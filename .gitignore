@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# IDEs
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Logs / temp
+logs/
+*.log
+
+# Data / saves (future-proofing)
+*.db
+*.sqlite
+*.json.bak
+
+# Environment files
+.env
+*.env
+
+# Node / Frontend
+node_modules/
+dist/
+build/
