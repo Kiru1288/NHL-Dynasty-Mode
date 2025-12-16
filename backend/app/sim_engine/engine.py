@@ -13,6 +13,11 @@ from app.sim_engine.ai.personality import (
 
 from app.sim_engine.ai.ai_manager import AIManager
 from app.sim_engine.ai.morale_engine import MoraleEngine, MoraleState
+<<<<<<< HEAD
+=======
+from app.sim_engine.ai.career_arc import CareerArcEngine
+from app.sim_engine.ai.injury_risk import InjuryRiskEngine
+>>>>>>> 3307d89 (Add career arc and injury risk engines with ambient wear-and-tear)
 
 
 class SimEngine:
@@ -23,15 +28,39 @@ class SimEngine:
     - Validate personality behavior
     - Validate AIManager intent signals
     - Validate MoraleEngine dynamics
+<<<<<<< HEAD
+=======
+    - Validate CareerArcEngine long-horizon pressures
+    - Validate InjuryRiskEngine latent injury-proneness
+
+    NOTE:
+    - No narratives
+    - No forced decisions
+    - All systems run side-by-side
+>>>>>>> 3307d89 (Add career arc and injury risk engines with ambient wear-and-tear)
     """
 
     def __init__(self, seed: int | None = None):
         self.year = 0
         self.rng = random.Random(seed)
 
+<<<<<<< HEAD
         self.ai_manager = AIManager(self.rng)
         self.morale_engine = MoraleEngine()
 
+=======
+        # -------------------------------
+        # Core Systems
+        # -------------------------------
+        self.ai_manager = AIManager(self.rng)
+        self.morale_engine = MoraleEngine()
+        self.career_arc_engine = CareerArcEngine()
+        self.injury_risk_engine = InjuryRiskEngine()
+
+        # -------------------------------
+        # Personality
+        # -------------------------------
+>>>>>>> 3307d89 (Add career arc and injury risk engines with ambient wear-and-tear)
         factory = PersonalityFactory(self.rng)
 
         self.personality = factory.generate(
@@ -42,6 +71,7 @@ class SimEngine:
         )
 
         self.behavior = PersonalityBehavior(self.personality, self.rng)
+<<<<<<< HEAD
         self.morale: MoraleState = self.morale_engine.create_state()
 
         print("\n=== TEST PLAYER PERSONALITY PROFILE ===")
@@ -56,6 +86,39 @@ class SimEngine:
 
         team_success = self.rng.random()
 
+=======
+
+        # -------------------------------
+        # State
+        # -------------------------------
+        self.morale: MoraleState = self.morale_engine.create_state()
+        self.career_arc = self.career_arc_engine.create_state()
+        self.injury_risk = self.injury_risk_engine.create_state()
+
+        # -------------------------------
+        # Debug: Personality Print
+        # -------------------------------
+        print("\n=== TEST PLAYER PERSONALITY PROFILE ===")
+        for f in fields(self.personality):
+            print(f"{f.name:20s}: {getattr(self.personality, f.name):.2f}")
+
+    # --------------------------------------------------
+    # Single Season Simulation
+    # --------------------------------------------------
+
+    def sim_year(self):
+        self.year += 1
+
+        print(f"\n==============================")
+        print(f"      SIM YEAR {self.year}")
+        print(f"==============================")
+
+        # -------------------------------
+        # TEMP CONTEXT (placeholder only)
+        # -------------------------------
+        team_success = self.rng.random()
+
+>>>>>>> 3307d89 (Add career arc and injury risk engines with ambient wear-and-tear)
         ctx = BehaviorContext(
             team_success=team_success,
             losing_streak=self.rng.random() * (1.0 - team_success),
@@ -72,11 +135,24 @@ class SimEngine:
             cup_satisfaction=0.0,
         )
 
+<<<<<<< HEAD
+=======
+        # -------------------------------
+        # AI Signals (intent only)
+        # -------------------------------
+>>>>>>> 3307d89 (Add career arc and injury risk engines with ambient wear-and-tear)
         signals = self.ai_manager.evaluate_player(
             behavior=self.behavior,
             ctx=ctx,
         )
 
+<<<<<<< HEAD
+=======
+        # -------------------------------
+        # TEMP Morale Circumstances
+        # (placeholder — narratives later)
+        # -------------------------------
+>>>>>>> 3307d89 (Add career arc and injury risk engines with ambient wear-and-tear)
         circumstances = {
             "team_results": {
                 "intensity": team_success - 0.5,
@@ -108,6 +184,31 @@ class SimEngine:
             ctx=ctx,
         )
 
+<<<<<<< HEAD
+=======
+        # -------------------------------
+        # Career Arc Update
+        # -------------------------------
+        self.career_arc_engine.update(
+            self.career_arc,
+            personality=self.personality,
+            morale_axes=self.morale.axes,
+        )
+
+        # -------------------------------
+        # Injury Risk Update (latent)
+        # -------------------------------
+        self.injury_risk_engine.update(
+            self.injury_risk,
+            personality=self.personality,
+            morale_axes=self.morale.axes,
+            career=self.career_arc,
+        )
+
+        # -------------------------------
+        # DEBUG OUTPUT
+        # -------------------------------
+>>>>>>> 3307d89 (Add career arc and injury risk engines with ambient wear-and-tear)
         print("\n--- AI SIGNALS ---")
         print(f"Contract Aggression : {signals.contract_aggression:.2f}")
         print(f"Trade Request Intent: {signals.trade_request_intent:.2f}")
@@ -120,8 +221,23 @@ class SimEngine:
             print(f"{k:12s}: {v:.2f}")
 
         print(f"\nOverall Morale: {self.morale.overall():.2f}")
+<<<<<<< HEAD
         print(f"Flags: {self.morale_engine.narrative_flags(self.morale)}")
 
+=======
+        print(f"Morale Flags: {self.morale_engine.narrative_flags(self.morale)}")
+
+        print("\n--- CAREER ARC ---")
+        print(self.career_arc_engine.summary(self.career_arc))
+
+        print("\n--- INJURY RISK ---")
+        print(self.injury_risk_engine.summary(self.injury_risk))
+
+    # --------------------------------------------------
+    # Multi-Year Simulation
+    # --------------------------------------------------
+
+>>>>>>> 3307d89 (Add career arc and injury risk engines with ambient wear-and-tear)
     def sim_years(self, years: int = 5):
         for _ in range(years):
             self.sim_year()

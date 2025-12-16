@@ -17,23 +17,21 @@ from app.sim_engine.ai.personality import (
 # --------------------------------------------------
 
 AXES = (
-    "confidence",   # belief in self & performance
-    "belonging",    # locker room / identity / fit
-    "trust",        # coach & management
-    "motivation",   # will to push through adversity
-    "stability",    # life / contract / health security
+    "confidence",
+    "belonging",
+    "trust",
+    "motivation",
+    "stability",
 )
 
-# Floors prevent cartoon outcomes
+# Floors (hard safety only)
 MOTIVATION_FLOOR = 0.08
 TRUST_FLOOR = 0.05
 STABILITY_FLOOR = 0.06
 
-# Limits: prevent one tick from nuking a whole axis
 MAX_STABILITY_DROP_PER_TICK = 0.20
 MAX_TRUST_GAIN_PER_TICK = 0.08
 
-# Belonging soft-cap range
 BELONGING_SOFTCAP_START = 0.85
 
 
@@ -44,13 +42,12 @@ BELONGING_SOFTCAP_START = 0.85
 @dataclass
 class MoraleSignal:
     key: str
-    intensity: float                 # [-1, +1]
+    intensity: float
     axis_weights: Dict[str, float]
     half_life_days: float
     created_ts: float = field(default_factory=lambda: time.time())
 
     def value(self, now_ts: float) -> float:
-        # Safe handling
         if self.half_life_days <= 0:
             return 0.0
         age_days = max(0.0, (now_ts - self.created_ts) / 86400.0)
@@ -78,21 +75,50 @@ class MoraleState:
 
 class MoraleEngine:
     """
-    Emergent morale system driven by:
-    - accumulated circumstances
-    - personality filtering
-    - decay and nonlinear interactions
+    Personality-anchored morale system.
 
-    This version fixes:
-    - trust flatlining forever
-    - stability collapsing unrealistically fast
-    - belonging hitting 1.00 too easily
+    Key properties:
+    - Each player has their own emotional center per axis
+    - Most players live near the middle
+    - Extremes decay unless reinforced
     """
+
+    # -------------------------------
+    # Creation
+    # -------------------------------
 
     def create_state(self) -> MoraleState:
         return MoraleState(
             axes={axis: 0.5 for axis in AXES},
             signals=[]
+        )
+
+    # -------------------------------
+    # Personality Anchors
+    # -------------------------------
+
+    def _axis_center(self, axis: str, p: PersonalityProfile) -> float:
+        if axis == "confidence":
+            return clamp01(0.40 + 0.40 * p.confidence)
+        if axis == "belonging":
+            return clamp01(0.35 + 0.45 * p.loyalty)
+        if axis == "trust":
+            return clamp01(0.30 + 0.45 * p.coachability)
+        if axis == "motivation":
+            return clamp01(0.35 + 0.45 * p.competitiveness)
+        if axis == "stability":
+            return clamp01(0.40 + 0.50 * p.stability_need)
+        return 0.5
+
+    def _swing_damping(self, p: PersonalityProfile) -> float:
+        """
+        Lower = more stable emotional range.
+        """
+        return clamp01(
+            0.65
+            + 0.60 * p.volatility
+            - 0.40 * p.patience
+            - 0.25 * p.confidence
         )
 
     # -------------------------------
@@ -128,31 +154,28 @@ class MoraleEngine:
         now_ts: float | None = None,
     ) -> None:
         now_ts = now_ts or time.time()
-
-        # Snapshot for per-tick limiting
         prev_axes = dict(state.axes)
 
+        damping = self._swing_damping(personality)
+
         # --------------------------------------------------
-        # Natural reversion toward neutral
+        # Reversion toward PERSONALITY CENTER
         # --------------------------------------------------
         for axis in state.axes:
-            base_reversion = 0.02 + 0.08 * personality.patience
+            center = self._axis_center(axis, personality)
 
-            # trust: slower baseline, but can recover when things stabilize
+            reversion_rate = 0.015 + 0.05 * personality.patience
             if axis == "trust":
-                base_reversion *= 0.55 + 0.45 * personality.coachability
-
-            # stability: recovery depends heavily on life stress
+                reversion_rate *= 0.6 + 0.4 * personality.coachability
             if axis == "stability":
-                low_stress = 1.0 - clamp01(ctx.injury_burden + ctx.family_event)
-                base_reversion *= 0.65 + 0.85 * low_stress
+                reversion_rate *= 0.6 + 0.6 * (1.0 - ctx.injury_burden)
 
             state.axes[axis] = clamp01(
-                state.axes[axis] + base_reversion * (0.5 - state.axes[axis])
+                state.axes[axis] + reversion_rate * (center - state.axes[axis])
             )
 
         # --------------------------------------------------
-        # Apply circumstance signals
+        # Apply Signals
         # --------------------------------------------------
         for signal in list(state.signals):
             v = signal.value(now_ts)
@@ -166,16 +189,15 @@ class MoraleEngine:
                 if axis not in state.axes:
                     continue
 
-                sensitivity = self._axis_sensitivity(axis, personality)
-                delta = v * weight * sensitivity * reaction
+                delta = v * weight * reaction * damping
 
-                # Belonging softcap: diminishing returns near the top
-                if axis == "belonging":
-                    delta *= self._belonging_softcap_multiplier(state.axes["belonging"])
+                # Extremes resist further movement
+                dist = abs(state.axes[axis] - self._axis_center(axis, personality))
+                resistance = clamp01(1.0 - dist * 1.25)
+                delta *= resistance
 
-                    # If trust is rock-bottom, belonging shouldn't inflate endlessly
-                    if state.axes["trust"] < 0.15 and delta > 0:
-                        delta *= 0.55
+                if axis == "belonging" and state.axes["trust"] < 0.15 and delta > 0:
+                    delta *= 0.5
 
                 state.axes[axis] = clamp01(state.axes[axis] + delta)
 
@@ -185,23 +207,17 @@ class MoraleEngine:
         self._apply_interactions(state, personality)
 
         # --------------------------------------------------
-        # Trust natural repair (fixes “trust flatlines forever”)
-        # No explicit “event” yet — just slow repair when conditions improve
-        # --------------------------------------------------
-        trust_repair = self._trust_repair(ctx, personality)
-        if trust_repair > 0:
-            state.axes["trust"] = clamp01(state.axes["trust"] + trust_repair)
-
-        # Cap trust gain per tick (prevents magical rebounds)
-        state.axes["trust"] = min(state.axes["trust"], prev_axes["trust"] + MAX_TRUST_GAIN_PER_TICK)
-
-        # --------------------------------------------------
-        # Stability damage limiter (fixes “stability hits 0 too easily”)
+        # Stability / Trust Limits
         # --------------------------------------------------
         if state.axes["stability"] < prev_axes["stability"]:
             drop = prev_axes["stability"] - state.axes["stability"]
             if drop > MAX_STABILITY_DROP_PER_TICK:
                 state.axes["stability"] = prev_axes["stability"] - MAX_STABILITY_DROP_PER_TICK
+
+        state.axes["trust"] = min(
+            state.axes["trust"],
+            prev_axes["trust"] + MAX_TRUST_GAIN_PER_TICK
+        )
 
         # --------------------------------------------------
         # Floors
@@ -211,85 +227,23 @@ class MoraleEngine:
         state.axes["stability"] = max(state.axes["stability"], STABILITY_FLOOR)
 
     # -------------------------------
-    # Axis Sensitivity
-    # -------------------------------
-
-    def _axis_sensitivity(self, axis: str, p: PersonalityProfile) -> float:
-        if axis == "confidence":
-            return 0.6 + 0.8 * (1.0 - p.confidence) + 0.4 * p.volatility
-        if axis == "belonging":
-            return 0.6 + 0.8 * (1.0 - p.introversion)
-        if axis == "trust":
-            return 0.6 + 0.8 * (1.0 - p.coachability)
-        if axis == "motivation":
-            return 0.6 + 0.8 * p.competitiveness
-        if axis == "stability":
-            return 0.6 + 0.8 * p.stability_need
-        return 1.0
-
-    # -------------------------------
-    # Axis Interactions
+    # Interactions
     # -------------------------------
 
     def _apply_interactions(self, state: MoraleState, p: PersonalityProfile) -> None:
-        # Confidence + Trust collapse → disengagement
         if state.axes["confidence"] < 0.35 and state.axes["trust"] < 0.35:
             state.axes["motivation"] = clamp01(
-                state.axes["motivation"] - (0.03 + 0.05 * p.volatility)
+                state.axes["motivation"] - (0.02 + 0.04 * p.volatility)
             )
 
-        # Burnout bleed
-        if state.axes["motivation"] > 0.7 and state.axes["stability"] < 0.3:
-            state.axes["confidence"] = clamp01(
-                state.axes["confidence"] - (0.02 + 0.04 * (1.0 - p.patience))
+        if (
+            state.axes["belonging"] > 0.85
+            and state.axes["trust"] < 0.20
+            and state.axes["stability"] < 0.20
+        ):
+            state.axes["motivation"] = clamp01(
+                state.axes["motivation"] - (0.02 + 0.04 * p.legacy_drive)
             )
-
-        # Locker room buffer
-        if state.axes["belonging"] > 0.7 and state.axes["confidence"] < 0.4:
-            state.axes["confidence"] = clamp01(
-                state.axes["confidence"] + (0.02 + 0.03 * p.leadership)
-            )
-
-        # Stability + Trust inertia
-        if state.axes["stability"] > 0.7 and state.axes["trust"] > 0.7:
-            for axis in state.axes:
-                state.axes[axis] = clamp01(state.axes[axis] * 0.97 + 0.5 * 0.03)
-
-    # -------------------------------
-    # Helpers (fixes)
-    # -------------------------------
-
-    def _belonging_softcap_multiplier(self, belonging: float) -> float:
-        """
-        Diminishing returns for belonging > softcap start.
-        """
-        if belonging <= BELONGING_SOFTCAP_START:
-            return 1.0
-        # as belonging approaches 1.0, gains shrink toward ~0.25
-        t = (belonging - BELONGING_SOFTCAP_START) / max(1e-6, (1.0 - BELONGING_SOFTCAP_START))
-        return 1.0 - 0.75 * clamp01(t)
-
-    def _trust_repair(self, ctx: BehaviorContext, p: PersonalityProfile) -> float:
-        """
-        Natural trust repair without explicit events:
-        - role mismatch low
-        - ice time satisfaction decent
-        - not in a hardcore losing spiral
-        - coachability increases the repair rate
-        """
-        role_ok = clamp01(1.0 - ctx.role_mismatch)
-        ice_ok = clamp01((ctx.ice_time_satisfaction - 0.45) / 0.55)
-        stress = clamp01(ctx.losing_streak + ctx.rebuild_mode)
-
-        # If conditions are good, trust can slowly rebuild
-        condition = role_ok * ice_ok * (1.0 - 0.7 * stress)
-
-        if condition <= 0.15:
-            return 0.0
-
-        # Slow repair rate; coachable players repair faster
-        rate = 0.01 + 0.05 * p.coachability
-        return clamp01(condition) * rate
 
     # -------------------------------
     # Narrative Flags
