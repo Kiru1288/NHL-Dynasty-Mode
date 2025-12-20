@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import math
 import random
 
+from app.sim_engine.ai.decision_weights import get_decision_weights
+
 
 # =============================================================================
 # Data models
@@ -19,6 +21,9 @@ class RetirementFactors:
     career_context_pressure: float = 0.0
     fatigue_pressure: float = 0.0
     voluntary_exit_pressure: float = 0.0
+
+    # NEW: life/off-ice pressure (from decision_weights)
+    life_pressure: float = 0.0
 
     legacy_resistance: float = 0.0
     money_resistance: float = 0.0
@@ -38,6 +43,7 @@ class RetirementFactors:
             + self.career_context_pressure
             + self.fatigue_pressure
             + self.voluntary_exit_pressure
+            + self.life_pressure
             + self.early_outlier_boost
         )
 
@@ -93,6 +99,11 @@ def is_truthy(x: Any) -> bool:
 class RetirementEngine:
     """
     Conservative retirement model with a realistic early-late voluntary exit window.
+
+    UPDATED:
+    - Pulls player.life_pressure and context signals
+    - Uses decision_weights retirement mapping
+    - Adds life pressure into net score so it can beat "age"
     """
 
     def __init__(self, seed: Optional[int] = None):
@@ -139,7 +150,12 @@ class RetirementEngine:
         factors.contract_pressure = self._contract_pressure(age, context)
         factors.career_context_pressure = self._career_context_pressure(context)
         factors.fatigue_pressure = self._fatigue_pressure(context)
+
+        # Existing voluntary_exit window (35–36)
         factors.voluntary_exit_pressure = self._voluntary_exit_pressure(player, context)
+
+        # NEW: life/off-ice pressure weighted by decision_weights
+        factors.life_pressure = self._life_pressure_weighted(player, context)
 
         (
             factors.legacy_resistance,
@@ -159,14 +175,14 @@ class RetirementEngine:
         raw_chance = sigmoid(net - threshold)
 
         # --------------------------------------------------
-        # AGE CAPS (35–36 INTENTIONALLY HIGHER)
+        # AGE CAPS (still conservative, but life pressure can win within caps)
         # --------------------------------------------------
         age_caps = [
             (25, 0.00001),
             (28, 0.0001),
             (31, 0.001),
             (34, 0.004),
-            (36, 0.10),   # ⭐ voluntary exit window
+            (36, 0.10),   # voluntary exit window
             (38, 0.18),
             (40, 0.35),
         ]
@@ -180,7 +196,7 @@ class RetirementEngine:
         retire_chance = min(raw_chance, cap)
         retired = self.rng.random() < retire_chance
 
-        primary, secondary, tags = self._classify_reasons(age, factors)
+        primary, secondary, tags = self._classify_reasons(age, factors, player, context)
         considering = (not retired) and ((net - threshold) > self.considering_threshold)
 
         return RetirementDecision(
@@ -209,7 +225,12 @@ class RetirementEngine:
 
     def _injury_pressure(self, player, context) -> float:
         wear = float(safe_get(player, "injury_wear", 0.0))
-        return clamp(wear * 0.7, 0.0, 1.5)
+        base = clamp(wear * 0.7, 0.0, 1.5)
+        if is_truthy(context.get("career_ending_injury")):
+            base += 0.55
+        if is_truthy(context.get("recent_major_injury")):
+            base += 0.20
+        return clamp(base, 0.0, 1.5)
 
     def _morale_influence(self, morale: float) -> Tuple[float, float]:
         pressure = max(0.0, 0.45 - morale) * 0.6
@@ -222,9 +243,13 @@ class RetirementEngine:
         return 0.15 if is_truthy(context.get("no_offers")) else 0.0
 
     def _career_context_pressure(self, context) -> float:
-        return 0.10 if is_truthy(context.get("bought_out")) else 0.0
+        pressure = 0.0
+        pressure += 0.10 if is_truthy(context.get("bought_out")) else 0.0
+        pressure += 0.05 if is_truthy(context.get("healthy_scratches", 0) >= 25) else 0.0
+        return pressure
 
     def _fatigue_pressure(self, context) -> float:
+        # keep light; main fatigue is in life pressure weighting
         return float(context.get("usage_heavy", 0.0)) * 0.06
 
     def _voluntary_exit_pressure(self, player, context) -> float:
@@ -235,18 +260,82 @@ class RetirementEngine:
         morale = float(safe_get(player, "morale", 0.6))
         family = clamp(float(safe_get(player.personality, "family_priority", 0.0)))
         competitiveness = clamp(float(safe_get(player.personality, "competitiveness", 0.5)))
-        identity = float(context.get("identity_instability", 0.0))
-        fatigue = float(context.get("emotional_fatigue", 0.0))
+
+        # Use the signals you already pass from engine.py
+        identity = 1.0 if is_truthy(context.get("questioning_identity")) else float(context.get("identity_instability", 0.0))
+        fatigue = float(context.get("mental_fatigue", 0.0))  # engine provides this
 
         base = (
             (0.55 - morale) * 0.4
             + family * 0.35
             + identity * 0.45
-            + fatigue * 0.45
+            + fatigue * 0.55
             - competitiveness * 0.6
         )
 
         return clamp(base, 0.0, 0.6)
+
+    # ------------------------------------------------------------------
+    # NEW: decision_weights retirement model integration
+    # ------------------------------------------------------------------
+
+    def _life_pressure_weighted(self, player, context) -> float:
+        """
+        Convert player.life_pressure + context signals into a weighted retirement pressure
+        using decision_weights.py ("retirement" -> domains -> traits).
+        """
+
+        # Domain pressures from engine (0..1). This is your "human life state"
+        domain_pressure = safe_get(player, "life_pressure", {}) or {}
+
+        # Pull retirement weights from decision_weights
+        weights = get_decision_weights("retirement")  # domain -> trait weights
+
+        # Map engine state/context into trait values (0..1)
+        # We keep this simple and grounded in what you already have.
+        morale = float(safe_get(player, "morale", 0.6))
+        wear = float(safe_get(player, "injury_wear", 0.0))
+        p = safe_get(player, "personality", None)
+
+        trait_values: Dict[str, float] = {
+            # health domain traits
+            "injury_risk": clamp(wear),
+            "chronic_pain": clamp(wear * 0.85),
+            "mental_fatigue": clamp(float(context.get("mental_fatigue", domain_pressure.get("psychological", 0.0)))),
+
+            # family domain traits
+            "family_priority": clamp(float(safe_get(p, "family_priority", 0.3)) if p else 0.3),
+            "relationship_strain": clamp(domain_pressure.get("family", 0.0) * 0.7),
+            "desire_for_normal_life": clamp(domain_pressure.get("family", 0.0) * 0.6),
+
+            # psychological domain traits
+            "burnout": clamp(max(domain_pressure.get("psychological", 0.0), float(context.get("mental_fatigue", 0.0)))),
+            "anxiety": clamp(domain_pressure.get("psychological", 0.0) * 0.6),
+            "loss_of_joy": clamp(max(0.0, 0.55 - morale) + domain_pressure.get("psychological", 0.0) * 0.4),
+
+            # career_identity domain traits (note: these are resistances via negative weights)
+            "legacy_drive": clamp(float(safe_get(p, "legacy_drive", 0.5)) if p else 0.5),
+            "ambition": clamp(float(safe_get(p, "ambition", 0.5)) if p else 0.5),
+            "confidence": clamp(float(safe_get(p, "confidence", 0.5)) if p else 0.5),
+
+            # security domain traits
+            "financial_security": clamp(float(context.get("career_earnings", 0.0)) / 200_000_000.0),
+            "money_focus": clamp(float(safe_get(p, "money_focus", 0.4)) if p else 0.4),
+        }
+
+        # Weighted sum:
+        # - We compute traits according to decision_weights
+        # - We also lightly multiply by domain pressure to reflect "current life strain"
+        score = 0.0
+        for domain, trait_map in weights.items():
+            dom_mult = 0.65 + 0.55 * clamp(domain_pressure.get(domain, 0.0))  # 0.65..1.20
+            for trait, w in trait_map.items():
+                v = clamp(float(trait_values.get(trait, 0.0)))
+                score += (v * w) * dom_mult
+
+        # Clamp and scale into the same "pressure units" as other factors
+        # Typical useful range: 0.0..~0.6 (so it competes with age_pressure)
+        return clamp(score, 0.0, 0.75)
 
     def _personality_resistance(self, p) -> Tuple[float, float, float]:
         return (
@@ -268,13 +357,37 @@ class RetirementEngine:
         if age < 40: return 0.42
         return 0.35
 
-    def _classify_reasons(self, age, factors):
+    def _classify_reasons(self, age: float, factors: RetirementFactors, player: Any, context: Dict[str, Any]):
+        tags: List[str] = []
+        secondary: List[str] = []
+
+        # Keep the "extreme early" label
         if age < 30:
             return "extreme outlier", [], ["extreme_early"]
+
+        # Strong non-age reasons should beat "age"
+        if factors.injury_pressure > 0.70:
+            return "injuries", [], []
+
+        # Burnout / mental
+        if factors.life_pressure > 0.35 and float(context.get("mental_fatigue", 0.0)) > 0.45:
+            return "burnout", [], ["life_pressure"]
+
+        # Family pull
+        if is_truthy(context.get("family_event")) or (safe_get(player, "life_pressure", {}).get("family", 0.0) > 0.55):
+            if factors.life_pressure > 0.30:
+                return "family", [], ["life_pressure"]
+
+        # Identity collapse
+        if is_truthy(context.get("questioning_identity")) and factors.life_pressure > 0.30:
+            return "identity", [], ["life_pressure"]
+
+        # Your 35–36 voluntary exit window stays
         if factors.voluntary_exit_pressure > 0.25:
             return "voluntary_exit", [], ["early_late"]
-        if factors.injury_pressure > 0.4:
-            return "injuries", [], []
+
+        # Traditional morale burnout
         if factors.morale_pressure > 0.25:
             return "burnout", [], []
-        return "age", [], []
+
+        return "age", secondary, tags

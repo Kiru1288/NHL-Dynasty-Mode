@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, asdict
+
+from typing import Dict
 import random
 import time
 
@@ -16,17 +18,12 @@ from app.sim_engine.ai.morale_engine import MoraleEngine, MoraleState
 from app.sim_engine.ai.career_arc import CareerArcEngine
 from app.sim_engine.ai.injury_risk import InjuryRiskEngine
 from app.sim_engine.ai.retirement_engine import RetirementEngine
+from app.sim_engine.ai.randomness import RandomnessEngine
 
 
 class SimEngine:
     """
     Simulation driver for a single NHL player career.
-
-    Focus:
-    - Personality-driven decisions
-    - Long-horizon morale & identity
-    - Injury accumulation
-    - Realistic early-late retirement (35–36 window)
     """
 
     def __init__(self, seed: int | None = None):
@@ -34,14 +31,21 @@ class SimEngine:
         self.rng = random.Random(seed)
         self.retired = False
 
+        # --------------------------------------------------
         # Core systems
+        # --------------------------------------------------
         self.ai_manager = AIManager(self.rng)
         self.morale_engine = MoraleEngine()
         self.career_arc_engine = CareerArcEngine()
         self.injury_risk_engine = InjuryRiskEngine()
         self.retirement_engine = RetirementEngine(seed=seed)
 
+        # Randomness (controlled chaos)
+        self.randomness = RandomnessEngine(self.rng)
+
+        # --------------------------------------------------
         # Personality
+        # --------------------------------------------------
         factory = PersonalityFactory(self.rng)
         self.personality = factory.generate(
             archetypes=[
@@ -51,10 +55,25 @@ class SimEngine:
         )
         self.behavior = PersonalityBehavior(self.personality, self.rng)
 
+        # --------------------------------------------------
         # State
+        # --------------------------------------------------
         self.morale: MoraleState = self.morale_engine.create_state()
         self.career_arc = self.career_arc_engine.create_state()
         self.injury_risk = self.injury_risk_engine.create_state()
+
+        # --------------------------------------------------
+        # Life pressure (off-ice human factors)
+        # --------------------------------------------------
+        self.pressure: Dict[str, float] = {
+            "career_identity": 0.0,
+            "health": 0.0,
+            "family": 0.0,
+            "psychological": 0.0,
+            "security": 0.0,
+            "environment": 0.0,
+        }
+        self.base_pressure_decay = 0.12
 
         print("\n=== TEST PLAYER PERSONALITY PROFILE ===")
         for f in fields(self.personality):
@@ -82,7 +101,54 @@ class SimEngine:
         p.chronic_injuries = int((physical + fatigue) * 2)
         p.durability = max(0.0, 1.0 - total_risk)
 
+        # Snapshot of off-ice life pressure
+        p.life_pressure = self.pressure.copy()
         return p
+
+    # --------------------------------------------------
+    # Life pressure update
+    # --------------------------------------------------
+
+    def _update_life_pressure(self, ctx: BehaviorContext):
+        # Stress sensitivity (personality-weighted)
+        sensitivity = self.randomness.stress_sensitivity(self.personality)
+
+        self.pressure["family"] += ctx.family_event * 0.8 * sensitivity
+        self.pressure["psychological"] += (
+            (1.0 - ctx.ice_time_satisfaction) * 0.2
+            + ctx.losing_streak * 0.3
+        ) * sensitivity
+        self.pressure["career_identity"] += (
+            ctx.role_mismatch * 0.4
+            + (0.5 - ctx.team_success) * 0.2
+        ) * sensitivity
+        self.pressure["environment"] += ctx.market_heat * 0.15 * sensitivity
+        self.pressure["health"] += ctx.injury_burden * 0.6 * sensitivity
+
+        # --------------------------------------------------
+        # Rare life events (from randomness engine)
+        # --------------------------------------------------
+        events = self.randomness.roll_life_events(
+            year=self.year,
+            age=18 + self.year,
+            personality=self.personality,
+            context={
+                "morale": self.morale.overall(),
+            },
+        )
+
+        for domain, delta in events.items():
+            if domain in self.pressure:
+                self.pressure[domain] += delta
+
+        # --------------------------------------------------
+        # Clamp + decay (recovery variance)
+        # --------------------------------------------------
+        recovery = self.randomness.recovery_modifier(self.personality)
+
+        for k in self.pressure:
+            self.pressure[k] = max(0.0, min(1.0, self.pressure[k]))
+            self.pressure[k] *= (1.0 - self.base_pressure_decay * recovery)
 
     # --------------------------------------------------
     # Single season
@@ -116,13 +182,23 @@ class SimEngine:
             cup_satisfaction=0.0,
         )
 
-        # AI signals (FIXED)
-        signals = self.ai_manager.evaluate_player(
+        # --------------------------------------------------
+        # Apply controlled randomness to context
+        # --------------------------------------------------
+        ctx_dict = self.randomness.apply_context_noise(asdict(ctx), self.personality)
+
+        ctx = BehaviorContext(**ctx_dict)
+
+
+        # AI decision signals
+        self.ai_manager.evaluate_player(
             behavior=self.behavior,
             ctx=ctx,
         )
 
-        # Morale (FIXED)
+        # --------------------------------------------------
+        # Morale
+        # --------------------------------------------------
         circumstances = {
             "team_results": {
                 "intensity": team_success - 0.5,
@@ -154,14 +230,15 @@ class SimEngine:
             ctx=ctx,
         )
 
-        # Career arc
+        # --------------------------------------------------
+        # Career arc & injuries
+        # --------------------------------------------------
         self.career_arc_engine.update(
             self.career_arc,
             personality=self.personality,
             morale_axes=self.morale.axes,
         )
 
-        # Injury risk
         self.injury_risk_engine.update(
             self.injury_risk,
             personality=self.personality,
@@ -169,7 +246,14 @@ class SimEngine:
             career=self.career_arc,
         )
 
+        # --------------------------------------------------
+        # Life pressure
+        # --------------------------------------------------
+        self._update_life_pressure(ctx)
+
+        # --------------------------------------------------
         # Retirement
+        # --------------------------------------------------
         player = self._build_retirement_player()
 
         retirement_ctx = {
@@ -180,8 +264,12 @@ class SimEngine:
             ),
             "usage_heavy": ctx.age_factor,
             "healthy_scratches": int(ctx.scratched_recently * 82),
-            "family_event": ctx.family_event > 0.0,
-            "questioning_identity": self.career_arc.questioning_identity,
+            "family_event": self.pressure["family"] > 0.55,
+            "questioning_identity": (
+                self.career_arc.questioning_identity
+                or self.pressure["career_identity"] > 0.6
+            ),
+            "mental_fatigue": self.pressure["psychological"],
             "no_offers": ctx.offer_respect < 0.35 and self.year > 26,
             "career_earnings": self.year * 3_500_000,
         }
