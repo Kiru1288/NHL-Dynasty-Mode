@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import fields, asdict
-from typing import Dict
+from dataclasses import asdict
 import random
 import time
 
@@ -23,27 +22,20 @@ from app.sim_engine.ai.retirement_engine import RetirementEngine
 from app.sim_engine.ai.randomness import RandomnessEngine
 
 # -------------------------------
-# Player entity
+# Entities
 # -------------------------------
-from app.sim_engine.entities.player import (
-    Player,
-    IdentityBio,
-    BackstoryUpbringing,
-    PersonalityTraits,
-    CareerArcSeeds,
-    Position,
-    Shoots,
-    BackstoryType,
-    UpbringingType,
-    SupportLevel,
-    PressureLevel,
-    DevResources,
-)
+from app.sim_engine.entities.player import Player
+from app.sim_engine.entities.team import Team
 
 
 class SimEngine:
     """
     Simulation driver for a single NHL player career.
+
+    This engine now:
+    - Feeds real season outcomes into team.py
+    - Allows teams to evolve, panic, stabilize, or collapse
+    - Prevents immortal careers caused by static org context
     """
 
     def __init__(self, seed: int | None = None):
@@ -51,9 +43,7 @@ class SimEngine:
         self.rng = random.Random(seed)
         self.retired = False
 
-        # --------------------------------------------------
         # Core systems
-        # --------------------------------------------------
         self.ai_manager = AIManager(self.rng)
         self.morale_engine = MoraleEngine()
         self.career_arc_engine = CareerArcEngine()
@@ -61,14 +51,11 @@ class SimEngine:
         self.retirement_engine = RetirementEngine(seed=seed)
         self.randomness = RandomnessEngine(self.rng)
 
-        # --------------------------------------------------
-        # Player
-        # --------------------------------------------------
-        self.player = self._create_test_player(seed)
+        # Injected entities
+        self.player: Player | None = None
+        self.team: Team | None = None
 
-        # --------------------------------------------------
         # Personality (AI-side)
-        # --------------------------------------------------
         factory = PersonalityFactory(self.rng)
         self.personality = factory.generate(
             archetypes=[
@@ -78,93 +65,21 @@ class SimEngine:
         )
         self.behavior = PersonalityBehavior(self.personality, self.rng)
 
-        # --------------------------------------------------
         # State
-        # --------------------------------------------------
         self.morale: MoraleState = self.morale_engine.create_state()
         self.career_arc = self.career_arc_engine.create_state()
         self.injury_risk = self.injury_risk_engine.create_state()
 
-        print("\n=== TEST PLAYER CREATED ===")
-        print(self.player)
-
-        print("\n=== TEST PLAYER PERSONALITY PROFILE ===")
-        for f in fields(self.personality):
-            print(f"{f.name:22s}: {getattr(self.personality, f.name):.2f}")
-
     # --------------------------------------------------
-    # Player factory
+    # Injection
     # --------------------------------------------------
 
-    def _create_test_player(self, seed: int | None) -> Player:
-        rng = random.Random(seed)
+    def set_player(self, player: Player):
+        self.player = player
 
-        identity = IdentityBio(
-            name="Test Player",
-            age=18,
-            birth_year=2007,
-            birth_country="Canada",
-            birth_city="Toronto",
-            height_cm=183,
-            weight_kg=86,
-            position=Position.C,
-            shoots=Shoots.L,
-            draft_year=2025,
-            draft_round=1,
-            draft_pick=12,
-        )
-
-        backstory = BackstoryUpbringing(
-            backstory=BackstoryType.GRINDER,
-            upbringing=UpbringingType.ROUGH,
-            family_support=SupportLevel.MEDIUM,
-            early_pressure=PressureLevel.MODERATE,
-            dev_resources=DevResources.LOCAL,
-        )
-
-        traits = PersonalityTraits(
-            loyalty=0.75,
-            ambition=0.30,
-            money_focus=0.55,
-            family_priority=0.35,
-            legacy_drive=0.70,
-            risk_tolerance=0.50,
-            adaptability=0.70,
-            patience=0.25,
-            stability_need=0.45,
-            ego=0.10,
-            confidence=0.35,
-            volatility=0.45,
-            competitiveness=0.20,
-            leadership=0.30,
-            coachability=0.65,
-            media_comfort=0.50,
-            introversion=0.30,
-            work_ethic=0.80,
-            mental_toughness=0.75,
-            clutch_tendency=0.40,
-        )
-
-        career = CareerArcSeeds(
-            expected_peak_age=28,
-            decline_rate=0.45,
-            breakout_probability=0.18,
-            bust_probability=0.10,
-            prime_duration=0.55,
-            season_consistency=0.50,
-            dev_curve_seed=rng.randint(1, 999999),
-            regression_resistance=0.60,
-            ceiling_floor_gap=0.40,
-        )
-
-        return Player(
-            identity=identity,
-            backstory=backstory,
-            ratings={},
-            traits=traits,
-            career=career,
-            rng_seed=seed,
-        )
+    def set_team(self, team: Team):
+        self.team = team
+        team.add_player(self.player)
 
     # --------------------------------------------------
     # Retirement adapter
@@ -178,19 +93,17 @@ class SimEngine:
         p.age = self.player.age
         p.personality = self.personality
         p.morale = self.morale.overall()
-
         p.injury_wear = self.player.health.wear_and_tear
         p.career_injury_score = self.player.health.wear_and_tear
         p.chronic_injuries = len(self.player.health.chronic_flags)
         p.durability = 1.0 - self.player.health.wear_and_tear
-
         p.life_pressure = asdict(self.player.life_pressure)
         p.ovr = self.player.ovr()
 
         return p
 
     # --------------------------------------------------
-    # Career stage
+    # Career stage (purely descriptive)
     # --------------------------------------------------
 
     def _derive_career_stage(self) -> str:
@@ -210,10 +123,10 @@ class SimEngine:
         return "Fringe / Retirement Risk"
 
     # --------------------------------------------------
-    # DEBUG
+    # FULL DEBUG DUMP
     # --------------------------------------------------
 
-    def _debug_dump_year(self, *, ctx, signals, decision):
+    def _debug_dump_year(self, *, ctx, decision, team_ctx, win_pct):
         print("\n================ PLAYER STATE DUMP ================")
 
         print("\n[IDENTITY]")
@@ -221,13 +134,15 @@ class SimEngine:
         print(f"Age         : {self.player.age}")
         print(f"Position    : {self.player.position.value}")
         print(f"Shoots      : {self.player.shoots.value}")
+        print(f"Team        : {self.team.city} {self.team.name}")
+        print(f"Team Style  : {self.team.archetype}")
 
         print("\n[OVR / ATTRIBUTES]")
         print(f"OVR         : {self.player.ovr():.3f}")
         for g, v in self.player.group_averages().items():
             print(f"{g:22s}: {v:.3f}")
 
-        print("\n[TRAITS]")
+        print("\n[PERSONALITY TRAITS]")
         for k, v in vars(self.player.traits).items():
             print(f"{k:22s}: {v:.3f}")
 
@@ -236,18 +151,42 @@ class SimEngine:
             print(f"{k:22s}: {v:.3f}")
 
         print("\n[HEALTH]")
-        print(f"Wear & tear : {self.player.health.wear_and_tear:.3f}")
+        print(f"Wear & Tear         : {self.player.health.wear_and_tear:.3f}")
+        print(f"Chronic Injuries    : {len(self.player.health.chronic_flags)}")
 
         print("\n[MORALE]")
-        print(f"Overall morale: {self.morale.overall():.3f}")
+        print(f"Overall Morale      : {self.morale.overall():.3f}")
+        for axis, val in self.morale.axes.items():
+            print(f"{axis:22s}: {val:.3f}")
+
+        print("\n[CAREER ARC]")
+        for k, v in vars(self.career_arc).items():
+            if isinstance(v, float):
+                print(f"{k:22s}: {v:.3f}")
+
+        print("\n[INJURY RISK]")
+        print(f"Total Risk          : {self.injury_risk.total_risk:.3f}")
+
+        print("\n[TEAM CONTEXT]")
+        print(f"Season Win %        : {win_pct:.3f}")
+        for k, v in team_ctx.items():
+            if isinstance(v, float):
+                print(f"{k:22s}: {v:.3f}")
+            else:
+                print(f"{k:22s}: {v}")
+
+        print("\n[BEHAVIOR CONTEXT]")
+        for k, v in asdict(ctx).items():
+            print(f"{k:22s}: {v:.3f}")
 
         print("\n[RETIREMENT]")
-        print(f"Retire chance : {decision.retire_chance:.6f}")
-        print(f"Net score     : {decision.net_score:.3f}")
-        print(f"Reason        : {decision.primary_reason}")
+        print(f"Retire Chance       : {decision.retire_chance:.6f}")
+        print(f"Net Score           : {decision.net_score:.3f}")
+        print(f"Primary Reason      : {decision.primary_reason}")
 
         print("\n[CAREER STAGE]")
         print(self._derive_career_stage())
+
         print("===================================================")
 
     # --------------------------------------------------
@@ -255,7 +194,7 @@ class SimEngine:
     # --------------------------------------------------
 
     def sim_year(self):
-        if self.retired:
+        if self.retired or self.player is None or self.team is None:
             return
 
         self.year += 1
@@ -264,29 +203,54 @@ class SimEngine:
         print(f"      SIM YEAR {self.year}")
         print("==============================")
 
-        team_success = self.rng.random()
+        # --------------------------------------------------
+        # 1. Simulate TEAM SEASON RESULT (abstract)
+        # --------------------------------------------------
+        # Expected win % comes from team internals
+        expected = self.team._expected_win_pct()
 
+        # Noise + chaos (bad orgs swing more)
+        chaos = (1.0 - self.team.state.stability) * self.rng.uniform(-0.10, 0.10)
+        luck = self.rng.uniform(-0.06, 0.06)
+
+        win_pct = max(0.25, min(0.75, expected + chaos + luck))
+
+        # --------------------------------------------------
+        # 2. Update TEAM STATE (CRITICAL)
+        # --------------------------------------------------
+        self.team.update_team_state(win_pct=win_pct)
+
+        team_ctx = self.team.team_context_for_player(self.player)
+
+        rebuild_mode = team_ctx["rebuild_mode"]
+
+        # --------------------------------------------------
+        # 3. Build BEHAVIOR CONTEXT
+        # --------------------------------------------------
         ctx = BehaviorContext(
-            team_success=team_success,
-            losing_streak=self.rng.random() * (1.0 - team_success),
-            rebuild_mode=0.4 if team_success < 0.45 else 0.0,
-            role_mismatch=self.rng.random() * 0.5,
-            ice_time_satisfaction=0.4 + self.rng.random() * 0.6,
-            scratched_recently=self.rng.random() * 0.3,
-            offer_respect=0.4 + self.rng.random() * 0.6,
+            team_success=win_pct,
+            losing_streak=max(0.0, 0.5 - win_pct),
+            rebuild_mode=rebuild_mode,
+            role_mismatch=team_ctx["role_mismatch"],
+            ice_time_satisfaction=0.35 + self.rng.random() * 0.55,
+            scratched_recently=0.0,
+            offer_respect=team_ctx["stability"],
             ufa_pressure=min(1.0, self.year / 7.0),
-            market_heat=0.3 + self.rng.random() * 0.4,
-            injury_burden=self.rng.random() * 0.3,
+            market_heat=team_ctx.get("market_pressure", 0.5),
+            injury_burden=self.injury_risk.total_risk,
             family_event=0.15 if self.year in (4, 7, 12, 18, 25) else 0.0,
-            age_factor=min(1.0, self.year / 18.0),
+            age_factor=min(1.0, self.player.age / 35.0),
             cup_satisfaction=0.0,
         )
 
-        ctx = BehaviorContext(**self.randomness.apply_context_noise(
-            asdict(ctx), self.personality
-        ))
+        ctx = BehaviorContext(
+            **self.randomness.apply_context_noise(asdict(ctx), self.personality)
+        )
 
-        signals = self.ai_manager.evaluate_player(
+        # --------------------------------------------------
+        # 4. AI + PSYCHOLOGY
+        # --------------------------------------------------
+        self.ai_manager.evaluate_player(
             behavior=self.behavior,
             ctx=ctx,
         )
@@ -311,24 +275,36 @@ class SimEngine:
             career=self.career_arc,
         )
 
-        # 🔑 THIS IS THE BIG CHANGE
+        # --------------------------------------------------
+        # 5. PLAYER AGING / DEVELOPMENT
+        # --------------------------------------------------
         self.player.advance_year(
             season_morale=self.morale.overall(),
             season_injury_risk=self.injury_risk.total_risk,
-            team_instability=ctx.rebuild_mode,
+            team_instability=1.0 - team_ctx["stability"],
         )
 
-        proxy = self._build_retirement_player()
-        decision = self.retirement_engine.evaluate_player(proxy, {})
+        # --------------------------------------------------
+        # 6. RETIREMENT CHECK
+        # --------------------------------------------------
+        decision = self.retirement_engine.evaluate_player(
+            self._build_retirement_player(), {}
+        )
 
+        # --------------------------------------------------
+        # 7. DEBUG OUTPUT
+        # --------------------------------------------------
         self._debug_dump_year(
             ctx=ctx,
-            signals=signals,
             decision=decision,
+            team_ctx=team_ctx,
+            win_pct=win_pct,
         )
 
         if decision.retired:
             self.retired = True
+            self.player.retired = True
+            self.player.retirement_reason = decision.primary_reason
             print("\n PLAYER HAS RETIRED ")
 
     # --------------------------------------------------
@@ -340,4 +316,4 @@ class SimEngine:
             if self.retired:
                 break
             self.sim_year()
-            time.sleep(0.05)
+            time.sleep(0.03)
