@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from email.policy import default
 from enum import Enum
 from typing import Dict, List, Optional, Any, Tuple
 import random
@@ -77,6 +78,12 @@ class CareerArcType(str, Enum):
 # UTILITIES
 # ============================================================
 
+RATING_MIN = 20
+RATING_MAX = 99
+
+def clamp_rating(x: float) -> int:
+    return int(max(RATING_MIN, min(RATING_MAX, round(x))))
+
 def clamp01(x: float) -> float:
     if x < 0.0:
         return 0.0
@@ -93,11 +100,12 @@ def clamp(x: float, lo: float, hi: float) -> float:
     return float(x)
 
 
-def normalize_ratings_dict(r: Dict[str, float], keys: List[str], default: float = 0.5) -> Dict[str, float]:
+def normalize_ratings_dict(r, keys, default=50):
     out = {}
     for k in keys:
-        out[k] = clamp01(r.get(k, default))
+        out[k] = clamp_rating(r.get(k, default))
     return out
+
 
 
 # ============================================================
@@ -257,16 +265,23 @@ OVR_WEIGHTS_GOALIE: Dict[str, float] = {
 }
 
 
-def _avg(ratings: Dict[str, float], keys: List[str]) -> float:
+def _avg(ratings: Dict[str, int], keys: List[str]) -> int:
     if not keys:
-        return 0.5
-    s = 0.0
-    n = 0
+        return 50
+
+    total = 0
+    count = 0
     for k in keys:
         if k in ratings:
-            s += float(ratings[k])
-            n += 1
-    return clamp01(s / max(1, n))
+            total += int(ratings[k])
+            count += 1
+
+    if count == 0:
+        return 50
+
+    return clamp_rating(total / count)
+
+
 
 
 def _group_avgs(ratings: Dict[str, float], position: Position) -> Dict[str, float]:
@@ -286,21 +301,29 @@ def _group_avgs(ratings: Dict[str, float], position: Position) -> Dict[str, floa
     }
 
 
-def compute_ovr(ratings: Dict[str, float], position: Position) -> float:
+def compute_ovr(ratings: Dict[str, int], position: Position) -> float:
     g = _group_avgs(ratings, position)
+
+    def norm(x: int) -> float:
+        return x / RATING_MAX  # 99 → 1.0
+
     if position == Position.G:
         w = OVR_WEIGHTS_GOALIE
-        return clamp01(g["goalie"] * w["goalie"] + g["iq"] * w["iq"] + g["physical"] * w["physical"])
+        return clamp01(
+            norm(g["goalie"]) * w["goalie"]
+            + norm(g["iq"]) * w["iq"]
+            + norm(g["physical"]) * w["physical"]
+        )
+
     w = OVR_WEIGHTS_SKATER
     return clamp01(
-        g["skating"] * w["skating"]
-        + g["offense"] * w["offense"]
-        + g["passing"] * w["passing"]
-        + g["defense"] * w["defense"]
-        + g["iq"] * w["iq"]
-        + g["physical"] * w["physical"]
+        norm(g["skating"]) * w["skating"]
+        + norm(g["offense"]) * w["offense"]
+        + norm(g["passing"]) * w["passing"]
+        + norm(g["defense"]) * w["defense"]
+        + norm(g["iq"]) * w["iq"]
+        + norm(g["physical"]) * w["physical"]
     )
-
 
 # ============================================================
 # LIFE PRESSURE (CRITICAL FIX)
@@ -592,18 +615,20 @@ def _decay_targeted(
             continue
         # add some variability so decline isn't perfectly smooth
         d = amount * (1.0 + rng.uniform(-noise, noise))
-        ratings[k] = clamp01(ratings[k] - d)
+        ratings[k] = clamp_rating(ratings[k] - d)
+
 
 
 def _apply_global_decay(
-    ratings: Dict[str, float],
+    ratings: Dict[str, int],
     amount: float,
     rng: random.Random,
     noise: float = 0.10,
 ) -> None:
     for k in list(ratings.keys()):
         d = amount * (1.0 + rng.uniform(-noise, noise))
-        ratings[k] = clamp01(ratings[k] - d)
+        ratings[k] = clamp_rating(ratings[k] - d)
+
 
 
 def _apply_injury_scarring(
@@ -681,7 +706,7 @@ class Player:
         self.ratings: Dict[str, float] = normalize_ratings_dict(
             ratings or {},
             keys=ATTRIBUTE_KEYS,
-            default=0.5
+            default=50
         )
 
         self.traits = traits or PersonalityTraits()
@@ -733,20 +758,22 @@ class Player:
     def shoots(self) -> Shoots:
         return self.identity.shoots
 
-    # -----------------------------
+       # -----------------------------
     # Ratings access
     # -----------------------------
-    def get(self, key: str, default: float = 0.5) -> float:
+    def get(self, key: str, default: int = 50) -> int:
         if key in ALIASES:
             key = ALIASES[key]
-        return clamp01(self.ratings.get(key, default))
+        return int(self.ratings.get(key, default))
 
     def set(self, key: str, value: float) -> None:
         if key in ALIASES:
             key = ALIASES[key]
         if key not in self.ratings:
             raise KeyError(f"Unknown rating key: {key}")
-        self.ratings[key] = clamp01(value)
+        self.ratings[key] = clamp_rating(value)
+
+
 
     def group_averages(self) -> Dict[str, float]:
         return _group_avgs(self.ratings, self.position)
@@ -888,7 +915,8 @@ class Player:
         if years_past_peak > 0:
             # base yearly decay in absolute rating units
             # tuned to be subtle yearly but meaningful over a decade
-            base = 0.0020 + 0.0015 * clamp01(self.career.decline_rate)  # ~0.002–0.0035
+            base = 1.5 + 2.0 * self.career.decline_rate   # points per year
+
             base *= (1.0 - 0.55 * clamp01(self.career.regression_resistance))  # resistance dampens
 
             # age accelerates late
@@ -931,7 +959,8 @@ class Player:
 
         # clamp ratings
         for k in list(self.ratings.keys()):
-            self.ratings[k] = clamp01(self.ratings[k])
+            self.ratings[k] = clamp_rating(self.ratings[k])
+
 
         # update wear slightly over time even without major injury
         self.health.wear_and_tear = clamp01(self.health.wear_and_tear + 0.005 + 0.010 * injury_risk)

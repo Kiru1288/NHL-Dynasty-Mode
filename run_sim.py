@@ -76,18 +76,28 @@ def create_random_player(rng: random.Random) -> Player:
         dev_curve_seed=rng.randint(1, 2_000_000_000),
     )
 
+    ratings = {
+    "skating": rng.uniform(0.45, 0.60),
+    "offense": rng.uniform(0.45, 0.60),
+    "passing": rng.uniform(0.45, 0.60),
+    "defense": rng.uniform(0.45, 0.60),
+    "physical": rng.uniform(0.45, 0.60),
+    "iq": rng.uniform(0.45, 0.60),
+}
+
     return Player(
-        identity=identity,
-        backstory=backstory,
-        ratings={},
-        traits=traits,
-        career=career,
-        rng_seed=rng.randint(1, 2_000_000_000),
-    )
+    identity=identity,
+    backstory=backstory,
+    ratings=ratings,
+    traits=traits,
+    career=career,
+    rng_seed=rng.randint(1, 2_000_000_000),
+)
+
 
 
 # ==================================================
-# TEAM DEBUG SNAPSHOT
+# TEAM SNAPSHOT (ONE-TIME)
 # ==================================================
 
 def dump_team_snapshot(team: Team):
@@ -96,43 +106,11 @@ def dump_team_snapshot(team: Team):
     print(f"Archetype: {team.archetype}")
     print(f"Status: {team.state.status}")
 
-    print("\n[MARKET]")
-    for k, v in vars(team.market).items():
-        print(f"{k:22s}: {v}")
-
-    print("\n[OWNERSHIP]")
-    for k, v in vars(team.ownership).items():
-        print(f"{k:22s}: {v:.3f}")
-
-    print("\n[REPUTATION]")
-    for k, v in vars(team.reputation).items():
-        print(f"{k:22s}: {v:.3f}")
-
-    print("\n[ORG PHILOSOPHY]")
-    print(f"Development Quality    : {team.development_quality:.3f}")
-    print(f"Prospect Patience      : {team.prospect_patience:.3f}")
-    print(f"Risk Tolerance         : {team.risk_tolerance:.3f}")
-
     print("\n[DYNAMIC STATE]")
     print(f"Competitive Score      : {team.state.competitive_score:.3f}")
     print(f"Team Morale            : {team.state.team_morale:.3f}")
-    print(f"Org Pressure           : {team.state.organizational_pressure:.3f}")
     print(f"Stability              : {team.state.stability:.3f}")
-    print(f"Ownership Stability    : {team.state.ownership_stability:.3f}")
-    print(f"Arena Security         : {team.state.arena_security:.3f}")
-    print(f"Financial Health       : {team.state.financial_health:.3f}")
-
-    print("\n[ROSTER QUALITY PROXY]")
-    print(f"Star Count             : {team.roster_quality.star_count}")
-    print(f"Core Count             : {team.roster_quality.core_count}")
-    print(f"Depth Quality          : {team.roster_quality.depth_quality:.3f}")
-
-    if team.state.triggered_events:
-        print("\n[TRIGGERED EVENTS]")
-        for e in team.state.triggered_events:
-            print(f"- {e}")
-
-    print("==============================================")
+    print("===============================================")
 
 
 # ==================================================
@@ -141,15 +119,9 @@ def dump_team_snapshot(team: Team):
 
 if __name__ == "__main__":
 
-    # --------------------------------------------------
-    # TRUE RANDOM SEED (system entropy)
-    # --------------------------------------------------
     master_seed = int(time.time_ns())
     rng = random.Random(master_seed)
 
-    # --------------------------------------------------
-    # Create RANDOM entities
-    # --------------------------------------------------
     player = create_random_player(rng)
 
     team = Team(
@@ -162,44 +134,22 @@ if __name__ == "__main__":
         ),
         division=rng.choice(["Atlantic", "Metropolitan", "Central", "Pacific"]),
         conference=rng.choice(["East", "West"]),
-        archetype=rng.choice(
-            [
-                TeamArchetype.PATIENT_BUILDER,
-                TeamArchetype.WIN_NOW,
-                TeamArchetype.MEDIOCRE,
-                TeamArchetype.DRAFT_AND_DEVELOP,
-                TeamArchetype.CHAOTIC,
-            ]
-        ),
+        archetype=rng.choice([
+            TeamArchetype.PATIENT_BUILDER,
+            TeamArchetype.WIN_NOW,
+            TeamArchetype.MEDIOCRE,
+            TeamArchetype.DRAFT_AND_DEVELOP,
+            TeamArchetype.CHAOTIC,
+        ]),
         rng=rng,
     )
 
-    sim = SimEngine(seed=rng.randint(1, 2_000_000_000))
+    sim = SimEngine(seed=master_seed)
     sim.set_player(player)
     sim.set_team(team)
 
-    # --------------------------------------------------
-    # Terminal header (minimal)
-    # --------------------------------------------------
-    print("\n=================================================")
-    print(f"CAREER SIM RUN — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=================================================")
-    print(f"Seed: {master_seed}")
-    print(f"Player: {player.name}")
-    print(f"Team: {team.city} {team.name} ({team.archetype})")
-    print(f"Initial OVR: {round(player.ovr(), 3)}")
-    print("-------------------------------------------------")
-    print("Running sim… full output → app/sim_results.txt")
-    print("-------------------------------------------------\n")
-
-    # --------------------------------------------------
-    # Ensure output directory exists
-    # --------------------------------------------------
     os.makedirs("app", exist_ok=True)
 
-    # --------------------------------------------------
-    # WRITE FULL SIM OUTPUT TO FILE
-    # --------------------------------------------------
     with open("app/sim_results.txt", "a", encoding="utf-8") as f:
         with redirect_stdout(f):
 
@@ -214,7 +164,8 @@ if __name__ == "__main__":
 
             dump_team_snapshot(team)
 
-            sim.sim_years(40)
+            # 🔥 ENGINE CONTROLS EVERYTHING YEAR-BY-YEAR
+            sim.sim_years(years=40, debug_dump=True, sleep_s=0.0)
 
             print("\n================ CAREER SUMMARY ================")
             print(f"Final Age              : {player.age}")
