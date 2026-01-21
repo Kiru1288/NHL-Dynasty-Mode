@@ -1,0 +1,3687 @@
+
+=================================================
+CAREER SIM RUN — 2026-01-10 22:43:26
+=================================================
+Seed: 1768110206743941800
+Player: SimPlayer_6195
+Team: Boston Canadiens (draft_and_develop)
+Initial OVR: 0.505
+-------------------------------------------------
+
+
+================ TEAM SNAPSHOT ================
+Team: Boston Canadiens
+Archetype: draft_and_develop
+Status: bubble
+
+[DYNAMIC STATE]
+Competitive Score      : 0.500
+Team Morale            : 0.500
+Stability              : 0.500
+===============================================
+
+==============================
+      SIM YEAR 1
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 19
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.497
+
+[SEASON STATS]
+season                : 2026
+role                  : depth
+goals                 : 13
+assists               : 11
+points                : 25
+war                   : 0.460
+xgf_pct               : 0.400
+performance_score     : 1.400
+expected_score        : 40
+delta                 : -38.600
+skating               : 49.000
+offense               : 49.000
+passing               : 49.000
+defense               : 49.000
+iq                    : 50.000
+physical              : 50.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.614
+money_focus           : 0.417
+family_priority       : 0.927
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.495
+confidence            : 0.260
+volatility            : 0.985
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.046
+health                : 0.000
+family                : 0.017
+psychological         : 0.032
+security              : 0.027
+environment           : 0.049
+
+[HEALTH]
+Wear & Tear         : 0.005
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.504
+confidence            : 0.509
+belonging             : 0.506
+trust                 : 0.497
+motivation            : 0.503
+stability             : 0.510
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.009
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.000
+security_anxiety      : 0.009
+
+[INJURY RISK]
+Total Risk          : 0.004
+
+[TEAM CONTEXT]
+Season Win %        : 0.662
+rebuild_mode          : 0.439
+role_mismatch         : 0.000
+stability             : 0.465
+dev_modifier          : 0.877
+team_morale           : 0.548
+team_pressure         : 0.608
+team_status           : contending
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.503
+rep_mgmt              : 0.504
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.662
+losing_streak         : 0.012
+rebuild_mode          : 0.439
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.981
+scratched_recently    : 0.000
+offer_respect         : 0.481
+ufa_pressure          : 0.143
+market_heat           : 0.798
+injury_burden         : 0.000
+family_event          : 0.000
+age_factor            : 0.514
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.509
+Salary Cap          : 93
+Cap Growth Rate     : 0.062
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.977
+
+[CONTRACT STATUS]
+Years Left          : 2
+AAV                 : 864,823
+Clause              : m-ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000001
+Net Score           : -1.000
+Primary Reason      : too young
+
+[CAREER STAGE]
+Prospect / Development
+===================================================
+
+==============================
+      SIM YEAR 2
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 20
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.489
+
+[SEASON STATS]
+season                : 2027
+role                  : depth
+goals                 : 7
+assists               : 18
+points                : 25
+war                   : 0.480
+xgf_pct               : 0.400
+performance_score     : 2.100
+expected_score        : 40
+delta                 : -37.900
+skating               : 48.000
+offense               : 48.000
+passing               : 48.000
+defense               : 48.000
+iq                    : 50.000
+physical              : 50.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.612
+money_focus           : 0.417
+family_priority       : 0.931
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.490
+confidence            : 0.270
+volatility            : 0.980
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.088
+health                : 0.001
+family                : 0.033
+psychological         : 0.061
+security              : 0.052
+environment           : 0.097
+
+[HEALTH]
+Wear & Tear         : 0.010
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.507
+confidence            : 0.517
+belonging             : 0.512
+trust                 : 0.494
+motivation            : 0.506
+stability             : 0.519
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.018
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.000
+security_anxiety      : 0.018
+
+[INJURY RISK]
+Total Risk          : 0.009
+
+[TEAM CONTEXT]
+Season Win %        : 0.656
+rebuild_mode          : 0.381
+role_mismatch         : 0.000
+stability             : 0.441
+dev_modifier          : 0.854
+team_morale           : 0.594
+team_pressure         : 0.681
+team_status           : contending
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.498
+rep_mgmt              : 0.503
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.656
+losing_streak         : 0.040
+rebuild_mode          : 0.381
+role_mismatch         : 0.000
+ice_time_satisfaction : 1.000
+scratched_recently    : 0.000
+offer_respect         : 0.491
+ufa_pressure          : 0.286
+market_heat           : 0.798
+injury_burden         : 0.004
+family_event          : 0.000
+age_factor            : 0.543
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.506
+Salary Cap          : 97
+Cap Growth Rate     : 0.041
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.978
+
+[CONTRACT STATUS]
+Years Left          : 1
+AAV                 : 864,823
+Clause              : m-ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000001
+Net Score           : -1.000
+Primary Reason      : too young
+
+[CAREER STAGE]
+Prospect / Development
+===================================================
+
+==============================
+      SIM YEAR 3
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 21
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.481
+
+[SEASON STATS]
+season                : 2028
+role                  : depth
+goals                 : 7
+assists               : 30
+points                : 38
+war                   : 0.500
+xgf_pct               : 0.400
+performance_score     : 23.100
+expected_score        : 40
+delta                 : -16.900
+skating               : 47.000
+offense               : 47.000
+passing               : 47.000
+defense               : 47.000
+iq                    : 50.000
+physical              : 50.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.609
+money_focus           : 0.417
+family_priority       : 0.935
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.485
+confidence            : 0.278
+volatility            : 0.976
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.127
+health                : 0.002
+family                : 0.047
+psychological         : 0.088
+security              : 0.075
+environment           : 0.144
+
+[HEALTH]
+Wear & Tear         : 0.015
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.511
+confidence            : 0.525
+belonging             : 0.518
+trust                 : 0.491
+motivation            : 0.509
+stability             : 0.528
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.027
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.000
+security_anxiety      : 0.027
+
+[INJURY RISK]
+Total Risk          : 0.014
+
+[TEAM CONTEXT]
+Season Win %        : 0.696
+rebuild_mode          : 0.306
+role_mismatch         : 0.000
+stability             : 0.397
+dev_modifier          : 0.837
+team_morale           : 0.656
+team_pressure         : 0.718
+team_status           : contending
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.494
+rep_mgmt              : 0.502
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.696
+losing_streak         : 0.002
+rebuild_mode          : 0.306
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.946
+scratched_recently    : 0.000
+offer_respect         : 0.395
+ufa_pressure          : 0.429
+market_heat           : 0.798
+injury_burden         : 0.008
+family_event          : 0.000
+age_factor            : 0.571
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.515
+Salary Cap          : 103
+Cap Growth Rate     : 0.053
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.978
+
+[CONTRACT STATUS]
+Years Left          : 4
+AAV                 : 813,523
+Clause              : ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000001
+Net Score           : -1.000
+Primary Reason      : too young
+
+[CAREER STAGE]
+Prospect / Development
+===================================================
+
+==============================
+      SIM YEAR 4
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 22
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.474
+
+[SEASON STATS]
+season                : 2029
+role                  : depth
+goals                 : 18
+assists               : 13
+points                : 32
+war                   : 0.490
+xgf_pct               : 0.400
+performance_score     : 10.850
+expected_score        : 40
+delta                 : -29.150
+skating               : 46.000
+offense               : 46.000
+passing               : 46.000
+defense               : 46.000
+iq                    : 50.000
+physical              : 50.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.607
+money_focus           : 0.417
+family_priority       : 0.939
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.480
+confidence            : 0.287
+volatility            : 0.972
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.163
+health                : 0.004
+family                : 0.061
+psychological         : 0.112
+security              : 0.096
+environment           : 0.192
+
+[HEALTH]
+Wear & Tear         : 0.020
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.514
+confidence            : 0.533
+belonging             : 0.523
+trust                 : 0.488
+motivation            : 0.512
+stability             : 0.536
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.036
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.000
+security_anxiety      : 0.036
+
+[INJURY RISK]
+Total Risk          : 0.019
+
+[TEAM CONTEXT]
+Season Win %        : 0.668
+rebuild_mode          : 0.246
+role_mismatch         : 0.000
+stability             : 0.352
+dev_modifier          : 0.809
+team_morale           : 0.702
+team_pressure         : 0.800
+team_status           : contending
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.491
+rep_mgmt              : 0.500
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.668
+losing_streak         : 0.015
+rebuild_mode          : 0.246
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.987
+scratched_recently    : 0.000
+offer_respect         : 0.371
+ufa_pressure          : 0.571
+market_heat           : 0.798
+injury_burden         : 0.014
+family_event          : 0.150
+age_factor            : 0.600
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.520
+Salary Cap          : 112
+Cap Growth Rate     : 0.089
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.977
+
+[CONTRACT STATUS]
+Years Left          : 3
+AAV                 : 813,523
+Clause              : ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000001
+Net Score           : -1.000
+Primary Reason      : too young
+
+[CAREER STAGE]
+Young NHL Regular
+===================================================
+
+==============================
+      SIM YEAR 5
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 23
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.466
+
+[SEASON STATS]
+season                : 2030
+role                  : depth
+goals                 : 13
+assists               : 12
+points                : 25
+war                   : 0.490
+xgf_pct               : 0.400
+performance_score     : 1.400
+expected_score        : 45
+delta                 : -43.600
+skating               : 45.000
+offense               : 45.000
+passing               : 45.000
+defense               : 45.000
+iq                    : 50.000
+physical              : 50.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.605
+money_focus           : 0.417
+family_priority       : 0.943
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.475
+confidence            : 0.295
+volatility            : 0.969
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.196
+health                : 0.006
+family                : 0.073
+psychological         : 0.134
+security              : 0.115
+environment           : 0.240
+
+[HEALTH]
+Wear & Tear         : 0.026
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.517
+confidence            : 0.541
+belonging             : 0.528
+trust                 : 0.485
+motivation            : 0.514
+stability             : 0.544
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.045
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.000
+security_anxiety      : 0.044
+
+[INJURY RISK]
+Total Risk          : 0.024
+
+[TEAM CONTEXT]
+Season Win %        : 0.620
+rebuild_mode          : 0.207
+role_mismatch         : 0.000
+stability             : 0.319
+dev_modifier          : 0.787
+team_morale           : 0.725
+team_pressure         : 0.863
+team_status           : contending
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.487
+rep_mgmt              : 0.496
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.620
+losing_streak         : 0.000
+rebuild_mode          : 0.207
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.950
+scratched_recently    : 0.000
+offer_respect         : 0.319
+ufa_pressure          : 0.714
+market_heat           : 0.798
+injury_burden         : 0.019
+family_event          : 0.000
+age_factor            : 0.629
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.521
+Salary Cap          : 122
+Cap Growth Rate     : 0.089
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.976
+
+[CONTRACT STATUS]
+Years Left          : 2
+AAV                 : 813,523
+Clause              : ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000001
+Net Score           : -1.000
+Primary Reason      : too young
+
+[CAREER STAGE]
+Young NHL Regular
+===================================================
+
+==============================
+      SIM YEAR 6
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 24
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.466
+
+[SEASON STATS]
+season                : 2031
+role                  : depth
+goals                 : 9
+assists               : 11
+points                : 21
+war                   : 4.050
+xgf_pct               : 0.407
+performance_score     : 44.550
+expected_score        : 45
+delta                 : -0.450
+skating               : 45.000
+offense               : 45.000
+passing               : 45.000
+defense               : 45.000
+iq                    : 50.000
+physical              : 50.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.603
+money_focus           : 0.417
+family_priority       : 0.947
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.470
+confidence            : 0.303
+volatility            : 0.966
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.226
+health                : 0.008
+family                : 0.085
+psychological         : 0.154
+security              : 0.132
+environment           : 0.288
+
+[HEALTH]
+Wear & Tear         : 0.031
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.520
+confidence            : 0.548
+belonging             : 0.534
+trust                 : 0.482
+motivation            : 0.517
+stability             : 0.552
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.054
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.000
+security_anxiety      : 0.052
+
+[INJURY RISK]
+Total Risk          : 0.029
+
+[TEAM CONTEXT]
+Season Win %        : 0.583
+rebuild_mode          : 0.184
+role_mismatch         : 0.000
+stability             : 0.263
+dev_modifier          : 0.592
+team_morale           : 0.733
+team_pressure         : 0.910
+team_status           : contending
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.483
+rep_mgmt              : 0.490
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.583
+losing_streak         : 0.012
+rebuild_mode          : 0.184
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.920
+scratched_recently    : 0.000
+offer_respect         : 0.248
+ufa_pressure          : 0.857
+market_heat           : 0.798
+injury_burden         : 0.024
+family_event          : 0.000
+age_factor            : 0.657
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.523
+Salary Cap          : 131
+Cap Growth Rate     : 0.075
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.975
+
+[CONTRACT STATUS]
+Years Left          : 7
+AAV                 : 9,477,095
+Clause              : m-ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000001
+Net Score           : -1.000
+Primary Reason      : too young
+
+[CAREER STAGE]
+Young NHL Regular
+===================================================
+
+==============================
+      SIM YEAR 7
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 25
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.458
+
+[SEASON STATS]
+season                : 2032
+role                  : depth
+goals                 : 8
+assists               : 13
+points                : 22
+war                   : 0.520
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 45
+delta                 : -45.000
+skating               : 44.000
+offense               : 44.000
+passing               : 44.000
+defense               : 44.000
+iq                    : 50.000
+physical              : 50.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.601
+money_focus           : 0.417
+family_priority       : 0.951
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.465
+confidence            : 0.310
+volatility            : 0.963
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.254
+health                : 0.011
+family                : 0.095
+psychological         : 0.173
+security              : 0.148
+environment           : 0.341
+
+[HEALTH]
+Wear & Tear         : 0.036
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.523
+confidence            : 0.555
+belonging             : 0.539
+trust                 : 0.479
+motivation            : 0.519
+stability             : 0.560
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.062
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.009
+security_anxiety      : 0.060
+
+[INJURY RISK]
+Total Risk          : 0.036
+
+[TEAM CONTEXT]
+Season Win %        : 0.718
+rebuild_mode          : 0.100
+role_mismatch         : 0.000
+stability             : 0.179
+dev_modifier          : 0.590
+team_morale           : 0.804
+team_pressure         : 0.865
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.481
+rep_mgmt              : 0.485
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.718
+losing_streak         : 0.006
+rebuild_mode          : 0.100
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.365
+scratched_recently    : 0.000
+offer_respect         : 0.187
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.029
+family_event          : 0.150
+age_factor            : 0.686
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.519
+Salary Cap          : 135
+Cap Growth Rate     : 0.033
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.974
+
+[CONTRACT STATUS]
+Years Left          : 7
+AAV                 : 842,093
+Clause              : m-ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000004
+Net Score           : -1.069
+Primary Reason      : extreme outlier
+
+[CAREER STAGE]
+Young NHL Regular
+===================================================
+
+==============================
+      SIM YEAR 8
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 26
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.447
+
+[SEASON STATS]
+season                : 2033
+role                  : depth
+goals                 : 8
+assists               : 11
+points                : 19
+war                   : 0.500
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 45
+delta                 : -45.000
+skating               : 42.000
+offense               : 43.000
+passing               : 43.000
+defense               : 43.000
+iq                    : 50.000
+physical              : 49.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.599
+money_focus           : 0.417
+family_priority       : 0.955
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.460
+confidence            : 0.318
+volatility            : 0.961
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.280
+health                : 0.014
+family                : 0.105
+psychological         : 0.189
+security              : 0.162
+environment           : 0.395
+
+[HEALTH]
+Wear & Tear         : 0.042
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.526
+confidence            : 0.562
+belonging             : 0.543
+trust                 : 0.476
+motivation            : 0.522
+stability             : 0.567
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.070
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.017
+security_anxiety      : 0.067
+
+[INJURY RISK]
+Total Risk          : 0.042
+
+[TEAM CONTEXT]
+Season Win %        : 0.728
+rebuild_mode          : 0.012
+role_mismatch         : 0.000
+stability             : 0.111
+dev_modifier          : 0.588
+team_morale           : 0.878
+team_pressure         : 0.834
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.480
+rep_mgmt              : 0.480
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.728
+losing_streak         : 0.032
+rebuild_mode          : 0.012
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.269
+scratched_recently    : 0.000
+offer_respect         : 0.070
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.035
+family_event          : 0.000
+age_factor            : 0.714
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.523
+Salary Cap          : 143
+Cap Growth Rate     : 0.062
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.974
+
+[CONTRACT STATUS]
+Years Left          : 5
+AAV                 : 819,719
+Clause              : m-ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000004
+Net Score           : -1.066
+Primary Reason      : extreme outlier
+
+[CAREER STAGE]
+Prime Years
+===================================================
+
+==============================
+      SIM YEAR 9
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 27
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.436
+
+[SEASON STATS]
+season                : 2034
+role                  : depth
+goals                 : 7
+assists               : 12
+points                : 19
+war                   : 0.480
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 45
+delta                 : -45.000
+skating               : 40.000
+offense               : 42.000
+passing               : 42.000
+defense               : 42.000
+iq                    : 50.000
+physical              : 48.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.596
+money_focus           : 0.417
+family_priority       : 0.959
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.454
+confidence            : 0.325
+volatility            : 0.959
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.307
+health                : 0.017
+family                : 0.117
+psychological         : 0.207
+security              : 0.177
+environment           : 0.453
+
+[HEALTH]
+Wear & Tear         : 0.047
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.528
+confidence            : 0.569
+belonging             : 0.548
+trust                 : 0.474
+motivation            : 0.524
+stability             : 0.574
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.079
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.026
+security_anxiety      : 0.074
+
+[INJURY RISK]
+Total Risk          : 0.048
+
+[TEAM CONTEXT]
+Season Win %        : 0.722
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.031
+dev_modifier          : 0.581
+team_morale           : 0.949
+team_pressure         : 0.816
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.481
+rep_mgmt              : 0.473
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.722
+losing_streak         : 0.028
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.421
+scratched_recently    : 0.000
+offer_respect         : 0.066
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.041
+family_event          : 0.000
+age_factor            : 0.743
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.527
+Salary Cap          : 153
+Cap Growth Rate     : 0.069
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.973
+
+[CONTRACT STATUS]
+Years Left          : 0
+AAV                 : (none)
+Clause              : none
+
+[LAST CONTRACT RESULT]
+Outcome             : force_trade
+Notes               :
+  - player forces trade after negotiation collapse
+
+[RETIREMENT]
+Retire Chance       : 0.000003
+Net Score           : -1.099
+Primary Reason      : extreme outlier
+
+[CAREER STAGE]
+Prime Years
+===================================================
+
+==============================
+      SIM YEAR 10
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 28
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.425
+
+[SEASON STATS]
+season                : 2035
+role                  : depth
+goals                 : 9
+assists               : 12
+points                : 22
+war                   : 0.450
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 45
+delta                 : -45.000
+skating               : 38.000
+offense               : 41.000
+passing               : 41.000
+defense               : 41.000
+iq                    : 50.000
+physical              : 47.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.594
+money_focus           : 0.417
+family_priority       : 0.964
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.448
+confidence            : 0.332
+volatility            : 0.958
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.336
+health                : 0.022
+family                : 0.130
+psychological         : 0.225
+security              : 0.192
+environment           : 0.509
+
+[HEALTH]
+Wear & Tear         : 0.053
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.531
+confidence            : 0.575
+belonging             : 0.552
+trust                 : 0.471
+motivation            : 0.526
+stability             : 0.580
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.087
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.034
+security_anxiety      : 0.081
+
+[INJURY RISK]
+Total Risk          : 0.054
+
+[TEAM CONTEXT]
+Season Win %        : 0.750
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.580
+team_morale           : 1.000
+team_pressure         : 0.797
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.483
+rep_mgmt              : 0.465
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.750
+losing_streak         : 0.013
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.382
+scratched_recently    : 0.000
+offer_respect         : 0.016
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.046
+family_event          : 0.000
+age_factor            : 0.771
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.535
+Salary Cap          : 164
+Cap Growth Rate     : 0.070
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.972
+
+[CONTRACT STATUS]
+Years Left          : 6
+AAV                 : 807,187
+Clause              : m-ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000003
+Net Score           : -1.109
+Primary Reason      : extreme outlier
+
+[CAREER STAGE]
+Prime Years
+===================================================
+
+==============================
+      SIM YEAR 11
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 29
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.412
+
+[SEASON STATS]
+season                : 2036
+role                  : depth
+goals                 : 7
+assists               : 12
+points                : 20
+war                   : 0.530
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 45
+delta                 : -45.000
+skating               : 36.000
+offense               : 39.000
+passing               : 40.000
+defense               : 40.000
+iq                    : 50.000
+physical              : 46.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.590
+money_focus           : 0.417
+family_priority       : 0.970
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.441
+confidence            : 0.339
+volatility            : 0.957
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.366
+health                : 0.026
+family                : 0.144
+psychological         : 0.244
+security              : 0.208
+environment           : 0.560
+
+[HEALTH]
+Wear & Tear         : 0.058
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.533
+confidence            : 0.582
+belonging             : 0.557
+trust                 : 0.469
+motivation            : 0.528
+stability             : 0.586
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.095
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.042
+security_anxiety      : 0.088
+
+[INJURY RISK]
+Total Risk          : 0.060
+
+[TEAM CONTEXT]
+Season Win %        : 0.675
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.579
+team_morale           : 1.000
+team_pressure         : 0.804
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.486
+rep_mgmt              : 0.455
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.675
+losing_streak         : 0.022
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.295
+scratched_recently    : 0.000
+offer_respect         : 0.000
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.052
+family_event          : 0.000
+age_factor            : 0.800
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.532
+Salary Cap          : 177
+Cap Growth Rate     : 0.080
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.971
+
+[CONTRACT STATUS]
+Years Left          : 6
+AAV                 : 828,841
+Clause              : ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000005
+Net Score           : -1.026
+Primary Reason      : extreme outlier
+
+[CAREER STAGE]
+Prime Years
+===================================================
+
+==============================
+      SIM YEAR 12
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 30
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.401
+
+[SEASON STATS]
+season                : 2037
+role                  : depth
+goals                 : 9
+assists               : 13
+points                : 22
+war                   : 0.520
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 45
+delta                 : -45.000
+skating               : 34.000
+offense               : 38.000
+passing               : 39.000
+defense               : 39.000
+iq                    : 50.000
+physical              : 45.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.587
+money_focus           : 0.417
+family_priority       : 0.976
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.433
+confidence            : 0.346
+volatility            : 0.957
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.398
+health                : 0.032
+family                : 0.160
+psychological         : 0.264
+security              : 0.224
+environment           : 0.607
+
+[HEALTH]
+Wear & Tear         : 0.064
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.536
+confidence            : 0.588
+belonging             : 0.561
+trust                 : 0.466
+motivation            : 0.531
+stability             : 0.592
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.103
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.050
+security_anxiety      : 0.094
+
+[INJURY RISK]
+Total Risk          : 0.068
+
+[TEAM CONTEXT]
+Season Win %        : 0.741
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.581
+team_morale           : 1.000
+team_pressure         : 0.793
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.490
+rep_mgmt              : 0.446
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.741
+losing_streak         : 0.013
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.381
+scratched_recently    : 0.000
+offer_respect         : 0.016
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.058
+family_event          : 0.150
+age_factor            : 0.829
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.529
+Salary Cap          : 187
+Cap Growth Rate     : 0.056
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.973
+
+[CONTRACT STATUS]
+Years Left          : 5
+AAV                 : 826,946
+Clause              : m-ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000071
+Net Score           : -0.992
+Primary Reason      : age
+
+[CAREER STAGE]
+Late Prime / Early Decline
+===================================================
+
+==============================
+      SIM YEAR 13
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 31
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.386
+
+[SEASON STATS]
+season                : 2038
+role                  : depth
+goals                 : 7
+assists               : 12
+points                : 20
+war                   : 0.500
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 45
+delta                 : -45.000
+skating               : 31.000
+offense               : 36.000
+passing               : 38.000
+defense               : 38.000
+iq                    : 50.000
+physical              : 44.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.583
+money_focus           : 0.417
+family_priority       : 0.983
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.425
+confidence            : 0.352
+volatility            : 0.957
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.430
+health                : 0.039
+family                : 0.177
+psychological         : 0.284
+security              : 0.240
+environment           : 0.651
+
+[HEALTH]
+Wear & Tear         : 0.070
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.538
+confidence            : 0.593
+belonging             : 0.565
+trust                 : 0.464
+motivation            : 0.533
+stability             : 0.598
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.111
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.058
+security_anxiety      : 0.101
+
+[INJURY RISK]
+Total Risk          : 0.076
+
+[TEAM CONTEXT]
+Season Win %        : 0.654
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.578
+team_morale           : 1.000
+team_pressure         : 0.808
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.493
+rep_mgmt              : 0.435
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.654
+losing_streak         : 0.022
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.294
+scratched_recently    : 0.000
+offer_respect         : 0.000
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.066
+family_event          : 0.000
+age_factor            : 0.857
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.523
+Salary Cap          : 192
+Cap Growth Rate     : 0.025
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.973
+
+[CONTRACT STATUS]
+Years Left          : 5
+AAV                 : 849,692
+Clause              : m-ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000075
+Net Score           : -0.984
+Primary Reason      : age
+
+[CAREER STAGE]
+Late Prime / Early Decline
+===================================================
+
+==============================
+      SIM YEAR 14
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 32
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.373
+
+[SEASON STATS]
+season                : 2039
+role                  : depth
+goals                 : 9
+assists               : 11
+points                : 21
+war                   : 0.460
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 45
+delta                 : -45.000
+skating               : 29.000
+offense               : 34.000
+passing               : 37.000
+defense               : 37.000
+iq                    : 50.000
+physical              : 43.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.578
+money_focus           : 0.417
+family_priority       : 0.990
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.416
+confidence            : 0.358
+volatility            : 0.957
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.464
+health                : 0.047
+family                : 0.195
+psychological         : 0.304
+security              : 0.256
+environment           : 0.690
+
+[HEALTH]
+Wear & Tear         : 0.076
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.540
+confidence            : 0.599
+belonging             : 0.569
+trust                 : 0.461
+motivation            : 0.535
+stability             : 0.604
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.119
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.066
+security_anxiety      : 0.107
+
+[INJURY RISK]
+Total Risk          : 0.084
+
+[TEAM CONTEXT]
+Season Win %        : 0.604
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.575
+team_morale           : 1.000
+team_pressure         : 0.827
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.495
+rep_mgmt              : 0.424
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.604
+losing_streak         : 0.001
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.347
+scratched_recently    : 0.000
+offer_respect         : 0.000
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.074
+family_event          : 0.000
+age_factor            : 0.886
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.515
+Salary Cap          : 199
+Cap Growth Rate     : 0.040
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.972
+
+[CONTRACT STATUS]
+Years Left          : 4
+AAV                 : 850,389
+Clause              : m-ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000083
+Net Score           : -0.966
+Primary Reason      : age
+
+[CAREER STAGE]
+Late Prime / Early Decline
+===================================================
+
+==============================
+      SIM YEAR 15
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 33
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.359
+
+[SEASON STATS]
+season                : 2040
+role                  : depth
+goals                 : 8
+assists               : 10
+points                : 19
+war                   : 0.470
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 39
+delta                 : -39.000
+skating               : 26.000
+offense               : 33.000
+passing               : 36.000
+defense               : 36.000
+iq                    : 50.000
+physical              : 42.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.574
+money_focus           : 0.417
+family_priority       : 0.998
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.406
+confidence            : 0.363
+volatility            : 0.958
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.498
+health                : 0.055
+family                : 0.215
+psychological         : 0.325
+security              : 0.273
+environment           : 0.727
+
+[HEALTH]
+Wear & Tear         : 0.082
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.542
+confidence            : 0.604
+belonging             : 0.573
+trust                 : 0.459
+motivation            : 0.536
+stability             : 0.609
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.127
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.073
+security_anxiety      : 0.113
+
+[INJURY RISK]
+Total Risk          : 0.092
+
+[TEAM CONTEXT]
+Season Win %        : 0.632
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.574
+team_morale           : 1.000
+team_pressure         : 0.834
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.497
+rep_mgmt              : 0.412
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.632
+losing_streak         : 0.017
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.392
+scratched_recently    : 0.000
+offer_respect         : 0.021
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.081
+family_event          : 0.000
+age_factor            : 0.914
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.513
+Salary Cap          : 208
+Cap Growth Rate     : 0.046
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.971
+
+[CONTRACT STATUS]
+Years Left          : 0
+AAV                 : (none)
+Clause              : none
+
+[LAST CONTRACT RESULT]
+Outcome             : walk
+Notes               :
+  - player walks to market
+
+[RETIREMENT]
+Retire Chance       : 0.000083
+Net Score           : -0.965
+Primary Reason      : age
+
+[CAREER STAGE]
+Late Prime / Early Decline
+===================================================
+
+==============================
+      SIM YEAR 16
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 34
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.345
+
+[SEASON STATS]
+season                : 2041
+role                  : depth
+goals                 : 8
+assists               : 11
+points                : 19
+war                   : 0.530
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 39
+delta                 : -39.000
+skating               : 24.000
+offense               : 31.000
+passing               : 35.000
+defense               : 35.000
+iq                    : 50.000
+physical              : 40.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.568
+money_focus           : 0.417
+family_priority       : 1.000
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.396
+confidence            : 0.369
+volatility            : 0.960
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.534
+health                : 0.065
+family                : 0.236
+psychological         : 0.346
+security              : 0.290
+environment           : 0.761
+
+[HEALTH]
+Wear & Tear         : 0.088
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.544
+confidence            : 0.610
+belonging             : 0.576
+trust                 : 0.457
+motivation            : 0.538
+stability             : 0.614
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.134
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.081
+security_anxiety      : 0.119
+
+[INJURY RISK]
+Total Risk          : 0.102
+
+[TEAM CONTEXT]
+Season Win %        : 0.679
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.575
+team_morale           : 1.000
+team_pressure         : 0.827
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.500
+rep_mgmt              : 0.402
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.679
+losing_streak         : 0.020
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.301
+scratched_recently    : 0.000
+offer_respect         : 0.000
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.089
+family_event          : 0.000
+age_factor            : 0.943
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.521
+Salary Cap          : 223
+Cap Growth Rate     : 0.072
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.971
+
+[CONTRACT STATUS]
+Years Left          : 3
+AAV                 : 808,375
+Clause              : m-ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000148
+Net Score           : -0.869
+Primary Reason      : age
+
+[CAREER STAGE]
+Veteran
+===================================================
+
+==============================
+      SIM YEAR 17
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 35
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.330
+
+[SEASON STATS]
+season                : 2042
+role                  : depth
+goals                 : 9
+assists               : 12
+points                : 21
+war                   : 0.450
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 39
+delta                 : -39.000
+skating               : 21.000
+offense               : 29.000
+passing               : 34.000
+defense               : 34.000
+iq                    : 50.000
+physical              : 39.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.563
+money_focus           : 0.417
+family_priority       : 1.000
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.385
+confidence            : 0.374
+volatility            : 0.961
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.570
+health                : 0.077
+family                : 0.257
+psychological         : 0.368
+security              : 0.306
+environment           : 0.792
+
+[HEALTH]
+Wear & Tear         : 0.094
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.546
+confidence            : 0.615
+belonging             : 0.580
+trust                 : 0.455
+motivation            : 0.540
+stability             : 0.619
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.142
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.088
+security_anxiety      : 0.125
+
+[INJURY RISK]
+Total Risk          : 0.113
+
+[TEAM CONTEXT]
+Season Win %        : 0.624
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.573
+team_morale           : 1.000
+team_pressure         : 0.835
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.502
+rep_mgmt              : 0.391
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.624
+losing_streak         : 0.016
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.310
+scratched_recently    : 0.000
+offer_respect         : 0.000
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.099
+family_event          : 0.000
+age_factor            : 0.971
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.531
+Salary Cap          : 235
+Cap Growth Rate     : 0.054
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.972
+
+[CONTRACT STATUS]
+Years Left          : 4
+AAV                 : 816,450
+Clause              : ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000456
+Net Score           : -0.862
+Primary Reason      : age
+
+[CAREER STAGE]
+Veteran
+===================================================
+
+==============================
+      SIM YEAR 18
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 36
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.318
+
+[SEASON STATS]
+season                : 2043
+role                  : depth
+goals                 : 7
+assists               : 14
+points                : 22
+war                   : 0.520
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 39
+delta                 : -39.000
+skating               : 20.000
+offense               : 27.000
+passing               : 33.000
+defense               : 33.000
+iq                    : 50.000
+physical              : 37.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.557
+money_focus           : 0.417
+family_priority       : 1.000
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.373
+confidence            : 0.378
+volatility            : 0.964
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.608
+health                : 0.089
+family                : 0.280
+psychological         : 0.390
+security              : 0.324
+environment           : 0.821
+
+[HEALTH]
+Wear & Tear         : 0.100
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.548
+confidence            : 0.620
+belonging             : 0.583
+trust                 : 0.452
+motivation            : 0.542
+stability             : 0.623
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.149
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.095
+security_anxiety      : 0.130
+
+[INJURY RISK]
+Total Risk          : 0.123
+
+[TEAM CONTEXT]
+Season Win %        : 0.620
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.572
+team_morale           : 1.000
+team_pressure         : 0.841
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.504
+rep_mgmt              : 0.380
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.620
+losing_streak         : 0.002
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.345
+scratched_recently    : 0.000
+offer_respect         : 0.000
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.109
+family_event          : 0.150
+age_factor            : 1.000
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.530
+Salary Cap          : 249
+Cap Growth Rate     : 0.058
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.972
+
+[CONTRACT STATUS]
+Years Left          : 4
+AAV                 : 878,920
+Clause              : m-ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.000401
+Net Score           : -0.884
+Primary Reason      : age
+
+[CAREER STAGE]
+Veteran
+===================================================
+
+==============================
+      SIM YEAR 19
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 37
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.309
+
+[SEASON STATS]
+season                : 2044
+role                  : depth
+goals                 : 9
+assists               : 14
+points                : 24
+war                   : 0.490
+xgf_pct               : 0.400
+performance_score     : 0.350
+expected_score        : 39
+delta                 : -38.650
+skating               : 20.000
+offense               : 25.000
+passing               : 32.000
+defense               : 32.000
+iq                    : 50.000
+physical              : 35.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.551
+money_focus           : 0.417
+family_priority       : 1.000
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.361
+confidence            : 0.382
+volatility            : 0.967
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.645
+health                : 0.103
+family                : 0.303
+psychological         : 0.412
+security              : 0.341
+environment           : 0.847
+
+[HEALTH]
+Wear & Tear         : 0.106
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.550
+confidence            : 0.624
+belonging             : 0.586
+trust                 : 0.450
+motivation            : 0.543
+stability             : 0.628
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.157
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.102
+security_anxiety      : 0.135
+
+[INJURY RISK]
+Total Risk          : 0.133
+
+[TEAM CONTEXT]
+Season Win %        : 0.710
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.575
+team_morale           : 1.000
+team_pressure         : 0.824
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.507
+rep_mgmt              : 0.370
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.710
+losing_streak         : 0.016
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.618
+scratched_recently    : 0.000
+offer_respect         : 0.020
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.120
+family_event          : 0.000
+age_factor            : 1.000
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.529
+Salary Cap          : 264
+Cap Growth Rate     : 0.061
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.972
+
+[CONTRACT STATUS]
+Years Left          : 0
+AAV                 : (none)
+Clause              : none
+
+[LAST CONTRACT RESULT]
+Outcome             : force_trade
+Notes               :
+  - player forces trade after negotiation collapse
+
+[RETIREMENT]
+Retire Chance       : 0.001888
+Net Score           : -0.625
+Primary Reason      : age
+
+[CAREER STAGE]
+Veteran
+===================================================
+
+==============================
+      SIM YEAR 20
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 38
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.299
+
+[SEASON STATS]
+season                : 2045
+role                  : depth
+goals                 : 7
+assists               : 14
+points                : 21
+war                   : 0.470
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 39
+delta                 : -39.000
+skating               : 20.000
+offense               : 23.000
+passing               : 31.000
+defense               : 31.000
+iq                    : 50.000
+physical              : 33.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.544
+money_focus           : 0.417
+family_priority       : 1.000
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.348
+confidence            : 0.386
+volatility            : 0.970
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.684
+health                : 0.119
+family                : 0.326
+psychological         : 0.434
+security              : 0.358
+environment           : 0.871
+
+[HEALTH]
+Wear & Tear         : 0.113
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.551
+confidence            : 0.629
+belonging             : 0.589
+trust                 : 0.448
+motivation            : 0.545
+stability             : 0.632
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.164
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.109
+security_anxiety      : 0.141
+
+[INJURY RISK]
+Total Risk          : 0.144
+
+[TEAM CONTEXT]
+Season Win %        : 0.556
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.571
+team_morale           : 0.996
+team_pressure         : 0.847
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.508
+rep_mgmt              : 0.357
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.556
+losing_streak         : 0.017
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.307
+scratched_recently    : 0.000
+offer_respect         : 0.000
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.130
+family_event          : 0.000
+age_factor            : 1.000
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.532
+Salary Cap          : 284
+Cap Growth Rate     : 0.074
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.973
+
+[CONTRACT STATUS]
+Years Left          : 3
+AAV                 : 837,909
+Clause              : ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.002908
+Net Score           : -0.553
+Primary Reason      : age
+
+[CAREER STAGE]
+Aging Veteran
+===================================================
+
+==============================
+      SIM YEAR 21
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 39
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.291
+
+[SEASON STATS]
+season                : 2046
+role                  : depth
+goals                 : 9
+assists               : 13
+points                : 23
+war                   : 0.500
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 39
+delta                 : -39.000
+skating               : 20.000
+offense               : 21.000
+passing               : 30.000
+defense               : 30.000
+iq                    : 50.000
+physical              : 32.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.537
+money_focus           : 0.417
+family_priority       : 1.000
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.334
+confidence            : 0.390
+volatility            : 0.974
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.723
+health                : 0.136
+family                : 0.351
+psychological         : 0.457
+security              : 0.376
+environment           : 0.894
+
+[HEALTH]
+Wear & Tear         : 0.119
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.553
+confidence            : 0.633
+belonging             : 0.593
+trust                 : 0.446
+motivation            : 0.547
+stability             : 0.636
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.172
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.116
+security_anxiety      : 0.146
+
+[INJURY RISK]
+Total Risk          : 0.154
+
+[TEAM CONTEXT]
+Season Win %        : 0.593
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.569
+team_morale           : 1.000
+team_pressure         : 0.859
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.510
+rep_mgmt              : 0.345
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.593
+losing_streak         : 0.016
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.309
+scratched_recently    : 0.000
+offer_respect         : 0.000
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.140
+family_event          : 0.000
+age_factor            : 1.000
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.540
+Salary Cap          : 293
+Cap Growth Rate     : 0.032
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.972
+
+[CONTRACT STATUS]
+Years Left          : 3
+AAV                 : 817,653
+Clause              : ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.004706
+Net Score           : -0.472
+Primary Reason      : age
+
+[CAREER STAGE]
+Aging Veteran
+===================================================
+
+==============================
+      SIM YEAR 22
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 40
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.283
+
+[SEASON STATS]
+season                : 2047
+role                  : depth
+goals                 : 11
+assists               : 17
+points                : 29
+war                   : 0.560
+xgf_pct               : 0.400
+performance_score     : 4.200
+expected_score        : 39
+delta                 : -34.800
+skating               : 20.000
+offense               : 20.000
+passing               : 29.000
+defense               : 29.000
+iq                    : 50.000
+physical              : 30.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.530
+money_focus           : 0.417
+family_priority       : 1.000
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.320
+confidence            : 0.393
+volatility            : 0.978
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.763
+health                : 0.154
+family                : 0.375
+psychological         : 0.480
+security              : 0.393
+environment           : 0.914
+
+[HEALTH]
+Wear & Tear         : 0.126
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.555
+confidence            : 0.637
+belonging             : 0.595
+trust                 : 0.444
+motivation            : 0.548
+stability             : 0.640
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.179
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.123
+security_anxiety      : 0.151
+
+[INJURY RISK]
+Total Risk          : 0.164
+
+[TEAM CONTEXT]
+Season Win %        : 0.600
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.568
+team_morale           : 1.000
+team_pressure         : 0.866
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.511
+rep_mgmt              : 0.333
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.600
+losing_streak         : 0.027
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 1.000
+scratched_recently    : 0.000
+offer_respect         : 0.033
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.150
+family_event          : 0.000
+age_factor            : 1.000
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.536
+Salary Cap          : 300
+Cap Growth Rate     : 0.025
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.972
+
+[CONTRACT STATUS]
+Years Left          : 3
+AAV                 : 850,526
+Clause              : m-ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.038151
+Net Score           : -0.188
+Primary Reason      : age
+
+[CAREER STAGE]
+Aging Veteran
+===================================================
+
+==============================
+      SIM YEAR 23
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 41
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.278
+
+[SEASON STATS]
+season                : 2048
+role                  : depth
+goals                 : 7
+assists               : 12
+points                : 19
+war                   : 0.470
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 39
+delta                 : -39.000
+skating               : 20.000
+offense               : 20.000
+passing               : 28.000
+defense               : 28.000
+iq                    : 50.000
+physical              : 28.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.522
+money_focus           : 0.417
+family_priority       : 1.000
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.305
+confidence            : 0.396
+volatility            : 0.983
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.803
+health                : 0.174
+family                : 0.400
+psychological         : 0.502
+security              : 0.411
+environment           : 0.920
+
+[HEALTH]
+Wear & Tear         : 0.133
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.556
+confidence            : 0.642
+belonging             : 0.598
+trust                 : 0.442
+motivation            : 0.549
+stability             : 0.643
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.186
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.129
+security_anxiety      : 0.155
+
+[INJURY RISK]
+Total Risk          : 0.175
+
+[TEAM CONTEXT]
+Season Win %        : 0.750
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.573
+team_morale           : 1.000
+team_pressure         : 0.837
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.515
+rep_mgmt              : 0.323
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.750
+losing_streak         : 0.002
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.355
+scratched_recently    : 0.000
+offer_respect         : 0.003
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.160
+family_event          : 0.000
+age_factor            : 1.000
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.533
+Salary Cap          : 318
+Cap Growth Rate     : 0.058
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.972
+
+[CONTRACT STATUS]
+Years Left          : 3
+AAV                 : 876,460
+Clause              : ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.081577
+Net Score           : -0.054
+Primary Reason      : age
+
+[CAREER STAGE]
+Aging Veteran
+===================================================
+
+==============================
+      SIM YEAR 24
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 42
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.273
+
+[SEASON STATS]
+season                : 2049
+role                  : depth
+goals                 : 8
+assists               : 17
+points                : 25
+war                   : 0.490
+xgf_pct               : 0.400
+performance_score     : 1.400
+expected_score        : 39
+delta                 : -37.600
+skating               : 20.000
+offense               : 20.000
+passing               : 27.000
+defense               : 27.000
+iq                    : 50.000
+physical              : 26.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.514
+money_focus           : 0.417
+family_priority       : 1.000
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.290
+confidence            : 0.398
+volatility            : 0.988
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.840
+health                : 0.194
+family                : 0.424
+psychological         : 0.523
+security              : 0.427
+environment           : 0.920
+
+[HEALTH]
+Wear & Tear         : 0.140
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.557
+confidence            : 0.645
+belonging             : 0.601
+trust                 : 0.440
+motivation            : 0.551
+stability             : 0.647
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.193
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.136
+security_anxiety      : 0.160
+
+[INJURY RISK]
+Total Risk          : 0.185
+
+[TEAM CONTEXT]
+Season Win %        : 0.708
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.575
+team_morale           : 1.000
+team_pressure         : 0.828
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.517
+rep_mgmt              : 0.313
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.708
+losing_streak         : 0.018
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.904
+scratched_recently    : 0.000
+offer_respect         : 0.000
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.170
+family_event          : 0.000
+age_factor            : 1.000
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.534
+Salary Cap          : 327
+Cap Growth Rate     : 0.031
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : speed_and_skill
+League Nudges       :
+  injury_rate_mod     : 0.973
+
+[CONTRACT STATUS]
+Years Left          : 2
+AAV                 : 856,714
+Clause              : m-ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.092336
+Net Score           : -0.031
+Primary Reason      : age
+
+[CAREER STAGE]
+Fringe / Retirement Risk
+===================================================
+
+==============================
+      SIM YEAR 25
+==============================
+
+================ PLAYER STATE DUMP ================
+
+[IDENTITY]
+Name        : SimPlayer_6195
+Age         : 43
+Position    : RW
+Shoots      : R
+Team        : Boston Canadiens
+Team Style  : draft_and_develop
+
+[OVR / ATTRIBUTES]
+OVR         : 0.268
+
+[SEASON STATS]
+season                : 2050
+role                  : depth
+goals                 : 9
+assists               : 11
+points                : 20
+war                   : 0.470
+xgf_pct               : 0.400
+performance_score     : 0.000
+expected_score        : 39
+delta                 : -39.000
+skating               : 20.000
+offense               : 20.000
+passing               : 26.000
+defense               : 26.000
+iq                    : 50.000
+physical              : 24.000
+
+[PERSONALITY TRAITS]
+loyalty               : 0.413
+ambition              : 0.507
+money_focus           : 0.417
+family_priority       : 1.000
+legacy_drive          : 0.844
+risk_tolerance        : 0.500
+adaptability          : 0.500
+patience              : 0.500
+stability_need        : 0.500
+ego                   : 0.275
+confidence            : 0.400
+volatility            : 0.993
+competitiveness       : 0.500
+leadership            : 0.127
+coachability          : 0.386
+media_comfort         : 0.500
+introversion          : 0.500
+work_ethic            : 1.000
+mental_toughness      : 0.499
+clutch_tendency       : 0.500
+
+[LIFE PRESSURE]
+career_identity       : 0.874
+health                : 0.215
+family                : 0.445
+psychological         : 0.542
+security              : 0.441
+environment           : 0.920
+
+[HEALTH]
+Wear & Tear         : 0.146
+Chronic Injuries    : 0
+
+[MORALE]
+Overall Morale      : 0.559
+confidence            : 0.649
+belonging             : 0.604
+trust                 : 0.438
+motivation            : 0.552
+stability             : 0.650
+
+[CAREER ARC]
+expectation_gap       : 0.000
+identity_instability  : 0.200
+emotional_fatigue     : 0.000
+legacy_pressure       : 0.142
+security_anxiety      : 0.165
+
+[INJURY RISK]
+Total Risk          : 0.195
+
+[TEAM CONTEXT]
+Season Win %        : 0.591
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+stability             : 0.000
+dev_modifier          : 0.571
+team_morale           : 1.000
+team_pressure         : 0.848
+team_status           : dysfunctional
+market_pressure       : 0.798
+fan_expectations      : 0.817
+ownership_meddling    : 0.296
+ownership_patience    : 0.635
+rep_player            : 0.519
+rep_mgmt              : 0.301
+
+[BEHAVIOR CONTEXT]
+team_success          : 0.591
+losing_streak         : 0.049
+rebuild_mode          : 0.000
+role_mismatch         : 0.000
+ice_time_satisfaction : 0.226
+scratched_recently    : 0.000
+offer_respect         : 0.000
+ufa_pressure          : 1.000
+market_heat           : 0.798
+injury_burden         : 0.194
+family_event          : 0.150
+age_factor            : 1.000
+cup_satisfaction      : 0.000
+
+[LEAGUE SNAPSHOT]
+Season              : unknown
+League Health       : 0.538
+Salary Cap          : 344
+Cap Growth Rate     : 0.049
+Parity Index        : 0.000
+Chaos Index         : 0.000
+Active Era          : grind_low_scoring
+League Nudges       :
+  injury_rate_mod     : 1.050
+
+[CONTRACT STATUS]
+Years Left          : 3
+AAV                 : 853,784
+Clause              : ntc
+
+[LAST CONTRACT RESULT]
+Outcome             : accept
+
+[RETIREMENT]
+Retire Chance       : 0.523919
+Net Score           : 0.366
+Primary Reason      : age
+
+[CAREER STAGE]
+Fringe / Retirement Risk
+===================================================
+
+PLAYER HAS RETIRED
+
+================ CAREER SUMMARY ================
+Final Age              : 43
+Final OVR              : 0.268
+Retired                : True
+Retirement Reason      : age
+===============================================
+
