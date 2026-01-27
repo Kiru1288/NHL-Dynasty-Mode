@@ -48,11 +48,7 @@ from app.sim_engine.ai.retirement_engine import RetirementEngine
 from app.sim_engine.ai.randomness import RandomnessEngine
 from app.sim_engine.context.League_Stats import LeagueStats
 from app.sim_engine.context.Player_Stats import PlayerStatsEngine
-from app.sim_engine.ai.coach import (
-    Coach,
-    CoachStyle,
-    CoachImpact,
-)
+
 
 
 
@@ -62,6 +58,7 @@ from app.sim_engine.ai.coach import (
 from app.sim_engine.entities.player import Player
 from app.sim_engine.entities.team import Team
 from app.sim_engine.entities.league import League
+from app.sim_engine.entities.coach import Coach
 
 
 # -------------------------------
@@ -200,6 +197,13 @@ class SimEngine:
         self.team: Team | None = None
 
         # ------------------------------------
+        # Coach (ACTIVE system)
+        # ------------------------------------
+        self.coach: Coach | None = None
+        self.coach_last_season: dict | None = None
+
+
+        # ------------------------------------
         # Personality (AI-side)
         # ------------------------------------
         factory = PersonalityFactory(self.rng)
@@ -245,10 +249,20 @@ class SimEngine:
         self.player = player
 
     def set_team(self, team: Team) -> None:
+        if team.coach is None:
+            raise RuntimeError(
+                "SimEngine requires team.coach to be set before sim_year()."
+            )
+
         self.team = team
-        # Guard: team.add_player may expect not-None
-        if self.player is not None:
-            team.add_player(self.player)
+        self.coach = team.coach
+
+
+
+    # Attach team coach if present
+        if hasattr(team, "coach"):
+            self.coach = team.coach
+
 
     # --------------------------------------------------
     # League helpers
@@ -603,8 +617,9 @@ class SimEngine:
             "league_health": float(health.get("health_score", 0.6)),
             "era": (era.get("state") or {}).get("active_era", "unknown"),
             "coach_security": (
-            self.coach_impact.job_security if self.coach_impact else 0.5
-        ),
+        self.coach.job_security if self.coach else 0.5
+    ),
+
 
         }
 
@@ -662,7 +677,7 @@ class SimEngine:
         print(f"Team Style  : {getattr(self.team, 'archetype', 'unknown')}")
         print("\n[COACH]")
         print(f"Name                : {self.coach.name}")
-        print(f"Style               : {self.coach.style.value}")
+        
         print(f"Job Security        : {self.coach.job_security:.3f}")
 
 
@@ -672,11 +687,7 @@ class SimEngine:
         # --------------------------------------------------
         # SEASON STATS (LATEST)
         # --------------------------------------------------
-        if self.coach_impact:
-            print("\n[COACH IMPACT]")
-            for k, v in vars(self.coach_impact).items():
-                if isinstance(v, float):
-                    print(f"{k:22s}: {v:.3f}")
+        
 
         if hasattr(self.player, "season_stats") and self.player.season_stats:
             latest = self.player.season_stats.get(2025 + self.year)
@@ -753,6 +764,14 @@ class SimEngine:
         print(f"Parity Index        : {float(parity.get('parity_index', 0.0)):.3f}")
         print(f"Chaos Index         : {float((self.last_league_forecast or {}).get('chaos_index', 0.0)):.3f}")
         print(f"Active Era          : {(era.get('state') or {}).get('active_era', 'unknown')}")
+        print("\n[COACH]")
+        print(f"Name                : {self.coach.name}")
+        print(f"Job Security        : {self.coach.job_security:.3f}")
+        print(f"Risk Tolerance      : {self.coach.tactics.risk_tolerance:.3f}")
+        print(f"Pace Preference     : {self.coach.tactics.pace_preference.value}")
+        print(f"Lost Room           : {self.coach.lost_room}")
+        print(f"Room Temperature    : {self.coach.room_temperature:.3f}")
+
 
         top_narr = (narrative.get("top_narratives") or [])
         if top_narr:
@@ -842,15 +861,29 @@ class SimEngine:
         team_ctx = self.team.team_context_for_player(self.player)
         rebuild_mode = team_ctx.get("rebuild_mode", 0.0)
 
+                # --------------------------------------------------
+        # Coach season tick (ACTIVE)
+        # --------------------------------------------------
+        coach_results = {
+            "points_pct": win_pct,
+            "made_playoffs": 1.0 if win_pct >= 0.55 else 0.0,
+            "player_conflicts": float(team_ctx.get("player_conflicts", 0.0)),
+            "media_pressure": float(team_ctx.get("market_pressure", 0.5)),
+        }
+
+        self.coach_last_season = self.coach.year_tick(
+            rng=self.rng,
+            market_tag=str(getattr(self.team, "market_tag", "")),
+            team_status=str(getattr(self.team, "status", "bubble")),
+            owner_expectations=float(getattr(self.team, "owner_expectations", 0.55)),
+            results=coach_results,
+        )
+
+
         # --------------------------------------------------
 # Coach evaluation (seasonal)
 # --------------------------------------------------
-        self.coach_impact = self.coach.evaluate_season(
-            team=self.team,
-            win_pct=win_pct,
-            roster_context=team_ctx,
-            league_context=self.last_league_context or {},
-        )
+        
 
 
         # --------------------------------------------------
@@ -871,11 +904,11 @@ class SimEngine:
         # 3. Build behavior context
         # --------------------------------------------------
         injury_burden = float(self.injury_risk.total_risk) * float(league_nudges["injury_rate_mod"])
-        league_morale_pressure = max(
-            0.0,
+        league_morale_pressure = (
             float(league_nudges["morale_volatility_mod"]) - 1.0
-            + (self.coach_impact.morale_volatility if self.coach_impact else 0.0)
+            + (self.coach.tactics.volatility_factor() * 0.35)
         )
+
 
 
         ctx = BehaviorContext(
@@ -887,7 +920,8 @@ class SimEngine:
                 (
                     0.35
                     + float(season_stats.get("performance_score", 0.50)) * 0.65
-                    + (self.coach_impact.ice_time_bias if self.coach_impact else 0.0)
+                    + ((self.coach.room_temperature - 0.5) * 0.12)
+
                 ),
                 0.15,
                 0.98,
@@ -938,16 +972,24 @@ class SimEngine:
         )
 
         # --------------------------------------------------
-        # 5. Aging / development
-        # --------------------------------------------------
+# 5. Aging / development (coach-aware)
+# --------------------------------------------------
+
+        coach_dev = self.coach.development_effects_for_player(
+            player_id=str(self.player.id),
+            player_age=int(self.player.age),
+            player_personality=vars(self.player.traits),
+            in_role_fit=float(team_ctx.get("role_fit", 0.55)),
+            rng=self.rng,
+        )
+
         self.player.advance_year(
-    season_morale=self.morale.overall(),
-    season_injury_risk=self.injury_risk.total_risk,
-    team_instability=1.0 - float(team_ctx.get("stability", 0.5)),
-    development_modifier=(
-        self.coach_impact.development_boost if self.coach_impact else 0.0
-    ),
-)
+            season_morale=self.morale.overall(),
+            season_injury_risk=self.injury_risk.total_risk,
+            team_instability=1.0 - float(team_ctx.get("stability", 0.5)),
+            development_modifier=coach_dev["skill_growth_multiplier"] - 1.0,
+        )
+
 
 
         # --------------------------------------------------

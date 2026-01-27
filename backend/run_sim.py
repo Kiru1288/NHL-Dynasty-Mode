@@ -5,6 +5,7 @@ import os
 import time
 
 from app.sim_engine.engine import SimEngine
+from app.sim_engine.entities.coach import Coach
 from app.sim_engine.entities.player import (
     Player,
     IdentityBio,
@@ -25,7 +26,6 @@ from app.sim_engine.entities.team import Team, TeamArchetype
 # ==================================================
 # RANDOM PLAYER FACTORY
 # ==================================================
-
 def create_random_player(rng: random.Random) -> Player:
     identity = IdentityBio(
         name=f"SimPlayer_{rng.randint(1000, 9999)}",
@@ -77,47 +77,67 @@ def create_random_player(rng: random.Random) -> Player:
     )
 
     ratings = {
-    "skating": rng.uniform(0.45, 0.60),
-    "offense": rng.uniform(0.45, 0.60),
-    "passing": rng.uniform(0.45, 0.60),
-    "defense": rng.uniform(0.45, 0.60),
-    "physical": rng.uniform(0.45, 0.60),
-    "iq": rng.uniform(0.45, 0.60),
-}
+        "skating": rng.uniform(0.45, 0.60),
+        "offense": rng.uniform(0.45, 0.60),
+        "passing": rng.uniform(0.45, 0.60),
+        "defense": rng.uniform(0.45, 0.60),
+        "physical": rng.uniform(0.45, 0.60),
+        "iq": rng.uniform(0.45, 0.60),
+    }
 
     return Player(
-    identity=identity,
-    backstory=backstory,
-    ratings=ratings,
-    traits=traits,
-    career=career,
-    rng_seed=rng.randint(1, 2_000_000_000),
-)
-
+        identity=identity,
+        backstory=backstory,
+        ratings=ratings,
+        traits=traits,
+        career=career,
+        rng_seed=rng.randint(1, 2_000_000_000),
+    )
 
 
 # ==================================================
-# TEAM SNAPSHOT (ONE-TIME)
+# COACH FACTORY (MATCHES Coach.__init__)
 # ==================================================
+def create_random_coach(rng: random.Random) -> Coach:
+    coach = Coach(
+        coach_id=f"COACH_{rng.randint(1000, 9999)}",
+        name=f"Coach_{rng.randint(100, 999)}",
+        age=rng.randint(38, 65),
+        nationality=rng.choice(["CAN", "USA", "SWE", "FIN", "CZE"]),
+        experience_years=rng.randint(5, 35),
+        career_stage=rng.choice(["rookie", "established", "veteran", "late_career"]),
+        role=rng.choice(["head_coach", "assistant", "associate", "skills_coach"]),
+        specialization=rng.choice([
+            "player_development",
+            "systems",
+            "motivation",
+            "tactics",
+            "discipline",
+        ]),
+    )
+    coach.rng = rng  # optional, but safe
+    return coach
 
+
+# ==================================================
+# TEAM SNAPSHOT
+# ==================================================
 def dump_team_snapshot(team: Team):
     print("\n================ TEAM SNAPSHOT ================")
     print(f"Team: {team.city} {team.name}")
     print(f"Archetype: {team.archetype}")
     print(f"Status: {team.state.status}")
-
-    print("\n[DYNAMIC STATE]")
-    print(f"Competitive Score      : {team.state.competitive_score:.3f}")
-    print(f"Team Morale            : {team.state.team_morale:.3f}")
-    print(f"Stability              : {team.state.stability:.3f}")
+    print(f"Competitive Score : {team.state.competitive_score:.3f}")
+    print(f"Team Morale       : {team.state.team_morale:.3f}")
+    print(f"Stability         : {team.state.stability:.3f}")
     print("===============================================")
 
 
 # ==================================================
 # MAIN
 # ==================================================
-
 if __name__ == "__main__":
+    print(">>> run_sim.py STARTED")
 
     master_seed = int(time.time_ns())
     rng = random.Random(master_seed)
@@ -126,12 +146,8 @@ if __name__ == "__main__":
 
     team = Team(
         team_id=rng.randint(1, 32),
-        city=rng.choice(
-            ["Ottawa", "Toronto", "Montreal", "Boston", "New York", "Chicago", "Detroit"]
-        ),
-        name=rng.choice(
-            ["Senators", "Maple Leafs", "Canadiens", "Bruins", "Rangers", "Blackhawks", "Red Wings"]
-        ),
+        city=rng.choice(["Ottawa", "Toronto", "Montreal", "Boston", "New York", "Chicago", "Detroit"]),
+        name=rng.choice(["Senators", "Maple Leafs", "Canadiens", "Bruins", "Rangers", "Blackhawks", "Red Wings"]),
         division=rng.choice(["Atlantic", "Metropolitan", "Central", "Pacific"]),
         conference=rng.choice(["East", "West"]),
         archetype=rng.choice([
@@ -144,35 +160,39 @@ if __name__ == "__main__":
         rng=rng,
     )
 
+    # 🔒 REQUIRED: attach coach BEFORE engine sees team
+    team.coach = create_random_coach(rng)
+
     sim = SimEngine(seed=master_seed)
     sim.set_player(player)
     sim.set_team(team)
 
     os.makedirs("app", exist_ok=True)
 
+    print(">>> Simulation wiring complete. Writing output to app/sim_results.txt")
+
     with open("app/sim_results.txt", "a", encoding="utf-8") as f:
         with redirect_stdout(f):
-
             print("\n=================================================")
             print(f"CAREER SIM RUN — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             print("=================================================")
-            print(f"Seed: {master_seed}")
-            print(f"Player: {player.name}")
-            print(f"Team: {team.city} {team.name} ({team.archetype})")
-            print(f"Initial OVR: {round(player.ovr(), 3)}")
-            print("-------------------------------------------------\n")
+            print(f"Seed   : {master_seed}")
+            print(f"Player : {player.name}")
+            print(f"Team   : {team.city} {team.name} ({team.archetype})")
+            print(f"Coach  : {team.coach.name} | {team.coach.role} | {team.coach.specialization}")
+            print(f"Initial OVR: {player.ovr():.3f}")
+            print("-------------------------------------------------")
 
             dump_team_snapshot(team)
 
-            # 🔥 ENGINE CONTROLS EVERYTHING YEAR-BY-YEAR
             sim.sim_years(years=40, debug_dump=True, sleep_s=0.0)
 
             print("\n================ CAREER SUMMARY ================")
-            print(f"Final Age              : {player.age}")
-            print(f"Final OVR              : {round(player.ovr(), 3)}")
-            print(f"Retired                : {player.retired}")
+            print(f"Final Age : {player.age}")
+            print(f"Final OVR : {player.ovr():.3f}")
+            print(f"Retired   : {player.retired}")
             if player.retired:
-                print(f"Retirement Reason      : {player.retirement_reason}")
-            print("===============================================\n")
+                print(f"Reason    : {player.retirement_reason}")
+            print("===============================================")
 
-    print("Simulation complete. Results saved to app/sim_results.txt\n")
+    print(">>> Simulation finished successfully.")

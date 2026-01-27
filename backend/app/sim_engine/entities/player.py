@@ -730,6 +730,9 @@ class Player:
             rng_seed = random.randint(1, 2_000_000_000)
         self.context = context or ContextState(chaos_seed=rng_seed)
         self.context.clamp_all()
+                # Stable player ID (required by engine, contracts, logging)
+        self.id = f"PLAYER_{rng_seed}"
+
 
         self.retired = retired
 
@@ -820,14 +823,16 @@ class Player:
     # (call this once per season/year in your SimEngine)
     # -----------------------------
     def advance_year(
-        self,
-        *,
-        season_morale: Optional[float] = None,
-        season_injury_risk: Optional[float] = None,
-        major_injury_severity: Optional[float] = None,  # 0–1 scar event
-        role_change: float = 0.0,  # -1 demotion, +1 promotion (optional)
-        team_instability: float = 0.0,  # 0–1 (optional)
-    ) -> Dict[str, Any]:
+    self,
+    *,
+    season_morale: Optional[float] = None,
+    season_injury_risk: Optional[float] = None,
+    major_injury_severity: Optional[float] = None,
+    role_change: float = 0.0,
+    team_instability: float = 0.0,
+    development_modifier: float = 0.0,  # 🔥 NEW (coach impact)
+) -> Dict[str, Any]:
+
         """
         One call per simulated year.
         This is where:
