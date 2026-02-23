@@ -49,6 +49,17 @@ from app.sim_engine.ai.randomness import RandomnessEngine
 from app.sim_engine.context.League_Stats import LeagueStats
 from app.sim_engine.context.Player_Stats import PlayerStatsEngine
 
+from app.sim_engine.draft.draft_lottery import (
+    LotteryTeam,
+    run_draft_lottery,
+)
+
+from app.sim_engine.draft.draft_board import (
+    DraftBoard,
+    DraftContext,
+    DraftEvent,
+    TeamProfile as DraftTeamProfile,
+)
 
 
 
@@ -59,6 +70,19 @@ from app.sim_engine.entities.player import Player
 from app.sim_engine.entities.team import Team
 from app.sim_engine.entities.league import League
 from app.sim_engine.entities.coach import Coach
+from app.sim_engine.entities.prospect import (
+    Prospect,
+    ProspectPhase,
+    ScoutProfile,
+)
+# -------------------------------
+# Economy Systems
+# -------------------------------
+from app.sim_engine.economy.waiver_ai import (
+    WaiverEngine,
+    WaiverConfig,
+    update_priority_after_claim,
+)
 
 
 # -------------------------------
@@ -81,6 +105,18 @@ from app.sim_engine.entities.contract import (
     ContractContextKind,
 )
 
+# -------------------------------
+# Scouting System
+# -------------------------------
+from app.sim_engine.draft.scouting import (
+    create_scout,
+    create_scouting_department,
+    update_scouting,
+    build_team_draft_board,
+    LeagueContextSnapshot,
+    Region,
+    ScoutRole,
+)
 
 
 
@@ -157,11 +193,13 @@ class SimEngine:
     # Construction
     # --------------------------------------------------
 
-    def __init__(self, seed: int | None = None):
+    def __init__(self, seed: int | None = None, debug: bool = False):
         self.year: int = 0
         self.seed: int = seed if seed is not None else random.randrange(1, 10**18)
         self.rng: random.Random = random.Random(self.seed)
         self.retired: bool = False
+        self.debug: bool = debug
+        self.last_draft_lottery = None
 
         # ------------------------------------
         # League ecosystem (MACRO ONLY)
@@ -189,12 +227,34 @@ class SimEngine:
         self.injury_risk_engine = InjuryRiskEngine()
         self.retirement_engine = RetirementEngine(seed=self.seed)
         self.randomness = RandomnessEngine(self.rng)
+                # ------------------------------------
+        # Waiver System
+        # ------------------------------------
+        self.waiver_engine = WaiverEngine(
+            config=WaiverConfig(early_season_cutoff_day=30)
+        )
+        self.waiver_priority: list[str] = []
+
 
         # ------------------------------------
         # Injected entities
         # ------------------------------------
         self.player: Player | None = None
         self.team: Team | None = None
+        # ------------------------------------
+        # Prospect pipeline (pre-draft)
+        # ------------------------------------
+        self.prospects: list[Prospect] = []
+        self.draft_class: list[Prospect] = []
+        self.scout_pool: list[ScoutProfile] = []
+        self.last_draft_results: list[dict] = []
+
+                # ------------------------------------
+        # Scouting Departments (NEW)
+        # ------------------------------------
+        self.team_scouting_departments: dict[str, Any] = {}
+
+
 
         # ------------------------------------
         # Coach (ACTIVE system)
@@ -244,6 +304,14 @@ class SimEngine:
     # --------------------------------------------------
     # Injection
     # --------------------------------------------------
+    def add_prospect(self, prospect: Prospect) -> None:
+        self.prospects.append(prospect)
+
+    def set_draft_class(self, prospects: list[Prospect]) -> None:
+        self.draft_class = prospects
+
+    def set_scout_pool(self, scouts: list[ScoutProfile]) -> None:
+        self.scout_pool = scouts
 
     def set_player(self, player: Player) -> None:
         self.player = player
@@ -257,6 +325,34 @@ class SimEngine:
         self.team = team
         self.coach = team.coach
 
+                # ------------------------------------
+        # Initialize scouting department for team
+        # ------------------------------------
+        if self.team.team_id not in self.team_scouting_departments:
+
+            rng = random.Random(self.seed)
+
+            scouts = [
+                create_scout(team_id=self.team.team_id, region=Region.OHL, role=ScoutRole.AREA, rng=rng),
+                create_scout(team_id=self.team.team_id, region=Region.WHL, role=ScoutRole.AREA, rng=rng),
+                create_scout(team_id=self.team.team_id, region=Region.QMJHL, role=ScoutRole.AREA, rng=rng),
+                create_scout(team_id=self.team.team_id, region=Region.USHL, role=ScoutRole.AREA, rng=rng),
+                create_scout(team_id=self.team.team_id, region=Region.EUROPE, role=ScoutRole.CROSSCHECK, rng=rng),
+                create_scout(team_id=self.team.team_id, region=Region.OTHER, role=ScoutRole.HEAD, rng=rng),
+            ]
+
+            dept = create_scouting_department(
+                team_id=self.team.team_id,
+                budget_level=0.6,
+                coverage_quality=0.6,
+                scouts=scouts,
+                rng_seed=self.seed,
+            )
+
+            self.team_scouting_departments[self.team.team_id] = dept
+
+
+
 
 
     # Attach team coach if present
@@ -267,6 +363,78 @@ class SimEngine:
     # --------------------------------------------------
     # League helpers
     # --------------------------------------------------
+    def _prospect_to_board_payload(self, p: Prospect) -> dict:
+        """
+        Adapter: Prospect entity -> dict payload for DraftBoard scoring.
+        Safe: uses getattr fallbacks so it won't crash if fields aren't present.
+        """
+        # Identity
+        pid = str(getattr(p, "id", getattr(getattr(p, "identity", None), "id", "")) or "")
+        name = str(getattr(getattr(p, "identity", None), "name", getattr(p, "name", f"Prospect_{pid}")))
+        pos = str(getattr(getattr(p, "position", None), "value", getattr(p, "position", "C")))
+
+        # Draft "truth-ish" signals (still imperfect – but this is what teams *think*)
+        # If your Prospect has draft_value_range like (floor, ceiling) or similar, map it
+        dvr = getattr(p, "draft_value_range", None)
+        if isinstance(dvr, (list, tuple)) and len(dvr) >= 2:
+            floor_sig = float(dvr[0])
+            ceiling_sig = float(dvr[1])
+        else:
+            # fallback: if your Prospect stores other signals
+            floor_sig = float(getattr(p, "floor", 0.5))
+            ceiling_sig = float(getattr(p, "ceiling", getattr(p, "upside", 0.5)))
+
+        # Certainty / variance (if you have it)
+        certainty = float(getattr(p, "certainty", getattr(p, "certainty_signal", 0.5)))
+        variance = float(getattr(p, "variance", getattr(p, "boom_bust", 0.4)))
+
+        # Optional: readiness / production / tools
+        production = float(getattr(p, "production", getattr(p, "points_signal", 0.5)))
+        skating = float(getattr(p, "skating", 0.5))
+        hockey_iq = float(getattr(p, "hockey_iq", getattr(p, "iq", 0.5)))
+        nhl_readiness = float(getattr(p, "nhl_readiness", getattr(p, "readiness", 0.5)))
+
+        # Mentality/personality (IF your Prospect already has these; otherwise safe defaults)
+        # If your Prospect stores a "mentality" dict or dataclass, we try to read it.
+        ment = getattr(p, "mentality", None)
+        coachability = float(getattr(ment, "coachability", 0.5)) if ment else float(getattr(p, "coachability", 0.5))
+        work_ethic = float(getattr(ment, "work_ethic", 0.5)) if ment else float(getattr(p, "work_ethic", 0.5))
+        resilience = float(getattr(ment, "resilience", 0.5)) if ment else float(getattr(p, "resilience", 0.5))
+        leadership = float(getattr(ment, "leadership", 0.5)) if ment else float(getattr(p, "leadership", 0.5))
+        volatility = float(getattr(ment, "volatility", 0.5)) if ment else float(getattr(p, "volatility", 0.5))
+        entitlement = float(getattr(ment, "entitlement", 0.5)) if ment else float(getattr(p, "entitlement", 0.5))
+        consistency = float(getattr(ment, "consistency", 0.5)) if ment else float(getattr(p, "consistency", 0.5))
+
+        # Risk flags (injury etc)
+        injury_risk = float(getattr(p, "injury_risk", getattr(getattr(p, "risk", None), "injury_risk", 0.3)))
+        off_ice_risk = float(getattr(p, "off_ice_risk", 0.2))
+
+        return {
+            "id": pid,
+            "name": name,
+            "position": pos,
+            # "signals"
+            "upside": max(0.0, min(1.0, ceiling_sig)),
+            "floor": max(0.0, min(1.0, floor_sig)),
+            "certainty": max(0.0, min(1.0, certainty)),
+            "variance": max(0.0, min(1.0, variance)),
+            "production": max(0.0, min(1.0, production)),
+            "skating": max(0.0, min(1.0, skating)),
+            "hockey_iq": max(0.0, min(1.0, hockey_iq)),
+            "nhl_readiness": max(0.0, min(1.0, nhl_readiness)),
+            # mentality/personality
+            "coachability": max(0.0, min(1.0, coachability)),
+            "work_ethic": max(0.0, min(1.0, work_ethic)),
+            "resilience": max(0.0, min(1.0, resilience)),
+            "leadership": max(0.0, min(1.0, leadership)),
+            "volatility": max(0.0, min(1.0, volatility)),
+            "entitlement": max(0.0, min(1.0, entitlement)),
+            "consistency": max(0.0, min(1.0, consistency)),
+            # risk
+            "injury_risk": max(0.0, min(1.0, injury_risk)),
+            "boom_bust": max(0.0, min(1.0, variance)),
+            "off_ice_risk": max(0.0, min(1.0, off_ice_risk)),
+        }
 
     def _advance_league_and_cache(self) -> dict:
 
@@ -818,8 +986,309 @@ class SimEngine:
 
 
          
+        # --------------------------------------------------
+    # Draft orchestration (lottery + selection)
+    # --------------------------------------------------
 
-   
+    def run_offseason_draft(
+        self,
+        *,
+        non_playoff_teams: list[tuple[str, int]],
+        org_dev_quality: dict[str, float],
+        coach_fit: dict[str, float],
+        market_pressure: dict[str, float],
+        seed: int | None = None,
+    ) -> list[dict]:
+        """
+        Full draft pipeline:
+        1) Run NHL-style draft lottery
+        2) Produce final team order
+        3) Execute draft picks via run_draft()
+
+        non_playoff_teams:
+            [(team_id, season_points), ...] sorted WORST → BEST
+        """
+
+        # ------------------------------------
+        # 1. Build lottery inputs
+        # ------------------------------------
+        lottery_teams = [
+            LotteryTeam(team_id=t[0], points=t[1])
+            for t in non_playoff_teams
+        ]
+
+        # ------------------------------------
+        # 2. Run lottery
+        # ------------------------------------
+        lottery_result = run_draft_lottery(
+            teams=lottery_teams,
+            seed=seed or self.seed + self.year,
+        )
+
+        team_order = lottery_result.pick_order
+        self.last_draft_lottery = lottery_result
+
+
+
+        # ------------------------------------
+        # 3. Execute draft
+        # ------------------------------------
+        draft_results = self.run_draft(
+            team_order=team_order,
+            org_dev_quality=org_dev_quality,
+            coach_fit=coach_fit,
+            market_pressure=market_pressure,
+        )
+
+        # ------------------------------------
+        # 4. Cache results
+        # ------------------------------------
+        self.last_draft_results = {
+            "order": team_order,
+            "lottery_winners": lottery_result.lottery_winners,
+            "results": draft_results,
+        }
+
+        return draft_results
+
+    def run_draft(
+        self,
+        *,
+        team_order: list[str],
+        org_dev_quality: dict[str, float],
+        coach_fit: dict[str, float],
+        market_pressure: dict[str, float],
+    ) -> list[dict]:
+        """
+        Executes a realistic draft:
+        - Each team builds its OWN internal DraftBoard
+        - Picks are made via board.recommend_pick() using sliding/rumors/runs
+        - Prospect conversion stays the same
+        - Draft results include pick meta (mood/intent/top5/trade_signal) for storytelling/debug
+
+        NOTE:
+        - This replaces the old "sort by consensus and pop(0)" logic.
+        """
+
+        # ----------------------------
+        # 1) Draft-eligible prospects
+        # ----------------------------
+        eligible: list[Prospect] = [p for p in self.prospects if p.phase == ProspectPhase.DRAFT_YEAR]
+        if not eligible:
+            self.last_draft_results = []
+            return []
+
+        # Convert to board payloads once
+        dept = self.team_scouting_departments.get(team_order[0])  # example: your team
+
+        payloads = []
+        payload_by_id = {}
+
+        for p in eligible:
+            pid = str(p.id)
+
+            if dept and pid in dept.team_views:
+                tv = dept.team_views[pid]
+
+                payload = {
+                    "id": pid,
+                    "name": getattr(p, "name", f"Prospect_{pid}"),
+                    "position": getattr(p.position, "value", "C"),
+                    "upside": tv.ceiling_est[1],
+                    "floor": tv.floor_est[1],
+                    "certainty": tv.confidence,
+                    "variance": 1.0 - tv.confidence,
+                    "production": tv.grade,
+                    "skating": 0.5,
+                    "hockey_iq": 0.5,
+                    "nhl_readiness": tv.grade,
+                    "coachability": 0.5,
+                    "work_ethic": 0.5,
+                    "resilience": 0.5,
+                    "leadership": 0.5,
+                    "volatility": 0.5,
+                    "entitlement": 0.5,
+                    "consistency": 0.5,
+                    "injury_risk": 0.5,
+                    "boom_bust": 0.5,
+                    "off_ice_risk": 0.2,
+                }
+
+            else:
+                payload = self._prospect_to_board_payload(p)
+
+            payloads.append(payload)
+            payload_by_id[pid] = payload
+
+        prospect_by_id = {}
+        for p in eligible:
+            pid = str(getattr(p, "id", getattr(getattr(p, "identity", None), "id", "")) or "")
+            prospect_by_id[pid] = p
+
+        # ----------------------------
+        # 2) Build DraftBoards (one per team)
+        # ----------------------------
+        ctx = DraftContext(
+            seed=self.seed + self.year,
+            year=2025 + self.year,
+            recent_picks_window=8,
+            iceberg_effect_strength=0.65,
+            run_strength=0.55,
+        )
+
+        boards: dict[str, DraftBoard] = {}
+        for team_id in team_order:
+            profile = self._build_draft_team_profile(
+                team_id,
+                org_dev_quality=org_dev_quality,
+                coach_fit=coach_fit,
+                market_pressure=market_pressure,
+            )
+            b = DraftBoard(profile, ctx)
+            b.build(payloads)
+            boards[team_id] = b
+
+        # ----------------------------
+        # 3) Run the draft
+        # ----------------------------
+        drafted_ids: set[str] = set()
+        league_events: list[DraftEvent] = []
+        results: list[dict] = []
+
+        for pick_number, team_id in enumerate(team_order, start=1):
+            if len(drafted_ids) >= len(payloads):
+                break
+
+            board = boards[team_id]
+
+            chosen_id, meta = board.recommend_pick(
+                pick_number=pick_number,
+                drafted_ids=drafted_ids,
+                league_events=league_events,
+            )
+
+            # Safety fallback: if something goes weird, take best available by that board
+            if not chosen_id or chosen_id in drafted_ids or chosen_id not in payload_by_id:
+                avail = board.available(drafted_ids)
+                if not avail:
+                    break
+                chosen_id = avail[0].prospect_id
+
+            drafted_ids.add(chosen_id)
+
+            chosen_payload = payload_by_id[chosen_id]
+            prospect = prospect_by_id.get(chosen_id)
+
+            # Another safety fallback (shouldn't happen)
+            if prospect is None:
+                # find by matching name/id
+                # If missing, just skip conversion but still record the pick
+                prospect_name = chosen_payload.get("name", "Unknown Prospect")
+                event = DraftEvent(
+                    pick_number=pick_number,
+                    team_id=team_id,
+                    prospect_id=chosen_id,
+                    prospect_name=prospect_name,
+                    note="(missing prospect entity)",
+                )
+                league_events.append(event)
+                # update boards with the pick
+                for b in boards.values():
+                    b.on_pick_made(event)
+
+                results.append({
+                    "pick": pick_number,
+                    "team_id": team_id,
+                    "prospect_id": chosen_id,
+                    "prospect_name": prospect_name,
+                    "player_payload": None,
+                    "draft_meta": meta,
+                })
+                continue
+
+            # Convert prospect -> player payload (your existing system)
+            payload = prospect.convert_to_player_payload(
+                drafted_by_team_id=team_id,
+                org_dev_quality=org_dev_quality.get(team_id, 0.5),
+                coach_fit=coach_fit.get(team_id, 0.5),
+                market_pressure=market_pressure.get(team_id, 0.5),
+            )
+
+            # Draft event (feeds iceberg/runs)
+            event = DraftEvent(
+                pick_number=pick_number,
+                team_id=team_id,
+                prospect_id=chosen_id,
+                prospect_name=str(getattr(getattr(prospect, "identity", None), "name", chosen_payload.get("name", "Unknown"))),
+                note=f"{meta.get('mood','')}/{meta.get('intent','')}",
+            )
+            league_events.append(event)
+
+            # Push pick into every board so their run trackers stay synced
+            for b in boards.values():
+                b.on_pick_made(event)
+
+            # Remove from active prospects list (engine truth)
+            if prospect in self.prospects:
+                self.prospects.remove(prospect)
+
+            results.append({
+                "pick": pick_number,
+                "team_id": team_id,
+                "prospect_id": chosen_id,
+                "prospect_name": event.prospect_name,
+                "player_payload": payload,
+                "draft_range": getattr(prospect, "draft_rank_range", None),
+                "draft_meta": meta,  # <- this is GOLD for debug/storytelling
+            })
+
+        self.last_draft_results = results
+        return results
+
+                # --------------------------------------------------
+    # Waiver Processing
+    # --------------------------------------------------
+    def process_waiver_player(self, player_payload: dict) -> None:
+        """
+        Simulates waiving a player and processes league claims.
+        """
+
+        if not self.waiver_priority:
+            return
+
+        # Build simplified team dictionaries for waiver engine
+        team_dicts = []
+
+        for team in self.league.teams:
+            team_dicts.append({
+                "team_id": str(team.id),
+                "points": getattr(team, "points", 0),
+                "point_pct": getattr(team, "point_pct", 0.5),
+                "goal_diff": getattr(team, "goal_diff", 0),
+                "cap_space": getattr(team, "cap_space", 5_000_000),
+                "competitive_window": getattr(team, "status", "bubble"),
+                "roster_needs": getattr(team, "roster_needs", []),
+            })
+
+        winner = self.waiver_engine.process_player(
+            player=player_payload,
+            teams=team_dicts,
+            priority_order=self.waiver_priority,
+        )
+
+        if winner:
+            self.waiver_priority = update_priority_after_claim(
+                self.waiver_priority,
+                winner
+            )
+
+            if self.debug:
+                print(f"\nWAIVER CLAIM: {winner} claimed player.")
+
+        else:
+            if self.debug:
+                print("\nWAIVER CLEAR: Player cleared waivers.")
+
 
     # --------------------------------------------------
     # Single season
@@ -832,6 +1301,13 @@ class SimEngine:
             return
 
         self.year += 1
+                # --------------------------------------------------
+        # Draft-year locking for eligible prospects
+        # --------------------------------------------------
+        for p in self.prospects:
+            if p.phase == ProspectPhase.DRAFT_YEAR:
+                p.lock_draft_year_outputs()
+
 
         print("\n==============================")
         print(f"      SIM YEAR {self.year}")
@@ -842,6 +1318,54 @@ class SimEngine:
         # --------------------------------------------------
         self._advance_league_and_cache()
         league_nudges = self._league_nudges()
+
+                # --------------------------------------------------
+        # Initialize waiver priority for season
+        # --------------------------------------------------
+        league_ctx = self.last_league_context or {}
+        season_ctx = {
+            "day": 1,
+            "standings_current": getattr(self.league, "teams", []),
+        }
+
+        self.waiver_priority = self.waiver_engine.build_priority(
+            league_context={
+                "standings_prev": getattr(self.league, "teams", [])
+            },
+            season_context=season_ctx,
+        )
+
+        # --------------------------------------------------
+        # 0A. Prospect development year (PRE-NHL)
+        # --------------------------------------------------
+        for p in self.prospects:
+            # Only simulate prospects not yet drafted
+            if p.phase != ProspectPhase.DRAFT_YEAR:
+                p.step_year()
+                # --------------------------------------------------
+        # 0B. Weekly scouting simulation (NEW)
+        # --------------------------------------------------
+        dept = self.team_scouting_departments.get(self.team.team_id)
+
+
+        if dept:
+            # simulate 26 scouting ticks per season
+            for week in range(1, 27):
+                league_snapshot = LeagueContextSnapshot(
+                    season=2025 + self.year,
+                    week=week,
+                    active_era="modern_offense",
+                    league_health=0.6,
+                )
+
+                update_scouting(
+                    dept=dept,
+                    prospects=self.prospects,
+                    league_ctx=league_snapshot,
+                    week=week,
+                )
+
+
 
         # --------------------------------------------------
         # 1. Team season result (abstract)
@@ -990,12 +1514,86 @@ class SimEngine:
             development_modifier=coach_dev["skill_growth_multiplier"] - 1.0,
         )
 
+                            # Example: random waiver test for depth player
+        if self.player.ovr() < 0.42 and self.rng.random() < 0.15:
+            waiver_payload = {
+                "position": self.player.position.value,
+                "age": self.player.age,
+                "cap_hit": 1_200_000,
+                "contract_years_left": 1,
+                "overall_projection": self.player.ovr(),
+            }
+
+            self.process_waiver_player(waiver_payload)
+
+
+
+                # --------------------------------------------------
+        # OFFSEASON: Draft (lottery + selection)
+        # --------------------------------------------------
+        if self.draft_class:
+            non_playoff = []
+
+            for team in self.league.teams:
+                if not getattr(team, "made_playoffs", False):
+                    non_playoff.append(
+                        (team.id, int(getattr(team, "points", 0)))
+                    )
+
+            # Sort WORST → BEST
+            non_playoff.sort(key=lambda x: x[1])
+
+            self.run_offseason_draft(
+                non_playoff_teams=non_playoff,
+                org_dev_quality={t[0]: 0.5 for t in non_playoff},
+                coach_fit={t[0]: 0.5 for t in non_playoff},
+                market_pressure={t[0]: 0.5 for t in non_playoff},
+            )
+            
 
 
         # --------------------------------------------------
         # 6. Offseason contracts
         # --------------------------------------------------
         self._maybe_run_offseason_contracts(ctx=ctx, win_pct=win_pct)
+        # --------------------------------------------------
+# DRAFT LOTTERY OUTPUT (DEBUG)
+# --------------------------------------------------
+        if self.debug and self.last_draft_lottery:
+            print("\n================ DRAFT LOTTERY =================")
+            for i, team_id in enumerate(
+                self.last_draft_lottery.pick_order[:16], start=1
+            ):
+                marker = (
+                    " (LOTTERY WINNER)"
+                    if team_id in self.last_draft_lottery.lottery_winners
+                    else ""
+                )
+                print(f"Pick #{i}: {team_id}{marker}")
+            print("===============================================\n")
+
+    # Clear so it prints only once per season
+        self.last_draft_lottery = None
+                        # ------------------------------------
+        # SCOUTING SNAPSHOT
+        # ------------------------------------
+        dept = self.team_scouting_departments.get(self.team.team_id)
+
+        if dept:
+            print("\n[SCOUTING SNAPSHOT]")
+            top = sorted(
+                dept.team_views.values(),
+                key=lambda v: (v.tier, -v.grade),
+            )[:5]
+
+            for v in top:
+                print(
+                    f"{v.prospect_id} | grade={v.grade:.3f} "
+                    f"conf={v.confidence:.3f} "
+                    f"tier={v.tier} "
+                    f"disagree={v.disagreement:.2f}"
+                )
+
 
         # --------------------------------------------------
         # 7. Retirement
@@ -1032,3 +1630,5 @@ class SimEngine:
             self.sim_year(debug_dump=debug_dump)
             if sleep_s and sleep_s > 0:
                 time.sleep(float(sleep_s))
+
+  
