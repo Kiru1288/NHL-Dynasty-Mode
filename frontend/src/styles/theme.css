@@ -1,0 +1,15 @@
+:root {
+  --bg-deep: #050a14;
+  --bg-panel: #0c1526;
+  --bg-panel-alt: #111d32;
+  --border: #3a4a63;
+  --border-bright: #6b7c95;
+  --text: #f0f2f5;
+  --text-muted: #a8b0bf;
+  --accent: #c8102e;
+  --accent-dim: #8b0b20;
+  --silver: #c5ccd6;
+  --highlight: rgba(200, 16, 46, 0.18);
+  --font-head: "Arial Black", "Franklin Gothic Heavy", Arial, sans-serif;
+  --font-body: "Segoe UI", Roboto, Arial, sans-serif;
+}

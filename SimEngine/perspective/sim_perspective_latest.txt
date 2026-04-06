@@ -1,0 +1,135 @@
+========================================================================
+FRANCHISE PERSPECTIVE SIMULATION (GM / front-office POV)
+========================================================================
+Mode          : perspective
+Seed          : 999
+Years         : 1
+Start season  : 2025
+Universe mode : combined
+User team     : Ottawa Senators (id=Senators)
+Interactive draft: off (full AI draft)
+Timestamp UTC : 2026-04-06T06:30:59+00:00
+Output file   : C:\Users\KHank\Desktop\NHL Franchise Mode\SimEngine\perspective\perspective_20260406_063059_seed999.txt
+
+Engine note: underlying simulation matches run_sim.run_simulation_core; universe timeline is discarded to reduce noise. This file is the authoritative POV log.
+
+========================================================================
+SEASON 2025  |  Ottawa Senators
+========================================================================
+Franchise identity snapshot
+  Runner archetype: balanced
+  Competitive window read: Balanced / opportunistic
+  Finish: 103 pts  (~6/32)  bucket=contender  playoffs=yes
+  League champion: team Jets (not us).
+
+Internal front-office brief
+  Market / media: unknown
+  Ownership levers: unknown
+  Org state: unknown
+  Cap read: league cap ~$95.3M — team-level usage unavailable
+  Coach present (Coach_012); rating fields not exposed
+  Trade / deadline posture: Hold flexibility unless division arms race forces response.
+
+Season flow (internal)
+  Season baseline established for the org chart. Postseason berth secured (finish ~6/32) — evaluation mode switches to matchup viability.
+
+Roster structure (our club)
+  Skaters/goalies: 23  mean OVR~0.702  top-3 mean~0.790
+  Age mix: U24 5 | prime 12 | 30+ 6
+  Positional counts: {'C': 5, 'LW': 5, 'RW': 4, 'D': 6, 'G': 3}
+
+Prospect pipeline — our view
+  Pool size: 11  (healthy vs org minimums)
+    • Global JUN 2025-51185  ceiling~0.58  dev_yrs_left=3  arch=STALLED_DEVELOPER
+    • Global JUN 2025-34071  ceiling~0.58  dev_yrs_left=2  arch=LATE_BLOOMER
+    • Global JUN 2025-94031  ceiling~0.56  dev_yrs_left=2  arch=STALLED_DEVELOPER
+    • Global JUN 2025-6235  ceiling~0.53  dev_yrs_left=4  arch=HIGH_VARIANCE
+    • Global EUR 2025-38445  ceiling~0.53  dev_yrs_left=2  arch=STALLED_DEVELOPER
+    • Global MIN 2025-94626  ceiling~0.52  dev_yrs_left=2  arch=LATE_BLOOMER
+
+League events that matter to us (filtered)
+  [  81] (TRADE) TRADE (rebuild fire sale): Rangers acquires Top-4 D rental from Avalanche for 1st round pick + Prospect (high ceiling)
+  [  81] (TRADE) TRADE (player-for-player swap): Blackhawks acquires Top-4 D rental from Avalanche for Backup goalie + Prospect (mid)
+  [  80] (TRADE) TRADE (picks-for-player package): Rangers acquires Top-6 forward from Avalanche for 1st round pick + 2nd round pick + Prospect (mid)
+  [  80] (TRADE) TRADE (picks-for-player package): Blackhawks acquires Top-4 D rental from Avalanche for 1st round pick + 2nd round pick + Prospect (mid)
+  [  78] (TRADE) TRADE (change-of-scenery swap): Blackhawks acquires Backup goalie from Avalanche for 2nd round pick
+  [  73] (RETIREMENT) RETIREMENT: Mikko Salminen retires at age 37
+  [  73] (RETIREMENT) RETIREMENT: Jani Mäkinen retires at age 37
+  [  71] (TRADE) TRADE (multi-asset hockey trade): Blues acquires Top-4 D rental from Avalanche for 1st round pick + Prospect (high ceiling)
+  [  71] (TRADE) TRADE (player-for-player swap): Golden Knights acquires Top-4 D rental from Avalanche for Backup goalie + Prospect (mid)
+  [  71] (TRADE) TRADE (player-for-player swap): Golden Knights acquires Top-6 forward from Avalanche for Middle-6 winger + Prospect (mid)
+  [  70] (TRADE) TRADE (deadline add): Wild acquires Top-6 forward from Avalanche for 2nd round pick + Prospect (mid)
+  [  69] (LOTTERY) DRAFT LOTTERY: #1 Kings, #2 Ducks, #3 Kraken, #4 Avalanche, #5 Flames
+  [  63] (RETIREMENT) RETIREMENT: Matias Salminen retires at age 32
+  [  63] (DRAFT) DRAFT: Entry draft order set (32 slots); matches engine lottery seed.
+
+Playoff / consequence framing
+  Playoff ticket punched — the honest question is whether the run was structural or matchup-luck driven.
+
+Engine league season (structural) — our takeaway
+  Structural sim champion team_id='27' (cross-check vs universe macro champion).
+
+Year-end strategic summary
+  2025: 103 pts, rank 6/32, playoffs=Y, identity=balanced, bucket=contender.
+
+=== FRONT OFFICE REPORT ===
+Season 2025  |  Ottawa Senators
+
+TEAM DIAGNOSIS
+  Profile: CONTENDER (STRONG)
+  Issue: The club shows competitive strengths in the standings and top-end talent, while roster balance is workable if health and special teams hold. Implication: stay patient unless flaws worsen or the window clearly closes.
+  Risk: Injury to a top driver still hurts, but structure absorbs shock better than most.
+  Structural integrity: MODERATE
+  Scores (0–1 scale): contender=0.812  depth=0.518  star-dependency=0.286  goalie-reliance=0.477
+  Age curve read: MIXED / PLATEAU (top-5 mean age 28.8)
+  Narrative identity (performance-aligned): legitimate_contender
+
+ROSTER ANALYSIS
+  • Positional stress: balanced chart (no glaring hole).
+  • No screaming hole on paper; separation comes from coaching and special teams.
+  • PIPELINE GAP: Top of the pool does not solve the current structural issue — external acquisition likely required. (Pipeline head does not obviously solve the diagnosis weaknesses — market action may still be required.)
+
+CAP ANALYSIS (synthetic)
+  Estimated payroll: ~$89.01M  vs cap $95.3M
+  Estimated cap usage: ~93.4%
+  Efficiency read: SOLID
+  Note: Usage model from mean roster OVR proxy ~69 (band 90-95% target, clamped ≤108%). Depth-vs-stars and age-cost inform efficiency read.
+  Dead-weight proxy: none flagged beyond normal middle-class noise.
+
+PROSPECT OUTLOOK
+  Top of pool: Global JUN 2025-51185 — tier: Bust Risk
+  Pipeline strength: MEDIUM
+  NHL impact timeline (headline prospect): ~3 season(s)
+  Need alignment: Top prospect profile does not clearly patch the team's primary structural issues.
+  PIPELINE GAP: Top of the pool does not solve the current structural issue — external acquisition likely required.
+    • Global JUN 2025-51185 (C): Bust Risk  ceiling~0.58  ETA~3y
+    • Global JUN 2025-34071 (RW): Trade Asset / Lottery Ticket  ceiling~0.58  ETA~2y
+    • Global JUN 2025-94031 (C): Bust Risk  ceiling~0.56  ETA~2y
+    • Global JUN 2025-6235 (C): Trade Asset / Lottery Ticket  ceiling~0.53  ETA~4y
+    • Global EUR 2025-38445 (D): Bust Risk  ceiling~0.53  ETA~2y
+    • Global MIN 2025-94626 (C): Trade Asset / Lottery Ticket  ceiling~0.52  ETA~2y
+
+FRANCHISE TRAJECTORY (memory)
+  Pressure level: ELEVATED
+  Missed-playoff streak: 0
+  Years since contention signal: 0
+  Years stuck middle band: 0
+  Core age trail (recent): []
+  Last season strategy tag: None
+  Fan sentiment (synthetic): ELEVATED
+
+FRONT OFFICE DIRECTION
+  Strategy: BUY
+  Reason: Short window open — targeted add if cap room allows.
+  Pipeline context: Pipeline head does not obviously solve the diagnosis weaknesses — market action may still be required.
+
+TRANSACTION ANALYSIS (our club)
+  (No trades logged involving our club this season.)
+
+FINAL VERDICT
+  What we are: legitimate contender.
+  What we should do: BUY — Short window open — targeted add if cap room allows.
+  One-line: This group profiles as contender (strong): The club shows competitive strengths in the standings and top-end talent, while roster balance is workable if health and special teams hold. Implication: stay patient unless flaws worsen or the window clearly closes. Front office should execute a BUY posture — short window open — targeted add if cap room allows.
+
+========================================================================
+RUN COMPLETE — universe state advanced; review season blocks above for narrative continuity.
