@@ -52,7 +52,8 @@ export function SettingsScreen() {
           return (
             <div
               key={row.key}
-              className={`settings-row ${sel ? "is-selected" : ""}`}
+              className={`settings-row ui-interactive ${sel ? "is-selected" : ""}`}
+              data-tooltip="Local presentation rule — sim binding can wire later"
               onClick={() => setSettingsRowIndex(idx)}
               role="presentation"
             >

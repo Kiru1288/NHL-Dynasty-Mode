@@ -55,6 +55,7 @@ export function FranchiseSetup() {
       setFranchiseSessionId(res.session_id);
       navigate("/", { replace: true });
     } catch (err) {
+      console.error("[FranchiseSetup] startFranchise", err);
       setError(formatFranchiseApiError(err));
     } finally {
       setLoading(false);

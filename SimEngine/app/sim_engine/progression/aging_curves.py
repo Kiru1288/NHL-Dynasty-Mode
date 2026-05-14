@@ -45,21 +45,21 @@ def get_age_modifier(player: Any, rng: Any) -> float:
     # Age phases (deterministic curve; optional tiny variance via rng if desired)
     if age <= 21:
         # 18-21: rapid development
-        return 0.06 + rng.uniform(0.0, 0.04)
+        return 0.052 + rng.uniform(0.0, 0.035)
     if age <= 24:
         # 22-24: strong development
-        return 0.04 + rng.uniform(0.0, 0.03)
+        return 0.034 + rng.uniform(0.0, 0.026)
     if age <= 27:
         # 25-27: peak growth
-        return 0.02 + rng.uniform(-0.01, 0.02)
+        return 0.016 + rng.uniform(-0.012, 0.018)
     if age <= 30:
         # 28-30: plateau
-        return rng.uniform(-0.01, 0.01)
+        return rng.uniform(-0.014, 0.008)
     if age <= 33:
         # 31-33: mild regression
-        return -0.015 + rng.uniform(-0.01, 0.005)
+        return -0.018 + rng.uniform(-0.012, 0.004)
     if age <= 36:
         # 34-36: moderate regression
-        return -0.03 + rng.uniform(-0.015, 0.0)
+        return -0.034 + rng.uniform(-0.018, 0.0)
     # 37+: severe regression
-    return -0.05 + rng.uniform(-0.02, 0.0)
+    return -0.055 + rng.uniform(-0.022, 0.0)

@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const baseURL = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000";
+export const baseURL = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000";
 
 export const SESSION_STORAGE_KEY = "nhl_franchise_session_id";
 
@@ -56,7 +56,8 @@ export function formatFranchiseApiError(err) {
       `Check ${baseURL}/api/health for mode: interactive_franchise.`
     );
   }
-  const d = err.response?.data?.detail;
+  const data = err.response?.data;
+  const d = data?.detail ?? data?.message;
   if (typeof d === "string") return d;
   if (d) return JSON.stringify(d);
   return err.message || String(err);

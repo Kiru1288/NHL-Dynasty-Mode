@@ -144,6 +144,117 @@ def _simulate_series(
     return series
 
 
+def _sort_team_ids_by_standings(standings: StandingsTable, team_ids: List[str]) -> List[str]:
+    recs = [standings.records[tid] for tid in team_ids if tid in standings.records]
+    recs.sort(key=standings._sort_key, reverse=True)
+    return [r.team_id for r in recs]
+
+
+def _simulate_nhl_conference_bracket(
+    rng: random.Random,
+    standings: StandingsTable,
+    conference: str,
+    strength_map: Dict[str, float],
+) -> Tuple[List[PlayoffSeries], str]:
+    """
+    Simulate rounds 1–3 for one conference. Returns (all series, conference champion team_id).
+    """
+    series_all: List[PlayoffSeries] = []
+    r1 = standings.nhl_conference_first_round_series(conference)
+    if len(r1) != 4:
+        return series_all, ""
+
+    current = [_simulate_series(rng, s, strength_map) for s in r1]
+    series_all.extend(current)
+    wids = _sort_team_ids_by_standings(standings, [s.winner_id() for s in current])
+    if len(wids) < 4:
+        return series_all, wids[0] if wids else ""
+
+    r2: List[PlayoffSeries] = [
+        PlayoffSeries(
+            round_index=2,
+            conference=conference,
+            seed_high=1,
+            seed_low=4,
+            team_high_id=wids[0],
+            team_low_id=wids[3],
+        ),
+        PlayoffSeries(
+            round_index=2,
+            conference=conference,
+            seed_high=2,
+            seed_low=3,
+            team_high_id=wids[1],
+            team_low_id=wids[2],
+        ),
+    ]
+    cur2 = [_simulate_series(rng, s, strength_map) for s in r2]
+    series_all.extend(cur2)
+    w2 = _sort_team_ids_by_standings(standings, [s.winner_id() for s in cur2])
+    if len(w2) < 2:
+        return series_all, w2[0] if w2 else ""
+
+    cf = PlayoffSeries(
+        round_index=3,
+        conference=conference,
+        seed_high=1,
+        seed_low=2,
+        team_high_id=w2[0],
+        team_low_id=w2[1],
+    )
+    cur3 = _simulate_series(rng, cf, strength_map)
+    series_all.append(cur3)
+    return series_all, cur3.winner_id()
+
+
+def _simulate_nhl_full_playoffs(
+    rng: random.Random,
+    standings: StandingsTable,
+    teams: List[Any],
+    strength_map: Dict[str, float],
+) -> Optional[PlayoffResult]:
+    """Stanley Cup playoffs using division + wild-card R1 when standings support it."""
+    if not standings.uses_nhl_playoff_pairings():
+        return None
+
+    series_all: List[PlayoffSeries] = []
+    conf_champs: Dict[str, str] = {}
+    for conf in sorted(standings._by_conf.keys()):
+        block, champ = _simulate_nhl_conference_bracket(rng, standings, conf, strength_map)
+        series_all.extend(block)
+        if champ:
+            conf_champs[conf] = champ
+
+    champs = list(conf_champs.values())
+    if len(champs) >= 2:
+        ordered = _sort_team_ids_by_standings(standings, champs)
+        fin = PlayoffSeries(
+            round_index=4,
+            conference=None,
+            seed_high=1,
+            seed_low=2,
+            team_high_id=ordered[0],
+            team_low_id=ordered[1],
+        )
+        curf = _simulate_series(rng, fin, strength_map)
+        series_all.append(curf)
+        champion = curf.winner_id()
+        finalists = [curf.team_high_id, curf.team_low_id]
+        return PlayoffResult(champion_id=champion, finalist_ids=finalists, series_list=series_all)
+
+    if len(champs) == 1:
+        champion = champs[0]
+        cf_list = [s for s in series_all if getattr(s, "round_index", 0) == 3]
+        if cf_list:
+            last_cf = cf_list[-1]
+            finalists = [last_cf.team_high_id, last_cf.team_low_id]
+        else:
+            finalists = [champion, champion]
+        return PlayoffResult(champion_id=champion, finalist_ids=finalists, series_list=series_all)
+
+    return None
+
+
 def simulate_playoffs(
     rng: random.Random,
     standings: StandingsTable,
@@ -157,6 +268,10 @@ def simulate_playoffs(
     all_records = standings.league_table()
     if len(all_records) < 2:
         return None
+
+    nhl_res = _simulate_nhl_full_playoffs(rng, standings, teams, strength_map)
+    if nhl_res is not None:
+        return nhl_res
 
     seeds_by_conf = standings.playoff_seeds_by_conference(per_conf=8)
     series_all: List[PlayoffSeries] = []

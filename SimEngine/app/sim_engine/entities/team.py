@@ -249,6 +249,8 @@ class Team:
         # Rosters
         # -------------------------------
         self.roster: List[Player] = []
+        self.ahl_roster: List[Player] = []
+        self.echl_roster: List[Player] = []
         self.scratches: List[Player] = []
         self.prospects: List[Player] = []
         self.prospect_pool: List[Any] = []  # drafted Prospect entities (development pipeline)

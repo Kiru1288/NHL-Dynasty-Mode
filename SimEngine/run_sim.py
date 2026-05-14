@@ -5878,22 +5878,7 @@ def run_simulation_core(
                     },
                 )
 
-        # CAREER
-        if run_cfg.mode in ("combined", "career_only", "regression"):
-            last_context["phase"] = "career_year"
-            career_result = run_career_year(sim, year, run_cfg, logger)
-            if run_cfg.write_json:
-                out.write_json(
-                    f"career_year_{year}.json",
-                    {
-                        "year": year,
-                        "player_id": career_result.player_id,
-                        "team_id": career_result.team_id,
-                        "summary": safe_to_primitive(career_result.summary),
-                    },
-                )
-
-        # LEAGUE (structural season using engine.league *)
+        # LEAGUE (structural season — before career so sim_year reads game-derived stat ledger)
         if sim is not None and hasattr(sim, "simulate_league_season") and run_cfg.mode in ("combined", "career_only", "regression"):
             last_context["phase"] = "league_season"
             league_rng = rng_from_seed(split_seed(run_cfg.seed, f"league::{year}"))
@@ -5905,6 +5890,9 @@ def run_simulation_core(
                 _emit_world_simulation_report(logger, league, year)
             if league_season_result is not None and run_cfg.write_json:
                 # Minimal JSON-friendly dump; detailed structures live inside engine.
+                pstats = getattr(league_season_result, "player_season_stats", None) or []
+                smeta = getattr(league_season_result, "simulation_meta", None) or {}
+                nev = getattr(league_season_result, "news_events", None) or []
                 out.write_json(
                     f"league_season_{year}.json",
                     {
@@ -5921,6 +5909,24 @@ def run_simulation_core(
                             }
                             for name, award in league_season_result.awards.items()
                         },
+                        "player_season_stats": [safe_to_primitive(x) for x in pstats[:120]],
+                        "simulation_meta": safe_to_primitive(smeta),
+                        "news_events": [safe_to_primitive(x) for x in nev[:250]],
+                    },
+                )
+
+        # CAREER (after league season so player season_stats come from game simulation ledger)
+        if run_cfg.mode in ("combined", "career_only", "regression"):
+            last_context["phase"] = "career_year"
+            career_result = run_career_year(sim, year, run_cfg, logger)
+            if run_cfg.write_json:
+                out.write_json(
+                    f"career_year_{year}.json",
+                    {
+                        "year": year,
+                        "player_id": career_result.player_id,
+                        "team_id": career_result.team_id,
+                        "summary": safe_to_primitive(career_result.summary),
                     },
                 )
 

@@ -61,7 +61,7 @@ def update_player_potential(player: Any, rng: Any) -> None:
     sm = float(getattr(player, "_steal_momentum", 0.06) or 0.06)
     nar_g = float(getattr(player, "_narrative_prog_growth_mult", 1.0) or 1.0)
     nar_d = float(getattr(player, "_narrative_decline_p_mult", 1.0) or 1.0)
-    p_break = 0.12
+    p_break = 0.078
     p_bust = 0.10
     if arch == "HIGH_VARIANCE":
         p_break += 0.035

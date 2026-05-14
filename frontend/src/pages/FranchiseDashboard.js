@@ -15,6 +15,7 @@ import {
   getFranchiseSessionId,
   isNetworkError,
 } from "../services/api";
+import { franchiseFeedText } from "../game/constants";
 
 function goSetup() {
   clearFranchiseSession();
@@ -128,7 +129,7 @@ export function FranchiseDashboard() {
         <div className="franchise-col franchise-col--main">
           <Panel title="Control room feed" subtitle="Narrative + league events for your session.">
             <pre className="log-view" style={{ maxHeight: "min(38vh, 360px)" }}>
-              {(state?.timeline || []).join("\n") || "No entries yet."}
+              {(state?.timeline || []).map((t) => franchiseFeedText(t)).join("\n") || "No entries yet."}
             </pre>
             <div style={{ marginTop: "1rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
               <Button onClick={onAdvance} disabled={!state?.flags?.can_advance || advancing}>
@@ -171,7 +172,7 @@ export function FranchiseDashboard() {
           <Panel title="Notifications">
             <ul className="note-list">
               {(state?.notifications || []).map((n, i) => (
-                <li key={i}>{n}</li>
+                <li key={i}>{franchiseFeedText(n)}</li>
               ))}
             </ul>
           </Panel>

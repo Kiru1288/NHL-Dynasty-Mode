@@ -64,12 +64,14 @@ class TradeAI:
         self.value_model = PlayerValue()
         self.needs_model = TeamNeeds()
 
-    def evaluate_trade_market(self, league: Any) -> List[Dict[str, Any]]:
+    def evaluate_trade_market(self, league: Any, *, max_executions: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Returns list of trade dicts with keys:
         - from_team_id, to_team_id
         - outgoing (list player names), incoming (list player names)
         - headline string for logging
+
+        max_executions: when set (e.g. daily sim tick), caps how many trades are executed this call.
         """
         teams: List[Any] = list(getattr(league, "teams", None) or [])
         if len(teams) < 2:
@@ -79,6 +81,8 @@ class TradeAI:
         chaos = _safe_float(getattr(getattr(league, "balance", None), "chaos_index", None), _safe_float(getattr(league, "chaos_index", None), 0.5))
         target_trades = self.base_trades + int(round(chaos * 4.0))
         target_trades = max(self.base_trades, min(self.max_trades, target_trades))
+        if max_executions is not None:
+            target_trades = max(0, min(int(max_executions), target_trades))
 
         # Precompute needs
         needs_by_id: Dict[str, Dict[str, float]] = {}
@@ -102,8 +106,25 @@ class TradeAI:
                 return "contender"
             return "emerging"
 
-        sellers = [t for t in teams if gm_window(t) in ("rebuild", "declining") or ("rebuild" in str(getattr(t, "status", "")).lower())]
-        buyers = [t for t in teams if gm_window(t) in ("contender", "emerging") or ("contend" in str(getattr(t, "status", "")).lower())]
+        def _pt_pct(t: Any) -> float:
+            try:
+                return float(getattr(t, "point_pct", None))
+            except Exception:
+                return 0.5
+
+        sellers = [
+            t
+            for t in teams
+            if gm_window(t) in ("rebuild", "declining")
+            or ("rebuild" in str(getattr(t, "status", "")).lower())
+            or _pt_pct(t) < 0.46
+        ]
+        buyers = [
+            t
+            for t in teams
+            if gm_window(t) in ("contender", "emerging") or ("contend" in str(getattr(t, "status", "")).lower()) or _pt_pct(t) > 0.54
+        ]
+        bubble = [t for t in teams if 0.46 <= _pt_pct(t) <= 0.54]
         if not sellers:
             sellers = teams[:]
         if not buyers:
@@ -115,8 +136,12 @@ class TradeAI:
         for _ in range(target_trades * 3):  # attempt budget
             if len(trades) >= target_trades:
                 break
-            seller = sellers[_safe_int(_ % len(sellers), 0)]
-            buyer = buyers[_safe_int((_ * 7) % len(buyers), 0)]
+            if len(bubble) >= 2 and _safe_int(_, 0) % 5 == 0 and chaos < 0.62:
+                seller = bubble[_ % len(bubble)]
+                buyer = bubble[(_ * 3) % len(bubble)]
+            else:
+                seller = sellers[_safe_int(_ % len(sellers), 0)]
+                buyer = buyers[_safe_int((_ * 7) % len(buyers), 0)]
             if seller is buyer:
                 continue
             sid = str(getattr(seller, "team_id", "S"))
@@ -158,11 +183,18 @@ class TradeAI:
                 continue
 
             # Execute trade (mutate rosters)
+            extra_names: List[str] = []
             try:
                 s_roster.remove(s_offer)
                 b_roster.append(s_offer)
                 b_roster.remove(b_prospect)
                 s_roster.append(b_prospect)
+                if len(b_candidates) >= 4 and (id(s_offer) % 113) < 26:
+                    pick2 = next((p for p in b_candidates if p is not b_prospect and p is not s_offer), None)
+                    if pick2 is not None and pick2 in b_roster and _player_ovr(pick2) < _player_ovr(b_prospect) + 0.08:
+                        b_roster.remove(pick2)
+                        s_roster.append(pick2)
+                        extra_names.append(getattr(pick2, "name", "Piece"))
                 seller.roster = s_roster
                 buyer.roster = b_roster
             except Exception:
@@ -173,12 +205,15 @@ class TradeAI:
                 + f"{getattr(buyer, 'name', bid)} acquire {getattr(s_offer, 'name', 'Player')}; "
                 + f"{getattr(seller, 'name', sid)} receive {getattr(b_prospect, 'name', 'Asset')}"
             )
+            if extra_names:
+                headline += f" + {extra_names[0]}"
+            inc_list = [getattr(b_prospect, "name", "Asset")] + extra_names
             trades.append(
                 {
                     "from_team_id": sid,
                     "to_team_id": bid,
                     "outgoing": [getattr(s_offer, "name", "Player")],
-                    "incoming": [getattr(b_prospect, "name", "Asset")],
+                    "incoming": inc_list,
                     "headline": headline,
                 }
             )
@@ -189,6 +224,6 @@ class TradeAI:
 _DEFAULT = TradeAI()
 
 
-def evaluate_trade_market(league: Any) -> List[Dict[str, Any]]:
-    return _DEFAULT.evaluate_trade_market(league)
+def evaluate_trade_market(league: Any, *, max_executions: Optional[int] = None) -> List[Dict[str, Any]]:
+    return _DEFAULT.evaluate_trade_market(league, max_executions=max_executions)
 

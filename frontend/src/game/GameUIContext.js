@@ -1,10 +1,12 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
-  advanceDay,
+  advanceFranchise,
+  dismissFranchisePopups,
   getFranchiseState,
   listTeams,
   startFranchise,
   submitDecision,
+  submitStorylineChoice,
 } from "../services/franchiseService";
 import {
   clearFranchiseSession,
@@ -12,7 +14,8 @@ import {
   getFranchiseSessionId,
   setFranchiseSessionId,
 } from "../services/api";
-import { HUB_MENU, SCREENS } from "./constants";
+import { HUB_MENU, SCREENS, buildDefaultFranchiseTeamList } from "./constants";
+import { ShowcasePopupLayer } from "../components/game/ShowcasePopupLayer";
 
 const GameUIContext = createContext(null);
 
@@ -30,10 +33,11 @@ export function GameUIProvider({ children }) {
   const [rosterRowIndex, setRosterRowIndex] = useState(0);
   const [settingsRowIndex, setSettingsRowIndex] = useState(0);
   const [setupTeamIndex, setSetupTeamIndex] = useState(0);
-  const [setupArchetypeIndex, setSetupArchetypeIndex] = useState(0);
+  const [setupGamesPerTeam, setSetupGamesPerTeam] = useState(82);
 
   const [teams, setTeams] = useState([]);
-  const [coachName, setCoachName] = useState("Pat Quinn");
+  const [teamsLoading, setTeamsLoading] = useState(false);
+  const [gmName, setGmName] = useState("Pat Quinn");
   const [franchiseState, setFranchiseState] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -45,11 +49,6 @@ export function GameUIProvider({ children }) {
     slashing: 50,
     interference: 50,
   });
-
-  const archetypes = useMemo(
-    () => ["balanced", "development", "defense_first", "aggressive", "players_coach"],
-    []
-  );
 
   const refreshFranchise = useCallback(async () => {
     if (!getFranchiseSessionId()) return;
@@ -78,63 +77,172 @@ export function GameUIProvider({ children }) {
   }, [refreshFranchise]);
 
   const loadTeams = useCallback(async () => {
+    const fallback = buildDefaultFranchiseTeamList();
+    setTeams(fallback);
+    setSetupTeamIndex((i) => Math.min(i, Math.max(0, fallback.length - 1)));
+    setTeamsLoading(true);
     try {
       const t = await listTeams();
-      setTeams(t);
-      setSetupTeamIndex((i) => Math.min(i, Math.max(0, t.length - 1)));
+      const list = Array.isArray(t) && t.length > 0 ? t : fallback;
+      setTeams(list);
+      setSetupTeamIndex((i) => Math.min(i, Math.max(0, list.length - 1)));
     } catch (e) {
       setError(formatFranchiseApiError(e));
+    } finally {
+      setTeamsLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    if (screen === SCREENS.SETUP) {
-      loadTeams();
-    }
-  }, [screen, loadTeams]);
-
   const beginFranchise = useCallback(async () => {
-    if (!teams.length) return;
+    if (!teams.length) {
+      setError("No team selected. Check that the API is running, then try again.");
+      return;
+    }
     setError(null);
     setLoading(true);
     try {
       const t = teams[setupTeamIndex];
-      const arch = archetypes[setupArchetypeIndex] || "balanced";
+      const teamQuery = String(
+        t?.team_id ??
+          t?.teamId ??
+          t?.id ??
+          t?.abbr ??
+          t?.abbreviation ??
+          t?.name ??
+          ""
+      ).trim();
+      if (!teamQuery) {
+        throw new Error("No valid team id was found for the selected team.");
+      }
       const res = await startFranchise({
-        team_query: String(t.team_id),
-        head_coach_name: coachName.trim() || "Head Coach",
-        coach_archetype: arch,
+        team_query: teamQuery,
+        head_coach_name: gmName.trim() || "General Manager",
+        coach_archetype: "balanced",
+        games_per_team: Number(setupGamesPerTeam) || 82,
       });
-      setFranchiseSessionId(res.session_id);
-      setFranchiseState(res.state);
+      const nextSessionId = String(res?.session_id || "").trim();
+      let nextState = res?.state ?? res?.franchiseState;
+      if (nextState == null && res && typeof res === "object") {
+        const looksLikeApiEnvelope =
+          Object.prototype.hasOwnProperty.call(res, "session_id") &&
+          (Object.prototype.hasOwnProperty.call(res, "ok") ||
+            Object.prototype.hasOwnProperty.call(res, "state"));
+        if (!looksLikeApiEnvelope) {
+          nextState = res;
+        }
+      }
+      if (!nextSessionId) {
+        throw new Error("Backend returned no session id.");
+      }
+      setFranchiseSessionId(nextSessionId);
+      if (!nextState || typeof nextState !== "object") {
+        // Some backend variants return only session id from /start.
+        // In that case, fetch the authoritative state and continue.
+        nextState = await getFranchiseState();
+      }
+      if (!nextState || typeof nextState !== "object") {
+        throw new Error("Backend returned no franchise state.");
+      }
+      setFranchiseState(nextState);
       setHubMenuIndex(1);
       setScreen(SCREENS.HUB);
     } catch (e) {
+      console.error("[beginFranchise]", e);
       setError(formatFranchiseApiError(e));
     } finally {
       setLoading(false);
     }
-  }, [teams, setupTeamIndex, archetypes, setupArchetypeIndex, coachName]);
+  }, [teams, setupTeamIndex, gmName, setupGamesPerTeam]);
+
+  const onAdvanceFranchise = useCallback(
+    async ({ mode = "day", count = 1, auto_resolve: autoResolve } = {}) => {
+      if (!franchiseState || franchiseState.phase === "complete") return;
+      const m = String(mode || "day").toLowerCase();
+      const c = Math.max(1, Number(count) || 1);
+      const soloDay = m === "day" && c === 1;
+      if (soloDay && !franchiseState?.flags?.can_advance) return;
+      const multiDayBlock =
+        m === "days" || m === "games" || (m === "day" && c > 1);
+      const seasonBlock = m === "season";
+      const bulkSim = multiDayBlock || seasonBlock;
+      const effectiveAuto = autoResolve === undefined ? Boolean(bulkSim) : Boolean(autoResolve);
+      setAdvancing(true);
+      setError(null);
+      try {
+        if (bulkSim) {
+          if (!effectiveAuto && franchiseState?.flags && !franchiseState.flags.can_advance) return;
+          const targetMode = seasonBlock ? "season" : m === "games" ? "games" : "days";
+          const targetCount = seasonBlock ? 1 : c;
+          const res = await advanceFranchise({
+            mode: targetMode,
+            count: targetCount,
+            auto_resolve: effectiveAuto,
+          });
+          setFranchiseState(res.state);
+        } else {
+          const res = await advanceFranchise({ mode: "day", count: 1, auto_resolve: effectiveAuto });
+          setFranchiseState(res.state);
+        }
+      } catch (e) {
+        const d = e.response?.data?.detail;
+        const msg = typeof d === "string" ? d : JSON.stringify(d || e.message);
+        try {
+          if (getFranchiseSessionId()) {
+            const s = await getFranchiseState();
+            setFranchiseState(s);
+          }
+        } catch {
+          /* keep prior state */
+        }
+        setError(msg);
+      } finally {
+        setAdvancing(false);
+      }
+    },
+    [franchiseState]
+  );
 
   const onAdvanceDay = useCallback(async () => {
-    if (!franchiseState?.flags?.can_advance) return;
-    setAdvancing(true);
-    setError(null);
-    try {
-      const res = await advanceDay();
-      setFranchiseState(res.state);
-    } catch (e) {
-      const d = e.response?.data?.detail;
-      setError(typeof d === "string" ? d : JSON.stringify(d || e.message));
-    } finally {
-      setAdvancing(false);
-    }
-  }, [franchiseState?.flags?.can_advance]);
+    await onAdvanceFranchise({ mode: "day", count: 1, auto_resolve: true });
+  }, [onAdvanceFranchise]);
 
   const onResolveDecision = useCallback(async (decisionId, choiceId) => {
     setError(null);
     try {
       const res = await submitDecision(decisionId, choiceId);
+      setFranchiseState(res.state);
+    } catch (e) {
+      const d = e.response?.data?.detail;
+      const msg = typeof d === "string" ? d : JSON.stringify(d || e.message);
+      try {
+        if (getFranchiseSessionId()) {
+          const s = await getFranchiseState();
+          setFranchiseState(s);
+        }
+      } catch {
+        /* ignore */
+      }
+      setError(msg);
+    }
+  }, []);
+
+  const onResolveStorylineChoice = useCallback(async (storylineId, choiceId) => {
+    setError(null);
+    try {
+      const res = await submitStorylineChoice(storylineId, choiceId);
+      setFranchiseState(res.state);
+    } catch (e) {
+      const d = e.response?.data?.detail;
+      const msg = typeof d === "string" ? d : JSON.stringify(d || e.message);
+      setError(msg);
+    }
+  }, []);
+
+  const onDismissShowcasePopups = useCallback(async (ids) => {
+    if (!getFranchiseSessionId() || !ids || !ids.length) return;
+    setError(null);
+    try {
+      const res = await dismissFranchisePopups(ids);
       setFranchiseState(res.state);
     } catch (e) {
       const d = e.response?.data?.detail;
@@ -156,8 +264,16 @@ export function GameUIProvider({ children }) {
       if (item.id === "roster") {
         setRosterRowIndex(0);
         setScreen(SCREENS.ROSTER);
+      } else if (item.id === "calendar") {
+        setScreen(SCREENS.CALENDAR);
+      } else if (item.id === "stats") {
+        setScreen(SCREENS.STATS);
       } else if (item.id === "ops") {
-        setScreen(SCREENS.HUB);
+        setScreen(SCREENS.TRADE);
+      } else if (item.id === "draft_class") {
+        setScreen(SCREENS.DRAFT_CLASS);
+      } else if (item.id === "office") {
+        setScreen(SCREENS.OFFICE);
       } else if (item.id === "settings") {
         setSettingsRowIndex(0);
         setScreen(SCREENS.SETTINGS);
@@ -188,12 +304,13 @@ export function GameUIProvider({ children }) {
       setSettingsRowIndex,
       setupTeamIndex,
       setSetupTeamIndex,
-      setupArchetypeIndex,
-      setSetupArchetypeIndex,
+      setupGamesPerTeam,
+      setSetupGamesPerTeam,
       teams,
-      coachName,
-      setCoachName,
-      archetypes,
+      teamsLoading,
+      loadTeams,
+      gmName,
+      setGmName,
       franchiseState,
       setFranchiseState,
       error,
@@ -205,7 +322,10 @@ export function GameUIProvider({ children }) {
       refreshFranchise,
       beginFranchise,
       onAdvanceDay,
+      onAdvanceFranchise,
       onResolveDecision,
+      onResolveStorylineChoice,
+      onDismissShowcasePopups,
       openHubMenu,
       goNewFranchise,
     }),
@@ -215,10 +335,11 @@ export function GameUIProvider({ children }) {
       rosterRowIndex,
       settingsRowIndex,
       setupTeamIndex,
-      setupArchetypeIndex,
+      setupGamesPerTeam,
       teams,
-      coachName,
-      archetypes,
+      teamsLoading,
+      loadTeams,
+      gmName,
       franchiseState,
       error,
       loading,
@@ -228,11 +349,19 @@ export function GameUIProvider({ children }) {
       refreshFranchise,
       beginFranchise,
       onAdvanceDay,
+      onAdvanceFranchise,
       onResolveDecision,
+      onResolveStorylineChoice,
+      onDismissShowcasePopups,
       openHubMenu,
       goNewFranchise,
     ]
   );
 
-  return <GameUIContext.Provider value={value}>{children}</GameUIContext.Provider>;
+  return (
+    <GameUIContext.Provider value={value}>
+      {children}
+      <ShowcasePopupLayer />
+    </GameUIContext.Provider>
+  );
 }

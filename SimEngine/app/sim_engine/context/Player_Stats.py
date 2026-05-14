@@ -27,6 +27,8 @@ from app.sim_engine.entities.player import (
     DEFENSE_KEYS,
     SKATING_KEYS,
     IQ_KEYS,
+    PHYS_KEYS,
+    SKILL_KEYS,
 )
 
 # ============================================================
@@ -129,7 +131,8 @@ class PlayerStatsEngine:
         """
         Determine usage tier based on OVR (0–100).
         """
-        ovr = player.ovr()
+        raw = float(player.ovr())
+        ovr = raw * 99.0 if raw <= 1.5 else raw
 
         if ovr >= 88:
             return "elite"
@@ -172,11 +175,13 @@ class PlayerStatsEngine:
 
         # (KEYS, WEIGHT) pairs — NOT A DICT
         groups = [
-            (OFFENSE_KEYS, 0.30),
-            (PASSING_KEYS, 0.20),
-            (SKATING_KEYS, 0.20),
-            (DEFENSE_KEYS, 0.20),
+            (OFFENSE_KEYS, 0.22),
+            (PASSING_KEYS, 0.18),
+            (SKATING_KEYS, 0.18),
+            (DEFENSE_KEYS, 0.16),
             (IQ_KEYS, 0.10),
+            (SKILL_KEYS, 0.10),
+            (PHYS_KEYS, 0.06),
         ]
 
         for keys, weight in groups:

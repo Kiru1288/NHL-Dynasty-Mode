@@ -388,9 +388,9 @@ def apply_player_development(player: Any, rng: Any) -> None:
     if dev_phase == "STALL":
         growth_base *= rng.uniform(0.03, 0.19)
     elif dev_phase == "SPIKE":
-        growth_base *= rng.uniform(1.92, 3.22)
+        growth_base *= rng.uniform(1.38, 2.05)
         if age <= 22 and archetype in ("HIGH_VARIANCE", "ELITE_CEILING_VOLATILE"):
-            growth_base *= rng.uniform(1.03, 1.11)
+            growth_base *= rng.uniform(1.02, 1.07)
     elif dev_phase == "REGRESSION":
         growth_base *= rng.uniform(-1.22, -0.32)
     else:

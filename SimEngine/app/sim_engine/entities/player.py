@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from email.policy import default
 from enum import Enum
 from typing import Dict, List, Optional, Any, Tuple
 import random
@@ -100,230 +99,352 @@ def clamp(x: float, lo: float, hi: float) -> float:
     return float(x)
 
 
-def normalize_ratings_dict(r, keys, default=50):
+def normalize_ratings_dict(r, keys, default=68):
     out = {}
     for k in keys:
         out[k] = clamp_rating(r.get(k, default))
     return out
 
 
+def height_cm_to_imperial(height_cm: int) -> str:
+    """Feet/inches string; inches always 0–11."""
+    if height_cm is None or int(height_cm) <= 0:
+        return "—"
+    total_in = int(round(float(height_cm) / 2.54))
+    total_in = max(48, min(84, total_in))
+    ft = total_in // 12
+    inch = total_in % 12
+    return f"{ft}'{inch}\""
+
+
+def random_height_cm(rng: random.Random) -> int:
+    ft = rng.randint(5, 6)
+    inch = rng.randint(0, 11)
+    if ft == 6 and inch > 6:
+        inch = rng.randint(0, 6)
+    return int(round((ft * 12 + inch) * 2.54))
+
+
+def sanitize_height_cm(raw: Any, rng: random.Random) -> int:
+    """Clamp to plausible NHL cm; replace garbage with a valid random height."""
+    try:
+        v = int(round(float(raw)))
+    except (TypeError, ValueError):
+        v = 0
+    if v < 160 or v > 213:
+        return random_height_cm(rng)
+    return v
+
+
 
 # ============================================================
-# ATTRIBUTE KEYS (100 TOTAL)
-# Stored in ratings dict (0.0–1.0 internal scale)
+# ATTRIBUTE KEYS — 100 skater facets + 4 goalie tools (20–99 int)
+# Categories feed weighted OVR + sim systems (decay, stats, chemistry).
 # ============================================================
 
-ATTRIBUTE_KEYS: List[str] = [
-    # --- Skating & Movement (18)
-    "sk_top_speed",
-    "sk_first_step_accel",
-    "sk_backward_speed",
-    "sk_edge_control",
-    "sk_turning_radius",
-    "sk_lateral_quickness",
-    "sk_balance",
-    "sk_body_control",
-    "sk_pivots_transitions",
-    "sk_crossovers",
-    "sk_stride_efficiency",
-    "sk_glide_efficiency",
-    "sk_agility_under_pressure",
-    "sk_recovery_skating",
-    "sk_change_of_direction",
-    "sk_sprint_stamina",
-    "sk_stop_start_explosiveness",
-    "sk_net_drive_speed",
-
-    # --- Puck Skills & Offense (20)
-    "of_wrist_power",
-    "of_wrist_accuracy",
-    "of_snap_power",
-    "of_snap_accuracy",
-    "of_slap_power",
-    "of_slap_accuracy",
-    "of_one_timer_timing",
-    "of_release_speed",
-    "of_deception",
-    "of_hand_eye",
-    "of_puck_control_speed",
-    "of_puck_protection",
-    "of_puck_reception",
-    "of_tight_space_control",
-    "of_creativity",
-    "of_awareness",
-    "of_net_front_finishing",
-    "of_rebound_conversion",
-    "of_scoring_instinct",
-    "of_rush_finishing",
-
-    # --- Passing & Playmaking (16)
-    "ps_short_accuracy",
-    "ps_long_accuracy",
-    "ps_passing_power",
-    "ps_reception_awareness",
-    "ps_no_look",
-    "ps_saucer",
-    "ps_breakout_passing",
-    "ps_cross_ice",
-    "ps_touch_passing",
-    "ps_play_anticipation",
-    "ps_vision",
-    "ps_creativity_pressure",
-    "ps_decision_speed",
-    "ps_turnover_avoidance",
-    "ps_give_and_go",
-    "ps_pp_qb",
-
-    # --- Defensive Ability (18)
-    "df_positioning",
-    "df_gap_control",
-    "df_stick_check",
-    "df_poke_timing",
-    "df_hit_power",
-    "df_hit_timing",
-    "df_angling",
-    "df_block_willingness",
-    "df_block_technique",
-    "df_awareness",
-    "df_anticipation",
-    "df_interceptions",
-    "df_net_front",
-    "df_board_defense",
-    "df_pk_iq",
-    "df_recovery_speed",
-    "df_discipline",
-    "df_backcheck_intensity",
-
-    # --- Game Intelligence & Intangibles (16)
-    "iq_hockey_macro",
-    "iq_spatial_awareness",
-    "iq_pattern_recognition",
-    "iq_reaction_time",
-    "iq_composure",
-    "iq_consistency",
-    "iq_adaptability",
-    "iq_learning_rate",
-    "iq_system_fit",
-    "iq_situational_awareness",
-    "iq_clutch",
-    "iq_mistake_recovery",
-    "iq_anticipation_fatigue",
-    "iq_risk_assessment",
-    "iq_decision_randomness",
-    "iq_momentum_sensitivity",
-
-    # --- Physicality & Endurance (8)
-    "ph_strength",
-    "ph_core_strength",
-    "ph_upper_strength",
-    "ph_lower_strength",
-    "ph_endurance",
-    "ph_contact_resilience",
-    "ph_durability",
-    "ph_injury_resistance",
-
-    # --- Goalie-specific (4)
-    "g_reflex_speed",
-    "g_positioning_discipline",
-    "g_rebound_control",
-    "g_lateral_recovery",
+OFFENSE_ATTRS: List[str] = [
+    "off_wrist_shot_accuracy",
+    "off_wrist_shot_power",
+    "off_slap_shot_accuracy",
+    "off_slap_shot_power",
+    "off_one_timer",
+    "off_shot_iq",
+    "off_shooting_under_pressure",
+    "off_net_front_presence",
+    "off_tip_deflection",
+    "off_rebound_control_off",
+    "off_offensive_awareness",
+    "off_creativity",
+    "off_deception",
+    "off_puck_placement",
+    "off_finishing",
 ]
 
-# These are "classic" special stats many gameplay engines want quickly
+PLAYMAKING_ATTRS: List[str] = [
+    "pm_passing_accuracy",
+    "pm_passing_vision",
+    "pm_passing_speed",
+    "pm_puck_distribution",
+    "pm_offensive_read",
+    "pm_decision_making",
+    "pm_reaction_time",
+    "pm_assist_instinct",
+    "pm_give_and_go",
+    "pm_playmaking_creativity",
+    "pm_tempo_control",
+    "pm_offensive_anticipation",
+]
+
+DEFENSE_ATTRS: List[str] = [
+    "def_defensive_awareness",
+    "def_stick_checking",
+    "def_body_positioning",
+    "def_shot_blocking",
+    "def_gap_control",
+    "def_defensive_iq",
+    "def_interception_skill",
+    "def_board_battles",
+    "def_net_coverage",
+    "def_backchecking_effort",
+    "def_defensive_reads",
+    "def_pk_awareness",
+    "def_pressure_defense",
+    "def_containment_ability",
+    "def_defensive_consistency",
+]
+
+PHYSICAL_ATTRS: List[str] = [
+    "phy_strength",
+    "phy_balance",
+    "phy_checking",
+    "phy_aggression",
+    "phy_durability",
+    "phy_stamina",
+    "phy_endurance",
+    "phy_injury_resistance",
+    "phy_physicality",
+    "phy_recovery_rate",
+]
+
+SKATING_ATTRS: List[str] = [
+    "skg_speed",
+    "skg_acceleration",
+    "skg_agility",
+    "skg_edge_work",
+    "skg_balance_skating",
+    "skg_transition_speed",
+    "skg_explosiveness",
+    "skg_pivot_speed",
+    "skg_stride_efficiency",
+    "skg_top_speed_control",
+]
+
+IQ_ATTRS: List[str] = [
+    "iqm_hockey_iq",
+    "iqm_awareness",
+    "iqm_composure",
+    "iqm_confidence",
+    "iqm_consistency",
+    "iqm_clutch_factor",
+    "iqm_discipline",
+    "iqm_focus",
+    "iqm_adaptability",
+    "iqm_game_sense",
+]
+
+SKILL_ATTRS: List[str] = [
+    "pc_stickhandling",
+    "pc_puck_control",
+    "pc_deking",
+    "pc_puck_protection",
+    "pc_hand_eye_coordination",
+    "pc_creativity_puck",
+    "pc_tight_space_control",
+    "pc_control_under_pressure",
+]
+
+DEV_ATTRS: List[str] = [
+    "dev_potential",
+    "dev_growth_rate",
+    "dev_work_ethic",
+    "dev_coachability",
+    "dev_learning_ability",
+]
+
+PERSONALITY_ATTRS: List[str] = [
+    "per_leadership",
+    "per_professionalism",
+    "per_team_chemistry",
+    "per_media_handling",
+    "per_emotional_stability",
+]
+
+SPECIAL_ATTRS: List[str] = [
+    "st_big_game_performance",
+    "st_rivalry_performance",
+    "st_momentum_impact",
+    "st_fan_influence",
+    "st_locker_room_impact",
+    "st_injury_proneness_inv",
+    "st_suspension_risk",
+    "st_consistency_variance",
+    "st_pressure_handling",
+    "st_dev_ceiling_modifier",
+]
+
+GOALIE_ATTRS: List[str] = [
+    "g_reflexes",
+    "g_positioning",
+    "g_rebound_control_g",
+    "g_athleticism",
+]
+
+ATTRIBUTE_KEYS: List[str] = (
+    OFFENSE_ATTRS
+    + PLAYMAKING_ATTRS
+    + DEFENSE_ATTRS
+    + PHYSICAL_ATTRS
+    + SKATING_ATTRS
+    + IQ_ATTRS
+    + SKILL_ATTRS
+    + DEV_ATTRS
+    + PERSONALITY_ATTRS
+    + SPECIAL_ATTRS
+    + GOALIE_ATTRS
+)
+
 ALIASES = {
-    "faceoff": "df_positioning",  # placeholder if you want; better: add a true "sp_faceoffs" key later
+    "faceoff": "def_board_battles",
 }
 
+# Legacy group names (engine / chemistry / decay)
+OFFENSE_KEYS = OFFENSE_ATTRS
+PASSING_KEYS = PLAYMAKING_ATTRS
+SKATING_KEYS = SKATING_ATTRS
+DEFENSE_KEYS = DEFENSE_ATTRS
+IQ_KEYS = IQ_ATTRS
+PHYS_KEYS = PHYSICAL_ATTRS
+SKILL_KEYS = SKILL_ATTRS
+HIDDEN_KEYS = DEV_ATTRS
+PERSONALITY_KEYS = PERSONALITY_ATTRS
+SPECIAL_KEYS = SPECIAL_ATTRS
+GOALIE_KEYS = GOALIE_ATTRS
 
-# ============================================================
-# OPTION A: ATTRIBUTE GROUPS + WEIGHT MAPS
-# (used for OVR + decline targeting)
-# ============================================================
-
-SKATING_KEYS = [k for k in ATTRIBUTE_KEYS if k.startswith("sk_")]
-OFFENSE_KEYS = [k for k in ATTRIBUTE_KEYS if k.startswith("of_")]
-PASSING_KEYS = [k for k in ATTRIBUTE_KEYS if k.startswith("ps_")]
-DEFENSE_KEYS = [k for k in ATTRIBUTE_KEYS if k.startswith("df_")]
-IQ_KEYS = [k for k in ATTRIBUTE_KEYS if k.startswith("iq_")]
-PHYS_KEYS = [k for k in ATTRIBUTE_KEYS if k.startswith("ph_")]
-GOALIE_KEYS = [k for k in ATTRIBUTE_KEYS if k.startswith("g_")]
-
-# Overall weighting for skaters vs goalies (feel free to tune later)
-OVR_WEIGHTS_SKATER: Dict[str, float] = {
-    "skating": 0.22,
-    "offense": 0.22,
-    "passing": 0.16,
-    "defense": 0.18,
-    "iq": 0.14,
-    "physical": 0.08,
-}
-
-OVR_WEIGHTS_GOALIE: Dict[str, float] = {
-    "goalie": 0.70,
-    "iq": 0.20,
+OVR_CATEGORY_WEIGHTS_SKATER: Dict[str, float] = {
+    "offense": 0.18,
+    "playmaking": 0.14,
+    "defense": 0.16,
+    "skating": 0.14,
     "physical": 0.10,
+    "iq": 0.12,
+    "skill": 0.10,
+    "hidden": 0.04,
+    "personality": 0.02,
+    "special": 0.00,
+}
+
+ARCHETYPE_CATEGORY_MULT: Dict[str, Dict[str, float]] = {
+    "SNIPER": {"offense": 1.25, "playmaking": 0.90, "defense": 0.80, "skating": 1.02, "physical": 0.95, "iq": 1.0, "skill": 1.06, "hidden": 1.0, "personality": 1.0, "special": 1.0},
+    "PLAYMAKER": {"offense": 1.05, "playmaking": 1.25, "defense": 0.85, "skating": 1.02, "physical": 0.80, "iq": 1.05, "skill": 1.08, "hidden": 1.0, "personality": 1.0, "special": 1.0},
+    "DEFENSIVE_D": {"offense": 0.70, "playmaking": 0.85, "defense": 1.30, "skating": 1.0, "physical": 1.08, "iq": 1.05, "skill": 0.92, "hidden": 1.0, "personality": 1.0, "special": 1.0},
+    "OFFENSIVE_D": {"offense": 1.15, "playmaking": 0.95, "defense": 0.90, "skating": 1.08, "physical": 0.92, "iq": 1.02, "skill": 1.05, "hidden": 1.0, "personality": 1.0, "special": 1.0},
+    "POWER_FORWARD": {"offense": 1.10, "playmaking": 0.92, "defense": 0.88, "skating": 0.95, "physical": 1.30, "iq": 0.98, "skill": 1.02, "hidden": 1.0, "personality": 1.0, "special": 1.0},
+    "TWO_WAY": {"offense": 1.0, "playmaking": 1.0, "defense": 1.15, "skating": 1.05, "physical": 1.02, "iq": 1.10, "skill": 1.0, "hidden": 1.0, "personality": 1.0, "special": 1.0},
+    "TWO_WAY_F": {"offense": 1.0, "playmaking": 1.0, "defense": 1.15, "skating": 1.05, "physical": 1.02, "iq": 1.10, "skill": 1.0, "hidden": 1.0, "personality": 1.0, "special": 1.0},
+    "ELITE_FRANCHISE": {},
+    "BALANCED": {},
+    "BALANCED_G": {},
 }
 
 
-def _avg(ratings: Dict[str, int], keys: List[str]) -> int:
+def assign_skater_archetype(position: Position, rng: random.Random) -> str:
+    if position == Position.G:
+        return rng.choices(["BALANCED_G", "ELITE_FRANCHISE", "BALANCED_G", "BALANCED_G"], weights=[0.55, 0.08, 0.22, 0.15])[0]
+    if position == Position.D:
+        return rng.choices(
+            ["DEFENSIVE_D", "OFFENSIVE_D", "TWO_WAY", "BALANCED"],
+            weights=[0.34, 0.22, 0.28, 0.16],
+        )[0]
+    return rng.choices(
+        ["SNIPER", "PLAYMAKER", "POWER_FORWARD", "TWO_WAY_F", "BALANCED", "ELITE_FRANCHISE"],
+        weights=[0.17, 0.20, 0.16, 0.28, 0.17, 0.02],
+    )[0]
+
+
+def _avg(ratings: Dict[str, Any], keys: List[str]) -> int:
     if not keys:
-        return 50
+        return 68
 
     total = 0
     count = 0
     for k in keys:
         if k in ratings:
-            total += int(ratings[k])
+            total += int(float(ratings[k]))
             count += 1
 
     if count == 0:
-        return 50
+        return 68
 
     return clamp_rating(total / count)
 
 
-
-
-def _group_avgs(ratings: Dict[str, float], position: Position) -> Dict[str, float]:
-    if position == Position.G:
-        return {
-            "goalie": _avg(ratings, GOALIE_KEYS),
-            "iq": _avg(ratings, IQ_KEYS),
-            "physical": _avg(ratings, PHYS_KEYS),
-        }
+def _skater_category_raw_avgs(ratings: Dict[str, Any]) -> Dict[str, int]:
     return {
-        "skating": _avg(ratings, SKATING_KEYS),
-        "offense": _avg(ratings, OFFENSE_KEYS),
-        "passing": _avg(ratings, PASSING_KEYS),
-        "defense": _avg(ratings, DEFENSE_KEYS),
-        "iq": _avg(ratings, IQ_KEYS),
-        "physical": _avg(ratings, PHYS_KEYS),
+        "offense": _avg(ratings, OFFENSE_ATTRS),
+        "playmaking": _avg(ratings, PLAYMAKING_ATTRS),
+        "defense": _avg(ratings, DEFENSE_ATTRS),
+        "skating": _avg(ratings, SKATING_ATTRS),
+        "physical": _avg(ratings, PHYSICAL_ATTRS),
+        "iq": _avg(ratings, IQ_ATTRS),
+        "skill": _avg(ratings, SKILL_ATTRS),
+        "hidden": _avg(ratings, DEV_ATTRS),
+        "personality": _avg(ratings, PERSONALITY_ATTRS),
+        "special": _avg(ratings, SPECIAL_ATTRS),
     }
 
 
-def compute_ovr(ratings: Dict[str, int], position: Position) -> float:
-    g = _group_avgs(ratings, position)
+def _group_avgs(ratings: Dict[str, Any], position: Position) -> Dict[str, float]:
+    """Backward-compatible group averages for chemistry / debug."""
+    if position == Position.G:
+        return {
+            "goalie": _avg(ratings, GOALIE_ATTRS),
+            "iq": _avg(ratings, IQ_ATTRS),
+            "physical": _avg(ratings, PHYSICAL_ATTRS),
+            "skating": _avg(ratings, SKATING_ATTRS),
+        }
+    s = _skater_category_raw_avgs(ratings)
+    return {
+        "skating": float(s["skating"]),
+        "offense": float(s["offense"]),
+        "passing": float(s["playmaking"]),
+        "defense": float(s["defense"]),
+        "iq": float(s["iq"]),
+        "physical": float(s["physical"]),
+    }
 
-    def norm(x: int) -> float:
-        return x / RATING_MAX  # 99 → 1.0
+
+def compute_ovr(ratings: Dict[str, Any], position: Position, archetype: Optional[str] = None) -> float:
+    def norm_pts(x: float) -> float:
+        return clamp01(float(x) / RATING_MAX)
 
     if position == Position.G:
-        w = OVR_WEIGHTS_GOALIE
-        return clamp01(
-            norm(g["goalie"]) * w["goalie"]
-            + norm(g["iq"]) * w["iq"]
-            + norm(g["physical"]) * w["physical"]
-        )
+        g_skill = _avg(ratings, GOALIE_ATTRS)
+        sk = _avg(ratings, SKATING_ATTRS)
+        iq = _avg(ratings, IQ_ATTRS)
+        phy = _avg(ratings, PHYSICAL_ATTRS)
+        pts = 0.62 * g_skill + 0.14 * sk + 0.14 * iq + 0.10 * phy
+        arch = (archetype or "BALANCED_G").upper()
+        if arch == "ELITE_FRANCHISE":
+            pts *= 1.12
+        pot = float(ratings.get("dev_potential", pts))
+        pts = min(pts, pot)
+        return clamp01(pts / RATING_MAX)
 
-    w = OVR_WEIGHTS_SKATER
-    return clamp01(
-        norm(g["skating"]) * w["skating"]
-        + norm(g["offense"]) * w["offense"]
-        + norm(g["passing"]) * w["passing"]
-        + norm(g["defense"]) * w["defense"]
-        + norm(g["iq"]) * w["iq"]
-        + norm(g["physical"]) * w["physical"]
-    )
+    cats = _skater_category_raw_avgs(ratings)
+    arch_u = (archetype or "BALANCED").upper()
+    if arch_u == "ELITE_FRANCHISE":
+        mults = {k: 1.15 for k in cats}
+    else:
+        table = ARCHETYPE_CATEGORY_MULT.get(arch_u)
+        mults = dict(table) if table else {k: 1.0 for k in cats}
+
+    weighted_pts = 0.0
+    for cat, base in cats.items():
+        w = OVR_CATEGORY_WEIGHTS_SKATER.get(cat, 0.0)
+        if w <= 0:
+            continue
+        m = float(mults.get(cat, 1.0))
+        weighted_pts += float(base) * m * w
+
+    cons = float(ratings.get("iqm_consistency", 75))
+    clutch = float(ratings.get("iqm_clutch_factor", 80))
+    weighted_pts += (cons - 75.0) * 0.05
+    weighted_pts += (clutch - 80.0) * 0.03
+
+    pot = float(ratings.get("dev_potential", weighted_pts))
+    weighted_pts = min(weighted_pts, pot)
+
+    return norm_pts(weighted_pts)
 
 # ============================================================
 # LIFE PRESSURE (CRITICAL FIX)
@@ -698,6 +819,7 @@ class Player:
         context: Optional[ContextState] = None,
         retired: bool = False,
         rng_seed: Optional[int] = None,
+        archetype: Optional[str] = None,
     ):
         self.identity = identity
         self.backstory = backstory
@@ -706,7 +828,7 @@ class Player:
         self.ratings: Dict[str, float] = normalize_ratings_dict(
             ratings or {},
             keys=ATTRIBUTE_KEYS,
-            default=50
+            default=68,
         )
 
         self.traits = traits or PersonalityTraits()
@@ -730,14 +852,20 @@ class Player:
             rng_seed = random.randint(1, 2_000_000_000)
         self.context = context or ContextState(chaos_seed=rng_seed)
         self.context.clamp_all()
-                # Stable player ID (required by engine, contracts, logging)
+        # Stable player ID (required by engine, contracts, logging)
         self.id = f"PLAYER_{rng_seed}"
-
 
         self.retired = retired
 
         # Dedicated RNG for this player
         self._rng = random.Random(self.context.chaos_seed)
+
+        arch_raw = str(archetype or "").strip()
+        self.archetype: str = (
+            arch_raw.upper()
+            if arch_raw
+            else assign_skater_archetype(self.identity.position, self._rng)
+        )
 
         # Seasonal narrative modifier layer (overwritten by apply_narrative_mechanics_to_rosters)
         self._narrative_prog_growth_mult: float = 1.0
@@ -780,10 +908,10 @@ class Player:
     def shoots(self) -> Shoots:
         return self.identity.shoots
 
-       # -----------------------------
+    # -----------------------------
     # Ratings access
     # -----------------------------
-    def get(self, key: str, default: int = 50) -> int:
+    def get(self, key: str, default: int = 68) -> int:
         if key in ALIASES:
             key = ALIASES[key]
         return int(self.ratings.get(key, default))
@@ -801,7 +929,7 @@ class Player:
         return _group_avgs(self.ratings, self.position)
 
     def ovr(self) -> float:
-        return compute_ovr(self.ratings, self.position)
+        return compute_ovr(self.ratings, self.position, getattr(self, "archetype", None))
 
     # -----------------------------
     # Lifecycle resets
@@ -976,8 +1104,9 @@ class Player:
             else:
                 _decay_targeted(self.ratings, SKATING_KEYS, amount=yearly_decay * 0.40, rng=self._rng, noise=0.22)
                 _decay_targeted(self.ratings, PHYS_KEYS, amount=yearly_decay * 0.35, rng=self._rng, noise=0.22)
-                _decay_targeted(self.ratings, OFFENSE_KEYS, amount=yearly_decay * 0.15, rng=self._rng, noise=0.22)
-                _decay_targeted(self.ratings, PASSING_KEYS, amount=yearly_decay * 0.06, rng=self._rng, noise=0.22)
+                _decay_targeted(self.ratings, OFFENSE_KEYS, amount=yearly_decay * 0.12, rng=self._rng, noise=0.22)
+                _decay_targeted(self.ratings, PASSING_KEYS, amount=yearly_decay * 0.05, rng=self._rng, noise=0.22)
+                _decay_targeted(self.ratings, SKILL_KEYS, amount=yearly_decay * 0.05, rng=self._rng, noise=0.22)
                 _decay_targeted(self.ratings, DEFENSE_KEYS, amount=yearly_decay * 0.04, rng=self._rng, noise=0.22)
                 _decay_targeted(self.ratings, IQ_KEYS, amount=yearly_decay * 0.02, rng=self._rng, noise=0.10)
 

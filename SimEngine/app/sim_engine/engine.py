@@ -23,7 +23,7 @@ If you see create_random_player / dump_team_snapshot / redirect_stdout in this f
 it means engine.py got overwritten accidentally. Keep those in run_sim.py ONLY.
 """
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Optional, List, Tuple, Callable, Set, Sequence
 import math
 import random
@@ -106,6 +106,9 @@ from app.sim_engine.entities.player import (
     SKATING_KEYS,
     clamp_rating,
     compute_ovr,
+    assign_skater_archetype,
+    random_height_cm,
+    sanitize_height_cm,
 )
 from app.sim_engine.entities.team import Team, TeamArchetype
 from app.sim_engine.entities.league import League
@@ -127,6 +130,9 @@ from app.sim_engine.league import (
     simulate_playoffs,
     compute_awards,
 )
+from app.sim_engine.economy.trade_ai import evaluate_trade_market
+from app.sim_engine.economy.waiver_ai import process_waivers
+from app.sim_engine.economy.roster_manager import RosterManager
 
 try:
     from app.sim_engine.world import momentum as world_momentum
@@ -229,6 +235,10 @@ class LeagueSeasonResult:
     standings: StandingsTable
     playoff_result: Optional[PlayoffResult]
     awards: Dict[str, Any]
+    # Game-derived only (no distribution injection). Empty list if aggregation skipped.
+    player_season_stats: List[Dict[str, Any]] = field(default_factory=list)
+    simulation_meta: Dict[str, Any] = field(default_factory=dict)
+    news_events: List[Dict[str, Any]] = field(default_factory=list)
 
 
 # =====================================================================
@@ -751,11 +761,68 @@ def _player_performance_rating_base_0_100(player: Any) -> float:
     return _player_rating_0_100(player)
 
 
+def _player_contract_years_remaining(player: Any) -> int:
+    c = getattr(player, "contract", None)
+    for obj in (player, c):
+        if obj is None:
+            continue
+        for key in ("years_remaining", "term_remaining", "remaining_years", "term"):
+            v = getattr(obj, key, None)
+            if v is not None:
+                try:
+                    return max(0, int(v))
+                except (TypeError, ValueError):
+                    pass
+    return 1
+
+
+def _player_recent_production_score(player: Any) -> float:
+    stats = getattr(player, "season_stats", None) or getattr(player, "stats", None) or {}
+    if isinstance(stats, dict):
+        pts = float(stats.get("pts", stats.get("points", 0)) or 0)
+        gp = float(stats.get("gp", stats.get("games_played", 0)) or 0)
+        if gp > 0:
+            return max(0.0, min(1.4, pts / gp))
+    return 0.45
+
+
 def is_bad_contract(player: Any) -> bool:
-    contract_value = _economy_player_cap_hit_millions(player)
+    cap_hit = _economy_player_cap_hit_millions(player)
     rating = _player_rating_0_100(player)
-    value_ratio = contract_value / max(rating, 1.0)
-    return bool(value_ratio > 0.35)
+    age = career_player_age(player)
+    years = _player_contract_years_remaining(player)
+    production = _player_recent_production_score(player)
+
+    # Expected fair cap hit in millions.
+    # Stars can justify money. Depth players cannot.
+    fair = 0.8 + max(0.0, rating - 55.0) * 0.18
+
+    if production >= 1.0:
+        fair *= 1.18
+    elif production >= 0.75:
+        fair *= 1.08
+    elif production < 0.35:
+        fair *= 0.86
+
+    if age >= 35:
+        fair *= 0.72
+    elif age >= 32:
+        fair *= 0.84
+    elif age <= 24 and rating >= 78:
+        fair *= 1.10
+
+    # Term risk: long expensive older contracts are more dangerous.
+    term_risk = 1.0
+    if years >= 5 and age >= 30:
+        term_risk = 1.22
+    elif years >= 4 and age >= 32:
+        term_risk = 1.32
+    elif years <= 1:
+        term_risk = 0.92
+
+    badness = (cap_hit / max(0.75, fair)) * term_risk
+
+    return bool(badness >= 1.35)
 
 
 def sync_bad_contract_flag(player: Any) -> bool:
@@ -856,40 +923,79 @@ def adjust_player_demands(
 def apply_cap_pressure_effects(team: Any, *, salary_cap_m: Optional[float] = None) -> None:
     tier = str(getattr(team, "cap_pressure_tier", "") or "").lower()
     pressure = calculate_cap_pressure(team, salary_cap_m=salary_cap_m)
+
+    affected_players = 0
+    avg_multiplier = 1.0
+
     for player in _team_roster_players(team):
         if getattr(player, "retired", False):
             continue
+
         base = _player_rating_0_100(player)
+        mult = 1.0
+
         if tier == "cap_hell":
-            base *= 0.935
+            mult = 0.955
         elif tier == "critical":
-            base *= 0.965
+            mult = 0.975
         elif tier == "high":
-            base *= 0.985
+            mult = 0.99
         elif tier == "low":
-            base *= 1.018
+            mult = 1.012
         elif pressure > 0.9:
-            base *= 0.97
+            mult = 0.982
         elif pressure < 0.4:
-            base *= 1.02
-        setattr(player, "performance_rating", max(1.0, min(120.0, base)))
+            mult = 1.012
+
+        # High character players handle cap/media drama better.
+        try:
+            character = float(getattr(player, "character", 50) or 50)
+            if character >= 75 and mult < 1.0:
+                mult = 1.0 - ((1.0 - mult) * 0.55)
+            elif character <= 35 and mult < 1.0:
+                mult = 1.0 - ((1.0 - mult) * 1.20)
+        except Exception:
+            pass
+
+        affected_players += 1
+        avg_multiplier += (mult - 1.0)
+        setattr(player, "performance_rating", max(1.0, min(120.0, base * mult)))
+
+    if affected_players:
+        avg_multiplier = 1.0 + ((avg_multiplier - 1.0) / float(affected_players))
+
+    setattr(
+        team,
+        "_cap_pressure_effect_summary",
+        {
+            "tier": tier or "unknown",
+            "pressure": float(pressure),
+            "affected_players": int(affected_players),
+            "avg_multiplier": round(float(avg_multiplier), 4),
+            "visible_to_frontend": tier in ("high", "critical", "cap_hell") or pressure > 0.9,
+        },
+    )
+
     if tier == "cap_hell":
         st = getattr(team, "state", None)
         if st is not None and hasattr(st, "team_morale"):
             try:
                 cur = float(getattr(st, "team_morale", 0.5) or 0.5)
-                setattr(st, "team_morale", max(0.12, cur - 0.045))
+                setattr(st, "team_morale", max(0.12, cur - 0.035))
             except Exception:
                 pass
+
         for player in _team_roster_players(team):
             if getattr(player, "retired", False):
                 continue
+
             psych = getattr(player, "psych", None)
             if psych is None:
                 continue
+
             try:
                 m = float(getattr(psych, "morale", 0.5) or 0.5)
-                setattr(psych, "morale", max(0.15, m - 0.022))
+                setattr(psych, "morale", max(0.15, m - 0.017))
             except Exception:
                 pass
 
@@ -920,19 +1026,20 @@ def assign_development_profile(player: Any, rng: random.Random) -> str:
 
 
 def get_age_curve(age: int) -> float:
+    """Scales base progression_player draw; gentler peak, clearer post-30 decay."""
     if age <= 20:
-        return 1.3
+        return 1.22
     if age <= 23:
-        return 1.15
+        return 1.08
     if age <= 26:
-        return 1.05
+        return 1.02
     if age <= 29:
-        return 1.0
+        return 0.96
     if age <= 32:
-        return 0.95
+        return 0.86
     if age <= 35:
-        return 0.90
-    return 0.80
+        return 0.76
+    return 0.66
 
 
 def development_multiplier(player: Any) -> float:
@@ -978,28 +1085,138 @@ def career_ovr_0_100(player: Any) -> float:
     return float(_player_rating_0_100(player))
 
 
+def _career_attribute_weights_for_player(player: Any) -> Dict[str, float]:
+    """
+    Prevent every OVR bump from touching every rating equally.
+    A sniper breakout should not magically become a faceoff/shot-blocking god.
+    """
+    pos = getattr(player, "position", None)
+    pos_s = str(getattr(pos, "value", pos) or "").upper()
+
+    style = str(
+        getattr(player, "playstyle", None)
+        or getattr(player, "archetype", None)
+        or getattr(player, "player_type", None)
+        or ""
+    ).lower()
+
+    if pos_s in ("G", "GOALIE"):
+        return {
+            "goalie": 1.0,
+            "glove": 1.0,
+            "blocker": 1.0,
+            "rebound": 0.9,
+            "angles": 0.9,
+            "vision": 0.8,
+            "iq": 0.5,
+        }
+
+    if "sniper" in style:
+        return {
+            "shot": 1.25,
+            "shoot": 1.25,
+            "off": 1.0,
+            "puck": 0.85,
+            "skating": 0.65,
+            "iq": 0.55,
+            "def": 0.15,
+            "faceoff": 0.05,
+            "hit": 0.1,
+            "block": 0.1,
+        }
+
+    if "playmaker" in style:
+        return {
+            "pass": 1.25,
+            "play": 1.15,
+            "puck": 1.0,
+            "off": 0.85,
+            "iq": 0.85,
+            "skating": 0.55,
+            "def": 0.2,
+            "shot": 0.25,
+        }
+
+    if "defensive" in style or "shutdown" in style or pos_s in ("D", "LD", "RD"):
+        return {
+            "def": 1.2,
+            "block": 1.0,
+            "stick": 0.9,
+            "iq": 0.85,
+            "physical": 0.75,
+            "hit": 0.7,
+            "skating": 0.55,
+            "off": 0.25,
+            "shot": 0.15,
+            "faceoff": 0.05,
+        }
+
+    if "grinder" in style or "power" in style:
+        return {
+            "physical": 1.15,
+            "hit": 1.1,
+            "def": 0.8,
+            "skating": 0.65,
+            "iq": 0.45,
+            "off": 0.35,
+            "shot": 0.3,
+        }
+
+    return {
+        "off": 0.8,
+        "def": 0.65,
+        "iq": 0.65,
+        "skating": 0.65,
+        "shot": 0.55,
+        "pass": 0.55,
+        "physical": 0.45,
+        "faceoff": 0.2,
+    }
+
+
+def _rating_key_weight(key: str, weights: Dict[str, float]) -> float:
+    k = str(key or "").lower()
+
+    best = 0.35
+    for token, weight in weights.items():
+        if token in k:
+            best = max(best, float(weight))
+
+    return max(0.02, best)
+
+
 def _career_apply_rating_delta_0_100(player: Any, delta_0_100: float) -> None:
     if abs(delta_0_100) < 1e-9:
         return
+
     ratings = getattr(player, "ratings", None)
     if not ratings:
         return
+
     keys = list(ratings.keys())
     if not keys:
         return
-    per = float(delta_0_100) / float(len(keys))
+
+    weights = _career_attribute_weights_for_player(player)
+    key_weights = {k: _rating_key_weight(k, weights) for k in keys}
+    total_weight = sum(key_weights.values()) or float(len(keys))
+
     set_fn = getattr(player, "set", None)
     get_fn = getattr(player, "get", None)
+
     if callable(set_fn) and callable(get_fn):
         for k in keys:
             try:
-                set_fn(k, float(get_fn(k, 50)) + per)
+                share = key_weights[k] / total_weight
+                set_fn(k, float(get_fn(k, 50)) + float(delta_0_100) * share)
             except Exception:
                 pass
         return
+
     for k in keys:
         try:
-            ratings[k] = clamp_rating(float(ratings[k]) + per)
+            share = key_weights[k] / total_weight
+            ratings[k] = clamp_rating(float(ratings[k]) + float(delta_0_100) * share)
         except Exception:
             pass
 
@@ -1097,13 +1314,13 @@ _PROGRESSION_CONTROLLER_TRACE: bool = False
 # Temporary: full authoritative progression audit lines (player/season/event/pre/delta/post).
 _AUTHORITATIVE_PROGRESSION_DEBUG: bool = False
 # One-line proof of clamp/budget/cooldown per approved special event (set False to silence).
-_LOG_SPECIAL_PROGRESSION_ENFORCEMENT: bool = True
+_LOG_SPECIAL_PROGRESSION_ENFORCEMENT: bool = False
 
 # --- Central special-progression hard limits (0–100 OVR scale); impossible to exceed via engine apply+log ---
-SPECIAL_PROGRESSION_BREAKOUT_HARD_CAP: float = 5.3
-SPECIAL_PROGRESSION_LATE_BLOOM_HARD_CAP: float = 4.0
-_SPECIAL_TOP_BREAKOUT_DELTA: float = 4.22
-_SPECIAL_TOP_LATE_BLOOM_DELTA: float = 3.12
+SPECIAL_PROGRESSION_BREAKOUT_HARD_CAP: float = 4.45
+SPECIAL_PROGRESSION_LATE_BLOOM_HARD_CAP: float = 3.65
+_SPECIAL_TOP_BREAKOUT_DELTA: float = 3.55
+_SPECIAL_TOP_LATE_BLOOM_DELTA: float = 2.85
 _SPECIAL_ENFORCE_FLOOR: float = 0.17
 
 
@@ -1412,7 +1629,7 @@ def _roll_breakout_delta_controller(
 
     brm = float((macro or {}).get("breakout_p_mult", 1.0))
     nar_bo = float(getattr(player, "_narrative_breakout_p_mult", 1.0) or 1.0)
-    p = 0.032 * brm * nar_bo
+    p = 0.021 * brm * nar_bo
     if pot_cat == "elite":
         p *= 1.15
     if tr == "hot":
@@ -1422,8 +1639,8 @@ def _roll_breakout_delta_controller(
     used_bo = int(getattr(league, "_prog_global_breakouts_used", 0) or 0) if league is not None else 0
     mx_bo = max(1, int(getattr(league, "_prog_max_breakouts", 8) or 8)) if league is not None else 8
     if league is not None and used_bo >= max(1, int(mx_bo * 0.55)):
-        p *= 0.68
-    p = max(0.0, min(0.048, p))
+        p *= 0.62
+    p = max(0.0, min(0.034, p))
     if rng.random() >= p:
         return None, 0.0
 
@@ -1938,12 +2155,13 @@ def prime_league_season_breakout_v3(
         return
     tp = max(0, int(total_players))
     if tp <= 0:
-        mx_bo, mx_lb, mx_bust = 6, 2, 4
+        mx_bo, mx_lb, mx_bust = 4, 2, 3
     else:
-        mx_bo = max(6, min(10, int(round(6 + (tp / 900.0) * 4))))
-        mx_lb = max(2, min(5, int(round(2 + (tp / 1000.0) * 3))))
-        mx_bust = max(3, min(8, int(round(3 + (tp / 600.0) * 5))))
-    mx_top_bo = max(1, min(3, max(1, mx_bo // 3)))
+        # Tighter league-wide special events vs inflated OVR seasons (~700 NHL skaters).
+        mx_bo = max(3, min(7, int(round(3 + (tp / 780.0) * 3.2))))
+        mx_lb = max(2, min(4, int(round(2 + (tp / 950.0) * 2.0))))
+        mx_bust = max(2, min(6, int(round(2 + (tp / 650.0) * 3.5))))
+    mx_top_bo = max(1, min(2, max(1, mx_bo // 4)))
     try:
         setattr(league, "_season_breakout_events", 0)
         setattr(league, "_season_breakout_player_total", tp)
@@ -3210,29 +3428,35 @@ def _normalize_systemic_after_consequences(player: Any, team: Any) -> None:
 # =====================================================================
 
 LINE_CHEM_OFFENSE_KEYS: List[str] = [
-    "of_wrist_accuracy",
-    "of_snap_accuracy",
-    "of_scoring_instinct",
-    "of_net_front_finishing",
+    "off_wrist_shot_accuracy",
+    "off_slap_shot_accuracy",
+    "off_shot_iq",
+    "off_net_front_presence",
+    "off_finishing",
 ]
 LINE_CHEM_PASS_KEYS: List[str] = [
-    "ps_vision",
-    "ps_short_accuracy",
-    "ps_play_anticipation",
-    "ps_cross_ice",
+    "pm_passing_vision",
+    "pm_passing_accuracy",
+    "pm_offensive_anticipation",
+    "pm_puck_distribution",
 ]
 LINE_CHEM_IQ_KEYS: List[str] = [
-    "iq_situational_awareness",
-    "iq_pattern_recognition",
-    "iq_risk_assessment",
+    "iqm_awareness",
+    "iqm_game_sense",
+    "iqm_hockey_iq",
 ]
 LINE_CHEM_ALL_KEYS: List[str] = LINE_CHEM_OFFENSE_KEYS + LINE_CHEM_PASS_KEYS + LINE_CHEM_IQ_KEYS
-LINE_CHEM_ELITE_PASS_KEYS: List[str] = ["ps_vision", "ps_cross_ice", "ps_play_anticipation", "ps_long_accuracy"]
+LINE_CHEM_ELITE_PASS_KEYS: List[str] = [
+    "pm_passing_vision",
+    "pm_puck_distribution",
+    "pm_passing_accuracy",
+    "pm_offensive_read",
+]
 LINE_CHEM_ELITE_SHOT_KEYS: List[str] = [
-    "of_wrist_accuracy",
-    "of_snap_accuracy",
-    "of_scoring_instinct",
-    "of_release_speed",
+    "off_wrist_shot_accuracy",
+    "off_one_timer",
+    "off_shot_iq",
+    "off_finishing",
 ]
 
 
@@ -3258,7 +3482,7 @@ def _avg_keys_01(player: Any, keys: List[str]) -> float:
     s = 0.0
     n = 0
     for k in keys:
-        s += float(r.get(k, 50)) / 99.0
+        s += float(r.get(k, 68)) / 99.0
         n += 1
     return s / n if n else 0.5
 
@@ -4166,301 +4390,663 @@ def _pick_weight_storyline(
 def _build_player_storyline_catalog() -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
 
-    def push(
-        pool: str,
-        text: str,
-        fx: Dict[str, float],
-        dur: str = "medium",
-        *,
-        legal: bool = False,
-        char_max: int = 100,
-        char_min: int = 0,
-        volatile: bool = False,
-        star_only: bool = False,
-        vet_only: bool = False,
-        rookie_only: bool = False,
-        tier: Optional[str] = None,
-    ) -> None:
-        tier_eff = tier if tier is not None else _STORYLINE_POOL_TIER.get(pool, "mid")
-        out.append(
-            {
-                "id": f"{pool}_{len(out)}",
-                "pool": pool,
-                "text": text,
-                "fx": dict(fx),
-                "dur": dur,
-                "legal": legal,
-                "char_max": char_max,
-                "char_min": char_min,
-                "volatile": volatile,
-                "star_only": star_only,
-                "vet_only": vet_only,
-                "rookie_only": rookie_only,
-                "tier": tier_eff,
-            }
-        )
+    def push(pool: str, text: str, fx: Dict[str, float], **kwargs) -> None:
+        out.append({
+            "pool": pool,
+            "text": text,
+            "fx": fx,
+            **kwargs
+        })
+
+    # ==================================================
+    # LEGAL / CRIME / DISCIPLINE STORYLINES — 60
+    # ==================================================
 
     legal_lines = [
-        "Arrested for DUI with teammate in car",
-        "DUI checkpoint fail after team win",
-        "Arrested for street racing in team city",
-        "Illegal drag racing ring involvement",
-        "Bar fight with opposing fan",
-        "Bar fight with teammate",
-        "Assault after trash talk escalates",
-        "Punching security guard",
-        "Arrested outside casino",
-        "Gambling debt leads to threats",
-        "Betting on own team games",
-        "Betting against own team (huge scandal)",
-        "Involved in underground betting ring",
-        "Suspicious betting patterns linked to player",
-        "Friend betting using player info",
-        "Crypto scam involvement",
-        "NFT scam endorsement backlash",
-        "Fraud through fake business partner",
-        "Ponzi scheme victim (or participant)",
-        "Money laundering through club ownership",
-        "Domestic dispute (no charges, media chaos)",
-        "Domestic violence accusation",
-        "Restraining order issued",
-        "Public argument caught on video",
-        "Stalking allegation",
-        "Destroying hotel room",
-        "Kicked off airplane",
-        "Airport altercation arrest",
-        "Refuses security check, detained",
-        "Public meltdown in restaurant",
-        "Illegal firearm possession",
-        "Bringing weapon to public event",
-        "Reckless discharge (accidental)",
-        "Threatening someone with weapon",
-        "Social media weapon video backlash",
-        "Drug possession arrest",
-        "Performance-enhancing substance scandal",
-        "Party drug overdose scare",
-        "Suspended for substance abuse",
-        "Rehab entry mid-season",
-        "Arrested due to mistaken identity",
-        "Impersonation scam tied to player",
-        "Fake charity fraud scandal",
-        "Identity theft victim, mental spiral",
-        "Blackmail attempt exposed",
-        "Secret recorded video leak",
-        "Police investigation for unknown reason (mystery arc)",
-        "Arrested abroad (visa/legal chaos)",
-        "Political protest arrest",
-        "Viral police bodycam footage incident",
-        "DUI after team party",
-        "Suspended pending league investigation",
-        "Tax evasion probe becomes public",
-        "Witness in organized crime case (distraction)",
+        "Arrested for DUI after a team charity event",
+        "DUI checkpoint failure becomes public after road win",
+        "Pulled over for reckless driving after practice",
+        "Questioned by police after nightclub altercation",
+        "Bar fight investigation names player as person of interest",
+        "Public intoxication incident creates team embarrassment",
+        "Security footage shows player arguing with venue staff",
+        "Airport incident leads to police questioning",
+        "Customs delay sparks media speculation around player",
+        "Driving with suspended license charge surfaces",
+        "Property damage complaint filed after private party",
+        "Noise complaint escalates into police visit at player residence",
+        "Casino dispute triggers internal team review",
+        "Gambling allegation prompts league integrity inquiry",
+        "Illegal betting rumor causes locker room distraction",
+        "Player linked to suspicious betting account",
+        "Tax investigation involving player becomes public",
+        "Financial fraud inquiry connected to player’s advisor",
+        "Agent-related legal dispute drags player into headlines",
+        "Civil lawsuit creates distraction during playoff race",
+        "Assault allegation under preliminary review",
+        "Domestic disturbance call creates major media storm",
+        "Player detained after late-night street confrontation",
+        "Police report mentions teammate during off-day incident",
+        "Club promoter accuses player of unpaid damages",
+        "Lawsuit from former business partner goes public",
+        "League discipline hearing scheduled after off-ice incident",
+        "Team suspends player pending legal clarification",
+        "Player apologizes after police-involved misunderstanding",
+        "Traffic incident becomes viral social media scandal",
+        "Rideshare driver complaint leads to team review",
+        "Fan altercation after game results in investigation",
+        "Player accused of threatening arena employee",
+        "Parking lot confrontation captured on phone video",
+        "Player’s entourage involved in downtown police call",
+        "Legal dispute with landlord becomes public",
+        "Fraudulent investment rumor reaches team executives",
+        "Player named as witness in organized crime case",
+        "Old legal charge resurfaces during contract talks",
+        "Immigration documentation issue delays player travel",
+        "Minor possession charge creates league discipline concern",
+        "Fake ID scandal from junior years resurfaces online",
+        "Player questioned after teammate’s party incident",
+        "Civil complaint filed after offseason boating accident",
+        "Reckless boating incident sparks league conduct review",
+        "Player accused of damaging rental property on road trip",
+        "Security guard files complaint after arena tunnel incident",
+        "Heated argument with police officer creates PR crisis",
+        "Player misses practice after legal appointment",
+        "Court appearance scheduled during important homestand",
+        "Team legal staff involved after late-night incident",
+        "Player cleared legally but reputation takes hit",
+        "League requests explanation after police report leak",
+        "Anonymous complaint triggers internal conduct review",
+        "Former acquaintance makes public legal accusation",
+        "Player denies involvement in gambling-related investigation",
+        "Team captain asked about player’s legal distraction",
+        "Sponsor pauses campaign after legal controversy",
+        "Player enters league assistance program after conduct issue",
+        "Team fines player internally after off-ice incident",
     ]
+
     for i, lt in enumerate(legal_lines):
-        base = -0.18 - (i % 7) * 0.015
+        severity = -0.18 if i < 30 else -0.12
         push(
             "legal_crime",
             lt,
             {
-                "confidence": round(base, 3),
-                "morale": round(base * 1.1, 3),
-                "clutch": round(base * 0.75, 3),
-                "media_stress": 0.12 + (i % 4) * 0.02,
+                "morale": severity,
+                "discipline": -0.22,
+                "chemistry": -0.08,
+                "media": 0.20,
             },
-            dur="short" if i % 3 == 0 else "medium",
             legal=True,
-            char_max=49,
-            volatile=True,
+            rarity="rare" if i < 25 else "uncommon",
+            tone="negative",
         )
 
-    mental_tpl = [
-        ("Playoff exit triggers buried panic attacks", {"confidence": -0.14, "morale": -0.11, "anxiety": 0.13}, "medium", True),
-        ("Sports psychologist enlisted after benching spiral", {"confidence": -0.10, "morale": -0.08, "internal_motivation": 0.06}, "medium", False),
-        ("Imposter syndrome on promoted scoring line", {"confidence": -0.16, "consistency": -0.10, "decision": 0.08}, "short", True),
-        ("Sleep disorder wrecks morning skate habits", {"performance": -0.08, "morale": -0.09, "anxiety": 0.10}, "medium", False),
-        ("Hyperfixation on metrics erodes on-ice instinct", {"decision": 0.10, "confidence": -0.08}, "long", True),
-        ("Private depression diagnosis leaks to press", {"morale": -0.18, "media_stress": 0.16, "confidence": -0.12}, "medium", True),
-        ("Confidence crater after repeated shootout failures", {"confidence": -0.20, "clutch": -0.18}, "short", True),
-        ("Burnout: skips optional skates, tension with staff", {"internal_motivation": -0.14, "morale": -0.10}, "long", False),
-        ("Therapist clearance saga becomes distraction", {"media_stress": 0.11, "anxiety": 0.09}, "medium", True),
-        ("OCD rituals disrupt road routine", {"consistency": -0.08, "anxiety": 0.11}, "long", False),
+    # ==================================================
+    # MENTAL / PSYCHOLOGICAL STORYLINES — 60
+    # ==================================================
+
+    mental_lines = [
+        "Confidence collapses after repeated defensive mistakes",
+        "Player admits pressure has been affecting his game",
+        "Sports psychologist begins working with player privately",
+        "Player shows signs of burnout during heavy schedule",
+        "Long scoring drought creates visible frustration",
+        "Player becomes withdrawn after costly overtime turnover",
+        "Bench demotion shakes player’s confidence",
+        "Goalie loses composure after string of weak goals",
+        "Young player overwhelmed by sudden top-line role",
+        "Veteran struggles emotionally after losing leadership role",
+        "Player returns from personal reset with sharper focus",
+        "Mental fatigue becomes concern during road-heavy month",
+        "Player speaks openly about needing a confidence rebuild",
+        "Coaching staff notices player overthinking simple plays",
+        "Player starts gripping the stick too tightly during slump",
+        "Media pressure causes player to avoid interviews",
+        "Player regains confidence after strong practice week",
+        "Leadership group helps struggling player reset mentally",
+        "Player’s anxiety rises before rivalry matchup",
+        "Player looks rattled after hostile road crowd reaction",
+        "Goaltender requests extra work with mental performance coach",
+        "Player develops pregame routine to manage nerves",
+        "Team worries player is spiraling after social media criticism",
+        "Player blocks out media and goes quiet publicly",
+        "Pressure of contract year weighs heavily on player",
+        "Rookie admits NHL pace is mentally exhausting",
+        "Veteran becomes mentor during teammate’s confidence crisis",
+        "Player responds well after private meeting with coach",
+        "Player’s body language alarms coaching staff",
+        "Player avoids puck in key moments during confidence dip",
+        "Player rebuilds confidence after shootout winner",
+        "Mental reset day away from rink helps player recover",
+        "Player’s frustration boils over during practice drill",
+        "Team considers reducing player’s minutes to protect confidence",
+        "Player uses criticism as motivation after bad headlines",
+        "Player becomes obsessed with stat tracking during slump",
+        "Player’s fear of mistakes hurts offensive creativity",
+        "Coach publicly protects player from mounting criticism",
+        "Player admits he has not felt like himself lately",
+        "Player slowly regains swagger after physical game",
+        "Teammates rally around player after emotional interview",
+        "Player’s confidence spikes after promotion to power play",
+        "Player’s slump turns into full mental block",
+        "Goalie battles nerves after being pulled twice in a week",
+        "Player appears mentally refreshed after family visit",
+        "Player struggles with focus after trade rumors",
+        "Player handles pressure better after veteran guidance",
+        "Player’s confidence grows after strong defensive assignment",
+        "Player enters quiet leadership phase after adversity",
+        "Mental toughness praised after bounce-back performance",
+        "Player’s frustration with himself becomes obvious on bench",
+        "Player requests film session to rebuild trust in his game",
+        "Coach gives player simplified role to reduce pressure",
+        "Player’s confidence dips after being scratched",
+        "Player regains edge after emotional players-only meeting",
+        "Rookie’s confidence shaken after viral mistake clip",
+        "Player’s mental resilience becomes locker room storyline",
+        "Player starts journaling as part of performance routine",
+        "Heavy expectations begin affecting player’s decision-making",
+        "Player finally breaks through after weeks of visible tension",
     ]
-    for extra in range(48):
-        stem, fx0, dur0, vol = mental_tpl[extra % len(mental_tpl)]
+
+    for i, mt in enumerate(mental_lines):
+        positive = any(word in mt.lower() for word in ["regains", "reset", "refreshed", "praised", "resilience", "breaks through", "motivation"])
         push(
             "mental_psychological",
-            f"{stem} (arc thread {extra + 1})",
-            {k: round(float(v) + (extra % 5) * 0.006 * (1 if v > 0 else -1), 3) for k, v in fx0.items()},
-            dur=dur0,
-            volatile=vol,
+            mt,
+            {
+                "morale": 0.08 if positive else -0.10,
+                "confidence": 0.14 if positive else -0.16,
+                "chemistry": 0.04 if positive else -0.04,
+            },
+            rarity="common",
+            tone="positive" if positive else "negative",
         )
 
-    personal_tpl = [
-        ("New parent sleep debt craters recovery", {"performance": -0.09, "morale": -0.07}, "medium"),
-        ("Messy breakup splashed across gossip blogs", {"confidence": -0.12, "media_stress": 0.14, "morale": -0.10}, "short", True),
-        ("Engagement announced, hometown hero spotlight", {"confidence": 0.08, "media_comfort": 0.06}, "short"),
-        ("Family illness forces repeated travel absences", {"morale": -0.13, "internal_motivation": -0.06}, "long"),
-        ("Wedding planning chaos during road trip grind", {"decision": 0.07, "morale": -0.06}, "medium"),
-        ("Custody hearing dates clash with playoff push", {"anxiety": 0.15, "morale": -0.14}, "medium", True),
-        ("Long-distance relationship strain on West coast swing", {"morale": -0.09, "consistency": -0.07}, "medium"),
-        ("New house burglary rattles sense of safety", {"anxiety": 0.12, "confidence": -0.09}, "short", True),
-        ("Sibling rivalry in local media comparisons", {"media_stress": 0.10, "confidence": -0.07}, "short"),
-        ("Charity work overload, stretched thin", {"internal_motivation": 0.05, "performance": -0.05}, "medium"),
+    # ==================================================
+    # PERSONAL LIFE STORYLINES — 60
+    # ==================================================
+
+    personal_lines = [
+        "Birth of child gives player emotional boost",
+        "Family emergency causes player to miss practice",
+        "Player dedicates strong game to sick family member",
+        "Wedding planning becomes distraction during playoff race",
+        "Public breakup creates unwanted media attention",
+        "Relationship rumors follow player during road trip",
+        "Player’s family relocation helps him settle in market",
+        "Homesickness affects young European player",
+        "Player buys home in city, signaling long-term commitment",
+        "New parenthood affects player’s sleep and routine",
+        "Player’s charity work earns praise from local community",
+        "Family tragedy weighs heavily on player’s performance",
+        "Player returns from bereavement leave with emotional goal",
+        "Player’s sibling signs pro contract, creating proud moment",
+        "Player’s parent gives emotional interview after milestone game",
+        "Private family issue kept player away from optional skate",
+        "Player hosts youth hockey camp during off day",
+        "Player becomes active in local hospital visits",
+        "Player’s spouse criticizes organization on social media",
+        "Family travel issues delay player before road game",
+        "Player’s child appears at practice and lifts locker room mood",
+        "Player struggles balancing fatherhood and road schedule",
+        "Player’s offseason home purchase becomes local headline",
+        "Player’s family dislikes trade destination rumors",
+        "Rookie’s parents attend first NHL game, boosting morale",
+        "Player quietly supports teammate through family crisis",
+        "Personal milestone creates positive locker room energy",
+        "Player’s engagement announcement goes viral among fans",
+        "Divorce rumors create distraction during contract talks",
+        "Player changes routine to spend more time with family",
+        "Player credits family support for improved play",
+        "Player’s charity foundation launches in home market",
+        "Family illness leads to emotional postgame interview",
+        "Player misses morning skate for birth of child",
+        "Player returns from family leave with renewed focus",
+        "Player’s personal life becomes tabloid story",
+        "Teammates support player after difficult family news",
+        "Player’s partner relocates, improving off-ice stability",
+        "Player considers trade request for family reasons",
+        "Player’s family publicly praises city and fanbase",
+        "Personal stress affects player’s practice intensity",
+        "Player’s mentor from childhood passes away",
+        "Player honors late friend with strong performance",
+        "Player reconnects with old junior coach for support",
+        "Player’s family celebrates citizenship milestone",
+        "Off-ice routine stabilizes after difficult month",
+        "Player’s private life leaks into media cycle",
+        "Player deletes social media after family harassment",
+        "Player hosts teammates for family dinner, improving chemistry",
+        "Player’s newborn illness creates emotional strain",
+        "Player becomes guardian figure for younger sibling",
+        "Family vacation incident becomes minor team distraction",
+        "Player’s community involvement improves public image",
+        "Player’s personal growth impresses coaching staff",
+        "Player struggles after being away from family too long",
+        "Player’s family attends ceremony for career milestone",
+        "Player credits spouse for helping him through slump",
+        "Player takes leave to handle urgent personal matter",
+        "Player’s off-ice happiness translates into better play",
+        "Player’s personal adversity becomes rallying point",
     ]
-    for extra in range(46):
-        row = personal_tpl[extra % len(personal_tpl)]
-        stem, fx0 = row[0], row[1]
-        dur0 = row[2] if len(row) > 2 else "medium"
-        vol = row[3] if len(row) > 3 else False
+
+    for i, pt in enumerate(personal_lines):
+        positive = any(word in pt.lower() for word in ["boost", "praise", "settle", "charity", "support", "improved", "renewed", "stabilizes", "happiness", "rallying"])
         push(
             "personal_life",
-            f"{stem} (beat {extra + 1})",
-            {k: round(float(v) + (extra % 4) * 0.005 * (1 if v > 0 else -1), 3) for k, v in fx0.items()},
-            dur=dur0,
-            volatile=vol,
+            pt,
+            {
+                "morale": 0.10 if positive else -0.08,
+                "confidence": 0.06 if positive else -0.05,
+                "chemistry": 0.05 if positive else -0.03,
+            },
+            rarity="common",
+            tone="positive" if positive else "mixed",
         )
 
-    media_tpl = [
-        ("Radio host questions heart nightly", {"media_stress": 0.14, "confidence": -0.10}, "medium"),
-        ("Viral clip misread as dirty play", {"media_stress": 0.18, "morale": -0.11}, "short", True),
-        ("Softball interview turns into trap question meltdown", {"media_comfort": -0.12, "confidence": -0.08}, "short", True),
-        ("Podcast tour exposes awkward quotes", {"media_stress": 0.11, "chemistry": -0.05}, "medium"),
-        ("Trade rumor mill pins star target on him", {"anxiety": 0.13, "contract_pressure": 0.10}, "medium"),
-        ("Local paper runs anonymous source hit piece", {"morale": -0.12, "media_stress": 0.15}, "medium", True),
-        ("National panel debates his ceiling endlessly", {"confidence": -0.07, "media_stress": 0.10}, "long"),
-        ("Social media pile-on after bad turnover", {"confidence": -0.14, "anxiety": 0.12}, "short", True),
-        ("PR team stages rebound narrative", {"media_comfort": 0.09, "confidence": 0.06}, "short"),
-        ("Documentary crew embeds, locker room tightens", {"chemistry": -0.06, "internal_motivation": 0.05}, "long"),
+    # ==================================================
+    # MEDIA PRESSURE STORYLINES — 60
+    # ==================================================
+
+    media_lines = [
+        "Local radio calls player the biggest disappointment of the season",
+        "National broadcast questions player’s commitment level",
+        "Player’s postgame quote sparks controversy",
+        "Beat reporter hints at tension between player and coach",
+        "Player trends online after brutal defensive mistake",
+        "Fanbase turns on player after another quiet night",
+        "Player praised by analysts for elite two-way effort",
+        "Media labels player a future captain after strong month",
+        "Viral highlight boosts player’s popularity overnight",
+        "Player refuses interview after being benched",
+        "Reporter asks uncomfortable question about contract value",
+        "Player’s sarcastic answer becomes headline",
+        "Coach defends player during tense media scrum",
+        "Player becomes target of trade deadline speculation",
+        "Podcast rumor creates unnecessary locker room drama",
+        "Player’s analytics profile becomes hot debate online",
+        "Media credits player for changing team culture",
+        "Fan poll ranks player as most frustrating on roster",
+        "Player’s playoff struggles dominate morning shows",
+        "Player’s hot streak becomes national story",
+        "Media compares player unfavorably to former teammate",
+        "Player calls out unfair coverage after loss",
+        "Team PR limits player availability after controversy",
+        "Player wins back fans with honest interview",
+        "Player’s quiet leadership praised by insiders",
+        "Columnist says player has lost a step",
+        "Player’s goal celebration becomes viral meme",
+        "Misquoted interview creates needless controversy",
+        "Player clarifies comments after social media backlash",
+        "Analyst claims player is being misused by coaching staff",
+        "Media questions whether player can handle market pressure",
+        "Player laughs off trade rumors in confident interview",
+        "Reporter reveals player has been playing through injury",
+        "Player’s leadership questioned after locker room leak",
+        "Fan chants support player after difficult week",
+        "Player’s slow start becomes daily media obsession",
+        "Rookie receives overwhelming media attention after debut",
+        "Player publicly thanks fans after hostile stretch",
+        "Media praises player’s response to adversity",
+        "Player criticized for skipping optional media availability",
+        "Panel debate argues player deserves more ice time",
+        "Former player rips his effort on national TV",
+        "Player responds with dominant performance after criticism",
+        "Media narrative shifts after one massive game",
+        "Player’s agent leaks frustration through reporter",
+        "Team insider reports player is unhappy with role",
+        "Player becomes face of team’s collapse storyline",
+        "Player’s comeback story gains national attention",
+        "Fans defend player after unfair media pile-on",
+        "Press conference joke lands badly with fanbase",
+        "Player’s old quote resurfaces at worst possible time",
+        "Media pressure increases after captain avoids questions",
+        "Player becomes symbol of failed offseason plan",
+        "Analysts praise player’s maturity under pressure",
+        "Media speculates player may waive no-trade clause",
+        "Player’s emotional interview changes public perception",
+        "Reporter feud with player becomes unwanted subplot",
+        "Player’s slump is dissected frame-by-frame online",
+        "Media declares player has turned season around",
+        "Player’s reputation improves after accountability interview",
     ]
-    for extra in range(44):
-        row = media_tpl[extra % len(media_tpl)]
-        stem, fx0 = row[0], row[1]
-        dur0 = row[2] if len(row) > 2 else "medium"
-        vol = row[3] if len(row) > 3 else False
+
+    for i, ml in enumerate(media_lines):
+        positive = any(word in ml.lower() for word in ["praised", "praises", "credits", "support", "wins back", "dominant", "comeback", "maturity", "turned", "improves"])
         push(
             "media_pressure",
-            f"{stem} (cycle {extra + 1})",
-            {k: round(float(v) + (extra % 4) * 0.004 * (1 if v > 0 else -1), 3) for k, v in fx0.items()},
-            dur=dur0,
-            volatile=vol,
+            ml,
+            {
+                "morale": 0.06 if positive else -0.08,
+                "confidence": 0.10 if positive else -0.12,
+                "media": 0.18,
+            },
+            rarity="common",
+            tone="positive" if positive else "negative",
         )
 
-    team_tpl = [
-        ("Quiet feud with assistant coach spills into ice time", {"morale": -0.12, "chemistry": -0.08}, "medium", True),
-        ("Chemistry experiment line demotion sparks sulk", {"confidence": -0.10, "internal_motivation": -0.08}, "short", True),
-        ("Leadership group vote snub stings publicly", {"leadership": -0.10, "morale": -0.14}, "medium", True),
-        ("Roomie clash on long road trip", {"chemistry": -0.10, "morale": -0.07}, "short"),
-        ("Veteran calls him out in film session", {"mental_toughness": 0.06, "confidence": -0.08}, "short", True),
-        ("Young core rallies around his energy", {"chemistry": 0.12, "leadership": 0.10}, "long"),
-        ("Captaincy chatter divides fan base", {"media_stress": 0.12, "confidence": 0.07}, "medium"),
-        ("Healthy scratch streak, agent whispers trade demand", {"morale": -0.16, "contract_pressure": 0.12}, "medium", True),
-        ("PP1 promotion tightens internal jealousy", {"chemistry": -0.07, "performance": 0.06}, "medium", True),
-        ("Locker room leader emerges in losing skid", {"leadership": 0.14, "chemistry": 0.11, "morale": 0.08}, "long"),
+    # ==================================================
+    # TEAM DYNAMICS STORYLINES — 60
+    # ==================================================
+
+    team_lines = [
+        "Locker room tension grows after player criticizes effort",
+        "Player and coach clash over reduced ice time",
+        "Veteran calls out young teammates during practice",
+        "Players-only meeting sparks improved team focus",
+        "Player emerges as unexpected locker room leader",
+        "Line chemistry explodes after new combination is tested",
+        "Player refuses to blame goalie after ugly loss",
+        "Teammates frustrated by player’s risky turnovers",
+        "Captain privately challenges player to raise intensity",
+        "Player earns respect after blocking shots while hurt",
+        "Practice fight breaks out between two competitive teammates",
+        "Player apologizes after heated bench exchange",
+        "Assistant coach praises player’s attitude improvement",
+        "Veteran mentors struggling rookie through difficult stretch",
+        "Player feels isolated after trade rumors swirl",
+        "Locker room rallies behind player after media attack",
+        "Player’s selfish penalties frustrate coaching staff",
+        "Leadership group demands more accountability from player",
+        "Player buys dinner for team after milestone night",
+        "Rookie gains trust after strong defensive effort",
+        "Player loses trust after ignoring system details",
+        "Coach rewards player with late-game defensive assignment",
+        "Player’s positive attitude lifts room during losing streak",
+        "Teammates notice player staying late after practice",
+        "Player becomes bridge between veterans and young core",
+        "Bench argument creates awkward postgame atmosphere",
+        "Player’s effort level questioned internally",
+        "Coaching staff credits player for changing practice tempo",
+        "Player takes blame publicly to protect teammate",
+        "Line mate frustration grows over missed passes",
+        "Player’s leadership improves after captain’s injury",
+        "Player organizes team bonding event on road trip",
+        "Locker room divides over player’s role on power play",
+        "Player earns alternate captain consideration",
+        "Coach benches player to send message to roster",
+        "Player responds to benching with mature attitude",
+        "Veterans unhappy with player’s defensive shortcuts",
+        "Player becomes trusted voice during rough stretch",
+        "Chemistry with new linemates transforms his season",
+        "Player privately unhappy with deployment",
+        "Goalie thanks player for defensive support after win",
+        "Team morale improves after player’s emotional speech",
+        "Player’s ego becomes concern among teammates",
+        "Younger players gravitate toward veteran’s guidance",
+        "Player resents being scratched for accountability reasons",
+        "Locker room celebrates player’s first goal after slump",
+        "Player’s work ethic sets tone for entire practice",
+        "Coach questions whether player is buying into system",
+        "Player publicly backs coach despite fan criticism",
+        "Teammate praises player for handling criticism well",
+        "Player’s defensive laziness creates staff frustration",
+        "Player accepts reduced role for team success",
+        "Team bonds around player returning from personal leave",
+        "Player’s complaining begins irritating teammates",
+        "Player becomes emotional heartbeat of fourth line",
+        "Player loses power play spot, creating quiet tension",
+        "Coach trusts player in final minute for first time",
+        "Player’s unselfish play improves line chemistry",
+        "Veteran leadership calms team after chaotic week",
+        "Player’s attitude turnaround changes internal perception",
     ]
-    for extra in range(44):
-        row = team_tpl[extra % len(team_tpl)]
-        stem, fx0 = row[0], row[1]
-        dur0 = row[2] if len(row) > 2 else "medium"
-        vol = row[3] if len(row) > 3 else False
-        char_min = 72 if ("leader emerges" in stem or "Young core rallies" in stem) else 0
+
+    for i, tl in enumerate(team_lines):
+        positive = any(word in tl.lower() for word in ["improved", "leader", "chemistry", "respect", "praises", "mentors", "rallies", "trust", "positive", "bonding", "mature", "trusted", "unselfish", "calms", "turnaround"])
         push(
             "team_dynamics",
-            f"{stem} (thread {extra + 1})",
-            {k: round(float(v) + (extra % 4) * 0.005 * (1 if v > 0 else -1), 3) for k, v in fx0.items()},
-            dur=dur0,
-            volatile=vol,
-            char_min=char_min,
+            tl,
+            {
+                "morale": 0.08 if positive else -0.08,
+                "chemistry": 0.14 if positive else -0.14,
+                "discipline": 0.04 if positive else -0.06,
+            },
+            rarity="common",
+            tone="positive" if positive else "negative",
         )
 
-    money_tpl = [
-        ("Contract year surge: betting on himself nightly", {"performance": 0.14, "contract_pressure": 0.12, "confidence": 0.08}, "long"),
-        ("Bridge deal stalemate wears on focus", {"morale": -0.10, "contract_pressure": 0.14}, "medium", True),
-        ("Holdout threat leaked by camp", {"media_stress": 0.16, "chemistry": -0.09}, "short", True),
-        ("Arbitration hearing prep becomes obsession", {"decision": 0.09, "anxiety": 0.11}, "medium"),
-        ("NTC chatter dominates interviews", {"media_stress": 0.10, "morale": 0.05}, "medium"),
-        ("Underpaid vs peers chip on shoulder", {"internal_motivation": 0.10, "confidence": 0.06}, "long"),
-        ("Agent change mid-season whispers", {"anxiety": 0.10, "confidence": -0.06}, "short", True),
-        ("Bonus structure incentives risky play", {"performance": 0.06, "decision": 0.08}, "medium", True),
-        ("Buyout buzz after rough October", {"confidence": -0.14, "morale": -0.12}, "short", True),
-        ("Extension celebration, hometown discount narrative", {"morale": 0.12, "chemistry": 0.07}, "medium"),
+    # ==================================================
+    # MONEY / CAREER / CONTRACT STORYLINES — 60
+    # ==================================================
+
+    career_lines = [
+        "Contract talks stall after player rejects first offer",
+        "Player’s agent leaks frustration over negotiation pace",
+        "Team worries player may price himself out of market",
+        "Player takes hometown discount to stay with club",
+        "Extension talks create positive buzz around locker room",
+        "Trade rumors intensify after player changes agents",
+        "Player quietly asks management for clarity on future",
+        "Agent pushes for larger role before extension talks",
+        "Player’s production dips during contract year pressure",
+        "Career-best season strengthens player’s arbitration case",
+        "Team explores trade market due to cap concerns",
+        "Player unhappy with bridge deal proposal",
+        "Negotiations pause until after playoff race",
+        "Player says he wants to retire with organization",
+        "Long-term extension rumor energizes fanbase",
+        "Player refuses to discuss contract during slump",
+        "Salary dispute becomes distraction during road trip",
+        "Player’s no-trade clause becomes major storyline",
+        "Management uncertain about committing long term",
+        "Player bets on himself by delaying extension",
+        "Agent publicly denies trade request rumor",
+        "Player’s camp unhappy with special teams usage",
+        "Bonus clause controversy creates awkward situation",
+        "Player’s arbitration filing shocks front office",
+        "Team fears player could walk in free agency",
+        "Player’s role expands after trade deadline passes",
+        "Career decline concerns affect player’s value",
+        "Player’s resurgence changes front office plans",
+        "Retirement speculation grows around veteran",
+        "Player considers Europe if NHL role disappears",
+        "Prospect worries about being buried in depth chart",
+        "Player’s call-up chance becomes career crossroads",
+        "Waiver risk creates tension around roster decisions",
+        "Player accepts two-way deal to stay in system",
+        "Veteran wants one more playoff run before retirement",
+        "Player’s camp pushes back against healthy scratch pattern",
+        "Team receives calls on player but hesitates",
+        "Player’s leadership value complicates trade decision",
+        "Extension deadline pressure affects player’s focus",
+        "Player changes offseason trainer to revive career",
+        "Management sees player as future core piece",
+        "Player’s inconsistency hurts negotiation leverage",
+        "Trade protection blocks potential deadline move",
+        "Player open to relocation for bigger opportunity",
+        "Agent meeting with GM sparks speculation",
+        "Player’s playoff performance may decide his future",
+        "Rookie ELC bonuses become quiet cap concern",
+        "Veteran’s cap hit becomes fanbase obsession",
+        "Player embraces prove-it contract mentality",
+        "Team wants shorter term than player expects",
+        "Player’s loyalty praised after rejecting rival offer",
+        "Rumored extension falls apart over signing bonus",
+        "Player’s market value rises after injury replacement success",
+        "Front office debates buying out veteran’s contract",
+        "Player’s trade value peaks during hot streak",
+        "Player wants stability after multiple deadline rumors",
+        "Team’s cap crunch places player in awkward position",
+        "Player’s camp seeks modified no-trade protection",
+        "Management praises player while avoiding contract questions",
+        "Player’s future becomes defining offseason storyline",
     ]
-    for extra in range(40):
-        row = money_tpl[extra % len(money_tpl)]
-        stem, fx0 = row[0], row[1]
-        dur0 = row[2] if len(row) > 2 else "medium"
-        vol = row[3] if len(row) > 3 else False
+
+    for i, cl in enumerate(career_lines):
+        positive = any(word in cl.lower() for word in ["discount", "positive", "retire", "energizes", "resurgence", "future core", "loyalty", "rises", "stability", "praises"])
         push(
             "money_career",
-            f"{stem} (beat {extra + 1})",
-            {k: round(float(v) + (extra % 4) * 0.004 * (1 if v > 0 else -1), 3) for k, v in fx0.items()},
-            dur=dur0,
-            volatile=vol,
+            cl,
+            {
+                "morale": 0.07 if positive else -0.07,
+                "confidence": 0.06 if positive else -0.05,
+                "media": 0.10,
+            },
+            rarity="common",
+            tone="positive" if positive else "mixed",
         )
 
-    chaos_tpl = [
-        ("Bizarre injury from freak pregame ritual", {"morale": -0.08, "anxiety": 0.10}, "short", True),
-        ("Lost passport strand in foreign city", {"morale": -0.09, "media_stress": 0.08}, "short"),
-        ("Wrong bag swapped, plays in borrowed skates", {"confidence": -0.06, "consistency": -0.08}, "short", True),
-        ("Cryptid meme account claims he is witness", {"media_stress": 0.09, "media_comfort": -0.05}, "medium"),
-        ("Accidental live mic confession during intermission", {"media_stress": 0.14, "chemistry": -0.07}, "short", True),
-        ("Charity auction item is cursed joke that goes viral", {"media_comfort": 0.07, "media_stress": 0.08}, "medium", True),
-        ("Team bus detour into county fair chaos", {"morale": 0.06, "chemistry": 0.07}, "short"),
-        ("Mascot feud becomes running bit", {"morale": 0.08, "confidence": 0.05}, "short"),
-        ("Weather delay traps team at airport for 30 hours", {"morale": -0.06, "anxiety": 0.07}, "short"),
-        ("Reality TV cameo request divides management", {"media_stress": 0.10, "morale": -0.05}, "medium"),
+    # ==================================================
+    # PERFORMANCE / HOCKEY-SPECIFIC STORYLINES — 60
+    # ==================================================
+
+    performance_lines = [
+        "Player changes stick curve after prolonged scoring drought",
+        "Skating coach helps player regain first-step quickness",
+        "Player adds physical edge after being criticized as soft",
+        "Faceoff specialist begins mentoring young center",
+        "Defenseman simplifies game after brutal turnover stretch",
+        "Goalie adjusts glove positioning after repeated high shots",
+        "Player’s shot volume spikes after coaching adjustment",
+        "Power play role unlocks player’s offensive confidence",
+        "Penalty kill promotion improves player’s overall trust",
+        "Player studies film obsessively after defensive breakdowns",
+        "Coach praises player for finally attacking middle ice",
+        "Player’s zone entries become key tactical weapon",
+        "Player struggles with new defensive system",
+        "Player thrives after switching wings",
+        "Rookie learns to manage NHL pace after rough start",
+        "Veteran loses step but improves positional awareness",
+        "Player’s conditioning becomes issue late in games",
+        "Player’s offseason training finally shows results",
+        "Goalie’s rebound control becomes staff concern",
+        "Player’s finishing luck finally normalizes",
+        "Player’s shooting percentage crash alarms coaches",
+        "Player’s underlying numbers suggest breakout is coming",
+        "Player becomes trusted matchup weapon against stars",
+        "Player’s defensive reads improve dramatically",
+        "Coaching staff reduces player’s minutes to simplify role",
+        "Player earns more ice time through strong forecheck",
+        "Player’s backchecking effort wins over coaching staff",
+        "Defense pair struggles badly with communication",
+        "Player discovers chemistry with unexpected linemate",
+        "Goalie works with new goalie coach to fix stance",
+        "Player’s passing creativity returns after confidence boost",
+        "Player’s turnovers force temporary demotion",
+        "Young defender gains confidence after first NHL goal",
+        "Player’s heavy shot becomes power play focal point",
+        "Player’s neutral zone play frustrates opponents",
+        "Player’s discipline improves after penalty-heavy month",
+        "Player gets rewarded for net-front presence",
+        "Player’s defensive stick becomes quiet strength",
+        "Player’s transition game drives team offense",
+        "Player’s poor gap control becomes video-room focus",
+        "Coach gives player tougher assignments to test growth",
+        "Player embraces shutdown role after offensive slump",
+        "Player adds deception to shot release",
+        "Rookie’s defensive detail earns veteran praise",
+        "Player’s lack of pace creates lineup questions",
+        "Player’s board battles improve after strength work",
+        "Player earns trust as late-game defensive option",
+        "Goalie’s workload becomes concern after heavy stretch",
+        "Player’s cycle game wears down opponents",
+        "Player’s puck protection becomes major development win",
+        "Player’s rush defense remains major weakness",
+        "Player starts driving play despite low point totals",
+        "Player’s net-front screens create hidden value",
+        "Player’s one-timer finally becomes dangerous weapon",
+        "Player’s defensive-zone exits stabilize his pair",
+        "Player’s penalty trouble costs team momentum",
+        "Coach rewards player for consistent details",
+        "Player’s game matures after midseason reset",
+        "Player’s special teams versatility boosts value",
+        "Player’s all-around game takes noticeable leap",
     ]
-    for extra in range(46):
-        row = chaos_tpl[extra % len(chaos_tpl)]
-        stem, fx0 = row[0], row[1]
-        dur0 = row[2] if len(row) > 2 else "medium"
-        vol = row[3] if len(row) > 3 else False
+
+    for i, pl in enumerate(performance_lines):
+        negative = any(word in pl.lower() for word in ["struggles", "concern", "issue", "crash", "turnovers", "poor", "weakness", "trouble"])
+        push(
+            "performance_hockey",
+            pl,
+            {
+                "morale": -0.05 if negative else 0.07,
+                "confidence": -0.08 if negative else 0.10,
+                "chemistry": -0.03 if negative else 0.04,
+            },
+            rarity="common",
+            tone="negative" if negative else "positive",
+        )
+
+    # ==================================================
+    # CHAOTIC / WEIRD / NHL-STYLE ABSURDITY — 60
+    # ==================================================
+
+    weird_lines = [
+        "Player blames scoring slump on cursed hotel room",
+        "Player switches pregame meal and immediately scores twice",
+        "Teammates ban player’s lucky shirt after losing streak",
+        "Player’s bizarre superstition becomes locker room joke",
+        "Fan conspiracy theory claims player only scores on Tuesdays",
+        "Player’s dog becomes unofficial team mascot",
+        "Player loses equipment bag before rivalry game",
+        "Player accidentally wears wrong gloves during warmup",
+        "Goalie refuses to change mask after shutout streak",
+        "Player’s lucky stick breaks and panic spreads online",
+        "Player becomes meme after strange bench reaction",
+        "Teammates recreate player’s odd celebration in practice",
+        "Player insists new tape job changed his season",
+        "Arena DJ plays wrong goal song and player gets blamed",
+        "Player’s coffee addiction becomes running locker room gag",
+        "Rookie forced into absurd team karaoke tradition",
+        "Player claims road city has cursed ice",
+        "Equipment manager becomes hero after skate emergency",
+        "Player accidentally likes trade rumor post",
+        "Player’s fantasy football punishment goes viral",
+        "Teammates hide player’s helmet before practice prank",
+        "Player starts growing playoff beard two months early",
+        "Player’s strange warmup dance becomes fan favorite",
+        "Player refuses to step on team logo after bad luck claim",
+        "Veteran bans rookies from touching stereo after losses",
+        "Player’s unusual smelling salts routine alarms broadcast crew",
+        "Player misses bus after falling asleep in hotel lobby",
+        "Player’s pregame playlist causes locker room debate",
+        "Goalie talks to posts during hot streak",
+        "Player’s lucky socks become local merchandise idea",
+        "Teammate accuses player of jinxing shutout bid",
+        "Player’s broken stick gets displayed like trophy",
+        "Player starts using same parking spot during winning streak",
+        "Player’s odd handshake ritual spreads through team",
+        "Fan brings sign about player’s superstition and he scores",
+        "Player’s helmet sticker placement becomes online obsession",
+        "Player’s accidental quote becomes team slogan",
+        "Coach jokes player is powered by gas station snacks",
+        "Player gets stuck in elevator before morning skate",
+        "Player’s luggage sent to wrong city before back-to-back",
+        "Player blames poor game on bad nap timing",
+        "Team refuses to change hotel after comeback win",
+        "Player’s lucky hoodie goes missing before big game",
+        "Player’s unusual stretching routine confuses rookies",
+        "Mascot prank involving player goes viral",
+        "Player gets roasted for terrible aux cord choices",
+        "Teammates credit player’s ugly shoes for winning streak",
+        "Player becomes obsessed with same postgame restaurant",
+        "Player’s accidental fall during warmup becomes meme",
+        "Goalie changes water bottle order after bad outing",
+        "Player claims new mouthguard improves vision",
+        "Broadcast catches player arguing with broken stick",
+        "Player’s glove smell becomes locker room controversy",
+        "Player forgets rookie lap and gets chirped for weeks",
+        "Team starts fake award for player’s weird habits",
+        "Player’s superstition delays entire warmup routine",
+        "Player’s lucky charm confiscated by equipment staff",
+        "Fans chant about player’s strange celebration",
+        "Player’s bizarre confidence quote becomes viral audio",
+        "Locker room adopts ridiculous motto after player joke",
+    ]
+
+    for i, wl in enumerate(weird_lines):
         push(
             "chaotic_weird",
-            f"{stem} (variant {extra + 1})",
-            {k: round(float(v) + (extra % 5) * 0.004 * (1 if v > 0 else -1), 3) for k, v in fx0.items()},
-            dur=dur0,
-            volatile=vol,
+            wl,
+            {
+                "morale": 0.05,
+                "confidence": 0.03,
+                "chemistry": 0.06,
+                "media": 0.08,
+            },
+            rarity="uncommon",
+            tone="chaotic",
         )
-
-    push(
-        "team_dynamics",
-        "Clutch reputation cements after playoff OT winner",
-        {"confidence": 0.10, "clutch": 0.16, "morale": 0.10},
-        dur="medium",
-        star_only=True,
-        volatile=True,
-        tier="major",
-    )
-    push(
-        "team_dynamics",
-        "Mentorship arc: shelters rookie roommate through slump",
-        {"leadership": 0.14, "chemistry": 0.10, "internal_motivation": 0.08},
-        dur="long",
-        char_min=68,
-        vet_only=True,
-    )
-    push(
-        "money_career",
-        "Rookie deal overperformance sparks endorsement rush",
-        {"confidence": 0.09, "media_stress": 0.08, "performance": 0.08},
-        dur="medium",
-        rookie_only=True,
-    )
-    push(
-        "mental_psychological",
-        "Resilience arc: sports psych + staff alignment clicks",
-        {"confidence": 0.12, "mental_toughness": 0.10, "anxiety": -0.10},
-        dur="long",
-        char_min=55,
-    )
-    push(
-        "media_pressure",
-        "Handled pressure tour: turns boos into fuel",
-        {"mental_toughness": 0.12, "confidence": 0.10, "media_stress": -0.08},
-        dur="medium",
-        char_min=62,
-        volatile=True,
-    )
 
     return out
 
@@ -4514,6 +5100,11 @@ class SimEngine:
         self.last_league_forecast: dict | None = None
         self.last_league_shocks: list[dict] = []
         self.league_history: list[LeagueSeasonResult] = []
+
+        # Last full-league sim: game-derived stat ledger keyed by player id (str)
+        self._last_league_season_stat_ledger: Dict[str, Dict[str, Any]] = {}
+        self._last_league_sim_calendar_year: int = 0
+        self._last_league_season_validation: Dict[str, Any] = {}
 
         # ------------------------------------
 # Stats engines (season-level)
@@ -4687,7 +5278,7 @@ class SimEngine:
         def_positions = [Position.D] * 6
         g_positions = [Position.G] * 3
         ovr_tiers = (
-            [(0.52, 0.68)] * 6 + [(0.62, 0.76)] * 5 + [(0.70, 0.82)] * 5 + [(0.76, 0.86)] * 3 + [(0.82, 0.90)] * 2
+            [(0.58, 0.74)] * 6 + [(0.66, 0.80)] * 5 + [(0.72, 0.86)] * 5 + [(0.78, 0.90)] * 3 + [(0.84, 0.93)] * 2
         )
         assert len(ovr_tiers) >= 21
         GEN_P, ELITE_P, STAR_P = 0.003, 0.018, 0.045
@@ -4713,7 +5304,7 @@ class SimEngine:
                     elif roll < GEN_P + ELITE_P + STAR_P:
                         target_ovr = max(target_ovr, rng.uniform(0.86, 0.89))
                     else:
-                        target_ovr = min(target_ovr, 0.78)
+                        target_ovr = min(target_ovr, 0.84)
                     if roll >= GEN_P + ELITE_P:
                         target_ovr = min(target_ovr, 0.89)
                     age_lo, age_hi = age_order[slot_idx]
@@ -4731,14 +5322,17 @@ class SimEngine:
                         ident = generate_human_identity(rng)
                     hometown = str(ident.hometown or "Unknown")
                     birth_city = hometown.split(",")[0].strip() if hometown else "Unknown"
+                    h_cm = random_height_cm(rng)
+                    w_kg = int(78 + (h_cm - 178) * 0.38 + rng.randint(-9, 11))
+                    w_kg = max(65, min(118, w_kg))
                     identity = IdentityBio(
                         name=str(ident.full_name),
                         age=age,
                         birth_year=birth_year,
                         birth_country=str(ident.nationality),
                         birth_city=birth_city or "Unknown",
-                        height_cm=180 + rng.randint(-8, 8),
-                        weight_kg=85 + rng.randint(-10, 10),
+                        height_cm=h_cm,
+                        weight_kg=w_kg,
                         position=pos,
                         shoots=Shoots.L if rng.random() < 0.6 else Shoots.R,
                         draft_year=max(2018, birth_year + 18),
@@ -4757,6 +5351,7 @@ class SimEngine:
                         backstory=backstory,
                         ratings=ratings,
                         rng_seed=seed,
+                        archetype=assign_skater_archetype(pos, rng),
                     )
                     player.context.current_team_id = str(getattr(team, "team_id", team_idx))
                     team.roster.append(player)
@@ -6185,7 +6780,7 @@ class SimEngine:
                 age = year - birth_year
                 birth_country = str(identity_dict.get("birth_country", "Canada"))
                 birth_city = str(identity_dict.get("birth_city", "Unknown"))
-                height_cm = int(identity_dict.get("height_cm", 180))
+                height_cm = sanitize_height_cm(identity_dict.get("height_cm", 180), rng)
                 weight_kg = int(identity_dict.get("weight_kg", 85))
                 pos_val = identity_dict.get("position", "C")
                 if hasattr(pos_val, "value"):
@@ -6406,7 +7001,7 @@ class SimEngine:
             birth_year = int(identity_dict.get("birth_year", year - 18))
             birth_country = str(identity_dict.get("birth_country", "Canada"))
             birth_city = str(identity_dict.get("birth_city", "Unknown"))
-            height_cm = int(identity_dict.get("height_cm", 180))
+            height_cm = sanitize_height_cm(identity_dict.get("height_cm", 180), rng)
             weight_kg = int(identity_dict.get("weight_kg", 85))
             pos_val = identity_dict.get("position", "C")
             if hasattr(pos_val, "value"):
@@ -8314,17 +8909,93 @@ class SimEngine:
 
 
         # --------------------------------------------------
-# 2.5 Player season stats (real distribution + feedback)
-# --------------------------------------------------
-        season_stats = {}
-        if self.player_stats_engine is not None:
-            season_stats = self.player_stats_engine.simulate_player_season(
-                player=self.player,
-                season=2025 + self.year,
-            )
-        # Defensive persistence (even if engine changes later)
-        if season_stats and hasattr(self.player, "season_stats"):
-            self.player.season_stats[season_stats["season"]] = season_stats
+        # 2.5 Player season stats — game-derived ledger only (no distribution injection)
+        # --------------------------------------------------
+        if not hasattr(self.player, "season_stats") or self.player.season_stats is None:
+            self.player.season_stats = {}
+        season_stats: Dict[str, Any] = {}
+        season_tag = int(
+            getattr(self, "_last_league_sim_calendar_year", 0) or (2025 + int(getattr(self, "year", 0) or 0))
+        )
+        ledger = getattr(self, "_last_league_season_stat_ledger", None) or {}
+        pid = str(getattr(self.player, "id", "") or "")
+        row = ledger.get(pid) if pid else None
+        if row:
+            g = int(row.get("g", 0) or 0)
+            a = int(row.get("a", 0) or 0)
+            pts = g + a
+            gp = max(1, int(row.get("gp", 0) or 0))
+            per_gp = pts / float(gp)
+            perf = clamp(28.0 + 62.0 * min(1.35, per_gp / 1.15), 18.0, 98.0)
+            if str(row.get("position", "")).upper() == "G":
+                sa = max(1, int(row.get("shots_against", 0) or 0))
+                sv = int(row.get("saves", 0) or 0)
+                ga_ct = int(row.get("ga", 0) or 0)
+                sv_pct = sv / float(sa)
+                gaa = (ga_ct * 60.0) / max(1, gp)
+                perf_g = clamp(40.0 + 520.0 * (sv_pct - 0.88) - 1.15 * (gaa - 2.85), 22.0, 96.0)
+                season_stats = {
+                    "season": season_tag,
+                    "role": "starter",
+                    "goals": 0,
+                    "assists": 0,
+                    "points": 0,
+                    "ga": ga_ct,
+                    "gp": gp,
+                    "w": int(row.get("w", 0) or 0),
+                    "l": int(row.get("l", 0) or 0),
+                    "otl": int(row.get("otl", 0) or 0),
+                    "saves": sv,
+                    "shots_against": sa,
+                    "save_pct": round(sv_pct, 4),
+                    "gaa": round(gaa, 3),
+                    "performance_score": round(perf_g, 2),
+                    "expected_score": 60.0,
+                    "delta": 0.0,
+                    "war": 0.0,
+                    "xgf_pct": 0.5,
+                }
+            else:
+                season_stats = {
+                    "season": season_tag,
+                    "role": str(row.get("position") or "skater"),
+                    "goals": g,
+                    "assists": a,
+                    "points": pts,
+                    "g": g,
+                    "a": a,
+                    "gp": gp,
+                    "sog": int(row.get("sog", 0) or 0),
+                    "toi_sec": int(row.get("toi_sec", 0) or 0),
+                    "pim": int(row.get("pim", 0) or 0),
+                    "war": round(min(6.5, max(-2.0, (pts / max(1, gp)) * 0.22)), 2),
+                    "xgf_pct": round(0.48 + 0.0016 * float(per_gp), 3),
+                    "performance_score": round(perf, 2),
+                    "expected_score": 62.0,
+                    "delta": round(perf - 62.0, 2),
+                }
+            self.player.season_stats[int(season_tag)] = season_stats
+        else:
+            perf_fb = clamp(30.0 + 58.0 * float(win_pct), 22.0, 86.0)
+            season_stats = {
+                "season": season_tag,
+                "role": "skater",
+                "goals": 0,
+                "assists": 0,
+                "points": 0,
+                "g": 0,
+                "a": 0,
+                "gp": 0,
+                "sog": 0,
+                "toi_sec": 0,
+                "pim": 0,
+                "war": 0.0,
+                "xgf_pct": 0.5,
+                "performance_score": round(perf_fb, 2),
+                "expected_score": 60.0,
+                "delta": round(perf_fb - 60.0, 2),
+            }
+            self.player.season_stats[int(season_tag)] = season_stats
 
 
         # --------------------------------------------------
@@ -8707,6 +9378,667 @@ class SimEngine:
         mult = 1.0 + 0.48 * av - 0.32 * ac
         return max(0.82, min(1.30, mult))
 
+    def _team_offense_skill(self, team: Any, skaters_subset: Optional[List[Any]] = None) -> float:
+        """
+        Approx 0..1 offense+awareness signal from active skaters.
+        Uses weighted top-end roster talent so top-line clubs create more offense.
+        Optional skaters_subset limits the pool (e.g. injury-eligible players only).
+        """
+        if skaters_subset is not None:
+            roster = [p for p in skaters_subset if not getattr(p, "retired", False)]
+        else:
+            roster = [p for p in (getattr(team, "roster", None) or []) if not getattr(p, "retired", False)]
+        skaters = []
+        for p in roster:
+            pos = str(getattr(getattr(p, "identity", None), "position", "") or "").upper()
+            if pos == "G":
+                continue
+            skaters.append(p)
+        if not skaters:
+            return 0.5
+
+        rated: List[Tuple[float, Any]] = []
+        for p in skaters:
+            fn = getattr(p, "ovr", None)
+            ovr = float(fn() if callable(fn) else fn or 0.5)
+            if ovr <= 1.5:
+                ovr *= 99.0
+            rated.append((ovr, p))
+        rated.sort(key=lambda z: z[0], reverse=True)
+        top = [z[1] for z in rated[:12]]
+
+        vals: List[float] = []
+        for p in top:
+            r = getattr(p, "ratings", None) or {}
+            shoot = sum(float(r.get(k, 68.0) or 68.0) for k in OFFENSE_KEYS) / max(1, len(OFFENSE_KEYS))
+            aware = sum(float(r.get(k, 68.0) or 68.0) for k in IQ_KEYS) / max(1, len(IQ_KEYS))
+            passq = sum(float(r.get(k, 68.0) or 68.0) for k in PASSING_KEYS) / max(1, len(PASSING_KEYS))
+            vals.append(0.44 * shoot + 0.32 * aware + 0.24 * passq)
+
+        avg = sum(vals) / max(1, len(vals))
+        return max(0.25, min(0.95, avg / 99.0))
+
+    # ------------------------------------------------------------------
+    # Unified game stat ledger (single source of truth with franchise UI)
+    # ------------------------------------------------------------------
+
+    def _gm_active_roster(self, team: Any) -> List[Any]:
+        return [p for p in (getattr(team, "roster", None) or []) if not getattr(p, "retired", False)]
+
+    def _gm_pos_str(self, p: Any) -> str:
+        ident = getattr(p, "identity", None)
+        pos = getattr(ident, "position", None) if ident else None
+        return str(getattr(pos, "value", pos) or "?")
+
+    def _gm_skaters(self, team: Any) -> List[Any]:
+        return [p for p in self._gm_active_roster(team) if str(self._gm_pos_str(p)).upper() != "G"]
+
+    def _gm_goalies(self, team: Any) -> List[Any]:
+        all_goalies = [p for p in self._gm_active_roster(team) if str(self._gm_pos_str(p)).upper() == "G"]
+        healthy = [p for p in all_goalies if not self._injury_sidelined(p)]
+        # Hard runtime truth: prefer available goalies; only fall back if none are healthy.
+        return healthy or all_goalies
+
+    def _gm_ovr_bonus(self, p: Any) -> float:
+        try:
+            fn = getattr(p, "ovr", None)
+            o = float(fn() if callable(fn) else fn)
+            if o <= 1.5:
+                o *= 99.0
+            return max(14.0, o) ** 1.2
+        except Exception:
+            return 52.0
+
+    def _gm_role_usage_mult(self, p: Any) -> float:
+        role_raw = str(
+            getattr(p, "line_role", None)
+            or getattr(p, "role", None)
+            or getattr(p, "depth_role", None)
+            or ""
+        ).lower()
+        if "top" in role_raw or "line1" in role_raw or "first" in role_raw:
+            return 2.35
+        if "second" in role_raw or "line2" in role_raw:
+            return 1.65
+        if "third" in role_raw or "line3" in role_raw or "middle" in role_raw:
+            return 0.92
+        if "fourth" in role_raw or "line4" in role_raw or "depth" in role_raw:
+            return 0.58
+        return 0.85
+
+    def _gm_rating_avg(self, p: Any, keys: List[str], default: float = 68.0) -> float:
+        r = getattr(p, "ratings", None) or {}
+        vals = [float(r.get(k, default) or default) for k in keys]
+        return sum(vals) / max(1, len(vals))
+
+    def _gm_offense_weight(self, p: Any) -> float:
+        ovr = self._gm_ovr_bonus(p)
+        off = self._gm_rating_avg(p, OFFENSE_KEYS)
+        pm = self._gm_rating_avg(p, PASSING_KEYS)
+        iq = self._gm_rating_avg(p, IQ_KEYS)
+        pos = self._gm_pos_str(p).upper()
+        pos_mult = 0.86 if pos == "D" else 1.0
+        usage_mult = self._gm_role_usage_mult(p)
+        base = (0.40 * off + 0.34 * pm + 0.26 * iq) / 99.0
+        return max(0.04, (ovr ** 1.22) * (base ** 1.08) * usage_mult * pos_mult)
+
+    def _gm_forward_lines(self, skaters: List[Any]) -> Tuple[List[List[Any]], List[Any]]:
+        fw: List[Any] = []
+        defs: List[Any] = []
+        for p in skaters:
+            if str(self._gm_pos_str(p)).upper() == "D":
+                defs.append(p)
+            else:
+                fw.append(p)
+        fw.sort(key=lambda x: self._gm_ovr_bonus(x), reverse=True)
+        lines: List[List[Any]] = [[], [], [], []]
+        n = len(fw)
+        if n > 0:
+            q = max(1, (n + 3) // 4)
+            idx = 0
+            for li in range(4):
+                chunk = fw[idx : idx + q]
+                idx += len(chunk)
+                lines[li] = chunk
+        return lines, defs
+
+    def _gm_line_index_for_player(self, lines: List[List[Any]], p: Any) -> int:
+        for i, ln in enumerate(lines):
+            if p in ln:
+                return i
+        return 3
+
+    def _gm_toi_seconds_for_line(self, rng: random.Random, line_idx: int, is_d: bool) -> int:
+        if is_d:
+            lo, hi = 17, 24
+        elif line_idx == 0:
+            lo, hi = 18, 22
+        elif line_idx == 1:
+            lo, hi = 15, 18
+        elif line_idx == 2:
+            lo, hi = 12, 15
+        else:
+            lo, hi = 8, 12
+        mins = int(rng.randint(lo, hi))
+        secs = int(rng.randint(0, 55))
+        return mins * 60 + secs
+
+    def _gm_distribute_integer_shares(
+        self, rng: random.Random, weights: List[float], total: int
+    ) -> List[int]:
+        n = len(weights)
+        if n == 0 or total <= 0:
+            return [0] * n
+        ws = [max(1e-9, float(w)) for w in weights]
+        s = sum(ws)
+        raw = [total * (w / s) for w in ws]
+        out = [int(math.floor(x)) for x in raw]
+        rem = total - sum(out)
+        frac = sorted([(raw[i] - out[i], rng.random(), i) for i in range(n)], reverse=True)
+        t = 0
+        while rem > 0 and t < max(n * 3, 1):
+            _, _, idx = frac[t % len(frac)]
+            out[idx] += 1
+            rem -= 1
+            t += 1
+        guard = 0
+        while sum(out) > total and guard < n * 8:
+            j = min(range(n), key=lambda k: (out[k], -raw[k]))
+            if out[j] > 0:
+                out[j] -= 1
+            guard += 1
+        return out
+
+    def _gm_ledger_ensure(self, ledger: Dict[str, Dict[str, Any]], p: Any, team_id: str) -> Dict[str, Any]:
+        pid = str(getattr(p, "id", "") or "")
+        if not pid:
+            return {}
+        if pid not in ledger:
+            nm = str(getattr(getattr(p, "identity", None), "name", None) or getattr(p, "name", None) or "?")
+            ledger[pid] = {
+                "player_id": pid,
+                "name": nm,
+                "team_id": str(team_id),
+                "position": self._gm_pos_str(p),
+                "gp": 0,
+                "g": 0,
+                "a": 0,
+                "pts": 0,
+                "sog": 0,
+                "pim": 0,
+                "hit": 0,
+                "blk": 0,
+                "toi_sec": 0,
+                "ga": 0,
+                "w": 0,
+                "l": 0,
+                "otl": 0,
+                "saves": 0,
+                "shots_against": 0,
+            }
+        row = ledger[pid]
+        row["name"] = str(
+            getattr(getattr(p, "identity", None), "name", None) or getattr(p, "name", None) or row.get("name")
+        )
+        row["position"] = self._gm_pos_str(p)
+        row["team_id"] = str(team_id)
+        return row
+
+    def _gm_ledger_add(self, ledger: Dict[str, Dict[str, Any]], p: Any, team_id: str, **kwargs: int) -> None:
+        row = self._gm_ledger_ensure(ledger, p, team_id)
+        if not row:
+            return
+        for k, v in kwargs.items():
+            if v:
+                row[k] = int(row.get(k, 0)) + int(v)
+        if str(row.get("position") or "").upper() != "G":
+            row["pts"] = int(row.get("g", 0)) + int(row.get("a", 0))
+
+    def _gm_team_shots_target(self, rng: random.Random, team: Any, goals: int) -> int:
+        off = self._team_offense_skill(team)
+        base = 28.0 + 4.0 * (off - 0.5) + 2.15 * float(goals) + rng.uniform(-1.4, 1.4)
+        return int(round(max(25.0, min(35.0, base))))
+
+    def _gm_team_pk_suppression_factor(self, team: Any) -> float:
+        """0–1 proxy: strong defensive depth slightly suppresses opponent shot volume in stat ledger."""
+        defs = [p for p in self._gm_skaters(team) if str(self._gm_pos_str(p)).upper() == "D"]
+        if not defs:
+            return 0.45
+        xs = sorted((self._gm_ovr_bonus(p) for p in defs), reverse=True)[:6]
+        if not xs:
+            return 0.45
+        m = sum(xs) / float(len(xs))
+        return float(max(0.32, min(0.96, m / 22.0)))
+
+    def _gm_pick_goal_scorer(
+        self,
+        rng: random.Random,
+        lines_fw: List[List[Any]],
+        defs: List[Any],
+        skaters_all: List[Any],
+        d_goal_share: float,
+    ) -> Any:
+        if defs and rng.random() < d_goal_share:
+            w = [max(0.04, self._gm_offense_weight(p)) for p in defs]
+            return rng.choices(defs, weights=w, k=1)[0]
+        base_w = [0.38, 0.28, 0.17, 0.07]
+        eff_w: List[float] = []
+        eff_lines: List[List[Any]] = []
+        for i in range(4):
+            ln = lines_fw[i] if i < len(lines_fw) else []
+            if ln:
+                eff_w.append(base_w[i])
+                eff_lines.append(ln)
+        if not eff_lines:
+            w2 = [max(0.04, self._gm_offense_weight(p)) for p in skaters_all]
+            return rng.choices(skaters_all, weights=w2, k=1)[0]
+        s = sum(eff_w) or 1.0
+        eff_w = [w / s for w in eff_w]
+        li = rng.choices(range(len(eff_lines)), weights=eff_w, k=1)[0]
+        pool = eff_lines[li]
+        w3 = [max(0.04, self._gm_offense_weight(p) ** 1.15) for p in pool]
+        return rng.choices(pool, weights=w3, k=1)[0]
+
+    def _gm_pick_assists(
+        self, rng: random.Random, team_skaters: List[Any], scorer: Any, min_one: bool = True
+    ) -> List[Any]:
+        pool = [p for p in team_skaters if p is not scorer]
+        if not pool:
+            return []
+        out: List[Any] = []
+        if min_one:
+            w = [max(0.04, self._gm_offense_weight(p) ** 1.25) for p in pool]
+            out.append(rng.choices(pool, weights=w, k=1)[0])
+        if len(pool) >= 2 and rng.random() < 0.58:
+            pool2 = [p for p in pool if p is not out[0]]
+            if pool2:
+                w2 = [max(0.04, self._gm_offense_weight(p) ** 1.12) for p in pool2]
+                out.append(rng.choices(pool2, weights=w2, k=1)[0])
+        return out[:2]
+
+    def _injury_sidelined(self, player: Any) -> bool:
+        """True when player should not dress / produce counting stats this game."""
+        if int(getattr(player, "_world_injury_games_remaining", 0) or 0) > 0:
+            return True
+        h = getattr(player, "health", None)
+        if h is not None:
+            st = getattr(h, "injury_status", None)
+            if st is not None:
+                nm = str(getattr(st, "name", st))
+                if nm not in ("HEALTHY", "healthy", "Healthy"):
+                    return True
+        return False
+
+    def _roster_injury_depth_penalty(self, team: Any) -> float:
+        """Strength multiplier when injuries thin the lineup (game outcome only)."""
+        all_sk = self._gm_skaters(team)
+        if not all_sk:
+            return 1.0
+        active = [p for p in all_sk if not self._injury_sidelined(p)]
+        ratio = len(active) / max(9.0, float(len(all_sk)))
+        return max(0.87, min(1.0, 0.88 + 0.14 * ratio))
+
+    def accumulate_unified_game_stats(
+        self,
+        rng: random.Random,
+        home: Any,
+        away: Any,
+        hid: str,
+        aid: str,
+        hg: int,
+        ag: int,
+        ot: bool,
+        ledger: Dict[str, Dict[str, Any]],
+        *,
+        build_game_payload: bool = False,
+        calendar_day: int = 0,
+        calendar_iso: str = "",
+        game_id: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Single pipeline for skater/goalie counting stats from one simulated game.
+        Mutates ledger (player_id -> row). Optionally returns a franchise-style game box dict.
+        """
+        home_sk = [p for p in self._gm_skaters(home) if not self._injury_sidelined(p)]
+        away_sk = [p for p in self._gm_skaters(away) if not self._injury_sidelined(p)]
+
+        # Goalie pools respect injuries; if everyone is sidelined, fall back to raw list so the
+        # game can still be simulated, but injured goalies will only be used as a last resort.
+        home_gl = [g for g in self._gm_goalies(home) if not self._injury_sidelined(g)]
+        if not home_gl:
+            home_gl = self._gm_goalies(home)
+        away_gl = [g for g in self._gm_goalies(away) if not self._injury_sidelined(g)]
+        if not away_gl:
+            away_gl = self._gm_goalies(away)
+
+        h_sog_tgt = self._gm_team_shots_target(rng, home, int(hg))
+        a_sog_tgt = self._gm_team_shots_target(rng, away, int(ag))
+        h_pk = self._gm_team_pk_suppression_factor(home)
+        a_pk = self._gm_team_pk_suppression_factor(away)
+        a_sog_tgt = max(18, int(round(float(a_sog_tgt) * (1.0 - 0.065 * h_pk))))
+        h_sog_tgt = max(18, int(round(float(h_sog_tgt) * (1.0 - 0.065 * a_pk))))
+
+        def _dress_team(team_sk: List[Any], tid: str, sog_tgt: int) -> Dict[str, Dict[str, Any]]:
+            rows: Dict[str, Dict[str, Any]] = {}
+            if not team_sk:
+                return rows
+            lines_fw, defs = self._gm_forward_lines(team_sk)
+            tois: List[int] = []
+            pp_bias: List[float] = []
+            for p in team_sk:
+                li = self._gm_line_index_for_player(lines_fw, p)
+                is_d = str(self._gm_pos_str(p)).upper() == "D"
+                toi = self._gm_toi_seconds_for_line(rng, li if not is_d else 1, is_d)
+                toi = int(round(toi * max(0.72, min(1.35, self._gm_role_usage_mult(p) / 1.25))))
+                tois.append(toi)
+                if is_d:
+                    pp_bias.append(1.04 + 0.10 * (1.0 if li <= 1 else 0.0))
+                else:
+                    if li <= 0:
+                        pp_bias.append(1.24)
+                    elif li == 1:
+                        pp_bias.append(1.12)
+                    elif li == 2:
+                        pp_bias.append(1.05)
+                    else:
+                        pp_bias.append(1.0)
+            w_sh: List[float] = []
+            for p, toi, pb in zip(team_sk, tois, pp_bias):
+                base_w = max(0.04, self._gm_offense_weight(p))
+                toi_s = max(300, int(toi))
+                w_sh.append(base_w * pb * ((float(toi_s) / 3600.0) ** 0.48))
+            shots = self._gm_distribute_integer_shares(rng, w_sh, int(sog_tgt))
+            for i, p in enumerate(team_sk):
+                self._gm_ledger_add(ledger, p, tid, gp=1)
+                toi = tois[i]
+                is_d = str(self._gm_pos_str(p)).upper() == "D"
+                pim = int(rng.choices([0, 2, 4, 6], weights=[0.56, 0.28, 0.12, 0.04], k=1)[0])
+                if is_d:
+                    hit = int(rng.choices([0, 1, 2, 3, 4], weights=[0.17, 0.28, 0.30, 0.18, 0.07], k=1)[0])
+                    blk = int(rng.choices([0, 1, 2, 3, 4], weights=[0.10, 0.26, 0.33, 0.21, 0.10], k=1)[0])
+                else:
+                    hit = int(rng.choices([0, 1, 2, 3], weights=[0.29, 0.37, 0.24, 0.10], k=1)[0])
+                    blk = int(rng.choices([0, 1, 2], weights=[0.64, 0.29, 0.07], k=1)[0])
+                self._gm_ledger_add(ledger, p, tid, sog=int(shots[i]), pim=pim, hit=hit, blk=blk, toi_sec=toi)
+                pid = str(getattr(p, "id", "") or "")
+                if pid:
+                    row = ledger.get(pid, {})
+                    rows[pid] = {
+                        "player_id": pid,
+                        "name": row.get("name", "?"),
+                        "position": row.get("position", "?"),
+                        "g": 0,
+                        "a": 0,
+                        "sog": int(shots[i]),
+                        "pim": pim,
+                        "hit": hit,
+                        "blk": blk,
+                        "toi_sec": toi,
+                    }
+            return rows
+
+        home_rows = _dress_team(home_sk, hid, h_sog_tgt)
+        away_rows = _dress_team(away_sk, aid, a_sog_tgt)
+
+        def _goals_side(
+            team_sk: List[Any],
+            tid: str,
+            goals: int,
+            lines_fw: List[List[Any]],
+            defs: List[Any],
+            rows_by_pid: Dict[str, Dict[str, Any]],
+        ) -> Tuple[List[str], List[Dict[str, Any]]]:
+            high: List[str] = []
+            events: List[Dict[str, Any]] = []
+            if goals <= 0 or not team_sk:
+                return high, events
+            for _ in range(int(goals)):
+                rv0 = rng.random()
+                strength = "EV"
+                d_share = 0.125
+                if rv0 < 0.23:
+                    strength = "PP"
+                    d_share = 0.068
+                elif rv0 < 0.29:
+                    strength = "SH"
+                    d_share = 0.185
+                scorer = self._gm_pick_goal_scorer(rng, lines_fw, defs, team_sk, d_share)
+                self._gm_ledger_add(ledger, scorer, tid, g=1)
+                spid = str(getattr(scorer, "id", "") or "")
+                if spid in rows_by_pid:
+                    rows_by_pid[spid]["g"] = int(rows_by_pid[spid].get("g", 0)) + 1
+                assists = self._gm_pick_assists(rng, team_sk, scorer, min_one=bool(len(team_sk) >= 2))
+                if strength == "PP" and assists and rng.random() < 0.14:
+                    assists = assists[:1]
+                anames: List[str] = []
+                for ap in assists:
+                    self._gm_ledger_add(ledger, ap, tid, a=1)
+                    apid = str(getattr(ap, "id", "") or "")
+                    if apid in rows_by_pid:
+                        rows_by_pid[apid]["a"] = int(rows_by_pid[apid].get("a", 0)) + 1
+                    anames.append(
+                        str(getattr(getattr(ap, "identity", None), "name", None) or getattr(ap, "name", None) or "?")
+                    )
+                per = int(rng.choices([1, 2, 3], weights=[0.34, 0.42, 0.24])[0])
+                mm = int(rng.randint(0, 19))
+                ss = int(rng.choice([0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]))
+                events.append(
+                    {
+                        "for_team_id": str(tid),
+                        "period": per,
+                        "clock": f"{mm}:{ss:02d}",
+                        "scorer": str(
+                            getattr(getattr(scorer, "identity", None), "name", None)
+                            or getattr(scorer, "name", None)
+                            or "?"
+                        ),
+                        "scorer_id": spid,
+                        "assists": anames,
+                        "strength": strength,
+                    }
+                )
+                high.append(
+                    str(
+                        getattr(getattr(scorer, "identity", None), "name", None)
+                        or getattr(scorer, "name", None)
+                        or "?"
+                    )
+                )
+            return high, events
+
+        hfw, hdef = self._gm_forward_lines(home_sk)
+        afw, adef = self._gm_forward_lines(away_sk)
+        home_high, home_ev = _goals_side(home_sk, hid, int(hg), hfw, hdef, home_rows)
+        away_high, away_ev = _goals_side(away_sk, aid, int(ag), afw, adef, away_rows)
+
+        home_won = int(hg) > int(ag)
+        away_won = int(ag) > int(hg)
+
+        def _goalie_side(goalies: List[Any], tid: str, ga: int, won: bool, otl_loss: bool) -> Optional[Dict[str, Any]]:
+            if not goalies:
+                return None
+            w = [self._gm_ovr_bonus(g) for g in goalies]
+            g0 = rng.choices(goalies, weights=w, k=1)[0]
+            opp_sog = int(a_sog_tgt if str(tid) == str(hid) else h_sog_tgt)
+            sa = int(max(int(ga) + 12, opp_sog))
+            saves = int(max(0, sa - int(ga)))
+            if won:
+                self._gm_ledger_add(ledger, g0, tid, gp=1, ga=int(ga), w=1)
+            elif otl_loss:
+                self._gm_ledger_add(ledger, g0, tid, gp=1, ga=int(ga), otl=1)
+            else:
+                self._gm_ledger_add(ledger, g0, tid, gp=1, ga=int(ga), l=1)
+            gr = self._gm_ledger_ensure(ledger, g0, tid)
+            gr["shots_against"] = int(gr.get("shots_against", 0)) + sa
+            gr["saves"] = int(gr.get("saves", 0)) + saves
+            return {
+                "player_id": str(getattr(g0, "id", "") or ""),
+                "name": str(getattr(getattr(g0, "identity", None), "name", None) or getattr(g0, "name", None) or "?"),
+                "ga": int(ga),
+                "saves": saves,
+                "shots_against": sa,
+            }
+
+        hgk = _goalie_side(home_gl, hid, int(ag), home_won, bool(ot) and not home_won)
+        agk = _goalie_side(away_gl, aid, int(hg), away_won, bool(ot) and not away_won)
+
+        if not build_game_payload:
+            return None
+
+        home_sk_list = sorted(
+            home_rows.values(), key=lambda x: (-int(x.get("g", 0)), -int(x.get("a", 0)), str(x.get("name", "")))
+        )
+        away_sk_list = sorted(
+            away_rows.values(), key=lambda x: (-int(x.get("g", 0)), -int(x.get("a", 0)), str(x.get("name", "")))
+        )
+        home_sog = sum(int(x.get("sog", 0) or 0) for x in home_sk_list)
+        away_sog = sum(int(x.get("sog", 0) or 0) for x in away_sk_list)
+        home_pim = sum(int(x.get("pim", 0) or 0) for x in home_sk_list)
+        away_pim = sum(int(x.get("pim", 0) or 0) for x in away_sk_list)
+        gid = str(game_id or "").strip() or f"g{calendar_day}{hid}{aid}"[:18]
+        return {
+            "game_id": gid,
+            "day": int(calendar_day),
+            "iso": str(calendar_iso or ""),
+            "home_id": hid,
+            "away_id": aid,
+            "home_name": str(getattr(home, "city", "") or "").strip() + " " + str(getattr(home, "name", "") or "").strip(),
+            "away_name": str(getattr(away, "city", "") or "").strip() + " " + str(getattr(away, "name", "") or "").strip(),
+            "home_goals": int(hg),
+            "away_goals": int(ag),
+            "overtime": bool(ot),
+            "home_scoring": home_high[:14],
+            "away_scoring": away_high[:14],
+            "scoring_events": sorted(home_ev + away_ev, key=lambda e: (int(e.get("period") or 0), str(e.get("clock") or ""))),
+            "home_skaters": home_sk_list,
+            "away_skaters": away_sk_list,
+            "home_goalie": hgk,
+            "away_goalie": agk,
+            "home_shots": int(home_sog),
+            "away_shots": int(away_sog),
+            "home_pim": int(home_pim),
+            "away_pim": int(away_pim),
+        }
+
+    def _sync_ledger_to_player_season_stats(self, ledger: Dict[str, Dict[str, Any]], season_year: int) -> None:
+        """Write game-derived totals onto player.season_stats for tooling that reads player objects."""
+        teams = list(getattr(self.league, "teams", None) or [])
+        by_id: Dict[str, Any] = {}
+        for tm in teams:
+            for p in getattr(tm, "roster", None) or []:
+                pid = str(getattr(p, "id", "") or "")
+                if pid:
+                    by_id[pid] = p
+        for pid, row in ledger.items():
+            pl = by_id.get(pid)
+            if pl is None:
+                continue
+            gp = max(1, int(row.get("gp", 0) or 0))
+            g = int(row.get("g", 0) or 0)
+            a = int(row.get("a", 0) or 0)
+            pts = g + a
+            pos_u = str(row.get("position") or "").upper()
+            per_gp = pts / float(gp)
+            perf = clamp(28.0 + 62.0 * min(1.35, per_gp / 1.15), 18.0, 98.0)
+            if not hasattr(pl, "season_stats") or pl.season_stats is None:
+                pl.season_stats = {}
+            if pos_u == "G":
+                sa = max(1, int(row.get("shots_against", 0) or 0))
+                sv = int(row.get("saves", 0) or 0)
+                ga_ct = int(row.get("ga", 0) or 0)
+                sv_pct = sv / float(sa)
+                gaa = (ga_ct * 60.0) / max(1, gp)
+                perf_g = clamp(40.0 + 520.0 * (sv_pct - 0.88) - 1.15 * (gaa - 2.85), 22.0, 96.0)
+                pl.season_stats[int(season_year)] = {
+                    "season": int(season_year),
+                    "role": "starter",
+                    "goals": 0,
+                    "assists": 0,
+                    "points": 0,
+                    "ga": ga_ct,
+                    "gp": gp,
+                    "w": int(row.get("w", 0) or 0),
+                    "l": int(row.get("l", 0) or 0),
+                    "otl": int(row.get("otl", 0) or 0),
+                    "saves": sv,
+                    "shots_against": sa,
+                    "save_pct": round(sv_pct, 4),
+                    "gaa": round(gaa, 3),
+                    "performance_score": round(perf_g, 2),
+                    "expected_score": 60.0,
+                    "delta": 0.0,
+                    "war": 0.0,
+                    "xgf_pct": 0.5,
+                }
+            else:
+                pl.season_stats[int(season_year)] = {
+                    "season": int(season_year),
+                    "role": str(row.get("position") or "skater"),
+                    "goals": g,
+                    "assists": a,
+                    "points": pts,
+                    "g": g,
+                    "a": a,
+                    "gp": gp,
+                    "sog": int(row.get("sog", 0) or 0),
+                    "toi_sec": int(row.get("toi_sec", 0) or 0),
+                    "pim": int(row.get("pim", 0) or 0),
+                    "war": round(min(6.5, max(-2.0, (pts / max(1, gp)) * 0.22)), 2),
+                    "xgf_pct": round(0.48 + 0.0016 * float(per_gp), 3),
+                    "performance_score": round(perf, 2),
+                    "expected_score": 62.0,
+                    "delta": round(perf - 62.0, 2),
+                }
+
+    def _validate_league_season_scoring(
+        self,
+        standings: StandingsTable,
+        schedule: List[Any],
+        ledger: Dict[str, Dict[str, Any]],
+        year: int,
+        counters: Optional[Dict[str, int]] = None,
+    ) -> Dict[str, Any]:
+        meta: Dict[str, Any] = {"year": int(year)}
+        n_games = max(1, len(schedule))
+        tg = sum(int(rec.gf) for rec in standings.records.values())
+        meta["league_goals_total"] = int(tg)
+        meta["league_avg_goals_per_game"] = round(tg / float(n_games), 3)
+        sk = [
+            (int(v.get("g", 0)) + int(v.get("a", 0)), str(v.get("name", "?")))
+            for v in ledger.values()
+            if str(v.get("position") or "").upper() != "G"
+        ]
+        sk.sort(reverse=True)
+        meta["top_scorers"] = [{"name": n, "points": p} for p, n in sk[:10]]
+        top_pts = int(sk[0][0]) if sk else 0
+        warnings: List[str] = []
+        if meta["league_avg_goals_per_game"] < 5.0:
+            warnings.append(
+                f"LOW_SCORING: league avg goals/game {meta['league_avg_goals_per_game']:.3f} < 5.0 "
+                f"(target combined ~5.8–6.4)."
+            )
+        if top_pts < 70:
+            warnings.append(f"LOW_LEADER: top skater points {top_pts} < 70 (target elite 90+).")
+
+        ct = counters or {}
+        meta["trade_executions"] = int(ct.get("trade_executions", 0))
+        meta["waiver_claims"] = int(ct.get("waiver_claims", 0))
+        meta["major_injuries"] = int(ct.get("major_injuries", 0))
+        inj_per_team_gp = float(meta["major_injuries"]) / max(1.0, float(n_games) * 0.5)
+        meta["injury_event_density"] = round(inj_per_team_gp, 4)
+        if meta["trade_executions"] < 1:
+            warnings.append("LOW_TRADES: fewer than 1 executed in-season trade (expect deadline lift).")
+        if meta["major_injuries"] < 2:
+            warnings.append("LOW_INJURIES: very few major injury events logged (check world injury layer).")
+        if meta["major_injuries"] > int(len(standings.records) * 4.5):
+            warnings.append("HIGH_INJURIES: major injury count unusually high vs team count.")
+
+        meta["warnings"] = warnings
+        if warnings and self.debug:
+            for w in warnings:
+                print(f"[SimEngine season {year}] WARNING: {w}")
+        return meta
+
     def _simulate_game(
         self,
         rng: random.Random,
@@ -8720,36 +10052,51 @@ class SimEngine:
         """
         Abstract single-game simulation returning (home_goals, away_goals, overtime_flag).
 
-        Uses team strength and a light home-ice advantage to bias results,
-        but leaves significant room for variance and upsets.
-        Optional scales apply world-layer momentum/chemistry/fatigue/morale (subtle).
+        Tuned for ~5.8–6.4 combined goals per game (modern NHL pace) with 25–35 shots/team
+        and ~9–11% shooting implied by shot-based means.
         """
         hid = str(getattr(home, "team_id", getattr(home, "id", "H")))
         aid = str(getattr(away, "team_id", getattr(away, "id", "A")))
         s_home = max(0.15, min(0.92, strength_map.get(hid, 0.5) * float(home_strength_scale)))
         s_away = max(0.15, min(0.92, strength_map.get(aid, 0.5) * float(away_strength_scale)))
-
-        # Base scoring environment: ~2.8 goals per team
-        base = 2.8
         diff = s_home - s_away
-        home_mu = base + 1.0 * diff + 0.25  # home-ice bump
-        away_mu = base - 1.0 * diff
-        home_mu += team_scoring_pace_bias(home)
-        away_mu += team_scoring_pace_bias(away)
 
-        # Clamp to reasonable ranges
-        home_mu = max(1.3, min(5.5, home_mu))
-        away_mu = max(1.0, min(5.0, away_mu))
+        home_off_skill = self._team_offense_skill(home)
+        away_off_skill = self._team_offense_skill(away)
+
+        home_mu = team_scoring_pace_bias(home)
+        away_mu = team_scoring_pace_bias(away)
+
+        sog_home = 28.0 + 4.0 * (home_off_skill - 0.5) + 3.2 * diff + rng.uniform(-1.2, 1.2)
+        sog_away = 28.0 + 4.0 * (away_off_skill - 0.5) - 3.2 * diff + rng.uniform(-1.2, 1.2)
+        sog_home = max(25.0, min(35.0, sog_home))
+        sog_away = max(25.0, min(35.0, sog_away))
+
+        sh_home = max(0.09, min(0.11, 0.100 + 0.012 * (home_off_skill - 0.5)))
+        sh_away = max(0.09, min(0.11, 0.100 + 0.012 * (away_off_skill - 0.5)))
+
+        pp_home = max(0.18, min(0.24, 0.21 + 0.05 * (home_off_skill - 0.5)))
+        pp_away = max(0.18, min(0.24, 0.21 + 0.05 * (away_off_skill - 0.5)))
+
+        home_mu += sog_home * sh_home * (1.0 + 0.24 * pp_home)
+        away_mu += sog_away * sh_away * (1.0 + 0.24 * pp_away)
+
+        home_mu += 0.26 + 0.48 * diff
+        away_mu -= 0.42 * diff
+        home_mu *= 1.035
+        away_mu *= 1.035
+
+        home_mu = max(2.35, min(5.4, home_mu))
+        away_mu = max(2.15, min(5.2, away_mu))
 
         sg = max(0.75, min(1.25, float(noise_scale)))
         nh = self._narrative_team_goal_sigma_multiplier(home)
         na = self._narrative_team_goal_sigma_multiplier(away)
-        home_goals = max(0, int(round(rng.gauss(home_mu, 1.2 * sg * nh))))
-        away_goals = max(0, int(round(rng.gauss(away_mu, 1.2 * sg * na))))
+        home_goals = max(0, int(round(rng.gauss(home_mu, 1.02 * sg * nh))))
+        away_goals = max(0, int(round(rng.gauss(away_mu, 1.02 * sg * na))))
 
         overtime = False
         if home_goals == away_goals:
-            # Resolve ties via an overtime coin-flip with a tiny home bias.
             overtime = True
             if rng.random() < 0.52:
                 home_goals += 1
@@ -8757,6 +10104,114 @@ class SimEngine:
                 away_goals += 1
 
         return home_goals, away_goals, overtime
+
+    def _standings_sync_team_metrics(self, standings: StandingsTable, teams: List[Any]) -> None:
+        """Mirror standings rows onto team objects for waiver/trade heuristics."""
+        for t in teams:
+            tid = str(getattr(t, "team_id", getattr(t, "id", "")))
+            rec = standings.records.get(tid)
+            if rec is None:
+                continue
+            try:
+                setattr(t, "points", int(rec.points))
+                setattr(t, "point_pct", float(rec.point_pct()))
+                setattr(t, "goal_diff", int(rec.goal_diff()))
+            except Exception:
+                pass
+
+    def _season_daily_socio_economics(
+        self,
+        rng: random.Random,
+        day: int,
+        max_day: int,
+        standings: StandingsTable,
+        teams: List[Any],
+        news_out: List[Dict[str, Any]],
+        counters: Dict[str, int],
+    ) -> None:
+        """Per simulated calendar day: waivers, optional trades, roster pressure."""
+        self._standings_sync_team_metrics(standings, teams)
+        wire = list(getattr(self.league, "waiver_wire", None) or [])
+        for tm in teams:
+            tid = str(getattr(tm, "team_id", getattr(tm, "id", "")))
+            rs = list(getattr(tm, "roster", None) or [])
+            if len(rs) <= 23:
+                continue
+            rs_sorted = sorted(rs, key=lambda p: float(self._gm_ovr_bonus(p)))
+            while len(rs_sorted) > 23 and rng.random() < 0.65:
+                cand = rs_sorted[0]
+                if self._injury_sidelined(cand):
+                    rs_sorted.pop(0)
+                    continue
+                wire.append({"player": cand, "from_team": tid})
+                try:
+                    rs_sorted.remove(cand)
+                except ValueError:
+                    break
+            tm.roster = rs_sorted
+        setattr(self.league, "waiver_wire", wire)
+
+        for ln in process_waivers(self.league) or []:
+            counters["waiver_claims"] = int(counters.get("waiver_claims", 0)) + 1
+            news_out.append(
+                {
+                    "type": "waiver",
+                    "date": int(day),
+                    "headline": str(ln),
+                    "team": "",
+                    "players": [],
+                    "priority": "LOW",
+                }
+            )
+
+        md = max(40, int(max(120, max_day) * 0.56))
+        deadline_phase = max(0.0, min(1.0, (float(day) - float(md)) / max(20.0, float(max_day) * 0.2)))
+        trade_prob = 0.032 + 0.36 * deadline_phase
+        if rng.random() < trade_prob:
+            tr = evaluate_trade_market(self.league, max_executions=1)
+            counters["trade_executions"] = int(counters.get("trade_executions", 0)) + len(tr)
+            for t in tr:
+                news_out.append(
+                    {
+                        "type": "trade",
+                        "date": int(day),
+                        "headline": str(t.get("headline") or "Trade completed"),
+                        "team": str(t.get("to_team_id") or ""),
+                        "from_team_id": str(t.get("from_team_id") or ""),
+                        "players": list(t.get("outgoing") or []) + list(t.get("incoming") or []),
+                        "priority": "HIGH",
+                    }
+                )
+
+        rm = RosterManager()
+        tbl = standings.league_table()
+        n_t = max(1, len(tbl))
+        for tm in teams:
+            tid = str(getattr(tm, "team_id", getattr(tm, "id", "")))
+            rec = standings.records.get(tid)
+            rank = next((i for i, x in enumerate(tbl) if x.team_id == tid), n_t)
+            inj_ct = sum(1 for p in self._gm_skaters(tm) if self._injury_sidelined(p))
+            if inj_ct < 2 and rank <= int(0.42 * n_t):
+                continue
+            if rng.random() > 0.22:
+                continue
+            try:
+                logs = rm.manage(tm, self.league)
+            except Exception:
+                logs = []
+            for ln in logs[:2]:
+                u = str(ln).upper()
+                if "PROMOTION" in u or "CALL" in u or "RECALL" in u:
+                    news_out.append(
+                        {
+                            "type": "callup",
+                            "date": int(day),
+                            "headline": str(ln),
+                            "team": tid,
+                            "players": [],
+                            "priority": "LOW",
+                        }
+                    )
 
     def simulate_league_season(self, year: int, rng: Optional[random.Random] = None) -> Optional[LeagueSeasonResult]:
         """
@@ -8770,7 +10225,9 @@ class SimEngine:
         Returns a LeagueSeasonResult or None if league/teams are missing.
         When world.* modules load, integrates momentum, fatigue, injuries, morale,
         chemistry, and schedule stress into the regular-season loop (deterministic rng).
-        Macro trade / UFA event volume is generated in run_sim.simulate_universe_year, not in this path.
+        Each calendar day runs waivers, a light trade tick (higher near deadline), and roster
+        pressure (call-ups) before that day’s games. Macro UFA volume may still be generated
+        in run_sim.simulate_universe_year depending on mode.
         """
         if not getattr(self.league, "teams", None):
             return None
@@ -8842,112 +10299,210 @@ class SimEngine:
         last_game_day: Dict[str, Optional[int]] = {tid: None for tid in team_ids}
         prev_calendar_day: Optional[int] = None
         injury_log_major: List[Dict[str, Any]] = []
+        stat_ledger: Dict[str, Dict[str, Any]] = {}
+        news_events: List[Dict[str, Any]] = []
+        season_counters: Dict[str, int] = {"trade_executions": 0, "waiver_claims": 0, "major_injuries": 0}
+        milestone_seen: Set[Tuple[str, str, int]] = set()
+        run_hist: Dict[str, List[str]] = {}
+        max_cal = max((int(s.day) for s in schedule), default=0)
 
-        for slot in schedule:
-            home = team_by_id.get(slot.home_id)
-            away = team_by_id.get(slot.away_id)
-            if home is None or away is None:
-                continue
-            d = int(slot.day)
-            hid, aid = str(slot.home_id), str(slot.away_id)
+        by_day: Dict[int, List[Any]] = {}
+        for sl in schedule:
+            by_day.setdefault(int(sl.day), []).append(sl)
 
-            if use_world:
-                if prev_calendar_day is not None and d > prev_calendar_day:
-                    span = float(d - prev_calendar_day)
-                    world_momentum.decay_all_teams(teams, span * 0.06)
-                prev_calendar_day = d
+        for day in sorted(by_day.keys()):
+            self._season_daily_socio_economics(r, day, max_cal, standings, teams, news_events, season_counters)
+            for slot in by_day[day]:
+                home = team_by_id.get(slot.home_id)
+                away = team_by_id.get(slot.away_id)
+                if home is None or away is None:
+                    continue
+                d = int(slot.day)
+                hid, aid = str(slot.home_id), str(slot.away_id)
 
-                for tid, tm in ((hid, home), (aid, away)):
-                    lg = last_game_day.get(tid)
-                    if lg is not None:
-                        gap = d - lg - 1
-                        if gap > 0:
-                            world_fatigue.rest_roster(tm, gap, r)
-                    last_game_day[tid] = d
+                if use_world:
+                    if prev_calendar_day is not None and d > prev_calendar_day:
+                        span = float(d - prev_calendar_day)
+                        world_momentum.decay_all_teams(teams, span * 0.06)
+                    prev_calendar_day = d
 
-                hb2b = bool(play_days and world_calendar.is_back_to_back(play_days.get(hid, set()), d))
-                ab2b = bool(play_days and world_calendar.is_back_to_back(play_days.get(aid, set()), d))
+                    for tid, tm in ((hid, home), (aid, away)):
+                        lg = last_game_day.get(tid)
+                        if lg is not None:
+                            gap = d - lg - 1
+                            if gap > 0:
+                                world_fatigue.rest_roster(tm, gap, r)
+                        last_game_day[tid] = d
 
-                hm = world_momentum.team_strength_modifier(home)
-                am = world_momentum.team_strength_modifier(away)
-                hc = world_chemistry.team_strength_modifier(home)
-                ac = world_chemistry.team_strength_modifier(away)
-                hf = world_fatigue.team_fatigue_strength_factor(home)
-                af = world_fatigue.team_fatigue_strength_factor(away)
-                hmr = world_morale.team_morale_strength_factor(home)
-                amr = world_morale.team_morale_strength_factor(away)
+                    hb2b = bool(play_days and world_calendar.is_back_to_back(play_days.get(hid, set()), d))
+                    ab2b = bool(play_days and world_calendar.is_back_to_back(play_days.get(aid, set()), d))
 
-                h_scale = hm * hc * hf * hmr
-                a_scale = am * ac * af * amr
-                h_scale = max(0.93, min(1.07, h_scale))
-                a_scale = max(0.93, min(1.07, a_scale))
+                    hm = world_momentum.team_strength_modifier(home)
+                    am = world_momentum.team_strength_modifier(away)
+                    hc = world_chemistry.team_strength_modifier(home)
+                    ac = world_chemistry.team_strength_modifier(away)
+                    hf = world_fatigue.team_fatigue_strength_factor(home)
+                    af = world_fatigue.team_fatigue_strength_factor(away)
+                    hmr = world_morale.team_morale_strength_factor(home)
+                    amr = world_morale.team_morale_strength_factor(away)
 
-                base_noise = 1.0 + 0.22 * (chaos_index - 0.5)
-                nh = world_chemistry.chemistry_chaos_dampen(home, base_noise)
-                na = world_chemistry.chemistry_chaos_dampen(away, base_noise)
-                _, ih = self._identity_runner_strength_noise_factors(home)
-                _, ia = self._identity_runner_strength_noise_factors(away)
-                noise_scale = 0.5 * (nh + na) * (0.5 * (ih + ia))
+                    h_scale = hm * hc * hf * hmr
+                    a_scale = am * ac * af * amr
+                    h_scale = max(0.93, min(1.07, h_scale))
+                    a_scale = max(0.93, min(1.07, a_scale))
+                    h_scale *= self._roster_injury_depth_penalty(home)
+                    a_scale *= self._roster_injury_depth_penalty(away)
 
-                world_fatigue.tick_roster_fatigue_for_game(home, r, hb2b, schedule, d, hid)
-                world_fatigue.tick_roster_fatigue_for_game(away, r, ab2b, schedule, d, aid)
+                    base_noise = 1.0 + 0.22 * (chaos_index - 0.5)
+                    nh = world_chemistry.chemistry_chaos_dampen(home, base_noise)
+                    na = world_chemistry.chemistry_chaos_dampen(away, base_noise)
+                    _, ih = self._identity_runner_strength_noise_factors(home)
+                    _, ia = self._identity_runner_strength_noise_factors(away)
+                    noise_scale = 0.5 * (nh + na) * (0.5 * (ih + ia))
 
-                hg, ag, ot = self._simulate_game(
-                    r, home, away, strength_map,
-                    home_strength_scale=h_scale,
-                    away_strength_scale=a_scale,
-                    noise_scale=noise_scale,
+                    world_fatigue.tick_roster_fatigue_for_game(home, r, hb2b, schedule, d, hid)
+                    world_fatigue.tick_roster_fatigue_for_game(away, r, ab2b, schedule, d, aid)
+
+                    hg, ag, ot = self._simulate_game(
+                        r, home, away, strength_map,
+                        home_strength_scale=h_scale,
+                        away_strength_scale=a_scale,
+                        noise_scale=noise_scale,
+                    )
+
+                    world_momentum.update_momentum_after_game(home, hg, ag, r)
+                    world_momentum.update_momentum_after_game(away, ag, hg, r)
+                    blow = abs(hg - ag) >= 3
+                    world_chemistry.update_after_game(home, hg > ag, blow, r)
+                    world_chemistry.update_after_game(away, ag > hg, blow, r)
+
+                    for p in getattr(home, "roster", None) or []:
+                        if getattr(p, "retired", False):
+                            continue
+                        world_morale.update_after_team_result(
+                            p, hg > ag, hg - ag, r,
+                            role_satisfaction_proxy=float(
+                                getattr(getattr(p, "psych", None), "role_satisfaction", 0.5) or 0.5
+                            ),
+                        )
+                    for p in getattr(away, "roster", None) or []:
+                        if getattr(p, "retired", False):
+                            continue
+                        world_morale.update_after_team_result(
+                            p, ag > hg, ag - hg, r,
+                            role_satisfaction_proxy=float(
+                                getattr(getattr(p, "psych", None), "role_satisfaction", 0.5) or 0.5
+                            ),
+                        )
+
+                    for tm in (home, away):
+                        for pl in getattr(tm, "roster", None) or []:
+                            if int(getattr(pl, "_world_injury_games_remaining", 0) or 0) > 0:
+                                world_injuries.tick_games_missed(pl)
+
+                    for tm in (home, away):
+                        ev = world_injuries.maybe_injure_roster_subset(tm, r, chaos_index, max_checks=8)
+                        for label, tier, games, _pid in ev:
+                            if tier == "major":
+                                tid_inj = str(getattr(tm, "team_id", None) or getattr(tm, "id", None) or "")
+                                injury_log_major.append(
+                                    {
+                                        "player": label,
+                                        "tier": tier,
+                                        "games": games,
+                                        "team_id": tid_inj,
+                                    }
+                                )
+                                season_counters["major_injuries"] = int(season_counters.get("major_injuries", 0)) + 1
+                                news_events.append(
+                                    {
+                                        "type": "injury",
+                                        "date": int(day),
+                                        "headline": f"{label} ({tier}, {games}g) — {tid_inj}",
+                                        "team": tid_inj,
+                                        "players": [str(label)],
+                                        "priority": "MEDIUM",
+                                    }
+                                )
+                else:
+                    _, nh = self._identity_runner_strength_noise_factors(home)
+                    _, na = self._identity_runner_strength_noise_factors(away)
+                    id_noise = 0.5 * (nh + na)
+                    h_inj = self._roster_injury_depth_penalty(home)
+                    a_inj = self._roster_injury_depth_penalty(away)
+                    hg, ag, ot = self._simulate_game(
+                        r, home, away, strength_map,
+                        home_strength_scale=h_inj,
+                        away_strength_scale=a_inj,
+                        noise_scale=id_noise,
+                    )
+
+                self.accumulate_unified_game_stats(
+                    r, home, away, hid, aid, int(hg), int(ag), bool(ot), stat_ledger
                 )
+                standings.record_game(slot.home_id, slot.away_id, hg, ag, overtime=ot)
 
-                world_momentum.update_momentum_after_game(home, hg, ag, r)
-                world_momentum.update_momentum_after_game(away, ag, hg, r)
-                blow = abs(hg - ag) >= 3
-                world_chemistry.update_after_game(home, hg > ag, blow, r)
-                world_chemistry.update_after_game(away, ag > hg, blow, r)
-
-                for p in getattr(home, "roster", None) or []:
-                    if getattr(p, "retired", False):
-                        continue
-                    world_morale.update_after_team_result(
-                        p, hg > ag, hg - ag, r,
-                        role_satisfaction_proxy=float(
-                            getattr(getattr(p, "psych", None), "role_satisfaction", 0.5) or 0.5
-                        ),
-                    )
-                for p in getattr(away, "roster", None) or []:
-                    if getattr(p, "retired", False):
-                        continue
-                    world_morale.update_after_team_result(
-                        p, ag > hg, ag - hg, r,
-                        role_satisfaction_proxy=float(
-                            getattr(getattr(p, "psych", None), "role_satisfaction", 0.5) or 0.5
-                        ),
-                    )
-
-                for tm in (home, away):
-                    for pl in getattr(tm, "roster", None) or []:
-                        if int(getattr(pl, "_world_injury_games_remaining", 0) or 0) > 0:
-                            world_injuries.tick_games_missed(pl)
-
-                for tm in (home, away):
-                    ev = world_injuries.maybe_injure_roster_subset(tm, r, chaos_index, max_checks=7)
-                    for label, tier, games in ev:
-                        if tier == "major":
-                            injury_log_major.append(
+                for tm_m, tid_m in ((home, hid), (away, aid)):
+                    for p in self._gm_skaters(tm_m):
+                        pid = str(getattr(p, "id", "") or "")
+                        if not pid:
+                            continue
+                        row = stat_ledger.get(pid)
+                        if not row:
+                            continue
+                        pts = int(row.get("g", 0) or 0) + int(row.get("a", 0) or 0)
+                        gf = int(row.get("g", 0) or 0)
+                        nm = str(row.get("name") or "?")
+                        for th, kind, label in (
+                            (50, "pts", "50 points"),
+                            (80, "pts", "80 points"),
+                            (100, "pts", "100 points"),
+                            (30, "g", "30 goals"),
+                            (50, "g", "50 goals"),
+                        ):
+                            val = pts if kind == "pts" else gf
+                            if val < th:
+                                continue
+                            key = (pid, kind, th)
+                            if key in milestone_seen:
+                                continue
+                            milestone_seen.add(key)
+                            if r.random() > 0.65:
+                                continue
+                            news_events.append(
                                 {
-                                    "player": label,
-                                    "tier": tier,
-                                    "games": games,
-                                    "team_id": str(getattr(tm, "team_id", None) or getattr(tm, "id", None) or ""),
+                                    "type": "milestone",
+                                    "date": int(day),
+                                    "headline": f"{nm} reaches {label}",
+                                    "team": str(tid_m),
+                                    "players": [nm],
+                                    "priority": "MEDIUM",
                                 }
                             )
-            else:
-                _, nh = self._identity_runner_strength_noise_factors(home)
-                _, na = self._identity_runner_strength_noise_factors(away)
-                id_noise = 0.5 * (nh + na)
-                hg, ag, ot = self._simulate_game(r, home, away, strength_map, noise_scale=id_noise)
+                            break
 
-            standings.record_game(slot.home_id, slot.away_id, hg, ag, overtime=ot)
+                for tid, won in ((hid, hg > ag), (aid, ag > hg)):
+                    hist = run_hist.setdefault(tid, [])
+                    letter = "W" if won else "L"
+                    hist.append(letter)
+                    hist[:] = hist[-14:]
+                    streak = 1
+                    for j in range(len(hist) - 2, -1, -1):
+                        if hist[j] == letter:
+                            streak += 1
+                        else:
+                            break
+                    if streak >= 5 and r.random() < 0.55:
+                        news_events.append(
+                            {
+                                "type": "streak",
+                                "date": int(day),
+                                "headline": f"{tid} riding a {streak}-game {letter} streak",
+                                "team": tid,
+                                "players": [],
+                                "priority": "LOW",
+                            }
+                        )
 
         if use_world and world_fatigue is not None and world_injuries is not None:
             for tm in teams:
@@ -8975,7 +10530,21 @@ class SimEngine:
                     world_durability.apply_season_aging_durability(pl)
 
         playoff_result = simulate_playoffs(r, standings, teams, strength_map)
-        awards = compute_awards(standings, playoff_result, teams)
+
+        self._last_league_sim_calendar_year = int(year)
+        self._last_league_season_stat_ledger = dict(stat_ledger)
+        self._sync_ledger_to_player_season_stats(stat_ledger, int(year))
+        sim_meta = self._validate_league_season_scoring(
+            standings, schedule, stat_ledger, int(year), season_counters
+        )
+        self._last_league_season_validation = sim_meta
+        for w in sim_meta.get("warnings") or []:
+            print(f"[SimEngine] WARNING [{year}]: {w}")
+        sk_export = [v for v in stat_ledger.values() if str(v.get("position", "")).upper() != "G"]
+        sk_export.sort(key=lambda z: -(int(z.get("g", 0)) + int(z.get("a", 0))))
+        player_stat_export = sk_export[:520]
+        award_stat_rows = list(stat_ledger.values())
+        awards = compute_awards(standings, playoff_result, teams, player_season_stats=award_stat_rows)
 
         try:
             from app.sim_engine.entities.team import update_team_gm_strategic_profile
@@ -9011,12 +10580,26 @@ class SimEngine:
         except Exception:
             pass
 
+        _pri_rank = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+
+        def _news_sort_key(e: Dict[str, Any]) -> Tuple[int, int, int]:
+            pr = str(e.get("priority") or "LOW").upper()
+            pr_i = int(_pri_rank.get(pr, 4))
+            ty = str(e.get("type") or "")
+            ty_i = {"trade": 0, "injury": 1, "milestone": 2, "waiver": 3, "streak": 4, "callup": 5}.get(ty, 9)
+            return (pr_i, ty_i, int(e.get("date") or 0))
+
+        news_sorted = sorted(news_events, key=_news_sort_key)
+
         result = LeagueSeasonResult(
             year=year,
             schedule=schedule,
             standings=standings,
             playoff_result=playoff_result,
             awards=awards,
+            player_season_stats=list(player_stat_export),
+            simulation_meta=dict(sim_meta),
+            news_events=list(news_sorted),
         )
         self.league_history.append(result)
 
@@ -9251,10 +10834,15 @@ class SimEngine:
         self,
         rng: Optional[random.Random] = None,
         year: int = 0,
+        *,
+        franchise_tick: bool = False,
     ) -> Dict[str, Any]:
         """
         Character-driven player storylines plus systemic consequences (team/league ripples).
         Returns {"player_storylines": [...], "narrative_consequences": [...], "league_delta": {...}}.
+
+        franchise_tick: when True (franchise day advance), use small per-day caps and higher
+        per-player try rate so a few league-wide beats surface without a full-season batch.
         """
         r = rng if rng is not None else self.rng
         league = self.league
@@ -9274,9 +10862,14 @@ class SimEngine:
             "major_arc_cooldowns_applied": 0,
             "rookie_spam_trimmed": 0,
         }
-        major_cap = r.randint(8, 15)
-        mid_cap = r.randint(20, 35)
-        minor_cap = r.randint(25, 50)
+        if franchise_tick:
+            major_cap = r.randint(0, 1)
+            mid_cap = r.randint(1, 3)
+            minor_cap = r.randint(2, 5)
+        else:
+            major_cap = r.randint(8, 15)
+            mid_cap = r.randint(20, 35)
+            minor_cap = r.randint(25, 50)
         total_cap = major_cap + mid_cap + minor_cap
         total_assignments = 0
         team_major: Dict[str, int] = {}
@@ -9390,6 +10983,8 @@ class SimEngine:
                     p_try = 0.036 if char < 40 else 0.023 if char < 70 else 0.014
                     if abs(perf_delta) >= 0.035:
                         p_try *= 1.12
+                    if franchise_tick:
+                        p_try *= 2.85
                     won_roll = r.random() <= p_try
 
                 if may_assign and won_roll:
@@ -9539,6 +11134,7 @@ class SimEngine:
                         _normalize_systemic_after_consequences(player, team)
                         log_rec["player_name"] = pname
                         log_rec["team_name"] = tname
+                        log_rec["team_id"] = tid
                         log_rec["storyline_text"] = event_obj.get("storyline", "")
                         log_rec["teammates_rippled"] = ripple_n
                         log_rec["storyline_polarity"] = pol
