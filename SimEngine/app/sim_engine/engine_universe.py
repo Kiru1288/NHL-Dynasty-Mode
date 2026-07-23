@@ -4,6 +4,10 @@ from __future__ import annotations
 NHL DYNASTY MODE — FULL UNIVERSE ENGINE
 =======================================
 
+NOT used by live franchise startup (see backend/services/franchise_sim.py).
+Macro sim / experimental universe layer only. Do not call from franchise_sim.
+Franchise mode uses game ledger stats instead of abstract season stat simulation.
+
 This engine simulates the NHL as a living macro ecosystem.
 
 It uses ONLY systems already implemented:

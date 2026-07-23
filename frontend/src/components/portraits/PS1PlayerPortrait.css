@@ -1,0 +1,147 @@
+/* PS1 player portrait frame — profile/detail views only (not roster lists). */
+
+.ps1-portrait {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 2px solid rgba(201, 168, 106, 0.55);
+  background:
+    linear-gradient(180deg, rgba(8, 14, 28, 0.98) 0%, rgba(12, 20, 38, 0.96) 55%, rgba(6, 10, 18, 1) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -18px 36px rgba(0, 0, 0, 0.45),
+    0 16px 40px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(26, 39, 68, 0.9);
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.ps1-portrait::before {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border-radius: 10px;
+  border: 1px solid rgba(212, 175, 55, 0.22);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.ps1-portrait canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.ps1-portrait[data-size="sm"] {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+}
+
+.ps1-portrait[data-size="md"] {
+  width: 132px;
+  height: 168px;
+}
+
+.ps1-portrait[data-size="lg"] {
+  width: 168px;
+  height: 212px;
+}
+
+.ps1-portrait[data-size="profile"] {
+  width: 180px;
+  height: 200px;
+  border-radius: 16px;
+}
+
+.ps1-portrait[data-size="xl"] {
+  width: clamp(200px, 32vw, 280px);
+  height: clamp(220px, 36vw, 300px);
+  border-radius: 18px;
+}
+
+.ps1-portrait--fallback {
+  padding: 8px;
+  background:
+    linear-gradient(180deg, rgba(8, 14, 28, 0.98) 0%, rgba(12, 20, 38, 0.96) 100%);
+}
+
+.ps1-portrait--fallback .player-headshot {
+  margin: 0 auto;
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.45));
+}
+
+.ps1-portrait--loading {
+  min-height: 180px;
+}
+
+.ps1-portrait__loader {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid rgba(201, 168, 106, 0.25);
+  border-top-color: rgba(201, 168, 106, 0.85);
+  animation: ps1-portrait-spin 0.9s linear infinite;
+}
+
+@keyframes ps1-portrait-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.nhlrost-profile-modal__visual .ps1-portrait[data-size="profile"] {
+  width: min(220px, 100%);
+}
+
+.trade-asset-hero-visual .ps1-portrait[data-size="xl"] {
+  width: clamp(240px, 38vw, 340px);
+  height: clamp(300px, 48vw, 420px);
+  border-radius: 20px;
+  border-color: rgba(0, 216, 223, 0.32);
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.5),
+    0 0 40px rgba(0, 216, 223, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* Draft Class board rows — head-only circle crop */
+.dc-prospect-identity__avatar-wrap .ps1-portrait[data-size="sm"],
+.dc-prospect-identity__avatar-wrap .ps1-portrait--lazy[data-size="sm"] {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border-width: 1px;
+  border-color: rgba(118, 200, 245, 0.35);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.42);
+}
+
+.dc-prospect-identity__avatar-wrap .ps1-portrait--lazy {
+  display: grid;
+  place-items: center;
+  overflow: visible;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.dc-prospect-identity__avatar-wrap .ps1-portrait--lazy::before {
+  display: none;
+}
+
+/* Draft Class prospect profile modal */
+.dc-profile-identity__avatar-ring .ps1-portrait[data-size="profile"] {
+  width: min(180px, 100%);
+  height: 200px;
+  border-radius: 16px;
+  border-color: rgba(118, 200, 245, 0.42);
+  box-shadow:
+    0 16px 36px rgba(0, 0, 0, 0.48),
+    0 0 28px rgba(118, 200, 245, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}

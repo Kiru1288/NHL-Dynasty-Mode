@@ -50,13 +50,34 @@ def _pos(player: Any) -> str:
 
 
 def _ovr(player: Any) -> float:
-    fn = getattr(player, "ovr", None)
-    if callable(fn):
+    """Canonical 0–1 ability. Accepts legacy 0–99 attribute mirrors without promoting everyone."""
+    try:
+        from app.sim_engine.entities.player import normalize_rating, player_current_ovr_01
+
         try:
-            return float(fn())
+            return float(player_current_ovr_01(player))
         except Exception:
-            return 0.0
-    return _safe_float(getattr(player, "ovr", None), 0.0)
+            pass
+        fn = getattr(player, "ovr", None)
+        if callable(fn):
+            try:
+                return float(normalize_rating(fn()))
+            except Exception:
+                return 0.0
+        return float(normalize_rating(_safe_float(getattr(player, "ovr", None), 0.0)))
+    except Exception:
+        fn = getattr(player, "ovr", None)
+        if callable(fn):
+            try:
+                v = float(fn())
+            except Exception:
+                return 0.0
+        else:
+            v = _safe_float(getattr(player, "ovr", None), 0.0)
+        # Defensive scale normalize if player helpers are unavailable.
+        if v > 1.5:
+            return max(0.0, min(1.0, v / 99.0))
+        return max(0.0, min(1.0, v))
 
 
 @dataclass
@@ -88,16 +109,30 @@ class RosterManager:
         # Evaluate needs (used as a nudge for positional balance)
         needs = self.needs_model.evaluate(team)
 
-        # Promote NHL-ready prospects if roster has room
+        # Promote NHL-ready prospects if roster has room.
+        # Ability alone is not enough — skip unready high-potential kids when readiness is known.
         promoted = 0
         while len(roster) < self.roster_max:
             best = None
             best_score = self.promotion_threshold - 1.0
             for p in prospects:
                 ov = _ovr(p)
-                if ov >= self.promotion_threshold and ov > best_score:
-                    best_score = ov
-                    best = p
+                if ov < self.promotion_threshold or ov <= best_score:
+                    continue
+                ready = getattr(p, "nhl_readiness", None)
+                if ready is None:
+                    ready = getattr(p, "nhl_ready", None)
+                if ready is not None:
+                    try:
+                        r = float(ready)
+                        if r > 1.5:
+                            r = r / 100.0
+                        if r < 0.55:
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+                best_score = ov
+                best = p
             if best is None:
                 break
             prospects.remove(best)

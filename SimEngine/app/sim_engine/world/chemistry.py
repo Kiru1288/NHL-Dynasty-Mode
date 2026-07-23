@@ -56,18 +56,25 @@ def update_after_game(team: Any, won: bool, blowout: bool, rng: Any) -> None:
     init_chemistry(team)
     c = get_chemistry(team)
     stab = roster_stability_factor(team)
+    equilibrium = 0.52
     delta = 0.0
     if won:
-        delta += 0.012 + (0.008 if blowout else 0.0)
+        delta += 0.008 + (0.005 if blowout else 0.0)
     else:
-        delta -= 0.010 + (0.006 if blowout else 0.0)
+        delta -= 0.008 + (0.004 if blowout else 0.0)
     delta *= stab * identity_alignment(team)
     delta *= 0.92 + 0.10 * rng.random()
-    setattr(team, KEY, max(0.08, min(0.96, c + delta)))
+    reversion = (equilibrium - c) * 0.018
+    setattr(team, KEY, max(0.08, min(0.96, c + delta + reversion)))
 
 
 def team_strength_modifier(team: Any) -> float:
-    c = get_chemistry(team)
+    # Prefer canonical room chemistry when present; otherwise fall back to world store.
+    room = getattr(team, "_chemistry_cache", None)
+    if isinstance(room, dict) and room.get("overall") is not None:
+        c = max(0.0, min(1.0, float(room.get("overall", 50.0)) / 100.0))
+    else:
+        c = get_chemistry(team)
     return 1.0 + 0.04 * (c - 0.5)
 
 

@@ -333,3 +333,10 @@ def normalize_team_strengths(
             report["teams_trimmed"] += 1
 
     return report
+
+
+def player_scoring_health_metrics(goal_events: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Permanent calibration output for assist architecture health."""
+    from app.sim_engine.gameplay.game_analytics_ledger import league_assist_health_metrics
+
+    return league_assist_health_metrics(goal_events)

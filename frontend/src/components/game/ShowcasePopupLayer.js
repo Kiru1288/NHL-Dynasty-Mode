@@ -1,5 +1,523 @@
 import React, { useMemo, useState } from "react";
 import { useGameUI } from "../../game/GameUIContext";
+import { SCREENS } from "../../game/constants";
+import { isFranchiseCinematicPopup } from "../../events/franchiseEventKinds";
+import { getTeamLogoSrc, toLogoUrl } from "../../utils/teamLogos";
+
+function playerInitials(name) {
+  const parts = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!parts.length) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function resolveAlertTheme(pop) {
+  const theme = pop.theme || pop.presentation_type || "";
+  if (theme === "danger" || pop.legal_severity === "major" || pop.kind === "legal_trouble") {
+    return "danger";
+  }
+  if (theme === "warning" || pop.kind === "injury") return "warning";
+  if (theme === "positive") return "positive";
+  if (theme === "info") return "info";
+  return "neutral";
+}
+
+function isTradePopup(pop) {
+  if (!pop) return false;
+  if (String(pop.type || "").toLowerCase() === "trade") return true;
+  if (String(pop.cause_type || "").toLowerCase().includes("trade")) return true;
+  if (String(pop.event_type || "").toUpperCase().includes("TRADE")) return true;
+  const teams = Array.isArray(pop.teams) ? pop.teams : [];
+  return teams.some((t) => t && Array.isArray(t.acquired_assets) && t.acquired_assets.length > 0);
+}
+
+function StatCard({ label, value, sub }) {
+  return (
+    <div className="media-alert__stat">
+      <span className="media-alert__stat-label">{label}</span>
+      <strong className="media-alert__stat-value">{value}</strong>
+      {sub ? <small className="media-alert__stat-sub">{sub}</small> : null}
+    </div>
+  );
+}
+
+function OvrImpactBlock({ before, after, delta, reason }) {
+  if (before == null && after == null) return null;
+  const d = Number(delta ?? (after != null && before != null ? after - before : 0));
+  if (!d && before === after) return null;
+  return (
+    <div className={`media-alert__ovr ${d < 0 ? "is-neg" : d > 0 ? "is-pos" : ""}`}>
+      <div className="media-alert__ovr-label">Rating Impact</div>
+      <div className="media-alert__ovr-row">
+        <span className="media-alert__ovr-before">{before ?? "—"}</span>
+        <span className="media-alert__ovr-arrow" aria-hidden>
+          {d < 0 ? "↓" : d > 0 ? "↑" : "→"}
+        </span>
+        <span className="media-alert__ovr-after">{after ?? "—"}</span>
+      </div>
+      {d ? (
+        <div className="media-alert__ovr-delta">
+          {d > 0 ? "+" : ""}
+          {d} OVR
+        </div>
+      ) : null}
+      {reason ? <p className="media-alert__ovr-reason">{reason}</p> : null}
+    </div>
+  );
+}
+
+function formatCapHit(m) {
+  if (m == null || !Number.isFinite(Number(m))) return null;
+  const n = Number(m);
+  return `$${n.toFixed(n >= 10 ? 1 : 2)}M`;
+}
+
+function formatStat(v, digits = 0) {
+  if (v == null || v === "") return "—";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  return digits > 0 ? n.toFixed(digits) : String(Math.round(n));
+}
+
+function TeamMark({ team }) {
+  const abbr = String(team?.abbreviation || team?.team_id || "?").toUpperCase();
+  const src = toLogoUrl(
+    getTeamLogoSrc({
+      abbrev: abbr,
+      team_abbrev: abbr,
+      name: team?.display_name,
+      team_name: team?.display_name,
+    })
+  );
+  if (src) {
+    return <img className="trade-wire__logo" src={src} alt="" />;
+  }
+  return <span className="trade-wire__logo-fallback">{abbr.slice(0, 3)}</span>;
+}
+
+function TradePlayerCard({ asset, seasonLabel }) {
+  const stats = asset?.season_stats || {};
+  const role = asset?.role_line || [asset?.position, asset?.archetype].filter(Boolean).join(" | ");
+  const cap = formatCapHit(asset?.cap_hit_m);
+  const years = asset?.years_left;
+  const age = asset?.age;
+  const metaBits = [];
+  if (age != null) metaBits.push(`AGE ${age}`);
+  if (cap) metaBits.push(`${cap} CAP HIT`);
+  if (years != null) metaBits.push(`${years} YEAR${years === 1 ? "" : "S"} LEFT`);
+  if (asset?.retained_salary) metaBits.push(`${asset.retained_salary}% RET`);
+
+  return (
+    <div className="trade-wire__player-card">
+      <div className="trade-wire__player-top">
+        <div className="trade-wire__player-id">
+          <div className="trade-wire__player-name">{asset?.display_name || "Player"}</div>
+          {role ? <div className="trade-wire__player-role">{role}</div> : null}
+        </div>
+        {asset?.ovr != null ? (
+          <div className="trade-wire__ovr">
+            <span>OVR</span>
+            <strong>{asset.ovr}</strong>
+          </div>
+        ) : null}
+      </div>
+      {metaBits.length ? <div className="trade-wire__contract">{metaBits.join(" | ")}</div> : null}
+      <div className="trade-wire__stats-head">{seasonLabel ? `${seasonLabel} STATS` : "SEASON STATS"}</div>
+      <div className="trade-wire__stats-row">
+        {[
+          ["GP", formatStat(stats.gp)],
+          ["G", formatStat(stats.g)],
+          ["A", formatStat(stats.a)],
+          ["PTS", formatStat(stats.pts)],
+          ["xGF%", stats.xgf_pct != null ? formatStat(stats.xgf_pct, 1) : "—"],
+          ["WAR", stats.war != null ? formatStat(stats.war, 1) : "—"],
+        ].map(([label, value]) => (
+          <div key={label} className="trade-wire__stat">
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TradePickChip({ asset }) {
+  return (
+    <div className="trade-wire__pick-chip">
+      <span className="trade-wire__pick-label">{asset?.display_name || "Draft Pick"}</span>
+      {asset?.trade_value != null ? (
+        <span className="trade-wire__pick-val">TV {formatStat(asset.trade_value, 1)}</span>
+      ) : null}
+    </div>
+  );
+}
+
+function TradeSideColumn({ team, seasonLabel }) {
+  const assets = Array.isArray(team?.acquired_assets) ? team.acquired_assets : [];
+  const players = assets.filter((a) => String(a?.asset_type || "").toLowerCase() === "player");
+  const picks = assets.filter((a) => {
+    const t = String(a?.asset_type || "").toLowerCase();
+    return t === "draft_pick" || t === "pick";
+  });
+  const other = assets.filter((a) => {
+    const t = String(a?.asset_type || "").toLowerCase();
+    return t !== "player" && t !== "draft_pick" && t !== "pick";
+  });
+  const abbr = String(team?.abbreviation || team?.team_id || "TEAM").toUpperCase();
+
+  return (
+    <div className="trade-wire__side">
+      <div className="trade-wire__side-head">
+        <TeamMark team={team} />
+        <div>
+          <div className="trade-wire__side-name">{abbr}</div>
+          <div className="trade-wire__side-receives">RECEIVES</div>
+        </div>
+      </div>
+      <div className="trade-wire__side-assets">
+        {players.length
+          ? players.map((p, i) => (
+              <TradePlayerCard key={`${p.player_id || p.display_name}-${i}`} asset={p} seasonLabel={seasonLabel} />
+            ))
+          : null}
+        {picks.length ? (
+          <div className="trade-wire__picks">
+            <div className="trade-wire__picks-label">DRAFT PICKS</div>
+            {picks.map((pk, i) => (
+              <TradePickChip key={`${pk.pick_id || pk.display_name}-${i}`} asset={pk} />
+            ))}
+          </div>
+        ) : null}
+        {other.map((a, i) => (
+          <div key={`other-${i}`} className="trade-wire__pick-chip">
+            <span className="trade-wire__pick-label">{a.display_name || "Asset"}</span>
+          </div>
+        ))}
+        {!players.length && !picks.length && !other.length ? (
+          <div className="trade-wire__empty">No assets listed</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function TradeValueBar({ leftTeam, rightTeam, leftValue, rightValue }) {
+  const left = Number(leftValue);
+  const right = Number(rightValue);
+  const hasLeft = Number.isFinite(left);
+  const hasRight = Number.isFinite(right);
+  if (!hasLeft && !hasRight) return null;
+  const l = hasLeft ? Math.max(0, left) : 0;
+  const r = hasRight ? Math.max(0, right) : 0;
+  const total = l + r || 1;
+  const leftPct = Math.round((l / total) * 100);
+
+  return (
+    <section className="trade-wire__value">
+      <div className="trade-wire__section-label">
+        <span aria-hidden>▮</span> TRADE VALUE
+      </div>
+      <div className="trade-wire__value-row">
+        <div className="trade-wire__value-end">
+          <TeamMark team={leftTeam} />
+          <strong>{hasLeft ? formatStat(left, 1) : "—"}</strong>
+        </div>
+        <div className="trade-wire__value-track" aria-hidden>
+          <div className="trade-wire__value-fill is-left" style={{ width: `${leftPct}%` }} />
+          <div className="trade-wire__value-fill is-right" style={{ width: `${100 - leftPct}%` }} />
+        </div>
+        <div className="trade-wire__value-end is-right">
+          <strong>{hasRight ? formatStat(right, 1) : "—"}</strong>
+          <TeamMark team={rightTeam} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function rewriteTradeSummary(raw, left, right) {
+  const leftAbbr = String(left?.abbreviation || left?.team_id || "").toUpperCase();
+  const rightAbbr = String(right?.abbreviation || right?.team_id || "").toUpperCase();
+  const leftId = String(left?.team_id || "");
+  const rightId = String(right?.team_id || "");
+  let text = String(raw || "").trim();
+  if (!text) {
+    return `${leftAbbr || "Team"} completes a league trade with ${rightAbbr || "partner"}.`;
+  }
+  // Replace bare numeric club ids with abbreviations when present.
+  if (leftId && leftAbbr && leftId !== leftAbbr) {
+    text = text.replace(new RegExp(`\\b${leftId}\\b`, "g"), leftAbbr);
+  }
+  if (rightId && rightAbbr && rightId !== rightAbbr) {
+    text = text.replace(new RegExp(`\\b${rightId}\\b`, "g"), rightAbbr);
+  }
+  return text;
+}
+
+function TradeWireBody({ pop, onDismiss, onAction }) {
+  const teams = (Array.isArray(pop.teams) ? pop.teams : []).filter(
+    (t) => t && Array.isArray(t.acquired_assets)
+  );
+  const left = teams[0] || { abbreviation: pop.team_abbrev || pop.team_id, acquired_assets: [] };
+  const right = teams[1] || { abbreviation: pop.from_team_id, acquired_assets: [] };
+  const tv = pop.trade_value || {};
+  const leftValue = tv.left_value ?? left.trade_value;
+  const rightValue = tv.right_value ?? right.trade_value;
+  const summary = rewriteTradeSummary(
+    pop.summary || pop.details || "",
+    left,
+    right
+  );
+  const reasoning = pop.reason_text || pop.cause || pop.story_report || pop.effect_summary || "";
+  const tradeType = pop.trade_type_label || String(pop.trade_category || "League Trade").replace(/_/g, " ");
+  const seasonLabel = pop.season_label || "";
+
+  return (
+    <div className="trade-wire">
+      <div className="trade-wire__source-row">
+        <span className="trade-wire__source-icon" aria-hidden>
+          ⇄
+        </span>
+        <div className="trade-wire__source-copy">
+          <p className="trade-wire__source">{pop.source_label || "League Trade Wire"}</p>
+          {pop.calendar_iso ? <span className="trade-wire__date">{pop.calendar_iso}</span> : null}
+        </div>
+        <button type="button" className="trade-wire__close" onClick={onDismiss} aria-label="Close">
+          ×
+        </button>
+      </div>
+
+      <h3 className="trade-wire__title">TRADE COMPLETED</h3>
+      <p className="trade-wire__summary">{summary}</p>
+
+      <div className="trade-wire__exchange">
+        <TradeSideColumn team={left} seasonLabel={seasonLabel} />
+        <div className="trade-wire__swap" aria-hidden>
+          ⇄
+        </div>
+        <TradeSideColumn team={right} seasonLabel={seasonLabel} />
+      </div>
+
+      <TradeValueBar leftTeam={left} rightTeam={right} leftValue={leftValue} rightValue={rightValue} />
+
+      <section className="trade-wire__reason">
+        <div className="trade-wire__reason-meta">
+          <span className="trade-wire__section-label">TRADE TYPE</span>
+          <span className="trade-wire__type-pill">{tradeType}</span>
+        </div>
+        <div className="trade-wire__reason-body">
+          <div className="trade-wire__section-label">REASONING</div>
+          <p>{reasoning || "Roster management trade."}</p>
+        </div>
+      </section>
+
+      <div className="trade-wire__foot">
+        <button type="button" className="trade-wire__btn" onClick={() => onAction({ id: "tradehub" })}>
+          View Trade
+        </button>
+        <button type="button" className="trade-wire__btn" onClick={() => onAction({ id: "storylines" })}>
+          Open Storylines
+        </button>
+        <button type="button" className="trade-wire__btn is-primary" onClick={onDismiss}>
+          Continue →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [] }) {
+  const theme = resolveAlertTheme(pop);
+  const source = pop.source_label || pop.title || "League Update";
+  const icon = pop.icon || "◉";
+
+  return (
+    <div className={`media-alert media-alert--${theme}`}>
+      <div className="media-alert__source-row">
+        <span className="media-alert__icon" aria-hidden>
+          {icon}
+        </span>
+        <div>
+          <p className="media-alert__source">{source}</p>
+          {pop.calendar_iso ? <span className="media-alert__date">{pop.calendar_iso}</span> : null}
+        </div>
+      </div>
+
+      <div className="media-alert__hero">
+        <div className="media-alert__avatar">{playerInitials(pop.player_name)}</div>
+        <div className="media-alert__hero-text">
+          <h3 className="media-alert__headline">{pop.headline || pop.title || "Update"}</h3>
+          <p className="media-alert__player-line">
+            <strong>{pop.player_name || "—"}</strong>
+            {pop.team_abbrev || pop.team_abbr ? (
+              <span className="media-alert__team-badge">{pop.team_abbrev || pop.team_abbr}</span>
+            ) : null}
+          </p>
+        </div>
+      </div>
+
+      {children}
+
+      {actions.length ? (
+        <div className="media-alert__actions">
+          {actions.map((act) => (
+            <button
+              key={act.id}
+              type="button"
+              className={`media-alert__action ${act.primary ? "is-primary" : ""}`}
+              onClick={() => onAction(act)}
+            >
+              {act.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="media-alert__foot">
+        <button type="button" className="media-alert__dismiss" onClick={onDismiss}>
+          Dismiss
+        </button>
+        <button type="button" className="media-alert__continue" onClick={onDismiss}>
+          Continue
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function StorylineBody({ pop, onDismiss, onAction }) {
+  if (isTradePopup(pop)) {
+    return <TradeWireBody pop={pop} onDismiss={onDismiss} onAction={onAction} />;
+  }
+
+  const storyText = pop.story_report || pop.summary || pop.description || pop.storyline_text || "";
+  const impactText = pop.franchise_impact || pop.effect_summary || "";
+  const hasGames = Number(pop.games_remaining) > 0;
+  const sourceLabel = pop.source_label || pop.title || "Team Report";
+
+  const stats = [
+    { label: "Source", value: sourceLabel },
+    { label: "Player", value: pop.player_name || pop.culprit_player_name || "—" },
+    { label: "Team", value: pop.team_abbrev || pop.team_abbr || "—" },
+    {
+      label: "Status",
+      value: hasGames ? "Away from team" : pop.legal_severity === "major" ? "Under review" : "Active",
+    },
+  ];
+  if (pop.cause || pop.cause_type) {
+    stats.push({
+      label: "Cause",
+      value: pop.cause ? String(pop.cause).slice(0, 72) : String(pop.cause_type || "").replace(/_/g, " "),
+    });
+  }
+  if (hasGames) {
+    stats.push({
+      label: "Expected return",
+      value: pop.return_estimate || `${pop.games_remaining} games`,
+      sub: pop.return_date || "",
+    });
+  }
+
+  const actions = [
+    { id: "storylines", label: "Open Storylines", primary: true },
+    { id: "roster", label: "View Player" },
+  ];
+  if (pop.is_user_team) {
+    actions.unshift({ id: "calendar", label: "View Calendar" });
+  }
+
+  return (
+    <MediaAlertShell pop={{ ...pop, source_label: sourceLabel }} onDismiss={onDismiss} onAction={onAction} actions={actions}>
+      <div className="media-alert__stat-grid">
+        {stats.map((s) => (
+          <StatCard key={s.label} label={s.label} value={s.value} sub={s.sub} />
+        ))}
+      </div>
+
+      {pop.cause ? (
+        <section className="media-alert__section">
+          <h4 className="media-alert__section-title">Trigger / Cause</h4>
+          <p className="media-alert__story">{pop.cause}</p>
+        </section>
+      ) : null}
+
+      <section className="media-alert__section">
+        <h4 className="media-alert__section-title">Story Report</h4>
+        <p className="media-alert__story">{storyText}</p>
+      </section>
+
+      <section className="media-alert__section media-alert__section--impact">
+        <h4 className="media-alert__section-title">Franchise Impact</h4>
+        <OvrImpactBlock
+          before={pop.overall_before ?? pop.base_overall}
+          after={pop.overall_after ?? pop.effective_overall}
+          delta={pop.overall_delta}
+          reason={
+            pop.impact_reason ||
+            pop.cause ||
+            (hasGames
+              ? "Player temporarily unavailable — investigation / conduct penalty"
+              : "Temporary performance modifier from verified franchise trigger")
+          }
+        />
+        {impactText && !pop.overall_delta ? <p className="media-alert__impact-line">{impactText}</p> : null}
+        {!impactText && pop.overall_delta == null ? (
+          <p className="media-alert__impact-muted">No direct rating change reported.</p>
+        ) : null}
+      </section>
+
+      {pop.requires_decision ? (
+        <p className="media-alert__callout">GM response may be required — check Storylines → Decisions.</p>
+      ) : null}
+    </MediaAlertShell>
+  );
+}
+
+function InjuryBody({ pop, onDismiss, onAction }) {
+  const tier = String(pop.tier || "").toLowerCase();
+  const inj = pop.injury_type ? String(pop.injury_type) : "";
+
+  return (
+    <MediaAlertShell
+      pop={{
+        ...pop,
+        source_label: "Medical Desk Report",
+        icon: "+",
+        theme: "warning",
+      }}
+      onDismiss={onDismiss}
+      onAction={onAction}
+      actions={[
+        { id: "roster", label: "View Player", primary: true },
+        { id: "storylines", label: "Open Storylines" },
+      ]}
+    >
+      <div className="media-alert__stat-grid">
+        <StatCard label="Player" value={pop.player_name || "—"} />
+        <StatCard label="Team" value={pop.team_abbrev || "—"} />
+        <StatCard label="Severity" value={tier || "unknown"} />
+        <StatCard label="Timeline" value={pop.games != null ? `${pop.games} games` : "TBD"} sub={inj || ""} />
+      </div>
+
+      <section className="media-alert__section">
+        <h4 className="media-alert__section-title">Medical Report</h4>
+        <p className="media-alert__story">
+          {pop.headline || `${pop.player_name || "Player"} injured`} — expected to miss{" "}
+          <strong>{pop.games != null ? pop.games : "multiple"}</strong> games.
+        </p>
+      </section>
+
+      <section className="media-alert__section media-alert__section--impact">
+        <h4 className="media-alert__section-title">Franchise Impact</h4>
+        <p className="media-alert__impact-line">Unavailable for listed games · depth chart stress</p>
+      </section>
+    </MediaAlertShell>
+  );
+}
 
 function ShowcaseGameBody({ pop }) {
   const h = pop.home || {};
@@ -32,7 +550,6 @@ function WjcBody({ pop }) {
   const dayNum = pop.wjc_day;
   const dayTot = pop.wjc_days_total;
   const calIso = pop.calendar_iso;
-
   const rrGames = useMemo(() => (pop.round_robin_games || []).slice(), [pop]);
 
   return (
@@ -44,26 +561,21 @@ function WjcBody({ pop }) {
           {!complete ? <span className="showcase-popup__wjc-live"> · tournament in progress</span> : null}
         </p>
       ) : null}
-
       {complete ? (
         <div className="showcase-popup__medals">
           <div>
-            <span className="showcase-popup__medal showcase-popup__medal--gold">Gold</span>{" "}
-            {medals.gold || "—"}
+            <span className="showcase-popup__medal showcase-popup__medal--gold">Gold</span> {medals.gold || "—"}
           </div>
           <div>
-            <span className="showcase-popup__medal showcase-popup__medal--silver">Silver</span>{" "}
-            {medals.silver || "—"}
+            <span className="showcase-popup__medal showcase-popup__medal--silver">Silver</span> {medals.silver || "—"}
           </div>
           <div>
-            <span className="showcase-popup__medal showcase-popup__medal--bronze">Bronze</span>{" "}
-            {medals.bronze || "—"}
+            <span className="showcase-popup__medal showcase-popup__medal--bronze">Bronze</span> {medals.bronze || "—"}
           </div>
         </div>
       ) : (
         <p className="showcase-popup__muted">Medals are awarded after the gold medal game (Jan 5).</p>
       )}
-
       <h4 className="showcase-popup__h">Round robin — standings to date</h4>
       <div className="showcase-popup__table-wrap">
         <table className="showcase-popup__table">
@@ -97,39 +609,6 @@ function WjcBody({ pop }) {
           </tbody>
         </table>
       </div>
-
-      <h4 className="showcase-popup__h">Knockout bracket</h4>
-      {(po.quarterfinals || []).length ? (
-        <ul className="showcase-popup__ko">
-          {(po.quarterfinals || []).map((g, i) => (
-            <li key={`qf-${i}`}>
-              QF: {g.home_label || g.home} {g.home_goals}–{g.away_goals} {g.away_label || g.away} →{" "}
-              <strong>{g.winner_label || g.winner}</strong>
-            </li>
-          ))}
-          {(po.semifinals || []).map((g, i) => (
-            <li key={`sf-${i}`}>
-              SF: {g.home_label || g.home} {g.home_goals}–{g.away_goals} {g.away_label || g.away} →{" "}
-              <strong>{g.winner_label || g.winner}</strong>
-            </li>
-          ))}
-          {po.bronze ? (
-            <li>
-              Bronze: {po.bronze.home_label || po.bronze.home} {po.bronze.home_goals}–{po.bronze.away_goals}{" "}
-              {po.bronze.away_label || po.bronze.away} → <strong>{po.bronze.winner_label || po.bronze.winner}</strong>
-            </li>
-          ) : null}
-          {po.gold ? (
-            <li>
-              Final: {po.gold.home_label || po.gold.home} {po.gold.home_goals}–{po.gold.away_goals}{" "}
-              {po.gold.away_label || po.gold.away} → <strong>{po.gold.winner_label || po.gold.winner}</strong>
-            </li>
-          ) : null}
-        </ul>
-      ) : (
-        <p className="showcase-popup__muted">Knockout rounds unlock as the calendar moves through the tournament.</p>
-      )}
-
       <button type="button" className="showcase-popup__toggle" onClick={() => setOpenRr((v) => !v)}>
         {openRr ? "Hide" : "Show"} all round-robin scores ({rrGames.length})
       </button>
@@ -141,77 +620,6 @@ function WjcBody({ pop }) {
             </li>
           ))}
         </ul>
-      ) : null}
-
-      {prospects.length ? (
-        <>
-          <h4 className="showcase-popup__h">Your club — U20 tied to national teams</h4>
-          <ul className="showcase-popup__prospects">
-            {prospects.map((p) => (
-              <li key={p.player_id || p.name}>
-                <strong>{p.name}</strong> ({p.age}) — {p.roster ? `${p.roster} · ` : ""}
-                {p.wjc_country_label || p.wjc_country}{" "}
-                {p.made_wjc_team ? <span className="showcase-popup__tag showcase-popup__tag--yes">Roster</span> : null}
-                {!p.made_wjc_team ? (
-                  <span className="showcase-popup__tag showcase-popup__tag--no">Released</span>
-                ) : null}
-                <div className="showcase-popup__note">{p.note}</div>
-              </li>
-            ))}
-          </ul>
-        </>
-      ) : (
-        <p className="showcase-popup__muted">
-          No U20 players on your AHL affiliate (and no NHL U20s loaned to a national team) for this recap.
-        </p>
-      )}
-    </div>
-  );
-}
-
-function InjuryBody({ pop }) {
-  const tier = String(pop.tier || "").toLowerCase();
-  const inj = pop.injury_type ? String(pop.injury_type) : "";
-  return (
-    <div className="showcase-popup__wjc">
-      <p className="showcase-popup__wjc-banner">Medical Update</p>
-      <h3 className="showcase-popup__h" style={{ marginTop: 0 }}>
-        {pop.headline || "Player injured"}
-      </h3>
-      <p className="showcase-popup__muted" style={{ fontSize: 14, lineHeight: 1.45 }}>
-        {pop.player_name || "A player"} from <strong>{pop.team_abbrev || "the club"}</strong> is expected to miss{" "}
-        <strong>{pop.games != null ? pop.games : "multiple"}</strong> games
-        {inj ? ` (${inj})` : ""}.
-      </p>
-      <div className="showcase-popup__columns" style={{ marginTop: 12 }}>
-        <div>
-          <div className="showcase-popup__muted" style={{ fontSize: 11, textTransform: "uppercase" }}>
-            Team
-          </div>
-          <strong>{pop.team_abbrev || "—"}</strong>
-        </div>
-        <div>
-          <div className="showcase-popup__muted" style={{ fontSize: 11, textTransform: "uppercase" }}>
-            Severity
-          </div>
-          <strong style={{ textTransform: "capitalize" }}>{tier || "unknown"}</strong>
-        </div>
-        <div>
-          <div className="showcase-popup__muted" style={{ fontSize: 11, textTransform: "uppercase" }}>
-            Timeline
-          </div>
-          <strong>{pop.games != null ? `${pop.games} games` : "TBD"}</strong>
-        </div>
-      </div>
-      {pop.game_day_injury ? (
-        <p className="showcase-popup__muted" style={{ marginTop: 10, fontSize: 13 }}>
-          Timing: this injury was applied after today&apos;s scheduled game on the calendar.
-        </p>
-      ) : null}
-      {pop.requires_decision ? (
-        <p className="showcase-popup__note" style={{ marginTop: 14 }}>
-          Your hockey operations staff may need a response plan for this injury.
-        </p>
       ) : null}
     </div>
   );
@@ -233,74 +641,91 @@ function AllStarBody({ pop }) {
       ) : (
         <p className="showcase-popup__muted">No players from your NHL roster made this year&apos;s showcase.</p>
       )}
-      <div className="showcase-popup__columns">
-        <div>
-          <h4 className="showcase-popup__h">{pop.team_a_label}</h4>
-          <ul>
-            {(pop.team_a || []).map((r) => (
-              <li key={r.name} className={r.is_user ? "showcase-popup__you" : ""}>
-                {r.name}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <h4 className="showcase-popup__h">{pop.team_b_label}</h4>
-          <ul>
-            {(pop.team_b || []).map((r) => (
-              <li key={r.name} className={r.is_user ? "showcase-popup__you" : ""}>
-                {r.name}
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
     </div>
   );
 }
 
 export function ShowcasePopupLayer() {
-  const { franchiseState, onDismissShowcasePopups } = useGameUI();
-  const rawQueue = franchiseState?.pending_ui_popups || [];
+  const { franchiseState, onDismissShowcasePopups, setScreen } = useGameUI();
+  const rawQueue = (franchiseState?.pending_ui_popups || []).filter(
+    (p) => p && !isFranchiseCinematicPopup(p)
+  );
   const hasPendingDecisions =
     Array.isArray(franchiseState?.pending_decisions) && franchiseState.pending_decisions.length > 0;
-  // Show injury popups first when GM decisions are pending, but keep showcases/WJC/ASG in queue order after.
   const visiblePopups = hasPendingDecisions
-    ? [...rawQueue.filter((p) => p && p.kind === "injury"), ...rawQueue.filter((p) => p && p.kind !== "injury")]
+    ? [
+        ...rawQueue.filter((p) => p && p.kind === "injury"),
+        ...rawQueue.filter((p) => p && (p.kind === "legal_trouble" || p.kind === "storyline")),
+        ...rawQueue.filter(
+          (p) => p && p.kind !== "injury" && p.kind !== "legal_trouble" && p.kind !== "storyline"
+        ),
+      ]
     : rawQueue;
   const first = visiblePopups[0];
 
   if (!first) return null;
 
   const kind = first.kind;
+  const theme = resolveAlertTheme(first);
+
+  const dismiss = () => onDismissShowcasePopups([first.id]);
+
+  const handleAction = (act) => {
+    dismiss();
+    if (act.id === "storylines") setScreen?.(SCREENS.STORYLINES);
+    else if (act.id === "roster") setScreen?.(SCREENS.ROSTER);
+    else if (act.id === "calendar") setScreen?.(SCREENS.CALENDAR);
+    else if (act.id === "tradehub") setScreen?.(SCREENS.TRADE);
+    else if (act.id === "lines") setScreen?.(SCREENS.EDIT_LINES);
+  };
+
+  const isMediaAlert = kind === "storyline" || kind === "legal_trouble" || kind === "injury";
+  const isTradeAlert = isMediaAlert && isTradePopup(first);
 
   return (
     <div className="showcase-popup">
       <div className="showcase-popup__backdrop" aria-hidden />
-      <div className="showcase-popup__panel" role="dialog" aria-modal="true" aria-labelledby="showcase-popup-title">
-        <header className="showcase-popup__head">
-          <h2 id="showcase-popup-title" className="showcase-popup__title">
-            {first.title || "League showcase"}
-          </h2>
-          {first.season_label ? <div className="showcase-popup__season">{first.season_label}</div> : null}
-        </header>
+      <div
+        className={`showcase-popup__panel ${isMediaAlert ? "showcase-popup__panel--media" : ""} ${isTradeAlert ? "showcase-popup__panel--trade-wire" : ""} showcase-popup__panel--${theme}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="showcase-popup-title"
+      >
+        {!isMediaAlert ? (
+          <header className="showcase-popup__head">
+            <h2 id="showcase-popup-title" className="showcase-popup__title">
+              {first.title || "League showcase"}
+            </h2>
+            {first.season_label ? <div className="showcase-popup__season">{first.season_label}</div> : null}
+          </header>
+        ) : null}
         <div className="showcase-popup__body">
           {kind === "wjc_tournament" ? <WjcBody pop={first} /> : null}
           {kind === "showcase_game" ? <ShowcaseGameBody pop={first} /> : null}
           {kind === "allstar_game" ? <AllStarBody pop={first} /> : null}
-          {kind === "injury" ? <InjuryBody pop={first} /> : null}
-          {!["wjc_tournament", "showcase_game", "allstar_game", "injury"].includes(kind) ? (
+          {kind === "injury" ? <InjuryBody pop={first} onDismiss={dismiss} onAction={handleAction} /> : null}
+          {kind === "storyline" || kind === "legal_trouble" ? (
+            <StorylineBody pop={first} onDismiss={dismiss} onAction={handleAction} />
+          ) : null}
+          {!["wjc_tournament", "showcase_game", "allstar_game", "injury", "storyline", "legal_trouble"].includes(
+            kind
+          ) ? (
             <pre className="showcase-popup__raw">{JSON.stringify(first, null, 2)}</pre>
           ) : null}
         </div>
-        <footer className="showcase-popup__foot">
-          {visiblePopups.length > 1 ? (
-            <span className="showcase-popup__queue">+{visiblePopups.length - 1} more after this</span>
-          ) : null}
-          <button type="button" className="showcase-popup__btn" onClick={() => onDismissShowcasePopups([first.id])}>
-            Continue
-          </button>
-        </footer>
+        {!isMediaAlert ? (
+          <footer className="showcase-popup__foot">
+            {visiblePopups.length > 1 ? (
+              <span className="showcase-popup__queue">+{visiblePopups.length - 1} more after this</span>
+            ) : null}
+            <button type="button" className="showcase-popup__btn" onClick={dismiss}>
+              Continue
+            </button>
+          </footer>
+        ) : null}
+        {isMediaAlert && visiblePopups.length > 1 ? (
+          <div className="media-alert__queue">+{visiblePopups.length - 1} more alerts queued</div>
+        ) : null}
       </div>
     </div>
   );

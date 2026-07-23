@@ -1,0 +1,123 @@
+.broadcast-ticker {
+  --espn-red: #d71920;
+  --espn-dark: #08090c;
+  --espn-panel: #111318;
+  --espn-panel-2: #181b22;
+  --espn-border: rgba(255, 255, 255, 0.12);
+  --espn-border-red: rgba(215, 25, 32, 0.75);
+  --espn-text: #f5f5f5;
+  --espn-muted: #a9adb7;
+
+  position: relative;
+  z-index: 30;
+  display: flex;
+  align-items: stretch;
+  min-height: 38px;
+  max-height: 40px;
+  border-top: 2px solid var(--espn-red);
+  background: var(--espn-panel-2);
+  overflow: hidden;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.broadcast-ticker.is-compact {
+  min-height: 34px;
+  max-height: 36px;
+}
+
+.broadcast-ticker__bug {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  background: var(--espn-red);
+  color: #fff;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.broadcast-ticker__state {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-right: 1px solid var(--espn-border);
+  background: var(--espn-dark);
+  color: var(--espn-text);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.broadcast-ticker__viewport {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  border-left: 1px solid var(--espn-border-red);
+  background: var(--espn-dark);
+}
+
+.broadcast-ticker__track {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  animation: broadcastTickerScroll 36s linear infinite;
+  will-change: transform;
+}
+
+.broadcast-ticker__viewport:hover .broadcast-ticker__track {
+  animation-play-state: paused;
+}
+
+.broadcast-ticker.is-static .broadcast-ticker__track {
+  animation: none;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  max-width: 100%;
+  scrollbar-width: none;
+}
+
+.broadcast-ticker.is-static .broadcast-ticker__track::-webkit-scrollbar {
+  display: none;
+}
+
+.broadcast-ticker__item {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 18px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--espn-text);
+  line-height: 1;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.broadcast-ticker__separator {
+  display: inline-block;
+  width: 1px;
+  height: 14px;
+  background: var(--espn-border-red);
+  flex-shrink: 0;
+}
+
+@keyframes broadcastTickerScroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .broadcast-ticker__track {
+    animation: none !important;
+  }
+}

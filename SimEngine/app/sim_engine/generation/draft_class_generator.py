@@ -7,6 +7,14 @@ Outputs a list of dict "player profiles" with structured pipeline tiers so each 
 has realistic franchise / elite / top / middle / depth counts (weak vs stacked years).
 
 This is runner/engine friendly and avoids assuming a specific Player constructor.
+
+NOT used directly by live franchise startup. Franchise draft/scouting UI reads
+development_leagues via build_draft_class_rankings (franchise_sim.py). Reuse tier
+concepts from this module when enriching prospect metadata — do not maintain a
+separate invisible draft pool for franchise mode.
+
+CANONICAL live path: league_hierarchy_bootstrap.py → draft_ranking_logic.py →
+franchise_sim.build_draft_class_rankings() → draft_prospect_profile.py
 """
 
 import hashlib
@@ -22,11 +30,63 @@ from app.sim_engine.generation.attribute_generator import (
     compute_development_rate,
 )
 from app.sim_engine.generation.trait_generator import generate_traits
+from app.sim_engine.generation.player_headshots import attach_headshot_to_profile_dict
+from app.sim_engine.systems.chemistry import _DEFAULT_PROFILE as _DEFAULT_CHEM_PROFILE
 
 
 def _stable_id_from_seed(seed: int, salt: str) -> str:
     b = f"{seed}:{salt}".encode("utf-8")
     return "GEN_" + hashlib.sha1(b).hexdigest()[:14].upper()
+
+
+def _chemistry_profile_for_prospect(*, position: str, age: int, talent_tier: str, rng) -> Dict[str, Any]:
+    profile = dict(_DEFAULT_CHEM_PROFILE)
+    pos = str(position or "C").upper()
+    tier = str(talent_tier or "normal").lower()
+    if age >= 20:
+        profile["personality"] = rng.choice(["quiet_professional", "mentor", "veteran_stabilizer", "balanced"])
+        profile["leadership"] = int(52 + rng.randint(0, 24))
+    elif age <= 18:
+        profile["personality"] = rng.choice(["young_skilled", "streaky_confidence", "balanced", "intense_competitor"])
+        profile["leadership"] = int(38 + rng.randint(0, 16))
+    else:
+        profile["personality"] = rng.choice(["balanced", "glue_guy", "quiet_professional", "young_skilled"])
+        profile["leadership"] = int(44 + rng.randint(0, 20))
+
+    if pos == "G":
+        profile["playstyle"] = rng.choice(["hybrid_goalie", "butterfly_goalie"])
+        profile["pressure_response"] = int(48 + rng.randint(0, 32))
+        profile["temperament"] = int(46 + rng.randint(0, 30))
+    elif pos == "D":
+        profile["playstyle"] = rng.choice(["shutdown", "puck_mover", "defensive_defenseman", "offensive_defenseman", "two_way"])
+        profile["defensive_buy_in"] = int(50 + rng.randint(0, 34))
+    else:
+        profile["playstyle"] = rng.choice(["sniper", "playmaker", "power_forward", "two_way", "grinder", "balanced"])
+        profile["defensive_buy_in"] = int(42 + rng.randint(0, 30))
+
+    if tier in ("franchise", "elite"):
+        profile["ego"] = int(46 + rng.randint(0, 30))
+        profile["competitiveness"] = int(58 + rng.randint(0, 30))
+    elif tier in ("project", "longshot"):
+        profile["ego"] = int(35 + rng.randint(0, 22))
+        profile["competitiveness"] = int(40 + rng.randint(0, 26))
+
+    for k, v in list(profile.items()):
+        if k in ("personality", "playstyle"):
+            continue
+        profile[k] = int(max(0, min(100, round(float(v)))))
+    return profile
+
+
+def _attach_profile_extras(profile: Dict[str, Any], *, position: str, age: int, talent_tier: str, rng) -> Dict[str, Any]:
+    out = dict(profile)
+    out["chemistry_profile"] = _chemistry_profile_for_prospect(
+        position=position,
+        age=age,
+        talent_tier=talent_tier,
+        rng=rng,
+    )
+    return attach_headshot_to_profile_dict(out)
 
 
 def _choose_position(rng) -> str:
@@ -185,7 +245,7 @@ def generate_player_profile(
     seed_val = int(seed_hint if seed_hint is not None else rng.randrange(1, 2_000_000_000))
     pid = _stable_id_from_seed(seed_val, ident.full_name)
 
-    return {
+    return _attach_profile_extras({
         "id": pid,
         "name": ident.full_name,
         "nationality": ident.nationality,
@@ -210,7 +270,7 @@ def generate_player_profile(
         },
         "health": health,
         "development_rate": float(dev_rate),
-    }
+    }, position=pos, age=int(age), talent_tier=tier, rng=rng)
 
 
 def generate_player_profile_for_pipeline_slot(
@@ -261,7 +321,7 @@ def generate_player_profile_for_pipeline_slot(
     pid = _stable_id_from_seed(seed_val, ident.full_name)
     ceiling = _potential_ceiling_for_pipeline(pt, rng, bust=bust)
 
-    return {
+    return _attach_profile_extras({
         "id": pid,
         "name": ident.full_name,
         "nationality": ident.nationality,
@@ -290,7 +350,7 @@ def generate_player_profile_for_pipeline_slot(
         },
         "health": health,
         "development_rate": float(dev_rate),
-    }
+    }, position=position, age=int(age), talent_tier=tier, rng=rng)
 
 
 def generate_player_profile_forced_position(rng, *, age: int, position: str, **kwargs: Any) -> Dict[str, Any]:
@@ -315,7 +375,7 @@ def generate_player_profile_forced_position(rng, *, age: int, position: str, **k
     dev_rate = compute_development_rate(backstory=backstory, traits=traits, talent=talent)
     seed_val = int(kwargs.get("seed_hint") or rng.randrange(1, 2_000_000_000))
     pid = _stable_id_from_seed(seed_val, ident.full_name)
-    return {
+    return _attach_profile_extras({
         "id": pid,
         "name": ident.full_name,
         "nationality": ident.nationality,
@@ -340,7 +400,7 @@ def generate_player_profile_forced_position(rng, *, age: int, position: str, **k
         },
         "health": health,
         "development_rate": float(dev_rate),
-    }
+    }, position=position, age=int(age), talent_tier=tier, rng=rng)
 
 
 def generate_draft_class(

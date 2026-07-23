@@ -677,6 +677,62 @@ def _limit_identical_runs(values: List[int], max_run: int = 2) -> List[int]:
     return out
 
 
+def _ensure_unique_mapping_targets(
+    targets: List[int],
+    eligible: Sequence[int],
+) -> List[int]:
+    """
+    Spread duplicate calendar indices across nearby eligible dates.
+
+    Multiple abstract slate days must not map to the same concrete calendar day;
+    merging slates onto one date double-books teams that were safe on separate
+    abstract days.
+    """
+    if not targets:
+        return []
+
+    eligible_sorted = sorted(_dedupe_keep_order([int(x) for x in eligible]))
+    if not eligible_sorted:
+        return list(targets)
+
+    eligible_set = set(eligible_sorted)
+    used: set = set()
+    out: List[int] = []
+
+    def _nearest_unused(anchor: int) -> int:
+        anchor = int(anchor)
+        for radius in range(0, len(eligible_sorted) + 1):
+            for cand in (anchor + radius, anchor - radius):
+                if cand in eligible_set and cand not in used:
+                    return int(cand)
+        for cand in eligible_sorted:
+            if cand not in used:
+                return int(cand)
+        return int(eligible_sorted[-1])
+
+    for raw in targets:
+        raw = int(raw)
+        if raw not in eligible_set:
+            cursor = 0
+            while cursor < len(eligible_sorted) and eligible_sorted[cursor] < raw:
+                cursor += 1
+            if cursor < len(eligible_sorted):
+                raw = int(eligible_sorted[cursor])
+            else:
+                raw = int(eligible_sorted[-1])
+
+        if raw not in used:
+            out.append(raw)
+            used.add(raw)
+            continue
+
+        replacement = _nearest_unused(raw)
+        out.append(replacement)
+        used.add(replacement)
+
+    return out
+
+
 def _clamp_to_eligible(mapped: List[int], eligible: Sequence[int]) -> List[int]:
     if not mapped:
         return []
@@ -944,17 +1000,18 @@ def map_abstract_schedule_to_calendar(
     calendar: List[CalendarDay],
     abstract_day_numbers: List[int],
     *,
-    preseason_slate_cap: int = 4,
+    preseason_slate_cap: int = 0,
 ) -> Dict[int, int]:
     """
     Map abstract schedule day IDs to concrete calendar indices.
 
-    This version fixes the big gameplay issue:
-    - No dead October/November/December.
-    - No sudden 20-game late-month pileup caused by bad slate distribution.
-    - NHL-like month rhythm.
-    - Heavy Saturday/Tuesday/Thursday cadence.
-    - Christmas/Olympics/All-Star/4 Nations protected.
+    Regular-season abstract slates must land on regular-segment calendar days.
+    Mapping them onto preseason days caused ~50 games to be simmed then wiped
+    at the preseason→regular stats split (playoff_ready with a short season).
+
+    Preseason calendar days remain for exhibition UI; they do not steal
+    regular-season matchups unless an explicit positive preseason_slate_cap
+    is passed by a dedicated exhibition path.
     """
     abstract_sorted = sorted(_dedupe_keep_order([_safe_int(x) for x in abstract_day_numbers]))
 
@@ -972,13 +1029,16 @@ def map_abstract_schedule_to_calendar(
 
     total = len(abstract_sorted)
 
-    preseason_count = _estimate_preseason_abstract_count(
-        total_abstract_count=total,
-        preseason_slate_cap=preseason_slate_cap,
-        preseason_eligible_count=len(preseason_eligible),
-    )
+    # Default: map ALL regular-season abstract slates onto the regular segment.
+    preseason_count = 0
+    if int(preseason_slate_cap) > 0:
+        preseason_count = _estimate_preseason_abstract_count(
+            total_abstract_count=total,
+            preseason_slate_cap=preseason_slate_cap,
+            preseason_eligible_count=len(preseason_eligible),
+        )
+        preseason_count = min(preseason_count, total)
 
-    preseason_count = min(preseason_count, total)
     regular_count = max(0, total - preseason_count)
 
     preseason_targets = _build_preseason_mapping_targets(calendar, preseason_count)
@@ -990,20 +1050,45 @@ def map_abstract_schedule_to_calendar(
         regular_targets = _build_regular_mapping_targets(calendar, regular_count)
 
     if regular_count > 0 and not regular_targets:
-        preseason_count = total
-        regular_count = 0
-        preseason_targets = _build_preseason_mapping_targets(calendar, preseason_count)
+        # Prefer regular days; only fall back to preseason if no regular days exist.
+        if regular_eligible:
+            regular_count = total
+            preseason_count = 0
+            regular_targets = _build_regular_mapping_targets(calendar, regular_count)
+        else:
+            preseason_count = total
+            regular_count = 0
+            preseason_targets = _build_preseason_mapping_targets(calendar, preseason_count)
+
+    preseason_targets = _ensure_unique_mapping_targets(
+        preseason_targets,
+        preseason_eligible or regular_eligible,
+    )
+    regular_targets = _ensure_unique_mapping_targets(
+        regular_targets,
+        regular_eligible or preseason_eligible,
+    )
 
     targets = preseason_targets + regular_targets
     targets.sort()
 
     if len(targets) < total:
-        fallback_pool = regular_targets or preseason_targets or regular_eligible or preseason_eligible or [0]
+        fallback_pool = regular_targets or regular_eligible or preseason_targets or preseason_eligible or [0]
         while len(targets) < total:
             targets.append(int(fallback_pool[-1]))
 
     if len(targets) > total:
         targets = targets[:total]
+
+    # Final uniqueness pass: when mapping regular-season matchups only, NEVER
+    # spill onto preseason calendar indices (that caused the 50-game wipe).
+    if preseason_count <= 0 and regular_eligible:
+        targets = _ensure_unique_mapping_targets(targets, regular_eligible)
+    else:
+        combined_eligible = _dedupe_keep_order(
+            list(regular_eligible) + list(preseason_eligible)
+        )
+        targets = _ensure_unique_mapping_targets(targets, combined_eligible)
 
     return {
         int(old): int(new_idx)

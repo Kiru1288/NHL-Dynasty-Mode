@@ -11,8 +11,19 @@ export const SCREENS = {
   STATS: "stats",
   TRADE: "trade",
   DRAFT_CLASS: "draft_class",
+  DRAFT_LOTTERY: "draft_lottery",
+  TEAM_NEEDS: "team_needs",
+  SCOUTING: "scouting",
+  CHEMISTRY: "chemistry",
+  EDIT_LINES: "edit_lines",
+  POWER_PLAY: "power_play",
+  PENALTY_KILL: "penalty_kill",
+  CAP_LEDGER: "cap_ledger",
   OFFICE: "office",
+  GM_WORLD: "gm_world",
+  LEAGUE_OPERATIONS: "league_operations",
   SETTINGS: "settings",
+  PLACEHOLDER: "placeholder",
 };
 
 /** Hub left-rail entries (controller order). */

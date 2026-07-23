@@ -1,0 +1,33 @@
+/**
+ * Canonical string keys for franchise calendar events.
+ */
+export const EVENT_TYPES = Object.freeze({
+  TRADE_DEADLINE: "trade_deadline",
+  WORLD_JUNIORS: "world_juniors",
+  WINTER_CLASSIC: "winter_classic",
+  HERITAGE_CLASSIC: "heritage_classic",
+  ALL_STAR: "all_star",
+  DRAFT_LOTTERY: "draft_lottery",
+  ENTRY_DRAFT: "entry_draft",
+  DRAFT: "draft",
+  FREE_AGENCY: "free_agency",
+  RE_SIGN: "re_sign",
+  SALARY_CAP: "salary_cap",
+  DEVELOPMENT_REPORT: "development_report",
+  ROSTER_CLEANUP: "roster_cleanup",
+  NEXT_SEASON_REVEAL: "next_season_reveal",
+  CONTRACT_EXTENSION_DEADLINE: "contract_extension_deadline",
+  WAIVERS: "waivers",
+  INJURY_REPORT: "injury_report",
+  RIVALRY_NIGHT: "rivalry_night",
+  PLAYOFF_CLINCH: "playoff_clinch",
+  PLAYOFF_START: "playoffs_start",
+  AWARDS: "awards",
+  AWARDS_NIGHT: "awards_night",
+  RETIREMENTS: "retirements",
+  PROSPECT_DEVELOPMENT: "prospect_development",
+  SCOUTING_REPORT: "scouting_report",
+  INTERNATIONAL_TOURNAMENT: "international_tournament",
+  OPENING_NIGHT: "opening_night",
+  SEASON_REVIEW: "season_review",
+});

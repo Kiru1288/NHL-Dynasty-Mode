@@ -105,18 +105,27 @@ def _build_league_bracket(
     return series
 
 
+# --- Playoff realism tuning constants -----------------------------------
+# Sensitivity of per-game win prob to playoff strength gap (raised from 0.8 so
+# regular-season dominance matters), capped so underdogs always have a path.
+_SERIES_STRENGTH_SENSITIVITY = 1.12
+_SERIES_P_MIN = 0.42
+_SERIES_P_MAX = 0.68
+# Home-ice swing per game (games 1, 2, 5, 7 for the higher seed).
+_HOME_ICE_GAME_EDGE = 0.038
+
+
 def _series_win_probability(
     strength_high: float,
     strength_low: float,
 ) -> float:
     """
     Approximate per-game win probability for the higher seed, based on
-    normalized strength values (0..1 range). Slightly favors the higher
-    strength but leaves plenty of room for upsets.
+    normalized playoff strength values (0..1 range). Favors the stronger
+    team while leaving genuine room for best-of-seven upsets.
     """
-    # Map strength difference into [-0.25, 0.25] then shift around 0.5.
-    diff = max(-0.30, min(0.30, strength_high - strength_low))
-    return max(0.40, min(0.75, 0.5 + diff * 0.8))
+    diff = max(-0.35, min(0.35, strength_high - strength_low))
+    return max(_SERIES_P_MIN, min(_SERIES_P_MAX, 0.5 + diff * _SERIES_STRENGTH_SENSITIVITY))
 
 
 def _simulate_series(
@@ -132,7 +141,11 @@ def _simulate_series(
     wins_low = 0
     needed = (series.best_of // 2) + 1
     while wins_high < needed and wins_low < needed:
-        if rng.random() < p_high:
+        # 2-2-1-1-1 format: higher seed hosts games 1, 2, 5, 7 (0-indexed 0,1,4,6).
+        game_idx = wins_high + wins_low
+        home_high = game_idx in (0, 1, 4, 6)
+        p_game = p_high + (_HOME_ICE_GAME_EDGE if home_high else -_HOME_ICE_GAME_EDGE)
+        if rng.random() < p_game:
             wins_high += 1
         else:
             wins_low += 1
@@ -142,6 +155,78 @@ def _simulate_series(
     if series.winner_id() == series.team_low_id and series.seed_high + 1 < series.seed_low:
         series.upset = True
     return series
+
+
+def _player_ovr_01(p: Any) -> Optional[float]:
+    try:
+        fn = getattr(p, "ovr", None)
+        o = float(fn() if callable(fn) else fn)
+    except Exception:
+        return None
+    if o > 1.5:
+        o /= 99.0
+    return max(0.0, min(1.0, o))
+
+
+def _augment_strength_with_results(
+    teams: List[Any],
+    standings: StandingsTable,
+    strength_map: Dict[str, float],
+) -> Dict[str, float]:
+    """Blend real regular-season results, goaltending, and top-end talent into the
+    playoff strength signal.
+
+    Regular-season points percentage and goal differential come straight from the
+    game ledger standings, so Presidents'-Trophy-calibre teams carry their record
+    into the bracket. Goalie quality and top-six talent add roster texture.
+    Randomness still lives in the per-game series simulation.
+    """
+    out = dict(strength_map or {})
+    goalie_by_tid: Dict[str, float] = {}
+    top6_by_tid: Dict[str, float] = {}
+    for t in teams or []:
+        tid = getattr(t, "team_id", None)
+        if tid is None:
+            tid = getattr(t, "id", None)
+        if tid is None:
+            continue
+        tid = str(tid)
+        roster = [p for p in (getattr(t, "roster", None) or []) if not getattr(p, "retired", False)]
+        g_vals: List[float] = []
+        sk_vals: List[float] = []
+        for p in roster:
+            o = _player_ovr_01(p)
+            if o is None:
+                continue
+            pos = str(getattr(getattr(p, "identity", None), "position", "") or getattr(p, "position", "") or "")
+            if pos.upper().rstrip().endswith("G"):
+                g_vals.append(o)
+            else:
+                sk_vals.append(o)
+        if g_vals:
+            goalie_by_tid[tid] = max(g_vals)
+        if sk_vals:
+            sk_vals.sort(reverse=True)
+            top = sk_vals[:6]
+            top6_by_tid[tid] = sum(top) / len(top)
+
+    g_mean = (sum(goalie_by_tid.values()) / len(goalie_by_tid)) if goalie_by_tid else 0.0
+    s_mean = (sum(top6_by_tid.values()) / len(top6_by_tid)) if top6_by_tid else 0.0
+
+    for rec in standings.league_table():
+        tid = str(rec.team_id)
+        gp = max(1, int(getattr(rec, "gp", 0) or 0))
+        ppct = float(getattr(rec, "points", 0) or 0) / (2.0 * gp)
+        gd_pg = (float(getattr(rec, "gf", 0) or 0) - float(getattr(rec, "ga", 0) or 0)) / gp
+        adj = float(out.get(tid, 0.5))
+        adj += 0.62 * (ppct - 0.5)
+        adj += 0.038 * max(-2.0, min(2.0, gd_pg))
+        if tid in goalie_by_tid and g_mean > 0:
+            adj += 0.20 * (goalie_by_tid[tid] - g_mean)
+        if tid in top6_by_tid and s_mean > 0:
+            adj += 0.16 * (top6_by_tid[tid] - s_mean)
+        out[tid] = max(0.05, min(0.99, adj))
+    return out
 
 
 def _sort_team_ids_by_standings(standings: StandingsTable, team_ids: List[str]) -> List[str]:
@@ -255,6 +340,50 @@ def _simulate_nhl_full_playoffs(
     return None
 
 
+def build_playoff_first_round(
+    standings: StandingsTable,
+) -> Tuple[List[PlayoffSeries], List[TeamStandingRecord]]:
+    """
+    Build round-1 pairings and the playoff field without simulating series.
+
+    Uses NHL division + wild-card pairings when standings support them;
+    otherwise falls back to conference 1v8 seeding or league-wide 1v16.
+    """
+    playoff_teams: List[TeamStandingRecord] = []
+    seen: set[str] = set()
+
+    def _track(records: List[TeamStandingRecord]) -> None:
+        for rec in records:
+            tid = str(rec.team_id)
+            if tid in seen:
+                continue
+            seen.add(tid)
+            playoff_teams.append(rec)
+
+    if standings.uses_nhl_playoff_pairings():
+        first_round: List[PlayoffSeries] = []
+        for conf in sorted(standings._by_conf.keys()):
+            r1 = standings.nhl_conference_first_round_series(conf)
+            first_round.extend(r1)
+            eight = standings.nhl_conference_playoff_eight(conf)
+            if eight:
+                _track(eight)
+        return first_round, playoff_teams
+
+    seeds_by_conf = standings.playoff_seeds_by_conference(per_conf=8)
+    first_round = []
+    if "ALL" in seeds_by_conf:
+        seeds = seeds_by_conf["ALL"]
+        first_round = _build_league_bracket(standings, seeds)
+        _track(list(seeds[:16]))
+    else:
+        for conf, seeds in sorted(seeds_by_conf.items()):
+            first_round.extend(_build_conference_bracket(standings, conf, seeds))
+            _track(list(seeds))
+
+    return first_round, playoff_teams
+
+
 def simulate_playoffs(
     rng: random.Random,
     standings: StandingsTable,
@@ -268,6 +397,10 @@ def simulate_playoffs(
     all_records = standings.league_table()
     if len(all_records) < 2:
         return None
+
+    # Fold real ledger results (pts%, goal diff), goaltending, and top-end
+    # talent into the playoff strength signal before any series is simulated.
+    strength_map = _augment_strength_with_results(teams, standings, strength_map)
 
     nhl_res = _simulate_nhl_full_playoffs(rng, standings, teams, strength_map)
     if nhl_res is not None:

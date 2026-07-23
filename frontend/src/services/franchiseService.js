@@ -1,7 +1,14 @@
-import { api, baseURL } from "./api";
+import { api, baseURL, getFranchiseSessionId, isNetworkError, isTimeoutError } from "./api";
 
 /** Avoid infinite spinner if backend never responds (axios default timeout is 0 = none). */
 const FRANCHISE_START_TIMEOUT_MS = 900_000;
+let inflightFranchiseStatePromise = null;
+let inflightFranchiseStateSessionId = null;
+
+export function resetFranchiseStateCache() {
+  inflightFranchiseStatePromise = null;
+  inflightFranchiseStateSessionId = null;
+}
 
 export async function listTeams() {
   // SimEngine boot on this route can take minutes; cap wait so UI never hangs forever.
@@ -45,16 +52,203 @@ export async function startFranchise(payload) {
 /** @param {{ mode?: string, count?: number, auto_resolve?: boolean }} [opts] */
 export async function advanceFranchise(opts = {}) {
   const { mode = "day", count = 1, auto_resolve = true } = opts;
-  const { data } = await api.post("/api/franchise/advance", {
-    mode,
-    count,
-    auto_resolve,
+  const m = String(mode || "day").toLowerCase();
+  const heavy =
+    m === "season" ||
+    m === "days" ||
+    m === "games" ||
+    (m === "day" && Number(count) > 1) ||
+    Number(count) > 1;
+  try {
+    const { data } = await api.post(
+      "/api/franchise/advance",
+      {
+        mode,
+        count,
+        auto_resolve,
+      },
+      { timeout: heavy ? 600000 : 180000 }
+    );
+    return data;
+  } catch (e) {
+    if (isTimeoutError(e)) {
+      const err = new Error(
+        heavy
+          ? "Season/bulk advance timed out. The sim may still have finished — refresh Hub, then retry or open Playoffs if the season ended."
+          : "Day advance timed out. Retry Advance Day — the backend may still be processing."
+      );
+      err.code = "ECONNABORTED";
+      err.cause = e;
+      throw err;
+    }
+    if (isNetworkError(e)) {
+      const err = new Error(
+        "Connection dropped during advance (often a backend reload while simming). Check that the API is up, then retry Advance — avoid saving backend files mid-sim."
+      );
+      err.code = "ERR_NETWORK";
+      err.cause = e;
+      throw err;
+    }
+    throw e;
+  }
+}
+
+export async function enterPlayoffs() {
+  const { data } = await api.post("/api/franchise/playoffs/enter");
+  return data;
+}
+
+export async function playoffAction(action, body = {}) {
+  const heavy = ["sim_rest", "finish", "complete", "sim_round"].includes(
+    String(action || "").toLowerCase()
+  );
+  const { data } = await api.post(
+    "/api/franchise/playoffs/action",
+    {
+      action,
+      ...body,
+    },
+    { timeout: heavy ? 300000 : 180000 }
+  );
+  return data;
+}
+
+/** @param {{ target?: string }} [payload] */
+export async function advanceSeasonPhase(payload = {}) {
+  const { data } = await api.post("/api/franchise/season/advance-phase", payload);
+  return data;
+}
+
+/** @param {{ stage?: string }} [payload] */
+export async function enterOffseasonStage(payload = {}) {
+  return continueOffseason(payload);
+}
+
+export async function continueOffseason(payload = {}) {
+  const { data } = await api.post("/api/franchise/offseason/continue", payload, {
+    timeout: 300000,
   });
   return data;
 }
 
+export async function generateNextSeason() {
+  const { data } = await api.post("/api/franchise/next-season/generate");
+  return data;
+}
+
+export async function getLeagueOperations() {
+  const { data } = await api.get("/api/franchise/league-operations");
+  return data;
+}
+
 export async function getFranchiseState() {
-  const { data } = await api.get("/api/franchise/state");
+  const sid = getFranchiseSessionId();
+  if (!sid) {
+    resetFranchiseStateCache();
+    throw new Error("No franchise session");
+  }
+  if (inflightFranchiseStatePromise && inflightFranchiseStateSessionId === sid) {
+    return inflightFranchiseStatePromise;
+  }
+  inflightFranchiseStateSessionId = sid;
+  inflightFranchiseStatePromise = api
+    .get("/api/franchise/state")
+    .then((res) => res.data)
+    .finally(() => {
+      if (inflightFranchiseStateSessionId === sid) {
+        resetFranchiseStateCache();
+      }
+    });
+  return inflightFranchiseStatePromise;
+}
+
+export async function getStatsCentral() {
+  const { data } = await api.get("/api/franchise/stats-central");
+  return data;
+}
+
+export async function getDraftClassDetail() {
+  const { data } = await api.get("/api/franchise/draft-class/detail");
+  return data;
+}
+
+export async function getFranchiseStateHeavy(options = {}) {
+  const params = {
+    include_roster_browser: options.includeRosterBrowser !== false,
+    include_draft_class_rankings: options.includeDraftClassRankings !== false,
+    include_draft_class_hud: options.includeDraftClassHud !== false,
+  };
+  if (options.includeNhlCalendarFull) {
+    params.include_nhl_calendar_full = true;
+  }
+  const { data } = await api.get("/api/franchise/state/heavy", { params, timeout: 180000 });
+  return data;
+}
+
+export async function getContractOffice() {
+  const { data } = await api.get("/api/franchise/contract-office");
+  return data;
+}
+
+export async function getFreeAgentDetail(playerId) {
+  const { data } = await api.get(`/api/franchise/free-agents/${encodeURIComponent(playerId)}`);
+  return data;
+}
+
+async function postContractAction(path, payload) {
+  const { data } = await api.post(`/api/franchise/contracts/${path}`, payload);
+  return data;
+}
+
+export function offerContract(payload) {
+  return postContractAction("offer", payload);
+}
+
+export function reSignContract(payload) {
+  return postContractAction("re-sign", payload);
+}
+
+export function signFreeAgent(payload) {
+  return postContractAction("sign-free-agent", payload);
+}
+
+export function qualifyRfa(payload) {
+  return postContractAction("qualify-rfa", payload);
+}
+
+export function releaseRfaRights(payload) {
+  return postContractAction("release-rights", payload);
+}
+
+export function buyoutContract(payload) {
+  return postContractAction("buyout", payload);
+}
+
+export function waiveContract(payload) {
+  return postContractAction("waive", payload);
+}
+
+export function buryContract(payload) {
+  return postContractAction("bury", payload);
+}
+
+export function signElcContract(payload) {
+  return postContractAction("sign-elc", payload);
+}
+
+export async function getFranchiseChemistry() {
+  const { data } = await api.get("/api/franchise/chemistry");
+  return data;
+}
+
+export async function getFranchiseLines() {
+  const { data } = await api.get("/api/franchise/lines");
+  return data;
+}
+
+/** @param {{unit_type: string, lines: any}} payload */
+export async function saveFranchiseLines(payload) {
+  const { data } = await api.post("/api/franchise/lines", payload);
   return data;
 }
 
@@ -93,5 +287,87 @@ export async function dismissFranchisePopups(ids) {
 /** @param {{ assets_by_team: Record<string, Array<{type:string,id:string,team:string,retained?:number}>> }} payload */
 export async function submitTradePackage(payload) {
   const { data } = await api.post("/api/franchise/trade", payload || { assets_by_team: {} });
+  return data;
+}
+
+/** Evaluate a trade package without executing (backend-authoritative). */
+export async function evaluateTradePackage(payload) {
+  const { data } = await api.post("/api/franchise/trade/evaluate", payload || { assets_by_team: {} });
+  return data;
+}
+
+/** Ask an NTC/M-NTC player to waive for a destination team. */
+export async function requestNtcWaive(payload) {
+  const { data } = await api.post("/api/franchise/trade/ntc-waive", payload || {});
+  return data;
+}
+
+export async function getTradeAssets(options = {}) {
+  const force = options?.force !== false;
+  const { data } = await api.get("/api/franchise/trade/assets", {
+    params: { force: force ? 1 : 0, v: 3 },
+  });
+  return data;
+}
+
+export async function getTradeHistory(params = {}) {
+  const { data } = await api.get("/api/franchise/trade/history", { params });
+  return data;
+}
+
+export async function getTradeMarket() {
+  const { data } = await api.get("/api/franchise/trade/market");
+  return data;
+}
+
+export async function getEntryDraftState() {
+  const { data } = await api.get("/api/franchise/entry-draft/state");
+  return data;
+}
+
+export async function startEntryDraft() {
+  const { data } = await api.post("/api/franchise/entry-draft/start");
+  return data;
+}
+
+/** @param {{ player_id: string, pick_round?: number, pick_overall?: number }} body */
+export async function submitDraftPick(body) {
+  const { data } = await api.post("/api/franchise/draft/pick", body);
+  return data;
+}
+
+export async function submitCpuDraftPick() {
+  const { data } = await api.post("/api/franchise/entry-draft/cpu-pick");
+  return data;
+}
+
+export async function simEntryDraftRound() {
+  const { data } = await api.post("/api/franchise/entry-draft/sim-round");
+  return data;
+}
+
+export async function simEntryDraftToUserPick() {
+  const { data } = await api.post("/api/franchise/entry-draft/sim-to-user-pick");
+  return data;
+}
+
+export async function completeEntryDraft() {
+  const { data } = await api.post("/api/franchise/entry-draft/complete");
+  return data;
+}
+
+export async function getEntryDraftResults() {
+  const { data } = await api.get("/api/franchise/entry-draft/results");
+  return data;
+}
+
+export async function getDraftCombineState() {
+  const { data } = await api.get("/api/franchise/draft-combine/state");
+  return data;
+}
+
+/** @param {{ prospect_id: string, meeting_type?: 'interview'|'dinner' }} body */
+export async function submitCombineMeeting(body) {
+  const { data } = await api.post("/api/franchise/draft-combine/meeting", body);
   return data;
 }

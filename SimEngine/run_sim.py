@@ -609,7 +609,8 @@ def _team_payroll_with_bad_contracts(team: Any) -> Tuple[float, float]:
             ovr = 0.5
         if age >= 34 and ch >= 5.5 and ovr < 0.58:
             bad += ch * 0.18
-        elif age >= 32 and ch >= 6.5:
+        elif age >= 32 and ch >= 6.5 and ovr < 0.80:
+            # Aging mid-tier money is a risk; elite veterans (ovr >= 0.80) still earn it.
             bad += ch * 0.10
         elif age >= 30 and ch >= 8.0 and ovr < 0.65:
             bad += ch * 0.07
@@ -836,26 +837,30 @@ def _execute_league_cap_consequence_pass(
         )
 
     team_by_id = team_by_id_pre
+    # Bad-contract detection: aggregate into one league-level summary instead of
+    # spamming hundreds of per-player BAD CONTRACT lines every cap pass.
+    bad_contract_total = 0
+    bad_contract_teams = 0
+    bad_contract_examples: List[str] = []
     for team in teams:
         tid = str(_team_id(team))
         tm = team_by_id.get(tid)
         if tm is None or _ENGINE_ECON is None:
             continue
-        bad_logged = 0
+        team_bad = 0
         for p in [x for x in (getattr(tm, "roster", None) or []) if not getattr(x, "retired", False)]:
             try:
                 if not _ENGINE_ECON.is_bad_contract(p):
                     continue
             except Exception:
                 continue
-            if bad_logged >= 3:
-                break
-            bad_logged += 1
-            val = _runner_player_cap_hit_m(p)
-            pln = _player_display_name(p)
-            logger.emit(f"BAD CONTRACT FLAG: {pln} value={val}", "normal")
-            logger.emit(f"Bad contract identified: {pln}", "normal")
-            print(f"BAD CONTRACT FLAG: {pln} value={val}")
+            team_bad += 1
+            if len(bad_contract_examples) < 6:
+                val = _runner_player_cap_hit_m(p)
+                bad_contract_examples.append(f"{_player_display_name(p)} ({tid}, ${val}M)")
+        if team_bad:
+            bad_contract_total += team_bad
+            bad_contract_teams += 1
         try:
             cc = _ENGINE_ECON.cap_casualty_check(tm, salary_cap_m=cap_m)
         except Exception:
@@ -886,6 +891,19 @@ def _execute_league_cap_consequence_pass(
                     tags=["salary_cap", "trade_rumor", "cap_casualty", "storyline"],
                 )
             )
+
+    if bad_contract_total > 0:
+        ex = "; ".join(bad_contract_examples)
+        logger.emit(
+            f"BAD CONTRACT SUMMARY: {bad_contract_total} flagged contracts across "
+            f"{bad_contract_teams} teams (e.g. {ex})",
+            "normal",
+        )
+        tuning_year["bad_contracts"] = {
+            "total": int(bad_contract_total),
+            "teams": int(bad_contract_teams),
+            "examples": list(bad_contract_examples),
+        }
 
     for r in rows:
         pr = str(r["pressure"])
@@ -1348,8 +1366,19 @@ def _get_league_teams(league: Any) -> List[Any]:
 def _team_id(team: Any) -> str:
     for attr in ("team_id", "id", "abbr", "code", "name"):
         v = _safe_getattr(team, attr, None)
-        if isinstance(v, str) and v:
-            return v
+        if v is None:
+            continue
+        # Accept numeric ids too: team_id=0 (Boston) is valid and must map to "0",
+        # not the synthetic TEAM_#### fallback.
+        if isinstance(v, str):
+            if v:
+                return v
+            continue
+        if isinstance(v, (int, float)):
+            return str(int(v))
+        s = str(v)
+        if s:
+            return s
     # fallback stable-ish
     return f"TEAM_{abs(id(team)) % 10000:04d}"
 
@@ -2118,6 +2147,8 @@ def _advance_roster_ages_and_development(teams: List[Any], league: Any, state: U
                         season_injury_risk=injury_risk,
                         team_instability=team_instability,
                         development_modifier=dev_mod * age_damp + sys_dev,
+                        # Career lifecycle AGING DECLINE owns post-peak attribute cliffs.
+                        apply_peak_decline=False,
                     )
                 else:
                     if hasattr(player, "identity") and hasattr(player.identity, "age"):
@@ -2679,6 +2710,13 @@ def _simulate_standings(
     r: random.Random,
     league: Optional[Any] = None,
 ) -> List[TeamStanding]:
+    """FALLBACK-ONLY approximate standings (experimental macro layer).
+
+    The game ledger (`SimEngine.simulate_league_season`) is the source of truth
+    for standings. This approximation is only used when the ledger season is
+    unavailable (e.g. universe_only mode or engine failure). It must never
+    override ledger standings after the ledger season has been produced.
+    """
     standings: List[TeamStanding] = []
     # Convert chaos/parity to noise
     # More parity => compress spread; more chaos => more randomness
@@ -2743,6 +2781,52 @@ def _simulate_standings(
 
     standings.sort(key=lambda s: (s.points, s.goal_diff), reverse=True)
     return standings
+
+
+def _ledger_standings_to_universe_records(
+    league_season_result: Any,
+    teams: List[Any],
+) -> List[TeamStanding]:
+    """Convert the engine game-ledger StandingsTable into universe TeamStanding records.
+
+    The game ledger is the source of truth for team performance. This adapter lets
+    every universe phase (playoffs, waivers, coaching, trades, draft lottery, free
+    agency, identity evolution) consume real ledger standings instead of the
+    approximate `_simulate_standings` output.
+    """
+    out: List[TeamStanding] = []
+    try:
+        table = league_season_result.standings.league_table()
+    except Exception:
+        return out
+    name_by_id: Dict[str, str] = {}
+    for t in teams or []:
+        try:
+            name_by_id[_team_id(t)] = _team_name(t)
+        except Exception:
+            continue
+    for rec in table or []:
+        try:
+            tid = str(getattr(rec, "team_id", ""))
+            gp = int(getattr(rec, "gp", 0) or 0)
+            pts = int(getattr(rec, "points", 0) or 0)
+            gd = int(getattr(rec, "gf", 0) or 0) - int(getattr(rec, "ga", 0) or 0)
+            ppct = (pts / float(2 * gp)) if gp > 0 else 0.5
+            out.append(
+                TeamStanding(
+                    team_id=tid,
+                    team_name=str(getattr(rec, "name", "") or name_by_id.get(tid, tid)),
+                    expected_win_pct=ppct,
+                    point_pct=ppct,
+                    points=pts,
+                    goal_diff=gd,
+                    bucket=_bucket_from_point_pct(ppct),
+                )
+            )
+        except Exception:
+            continue
+    out.sort(key=lambda s: (s.points, s.goal_diff), reverse=True)
+    return out
 
 
 def _sync_team_gm_strategic_profiles(
@@ -3053,22 +3137,47 @@ def _trade_eval(
     Accept if both gain enough OR chaos allows a lopsided outcome rarely.
     Returns (accepted, fairness, breakdown)
     """
-    fairness = 1.0 - abs(buyer_gain - seller_gain)
-    fairness = clamp(fairness, 0.0, 1.0)
+    # Fairness is the RELATIVE balance of the two sides' gains, not the raw
+    # difference (which routinely exceeded 1.0 and pinned fairness to 0.0).
+    magnitude = abs(buyer_gain) + abs(seller_gain)
+    denom = max(0.5, magnitude)
+    fairness = clamp(1.0 - abs(buyer_gain - seller_gain) / denom, 0.0, 1.0)
     b_thr = -0.015 if relaxed else 0.03
     s_thr = -0.015 if relaxed else 0.03
     both_ok = buyer_gain >= b_thr and seller_gain >= s_thr
 
-    if both_ok:
-        return True, fairness, {"both_ok": True, "chaos_override": False, "relaxed": relaxed}
+    breakdown_base = {
+        "buyer_gain": round(float(buyer_gain), 4),
+        "seller_gain": round(float(seller_gain), 4),
+        "buyer_threshold": b_thr,
+        "seller_threshold": s_thr,
+        "relaxed": relaxed,
+    }
 
-    # chaos override
-    base_ov = 0.11 if relaxed else 0.04
-    override_chance = clamp(base_ov * (0.5 + chaos), 0.03, 0.22)
+    if both_ok:
+        return True, fairness, {"both_ok": True, "chaos_override": False, "accept_reason": "mutual_gain", **breakdown_base}
+
+    # Chaos override: rare, explainable lopsided deals (panic moves, bad GMs).
+    base_ov = 0.07 if relaxed else 0.025
+    override_chance = clamp(base_ov * (0.5 + chaos), 0.015, 0.12)
     roll = r.random()
     if roll < override_chance:
-        return True, fairness, {"both_ok": False, "chaos_override": True, "override_roll": roll, "override_chance": override_chance, "relaxed": relaxed}
-    return False, fairness, {"both_ok": False, "chaos_override": False, "override_roll": roll, "override_chance": override_chance, "relaxed": relaxed}
+        return True, fairness, {
+            "both_ok": False,
+            "chaos_override": True,
+            "accept_reason": "chaos_override",
+            "override_roll": roll,
+            "override_chance": override_chance,
+            **breakdown_base,
+        }
+    return False, fairness, {
+        "both_ok": False,
+        "chaos_override": False,
+        "reject_reason": "insufficient_mutual_gain",
+        "override_roll": roll,
+        "override_chance": override_chance,
+        **breakdown_base,
+    }
 
 
 MIN_SEASON_TRADES = 10
@@ -3170,10 +3279,11 @@ def _generate_trades(
     forced = [e for e in injected if e.type.upper() == "FORCE_TRADE"]
     if forced:
         fe = forced[0]
-        a = fe.payload.get("from_team_id") or fe.payload.get("team_a") or fe.target_team_id
-        b = fe.payload.get("to_team_id") or fe.payload.get("team_b")
+        # 0 is a valid team id: use explicit None checks instead of truthiness.
+        a = next((v for v in (fe.payload.get("from_team_id"), fe.payload.get("team_a"), fe.target_team_id) if v is not None and str(v) != ""), None)
+        b = next((v for v in (fe.payload.get("to_team_id"), fe.payload.get("team_b")) if v is not None and str(v) != ""), None)
         headline = str(fe.payload.get("headline", "FORCED TRADE executes."))
-        if a and b:
+        if a is not None and b is not None:
             events.append(
                 UniverseEvent(
                     event_id=str(uuid.uuid4()),
@@ -3892,7 +4002,7 @@ def _coach_changes(standings: List[TeamStanding], state: UniverseState, ucfg: Un
     forced_rebuild = [e for e in injected if e.type.upper() == "FORCE_REBUILD"]
     if forced_rebuild:
         tid = forced_rebuild[0].target_team_id
-        if tid:
+        if tid is not None and str(tid) != "":
             events.append(
                 UniverseEvent(
                     event_id=str(uuid.uuid4()),
@@ -4031,6 +4141,9 @@ class UniverseYearResult:
     waiver_claims: List[WaiverClaim] = field(default_factory=list)
     waived_count: int = 0
     playoff_champion_id: Optional[str] = None
+    # Game-ledger LeagueSeasonResult when the real season ran inside the universe
+    # year (source of truth for standings/playoffs/awards). None on fallback.
+    ledger_season_result: Any = None
 
 def simulate_universe_year(
     league: Any,
@@ -4373,11 +4486,48 @@ def simulate_universe_year(
     if teams and rng.random() < float(getattr(uni_cfg, "archetype_drift_rate", 0.10) or 0.10) * 0.065:
         events.extend(_team_identity_drift(state, uni_cfg, rng, year, teams))
 
-    # Phase 4: standings baseline (era scoring multiplier from tuning when available)
-    standings = _simulate_standings(teams, state, uni_cfg, rng, league) if teams else []
+    # Phase 4: standings. SOURCE OF TRUTH = game ledger season (simulate_league_season).
+    # The approximate `_simulate_standings` macro layer is fallback-only: it runs when
+    # the ledger season is unavailable, and is never allowed to override ledger results.
+    ledger_season_result: Any = None
+    if (
+        teams
+        and sim is not None
+        and hasattr(sim, "simulate_league_season")
+        and getattr(run_cfg, "mode", "") in ("combined", "regression")
+    ):
+        try:
+            league_rng = rng_from_seed(split_seed(run_cfg.seed, f"league::{year}"))
+            ledger_season_result = sim.simulate_league_season(year, league_rng)
+        except Exception as e:
+            ledger_season_result = None
+            events.append(
+                UniverseEvent(
+                    event_id=str(uuid.uuid4()),
+                    year=year,
+                    day=None,
+                    type="NOTE",
+                    teams=[],
+                    headline=f"WARNING: ledger season failed ({type(e).__name__}); falling back to approximate standings.",
+                    details={"error": str(e)},
+                    impact_score=0.10,
+                    tags=["warning"],
+                )
+            )
+
+    if ledger_season_result is not None:
+        standings = _ledger_standings_to_universe_records(ledger_season_result, teams)
+    else:
+        standings = []
+    if not standings:
+        standings = _simulate_standings(teams, state, uni_cfg, rng, league) if teams else []
+
     if teams and standings:
         _sync_playoff_streaks_and_contender_flags(teams, standings)
-        standings = _identity_guardrail_adjust_standings(standings, state, rng)
+        if ledger_season_result is None:
+            # Guardrail re-bucketing only applies to the approximate layer; ledger
+            # standings are real results and must not be mutated.
+            standings = _identity_guardrail_adjust_standings(standings, state, rng)
         _runner_update_rivalry_narrative(league, standings, rng, logger, year)
         _emit_awards_media_hof_org_pack(teams, standings, state, logger, year)
         _emit_identity_impact_logs(logger, state, standings)
@@ -4385,8 +4535,21 @@ def simulate_universe_year(
     playoff_champion_id: Optional[str] = None
 
     # Phase 4b: playoff resolution + dynasty state (cup/finals, power_states)
+    # Prefer the real ledger playoff bracket; weighted-random resolution is fallback-only.
     if len(standings) >= 2:
-        champion_id, runner_up_id = _resolve_playoff_champion(standings, rng, state)
+        champion_id = ""
+        runner_up_id = ""
+        if ledger_season_result is not None:
+            po = getattr(ledger_season_result, "playoff_result", None)
+            ch = getattr(po, "champion_id", None)
+            if ch is not None and str(ch) != "":
+                champion_id = str(ch)
+                finalists = [str(f) for f in (getattr(po, "finalist_ids", None) or [])]
+                runner_up_id = next((f for f in finalists if f != champion_id), "")
+        if not champion_id:
+            champion_id, runner_up_id = _resolve_playoff_champion(standings, rng, state)
+        if not runner_up_id:
+            runner_up_id = standings[1].team_id if standings[0].team_id == champion_id else standings[0].team_id
         playoff_champion_id = champion_id
         cw = dict(getattr(state, "cup_wins_by_team", None) or {})
         fa = dict(getattr(state, "finals_appearances_by_team", None) or {})
@@ -4573,6 +4736,7 @@ def simulate_universe_year(
         waiver_claims=waiver_claims,
         waived_count=waived_count,
         playoff_champion_id=playoff_champion_id,
+        ledger_season_result=ledger_season_result,
     )
 
 # =============================================================================
@@ -5879,20 +6043,50 @@ def run_simulation_core(
                 )
 
         # LEAGUE (structural season — before career so sim_year reads game-derived stat ledger)
+        # In combined/regression modes the ledger season already ran INSIDE
+        # simulate_universe_year (so lottery/trades/FA consumed real standings);
+        # reuse that result here instead of simulating a second divergent season.
         if sim is not None and hasattr(sim, "simulate_league_season") and run_cfg.mode in ("combined", "career_only", "regression"):
             last_context["phase"] = "league_season"
-            league_rng = rng_from_seed(split_seed(run_cfg.seed, f"league::{year}"))
-            try:
-                league_season_result = sim.simulate_league_season(year, league_rng)  # type: ignore
-            except Exception:
-                league_season_result = None
+            league_season_result = getattr(uni_result, "ledger_season_result", None) if uni_result is not None else None
+            if league_season_result is None:
+                league_rng = rng_from_seed(split_seed(run_cfg.seed, f"league::{year}"))
+                try:
+                    league_season_result = sim.simulate_league_season(year, league_rng)  # type: ignore
+                except Exception:
+                    league_season_result = None
             if league_season_result is not None:
                 _emit_world_simulation_report(logger, league, year)
             if league_season_result is not None and run_cfg.write_json:
                 # Minimal JSON-friendly dump; detailed structures live inside engine.
                 pstats = getattr(league_season_result, "player_season_stats", None) or []
-                smeta = getattr(league_season_result, "simulation_meta", None) or {}
+                gstats = getattr(league_season_result, "goalie_season_stats", None) or []
+                smeta = dict(getattr(league_season_result, "simulation_meta", None) or {})
                 nev = getattr(league_season_result, "news_events", None) or []
+
+                # Guardrail: ledger vs universe standings divergence (top 5 overlap).
+                validation_warnings = list(smeta.get("validation_warnings") or [])
+                try:
+                    ledger_rows = league_season_result.standings.league_table()
+                    ledger_top5 = [str(getattr(rr, "team_id", "")) for rr in ledger_rows[:5]]
+                    uni_top5 = [str(s.team_id) for s in (uni_result.standings if uni_result is not None else [])[:5]]
+                    if uni_top5:
+                        overlap = len(set(ledger_top5) & set(uni_top5))
+                        smeta["ledger_universe_top5_overlap"] = overlap
+                        if overlap < 4:
+                            validation_warnings.append(
+                                {
+                                    "severity": "P1",
+                                    "code": "STANDINGS_DIVERGENCE",
+                                    "message": f"universe standings diverge from ledger standings (top-5 overlap {overlap}/5).",
+                                }
+                            )
+                except Exception:
+                    pass
+                smeta["validation_warnings"] = validation_warnings
+                smeta.setdefault("stat_source", "game_ledger")
+
+                top_summary = (smeta.get("top_scorers") or [{}])[0]
                 out.write_json(
                     f"league_season_{year}.json",
                     {
@@ -5900,6 +6094,7 @@ def run_simulation_core(
                         "standings": league_season_result.standings.as_table_rows(),
                         "playoffs": {
                             "champion_id": getattr(getattr(league_season_result, "playoff_result", None), "champion_id", None),
+                            "finalist_ids": list(getattr(getattr(league_season_result, "playoff_result", None), "finalist_ids", None) or []),
                         },
                         "awards": {
                             name: {
@@ -5909,7 +6104,12 @@ def run_simulation_core(
                             }
                             for name, award in league_season_result.awards.items()
                         },
-                        "player_season_stats": [safe_to_primitive(x) for x in pstats[:120]],
+                        "player_season_stats": [safe_to_primitive(x) for x in pstats[:260]],
+                        "goalie_season_stats": [safe_to_primitive(x) for x in gstats[:90]],
+                        "league_gpg": smeta.get("league_avg_goals_per_game"),
+                        "top_scorer": safe_to_primitive(top_summary),
+                        "validation_warnings": [safe_to_primitive(w) for w in validation_warnings],
+                        "meta": {"stat_source": "game_ledger", "season_year": year},
                         "simulation_meta": safe_to_primitive(smeta),
                         "news_events": [safe_to_primitive(x) for x in nev[:250]],
                     },

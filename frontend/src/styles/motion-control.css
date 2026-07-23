@@ -1,0 +1,17 @@
+@font-face {
+  font-family: "Archivo Black";
+  src: url("./ArchivoBlack-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --font-motion-control: "Archivo Black", "Rajdhani", "Barlow Condensed", "Arial Narrow", sans-serif;
+}
+
+.hub-screen,
+.hub-screen .game-footer,
+.hub-screen .game-footer * {
+  font-family: var(--font-motion-control);
+}

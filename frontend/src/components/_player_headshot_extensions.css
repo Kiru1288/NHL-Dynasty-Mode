@@ -1,0 +1,491 @@
+/* Per-variant hair/face sculpts for headshots 16–60 */
+
+.headshot-16 .ph-hair { top: 10%; width: 64%; height: 22%; border-radius: 48% 48% 16% 16%; }
+.headshot-17 .ph-hair { top: 9%; width: 70%; height: 27%; border-radius: 52% 52% 18% 18%; }
+.headshot-17 .ph-extra { left: 50%; top: 54%; width: 24%; height: 7%; transform: translateX(-50%); border-bottom: 3px solid rgba(70, 81, 95, 0.72); border-radius: 50%; z-index: 8; }
+.headshot-18 .ph-hair { top: 8%; width: 68%; height: 25%; }
+.headshot-18 .ph-extra { left: 50%; top: 47%; width: 50%; height: 24%; transform: translateX(-50%); background: linear-gradient(180deg, rgba(25, 17, 13, 0.55), rgba(5, 3, 2, 0.85)); border-radius: 20% 20% 48% 48%; z-index: 6; }
+.headshot-19 .ph-hair { top: 11%; width: 60%; height: 20%; border-radius: 48% 48% 14% 14%; }
+.headshot-19 .ph-face { top: 14%; }
+.headshot-20 .ph-hair { top: 7%; width: 76%; height: 56%; border-radius: 46% 46% 42% 42%; z-index: 3; }
+.headshot-20 .ph-face { z-index: 5; }
+.headshot-21 .ph-face { background: linear-gradient(145deg, #dfe8ef, #818e9a); border-radius: 44% 44% 48% 48%; }
+.headshot-21 .ph-hair { top: 9%; width: 62%; height: 21%; }
+.headshot-21 .ph-extra { left: 50%; top: 43%; width: 44%; height: 32%; transform: translateX(-50%); background: repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.36) 0 2px, transparent 2px 7px); border-radius: 0 0 40% 40%; z-index: 8; opacity: 0.78; }
+.headshot-22 .ph-face { background: linear-gradient(145deg, #eef3f7, #9aa7b3); }
+.headshot-22 .ph-extra { left: 50%; top: 48%; width: 34%; height: 18%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.35); border-radius: 0 0 35% 35%; z-index: 8; }
+.headshot-23 .ph-hair { display: none; }
+.headshot-23 .ph-face { top: 12%; height: 52%; }
+.headshot-24 .ph-hair { top: 5%; width: 76%; height: 34%; border-radius: 48% 48% 24% 24%; background: radial-gradient(circle at 15% 50%, var(--hair) 0 12%, transparent 13%), radial-gradient(circle at 48% 20%, var(--hair) 0 15%, transparent 16%), linear-gradient(160deg, var(--hair), var(--hair2)); }
+.headshot-25 .ph-hair { top: 4%; width: 78%; height: 38%; border-radius: 50%; background: radial-gradient(circle at 50% 42%, var(--hair) 0 46%, transparent 47%), linear-gradient(160deg, var(--hair), var(--hair2)); }
+.headshot-26 .ph-hair { top: 6%; width: 78%; height: 52%; border-radius: 46% 46% 40% 40%; }
+.headshot-26 .ph-hair::before,
+.headshot-26 .ph-hair::after { content: ""; position: absolute; bottom: -24%; width: 24%; height: 52%; background: linear-gradient(180deg, var(--hair), var(--hair2)); border-radius: 999px; }
+.headshot-26 .ph-hair::before { left: 4%; transform: rotate(8deg); }
+.headshot-26 .ph-hair::after { right: 4%; transform: rotate(-8deg); }
+.headshot-27 .ph-hair { top: 5%; width: 74%; height: 32%; clip-path: polygon(0 65%, 10% 25%, 20% 55%, 32% 8%, 42% 50%, 54% 0, 66% 48%, 80% 15%, 92% 58%, 100% 68%, 92% 100%, 8% 100%); }
+.headshot-28 .ph-hair { top: 8%; width: 72%; height: 28%; transform: translateX(-50%) rotate(5deg); }
+.headshot-28 .ph-extra { left: 50%; top: 48%; width: 46%; height: 20%; transform: translateX(-50%); background: linear-gradient(180deg, rgba(168, 66, 30, 0.55), rgba(95, 29, 11, 0.85)); border-radius: 20% 20% 48% 48%; z-index: 6; }
+.headshot-29 .ph-extra { left: 50%; top: 49%; width: 28%; height: 7%; transform: translateX(-50%); z-index: 8; }
+.headshot-29 .ph-extra::before,
+.headshot-29 .ph-extra::after { content: ""; position: absolute; top: 0; width: 55%; height: 100%; background: var(--hair); border-radius: 999px 999px 60% 60%; }
+.headshot-29 .ph-extra::before { right: 48%; transform: rotate(8deg); }
+.headshot-29 .ph-extra::after { left: 48%; transform: rotate(-8deg); }
+.headshot-30 .ph-extra { left: 18%; top: 42%; width: 8%; height: 16%; background: rgba(120, 40, 40, 0.45); border-radius: 40%; transform: rotate(-18deg); z-index: 9; box-shadow: 12px 8px 0 rgba(120, 40, 40, 0.25); }
+.headshot-30 .ph-face { border-radius: 42% 46% 48% 44%; }
+.headshot-31 .ph-face { top: 18%; height: 44%; border-radius: 50%; }
+.headshot-31 .ph-hair { top: 12%; width: 58%; height: 18%; }
+.headshot-32 { filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 18px rgba(255, 215, 0, 0.28)); }
+.headshot-32 .ph-face { box-shadow: inset -10px -14px 18px rgba(0, 0, 0, 0.13), inset 8px 7px 14px rgba(255, 255, 255, 0.18), 0 0 16px rgba(255, 215, 0, 0.22); }
+.headshot-33 .ph-face { background: radial-gradient(circle at 62% 58%, rgba(120, 40, 40, 0.18), transparent 22%), linear-gradient(145deg, var(--skin), var(--skin-shadow)); }
+.headshot-33 .ph-extra { left: 72%; top: 46%; width: 10%; height: 8%; background: rgba(120, 40, 40, 0.35); border-radius: 50%; z-index: 9; }
+.headshot-34 .ph-face { background: linear-gradient(145deg, #eef3f8, #7d8fa0); }
+.headshot-34 .ph-extra { left: 50%; top: 40%; width: 48%; height: 34%; transform: translateX(-50%); background: linear-gradient(180deg, #0ea5e9, #0369a1); border-radius: 44% 44% 40% 40%; opacity: 0.88; z-index: 8; }
+.headshot-35 .ph-hair { top: 10%; width: 66%; height: 24%; border-radius: 48% 48% 18% 18%; }
+.headshot-35 .ph-face { top: 15%; height: 46%; }
+.headshot-36 .ph-face { background: linear-gradient(145deg, #e5edf3, #8a97a5); }
+.headshot-36 .ph-extra { left: 50%; top: 42%; width: 40%; height: 30%; transform: translateX(-50%); background: repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.4) 0 3px, transparent 3px 8px); border-radius: 0 0 38% 38%; z-index: 8; opacity: 0.8; }
+.headshot-37 .ph-hair { top: 6%; left: 53%; width: 80%; height: 35%; border-radius: 60% 48% 22% 36%; transform: translateX(-50%) rotate(-7deg); }
+.headshot-38 .ph-hair { top: 8%; width: 66%; height: 28%; }
+.headshot-38 .ph-extra { left: 50%; top: 31%; width: 58%; height: 25%; transform: translateX(-50%); z-index: 6; }
+.headshot-38 .ph-extra::before,
+.headshot-38 .ph-extra::after { content: ""; position: absolute; top: 0; width: 16%; height: 100%; background: linear-gradient(180deg, var(--hair), var(--hair2)); border-radius: 999px; }
+.headshot-38 .ph-extra::before { left: 0; }
+.headshot-38 .ph-extra::after { right: 0; }
+.headshot-39 .ph-hair { top: 4%; width: 60%; height: 28%; border-radius: 12px 12px 8px 8px; clip-path: polygon(10% 0, 90% 0, 100% 70%, 82% 100%, 18% 100%, 0 70%); }
+.headshot-40 .ph-hair { top: 11%; width: 62%; height: 20%; border-radius: 48% 48% 18% 18%; background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.18) 0 4px, transparent 4px 9px), linear-gradient(160deg, var(--hair), var(--hair2)); }
+.headshot-41 .ph-hair { top: 9%; width: 70%; height: 27%; border-radius: 52% 52% 18% 18%; }
+.headshot-41 .ph-extra { left: 50%; top: 54%; width: 26%; height: 7%; transform: translateX(-50%); border-bottom: 3px solid rgba(70, 81, 95, 0.72); border-radius: 50%; z-index: 8; }
+.headshot-42 .ph-hair { top: 5%; width: 76%; height: 34%; border-radius: 48% 48% 24% 24%; }
+.headshot-43 .ph-hair { top: 6%; left: 53%; width: 80%; height: 35%; border-radius: 60% 48% 22% 36%; transform: translateX(-50%) rotate(-7deg); }
+.headshot-43 .ph-hair::after { content: ""; position: absolute; right: -6%; top: 28%; width: 32%; height: 28%; background: var(--hair); border-radius: 999px; }
+.headshot-44 .ph-face { top: 18%; height: 44%; border-radius: 50%; }
+.headshot-44 .ph-hair { top: 12%; width: 58%; height: 18%; border-radius: 48% 48% 14% 14%; }
+.headshot-45 .ph-hair { top: 7%; width: 72%; height: 31%; }
+.headshot-45 .ph-hair::after { content: ""; position: absolute; left: 8%; right: 8%; bottom: 18%; height: 18%; background: #f7f7f7; border-radius: 999px; box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.18); }
+.headshot-46 .ph-extra { left: 50%; top: 49%; width: 28%; height: 7%; transform: translateX(-50%); z-index: 8; }
+.headshot-46 .ph-extra::before,
+.headshot-46 .ph-extra::after { content: ""; position: absolute; top: 0; width: 55%; height: 100%; background: var(--hair); border-radius: 999px 999px 60% 60%; }
+.headshot-47 .ph-face { border-radius: 42% 46% 48% 44%; }
+.headshot-47 .ph-extra { left: 18%; top: 42%; width: 8%; height: 16%; background: rgba(120, 40, 40, 0.4); border-radius: 40%; transform: rotate(-18deg); z-index: 9; }
+.headshot-48 .ph-hair { top: 5%; width: 74%; height: 32%; clip-path: polygon(0 65%, 10% 25%, 20% 55%, 32% 8%, 42% 50%, 54% 0, 66% 48%, 80% 15%, 92% 58%, 100% 68%, 92% 100%, 8% 100%); }
+.headshot-49 .ph-hair { top: 7%; width: 76%; height: 56%; border-radius: 46% 46% 42% 42%; z-index: 3; }
+.headshot-49 .ph-face { z-index: 5; }
+.headshot-50 .ph-face { top: 18%; height: 44%; border-radius: 50%; }
+.headshot-50 .ph-hair { top: 12%; width: 58%; height: 18%; }
+.headshot-51 .ph-hair { top: 12%; width: 58%; height: 19%; border-radius: 52% 52% 10% 10%; background: radial-gradient(circle, rgba(255, 255, 255, 0.12) 1px, transparent 2px), linear-gradient(160deg, var(--hair), var(--hair2)); background-size: 7px 7px, auto; }
+.headshot-52 .ph-face { background: linear-gradient(145deg, #eef3f8, #607080); box-shadow: 0 0 14px rgba(56, 189, 248, 0.35); }
+.headshot-52 .ph-extra { left: 50%; top: 38%; width: 50%; height: 36%; transform: translateX(-50%); background: linear-gradient(180deg, #38bdf8, #0c4a6e); border-radius: 44% 44% 38% 38%; opacity: 0.9; z-index: 8; }
+.headshot-53 .ph-hair { top: 8%; width: 68%; height: 25%; }
+.headshot-53 .ph-extra { left: 50%; top: 47%; width: 48%; height: 22%; transform: translateX(-50%); background: linear-gradient(180deg, rgba(25, 17, 13, 0.5), rgba(5, 3, 2, 0.82)); border-radius: 20% 20% 48% 48%; z-index: 6; }
+.headshot-54 .ph-hair { top: 8%; width: 68%; height: 25%; }
+.headshot-54 .ph-extra { left: 50%; top: 47%; width: 50%; height: 24%; transform: translateX(-50%); background: linear-gradient(180deg, rgba(25, 17, 13, 0.55), rgba(5, 3, 2, 0.85)); border-radius: 20% 20% 48% 48%; z-index: 6; }
+.headshot-55 .ph-face { background: linear-gradient(145deg, #e5edf3, #8a97a5); }
+.headshot-55 .ph-extra { left: 50%; top: 41%; width: 46%; height: 32%; transform: translateX(-50%); background: repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.38) 0 2px, transparent 2px 7px); border-radius: 0 0 40% 40%; z-index: 8; opacity: 0.82; }
+.headshot-56 .ph-hair { top: 12%; width: 58%; height: 19%; border-radius: 52% 52% 10% 10%; }
+.headshot-57 .ph-hair { top: 11%; width: 62%; height: 20%; border-radius: 48% 48% 18% 18%; }
+.headshot-58 .ph-hair { top: 10%; width: 66%; height: 24%; border-radius: 48% 48% 18% 18%; }
+.headshot-58 .ph-face { top: 15%; height: 46%; }
+.headshot-58::before { background: linear-gradient(180deg, #374151, #111827); }
+.headshot-59 .ph-hair { top: 8%; width: 72%; height: 30%; transform: translateX(-50%) rotate(5deg); }
+.headshot-60 .ph-hair { top: 6%; left: 53%; width: 80%; height: 35%; border-radius: 60% 48% 22% 36%; transform: translateX(-50%) rotate(-7deg); }
+.headshot-60 .ph-hair::after { content: ""; position: absolute; right: -6%; top: 28%; width: 32%; height: 28%; background: var(--hair); border-radius: 999px; }
+
+/* =========================================================
+   Team color overrides (CSS variables)
+   ========================================================= */
+
+.player-headshot {
+  --team-primary: var(--jersey);
+  --team-secondary: var(--jersey2);
+  --team-accent: rgba(255, 255, 255, 0.18);
+}
+
+.player-headshot[style*="--team-primary"],
+.player-headshot.team-branded {
+  --jersey: var(--team-primary, var(--jersey));
+  --jersey2: var(--team-secondary, var(--jersey2));
+}
+
+.player-headshot.glow,
+.player-headshot.premium,
+.headshot-32.player-headshot {
+  --team-accent: rgba(255, 215, 120, 0.35);
+}
+
+/* =========================================================
+   Presentation variants
+   ========================================================= */
+
+.player-headshot.variant-circle {
+  border-radius: 50%;
+  overflow: hidden;
+  clip-path: circle(46% at 50% 38%);
+}
+
+.player-headshot.variant-card {
+  border-radius: 18px;
+  padding: 6px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.player-headshot.variant-broadcast {
+  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.5)) saturate(1.08) contrast(1.05);
+  transform: translateZ(0);
+}
+
+.player-headshot.variant-scouting {
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.38));
+  opacity: 0.96;
+}
+
+.player-headshot.variant-roster,
+.player-headshot.size-roster {
+  --size: 56px;
+}
+
+.player-headshot.variant-draft {
+  filter: drop-shadow(0 0 14px rgba(201, 168, 106, 0.18));
+}
+
+.player-headshot.variant-trade {
+  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.45)) hue-rotate(-4deg);
+}
+
+.player-headshot.variant-injury {
+  filter: grayscale(0.18) drop-shadow(0 10px 18px rgba(0, 0, 0, 0.45));
+}
+
+.player-headshot.variant-goalie .ph-face,
+.player-headshot.role-goalie .ph-face {
+  background: linear-gradient(145deg, #eef3f7, #8a97a5);
+}
+
+.player-headshot.variant-superstar,
+.player-headshot.role-captain.glow {
+  filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 16px rgba(255, 215, 0, 0.24));
+}
+
+/* =========================================================
+   Badges, numbers, flags
+   ========================================================= */
+
+.player-headshot .ph-badge,
+.player-headshot .ph-number,
+.player-headshot .ph-flag {
+  position: absolute;
+  z-index: 12;
+  pointer-events: none;
+  font-family: "Rajdhani", "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.player-headshot .ph-badge {
+  top: 4%;
+  right: 2%;
+  min-width: calc(var(--size) * 0.22);
+  height: calc(var(--size) * 0.22);
+  padding: 0 calc(var(--size) * 0.04);
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(8, 10, 14, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #f5eedf;
+  font-size: calc(var(--size) * 0.13);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
+}
+
+.player-headshot .ph-badge.captain { background: rgba(201, 168, 106, 0.92); color: #1a1208; border-color: rgba(255, 240, 200, 0.45); }
+.player-headshot .ph-badge.alternate { background: rgba(30, 41, 59, 0.92); color: #dbeafe; }
+.player-headshot .ph-badge.rookie { background: rgba(34, 197, 94, 0.88); color: #052e16; }
+.player-headshot .ph-badge.injured { background: rgba(220, 38, 38, 0.88); color: #fff; }
+.player-headshot .ph-badge.hot { background: rgba(249, 115, 22, 0.9); color: #1a0a00; }
+.player-headshot .ph-badge.cold { background: rgba(56, 189, 248, 0.88); color: #082f49; }
+.player-headshot .ph-badge.elite { background: linear-gradient(135deg, #fde68a, #f59e0b); color: #1a1208; }
+.player-headshot .ph-badge.prospect { background: rgba(168, 85, 247, 0.88); color: #fff; }
+.player-headshot .ph-badge.goal { background: rgba(14, 165, 233, 0.9); color: #fff; font-size: calc(var(--size) * 0.11); }
+
+.player-headshot .ph-number {
+  left: 50%;
+  bottom: 8%;
+  transform: translateX(-50%);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: calc(var(--size) * 0.24);
+  line-height: 1;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.45), 0 0 8px rgba(0, 0, 0, 0.35);
+  font-style: italic;
+}
+
+.player-headshot .ph-flag {
+  left: 4%;
+  bottom: 10%;
+  padding: calc(var(--size) * 0.03) calc(var(--size) * 0.05);
+  border-radius: 999px;
+  background: rgba(8, 10, 14, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #dbeafe;
+  font-size: calc(var(--size) * 0.09);
+}
+
+/* =========================================================
+   Extended sizes
+   ========================================================= */
+
+.player-headshot.size-tiny { --size: 36px; }
+.player-headshot.size-xxl { --size: 220px; }
+.player-headshot.size-card { --size: 112px; }
+.player-headshot.size-profile { --size: 176px; }
+.player-headshot.size-broadcast { --size: 144px; }
+
+/* =========================================================
+   Mood / expression modifiers
+   ========================================================= */
+
+.player-headshot.mood-smile .ph-mouth { border-bottom-color: rgba(120, 40, 40, 0.65); transform: translateX(-50%) scaleY(1.15); }
+.player-headshot.mood-serious .ph-mouth { width: 18%; border-bottom-width: 2px; border-radius: 20%; }
+.player-headshot.mood-angry .ph-eyes::before,
+.player-headshot.mood-angry .ph-eyes::after { transform: translateY(-58%) rotate(12deg); box-shadow: 0 -2px 0 rgba(0, 0, 0, 0.25); }
+.player-headshot.mood-angry .ph-eyes::after { transform: translateY(-58%) rotate(-12deg); }
+.player-headshot.mood-focused .ph-eyes::before,
+.player-headshot.mood-focused .ph-eyes::after { height: 48%; width: 20%; }
+.player-headshot.mood-tired .ph-eyes::before,
+.player-headshot.mood-tired .ph-eyes::after { height: 42%; opacity: 0.82; transform: translateY(-42%); }
+.player-headshot.mood-confident .ph-face { box-shadow: inset -10px -14px 18px rgba(0, 0, 0, 0.13), inset 8px 7px 14px rgba(255, 255, 255, 0.16), 0 0 10px rgba(255, 255, 255, 0.08); }
+
+/* =========================================================
+   Age class modifiers
+   ========================================================= */
+
+.player-headshot.age-prospect .ph-face { border-radius: 50%; }
+.player-headshot.age-rookie .ph-hair { filter: saturate(1.05); }
+.player-headshot.age-veteran .ph-hair,
+.player-headshot.age-legend .ph-hair { filter: saturate(0.82); }
+.player-headshot.age-legend { filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 10px rgba(201, 168, 106, 0.18)); }
+
+/* =========================================================
+   Role modifiers
+   ========================================================= */
+
+.player-headshot.role-forward::before { clip-path: polygon(22% 0, 78% 0, 100% 100%, 0 100%); }
+.player-headshot.role-defense::before { clip-path: polygon(18% 0, 82% 0, 100% 100%, 0 100%); }
+.player-headshot.role-enforcer .ph-face { border-radius: 42% 46% 48% 44%; }
+.player-headshot.role-playmaker .ph-eyes::before,
+.player-headshot.role-playmaker .ph-eyes::after { box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.18); }
+.player-headshot.role-sniper .ph-eyes::before,
+.player-headshot.role-sniper .ph-eyes::after { background: #0f172a; }
+.player-headshot.role-two-way::before { background: linear-gradient(180deg, var(--team-primary, var(--jersey)), color-mix(in srgb, var(--team-secondary, var(--jersey2)) 70%, #111 30%)); }
+.player-headshot.role-prospect { opacity: 0.98; }
+
+/* =========================================================
+   Interaction states
+   ========================================================= */
+
+.player-headshot:hover,
+.player-headshot.animate-hover:hover {
+  transform: translateY(-2px) scale(1.03);
+  transition: transform 180ms ease, filter 180ms ease;
+}
+
+.player-headshot.is-selected {
+  outline: 2px solid rgba(201, 168, 106, 0.75);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 4px rgba(201, 168, 106, 0.12);
+}
+
+.player-headshot.is-dimmed { opacity: 0.45; filter: grayscale(0.25); }
+.player-headshot.is-scouted { box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.35); }
+
+.player-headshot.is-hidden .ph-face,
+.player-headshot.is-hidden .ph-hair,
+.player-headshot.is-hidden .ph-eyes,
+.player-headshot.is-hidden .ph-mouth,
+.player-headshot.is-hidden .ph-extra {
+  filter: blur(4px);
+  opacity: 0.55;
+}
+
+.player-headshot.is-locked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  z-index: 20;
+  border-radius: inherit;
+}
+
+/* =========================================================
+   Scouting visibility states
+   ========================================================= */
+
+.player-headshot.scout-unknown .ph-face,
+.player-headshot.scout-unknown .ph-hair,
+.player-headshot.scout-unknown .ph-eyes,
+.player-headshot.scout-unknown .ph-mouth {
+  filter: blur(5px) brightness(0.72);
+}
+
+.player-headshot.scout-unknown .ph-number,
+.player-headshot.scout-unknown .ph-badge { opacity: 0; }
+
+.player-headshot.scout-partial .ph-eyes,
+.player-headshot.scout-partial .ph-mouth,
+.player-headshot.scout-partial .ph-extra {
+  filter: blur(2px) opacity(0.75);
+}
+
+.player-headshot.scout-known {
+  filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.45));
+}
+
+/* =========================================================
+   Injury states
+   ========================================================= */
+
+.player-headshot.injury-day-to-day::before {
+  box-shadow: inset 0 -18px 26px rgba(0, 0, 0, 0.18), inset 0 0 0 2px rgba(250, 204, 21, 0.35);
+}
+
+.player-headshot.injury-long-term {
+  filter: grayscale(0.22) drop-shadow(0 12px 20px rgba(0, 0, 0, 0.45));
+}
+
+.player-headshot.injury-long-term::after {
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.35);
+}
+
+.player-headshot.injury-returning { filter: saturate(0.92); }
+.player-headshot.injury-returning .ph-badge.injured { background: rgba(34, 197, 94, 0.88); color: #052e16; }
+
+/* =========================================================
+   Draft board states
+   ========================================================= */
+
+.player-headshot.draft-top-pick { filter: drop-shadow(0 0 16px rgba(255, 215, 0, 0.28)); }
+.player-headshot.draft-lottery { filter: drop-shadow(0 0 14px rgba(168, 85, 247, 0.22)); }
+.player-headshot.draft-steal { box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.35); }
+.player-headshot.draft-bust-risk { box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.28); }
+.player-headshot.draft-sleeper { opacity: 0.94; filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.42)); }
+
+/* =========================================================
+   Utility classes
+   ========================================================= */
+
+.player-headshot.no-blink .ph-eyes::before,
+.player-headshot.no-blink .ph-eyes::after { animation: none !important; }
+
+.player-headshot.no-shadow,
+.player-headshot.flat {
+  filter: none;
+  box-shadow: none;
+  transform: none;
+}
+
+.player-headshot.glow {
+  filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 14px rgba(201, 168, 106, 0.22));
+}
+
+.player-headshot.premium {
+  filter: drop-shadow(0 14px 24px rgba(0, 0, 0, 0.5)) drop-shadow(0 0 18px rgba(255, 215, 0, 0.22));
+}
+
+.player-headshot.compact { --size: calc(var(--size) * 0.88); }
+.player-headshot.high-contrast { filter: contrast(1.12) saturate(1.08) drop-shadow(0 12px 20px rgba(0, 0, 0, 0.5)); }
+
+/* =========================================================
+   Animations
+   ========================================================= */
+
+@keyframes phIdleFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+@keyframes phBroadcastPulse {
+  0%, 100% { filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.5)); }
+  50% { filter: drop-shadow(0 12px 22px rgba(0, 0, 0, 0.55)) saturate(1.06); }
+}
+
+@keyframes phSelectedPulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(201, 168, 106, 0.12); }
+  50% { box-shadow: 0 0 0 6px rgba(201, 168, 106, 0.2); }
+}
+
+@keyframes phInjuredPulse {
+  0%, 100% { opacity: 0.88; }
+  50% { opacity: 0.72; }
+}
+
+@keyframes phHotPulse {
+  0%, 100% { filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.18)); }
+  50% { filter: drop-shadow(0 0 14px rgba(249, 115, 22, 0.32)); }
+}
+
+@keyframes phColdPulse {
+  0%, 100% { filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.12)); }
+  50% { filter: drop-shadow(0 0 14px rgba(56, 189, 248, 0.24)); }
+}
+
+.player-headshot.animate-idle { animation: phIdleFloat 4.8s ease-in-out infinite; }
+.player-headshot.animate-broadcast { animation: phBroadcastPulse 3.6s ease-in-out infinite; }
+.player-headshot.is-selected.animate-selected,
+.player-headshot.animate-selected { animation: phSelectedPulse 2.4s ease-in-out infinite; }
+.player-headshot.animate-injured { animation: phInjuredPulse 2.8s ease-in-out infinite; }
+.player-headshot.animate-hot { animation: phHotPulse 2.2s ease-in-out infinite; }
+.player-headshot.animate-cold { animation: phColdPulse 2.8s ease-in-out infinite; }
+
+/* =========================================================
+   Dark UI compatibility
+   ========================================================= */
+
+.player-headshot { color-scheme: dark; }
+
+.player-headshot.variant-card,
+.player-headshot.variant-scouting,
+.player-headshot.variant-roster {
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+}
+
+/* =========================================================
+   Reduced motion
+   ========================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  .player-headshot .ph-eyes::before,
+  .player-headshot .ph-eyes::after,
+  .player-headshot.animate-idle,
+  .player-headshot.animate-broadcast,
+  .player-headshot.animate-selected,
+  .player-headshot.animate-injured,
+  .player-headshot.animate-hot,
+  .player-headshot.animate-cold,
+  .player-headshot:hover {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+/*
+React usage example:
+
+import PlayerHeadshot from "../components/PlayerHeadshot";
+
+<PlayerHeadshot
+  player={player}
+  size="md"
+  variant="broadcast"
+  mood={player.expression || "neutral"}
+  teamColors={{ primary: "#c8102e", secondary: "#041e42" }}
+  badge={player.captain ? "C" : null}
+  number={player.jersey_number}
+  flag={player.nationality_code}
+  className={`role-forward age-${player.age_bucket}`}
+/>
+
+Deterministic class mapping from avatar_seed:
+  headshot-${player.headshot_id || ((player.avatar_seed % 60) + 1)}
+*/

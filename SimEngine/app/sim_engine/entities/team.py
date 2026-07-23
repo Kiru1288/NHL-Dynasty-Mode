@@ -455,10 +455,24 @@ class Team:
         Returns a 0–1 value representing how poorly the player fits
         their current role on this team.
 
-        NOTE: Until full roster roles exist, we infer role from roster depth index.
+        Prefer deployed line rank from saved/user lineup when available.
         """
         if player in self.prospects:
             return 0.0
+
+        deployed = getattr(player, "_gm_game_line_idx", None)
+        if deployed is None:
+            deployed = getattr(player, "_deployed_line_rank", None)
+        if deployed is not None:
+            try:
+                line_idx = int(deployed)
+            except Exception:
+                line_idx = 2
+            # Top line = low mismatch; deep bench = higher.
+            return float(min(0.85, max(0.0, line_idx) * 0.18))
+
+        if bool(getattr(player, "_recently_scratched", False)):
+            return 0.72
 
         depth_index = self.roster.index(player) if player in self.roster else 99
 

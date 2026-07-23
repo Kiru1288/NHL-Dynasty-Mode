@@ -397,6 +397,8 @@ class StandingsTable:
         away_goals: int,
         overtime: bool = False,
         shootout: bool = False,
+        stats_home_goals: Optional[int] = None,
+        stats_away_goals: Optional[int] = None,
     ) -> None:
         """
         Update standings for a single completed game.
@@ -421,6 +423,8 @@ class StandingsTable:
 
         home_goals = max(0, _safe_int(home_goals))
         away_goals = max(0, _safe_int(away_goals))
+        stat_hg = home_goals if stats_home_goals is None else max(0, _safe_int(stats_home_goals))
+        stat_ag = away_goals if stats_away_goals is None else max(0, _safe_int(stats_away_goals))
 
         h.gp += 1
         a.gp += 1
@@ -428,11 +432,11 @@ class StandingsTable:
         h.home_gp += 1
         a.away_gp += 1
 
-        h.gf += home_goals
-        h.ga += away_goals
+        h.gf += stat_hg
+        h.ga += stat_ag
 
-        a.gf += away_goals
-        a.ga += home_goals
+        a.gf += stat_ag
+        a.ga += stat_hg
 
         # Caller should avoid unresolved ties.
         # If tie somehow arrives, force deterministic OT-style result.

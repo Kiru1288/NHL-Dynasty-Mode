@@ -90,7 +90,16 @@ def resolve_user_team(teams: Sequence[Any], query: str) -> Any:
 # Replace INTERACTIVE_DRAFT_INPUT with a UI/API callable when wiring a frontend.
 # =============================================================================
 
-INTERACTIVE_DRAFT_INPUT: Callable[[str], str] = input
+def _frontend_safe_draft_input(prompt: str) -> str:
+    """
+    Frontend-safe default.
+    Terminal mode can still override this by passing input_fn=input.
+    React/API mode should never block the backend waiting for stdin.
+    """
+    return "auto"
+
+
+INTERACTIVE_DRAFT_INPUT: Callable[[str], str] = _frontend_safe_draft_input
 
 
 def _prospect_ceiling_mid(p: Any) -> float:

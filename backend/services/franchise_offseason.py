@@ -1,0 +1,5109 @@
+"""
+Franchise offseason phase controller — year-over-year continuation after Stanley Cup.
+"""
+
+from __future__ import annotations
+
+import random
+from collections import defaultdict
+from typing import Any, Dict, List, Optional, Tuple
+
+from services.franchise_session import FranchiseSession
+from services.nhl_season_calendar import (
+    build_season_calendar,
+    calendar_day_to_dict,
+    last_regular_season_index,
+    map_abstract_schedule_to_calendar,
+    season_anchor_event_markers,
+)
+
+OFFSEASON_STAGES: Tuple[str, ...] = (
+    "awards",
+    "retirements",
+    "salary_cap",
+    "development_report",
+    "draft_lottery",
+    "draft_combine",
+    "draft",
+    "draft_review",
+    "prospect_rights",
+    "re_sign",
+    "free_agency",
+    "roster_cleanup",
+    "next_season_reveal",
+)
+
+STAGE_NEXT_EVENT: Dict[str, str] = {
+    "awards": "retirements",
+    "retirements": "salary_cap",
+    "salary_cap": "development_report",
+    "development_report": "draft_lottery",
+    "draft_lottery": "draft_combine",
+    "draft_combine": "draft",
+    "draft": "draft_review",
+    "draft_review": "prospect_rights",
+    "prospect_rights": "re_sign",
+    "re_sign": "free_agency",
+    "free_agency": "roster_cleanup",
+    "roster_cleanup": "generate_next_season",
+    "next_season_reveal": "preseason_start",
+}
+
+# Post-draft slice used by Hub timeline / resume labels (keeps pre-draft stages intact).
+POST_DRAFT_STAGES: Tuple[str, ...] = (
+    "draft",
+    "draft_review",
+    "prospect_rights",
+    "re_sign",
+    "free_agency",
+    "roster_cleanup",
+    "next_season_reveal",
+)
+
+SIGNING_BONUS_REVENUE_FLOOR_M = 110.0
+
+
+def _safe_attr_float(obj: Any, *keys: str, default: float = 0.0) -> float:
+    for key in keys:
+        raw = getattr(obj, key, None)
+        if raw is None:
+            continue
+        if callable(raw) and not isinstance(raw, (int, float)):
+            try:
+                raw = raw()
+            except TypeError:
+                continue
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _mark_stage_entered(session: FranchiseSession, stage: str) -> None:
+    entered = getattr(session, "offseason_stage_entered_at", None)
+    if not isinstance(entered, dict):
+        session.offseason_stage_entered_at = {}
+        entered = session.offseason_stage_entered_at
+    if stage and stage not in entered:
+        entered[stage] = _now_iso()
+
+
+def _mark_stage_completed(session: FranchiseSession, stage: str) -> None:
+    done = list(getattr(session, "offseason_completed_stages", None) or [])
+    if stage and stage not in done:
+        done.append(stage)
+        session.offseason_completed_stages = done
+    completed = getattr(session, "offseason_stage_completed_at", None)
+    if not isinstance(completed, dict):
+        session.offseason_stage_completed_at = {}
+        completed = session.offseason_stage_completed_at
+    if stage:
+        completed[stage] = _now_iso()
+
+
+def invalidate_offseason_decision_payloads(session: FranchiseSession, *, reason: str = "") -> None:
+    """Force rebuild of decision-sensitive stage payloads after Cap Ledger / rights actions."""
+    session.prospect_rights_payload = {}
+    session.resign_payload = {}
+    session.roster_cleanup_payload = {}
+    if reason:
+        try:
+            from services.franchise_sim import invalidate_session_payload_caches
+            invalidate_session_payload_caches(session, f"offseason_decision_{reason}")
+        except Exception:
+            pass
+
+
+def team_signing_bonus_eligibility(session: FranchiseSession, team_id: Optional[str] = None) -> Dict[str, Any]:
+    """Revenue-gated signing-bonus capacity from real team economics."""
+    tid = str(team_id or session.user_team_id)
+    team = session.team_by_id.get(tid)
+    revenue_m = None
+    try:
+        from services.league_operations import calculate_team_revenue
+        row = calculate_team_revenue(session, team, tid, is_user=(tid == str(session.user_team_id)))
+        revenue_m = float(row.get("revenue") or row.get("revenue_m") or 0) or None
+    except Exception:
+        revenue_m = None
+        try:
+            revenue_m = float(getattr(team, "revenue_m", None) or getattr(team, "annual_revenue_m", None) or 0) or None
+        except Exception:
+            revenue_m = None
+    if revenue_m is None:
+        return {
+            "eligible": False,
+            "revenue_m": None,
+            "floor_m": SIGNING_BONUS_REVENUE_FLOOR_M,
+            "max_bonus_pct": 0.0,
+            "reason": "revenue_unavailable",
+        }
+    eligible = revenue_m >= SIGNING_BONUS_REVENUE_FLOOR_M
+    # Higher revenue → more bonus flexibility (capped); never invent when below floor.
+    if not eligible:
+        max_pct = 0.0
+    elif revenue_m >= 180:
+        max_pct = 0.20
+    elif revenue_m >= 140:
+        max_pct = 0.14
+    else:
+        max_pct = 0.08
+    return {
+        "eligible": eligible,
+        "revenue_m": round(revenue_m, 1),
+        "floor_m": SIGNING_BONUS_REVENUE_FLOOR_M,
+        "max_bonus_pct": max_pct,
+        "reason": None if eligible else "below_revenue_floor",
+    }
+
+
+def _sync_phase_fields(session: FranchiseSession) -> None:
+    ph = str(getattr(session, "phase", "regular") or "regular")
+    if ph == "complete":
+        if session.playoffs_simulated and not getattr(session, "offseason_stage", None):
+            session.phase = "post_cup"
+            ph = "post_cup"
+        elif getattr(session, "next_season_generated", False):
+            session.phase = "preseason"
+            ph = "preseason"
+        else:
+            session.phase = "offseason"
+            session.offseason_stage = session.offseason_stage or "awards"
+            ph = "offseason"
+    session.season_phase = ph
+    if session.champion_id and not session.stanley_cup_winner:
+        session.stanley_cup_winner = session.champion_id
+    if session.stanley_cup_winner and not session.champion_id:
+        session.champion_id = session.stanley_cup_winner
+
+
+def _serialize_award(award: Any) -> Dict[str, Any]:
+    if isinstance(award, dict):
+        return dict(award)
+    try:
+        from app.sim_engine.league.awards import serialize_award as _canon_serialize
+
+        return _canon_serialize(award)
+    except Exception:
+        pass
+    return {
+        "name": str(getattr(award, "name", "") or ""),
+        "award_id": str(getattr(award, "award_id", "") or ""),
+        "winner_name": str(getattr(award, "winner_name", "") or ""),
+        "winner_team_id": str(getattr(award, "winner_team_id", "") or ""),
+        "winner_player_id": str(getattr(award, "winner_player_id", "") or ""),
+        "winner_team_name": str(getattr(award, "winner_team_name", "") or ""),
+        "finalists": list(getattr(award, "finalists", None) or []),
+        "candidates": list(getattr(award, "candidates", None) or []),
+        "winners": list(getattr(award, "winners", None) or []),
+        "full_results": list(getattr(award, "full_results", None) or []),
+        "shared": bool(getattr(award, "shared", False)),
+        "status": str(getattr(award, "status", "complete") or "complete"),
+        "official": bool(getattr(award, "official", True)),
+        "display_metric": str(getattr(award, "display_metric", "") or ""),
+        "calculation_quality": str(getattr(award, "calculation_quality", "full") or "full"),
+        "fallback_reason": getattr(award, "fallback_reason", None),
+        "unavailable_reason": getattr(award, "unavailable_reason", None),
+        "winner_stats": dict(getattr(award, "winner_stats", None) or {}),
+        "rationale": str(getattr(award, "rationale", "") or ""),
+        "public_rationale": str(getattr(award, "public_rationale", "") or getattr(award, "rationale", "") or ""),
+        "voting": getattr(award, "voting", None),
+        "result": dict(getattr(award, "result", None) or {}),
+    }
+
+
+def _enqueue_offseason_popup(session: FranchiseSession, kind: str, title: str, headline: str) -> None:
+    from services.franchise_sim import _append_unique_dict_event
+
+    popup = {
+        "id": f"{kind}_{int(session.season_calendar_year)}",
+        "kind": kind,
+        "title": title,
+        "headline": headline,
+        "priority": "CRITICAL",
+    }
+    _append_unique_dict_event(session.pending_ui_popups, popup)
+
+
+def _playoff_lifecycle_log(session: FranchiseSession, event: str, **kwargs: Any) -> None:
+    bits = [str(event or "event")]
+    for key, value in kwargs.items():
+        if value is not None and str(value).strip():
+            bits.append(f"{key}={value}")
+    session.timeline.append("PLAYOFFS: " + " ".join(bits))
+
+
+def _serialize_playoff_series(series: Any) -> Dict[str, Any]:
+    high_id = str(getattr(series, "team_high_id", "") or "")
+    low_id = str(getattr(series, "team_low_id", "") or "")
+    return {
+        "round_index": int(getattr(series, "round_index", 1) or 1),
+        "conference": getattr(series, "conference", None),
+        "seed_high": int(getattr(series, "seed_high", 0) or 0),
+        "seed_low": int(getattr(series, "seed_low", 0) or 0),
+        "team_high_id": high_id,
+        "team_low_id": low_id,
+        "team_high": high_id,
+        "team_low": low_id,
+        "home_id": high_id,
+        "away_id": low_id,
+        "wins_high": int(getattr(series, "wins_high", 0) or 0),
+        "wins_low": int(getattr(series, "wins_low", 0) or 0),
+    }
+
+
+def _build_playoff_payload(session: FranchiseSession) -> Dict[str, Any]:
+    from app.sim_engine.league.playoffs import build_playoff_first_round
+    from services.franchise_sim import _display_team, _franchise_team_abbrev
+
+    standings = getattr(session, "standings", None)
+    if standings is None:
+        return {}
+
+    first_round, playoff_teams = build_playoff_first_round(standings)
+    team_rows: List[Dict[str, Any]] = []
+    for rec in playoff_teams:
+        tid = str(getattr(rec, "team_id", "") or "")
+        tm = (getattr(session, "team_by_id", None) or {}).get(tid)
+        team_rows.append(
+            {
+                "team_id": tid,
+                "name": _display_team(tm) if tm else str(getattr(rec, "name", tid) or tid),
+                "abbrev": _franchise_team_abbrev(tm) if tm else tid[:3].upper(),
+                "seed": int(getattr(rec, "playoff_seed", 0) or 0),
+                "w": int(getattr(rec, "wins", 0) or 0),
+                "l": int(getattr(rec, "losses", 0) or 0),
+                "otl": int(getattr(rec, "otl", 0) or 0),
+                "pts": int(getattr(rec, "points", 0) or 0),
+            }
+        )
+
+    matchups = [_serialize_playoff_series(s) for s in first_round]
+    return {
+        "first_round": matchups,
+        "first_round_matchups": matchups,
+        "matchups": matchups,
+        "series": matchups,
+        "playoff_teams": team_rows,
+        "teams": team_rows,
+    }
+
+
+def _transition_to_playoff_ready(session: FranchiseSession) -> Dict[str, Any]:
+    """Regular season finished — show playoff bracket UI before simulating the postseason."""
+    from services.franchise_sim import invalidate_session_payload_caches
+    from services.franchise_sim import _run_franchise_season_end_progression
+
+    if session.playoffs_simulated:
+        _sync_phase_fields(session)
+        return {
+            "status": str(session.phase),
+            "season_phase": str(session.season_phase),
+            "champion_id": session.champion_id,
+        }
+
+    if not getattr(session, "_year_end_progression_done", False):
+        prog = _run_franchise_season_end_progression(session)
+        sp = (prog.get("lifecycle") or {}).get("special_events", 0) if isinstance(prog.get("lifecycle"), dict) else 0
+        session.timeline.append(
+            f"YEAR-END: Roster aging + progression ({int(sp)} major career events league-wide)."
+        )
+        if int(prog.get("retired_removed", 0) or 0) > 0:
+            session.notifications.append(
+                f"{prog['retired_removed']} player(s) left active NHL rosters (retirement)."
+            )
+        setattr(session, "_year_end_progression_done", True)
+
+    session.regular_season_complete = True
+    session.phase = "playoff_ready"
+    session.season_phase = "playoff_ready"
+    session.next_important_event = "enter_playoffs"
+    session.playoff_payload = _build_playoff_payload(session)
+    session.playoffs_generated = True
+    _enqueue_offseason_popup(
+        session,
+        "playoff_start",
+        "Stanley Cup Playoffs",
+        "The bracket is set — postseason begins",
+    )
+    invalidate_session_payload_caches(session, "playoff_ready")
+
+    return {
+        "status": "playoff_ready",
+        "season_phase": "playoff_ready",
+        "next_important_event": "enter_playoffs",
+    }
+
+
+def complete_playoffs_from_live_result(session: FranchiseSession, live: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Finish postseason using an already-simulated live bracket (interactive mode).
+    Reuses awards / post_cup plumbing from complete_playoffs without re-simulating.
+    """
+    from app.sim_engine.league import compute_awards
+    from app.sim_engine.league.awards import apply_career_award_history, build_awards_payload
+    from app.sim_engine.league.playoffs import PlayoffResult, PlayoffSeries
+    from services.franchise_sim import _display_team, invalidate_session_payload_caches
+
+    if session.playoffs_simulated and str(getattr(session, "phase", "")) in (
+        "post_cup",
+        "offseason",
+        "preseason",
+        "complete",
+    ):
+        return {
+            "status": "post_cup",
+            "season_phase": str(getattr(session, "phase", "post_cup")),
+            "champion_id": session.champion_id,
+            "already_done": True,
+        }
+
+    champion = str(live.get("champion_id") or "")
+    finalists = [str(x) for x in (live.get("finalist_ids") or []) if x]
+    series_objs: List[PlayoffSeries] = []
+    for s in live.get("series") or []:
+        if not s.get("team_high_id") or not s.get("team_low_id"):
+            continue
+        if str(s.get("status")) not in ("complete", "active") and int(s.get("wins_high") or 0) + int(s.get("wins_low") or 0) == 0:
+            # Skip untouched pending slots
+            if str(s.get("status")) == "pending":
+                continue
+        series_objs.append(
+            PlayoffSeries(
+                round_index=int(s.get("round_index") or 1),
+                conference=s.get("conference"),
+                seed_high=int(s.get("seed_high") or 0),
+                seed_low=int(s.get("seed_low") or 0),
+                team_high_id=str(s.get("team_high_id")),
+                team_low_id=str(s.get("team_low_id")),
+                wins_high=int(s.get("wins_high") or 0),
+                wins_low=int(s.get("wins_low") or 0),
+            )
+        )
+    playoff_result = PlayoffResult(
+        champion_id=champion,
+        finalist_ids=finalists or [champion],
+        series_list=series_objs,
+    )
+
+    sim = session.sim
+    teams = list(sim.league.teams)
+    season_year = int(getattr(session, "season_calendar_year", 0) or 0)
+    award_rows = [dict(v) for v in (list((session.player_season_stats or {}).values()) if session.player_season_stats else [])]
+    for row in award_rows:
+        row.setdefault("stat_scope", "regular_season")
+    playoff_rows = []
+    for key in ("playoff_player_stats", "player_playoff_stats", "playoff_stats"):
+        raw = getattr(session, key, None)
+        if isinstance(raw, dict):
+            playoff_rows = [dict(v) for v in raw.values()]
+            break
+        if isinstance(raw, list):
+            playoff_rows = [dict(v) for v in raw if isinstance(v, dict)]
+            break
+    for row in playoff_rows:
+        row["stat_scope"] = "playoffs"
+
+    season_seed = getattr(session, "franchise_seed", None)
+    if season_seed is None:
+        rng = getattr(sim, "rng", None)
+        raw_seed = getattr(rng, "_seed", None) if rng is not None else None
+        # Never use rng.seed — that is Random.seed (a method), not an int.
+        if isinstance(raw_seed, (int, float)) and not isinstance(raw_seed, bool):
+            season_seed = int(raw_seed) & 0xFFFFFFFF
+        else:
+            season_seed = int(season_year) & 0xFFFFFFFF
+    elif not isinstance(season_seed, (int, float)) or isinstance(season_seed, bool):
+        season_seed = int(season_year) & 0xFFFFFFFF
+    else:
+        season_seed = int(season_seed) & 0xFFFFFFFF
+
+    history_by_player = dict(getattr(session, "player_award_history", None) or {})
+    awards = compute_awards(
+        session.standings,
+        playoff_result,
+        teams,
+        player_season_stats=award_rows,
+        playoff_player_stats=playoff_rows,
+        season_seed=season_seed,
+        season_year=season_year,
+        season_length=int(getattr(session, "season_length", 82) or 82),
+        history_by_player=history_by_player,
+    )
+
+    session.playoffs_simulated = True
+    session.playoffs_done = True
+    session.phase = "post_cup"
+    session.season_phase = "post_cup"
+    session.champion_id = champion
+    session.stanley_cup_winner = champion
+    session.next_important_event = "awards"
+
+    result_id = f"awards:{season_year}:{season_seed}"
+    payload = build_awards_payload(
+        awards,
+        season=season_year,
+        season_seed=season_seed,
+        season_length=int(getattr(session, "season_length", 82) or 82),
+    )
+    payload["metadata"] = dict(payload.get("metadata") or {})
+    payload["metadata"]["season_year"] = season_year
+    payload["metadata"]["result_id"] = result_id
+    # Ceremony-sized client payload — full ballots caused ~15MB Network Errors on Cup night.
+    session.awards_payload = slim_awards_payload_for_client(payload)
+    session.awards_generated = True
+    try:
+        apply_career_award_history(teams, awards, season_year, result_id=result_id)
+    except Exception:
+        pass
+
+    ch_name = session.team_by_id.get(champion)
+    ch_disp = _display_team(ch_name) if ch_name else champion
+    session.notifications.append(f"Playoffs complete. Stanley Cup: {ch_disp}")
+    session.timeline.append(f"POSTSEASON: Champion {ch_disp}")
+
+    payload_po = dict(getattr(session, "playoff_payload", None) or {})
+    payload_po["champion_id"] = champion
+    payload_po["finalist_ids"] = finalists
+    payload_po["series_list"] = list(live.get("series") or [])
+    payload_po["completed"] = True
+    payload_po["live"] = False
+    session.playoff_payload = payload_po
+    if isinstance(getattr(session, "playoff_live", None), dict):
+        session.playoff_live["completed"] = True
+        session.playoff_live["champion_id"] = champion
+
+    _enqueue_offseason_popup(session, "awards", "Awards Night", "Season hardware awaits")
+    invalidate_session_payload_caches(session, "post_cup")
+    return {
+        "status": "post_cup",
+        "season_phase": "post_cup",
+        "champion_id": champion,
+        "awards_keys": list((session.awards_payload.get("awards") or {}).keys()),
+    }
+
+
+def complete_playoffs(session: FranchiseSession) -> Dict[str, Any]:
+    """Simulate playoffs only — transition to post_cup, do not end franchise."""
+    # Prefer finishing interactive live playoffs if already started.
+    live = getattr(session, "playoff_live", None)
+    if isinstance(live, dict) and live.get("started") and not session.playoffs_simulated:
+        try:
+            from services.franchise_playoffs import handle_playoff_action
+
+            res = handle_playoff_action(session, "sim_rest")
+            if isinstance(res.get("finish"), dict):
+                return res["finish"]
+            if session.playoffs_simulated:
+                return {
+                    "status": "post_cup",
+                    "season_phase": "post_cup",
+                    "champion_id": session.champion_id,
+                }
+        except Exception:
+            pass
+
+    from app.sim_engine.league import compute_awards, simulate_playoffs
+    from app.sim_engine.league.awards import apply_career_award_history, build_awards_payload
+    from services.franchise_sim import _display_team
+    from services.franchise_sim import invalidate_session_payload_caches
+
+    if session.playoffs_simulated and str(getattr(session, "phase", "")) in ("post_cup", "offseason", "preseason", "complete"):
+        return {
+            "status": "post_cup",
+            "season_phase": str(getattr(session, "phase", "post_cup")),
+            "champion_id": session.champion_id,
+            "already_done": True,
+        }
+
+    # Idempotent: if awards already frozen for this season, do not recompute/duplicate history.
+    existing = dict(getattr(session, "awards_payload", None) or {})
+    existing_meta = dict(existing.get("metadata") or {})
+    season_year = int(getattr(session, "season_calendar_year", 0) or 0)
+    if existing.get("awards") and str(existing_meta.get("season_year") or "") == str(season_year) and existing_meta.get("computed_at_stage"):
+        session.playoffs_simulated = True
+        session.playoffs_done = True
+        session.phase = "post_cup"
+        session.season_phase = "post_cup"
+        return {
+            "status": "post_cup",
+            "season_phase": "post_cup",
+            "champion_id": session.champion_id,
+            "already_done": True,
+            "awards_keys": list((existing.get("awards") or {}).keys()),
+        }
+
+    session.phase = "playoffs"
+    session.season_phase = "playoffs"
+    _playoff_lifecycle_log(session, "season_phase_updated", season_phase="playoffs")
+
+    sim = session.sim
+    teams = list(sim.league.teams)
+    playoff_result = simulate_playoffs(sim.rng, session.standings, teams, session.strength_map)
+
+    # Freeze input snapshots before any offseason mutation.
+    award_rows = [dict(v) for v in (list((session.player_season_stats or {}).values()) if session.player_season_stats else [])]
+    for row in award_rows:
+        row.setdefault("stat_scope", "regular_season")
+    playoff_rows = []
+    for key in ("playoff_player_stats", "player_playoff_stats", "playoff_stats"):
+        raw = getattr(session, key, None)
+        if isinstance(raw, dict):
+            playoff_rows = [dict(v) for v in raw.values()]
+            break
+        if isinstance(raw, list):
+            playoff_rows = [dict(v) for v in raw if isinstance(v, dict)]
+            break
+    for row in playoff_rows:
+        row["stat_scope"] = "playoffs"
+
+    season_seed = getattr(session, "franchise_seed", None)
+    if season_seed is None:
+        rng = getattr(sim, "rng", None)
+        raw_seed = getattr(rng, "_seed", None) if rng is not None else None
+        # Never use rng.seed — that is Random.seed (a method), not an int.
+        if isinstance(raw_seed, (int, float)) and not isinstance(raw_seed, bool):
+            season_seed = int(raw_seed) & 0xFFFFFFFF
+        else:
+            season_seed = int(season_year) & 0xFFFFFFFF
+    elif not isinstance(season_seed, (int, float)) or isinstance(season_seed, bool):
+        season_seed = int(season_year) & 0xFFFFFFFF
+    else:
+        season_seed = int(season_seed) & 0xFFFFFFFF
+
+    history_by_player = dict(getattr(session, "player_award_history", None) or {})
+    awards = compute_awards(
+        session.standings,
+        playoff_result,
+        teams,
+        player_season_stats=award_rows,
+        playoff_player_stats=playoff_rows,
+        season_seed=season_seed,
+        season_year=season_year,
+        season_length=int(getattr(session, "season_length", 82) or 82),
+        history_by_player=history_by_player,
+    )
+
+    session.playoffs_simulated = True
+    session.playoffs_done = True
+    session.phase = "post_cup"
+    session.season_phase = "post_cup"
+    session.champion_id = str(getattr(playoff_result, "champion_id", "") or "") if playoff_result else ""
+    session.stanley_cup_winner = session.champion_id
+
+    result_id = f"awards:{season_year}:{season_seed}"
+    payload = build_awards_payload(awards, season=season_year, season_seed=season_seed, season_length=int(getattr(session, "season_length", 82) or 82))
+    payload["metadata"] = dict(payload.get("metadata") or {})
+    payload["metadata"]["season_year"] = season_year
+    payload["metadata"]["result_id"] = result_id
+    payload["frozen_inputs"] = {
+        "regular_season_player_stats": award_rows,
+        "playoff_player_stats": playoff_rows,
+        "standings_snapshot": [
+            {
+                "team_id": str(getattr(r, "team_id", "")),
+                "points": int(getattr(r, "points", 0) or 0),
+                "wins": int(getattr(r, "wins", 0) or 0),
+                "losses": int(getattr(r, "losses", 0) or 0),
+                "otl": int(getattr(r, "otl", 0) or 0),
+                "gf": int(getattr(r, "gf", 0) or 0),
+                "ga": int(getattr(r, "ga", 0) or 0),
+            }
+            for r in list(session.standings.league_table() or [])
+        ],
+    }
+    # Drop frozen_inputs + ballot bloat before storing — state responses were ~15MB.
+    session.awards_payload = slim_awards_payload_for_client(payload)
+    session.awards_generated = True
+
+    try:
+        apply_career_award_history(teams, awards, season_year, result_id=result_id)
+    except Exception:
+        pass
+
+    ch_name = session.team_by_id.get(session.champion_id)
+    ch_disp = _display_team(ch_name) if ch_name else session.champion_id
+    session.notifications.append(f"Playoffs complete. Stanley Cup: {ch_disp}")
+    session.timeline.append(f"POSTSEASON: Champion {ch_disp}")
+    _playoff_lifecycle_log(session, "stanley_cup_winner", champion=session.champion_id)
+
+    payload_po = dict(getattr(session, "playoff_payload", None) or {})
+    if playoff_result is not None:
+        payload_po["champion_id"] = session.champion_id
+        payload_po["finalist_ids"] = list(getattr(playoff_result, "finalist_ids", None) or [])
+        payload_po["series_list"] = [
+            {
+                "round_index": int(getattr(s, "round_index", 0) or 0),
+                "conference": getattr(s, "conference", None),
+                "seed_high": int(getattr(s, "seed_high", 0) or 0),
+                "seed_low": int(getattr(s, "seed_low", 0) or 0),
+                "team_high_id": str(getattr(s, "team_high_id", "")),
+                "team_low_id": str(getattr(s, "team_low_id", "")),
+                "wins_high": int(getattr(s, "wins_high", 0) or 0),
+                "wins_low": int(getattr(s, "wins_low", 0) or 0),
+                "series_score": getattr(s, "series_score", lambda: "")(),
+            }
+            for s in (getattr(playoff_result, "series_list", None) or [])
+        ]
+        # Conference champions from awards payload (team achievements).
+        conf = next((a for a in (payload.get("team_achievements") or []) if str(a.get("award_id")) == "conference_champions"), None)
+        if conf:
+            payload_po["conference_champions"] = list(conf.get("winners") or conf.get("full_results") or [])
+    session.playoff_payload = payload_po
+    session.next_important_event = "awards"
+    _enqueue_offseason_popup(session, "awards", "Awards Night", "Season hardware awaits")
+    invalidate_session_payload_caches(session, "post_cup")
+
+    return {
+        "status": "post_cup",
+        "season_phase": "post_cup",
+        "champion_id": session.champion_id,
+        "awards_keys": list((session.awards_payload.get("awards") or {}).keys()),
+    }
+
+
+def advance_season_phase(session: FranchiseSession, target: Optional[str] = None) -> Dict[str, Any]:
+    """Single source-of-truth season phase controller."""
+    from services.franchise_sim import _regular_season_is_truly_complete
+
+    _sync_phase_fields(session)
+    phase = str(getattr(session, "phase", "regular") or "regular")
+    tgt = str(target or "").strip().lower()
+
+    if phase == "complete":
+        _sync_phase_fields(session)
+        phase = str(session.phase)
+
+    if phase == "regular":
+        if tgt in ("playoff_ready", "playoffs"):
+            if _regular_season_is_truly_complete(session):
+                return _transition_to_playoff_ready(session)
+            raise RuntimeError("Regular season not complete.")
+        if _regular_season_is_truly_complete(session):
+            return _transition_to_playoff_ready(session)
+        return {"status": "regular", "season_phase": "regular", "message": "Regular season in progress."}
+
+    if phase == "playoff_ready":
+        if tgt == "playoffs":
+            return complete_playoffs(session)
+        return {
+            "status": "playoff_ready",
+            "season_phase": "playoff_ready",
+            "next_important_event": "enter_playoffs",
+        }
+
+    if phase == "playoffs":
+        return complete_playoffs(session)
+
+    if phase == "post_cup":
+        session.phase = "offseason"
+        session.season_phase = "offseason"
+        session.offseason_stage = "awards"
+        session.next_important_event = "awards"
+        _enqueue_offseason_popup(session, "awards", "Awards Night", "Season hardware awaits")
+        return {"status": "offseason", "season_phase": "offseason", "offseason_stage": "awards"}
+
+    if phase == "offseason":
+        return continue_offseason(session)
+
+    if phase == "preseason":
+        if tgt == "regular":
+            session.phase = "regular"
+            session.season_phase = "regular"
+            session.next_important_event = ""
+            session.next_season_generated = False
+            session.next_season_payload = {}
+            return {"status": "regular", "season_phase": "regular"}
+        return {"status": "preseason", "season_phase": "preseason", "next_important_event": "preseason_start"}
+
+    return {"status": phase, "season_phase": phase}
+
+
+def _offseason_stage_ready(session: FranchiseSession, stage: str) -> bool:
+    stage = str(stage or "")
+    if stage == "awards":
+        return bool(session.awards_payload)
+    if stage == "retirements":
+        return bool(session.retirements_processed)
+    if stage == "salary_cap":
+        return bool((session.salary_cap_payload or {}).get("new_season_cap"))
+    if stage == "development_report":
+        return bool(getattr(session, "development_report_done", False))
+    if stage == "draft_lottery":
+        return bool(session.draft_lottery_done)
+    if stage == "draft_combine":
+        return bool(getattr(session, "draft_combine_done", False))
+    if stage == "draft":
+        state = getattr(session, "draft_state", None) or {}
+        return bool(session.draft_payload) or bool(state.get("draft_started"))
+    if stage == "draft_review":
+        p = getattr(session, "draft_review_payload", None)
+        return isinstance(p, dict) and p.get("version") == 4 and p.get("user_picks") is not None
+    if stage == "prospect_rights":
+        p = getattr(session, "prospect_rights_payload", None)
+        return isinstance(p, dict) and p.get("version") == 2
+    if stage == "re_sign":
+        p = session.resign_payload
+        return isinstance(p, dict) and p.get("version") == 2
+    if stage == "free_agency":
+        m = getattr(session, "free_agency_market_payload", None)
+        return isinstance(m, dict) and m.get("version") == 2
+    if stage == "roster_cleanup":
+        p = session.roster_cleanup_payload
+        return isinstance(p, dict) and p.get("version") == 2
+    if stage == "next_season_reveal":
+        return bool(session.next_season_payload)
+    return False
+
+
+def _ensure_offseason_stage_hydrated(session: FranchiseSession) -> None:
+    """Populate the current offseason screen payload when the user lands on it."""
+    _sync_phase_fields(session)
+    phase = str(session.phase)
+    if phase == "post_cup":
+        if not _offseason_stage_ready(session, "awards"):
+            _enter_awards_stage(session)
+        return
+    if phase != "offseason":
+        return
+    stage = str(getattr(session, "offseason_stage", "") or "awards")
+    if stage == "next_season_reveal":
+        return
+    if _offseason_stage_ready(session, stage):
+        return
+    _stage_handler(session, stage)
+
+
+def _stage_handler(session: FranchiseSession, stage: str) -> Dict[str, Any]:
+    handlers = {
+        "awards": _enter_awards_stage,
+        "retirements": _process_retirements,
+        "salary_cap": _advance_salary_cap,
+        "development_report": _run_offseason_development,
+        "draft_lottery": _run_draft_lottery,
+        "draft_combine": _run_draft_combine,
+        "draft": _prepare_draft_payload,
+        "draft_review": _run_draft_review,
+        "prospect_rights": _run_prospect_rights_stage,
+        "re_sign": _prepare_resign_payload,
+        "free_agency": _open_free_agency,
+        "roster_cleanup": _run_roster_cleanup,
+        "next_season_reveal": _finalize_next_season_reveal,
+    }
+    fn = handlers.get(stage)
+    if fn is None:
+        raise ValueError(f"Unknown offseason stage: {stage!r}")
+    return fn(session)
+
+
+def continue_offseason(
+    session: FranchiseSession,
+    *,
+    from_stage: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Advance one offseason UI stage.
+
+    ``from_stage`` is the stage the client currently shows. When a prior continue
+    advanced the server (e.g. to retirements) but the response failed to serialize,
+    the client may still be on awards — we re-deliver retirements instead of
+    skipping ahead to salary_cap.
+    """
+    from services.franchise_sim import invalidate_session_payload_caches
+
+    _sync_phase_fields(session)
+    client_stage = str(from_stage or "").strip().lower()
+
+    # Awards Night is shown while phase is still post_cup. Continue from that screen
+    # must move into offseason and advance past awards → retirements.
+    # Only park on awards if awards data is still missing.
+    if str(session.phase) == "post_cup":
+        session.phase = "offseason"
+        session.season_phase = "offseason"
+        session.offseason_stage = "awards"
+        session.next_important_event = "awards"
+        result = _enter_awards_stage(session)
+        if not _offseason_stage_ready(session, "awards"):
+            invalidate_session_payload_caches(session, "offseason_awards")
+            return {
+                **result,
+                "status": "offseason",
+                "season_phase": "offseason",
+                "offseason_stage": "awards",
+                "next_important_event": "awards",
+            }
+        # Awards already populated from Cup finish — fall through to next stage.
+
+    if str(session.phase) != "offseason":
+        raise ValueError(f"Cannot continue offseason from phase {session.phase!r}")
+
+    current = str(getattr(session, "offseason_stage", "") or "awards")
+    if current not in OFFSEASON_STAGES:
+        current = "awards"
+        session.offseason_stage = current
+
+    # Client still on Awards / post_cup, but server already processed Final Skate.
+    if (
+        client_stage in ("", "awards", "post_cup")
+        and current == "retirements"
+        and bool(getattr(session, "retirements_processed", False))
+        and isinstance(getattr(session, "retirements_payload", None), dict)
+    ):
+        session.next_important_event = STAGE_NEXT_EVENT.get("retirements", "retirements")
+        invalidate_session_payload_caches(session, "offseason_retirements")
+        return {
+            "retirements": session.retirements_payload,
+            "status": "offseason",
+            "season_phase": "offseason",
+            "offseason_stage": "retirements",
+            "next_important_event": session.next_important_event,
+            "replayed": True,
+        }
+
+    idx = OFFSEASON_STAGES.index(current)
+    result: Dict[str, Any] = {}
+
+    if current == "roster_cleanup" and not session.next_season_generated:
+        _ensure_offseason_stage_hydrated(session)
+        session.offseason_stage = "roster_cleanup"
+        session.next_important_event = "generate_next_season"
+        invalidate_session_payload_caches(session, "roster_cleanup")
+        return {
+            **result,
+            "status": "offseason",
+            "season_phase": "offseason",
+            "offseason_stage": "roster_cleanup",
+            "next_important_event": "generate_next_season",
+            "needs_generate_next_season": True,
+        }
+
+    if current == "next_season_reveal":
+        result = _finalize_next_season_reveal(session)
+        session.phase = "preseason"
+        session.season_phase = "preseason"
+        session.offseason_stage = None
+        session.next_important_event = "preseason_start"
+        invalidate_session_payload_caches(session, "preseason")
+        return {
+            **result,
+            "status": "preseason",
+            "season_phase": "preseason",
+            "offseason_stage": None,
+            "next_important_event": "preseason_start",
+        }
+
+    if current == "draft_combine" and not getattr(session, "draft_combine_done", False):
+        raise ValueError("Complete the Draft Combine before continuing offseason")
+
+    if current == "draft" and not session.draft_completed:
+        raise ValueError("Complete the Entry Draft before continuing offseason")
+
+    if idx + 1 < len(OFFSEASON_STAGES):
+        next_stage = OFFSEASON_STAGES[idx + 1]
+        _mark_stage_completed(session, current)
+        session.offseason_stage = next_stage
+        _mark_stage_entered(session, next_stage)
+        result = _stage_handler(session, next_stage)
+    else:
+        _mark_stage_completed(session, current)
+        session.phase = "preseason"
+        session.season_phase = "preseason"
+        session.offseason_stage = None
+        session.next_important_event = "preseason_start"
+        invalidate_session_payload_caches(session, "preseason")
+        return {
+            **result,
+            "status": "preseason",
+            "season_phase": "preseason",
+            "offseason_stage": None,
+            "next_important_event": "preseason_start",
+        }
+
+    session.next_important_event = STAGE_NEXT_EVENT.get(next_stage, next_stage)
+    invalidate_session_payload_caches(session, f"offseason_{next_stage}")
+    return {
+        **result,
+        "status": "offseason",
+        "season_phase": "offseason",
+        "offseason_stage": next_stage,
+        "next_important_event": session.next_important_event,
+    }
+
+
+def _enter_awards_stage(session: FranchiseSession) -> Dict[str, Any]:
+    if not session.awards_generated:
+        session.awards_payload = session.awards_payload or {"awards": {}, "items": []}
+    return {"awards": slim_awards_payload_for_client(session.awards_payload)}
+
+
+def _process_retirements(session: FranchiseSession) -> Dict[str, Any]:
+    from services.franchise_retirement import run_franchise_retirement_pass
+    from services.json_safe import json_safe
+
+    payload = run_franchise_retirement_pass(session)
+    session.retirements_payload = json_safe(payload)
+    return {"retirements": session.retirements_payload}
+
+
+def _tick_league_contracts(session: FranchiseSession) -> Dict[str, Any]:
+    from services.contract_economy import handle_player_contract_expiry
+    from services.franchise_sim import _serialize_player_row
+
+    # One tick per offseason salary-cap stage. Re-entry must not decrement twice.
+    if bool(getattr(session, "contracts_ticked", False)):
+        return {
+            "expired_ufas": [],
+            "expired_rfas": [],
+            "skipped": True,
+            "reason": "contracts_already_ticked",
+        }
+
+    sim = session.sim
+    league = getattr(sim, "league", None)
+    season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    teams = list(getattr(league, "teams", None) or [])
+    expired_ufas: List[Dict[str, Any]] = []
+    expired_rfas: List[Dict[str, Any]] = []
+
+    for team in teams:
+        roster = list(getattr(team, "roster", None) or [])
+        kept = []
+        for p in roster:
+            if getattr(p, "retired", False):
+                continue
+            outcome = handle_player_contract_expiry(p, team, league, season_year)
+            if outcome != "kept":
+                c = getattr(p, "contract", None)
+                rights = str(getattr(c, "rights_status", getattr(p, "rights_status", "UFA")) or "UFA").upper()
+                row = _serialize_player_row(p, include_ratings=True, session=session, _team=team)
+                if outcome == "rfa_rights" or "RFA" in rights:
+                    expired_rfas.append(row)
+                else:
+                    expired_ufas.append(row)
+                continue
+            kept.append(p)
+        team.roster = kept
+
+    session.contracts_ticked = True
+    return {"expired_ufas": expired_ufas, "expired_rfas": expired_rfas}
+
+
+def _cap_status_label(cap_space_m: float) -> str:
+    space = float(cap_space_m or 0)
+    if space < 0:
+        return "Over cap"
+    if space <= 1.0:
+        return "Tight"
+    if space <= 4.0:
+        return "Deadline limited"
+    if space >= 10.0:
+        return "Offseason flexible"
+    return "Healthy"
+
+
+def _build_cap_report(
+    session: FranchiseSession,
+    *,
+    cap_row: Dict[str, Any],
+    user_team: Any,
+    user_snap: Dict[str, Any],
+    tick: Dict[str, Any],
+    over_cap_teams: List[Dict[str, Any]],
+    season_year: int,
+) -> Dict[str, Any]:
+    from services.franchise_sim import _display_team
+
+    prev_cap = float(cap_row.get("previous_cap", 0) or 0)
+    new_cap = float(cap_row.get("upperLimit", cap_row.get("current_cap", 0)) or 0)
+    if prev_cap <= 0:
+        prev_cap = max(0.0, new_cap - float(cap_row.get("change", 0) or 0))
+    change = float(cap_row.get("cap_change", cap_row.get("change", new_cap - prev_cap)) or 0)
+    pct = float(cap_row.get("cap_change_percent", 0) or 0)
+    if prev_cap > 0 and pct == 0 and abs(change) > 1e-6:
+        pct = round((change / prev_cap) * 100.0, 1)
+
+    payroll = float(user_snap.get("totalCapHit", user_snap.get("activeRosterCapHit", 0)) or 0)
+    cap_space = float(user_snap.get("capSpace", user_snap.get("usableCapSpace", 0)) or 0)
+    dead_cap = round(
+        float(user_snap.get("buriedCapHit", 0) or 0)
+        + float(user_snap.get("buyoutCapHit", 0) or 0)
+        + float(user_snap.get("otherDeadCap", 0) or 0),
+        3,
+    )
+    retained = float(user_snap.get("retainedSalary", 0) or 0)
+    bonus = float(user_snap.get("bonusOverage", 0) or 0)
+    projected = float(user_snap.get("projectedDeadlineSpace", cap_space) or cap_space)
+
+    notes: List[str] = []
+    movement_label = str(cap_row.get("movement_label") or "").strip()
+    if movement_label:
+        notes.append(movement_label)
+    if over_cap_teams:
+        notes.append(f"{len(over_cap_teams)} teams over cap")
+    expired_ufas = list(tick.get("expired_ufas") or [])
+    if expired_ufas:
+        notes.append(f"{len(expired_ufas)} UFAs available")
+
+    sy = int(season_year)
+    season_label = cap_row.get("season") or f"{sy + 1}-{(sy + 2) % 100:02d}"
+
+    return {
+        "season": season_label,
+        "previous_cap": round(prev_cap, 3),
+        "current_cap": round(new_cap, 3),
+        "cap_change": round(change, 3),
+        "cap_change_percent": pct,
+        "movement_type": cap_row.get("movement_type", ""),
+        "movement_label": movement_label,
+        "movement_reason": str(cap_row.get("movement_reason") or "").strip(),
+        "notes": notes[:4],
+        "user_team": {
+            "team_id": str(session.user_team_id or ""),
+            "team_name": _display_team(user_team) if user_team is not None else "",
+            "payroll": round(payroll, 3),
+            "cap_space": round(cap_space, 3),
+            "dead_cap": dead_cap,
+            "retained_salary": round(retained, 3),
+            "bonus_overages": round(bonus, 3),
+            "projected_space": round(projected, 3),
+            "cap_status": _cap_status_label(cap_space),
+        },
+    }
+
+
+def _advance_salary_cap(session: FranchiseSession) -> Dict[str, Any]:
+    from app.sim_engine.economy.cap_engine import (
+        advance_league_salary_cap,
+        calculate_team_cap_snapshot,
+        cleanup_league_retained_salary_records,
+    )
+    from services.franchise_sim import _team_cap_snapshot
+
+    tick = _tick_league_contracts(session)
+    sim = session.sim
+    league = getattr(sim, "league", None)
+    sy = int(session.season_calendar_year)
+    if league is not None:
+        try:
+            cleanup_league_retained_salary_records(league)
+        except Exception:
+            pass
+    cap_row: Dict[str, Any] = {}
+    try:
+        cap_row = advance_league_salary_cap(league, sim.rng, season_year=sy + 1)
+    except Exception:
+        fallback_cap = float(getattr(league, "salary_cap_m", 88.0) or 88.0)
+        cap_row = {
+            "previous_cap": fallback_cap,
+            "upperLimit": fallback_cap,
+            "current_cap": fallback_cap,
+            "change": 0.0,
+            "cap_change": 0.0,
+            "cap_change_percent": 0.0,
+            "movement_type": "flat_cap",
+            "movement_label": "Flat cap year",
+            "movement_reason": "League held the cap steady.",
+        }
+
+    user_team = session.team_by_id.get(session.user_team_id)
+    user_snap = calculate_team_cap_snapshot(user_team, league) if user_team and league else {}
+    user_cap = _team_cap_snapshot(user_team, sim) if user_team else {}
+    over_cap_teams: List[Dict[str, Any]] = []
+    for tid, tm in (session.team_by_id or {}).items():
+        snap = calculate_team_cap_snapshot(tm, league) if tm and league else {}
+        space = float(snap.get("cap_space", snap.get("capSpace", 0)) or 0)
+        if space < 0:
+            over_cap_teams.append({"team_id": tid, "cap_space": space, "cap_hit": snap.get("cap_hit", snap.get("totalCapHit", 0))})
+
+    prev_cap = float(cap_row.get("previous_cap", 0) or 0)
+    new_cap = float(cap_row.get("upperLimit", cap_row.get("current_cap", getattr(league, "salary_cap_m", 0))) or 0)
+    if prev_cap <= 0:
+        prev_cap = max(0.0, new_cap - float(cap_row.get("change", 0) or 0))
+    change = float(cap_row.get("cap_change", cap_row.get("change", new_cap - prev_cap)) or 0)
+
+    cap_report = _build_cap_report(
+        session,
+        cap_row=cap_row,
+        user_team=user_team,
+        user_snap=user_snap,
+        tick=tick,
+        over_cap_teams=over_cap_teams,
+        season_year=sy,
+    )
+
+    payload = {
+        "last_season_cap": prev_cap,
+        "previous_cap": prev_cap,
+        "new_season_cap": new_cap,
+        "current_cap": new_cap,
+        "change": change,
+        "cap_change": change,
+        "cap_change_percent": cap_report.get("cap_change_percent", 0),
+        "movement_type": cap_report.get("movement_type", ""),
+        "movement_label": cap_report.get("movement_label", ""),
+        "movement_reason": cap_report.get("movement_reason", ""),
+        "cap_report": cap_report,
+        "user_team_cap": user_cap,
+        "over_cap_teams": over_cap_teams,
+        "expired_ufas": tick.get("expired_ufas", []),
+        "expired_rfas": tick.get("expired_rfas", []),
+        "notes": cap_report.get("notes", []),
+    }
+    session.salary_cap_payload = payload
+    session.timeline.append(f"OFFSEASON: Salary cap set to ${new_cap:.1f}M.")
+    return {"salary_cap": payload}
+
+
+# ---------------------------------------------------------------------------
+# Organizational Development Review — normalized report builders
+# ---------------------------------------------------------------------------
+
+_DEV_TREND_BREAKOUT = "Breakout"
+_DEV_TREND_IMPROVED = "Improved"
+_DEV_TREND_STABLE = "Stable"
+_DEV_TREND_STALLED = "Stalled"
+_DEV_TREND_REGRESSED = "Regressed"
+
+_DEV_READINESS_NHL_READY = "NHL Ready"
+_DEV_READINESS_CLOSE = "Close"
+_DEV_READINESS_DEVELOPING = "Developing"
+_DEV_READINESS_LONG_TERM = "Long-Term"
+_DEV_READINESS_AT_RISK = "At Risk"
+
+_DEV_ATTR_LABELS = {
+    "skating": "Skating",
+    "speed": "Speed",
+    "acceleration": "Acceleration",
+    "agility": "Agility",
+    "balance": "Balance",
+    "strength": "Strength",
+    "endurance": "Endurance",
+    "durability": "Durability",
+    "offensive_awareness": "Offensive awareness",
+    "defensive_awareness": "Defensive awareness",
+    "passing": "Passing",
+    "puck_control": "Puck control",
+    "deking": "Deking",
+    "shot_power": "Shot power",
+    "shot_accuracy": "Shot accuracy",
+    "wrist_shot": "Wrist shot",
+    "slap_shot": "Slap shot",
+    "faceoffs": "Faceoffs",
+    "positioning": "Positioning",
+    "rebounds": "Rebound control",
+    "glove_high": "Glove high",
+    "glove_low": "Glove low",
+    "five_hole": "Five hole",
+    "stick_handling": "Stick handling",
+    "poke_check": "Poke check",
+}
+
+_DEV_ATTR_PREFIXES = (
+    "off_",
+    "pm_",
+    "def_",
+    "phy_",
+    "skg_",
+    "iqm_",
+    "pc_",
+    "dev_",
+    "per_",
+    "st_",
+    "g_",
+)
+
+_DEV_META_ATTR_KEYS = frozenset(
+    {
+        "dev_potential",
+        "dev_ceiling",
+        "dev_growth_rate",
+        "dev_work_ethic",
+        "dev_coachability",
+        "dev_learning_ability",
+        "potential",
+        "overall",
+        "ovr",
+        "true_potential",
+        "true_ceiling",
+        "_generated_profile",
+        "generated_profile",
+    }
+)
+
+
+def _dev_player_id(player: Any) -> str:
+    return str(getattr(player, "player_id", getattr(player, "id", "")) or "").strip()
+
+
+def _dev_player_name(player: Any) -> str:
+    ident = getattr(player, "identity", None)
+    return str(getattr(ident, "name", None) or getattr(player, "name", "") or "Unknown")
+
+
+def _dev_player_position(player: Any) -> str:
+    ident = getattr(player, "identity", None)
+    pos = getattr(ident, "position", None) if ident else None
+    if pos is not None and hasattr(pos, "value"):
+        return str(pos.value).upper()
+    raw = str(pos or getattr(player, "position", "") or "F").upper()
+    return raw or "F"
+
+
+def _dev_player_age(player: Any) -> int:
+    ident = getattr(player, "identity", None)
+    try:
+        return int(getattr(ident, "age", None) or getattr(player, "age", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _dev_is_goalie(player: Any) -> bool:
+    return _dev_player_position(player) == "G"
+
+
+def _dev_is_defense(player: Any) -> bool:
+    pos = _dev_player_position(player)
+    return pos in ("D", "LD", "RD", "DEF", "DEFENSE")
+
+
+def _dev_is_signed(player: Any) -> bool:
+    return str(getattr(player, "signed_status", "unsigned") or "unsigned").lower() == "signed"
+
+
+def _dev_contract_status(player: Any) -> str:
+    signed = _dev_is_signed(player)
+    if signed:
+        return str(getattr(player, "contract_type", "") or getattr(getattr(player, "contract", None), "contract_type", "") or "signed")
+    if bool(getattr(player, "drafted", False)) or getattr(player, "nhl_rights_team_id", None):
+        return "unsigned_rights"
+    return "unsigned"
+
+
+def _dev_extract_attributes(player: Any) -> Dict[str, float]:
+    ratings = getattr(player, "ratings", None)
+    if not isinstance(ratings, dict):
+        return {}
+    out: Dict[str, float] = {}
+    for key, val in ratings.items():
+        try:
+            fv = float(val)
+        except Exception:
+            continue
+        if fv <= 1.5:
+            fv = round(fv * 99.0, 2)
+        out[str(key)] = round(fv, 2)
+    return out
+
+
+def _dev_is_skill_attr(key: str) -> bool:
+    return str(key or "").lower() not in _DEV_META_ATTR_KEYS and not str(key or "").startswith("_")
+
+
+def _dev_attr_deltas(before: Dict[str, float], after: Dict[str, float]) -> Dict[str, float]:
+    deltas: Dict[str, float] = {}
+    for key in set(before) | set(after):
+        if not _dev_is_skill_attr(key):
+            continue
+        diff = round(float(after.get(key, before.get(key, 0))) - float(before.get(key, 0)), 2)
+        if abs(diff) >= 0.01:
+            deltas[key] = diff
+    return deltas
+
+
+def _dev_attr_label(key: str) -> str:
+    k = str(key or "").lower()
+    if k in _DEV_ATTR_LABELS:
+        return _DEV_ATTR_LABELS[k]
+    for prefix in _DEV_ATTR_PREFIXES:
+        if k.startswith(prefix):
+            k = k[len(prefix) :]
+            break
+    return k.replace("_", " ").strip().title()
+
+
+def _dev_ledger_attr_deltas(ledger: Dict[str, Any]) -> Dict[str, float]:
+    """Return display-scale attribute deltas from the seasonal ledger (never rescale)."""
+    out: Dict[str, float] = {}
+    raw = ledger.get("attribute_deltas") if isinstance(ledger, dict) else None
+    if not isinstance(raw, dict):
+        return out
+    for k, v in raw.items():
+        if not _dev_is_skill_attr(k):
+            continue
+        try:
+            fv = round(float(v), 2)
+        except Exception:
+            continue
+        if abs(fv) < 0.01:
+            continue
+        out[str(k)] = fv
+    return out
+
+
+def _dev_ovr_from_ledger(ledger: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
+    """Read ovr_before/ovr_after from ledger (stored 0–1) as display-scale OVR."""
+    if not isinstance(ledger, dict) or not ledger.get("development_applied"):
+        return None, None
+    try:
+        before = ledger.get("ovr_before")
+        after = ledger.get("ovr_after")
+        if before is None or after is None:
+            return None, None
+        prev = int(round(float(before) * 99.0))
+        cur = int(round(float(after) * 99.0))
+        if prev <= 0 and cur <= 0:
+            return None, None
+        return float(prev), float(cur)
+    except Exception:
+        return None, None
+
+
+def _dev_snapshot_player(
+    player: Any,
+    *,
+    team_id: str = "",
+    league_id: str = "",
+) -> Dict[str, Any]:
+    from services.franchise_sim import _player_ovr99
+
+    return {
+        "overall": round(_player_ovr99(player), 2),
+        "attributes": _dev_extract_attributes(player),
+        "team_id": str(team_id or getattr(player, "team_id", "") or ""),
+        "league_id": str(
+            league_id
+            or getattr(player, "current_league_id", "")
+            or getattr(player, "development_path", "")
+            or ""
+        ),
+        "age": _dev_player_age(player),
+        "position": _dev_player_position(player),
+        "potential": _dev_player_potential_display(player),
+        "contract_status": _dev_contract_status(player),
+        "signed": _dev_is_signed(player),
+        "readiness_score": _dev_readiness_score_raw(player),
+        "readiness_tier": "",
+    }
+
+
+def _dev_player_potential_display(player: Any) -> float:
+    try:
+        from app.sim_engine.entities.player import display_rating, normalize_rating
+
+        pot = getattr(player, "potential", None)
+        if pot is not None:
+            return float(display_rating(normalize_rating(pot)))
+        ratings = getattr(player, "ratings", None) or {}
+        if ratings.get("dev_potential") is not None:
+            return float(display_rating(normalize_rating(ratings["dev_potential"])))
+    except Exception:
+        pass
+    try:
+        from services.franchise_sim import _player_ovr99
+
+        return float(int(round(_player_ovr99(player) + 4.0)))
+    except Exception:
+        return 0.0
+
+
+def _dev_readiness_score_raw(player: Any) -> float:
+    try:
+        from app.sim_engine.progression.development import calculate_nhl_readiness_score
+
+        return round(float(calculate_nhl_readiness_score(player)), 1)
+    except Exception:
+        raw = float(getattr(player, "nhl_readiness", 0) or 0)
+        return raw if raw > 1.5 else round(raw * 99.0, 1)
+
+
+def _dev_readiness_tier(player: Any, score: float) -> str:
+    s = float(score or 0)
+    goalie = _dev_is_goalie(player)
+    defense = _dev_is_defense(player)
+    if goalie:
+        if s >= 72:
+            return _DEV_READINESS_NHL_READY
+        if s >= 62:
+            return _DEV_READINESS_CLOSE
+        if s >= 50:
+            return _DEV_READINESS_DEVELOPING
+        if s >= 38:
+            return _DEV_READINESS_LONG_TERM
+        return _DEV_READINESS_AT_RISK
+    if defense:
+        if s >= 70:
+            return _DEV_READINESS_NHL_READY
+        if s >= 60:
+            return _DEV_READINESS_CLOSE
+        if s >= 48:
+            return _DEV_READINESS_DEVELOPING
+        if s >= 36:
+            return _DEV_READINESS_LONG_TERM
+        return _DEV_READINESS_AT_RISK
+    if s >= 68:
+        return _DEV_READINESS_NHL_READY
+    if s >= 58:
+        return _DEV_READINESS_CLOSE
+    if s >= 46:
+        return _DEV_READINESS_DEVELOPING
+    if s >= 34:
+        return _DEV_READINESS_LONG_TERM
+    return _DEV_READINESS_AT_RISK
+
+
+def _dev_development_phase(player: Any) -> str:
+    try:
+        from app.sim_engine.progression.development import (
+            PHASE_DECLINING,
+            PHASE_EMERGING,
+            PHASE_PRIME,
+            PHASE_PROSPECT,
+            PHASE_VETERAN,
+            career_phase_for_age,
+            determine_development_career_stage,
+        )
+
+        if _dev_is_goalie(player) and _dev_player_age(player) < 24:
+            return "Goalie Development"
+        phase = str(getattr(player, "career_phase", "") or career_phase_for_age(_dev_player_age(player)))
+        stage = str(getattr(player, "development_career_stage", "") or determine_development_career_stage(player))
+        if phase == PHASE_PROSPECT or stage == "prospect":
+            return "Early Development"
+        if phase == PHASE_EMERGING:
+            return "Growth"
+        if phase == PHASE_PRIME:
+            return "Prime"
+        if phase in (PHASE_VETERAN, PHASE_DECLINING) or stage in ("veteran", "declining", "late_career"):
+            return "Decline"
+        return "Refinement"
+    except Exception:
+        age = _dev_player_age(player)
+        if _dev_is_goalie(player) and age < 24:
+            return "Goalie Development"
+        if age <= 22:
+            return "Early Development"
+        if age <= 26:
+            return "Growth"
+        if age <= 30:
+            return "Refinement"
+        if age <= 34:
+            return "Prime"
+        return "Decline"
+
+
+def _dev_normalize_trend(
+    player: Any,
+    ovr_delta: float,
+    attr_deltas: Dict[str, float],
+    *,
+    session: Optional[FranchiseSession] = None,
+    season_stats: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Classify trend from recomputed OVR delta; stale player metadata cannot override."""
+    attr_sum = sum(v for v in attr_deltas.values() if v > 0)
+    attr_neg = sum(v for v in attr_deltas.values() if v < 0)
+
+    if ovr_delta >= 1.2:
+        return _DEV_TREND_BREAKOUT
+    if ovr_delta >= 0.35:
+        return _DEV_TREND_IMPROVED
+    if ovr_delta <= -0.8:
+        return _DEV_TREND_REGRESSED
+    if ovr_delta <= -0.35:
+        return _DEV_TREND_REGRESSED
+
+    if abs(ovr_delta) < 0.15:
+        if attr_sum >= 0.75 and attr_neg > -0.4:
+            return _DEV_TREND_IMPROVED
+        if attr_neg <= -0.75 and attr_sum < 0.4:
+            return _DEV_TREND_REGRESSED
+        gp = 0
+        if isinstance(season_stats, dict):
+            gp = int(season_stats.get("gp", 0) or 0)
+        if gp <= 0 and player is not None:
+            gp = _dev_games_played(player, session)
+        # Only call it a stall when they barely played — not for 80-point seasons.
+        if player is not None and gp < 20 and _dev_player_age(player) <= 26 and attr_sum < 0.35:
+            return _DEV_TREND_STALLED
+        return _DEV_TREND_STABLE
+
+    if ovr_delta > 0:
+        return _DEV_TREND_IMPROVED
+    return _DEV_TREND_REGRESSED
+
+
+def _dev_games_played(player: Any, session: Optional[FranchiseSession]) -> int:
+    try:
+        from app.sim_engine.progression.development import _get_games_played
+
+        gp = int(_get_games_played(player) or 0)
+        if gp > 0:
+            return gp
+    except Exception:
+        pass
+    if session is not None:
+        pid = _dev_player_id(player)
+        row = dict((getattr(session, "player_season_stats", None) or {}).get(pid) or {})
+        return int(row.get("gp", 0) or 0)
+    return int(getattr(player, "gp", 0) or getattr(player, "games_played", 0) or 0)
+
+
+def _dev_franchise_team_name(session: FranchiseSession) -> str:
+    uid = str(getattr(session, "user_team_id", "") or "")
+    user_team = session.team_by_id.get(uid) if uid else None
+    if user_team is None:
+        return ""
+    try:
+        from services.franchise_sim import _display_team
+
+        return str(_display_team(user_team) or "")
+    except Exception:
+        return str(getattr(user_team, "name", "") or getattr(user_team, "city", "") or "")
+
+
+def _dev_org_group(pool: str, league_id: str, signed: bool) -> str:
+    p = str(pool or "").lower()
+    lid = str(league_id or "").upper()
+    if p in ("nhl", "ahl"):
+        return "NHL / AHL"
+    if p == "echl":
+        return "ECHL"
+    if not signed or p == "unsigned":
+        return "Unsigned"
+    if "NCAA" in lid or lid in ("OHL", "WHL", "QMJHL", "USHL") or "CHL" in lid:
+        return "Junior / NCAA"
+    if lid.startswith("EU_") or any(x in lid for x in ("SHL", "LIIGA", "DEL", "KHL", "NL")):
+        return "Europe"
+    if p == "development":
+        if "NCAA" in lid or "CHL" in lid or lid in ("OHL", "WHL", "QMJHL", "USHL"):
+            return "Junior / NCAA"
+        return "Europe"
+    return "Junior / NCAA"
+
+
+def _dev_collect_org_entries(session: FranchiseSession) -> List[Dict[str, Any]]:
+    uid = str(getattr(session, "user_team_id", "") or "")
+    user_team = session.team_by_id.get(uid)
+    entries: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    def add(player: Any, pool: str, team_id: str, league_id: str, team_name: str = "") -> None:
+        if player is None or getattr(player, "retired", False):
+            return
+        pid = _dev_player_id(player)
+        if not pid:
+            return
+        norm = pid.lower()
+        if norm in seen:
+            return
+        seen.add(norm)
+        signed = _dev_is_signed(player)
+        entries.append(
+            {
+                "player": player,
+                "player_id": pid,
+                "pool": pool,
+                "organization_id": uid,
+                "team_id": str(team_id or uid),
+                "league_id": str(league_id or ""),
+                "team_name": str(team_name or ""),
+                "signed": signed,
+                "org_group": _dev_org_group(pool, league_id, signed),
+            }
+        )
+
+    if user_team is not None:
+        from services.franchise_sim import _display_team
+
+        tname = _display_team(user_team)
+        for p in getattr(user_team, "roster", None) or []:
+            add(p, "nhl", uid, "NHL", tname)
+        for p in getattr(user_team, "ahl_roster", None) or []:
+            add(p, "ahl", uid, "AHL", tname)
+        for p in getattr(user_team, "echl_roster", None) or []:
+            add(p, "echl", uid, "ECHL", tname)
+        for p in getattr(user_team, "prospect_pool", None) or getattr(user_team, "prospects", None) or []:
+            if str(getattr(p, "status", "") or "").lower() in ("nhl", "active"):
+                continue
+            lid = str(getattr(p, "current_league_id", "") or getattr(p, "development_path", "") or "Unsigned")
+            pool = "prospects" if _dev_is_signed(p) else "unsigned"
+            add(p, pool, uid, lid, tname)
+
+    league = getattr(getattr(session, "sim", None), "league", None)
+    for block in getattr(league, "development_leagues", None) or []:
+        code = str(block.get("league_code") or "")
+        for tm in block.get("teams") or []:
+            tname = str(tm.get("name") or "")
+            for p in tm.get("players") or []:
+                rights = str(
+                    getattr(p, "nhl_rights_team_id", None)
+                    or getattr(p, "rights_team_id", None)
+                    or ""
+                )
+                if rights != uid:
+                    continue
+                add(p, "development", uid, code, tname)
+    return entries
+
+
+def _dev_season_stats(session: FranchiseSession, player: Any) -> Dict[str, Any]:
+    pid = _dev_player_id(player)
+    row = dict((getattr(session, "player_season_stats", None) or {}).get(pid) or {})
+    gp = int(row.get("gp", 0) or getattr(player, "gp", 0) or 0)
+    if gp <= 0:
+        gp = int(getattr(player, "games_played", 0) or 0)
+    goals = int(row.get("g", row.get("goals", 0)) or 0)
+    assists = int(row.get("a", row.get("assists", 0)) or 0)
+    points = int(row.get("pts", goals + assists) or 0)
+    out: Dict[str, Any] = {
+        "gp": gp,
+        "goals": goals,
+        "assists": assists,
+        "points": points,
+        "league": str(row.get("league", "") or getattr(player, "current_league_id", "") or ""),
+    }
+    if gp > 0:
+        out["ppg"] = round(points / gp, 2)
+    toi = row.get("toi_sec")
+    if toi:
+        out["toi_sec"] = int(toi)
+    if _dev_is_goalie(player):
+        starts = int(row.get("starts", row.get("gs", 0)) or 0)
+        sv = row.get("sv_pct", row.get("save_pct"))
+        gaa = row.get("gaa", row.get("goals_against_avg"))
+        if starts:
+            out["starts"] = starts
+        if sv is not None:
+            out["save_pct"] = round(float(sv), 3) if float(sv) <= 1.5 else round(float(sv), 1)
+        if gaa is not None:
+            out["gaa"] = round(float(gaa), 2)
+        if gp:
+            out["workload"] = starts or gp
+    return out
+
+
+def _dev_league_adjusted_context(player: Any, season_stats: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        from services.unsigned_prospect_development import _league_quality
+
+        lid = str(
+            season_stats.get("league")
+            or getattr(player, "current_league_id", "")
+            or getattr(player, "development_path", "")
+            or ""
+        )
+        lq = float(_league_quality(lid))
+        gp = int(season_stats.get("gp", 0) or 0)
+        ppg = float(season_stats.get("ppg", 0) or 0)
+        out: Dict[str, Any] = {"league_quality": round(lq, 2)}
+        if gp >= 10 and ppg > 0:
+            out["production_rate"] = round(ppg * lq, 2)
+        prod = float(getattr(player, "production_score", 0) or getattr(player, "ppg", 0) or 0)
+        if prod > 0 and gp >= 10:
+            out["production_score"] = round(prod, 2)
+        return out
+    except Exception:
+        return {}
+
+
+def _dev_build_reasons(
+    player: Any,
+    session: FranchiseSession,
+    *,
+    trend: str,
+    ovr_delta: float,
+    attr_deltas: Dict[str, float],
+    season_stats: Dict[str, Any],
+    league_ctx: Dict[str, Any],
+) -> Tuple[str, List[str]]:
+    reasons: List[str] = []
+    pos_deltas = sorted(
+        ((k, v) for k, v in attr_deltas.items() if v > 0 and _dev_is_skill_attr(k)),
+        key=lambda x: -x[1],
+    )
+    neg_deltas = sorted(
+        ((k, v) for k, v in attr_deltas.items() if v < 0 and _dev_is_skill_attr(k)),
+        key=lambda x: x[1],
+    )
+    injured = bool(getattr(player, "injured", False) or getattr(player, "injury_flag", False))
+    gp = int(season_stats.get("gp", 0) or 0)
+
+    if trend not in (_DEV_TREND_REGRESSED,) and ovr_delta >= -0.1:
+        if len(pos_deltas) >= 2:
+            reasons.append(f"{_dev_attr_label(pos_deltas[0][0])} and {_dev_attr_label(pos_deltas[1][0])} improved")
+        elif len(pos_deltas) == 1:
+            reasons.append(f"{_dev_attr_label(pos_deltas[0][0])} improved")
+
+    if league_ctx.get("production_rate") and float(league_ctx["production_rate"]) >= 0.55 and trend in (
+        _DEV_TREND_IMPROVED,
+        _DEV_TREND_BREAKOUT,
+    ):
+        lid = str(season_stats.get("league", "") or "").upper()
+        if "AHL" in lid:
+            reasons.append("Strong AHL production accelerated readiness")
+        elif gp >= 20:
+            reasons.append("League production supported development")
+
+    if gp > 0 and gp < 15 and _dev_player_age(player) <= 24 and trend == _DEV_TREND_STALLED:
+        reasons.append("Limited games slowed development")
+
+    if injured and neg_deltas:
+        skate_keys = [k for k, _ in neg_deltas if "skat" in k.lower() or "speed" in k.lower()]
+        if skate_keys:
+            reasons.append("Injury reduced skating growth")
+        elif trend == _DEV_TREND_REGRESSED:
+            reasons.append("Injury limited offseason gains")
+
+    if _dev_player_age(player) >= 27 and trend == _DEV_TREND_REGRESSED and ovr_delta < 0:
+        reasons.append("Regression driven by age decline")
+
+    if _dev_is_goalie(player) and _dev_player_age(player) < 23 and _dev_readiness_tier(player, _dev_readiness_score_raw(player)) in (
+        _DEV_READINESS_LONG_TERM,
+        _DEV_READINESS_DEVELOPING,
+    ):
+        reasons.append("Goalie development remains long-term")
+
+    dev_type = str(getattr(player, "dev_type", "") or getattr(player, "_dev_archetype", "") or "").lower()
+    if "late_bloomer" in dev_type and ovr_delta >= 0.5 and _dev_player_age(player) >= 22:
+        reasons.append("Late-bloomer growth exceeded expectations")
+
+    if trend == _DEV_TREND_STALLED and not reasons:
+        reasons.append("Development plateaued this cycle")
+
+    if trend == _DEV_TREND_REGRESSED and ovr_delta < -0.3 and not reasons:
+        if len(neg_deltas) >= 2:
+            reasons.append(f"{_dev_attr_label(neg_deltas[0][0])} and {_dev_attr_label(neg_deltas[1][0])} declined")
+        elif len(neg_deltas) == 1:
+            reasons.append(f"{_dev_attr_label(neg_deltas[0][0])} declined")
+        else:
+            reasons.append("Overall skills declined this cycle")
+
+    if trend == _DEV_TREND_STABLE and not reasons and abs(ovr_delta) < 0.2:
+        reasons.append("Maintained current development level")
+
+    trimmed = [r for r in reasons if r and len(r.split()) <= 15]
+    if not trimmed:
+        return "", []
+    return trimmed[0], trimmed[1:3]
+
+
+def _dev_notable_category(
+    player: Any,
+    *,
+    trend: str,
+    ovr_delta: float,
+    readiness_tier: str,
+    prev_tier: str,
+    attr_deltas: Dict[str, float],
+) -> Tuple[bool, str]:
+    attr_gain = sum(v for v in attr_deltas.values() if v > 0)
+    dev_type = str(getattr(player, "dev_type", "") or "").lower()
+    if trend == _DEV_TREND_BREAKOUT and ovr_delta >= 1.0:
+        return True, "Top Riser"
+    if ovr_delta >= 1.5:
+        return True, "Top Riser"
+    if trend == _DEV_TREND_REGRESSED and ovr_delta <= -0.5:
+        return True, "Regressed"
+    if ovr_delta <= -1.0:
+        return True, "Regressed"
+    if readiness_tier == _DEV_READINESS_NHL_READY and prev_tier != _DEV_READINESS_NHL_READY:
+        return True, "Newly NHL Ready"
+    if trend == _DEV_TREND_STALLED:
+        return True, "Stalled"
+    if "late_bloomer" in dev_type and _dev_player_age(player) >= 22 and ovr_delta >= 0.5:
+        return True, "Late Bloomer"
+    if readiness_tier == _DEV_READINESS_AT_RISK and (trend == _DEV_TREND_REGRESSED or ovr_delta < -0.5):
+        return True, "High Risk"
+    if attr_gain >= 2.5 and ovr_delta >= 0.4:
+        return True, "Top Riser"
+    return False, ""
+
+
+def _dev_append_history(player: Any, record: Dict[str, Any], season: int) -> None:
+    hist = getattr(player, "development_history", None)
+    if not isinstance(hist, list):
+        hist = []
+        try:
+            setattr(player, "development_history", hist)
+        except Exception:
+            return
+    key_deltas = {
+        k: v
+        for k, v in sorted(
+            (record.get("attribute_deltas") or {}).items(),
+            key=lambda x: -abs(x[1]),
+        )[:6]
+    }
+    entry = {
+        "season": int(season),
+        "previous_ovr": record.get("previous_overall"),
+        "new_ovr": record.get("current_overall"),
+        "ovr_delta": record.get("overall_delta"),
+        "attribute_deltas": key_deltas,
+        "development_trend": record.get("development_trend"),
+        "league": record.get("current_league_id"),
+        "readiness_tier": record.get("readiness_tier"),
+        "kind": "offseason_report",
+    }
+    if hist and isinstance(hist[-1], dict) and int(hist[-1].get("season", -1)) == int(season) and hist[-1].get("kind") == "offseason_report":
+        hist[-1] = entry
+    else:
+        hist.append(entry)
+
+
+def _dev_validate_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Reject impossible combinations of labels, attribute deltas, and OVR movement."""
+    ovr_delta = float(record.get("overall_delta", 0) or 0)
+    attr_deltas = dict(record.get("attribute_deltas") or {})
+    trend = str(record.get("development_trend") or _DEV_TREND_STABLE)
+
+    # Detect legacy corrupt scaling (uniform ±24–25 on many keys).
+    if len(attr_deltas) >= 5:
+        rounded = [round(float(v), 1) for v in attr_deltas.values()]
+        if len(set(rounded)) == 1 and abs(rounded[0]) >= 20:
+            record["attribute_deltas"] = {}
+            record["previous_attributes"] = {}
+            record["current_attributes"] = {}
+            attr_deltas = {}
+
+    # Reconcile trend with authoritative OVR delta.
+    attr_sum = sum(v for v in attr_deltas.values() if v > 0)
+    attr_neg = sum(v for v in attr_deltas.values() if v < 0)
+    expected = _dev_normalize_trend(None, ovr_delta, attr_deltas)
+    if trend in (_DEV_TREND_BREAKOUT, _DEV_TREND_REGRESSED) and abs(ovr_delta) < 0.15:
+        trend = expected
+    elif trend == _DEV_TREND_BREAKOUT and ovr_delta < 0.8:
+        trend = expected
+    elif trend == _DEV_TREND_REGRESSED and ovr_delta > -0.25:
+        trend = expected
+    record["development_trend"] = trend
+
+    primary = str(record.get("primary_reason") or "")
+    if primary and "improved" in primary.lower() and trend == _DEV_TREND_REGRESSED:
+        record["primary_reason"] = ""
+        record["secondary_reasons"] = []
+    if primary and "declined" in primary.lower() and trend in (_DEV_TREND_IMPROVED, _DEV_TREND_BREAKOUT):
+        record["primary_reason"] = ""
+        record["secondary_reasons"] = []
+
+    notable_cat = str(record.get("notable_category") or "")
+    if notable_cat == "Regressed" and ovr_delta > -0.4:
+        record["notable"] = False
+        record["notable_category"] = ""
+    if notable_cat == "Top Riser" and ovr_delta < 0.35 and attr_sum < 1.0:
+        record["notable"] = False
+        record["notable_category"] = ""
+    if trend == _DEV_TREND_STALLED and abs(ovr_delta) >= 0.5:
+        record["notable"] = bool(record.get("notable")) and notable_cat not in ("Stalled", "")
+
+    # Drop readiness headline when regression dominates.
+    if (
+        record.get("readiness_tier") == _DEV_READINESS_NHL_READY
+        and trend == _DEV_TREND_REGRESSED
+        and ovr_delta < -0.25
+        and attr_neg <= -0.5
+    ):
+        record["readiness_tier"] = _DEV_READINESS_CLOSE
+
+    return record
+
+
+def _dev_build_record(
+    session: FranchiseSession,
+    entry: Dict[str, Any],
+    before: Dict[str, Any],
+    after: Dict[str, Any],
+    *,
+    season: int,
+) -> Dict[str, Any]:
+    player = entry["player"]
+    ledger = getattr(player, "development_ledger", None) or {}
+    if not isinstance(ledger, dict):
+        ledger = {}
+
+    snap_deltas = _dev_attr_deltas(before.get("attributes") or {}, after.get("attributes") or {})
+    ledger_deltas = _dev_ledger_attr_deltas(ledger)
+
+    # Integer OVRs everywhere in the Organizational Development Review.
+    # Prefer season-start snapshot for cumulative season growth, then ledger, then snap.
+    ledger_prev, ledger_cur = _dev_ovr_from_ledger(ledger)
+    snap_prev = int(round(float(before.get("overall", 0) or 0)))
+    snap_cur = int(round(float(after.get("overall", 0) or 0)))
+    season_start = None
+    try:
+        raw_start = getattr(player, "season_start_ovr", None)
+        if raw_start is None:
+            raw_start = getattr(player, "_season_start_ovr", None)
+        if raw_start is not None:
+            season_start = int(round(float(raw_start)))
+    except Exception:
+        season_start = None
+    if season_start is not None and season_start > 0:
+        prev_ovr = season_start
+        cur_ovr = snap_cur if snap_cur > 0 else int(round(ledger_cur or snap_cur))
+        ovr_delta = int(cur_ovr - prev_ovr)
+    elif ledger_prev is not None:
+        prev_ovr = int(round(ledger_prev))
+        # Live OVR after any soft-regression / follow-on passes.
+        cur_ovr = snap_cur if snap_cur > 0 else int(round(ledger_cur or snap_cur))
+        ovr_delta = int(cur_ovr - prev_ovr)
+    else:
+        prev_ovr = snap_prev
+        cur_ovr = snap_cur
+        ovr_delta = int(cur_ovr - prev_ovr)
+
+    if snap_deltas:
+        attr_deltas = dict(snap_deltas)
+        if ledger_deltas:
+            for k, v in ledger_deltas.items():
+                if k not in attr_deltas or abs(float(attr_deltas.get(k, 0) or 0)) < abs(float(v)):
+                    attr_deltas[k] = v
+    elif ledger_deltas:
+        attr_deltas = dict(ledger_deltas)
+    else:
+        attr_deltas = {}
+
+    # Round attribute deltas to whole points for the report UI.
+    attr_deltas = {
+        k: int(round(float(v)))
+        for k, v in attr_deltas.items()
+        if abs(float(v)) >= 0.5
+    }
+    attr_deltas = {k: v for k, v in attr_deltas.items() if v != 0}
+    readiness_score = _dev_readiness_score_raw(player)
+    readiness_tier = _dev_readiness_tier(player, readiness_score)
+    prev_tier = _dev_readiness_tier(player, float(before.get("readiness_score", 0) or 0))
+    season_stats = _dev_season_stats(session, player)
+    trend = _dev_normalize_trend(
+        player,
+        ovr_delta,
+        attr_deltas,
+        session=session,
+        season_stats=season_stats,
+    )
+    league_ctx = _dev_league_adjusted_context(player, season_stats)
+    primary, secondary = _dev_build_reasons(
+        player,
+        session,
+        trend=trend,
+        ovr_delta=ovr_delta,
+        attr_deltas=attr_deltas,
+        season_stats=season_stats,
+        league_ctx=league_ctx,
+    )
+    notable, notable_category = _dev_notable_category(
+        player,
+        trend=trend,
+        ovr_delta=ovr_delta,
+        readiness_tier=readiness_tier,
+        prev_tier=prev_tier,
+        attr_deltas=attr_deltas,
+    )
+    # Keep only attributes that moved (plus a tiny floor set) — avoids huge/unsafe dumps.
+    changed_keys = set(attr_deltas.keys())
+    prev_attrs = {
+        k: v for k, v in (before.get("attributes") or {}).items() if k in changed_keys
+    }
+    cur_attrs = {
+        k: v for k, v in (after.get("attributes") or {}).items() if k in changed_keys
+    }
+    record = {
+        "player_id": entry["player_id"],
+        "organization_id": entry["organization_id"],
+        "player_name": _dev_player_name(player),
+        "position": _dev_player_position(player),
+        "age": _dev_player_age(player),
+        "contract_status": after.get("contract_status") or before.get("contract_status") or "",
+        "signed": bool(entry.get("signed")),
+        "previous_team_id": str(before.get("team_id", "") or ""),
+        "current_team_id": str(after.get("team_id", "") or entry.get("team_id", "")),
+        "previous_league_id": str(before.get("league_id", "") or ""),
+        "current_league_id": str(after.get("league_id", "") or entry.get("league_id", "")),
+        "previous_overall": prev_ovr,
+        "current_overall": cur_ovr,
+        "overall_delta": ovr_delta,
+        "previous_attributes": prev_attrs,
+        "current_attributes": cur_attrs,
+        "attribute_deltas": attr_deltas,
+        "potential": after.get("potential") or before.get("potential") or 0,
+        "development_phase": _dev_development_phase(player),
+        "development_trend": trend,
+        "readiness_tier": readiness_tier,
+        "readiness_score": readiness_score,
+        "primary_reason": primary,
+        "secondary_reasons": secondary,
+        "season_stats": season_stats,
+        "league_adjusted_context": league_ctx,
+        "goalie": _dev_is_goalie(player),
+        "notable": notable,
+        "notable_category": notable_category,
+        "org_group": entry.get("org_group", ""),
+        "pool": entry.get("pool", ""),
+        "team_name": (
+            _dev_franchise_team_name(session)
+            if (
+                str(entry.get("league_id") or "").upper() in ("NHL", "AHL", "ECHL")
+                or str(entry.get("org_group") or "").startswith("NHL")
+                or str(entry.get("pool") or "").lower() in ("nhl", "ahl", "echl")
+            )
+            else str(entry.get("team_name", "") or "")
+        ),
+        "report_season": int(season),
+        "development_history": _dev_compact_history(player),
+    }
+    _dev_append_history(player, record, season)
+    return _dev_validate_record(record)
+
+
+def _dev_compact_history(player: Any) -> List[Dict[str, Any]]:
+    hist = getattr(player, "development_history", None)
+    if not isinstance(hist, list):
+        return []
+    rows: List[Dict[str, Any]] = []
+    for item in hist:
+        if not isinstance(item, dict):
+            continue
+        if item.get("kind") not in ("offseason_report", None) and "ovr_delta" not in item:
+            continue
+        prev = item.get("previous_ovr", item.get("ovr_before"))
+        new = item.get("new_ovr", item.get("ovr_after"))
+        if prev is None and new is None:
+            continue
+        # History / ledger may store 0–1; promote to display if clearly fractional.
+        try:
+            prev_raw = float(prev) if prev is not None else None
+            new_raw = float(new) if new is not None else None
+        except Exception:
+            continue
+        if prev_raw is not None and abs(prev_raw) <= 1.5:
+            prev_f = int(round(prev_raw * 99.0))
+        else:
+            prev_f = int(round(prev_raw)) if prev_raw is not None else None
+        if new_raw is not None and abs(new_raw) <= 1.5:
+            new_f = int(round(new_raw * 99.0))
+        else:
+            new_f = int(round(new_raw)) if new_raw is not None else None
+        delta = item.get("ovr_delta")
+        if delta is None and prev_f is not None and new_f is not None:
+            delta = int(new_f - prev_f)
+        else:
+            try:
+                d_raw = float(delta) if delta is not None else None
+                if d_raw is not None and abs(d_raw) <= 1.5 and prev_f is not None and new_f is not None:
+                    delta = int(new_f - prev_f)
+                elif d_raw is not None:
+                    delta = int(round(d_raw))
+                else:
+                    delta = None
+            except Exception:
+                delta = None
+        rows.append(
+            {
+                "season": item.get("season"),
+                "previous_ovr": prev_f,
+                "new_ovr": new_f,
+                "ovr_delta": delta,
+                "development_trend": item.get("development_trend"),
+                "readiness_tier": item.get("readiness_tier"),
+                "league": item.get("league"),
+            }
+        )
+    return rows[-5:]
+
+
+def _run_user_org_depth_progression(session: FranchiseSession, season_id: int) -> None:
+    from app.sim_engine.progression import run_player_progression
+
+    entries = _dev_collect_org_entries(session)
+    rng = session.sim.rng
+    for entry in entries:
+        pool = str(entry.get("pool") or "")
+        if pool in ("nhl", "unsigned"):
+            continue
+        player = entry["player"]
+        try:
+            _dev_stamp_season_production(session, player)
+            setattr(player, "_active_dev_season", season_id)
+            setattr(player, "_dev_source_path", f"org_{pool}")
+            run_player_progression(
+                player,
+                rng,
+                season_id=season_id,
+                source_path=f"org_{pool}",
+            )
+        except Exception:
+            pass
+
+
+def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None:
+    """Feed real season production into growth modifiers (PPG / workload)."""
+    stats = _dev_season_stats(session, player)
+    gp = int(stats.get("gp", 0) or 0)
+    if gp <= 0:
+        return
+    try:
+        setattr(player, "games_played", max(int(getattr(player, "games_played", 0) or 0), gp))
+    except Exception:
+        pass
+    if _dev_is_goalie(player):
+        sv = float(stats.get("save_pct") or stats.get("sv_pct") or 0.0)
+        if sv > 1.5:
+            sv = sv / 100.0
+        # .900 → ~0.55, .920 → ~0.78, .930 → ~0.90
+        score = 0.35 + max(0.0, (sv - 0.880) * 8.5) if sv > 0 else 0.5
+    else:
+        pts = float(stats.get("points", 0) or 0)
+        ppg = pts / float(gp)
+        # 0.40 PPG ~ depth, 0.70 solid, 0.95+ star season
+        score = 0.32 + ppg * 0.55
+        if ppg >= 0.85:
+            score = max(score, 0.82)
+        if ppg >= 0.95:
+            score = max(score, 0.90)
+        if ppg >= 1.10:
+            score = max(score, 0.95)
+    score = max(0.22, min(0.98, float(score)))
+    for key in ("production_score", "recent_performance_score", "points_signal", "production"):
+        try:
+            setattr(player, key, score)
+        except Exception:
+            pass
+
+
+def _dev_season_gap_ovr(player: Any) -> float:
+    """Runway to potential in display OVR points."""
+    try:
+        from services.franchise_sim import _player_ovr99
+
+        ovr = float(_player_ovr99(player))
+    except Exception:
+        ovr = 0.0
+    pot = float(_dev_player_potential_display(player) or 0)
+    return max(0.0, pot - ovr)
+
+
+def _dev_expected_display_growth(player: Any) -> float:
+    """Individualized expected displayed OVR growth for catch-up comparisons."""
+    try:
+        from app.sim_engine.progression.development import (
+            calculate_season_growth_budget,
+            resolve_development_profile,
+            _SEASON_END_POOL_SHARE,
+        )
+
+        profile = resolve_development_profile(player)
+        # Deterministic mid-noise estimate (no RNG) via phase NORMAL budget.
+        class _FixedRng:
+            def uniform(self, a, b):
+                return (float(a) + float(b)) * 0.5
+
+            def random(self):
+                return 0.5
+
+            def choice(self, seq):
+                return seq[0] if seq else None
+
+        budget = calculate_season_growth_budget(
+            player, None, profile, rng=_FixedRng(), dev_phase="NORMAL"
+        )
+        # Season-end pool only — mid-season is separate.
+        return max(0.0, float(budget) * 99.0 * float(_SEASON_END_POOL_SHARE))
+    except Exception:
+        gap = _dev_season_gap_ovr(player)
+        age = int(_dev_player_age(player) or 99)
+        if age <= 20 and gap >= 10:
+            return 4.5
+        if age <= 23 and gap >= 7:
+            return 3.5
+        if gap >= 4:
+            return 2.5
+        return 1.5
+
+
+def _dev_needs_growth_catchup(player: Any) -> bool:
+    """True when actual growth falls materially below individualized expected growth."""
+    age = int(_dev_player_age(player) or 99)
+    if age > 28:
+        return False
+    if _dev_season_gap_ovr(player) < 3.0:
+        return False
+    ledger = getattr(player, "development_ledger", None) or {}
+    if not isinstance(ledger, dict) or not ledger.get("development_applied"):
+        return True
+    lp, lc = _dev_ovr_from_ledger(ledger)
+    if lp is None or lc is None:
+        return True
+    actual = float(lc) - float(lp)
+    # Prefer season-start cumulative if present.
+    try:
+        start = getattr(player, "season_start_ovr", None)
+        if start is None:
+            start = getattr(player, "_season_start_ovr", None)
+        if start is not None:
+            from services.franchise_sim import _player_ovr99
+
+            actual = float(_player_ovr99(player)) - float(start)
+    except Exception:
+        pass
+    expected = _dev_expected_display_growth(player)
+    # Catch up when shortfall is large (design §12) — not a universal +1.5 gate.
+    if expected <= 1.0:
+        return actual < 0.75
+    return actual < (expected * 0.55)
+
+
+def _run_development_growth_catchup(session: FranchiseSession, season_id: int) -> int:
+    """
+    Re-open development for players who already ran under the old tiny budgets
+    (or stalled to ~0) despite real potential runway. Preserves season-start OVR.
+    """
+    from app.sim_engine.entities.player import player_current_ovr_01
+    from app.sim_engine.progression.development import apply_player_development
+    from app.sim_engine.progression.potential import ensure_development_ledger
+
+    rng = session.sim.rng
+    touched = 0
+    seen: set = set()
+
+    def _one(player: Any) -> None:
+        nonlocal touched
+        if player is None or getattr(player, "retired", False):
+            return
+        pid = _dev_player_id(player)
+        if not pid or pid.lower() in seen:
+            return
+        seen.add(pid.lower())
+        _dev_stamp_season_production(session, player)
+        if not _dev_needs_growth_catchup(player):
+            return
+        try:
+            setattr(player, "_active_dev_season", season_id)
+            ledger = ensure_development_ledger(player, season_id)
+            # Catchup is a single corrective pass — never reopen every stage entry.
+            if ledger.get("catchup_applied"):
+                return
+            orig_before = ledger.get("ovr_before")
+            if orig_before is None:
+                orig_before = float(player_current_ovr_01(player))
+            prev_attrs = dict(ledger.get("attribute_deltas") or {})
+            ledger["development_applied"] = False
+            apply_player_development(player, rng)
+            ledger = getattr(player, "development_ledger", None) or ledger
+            if not isinstance(ledger, dict):
+                return
+            ledger["ovr_before"] = float(orig_before)
+            merged = {str(k): float(v) for k, v in prev_attrs.items()}
+            for k, v in (ledger.get("attribute_deltas") or {}).items():
+                merged[str(k)] = float(merged.get(str(k), 0.0)) + float(v)
+            ledger["attribute_deltas"] = merged
+            try:
+                ledger["ovr_after"] = float(player_current_ovr_01(player))
+            except Exception:
+                pass
+            ledger["source_path"] = "apply_player_development:catchup_v5"
+            ledger["catchup_applied"] = True
+            ledger["development_applied"] = True
+            try:
+                setattr(player, "development_ledger", ledger)
+            except Exception:
+                pass
+            touched += 1
+        except Exception:
+            pass
+
+    league = getattr(getattr(session, "sim", None), "league", None)
+    for team in list(getattr(league, "teams", None) or []):
+        for p in getattr(team, "roster", None) or []:
+            _one(p)
+    for entry in _dev_collect_org_entries(session):
+        if str(entry.get("pool") or "") == "nhl":
+            continue
+        _one(entry.get("player"))
+    return touched
+
+
+def _dev_summary_line(summary: Dict[str, Any]) -> str:
+    parts = []
+    if summary.get("improved"):
+        parts.append(f"{summary['improved']} improved")
+    if summary.get("nhl_ready"):
+        parts.append(f"{summary['nhl_ready']} NHL ready")
+    if summary.get("stalled"):
+        parts.append(f"{summary['stalled']} stalled")
+    if summary.get("regressed"):
+        parts.append(f"{summary['regressed']} regressed")
+    return " · ".join(parts) if parts else "No notable movement"
+
+
+def _run_offseason_development(session: FranchiseSession) -> Dict[str, Any]:
+    from datetime import datetime, timezone
+
+    season_id = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    completed = int(getattr(session, "development_report_completed_season", 0) or 0)
+
+    def _safe_payload(raw: Any) -> Dict[str, Any]:
+        try:
+            from services.json_safe import json_safe
+
+            cleaned = json_safe(raw)
+            return cleaned if isinstance(cleaned, dict) else {}
+        except Exception:
+            return raw if isinstance(raw, dict) else {}
+
+    if completed == season_id and session.development_report_payload:
+        session.development_report_payload = _safe_payload(session.development_report_payload)
+        cached = session.development_report_payload
+        if int(cached.get("schema_version", 1) or 1) >= 5:
+            return {"development_report": cached}
+    if getattr(session, "development_report_done", False) and session.development_report_payload:
+        payload = _safe_payload(session.development_report_payload)
+        session.development_report_payload = payload
+        if (
+            int(payload.get("report_season", 0) or 0) == season_id
+            and int(payload.get("schema_version", 1) or 1) >= 5
+        ):
+            return {"development_report": payload}
+
+    import run_sim as rs
+    from services.franchise_sim import _player_ovr99
+
+    sim = session.sim
+    league = getattr(sim, "league", None)
+    teams = list(getattr(league, "teams", None) or [])
+    rng = sim.rng
+
+    org_entries = _dev_collect_org_entries(session)
+    # Stamp production so growth budgets see real PPG / workload.
+    for entry in org_entries:
+        try:
+            _dev_stamp_season_production(session, entry["player"])
+        except Exception:
+            pass
+
+    before_snapshots: Dict[str, Dict[str, Any]] = {}
+    for entry in org_entries:
+        player = entry["player"]
+        pid = entry["player_id"]
+        snap = _dev_snapshot_player(
+            player,
+            team_id=entry.get("team_id", ""),
+            league_id=entry.get("league_id", ""),
+        )
+        snap["readiness_tier"] = _dev_readiness_tier(player, snap["readiness_score"])
+        before_snapshots[pid] = snap
+
+    league_before: Dict[str, float] = {}
+    for team in teams:
+        for p in getattr(team, "roster", None) or []:
+            pid = _dev_player_id(p)
+            if not pid:
+                continue
+            try:
+                _dev_stamp_season_production(session, p)
+            except Exception:
+                pass
+            league_before[pid] = _player_ovr99(p)
+            try:
+                setattr(p, "_active_dev_season", season_id)
+            except Exception:
+                pass
+
+    if getattr(rs, "_run_player_progression_pass", None) and not getattr(
+        session, "_year_end_progression_done", False
+    ):
+        try:
+            rs._run_player_progression_pass(teams, rng, None)
+        except Exception:
+            pass
+
+    try:
+        _run_user_org_depth_progression(session, season_id)
+    except Exception:
+        pass
+
+    # Year-end often already applied weak/zero growth under the old formula.
+    # Catch up high-runway players (e.g. 84 OVR / 94 POT) so the review isn't flat.
+    try:
+        _run_development_growth_catchup(session, season_id)
+    except Exception:
+        pass
+
+    unsigned_dev: Dict[str, Any] = {}
+    try:
+        from services.unsigned_prospect_development import run_unsigned_prospect_development_pass
+
+        unsigned_dev = run_unsigned_prospect_development_pass(session, season_year=season_id)
+    except Exception:
+        unsigned_dev = {"developed": 0, "results": []}
+
+    risers: List[Dict[str, Any]] = []
+    fallers: List[Dict[str, Any]] = []
+    for team in teams:
+        tname = ""
+        try:
+            from services.franchise_sim import _display_team
+
+            tname = _display_team(team)
+        except Exception:
+            tname = str(getattr(team, "name", "") or getattr(team, "city", "") or "")
+        for p in getattr(team, "roster", None) or []:
+            pid = _dev_player_id(p)
+            if not pid:
+                continue
+            after = _player_ovr99(p)
+            before_v = float(league_before.get(pid, after))
+            # Prefer true season-start OVR for cumulative year growth display.
+            try:
+                start = getattr(p, "season_start_ovr", None)
+                if start is None:
+                    start = getattr(p, "_season_start_ovr", None)
+                if start is not None:
+                    before_v = float(start)
+            except Exception:
+                pass
+            # Year-end progression often already applied — recover true delta from ledger.
+            ledger = getattr(p, "development_ledger", None) or {}
+            lp, lc = _dev_ovr_from_ledger(ledger if isinstance(ledger, dict) else {})
+            if before_v == float(league_before.get(pid, after)) and lp is not None and lc is not None:
+                before_v = float(lp)
+                after = float(lc)
+            elif lc is not None:
+                after = float(lc)
+            diff = after - before_v
+            if abs(diff) >= 0.5:
+                row = {
+                    "player_id": pid,
+                    "name": _dev_player_name(p),
+                    "player_name": _dev_player_name(p),
+                    "position": _dev_player_position(p),
+                    "age": _dev_player_age(p),
+                    "delta": int(round(diff)),
+                    "overall_delta": int(round(diff)),
+                    "overall": int(round(after)),
+                    "current_overall": int(round(after)),
+                    "previous_overall": int(round(before_v)),
+                    "team_name": tname,
+                    "current_league_id": "NHL",
+                    "org_group": "NHL / AHL",
+                    "league_id": "NHL",
+                    "potential": int(round(_dev_player_potential_display(p) or 0)),
+                }
+                if isinstance(ledger, dict):
+                    row["attribute_deltas"] = {
+                        k: int(round(float(v)))
+                        for k, v in (_dev_ledger_attr_deltas(ledger) or {}).items()
+                        if abs(float(v)) >= 0.5
+                    }
+                if diff > 0:
+                    risers.append(row)
+                else:
+                    fallers.append(row)
+
+    risers.sort(key=lambda r: -int(r.get("delta", 0) or 0))
+    fallers.sort(key=lambda r: int(r.get("delta", 0) or 0))
+
+    organization_players: List[Dict[str, Any]] = []
+    for entry in org_entries:
+        player = entry["player"]
+        pid = entry["player_id"]
+        before = before_snapshots.get(pid) or _dev_snapshot_player(
+            player,
+            team_id=entry.get("team_id", ""),
+            league_id=entry.get("league_id", ""),
+        )
+        after = _dev_snapshot_player(
+            player,
+            team_id=entry.get("team_id", ""),
+            league_id=entry.get("league_id", ""),
+        )
+        after["readiness_tier"] = _dev_readiness_tier(player, after["readiness_score"])
+        record = _dev_build_record(session, entry, before, after, season=season_id)
+        organization_players.append(record)
+
+    organization_players.sort(
+        key=lambda r: (
+            -float(r.get("current_overall", 0) or 0),
+            -abs(float(r.get("overall_delta", 0) or 0)),
+        )
+    )
+
+    prospects_ready = [
+        {
+            "player_id": r["player_id"],
+            "name": r["player_name"],
+            "position": r["position"],
+            "overall": r["current_overall"],
+            "readiness_tier": r["readiness_tier"],
+            "readiness_score": r["readiness_score"],
+        }
+        for r in organization_players
+        if r.get("readiness_tier") == _DEV_READINESS_NHL_READY
+    ]
+
+    summary = {
+        "improved": sum(1 for r in organization_players if r.get("development_trend") in (_DEV_TREND_IMPROVED, _DEV_TREND_BREAKOUT)),
+        "nhl_ready": len(prospects_ready),
+        "stalled": sum(1 for r in organization_players if r.get("development_trend") == _DEV_TREND_STALLED),
+        "regressed": sum(1 for r in organization_players if r.get("development_trend") == _DEV_TREND_REGRESSED),
+        "total": len(organization_players),
+    }
+    summary["line"] = _dev_summary_line(summary)
+
+    payload = {
+        "schema_version": 5,
+        "report_season": season_id,
+        "organization_players": organization_players,
+        "league_risers": risers[:48],
+        "league_fallers": fallers[:24],
+        "prospects_ready": prospects_ready,
+        "summary": summary,
+        "risers": risers[:48],
+        "fallers": fallers[:24],
+        "unsigned_prospect_development": unsigned_dev,
+        "org_prospect_deltas": list(unsigned_dev.get("results") or [])[:12],
+    }
+    try:
+        from services.json_safe import json_safe
+
+        payload = json_safe(payload)
+    except Exception:
+        pass
+    session.development_report_payload = payload if isinstance(payload, dict) else {}
+    session.development_report_done = True
+    session.development_report_completed_season = season_id
+    session.development_report_generated_at = datetime.now(timezone.utc).isoformat()
+    return {"development_report": session.development_report_payload}
+
+
+def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
+    from services.franchise_sim import (
+        _build_standings_rows,
+        _display_team,
+        invalidate_session_payload_caches,
+    )
+    from datetime import datetime, timezone
+
+    if session.draft_lottery_done and session.draft_lottery_payload:
+        return {"draft_lottery": session.draft_lottery_payload}
+
+    sim = session.sim
+    standings_rows = _build_standings_rows(session)
+    ordered = sorted(standings_rows, key=lambda r: (int(r.get("pts", 0)), -int(r.get("w", 0))))
+    pre_lottery_order: List[Dict[str, Any]] = []
+    for i, row in enumerate(ordered[:16], start=1):
+        tid = str(row.get("team_id", ""))
+        tm = session.team_by_id.get(tid)
+        pre_lottery_order.append({
+            "lottery_rank": i,
+            "team_id": tid,
+            "team_name": _display_team(tm) if tm else tid,
+            "points": int(row.get("pts", 0)),
+            "wins": int(row.get("w", 0)),
+        })
+
+    picks: List[Dict[str, Any]] = []
+    draw_results: List[Dict[str, Any]] = []
+    seed = hash(
+        (
+            int(session.season_calendar_year),
+            int(getattr(sim.rng, "getstate", lambda: (0,))()[1][0] if hasattr(sim.rng, "getstate") else 0),
+        )
+    ) % (2**31)
+    try:
+        from app.sim_engine.draft.draft_lottery import LotteryTeam, run_draft_lottery
+
+        lot_teams = [
+            LotteryTeam(team_id=str(row.get("team_id", "")), points=int(row.get("pts", 0)))
+            for row in ordered[:16]
+        ]
+        result = run_draft_lottery(teams=lot_teams, seed=seed)
+        order = list(getattr(result, "pick_order", None) or [])
+        winners = list(getattr(result, "lottery_winners", None) or [])
+        for i, tid in enumerate(winners[:2], start=1):
+            draw_results.append({"draw": i, "team_id": str(tid), "won_pick": i})
+        for pick_num, tid in enumerate(order[:16], start=1):
+            orig_rank = next((i + 1 for i, r in enumerate(ordered) if str(r.get("team_id")) == str(tid)), pick_num)
+            tm = session.team_by_id.get(str(tid))
+            picks.append({
+                "pick": pick_num,
+                "team_id": str(tid),
+                "team_name": _display_team(tm) if tm else str(tid),
+                "original_rank": orig_rank,
+                "movement": orig_rank - pick_num,
+                "won_pick": pick_num if pick_num <= 2 and str(tid) in {str(w) for w in winners[:2]} else None,
+            })
+    except Exception:
+        for i, row in enumerate(ordered[:16], start=1):
+            tid = str(row.get("team_id", ""))
+            tm = session.team_by_id.get(tid)
+            picks.append({
+                "pick": i,
+                "team_id": tid,
+                "team_name": _display_team(tm) if tm else tid,
+                "original_rank": i,
+                "movement": 0,
+                "won_pick": None,
+            })
+
+    # Finalize protections against lottery outcome before draft order creation later.
+    try:
+        from services.draft_pick_conditions import resolve_pick_protections
+
+        league = getattr(sim, "league", None)
+        if league is not None:
+            resolve_pick_protections(
+                league,
+                draft_year=int(session.season_calendar_year) + 1,
+                lottery_order=[str(p["team_id"]) for p in picks],
+            )
+    except Exception:
+        pass
+
+    payload = {
+        "lottery_seed": seed,
+        "pre_lottery_order": pre_lottery_order,
+        "draw_results": draw_results,
+        "final_order": picks,
+        "picks": picks,
+        "order": picks,
+        "movement": [{"team_id": p["team_id"], "movement": p.get("movement", 0)} for p in picks],
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    session.draft_lottery_payload = payload
+    session.draft_lottery_done = True
+    invalidate_session_payload_caches(session, reason="draft_lottery")
+    return {"draft_lottery": payload}
+
+
+# ── Draft Review (post-draft evaluation) ─────────────────────────────────────
+
+_DR_LEAGUE_LABELS = {
+    "CHL_QMJHL": "QMJHL",
+    "CHL_OHL": "OHL",
+    "CHL_WHL": "WHL",
+    "QMJHL": "QMJHL",
+    "OHL": "OHL",
+    "WHL": "WHL",
+    "USHL": "USHL",
+    "NCAA": "NCAA",
+    "NCAA_D1": "NCAA",
+    "EU_SHL": "SHL",
+    "SHL": "SHL",
+    "EU_LIIGA": "Liiga",
+    "LIIGA": "Liiga",
+    "EU_DEL": "DEL",
+    "DEL": "DEL",
+    "EU_KHL": "KHL",
+    "KHL": "KHL",
+    "EU_CZE": "Czech Extraliga",
+    "CZE": "Czech Extraliga",
+    "EU_SUI": "NL",
+    "SUI": "NL",
+    "ALLSV": "Allsvenskan",
+    "AHL": "AHL",
+    "NHL": "NHL",
+    "JUNIOR": "Junior",
+    "EUROPE": "Europe",
+}
+
+
+def _dr_league_label(raw: Any) -> Optional[str]:
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    key = s.upper().replace(" ", "_").replace("-", "_")
+    if key in _DR_LEAGUE_LABELS:
+        return _DR_LEAGUE_LABELS[key]
+    if key.startswith("CHL_"):
+        return key.split("_", 1)[1]
+    if key.startswith("EU_"):
+        return _DR_LEAGUE_LABELS.get(key, key[3:].replace("_", " ").title())
+    if "_" in key and key.split("_")[-1] in _DR_LEAGUE_LABELS:
+        return _DR_LEAGUE_LABELS[key.split("_")[-1]]
+    return s.replace("_", " ")
+
+
+def _dr_to_float(raw: Any, default: Optional[float] = None) -> Optional[float]:
+    if raw is None or raw == "":
+        return default
+    if callable(raw) and not isinstance(raw, (int, float)):
+        try:
+            raw = raw()
+        except TypeError:
+            return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _dr_to_int(raw: Any, default: Optional[int] = None) -> Optional[int]:
+    v = _dr_to_float(raw, None)
+    if v is None:
+        return default
+    return int(round(v))
+
+
+def _dr_merge_stat_blob(*blobs: Any) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for blob in blobs:
+        if not isinstance(blob, dict):
+            continue
+        for src_key, dest_key in (
+            ("gp", "gp"),
+            ("games", "gp"),
+            ("games_played", "gp"),
+            ("g", "goals"),
+            ("goals", "goals"),
+            ("a", "assists"),
+            ("assists", "assists"),
+            ("pts", "points"),
+            ("points", "points"),
+            ("ppg", "ppg"),
+            ("points_per_game", "ppg"),
+            ("shots", "shots"),
+            ("sog", "shots"),
+            ("toi_sec", "toi_sec"),
+            ("toi", "toi_sec"),
+            ("primary_points", "primary_points"),
+            ("p1", "primary_points"),
+            ("starts", "starts"),
+            ("gs", "starts"),
+            ("sv_pct", "save_pct"),
+            ("save_pct", "save_pct"),
+            ("save_percentage", "save_pct"),
+            ("gaa", "gaa"),
+            ("goals_against_avg", "gaa"),
+            ("so", "shutouts"),
+            ("shutouts", "shutouts"),
+            ("league", "league"),
+            ("league_name", "league"),
+            ("league_code", "league"),
+        ):
+            if dest_key in out and out[dest_key] not in (None, "", 0, 0.0):
+                continue
+            if blob.get(src_key) is not None and blob.get(src_key) != "":
+                out[dest_key] = blob.get(src_key)
+    return out
+
+
+def _dr_player_stat_blob(player: Any) -> Dict[str, Any]:
+    if player is None:
+        return {}
+    blobs = [
+        getattr(player, "season_stats", None),
+        getattr(player, "stats", None),
+        getattr(player, "last_season_stats", None),
+        getattr(player, "prospect_stats", None),
+    ]
+    flat = {
+        "gp": getattr(player, "gp", None) or getattr(player, "games_played", None),
+        "goals": getattr(player, "goals", None) or getattr(player, "g", None),
+        "assists": getattr(player, "assists", None) or getattr(player, "a", None),
+        "points": getattr(player, "points", None) or getattr(player, "pts", None),
+        "ppg": getattr(player, "ppg", None) or getattr(player, "points_per_game", None),
+        "league": getattr(player, "current_league_id", None) or getattr(player, "league", None),
+        "save_pct": getattr(player, "save_pct", None) or getattr(player, "sv_pct", None),
+        "gaa": getattr(player, "gaa", None),
+        "starts": getattr(player, "starts", None),
+    }
+    return _dr_merge_stat_blob(flat, *[b for b in blobs if isinstance(b, dict)])
+
+
+def _dr_public_ability(pick: Dict[str, Any], board: Dict[str, Any], player: Any = None) -> float:
+    for raw in (
+        pick.get("nhl_readiness"),
+        pick.get("floor_grade"),
+        pick.get("current_ovr_estimate"),
+        pick.get("scouted_overall_estimate"),
+        board.get("nhl_readiness"),
+        board.get("current_ovr_estimate"),
+        board.get("scouted_overall_estimate"),
+        board.get("floor_score"),
+        getattr(player, "nhl_readiness", None) if player is not None else None,
+    ):
+        v = _dr_to_float(raw)
+        if v is None:
+            continue
+        if v <= 1.5:
+            v *= 99.0
+        if v > 0:
+            return v
+    return 0.0
+
+
+def _dr_public_ceiling(pick: Dict[str, Any], board: Dict[str, Any]) -> Optional[str]:
+    for raw in (
+        pick.get("potential_grade"),
+        pick.get("ceiling_grade"),
+        pick.get("talent_grade"),
+        pick.get("scout_tier"),
+        board.get("talent_grade"),
+        board.get("potential_grade"),
+        board.get("scout_tier"),
+        board.get("ceiling_label"),
+    ):
+        if raw is None or raw == "":
+            continue
+        # Avoid leaking raw numeric hidden potential; allow letter grades / tiers.
+        if isinstance(raw, (int, float)):
+            v = float(raw)
+            if v <= 1.5:
+                continue
+            if v >= 90:
+                return "Elite ceiling"
+            if v >= 84:
+                return "High ceiling"
+            if v >= 78:
+                return "Upside starter"
+            if v >= 72:
+                return "Solid NHL tools"
+            return "Developmental ceiling"
+        s = str(raw).strip()
+        if s.lower() in ("true", "false") or s.replace(".", "", 1).isdigit():
+            continue
+        return s
+    return None
+
+
+def _dr_public_floor(pick: Dict[str, Any], board: Dict[str, Any]) -> Optional[str]:
+    for raw in (
+        pick.get("floor_grade"),
+        board.get("floor_label"),
+        board.get("floor_score"),
+        pick.get("current_ovr_estimate"),
+    ):
+        if raw is None or raw == "":
+            continue
+        if isinstance(raw, (int, float)):
+            v = float(raw)
+            if v <= 1.5:
+                v *= 99.0
+            if v >= 70:
+                return "NHL-ready floor"
+            if v >= 64:
+                return "AHL / depth floor"
+            if v >= 58:
+                return "Org depth floor"
+            return "Project floor"
+        s = str(raw).strip()
+        if s.replace(".", "", 1).isdigit():
+            continue
+        return s
+    return None
+
+
+def _dr_resolve_eta_years(pick: Dict[str, Any], board: Dict[str, Any], player: Any = None) -> Tuple[int, str]:
+    """ETA years from public signals — never requires hidden true OVR."""
+    overall = _dr_to_int(pick.get("overall_pick"), 99) or 99
+    rank = _dr_to_int(pick.get("final_rank") or board.get("rank"), overall) or overall
+    ability = _dr_public_ability(pick, board, player)
+    age = _dr_to_int(pick.get("age") or board.get("age"), 18) or 18
+    conf = _dr_confidence_label(pick.get("scouting_confidence") or board.get("scouting_confidence"))
+    # Prefer stored draft ETA when present, then refine by ability/rank.
+    stored = _dr_to_int(pick.get("nhl_eta") or board.get("nhl_eta") or board.get("eta_years"), None)
+    years = stored if stored is not None else 4
+    if ability >= 72 and rank <= 15:
+        years = min(years, 1)
+    elif ability >= 68 and rank <= 32:
+        years = min(years, 2)
+    elif ability >= 64 and overall <= 32:
+        years = min(years, 3)
+    elif ability > 0 and ability < 55 and overall > 64:
+        years = max(years, 5)
+    elif ability > 0 and ability < 58 and overall <= 32:
+        years = max(years, 3)
+    if age <= 17:
+        years = max(years, 3)
+    elif age >= 20 and ability >= 64:
+        years = min(years, max(1, years - 1))
+    # Top pick should not default to mid-range project without signals.
+    if overall <= 10 and ability >= 60:
+        years = min(years, 2)
+    elif overall <= 10 and ability <= 0:
+        years = min(years if stored is not None else 3, 3)
+    years = max(0, min(int(years), 8))
+    return years, conf
+
+
+def _dr_scouting_summary(pick: Dict[str, Any], board: Dict[str, Any], selection: Dict[str, Any]) -> Dict[str, Any]:
+    ceiling = _dr_public_ceiling(pick, board)
+    floor = _dr_public_floor(pick, board)
+    conf = selection.get("scouting_confidence_label") or _dr_confidence_label(
+        pick.get("scouting_confidence") or board.get("scouting_confidence")
+    )
+    risk = str(selection.get("risk_level") or pick.get("risk_score") or board.get("risk") or "Medium")
+    board_bits = []
+    if selection.get("board_range"):
+        board_bits.append(str(selection["board_range"]))
+    if selection.get("selection_delta_label"):
+        board_bits.append(str(selection["selection_delta_label"]))
+    notes = []
+    if pick.get("pick_reason"):
+        notes.append(str(pick["pick_reason"]))
+    snap = pick.get("board_snapshot") if isinstance(pick.get("board_snapshot"), dict) else {}
+    if snap.get("pick_reasoning") and snap["pick_reasoning"] not in notes:
+        notes.append(str(snap["pick_reasoning"]))
+    if snap.get("stock_movement"):
+        notes.append(f"Stock: {snap['stock_movement']}")
+    if selection.get("selection_reason"):
+        notes.append(str(selection["selection_reason"]))
+    headline_parts = [p for p in (floor, ceiling) if p]
+    if not headline_parts:
+        headline = f"{selection.get('selection_verdict') or 'Scouting'} profile · {conf} confidence"
+    else:
+        headline = " · ".join(headline_parts[:2])
+    return {
+        "mode": "scouting",
+        "headline": headline,
+        "floor_label": floor,
+        "ceiling_label": ceiling,
+        "potential_label": ceiling,
+        "scouting_confidence_label": conf,
+        "risk_level": risk,
+        "board_context": " · ".join(board_bits) if board_bits else None,
+        "notes": notes[:3],
+        "league_context": "Production sample unavailable — scouting profile shown",
+        "data_confidence": conf,
+    }
+
+
+_DR_RIGHTS_STATUS_LABELS = {
+    "exclusive_rights": "Exclusive rights",
+    "college_rights": "College rights",
+    "indefinite_european_rights": "Indefinite European rights",
+    "drafted_unsigned": "Drafted, unsigned",
+    "signed": "Signed",
+    "rights_relinquished": "Rights relinquished",
+    "unrestricted_free_agent": "Unrestricted free agent",
+    "draft_reentry": "Draft re-entry",
+}
+
+_DR_ENV_GRADE_LABELS = {
+    "ideal": "Ideal environment",
+    "good": "Strong environment",
+    "acceptable": "Acceptable environment",
+    "risky": "Risky environment",
+    "poor": "Poor environment",
+}
+
+_DR_CONFIDENCE_LABELS = (
+    (75, "High"),
+    (50, "Medium"),
+    (0, "Low"),
+)
+
+
+def _dr_confidence_label(raw: Any) -> str:
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return "Medium"
+    if v <= 1.5:
+        v *= 100.0
+    for threshold, label in _DR_CONFIDENCE_LABELS:
+        if v >= threshold:
+            return label
+    return "Low"
+
+
+def _dr_pos_keys(pos: str) -> Tuple[str, ...]:
+    bucket = str(pos or "").upper()
+    if bucket in ("LW", "RW", "W"):
+        return ("LW", "RW", "W")
+    if bucket in ("D", "LD", "RD", "LHD", "RHD") or bucket.endswith("D"):
+        return ("D", "LD", "RD", "LHD", "RHD")
+    if bucket == "G":
+        return ("G",)
+    if bucket == "C":
+        return ("C",)
+    return (bucket,) if bucket else ()
+
+
+def _dr_pos_group(pos: str) -> str:
+    p = str(pos or "").upper()
+    if p == "G":
+        return "G"
+    if p in ("D", "LD", "RD", "LHD", "RHD") or p.endswith("D"):
+        return "D"
+    return "F"
+
+
+def _dr_player_pos(player: Any, fallback: str = "") -> str:
+    if player is None:
+        return str(fallback or "").upper()
+    try:
+        return _dev_player_position(player) or str(fallback or "").upper()
+    except Exception:
+        return str(getattr(player, "position", None) or fallback or "").upper()
+
+
+def _dr_player_matches_pos(player: Any, pos: str) -> bool:
+    keys = _dr_pos_keys(pos)
+    if not keys:
+        return False
+    ppos = _dr_player_pos(player)
+    if ppos in keys:
+        return True
+    sec = str(getattr(player, "secondary_position", "") or "").upper()
+    return sec in keys
+
+
+def _dr_eta_range(eta: Any, confidence: str = "Medium") -> Tuple[str, str]:
+    try:
+        e = int(eta)
+    except (TypeError, ValueError):
+        e = 4
+    e = max(0, min(e, 8))
+    bands = {
+        0: "0–1 years",
+        1: "0–2 years",
+        2: "1–3 years",
+        3: "2–4 years",
+        4: "3–5 years",
+        5: "4–6 years",
+        6: "5–7 years",
+    }
+    label = bands.get(e, "5–8 years")
+    return label, confidence or "Medium"
+
+
+def _dr_pub_delta(pick: Dict[str, Any]) -> Optional[int]:
+    d = pick.get("public_rank_delta")
+    if d is None:
+        d = pick.get("public_board_delta")
+    if d is None:
+        try:
+            fr = int(pick.get("final_rank") or 0)
+            op = int(pick.get("overall_pick") or 0)
+            if fr > 0 and op > 0:
+                d = op - fr
+        except (TypeError, ValueError):
+            d = None
+    try:
+        return int(d) if d is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _dr_selection_review(pick: Dict[str, Any], needs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    label = str(pick.get("selection_label") or pick.get("pick_classification") or "").strip()
+    conf_raw = pick.get("scouting_confidence")
+    if conf_raw is None:
+        conf_raw = (pick.get("board_snapshot") or {}).get("scouting_confidence")
+    conf_label = _dr_confidence_label(conf_raw)
+    delta = _dr_pub_delta(pick)
+    risk = str(pick.get("risk_score") or pick.get("risk") or "Medium")
+    need_cats = {str(n.get("category") or "") for n in (needs or [])[:4]}
+    pos = str(pick.get("position") or "").upper()
+    fills_need = any(
+        (n in ("Franchise Center", "Center Depth") and pos == "C")
+        or (n in ("Top-Six Winger", "Wing Depth") and pos in ("LW", "RW", "W"))
+        or (n == "Goalie Pipeline" and pos == "G")
+        or (n == "Right-Shot Defense" and pos in ("D", "RD", "RHD"))
+        for n in need_cats
+    )
+
+    board_range = None
+    snap = pick.get("board_snapshot") if isinstance(pick.get("board_snapshot"), dict) else {}
+    cr = snap.get("consensus_range") or pick.get("consensus_range")
+    if isinstance(cr, (list, tuple)) and len(cr) >= 2:
+        board_range = f"#{cr[0]}–#{cr[1]}"
+    elif snap.get("public_rank") is not None:
+        board_range = f"Board #{snap.get('public_rank')}"
+    elif pick.get("final_rank") is not None:
+        board_range = f"Board #{pick.get('final_rank')}"
+
+    if conf_label == "Low" and label in ("", "Off Board", "Expected"):
+        return {
+            "selection_grade": "C",
+            "selection_grade_label": "Incomplete read",
+            "selection_verdict": "Uncertain value",
+            "selection_reason": "Limited scouting confidence leaves board value unclear.",
+            "board_range": board_range,
+            "selection_delta_label": "Board incomplete",
+            "scouting_confidence": conf_raw,
+            "scouting_confidence_label": conf_label,
+            "risk_level": risk,
+            "risk_reason": "Uncertainty from thin scouting coverage.",
+        }
+
+    if label == "Steal":
+        grade, glabel, verdict = "A+", "Outstanding value", "Best value"
+        reason = "Fell well past public consensus at selection."
+    elif label == "Value":
+        grade, glabel, verdict = "B+", "Strong value", "Good value"
+        reason = "Available later than the public board expected."
+    elif label == "Expected":
+        grade, glabel, verdict = "B", "On the board", "Expected range"
+        reason = "Taken inside the expected public consensus window."
+    elif label == "Early" and fills_need:
+        grade, glabel, verdict = "B-", "Need fill", "Need-based selection"
+        reason = "Slightly early relative to the board, but fills an organizational need."
+    elif label == "Early":
+        grade, glabel, verdict = "B-", "Slight reach", "Aggressive projection"
+        reason = "Selected ahead of public consensus on upside projection."
+    elif label == "Reach":
+        grade, glabel, verdict = "C+", "Reach", "Aggressive projection"
+        reason = "Taken well ahead of public consensus ranking."
+    elif label == "Off Board":
+        grade, glabel, verdict = "C", "Off-board swing", "Long-term swing"
+        reason = "Selected outside the published consensus board."
+    elif fills_need:
+        grade, glabel, verdict = "B", "Need fill", "Need-based selection"
+        reason = "Addresses a documented organizational gap."
+    else:
+        grade, glabel, verdict = "B-", "Standard selection", "Expected range"
+        reason = pick.get("pick_reason") or "Standard selection relative to available information."
+
+    if delta is None:
+        delta_label = "Board incomplete"
+    elif delta >= 15:
+        delta_label = f"Fell {delta} spots"
+    elif delta >= 5:
+        delta_label = f"Value of +{delta}"
+    elif delta <= -15:
+        delta_label = f"Reached {-delta} spots"
+    elif delta <= -5:
+        delta_label = f"Early by {-delta}"
+    else:
+        delta_label = "Near board rank"
+
+    risk_reason = {
+        "High": "Projection carries meaningful bust risk.",
+        "Low": "Tools and path project with lower variance.",
+        "Medium": "Balanced risk relative to draft slot.",
+    }.get(risk, "Standard developmental risk.")
+
+    return {
+        "selection_grade": grade,
+        "selection_grade_label": glabel,
+        "selection_verdict": verdict,
+        "selection_reason": reason,
+        "board_range": board_range,
+        "selection_delta_label": delta_label,
+        "scouting_confidence": conf_raw,
+        "scouting_confidence_label": conf_label,
+        "risk_level": risk,
+        "risk_reason": risk_reason,
+    }
+
+
+def _dr_production_snapshot(
+    session: FranchiseSession,
+    player: Any,
+    pick: Dict[str, Any],
+    board: Optional[Dict[str, Any]] = None,
+    selection: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    board = board or {}
+    selection = selection or {}
+    stats = _dr_merge_stat_blob(
+        _dev_season_stats(session, player) if player is not None else {},
+        _dr_player_stat_blob(player),
+        pick.get("season_stats") if isinstance(pick.get("season_stats"), dict) else {},
+        pick.get("stats") if isinstance(pick.get("stats"), dict) else {},
+        board,
+        {
+            "gp": pick.get("gp") or pick.get("games") or pick.get("games_played"),
+            "goals": pick.get("goals") or pick.get("g"),
+            "assists": pick.get("assists") or pick.get("a"),
+            "points": pick.get("points") or pick.get("pts"),
+            "ppg": pick.get("ppg") or pick.get("points_per_game"),
+            "league": pick.get("league") or pick.get("league_code"),
+        },
+    )
+    league_raw = str(
+        stats.get("league")
+        or pick.get("league")
+        or board.get("league")
+        or board.get("league_code")
+        or getattr(player, "current_league_id", "")
+        or ""
+    )
+    league = _dr_league_label(league_raw) or league_raw or None
+    year = int(getattr(session, "season_calendar_year", 0) or 0)
+    season_label = f"{year}–{str(year + 1)[2:]}" if year else None
+    gp = _dr_to_int(stats.get("gp"), 0) or 0
+    conf = "High" if gp >= 20 else ("Medium" if gp >= 5 else "Low")
+    is_g = (
+        _dev_is_goalie(player)
+        if player is not None
+        else str(pick.get("position") or board.get("position") or "").upper() == "G"
+    )
+
+    if gp <= 0:
+        scout = _dr_scouting_summary(pick, board, selection)
+        scout["season"] = season_label
+        scout["league"] = league
+        scout["club"] = pick.get("club") or board.get("club") or board.get("team_name") or board.get("team")
+        return scout
+
+    if is_g:
+        starts = _dr_to_int(stats.get("starts"), 0) or 0
+        out: Dict[str, Any] = {
+            "mode": "stats",
+            "season": season_label,
+            "league": league,
+            "games": gp,
+            "starts": starts or None,
+            "save_percentage": stats.get("save_pct"),
+            "goals_against_average": stats.get("gaa"),
+            "shutouts": stats.get("shutouts"),
+            "workload": starts or gp,
+            "data_confidence": conf,
+            "floor_label": _dr_public_floor(pick, board),
+            "ceiling_label": _dr_public_ceiling(pick, board),
+            "potential_label": _dr_public_ceiling(pick, board),
+        }
+        if stats.get("save_pct") is not None:
+            sv = float(stats["save_pct"])
+            sv = sv if sv > 1.5 else sv * 100.0
+            if sv >= 91.5:
+                out["league_context"] = "High-workload starter production"
+            elif sv >= 90.0:
+                out["league_context"] = "Solid starting goalie workload"
+            else:
+                out["league_context"] = "Developmental starter minutes"
+            out["production_trend"] = "Season body of work"
+        else:
+            out["league_context"] = f"{league or 'League'} workload tracked"
+            out["production_trend"] = "Partial goalie sample"
+        return {k: v for k, v in out.items() if v is not None}
+
+    goals = _dr_to_int(stats.get("goals"), 0) or 0
+    assists = _dr_to_int(stats.get("assists"), 0) or 0
+    points = _dr_to_int(stats.get("points"), goals + assists) or (goals + assists)
+    ppg = _dr_to_float(stats.get("ppg"))
+    if ppg is None and gp > 0:
+        ppg = round(points / gp, 2)
+    toi = None
+    if stats.get("toi_sec"):
+        try:
+            toi = round(float(stats["toi_sec"]) / max(1, gp) / 60.0, 1)
+        except (TypeError, ValueError):
+            toi = None
+    out = {
+        "mode": "stats",
+        "season": season_label,
+        "league": league,
+        "games": gp,
+        "goals": goals,
+        "assists": assists,
+        "points": points,
+        "points_per_game": ppg,
+        "primary_points": stats.get("primary_points"),
+        "shots": stats.get("shots"),
+        "toi_per_game": toi,
+        "data_confidence": conf,
+        "floor_label": _dr_public_floor(pick, board),
+        "ceiling_label": _dr_public_ceiling(pick, board),
+        "potential_label": _dr_public_ceiling(pick, board),
+    }
+    if gp >= 20 and ppg is not None:
+        if float(ppg) >= 1.2:
+            out["league_context"] = "Top-line junior production"
+        elif float(ppg) >= 0.85:
+            out["league_context"] = "Top-six scoring pace"
+        elif float(ppg) >= 0.55:
+            out["league_context"] = "Middle-six production"
+        else:
+            out["league_context"] = "Bottom-six / sheltered offence"
+        out["production_trend"] = "Stable season body of work"
+    else:
+        out["league_context"] = f"{league or 'League'} sample · {gp} GP"
+        out["production_trend"] = "Limited sample"
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def _dr_org_depth_counts(
+    team: Any,
+    pos: str,
+    *,
+    exclude_id: str = "",
+) -> Dict[str, Any]:
+    nhl = list(getattr(team, "roster", None) or []) if team else []
+    ahl = list(getattr(team, "ahl_roster", None) or []) if team else []
+    pool = list(getattr(team, "prospect_pool", None) or getattr(team, "prospects", None) or []) if team else []
+
+    def _id(p: Any) -> str:
+        return str(getattr(p, "player_id", None) or getattr(p, "id", "") or "")
+
+    def _filt(players: List[Any]) -> List[Any]:
+        out = []
+        for p in players:
+            if exclude_id and _id(p) == exclude_id:
+                continue
+            if _dr_player_matches_pos(p, pos):
+                out.append(p)
+        return out
+
+    nhl_m = _filt(nhl)
+    ahl_m = _filt(ahl)
+    pool_m = _filt(pool)
+    # Ready-ish NHL blockers: prefer higher OVR / readiness.
+    blockers = []
+    for p in sorted(nhl_m, key=lambda x: -_safe_attr_float(x, "overall", "ovr", "nhl_readiness"))[:3]:
+        blockers.append({
+            "name": getattr(getattr(p, "identity", None), "name", None) or getattr(p, "name", None),
+            "ovr": _safe_attr_float(p, "overall", "ovr") or None,
+        })
+    return {
+        "nhl_ahead": len(nhl_m),
+        "ahl_ahead": len(ahl_m),
+        "prospects_ahead": len(pool_m),
+        "blockers": blockers,
+        "nhl_players": nhl_m,
+        "ahl_players": ahl_m,
+        "prospect_players": pool_m,
+    }
+
+
+def _dr_organizational_fit(
+    team: Any,
+    pick: Dict[str, Any],
+    player: Any,
+    needs: List[Dict[str, Any]],
+    env: Dict[str, Any],
+) -> Dict[str, Any]:
+    pos = str(pick.get("position") or _dr_player_pos(player) or "")
+    pid = str(pick.get("prospect_id") or "")
+    depth = _dr_org_depth_counts(team, pos, exclude_id=pid)
+    nhl_n = depth["nhl_ahead"]
+    ahl_n = depth["ahl_ahead"]
+    pool_n = depth["prospects_ahead"]
+    total_ahead = nhl_n + ahl_n + max(0, pool_n)
+
+    if total_ahead <= 1:
+        congestion = "Low"
+        depth_status = f"Thin at {pos or 'position'}"
+        fit_grade, fit_label = "A-", "Clear organizational need"
+    elif total_ahead <= 3:
+        congestion = "Moderate"
+        depth_status = f"Developing depth at {pos or 'position'}"
+        fit_grade, fit_label = "B", "Useful pipeline addition"
+    elif total_ahead <= 5:
+        congestion = "Elevated"
+        depth_status = f"Crowded path at {pos or 'position'}"
+        fit_grade, fit_label = "C+", "Competitive depth battle"
+    else:
+        congestion = "High"
+        depth_status = f"Heavy congestion at {pos or 'position'}"
+        fit_grade, fit_label = "C", "Longer wait for opportunity"
+
+    need_cats = [str(n.get("category") or "") for n in (needs or [])[:4]]
+    need_filled = None
+    if pos == "C" and any("Center" in n for n in need_cats):
+        need_filled = "Center depth"
+    elif pos in ("LW", "RW", "W") and any("Wing" in n for n in need_cats):
+        need_filled = f"{'Right wing' if pos == 'RW' else 'Left wing' if pos == 'LW' else 'Wing'} scoring depth"
+    elif pos == "G" and any("Goalie" in n for n in need_cats):
+        need_filled = "Goalie pipeline"
+    elif _dr_pos_group(pos) == "D" and any("Defense" in n or "Right-Shot" in n for n in need_cats):
+        need_filled = "Puck-moving defence" if "Right-Shot" in "".join(need_cats) else "Defence depth"
+    elif total_ahead <= 2:
+        group = _dr_pos_group(pos)
+        need_filled = {
+            "F": "Forward pipeline depth",
+            "D": "Defence pipeline depth",
+            "G": "Goalie pipeline depth",
+        }.get(group, "Organizational depth")
+    else:
+        need_filled = "General organizational depth"
+
+    if any("Center" in n or "Wing" in n or "Goalie" in n or "Defense" in n or "Right-Shot" in n for n in need_cats):
+        if congestion == "Low":
+            fit_grade, fit_label = "A-", "Clear organizational need"
+
+    env_grade = str((env or {}).get("grade") or "acceptable")
+    env_reason = ((env or {}).get("reasons") or ["Standard developmental placement"])[0]
+    opportunities = []
+    if pool_n == 0:
+        opportunities.append(f"No established {pos or 'position'} prospect ahead")
+    if nhl_n <= 2:
+        opportunities.append("NHL depth remains thin")
+    if not opportunities:
+        opportunities.append("Earn role through production")
+
+    blockers_txt = []
+    if nhl_n >= 3:
+        blockers_txt.append("Multiple NHL players ahead")
+    if ahl_n >= 2:
+        blockers_txt.append("AHL depth already set")
+    age = pick.get("age")
+    if age is not None and int(age or 99) <= 18:
+        blockers_txt.append("Needs another junior or amateur season")
+    if not blockers_txt:
+        blockers_txt.append("Development timeline")
+
+    pipeline_rank = max(1, pool_n + 1)
+    if pipeline_rank == 1:
+        pipeline_label = "Top prospect at position"
+    elif pipeline_rank == 2:
+        pipeline_label = "Second in positional pipeline"
+    elif congestion == "High":
+        pipeline_label = f"#{pipeline_rank} — long wait likely"
+    else:
+        pipeline_label = f"#{pipeline_rank} in positional pipeline"
+
+    env_conflict = None
+    if congestion in ("Elevated", "High") and env_grade in ("ideal", "good"):
+        env_conflict = (
+            f"{_DR_ENV_GRADE_LABELS.get(env_grade, 'Strong environment')} reflects role/ice time fit; "
+            f"{congestion.lower()} congestion means NHL opportunity still waits behind depth."
+        )
+    elif congestion == "Low" and env_grade in ("risky", "poor"):
+        env_conflict = (
+            "Path is open organizationally, but the current development setting is a concern."
+        )
+
+    return {
+        "fit_grade": fit_grade,
+        "fit_label": fit_label,
+        "depth_status": depth_status,
+        "nhl_players_ahead": nhl_n,
+        "ahl_players_ahead": ahl_n,
+        "prospects_ahead": pool_n,
+        "path_congestion": congestion,
+        "need_filled": need_filled,
+        "expected_pipeline_rank": pipeline_rank,
+        "pipeline_label": pipeline_label,
+        "blockers": blockers_txt[:3],
+        "opportunities": opportunities[:3],
+        "environment_grade": _DR_ENV_GRADE_LABELS.get(env_grade, env_grade.title()),
+        "environment_reason": env_reason,
+        "fit_tension_note": env_conflict,
+        "depth_at_position": {
+            "count": nhl_n,
+            "blockers": depth["blockers"],
+        },
+    }
+
+
+def _dr_development_plan(
+    pick: Dict[str, Any],
+    player: Any,
+    card: Dict[str, Any],
+    production: Dict[str, Any],
+    fit: Dict[str, Any],
+    board: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    board = board or {}
+    path = str(
+        card.get("returning_to")
+        or pick.get("development_path")
+        or getattr(player, "development_path", "")
+        or ""
+    ).upper()
+    league_raw = str(
+        production.get("league")
+        or pick.get("league")
+        or board.get("league")
+        or board.get("league_code")
+        or card.get("current_league_id")
+        or ""
+    )
+    league = _dr_league_label(league_raw) or _dr_league_label(path) or league_raw
+    club = (
+        pick.get("club")
+        or board.get("club")
+        or board.get("team_name")
+        or board.get("team")
+        or getattr(player, "current_team_name", None)
+        or getattr(player, "junior_team", None)
+    )
+    age = int(pick.get("age") or board.get("age") or (_dev_player_age(player) if player is not None else 18) or 18)
+    pos = str(pick.get("position") or board.get("position") or _dr_player_pos(player) or "F").upper()
+    is_g = pos == "G"
+    overall = _dr_to_int(pick.get("overall_pick"), 99) or 99
+    readiness = _dr_public_ability(pick, board, player)
+    ahl_eligible = any(
+        a.get("id") == "assign_ahl" and a.get("enabled")
+        for a in (card.get("available_actions") or [])
+    )
+    if age >= 20 and ("EUROPE" in path or "NCAA" not in path):
+        ahl_eligible = ahl_eligible or age >= 20
+    elc_slide = bool(
+        card.get("elc_slide_eligible")
+        if card.get("elc_slide_eligible") is not None
+        else pick.get("can_slide")
+    )
+    ppg = float(production.get("points_per_game") or 0)
+    gp = int(production.get("games") or 0)
+    eta_years, eta_conf = _dr_resolve_eta_years(pick, board, player)
+    eta_range, _ = _dr_eta_range(eta_years, eta_conf)
+
+    # Draft-slot aware role bands (scouted ability can still override downward).
+    if overall <= 10:
+        jr_role = f"First-line {pos}" if pos in ("C", "LW", "RW") else ("Top-pair defence" if not is_g else "Franchise junior starter")
+        jr_minutes = "19–22 minutes" if not is_g else "Workhorse starter"
+        jr_st = "PP1 / primary unit" if not is_g else "None"
+        nhl_proj = (
+            "Top-six scoring winger" if pos in ("LW", "RW")
+            else ("1C / 2C driver" if pos == "C" else ("Top-four defence" if not is_g else "NHL starter trajectory"))
+        )
+        nhl_conf = "Medium" if readiness >= 60 else "Low-Medium"
+        nhl_reason = f"Pick #{overall} carries featured-role expectation; timeline depends on physical maturity and production."
+        obj = "Dominate age-group minutes and drive offence as a primary option"
+    elif overall <= 32:
+        jr_role = f"Top-six {pos}" if pos in ("C", "LW", "RW") else ("Top-four defence" if not is_g else "Junior starter")
+        jr_minutes = "17–20 minutes" if not is_g else "Primary starter"
+        jr_st = "PP1 / PP2" if not is_g else "None"
+        nhl_proj = (
+            "Middle-six / top-nine winger" if pos in ("LW", "RW")
+            else ("Middle-six centre" if pos == "C" else ("NHL defence depth / 2nd pair upside" if not is_g else "NHL depth / tandem upside"))
+        )
+        nhl_conf = "Medium"
+        nhl_reason = f"First-round capital supports a regular NHL role if development holds."
+        obj = "Produce in a top-six junior role without sheltered usage"
+    elif overall <= 96:
+        jr_role = f"Top-six {pos}" if pos != "D" and not is_g else ("Second-pair defence" if not is_g else "Split starter")
+        if gp >= 20 and ppg >= 1.0 and not is_g:
+            jr_role = f"First-line {pos}" if pos != "D" else "Top-pair defence"
+        jr_minutes = "16–19 minutes" if not is_g else "Shared starter"
+        jr_st = "Power-play contributor" if not is_g else "None"
+        nhl_proj = "NHL depth / call-up contributor" if not is_g else "Organizational goalie depth"
+        nhl_conf = "Low-Medium"
+        nhl_reason = "Mid-round projection; role clarity comes from sustained production."
+        obj = "Earn harder minutes through production and two-way reliability"
+    else:
+        jr_role = f"Middle-six {pos}" if not is_g and pos != "D" else ("Second-pair defence" if not is_g else "Developmental starter")
+        jr_minutes = "14–17 minutes" if not is_g else "Backup / developmental starts"
+        jr_st = "Secondary special teams" if not is_g else "None"
+        nhl_proj = "Long-term org depth" if not is_g else "Long-term goalie depth"
+        nhl_conf = "Low"
+        nhl_reason = "Later-round variance stays high until the tools translate."
+        obj = "Raise tools and earn trust in tougher minutes"
+
+    # Production can upgrade mid/late roles.
+    if not is_g and gp >= 20 and ppg >= 1.15 and overall > 10:
+        jr_role = f"First-line {pos}" if pos != "D" else "Top-pair defence"
+        jr_minutes = "18–21 minutes"
+        jr_st = "First power-play unit"
+        obj = "Drive offence as a primary option"
+    elif not is_g and gp >= 20 and ppg >= 0.85 and overall > 32:
+        jr_role = f"Top-six {pos}" if pos != "D" else "Top-four defence"
+        obj = "Sustain top-six production against better competition"
+
+    if readiness >= 72 and age >= 19 and ahl_eligible:
+        next_dest, next_label = "NHL", "Compete for NHL roster"
+        club_line = None
+        role = "Bottom-six audition" if not is_g else "Camp / third-goalie look"
+        minutes = "Limited NHL minutes" if not is_g else "Practice / emergency look"
+        st = "Situational" if not is_g else "None"
+        obj = "Earn a roster foothold without forced ice time"
+        alt = "AHL featured role if NHL minutes are unavailable"
+        steps = [
+            {"stage": "NHL camp", "status": "next", "detail": role},
+            {"stage": "AHL", "status": "future", "detail": "Featured fallback"},
+            {"stage": "NHL", "status": "projection", "detail": nhl_proj},
+        ]
+    elif "NCAA" in path or "NCAA" in str(league_raw).upper() or league == "NCAA":
+        next_dest = "NCAA"
+        next_label = f"Remain at {club}" if club else "Remain in NCAA"
+        club_line = club
+        role = "Top-six college forward" if not is_g else "College starter"
+        if _dr_pos_group(pos) == "D":
+            role = "Top-pair college defence"
+        if overall <= 32:
+            role = "Featured college role"
+        minutes = "18–22 minutes" if not is_g else "Starting workload"
+        st = "First power-play unit" if not is_g else "None"
+        obj = "Lead at the college level and refine pro tools"
+        alt = "Sign and join AHL after the eligibility window"
+        steps = [
+            {"stage": "NCAA", "status": "next", "detail": role},
+            {"stage": "AHL", "status": "future", "detail": "Pro introduction"},
+            {"stage": "NHL", "status": "projection", "detail": nhl_proj},
+        ]
+    elif "EUROPE" in path or any(
+        x in str(league_raw).upper() for x in ("SHL", "LIIGA", "DEL", "KHL", "CZE", "SUI", "SVK", "ALLSV")
+    ) or league in ("SHL", "Liiga", "DEL", "KHL", "Czech Extraliga", "NL", "Allsvenskan"):
+        if ahl_eligible and age >= 20 and readiness >= 64:
+            next_dest, next_label = "AHL", "Sign and join AHL"
+            club_line = None
+            role = "AHL top nine" if not is_g else ("AHL starter" if readiness >= 66 else "AHL backup")
+            minutes = "16–19 minutes" if not is_g else "Shared starter workload"
+            st = "Second power-play look" if not is_g else "None"
+            obj = "Transition the North American game"
+            alt = f"Remain with {club}" if club else "Remain in Europe another season"
+            steps = [
+                {"stage": "AHL", "status": "next", "detail": role},
+                {"stage": "NHL", "status": "future", "detail": "Depth introduction"},
+                {"stage": "NHL", "status": "projection", "detail": nhl_proj},
+            ]
+        else:
+            next_dest = league or "Europe"
+            next_label = f"Remain with {club}" if club else f"Remain in {league or 'Europe'}"
+            club_line = club
+            role = "European pro role" if not is_g else "European starting goalie"
+            if overall <= 32:
+                role = "Featured European minutes"
+            minutes = "Featured pro minutes" if not is_g else "Starter / 1B"
+            st = "Power-play usage" if not is_g else "None"
+            obj = "Produce against men and add strength"
+            alt = "Sign and join AHL when ready"
+            steps = [
+                {"stage": league or "Europe", "status": "next", "detail": role},
+                {"stage": "AHL", "status": "future", "detail": "NA transition"},
+                {"stage": "NHL", "status": "projection", "detail": nhl_proj},
+            ]
+    elif ahl_eligible and age >= 20 and readiness >= 60:
+        next_dest, next_label = "AHL", "AHL featured role" if not is_g else ("AHL starter" if readiness >= 64 else "AHL backup")
+        club_line = None
+        role = "AHL top nine" if not is_g else next_label
+        minutes = "16–19 minutes" if not is_g else "Shared starter workload"
+        st = "Second power-play look" if not is_g else "None"
+        obj = "Dominate AHL minutes before the NHL push"
+        alt = "Challenge for NHL depth if production spikes"
+        steps = [
+            {"stage": "AHL", "status": "next", "detail": role},
+            {"stage": "NHL", "status": "future", "detail": "Depth introduction"},
+            {"stage": "NHL", "status": "projection", "detail": nhl_proj},
+        ]
+    else:
+        # Junior / CHL / USHL — use specific league/club, never raw enum.
+        next_dest = league or "Junior"
+        if club and league:
+            next_label = f"Return to {club}"
+        elif league:
+            next_label = f"Return to {league}"
+        elif club:
+            next_label = f"Return to {club}"
+        else:
+            next_label = "Return to junior club"
+        club_line = club
+        if is_g:
+            role = "Junior starting goalie" if overall <= 64 else "Developmental starter"
+            minutes = "Primary starter workload"
+            st = "None"
+            obj = "Own the crease and raise save percentage"
+            alt = "AHL backup look after junior season if eligible"
+            steps = [
+                {"stage": league or "Junior", "status": "next", "detail": role},
+                {"stage": "AHL", "status": "future", "detail": "Pro crease introduction"},
+                {"stage": "NHL", "status": "projection", "detail": nhl_proj},
+            ]
+        else:
+            role, minutes, st = jr_role, jr_minutes, jr_st
+            alt = (
+                f"AHL challenge after {league} season"
+                if age >= 19 and league
+                else (f"Another {league} season if still eligible" if league else "Reassess after next season")
+            )
+            steps = [
+                {"stage": league or "Junior", "status": "next", "detail": role},
+                {"stage": "AHL", "status": "future", "detail": "Pro introduction"},
+                {"stage": "NHL", "status": "projection", "detail": nhl_proj},
+            ]
+
+    secondary = "Improve defensive-zone exits" if _dr_pos_group(pos) != "G" else "Improve rebound control and composure"
+    if fit.get("path_congestion") in ("Elevated", "High"):
+        secondary = "Outproduce depth competitors for the next role"
+    if overall <= 10:
+        secondary = "Add strength and pace for an NHL top-six translation"
+
+    return {
+        "next_destination": next_dest,
+        "next_destination_label": next_label,
+        "next_club": club_line,
+        "recommended_role": role,
+        "minutes_target": minutes,
+        "special_teams_role": st,
+        "season_objective": obj,
+        "secondary_objective": secondary,
+        "alternate_path": alt,
+        "path_steps": steps,
+        "eta_range": eta_range,
+        "eta_years": eta_years,
+        "eta_confidence": eta_conf,
+        "nhl_projection": nhl_proj,
+        "nhl_projection_confidence": nhl_conf,
+        "nhl_projection_reason": nhl_reason,
+        "ahl_eligible": bool(ahl_eligible),
+        "elc_can_slide": bool(elc_slide),
+    }
+
+
+def _dr_rights_preview(card: Dict[str, Any], plan: Dict[str, Any], pick: Dict[str, Any]) -> Dict[str, Any]:
+    status = str(card.get("rights_status") or "exclusive_rights")
+    expiry = card.get("rights_through") or card.get("rights_expiry_year")
+    years_rem = None
+    try:
+        if expiry is not None and pick.get("draft_year") is not None:
+            years_rem = max(0, int(expiry) - int(pick.get("draft_year")))
+        elif expiry is not None:
+            years_rem = None
+    except (TypeError, ValueError):
+        years_rem = None
+    elc_slide = bool(plan.get("elc_can_slide") if plan.get("elc_can_slide") is not None else card.get("elc_slide_eligible"))
+    next_label = str(plan.get("next_destination_label") or "")
+    readiness = float(pick.get("nhl_readiness") or 0)
+    if readiness and readiness <= 1.5:
+        readiness *= 99.0
+
+    if readiness >= 70 and plan.get("next_destination") == "NHL":
+        rec, reason = "Sign", "Near-ready; ELC opens a pro path immediately."
+        contract_now = True
+    elif plan.get("next_destination") in ("AHL",) or "AHL" in next_label:
+        rec, reason = "Sign", "AHL assignment requires an ELC."
+        contract_now = True
+    elif "NCAA" in str(plan.get("next_destination") or "").upper() or "college" in next_label.lower():
+        rec, reason = "Wait", "Keep him in college; signing is not required now."
+        contract_now = False
+    elif any(x in next_label for x in ("Europe", "SHL", "Liiga", "DEL", "KHL")) or "EUROPE" in str(plan.get("next_destination") or "").upper():
+        rec, reason = "Wait", "Leave him in Europe until a North American push is clear."
+        contract_now = False
+    elif plan.get("elc_can_slide"):
+        dest = plan.get("next_club") or plan.get("next_destination") or "his development league"
+        rec, reason = "Wait", f"Send him back to {dest} and preserve the ELC slide."
+        contract_now = False
+    else:
+        rec, reason = "Wait", "No immediate contract pressure; review at Prospect Rights."
+        contract_now = False
+
+    deadline = f"Rights expire in {expiry}" if expiry is not None else "Rights window open"
+    return {
+        "rights_status": status,
+        "rights_status_label": _DR_RIGHTS_STATUS_LABELS.get(status, status.replace("_", " ").title()),
+        "rights_years_remaining": years_rem,
+        "rights_deadline_label": deadline,
+        "rights_through": expiry,
+        "signing_recommendation": rec,
+        "signing_reason": reason,
+        "elc_can_slide": elc_slide,
+        "contract_required_now": contract_now,
+        "entry_level_contract_eligible": card.get("entry_level_contract_eligible", True),
+        "recommended_action": card.get("recommended_action"),
+        "recommended_label": card.get("recommended_label"),
+        "available_actions": card.get("available_actions") or [],
+        "elc_slide_eligible": card.get("elc_slide_eligible"),
+        "development_environment": card.get("development_environment"),
+        "eta": card.get("eta"),
+        "path_visual": [s.get("stage") for s in (plan.get("path_steps") or [])],
+        "returning_to": card.get("returning_to"),
+    }
+
+
+def _dr_review_line(
+    pick: Dict[str, Any],
+    selection: Dict[str, Any],
+    plan: Dict[str, Any],
+    fit: Dict[str, Any],
+) -> str:
+    name_pos = str(pick.get("position") or "prospect")
+    archetype = str(pick.get("archetype") or pick.get("player_type") or "").strip()
+    who = f"A {archetype.lower()} {name_pos}" if archetype else f"A {name_pos}"
+    verdict = str(selection.get("selection_verdict") or "Expected range").lower()
+    dest = str(plan.get("next_destination_label") or "development path")
+    line = f"{who} drafted with {verdict} and a clear path to {dest.lower()}."
+    words = line.split()
+    if len(words) > 22:
+        line = " ".join(words[:22])
+    if fit.get("fit_label") and "need" in str(fit.get("fit_label")).lower():
+        alt = f"{who} fills a real need with {verdict} at the pick."
+        if len(alt.split()) <= 22:
+            line = alt
+    return line[0].upper() + line[1:] if line else "Selection under organizational review."
+
+
+def _dr_identity_fields(
+    pick: Dict[str, Any],
+    player: Any,
+    board_entry: Dict[str, Any],
+) -> Dict[str, Any]:
+    ident = getattr(player, "identity", None) if player is not None else None
+    age = pick.get("age")
+    if age is None:
+        age = board_entry.get("age")
+    if age is None and player is not None:
+        age = _dev_player_age(player) or None
+    shoots = (
+        pick.get("shoots")
+        or board_entry.get("shoots")
+        or board_entry.get("handedness")
+        or (getattr(ident, "shoots", None) if ident else None)
+        or getattr(player, "shoots", None)
+    )
+    height = (
+        pick.get("height")
+        or board_entry.get("height")
+        or board_entry.get("height_display")
+        or getattr(player, "height", None)
+        or (getattr(ident, "height", None) if ident else None)
+    )
+    weight = (
+        pick.get("weight")
+        or board_entry.get("weight")
+        or getattr(player, "weight", None)
+        or (getattr(ident, "weight", None) if ident else None)
+    )
+    club = (
+        pick.get("club")
+        or pick.get("team_name_junior")
+        or board_entry.get("club")
+        or board_entry.get("team")
+        or getattr(player, "current_team_name", None)
+        or getattr(player, "junior_team", None)
+    )
+    league = pick.get("league") or board_entry.get("league") or board_entry.get("league_name")
+    nationality = pick.get("nationality") or board_entry.get("nationality") or getattr(player, "nationality", None)
+    if nationality is None and ident is not None:
+        nationality = getattr(ident, "nationality", None) or getattr(ident, "nation", None)
+    secondary = (
+        pick.get("secondary_position")
+        or board_entry.get("secondary_position")
+        or getattr(player, "secondary_position", None)
+    )
+    archetype = (
+        pick.get("archetype")
+        or pick.get("player_type")
+        or board_entry.get("archetype")
+        or board_entry.get("player_type")
+        or getattr(player, "archetype", None)
+        or getattr(player, "player_type", None)
+    )
+    return {
+        "age": age,
+        "shoots": shoots,
+        "height": height,
+        "weight": weight,
+        "club": club,
+        "league": league,
+        "nationality": nationality,
+        "secondary_position": secondary,
+        "archetype": archetype,
+    }
+
+
+def _dr_pick_score(selection: Dict[str, Any], fit: Dict[str, Any], pick: Dict[str, Any]) -> float:
+    grade_map = {"A+": 96, "A": 92, "A-": 88, "B+": 84, "B": 78, "B-": 72, "C+": 66, "C": 60, "C-": 54, "D": 45}
+    score = float(grade_map.get(str(selection.get("selection_grade") or "B"), 75))
+    fit_map = {"A-": 8, "A": 10, "B": 4, "C+": 0, "C": -4}
+    score += float(fit_map.get(str(fit.get("fit_grade") or "B"), 2))
+    conf = str(selection.get("scouting_confidence_label") or "")
+    if conf == "High":
+        score += 3
+    elif conf == "Low":
+        score -= 2
+    # Do not punish late rounds for uncertainty alone.
+    try:
+        rnd = int(pick.get("round") or 1)
+        if rnd >= 5 and str(selection.get("selection_verdict")) == "Uncertain value":
+            score += 4
+    except (TypeError, ValueError):
+        pass
+    return score
+
+
+def _dr_letter_from_score(score: float) -> Tuple[str, str]:
+    if score >= 90:
+        return "A", "Excellent haul"
+    if score >= 85:
+        return "A-", "Very strong haul"
+    if score >= 80:
+        return "B+", "Strong value"
+    if score >= 75:
+        return "B", "Solid haul"
+    if score >= 70:
+        return "B-", "Mixed value"
+    if score >= 64:
+        return "C+", "Uneven haul"
+    return "C", "Developmental haul"
+
+
+def _dr_haul_summary(
+    enriched: List[Dict[str, Any]],
+    needs: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    n = len(enriched)
+    mix = {"F": 0, "D": 0, "G": 0}
+    for p in enriched:
+        g = _dr_pos_group(str(p.get("position") or ""))
+        mix[g] = mix.get(g, 0) + 1
+
+    scores = []
+    for p in enriched:
+        scores.append(_dr_pick_score(
+            {
+                "selection_grade": p.get("selection_grade"),
+                "scouting_confidence_label": p.get("scouting_confidence_label"),
+                "selection_verdict": p.get("selection_verdict"),
+            },
+            p.get("organizational_fit") or {},
+            p,
+        ))
+    avg = sum(scores) / max(1, len(scores)) if scores else 70.0
+    grade, grade_label = _dr_letter_from_score(avg)
+
+    steals = sum(1 for p in enriched if p.get("was_steal") or p.get("selection_verdict") == "Best value")
+    values = sum(1 for p in enriched if p.get("was_value") or p.get("selection_verdict") == "Good value")
+    reaches = sum(1 for p in enriched if p.get("was_reach") or p.get("selection_verdict") == "Aggressive projection")
+    expected = sum(1 for p in enriched if p.get("selection_verdict") == "Expected range")
+    high_risk = sum(1 for p in enriched if str(p.get("risk_level") or p.get("risk_score")) == "High")
+    low_risk = sum(1 for p in enriched if str(p.get("risk_level") or p.get("risk_score")) == "Low")
+    near_ready = sum(
+        1 for p in enriched
+        if int((p.get("development_plan") or {}).get("eta_years") if (p.get("development_plan") or {}).get("eta_years") is not None else p.get("nhl_eta") or 99) <= 2
+    )
+    long_term = sum(
+        1 for p in enriched
+        if int((p.get("development_plan") or {}).get("eta_years") if (p.get("development_plan") or {}).get("eta_years") is not None else p.get("nhl_eta") or 0) >= 4
+    )
+
+    needs_addressed: List[str] = []
+    for p in enriched:
+        nf = (p.get("organizational_fit") or {}).get("need_filled")
+        if nf and nf not in needs_addressed and "General" not in str(nf):
+            needs_addressed.append(str(nf))
+    for n_item in needs[:3]:
+        cat = str(n_item.get("category") or "")
+        if cat and cat not in needs_addressed and any(
+            (cat == "Wing Depth" and str(p.get("position")) in ("LW", "RW", "W"))
+            or (cat == "Center Depth" and str(p.get("position")) == "C")
+            or (cat == "Goalie Pipeline" and str(p.get("position")) == "G")
+            or ("Defense" in cat and _dr_pos_group(str(p.get("position") or "")) == "D")
+            for p in enriched
+        ):
+            needs_addressed.append(cat)
+    needs_addressed = needs_addressed[:4]
+
+    reason_bits = []
+    if reaches >= 2:
+        reason_bits.append(f"{reaches} aggressive early picks")
+    if steals + values == 0 and n:
+        reason_bits.append("few clear value wins vs the public board")
+    if high_risk >= max(2, n // 2):
+        reason_bits.append(f"{high_risk} high-risk projections")
+    if long_term >= max(3, n - 1) and n:
+        reason_bits.append("most picks are long-term projects")
+    if not needs_addressed and n:
+        reason_bits.append("limited direct need fills")
+    if steals >= 1:
+        reason_bits.append(f"{steals} steal-level value hit{'s' if steals != 1 else ''}")
+    if not reason_bits:
+        reason_bits.append("balanced mix of board-range selections")
+    grade_reason = f"{grade_label} because of " + ", ".join(reason_bits[:3]) + "."
+
+    def _value_score(p: Dict[str, Any]) -> float:
+        verdict = {
+            "Best value": 50, "Good value": 35, "Need-based selection": 22,
+            "Expected range": 12, "Aggressive projection": 4, "Long-term swing": 8, "Uncertain value": 0,
+        }.get(str(p.get("selection_verdict")), 10)
+        delta = _dr_pub_delta(p) or 0
+        return verdict + max(-20, min(30, float(delta)))
+
+    def _close_score(p: Dict[str, Any]) -> float:
+        plan = p.get("development_plan") or {}
+        years = plan.get("eta_years")
+        if years is None:
+            years = p.get("nhl_eta")
+        years = int(years if years is not None else 99)
+        ready = _dr_public_ability(p, {}, None)
+        # Lower is closer; subtract readiness so near-ready high picks win.
+        return float(years) * 10.0 - ready
+
+    best_value = max(enriched, key=_value_score) if enriched else None
+    closest = min(enriched, key=_close_score) if enriched else None
+    # Prefer distinct highlight players when possible.
+    if (
+        best_value and closest
+        and str(best_value.get("prospect_id")) == str(closest.get("prospect_id"))
+        and len(enriched) > 1
+    ):
+        others = [p for p in enriched if str(p.get("prospect_id")) != str(best_value.get("prospect_id"))]
+        closest = min(others, key=_close_score) if others else closest
+    largest = max(
+        enriched,
+        key=lambda p: int((p.get("development_plan") or {}).get("eta_years") if (p.get("development_plan") or {}).get("eta_years") is not None else p.get("nhl_eta") or 0),
+        default=None,
+    ) if enriched else None
+    highest_conf = max(
+        enriched,
+        key=lambda p: float(p.get("scouting_confidence") or 0),
+        default=None,
+    ) if enriched else None
+
+    balance = f"{mix.get('F', 0)}F / {mix.get('D', 0)}D / {mix.get('G', 0)}G"
+    bits = []
+    if n:
+        bits.append(f"{n} selection{'s' if n != 1 else ''}")
+    if needs_addressed:
+        bits.append(f"addressed {needs_addressed[0].lower()}")
+    if long_term:
+        bits.append(f"{long_term} four-year-plus project{'s' if long_term != 1 else ''}")
+    if mix.get("G"):
+        bits.append("added goaltending")
+    summary_line = (", ".join(bits).capitalize() + ".") if bits else "Draft class under review."
+
+    def _pid(p: Optional[Dict[str, Any]]) -> Optional[str]:
+        return str(p.get("prospect_id")) if p and p.get("prospect_id") else None
+
+    return {
+        "total_picks": n,
+        "position_mix": mix,
+        "position_balance_label": balance,
+        "haul_grade": grade,
+        "haul_grade_label": grade_label,
+        "haul_grade_reason": grade_reason,
+        "needs_addressed": needs_addressed,
+        "best_value_pick_id": _pid(best_value),
+        "closest_to_nhl_pick_id": _pid(closest),
+        "largest_project_pick_id": _pid(largest),
+        "highest_confidence_pick_id": _pid(highest_conf),
+        "summary_line": summary_line,
+        "long_term_projects": long_term,
+        "long_term_label": f"{long_term} projects (4+ years)" if long_term else "No 4+ year projects",
+        "near_ready_count": near_ready,
+        "steals": steals,
+        "value_picks": values,
+        "reaches": reaches,
+        "expected_picks": expected,
+        "risk_distribution": {"High": high_risk, "Low": low_risk, "Medium": max(0, n - high_risk - low_risk)},
+        "analysis_chips": [
+            balance,
+            f"{steals} steal{'s' if steals != 1 else ''}" if steals else None,
+            f"{reaches} reach{'es' if reaches != 1 else ''}" if reaches else None,
+            f"{near_ready} near-ready" if near_ready else None,
+            f"{high_risk} high-risk" if high_risk else None,
+            f"{long_term} long projects" if long_term else None,
+        ],
+    }
+
+
+def _enrich_draft_review_pick(
+    session: FranchiseSession,
+    pick: Dict[str, Any],
+    *,
+    team: Any,
+    needs: List[Dict[str, Any]],
+    board_by_id: Dict[str, Dict[str, Any]],
+    league: Any,
+) -> Dict[str, Any]:
+    from services.draft_rights_engine import rights_card_payload, development_path_for
+    from services.draft_player_registry import get_player
+
+    pid = str(pick.get("prospect_id") or pick.get("player_id") or pick.get("selected_prospect_id") or "")
+    player = None
+    if league is not None and pid:
+        try:
+            player = get_player(league, pid)
+        except Exception:
+            player = None
+    board_entry = board_by_id.get(pid) or {}
+    for alt in (pick.get("key"), pick.get("player_id")):
+        if not board_entry and alt:
+            board_entry = board_by_id.get(str(alt)) or {}
+
+    try:
+        card = rights_card_payload(player) if player is not None else {}
+    except Exception:
+        card = {}
+
+    identity = _dr_identity_fields(pick, player, board_entry)
+    if identity.get("league"):
+        identity["league"] = _dr_league_label(identity["league"]) or identity["league"]
+    path_raw = card.get("returning_to") or pick.get("development_path") or development_path_for(pick)
+    path = _dr_league_label(path_raw) or path_raw
+    selection = _dr_selection_review({**pick, **identity}, needs)
+    production = _dr_production_snapshot(
+        session, player, {**pick, **identity}, board=board_entry, selection=selection
+    )
+    env = card.get("development_environment") or {}
+    fit = _dr_organizational_fit(team, {**pick, **identity, "prospect_id": pid}, player, needs, env)
+    plan = _dr_development_plan(
+        {**pick, **identity, **selection, "prospect_id": pid},
+        player,
+        card,
+        production,
+        fit,
+        board=board_entry,
+    )
+    rights = _dr_rights_preview(card, plan, {**pick, "prospect_id": pid, "draft_year": pick.get("draft_year")})
+    review_line = _dr_review_line({**pick, **identity}, selection, plan, fit)
+    eta_years = plan.get("eta_years")
+    if eta_years is None:
+        eta_years, _ = _dr_resolve_eta_years({**pick, **identity}, board_entry, player)
+
+    base = {k: v for k, v in pick.items() if k != "player_ref"}
+    return {
+        **base,
+        "prospect_id": pid or base.get("prospect_id"),
+        "prospect_name": pick.get("prospect_name") or pick.get("name") or board_entry.get("name"),
+        "overall_pick": pick.get("overall_pick"),
+        "round": pick.get("round"),
+        "round_pick": pick.get("pick_in_round") or pick.get("round_pick"),
+        "position": pick.get("position") or identity.get("secondary_position") or _dr_player_pos(player),
+        **identity,
+        **selection,
+        "production": production,
+        "development_plan": plan,
+        "organizational_fit": fit,
+        "rights_card": rights,
+        "review_line": review_line,
+        "potential_label": production.get("potential_label") or _dr_public_ceiling({**pick, **identity}, board_entry),
+        "floor_label": production.get("floor_label") or _dr_public_floor({**pick, **identity}, board_entry),
+        "ceiling_label": production.get("ceiling_label") or _dr_public_ceiling({**pick, **identity}, board_entry),
+        # Backward-compatible fields used by older UI / stages
+        "development_path": path,
+        "path_visual": [s.get("stage") for s in (plan.get("path_steps") or [])] or card.get("path_visual"),
+        "nhl_eta": eta_years,
+        "recommended_path": plan.get("next_destination_label") or card.get("recommended_label"),
+        "elc_eligible": rights.get("entry_level_contract_eligible", True),
+        "can_slide": rights.get("elc_can_slide"),
+        "ahl_eligible": plan.get("ahl_eligible"),
+        "uses_contract_slot_if_signed": True,
+        "depth_at_position": fit.get("depth_at_position") or {"count": 0, "blockers": []},
+        "development_environment": env,
+        "development_risks": (env or {}).get("reasons") or [],
+    }
+
+
+def _run_draft_review(session: FranchiseSession) -> Dict[str, Any]:
+    """Post-draft organizational review — value, paths, fit, and rights preview."""
+    existing = getattr(session, "draft_review_payload", None)
+    if isinstance(existing, dict) and existing.get("user_picks") is not None and existing.get("version") == 4:
+        return {"draft_review": existing}
+
+    from services.franchise_entry_draft import get_draft_recap, calculate_team_needs
+    from services.franchise_sim import get_cached_draft_class_rankings
+
+    state = getattr(session, "draft_state", None) or {}
+    completed = list(state.get("completed_picks") or state.get("draft_results") or [])
+    user_id = str(session.user_team_id)
+    user_picks = [p for p in completed if str(p.get("team_id")) == user_id]
+    league = getattr(session.sim, "league", None)
+    team = session.team_by_id.get(user_id)
+
+    needs: List[Dict[str, Any]] = []
+    try:
+        needs = calculate_team_needs(session, user_id)
+    except Exception:
+        needs = []
+
+    board_by_id: Dict[str, Dict[str, Any]] = {}
+    try:
+        board = get_cached_draft_class_rankings(session, session.sim)
+        for e in (board.get("entries") or []):
+            for ident in (e.get("key"), e.get("prospect_id"), e.get("player_id")):
+                if ident is not None:
+                    board_by_id.setdefault(str(ident), e)
+    except Exception:
+        board_by_id = {}
+
+    enriched: List[Dict[str, Any]] = []
+    draft_year = state.get("draft_year") or (int(session.season_calendar_year) + 1)
+    for pick in user_picks:
+        try:
+            row = dict(pick) if isinstance(pick, dict) else {}
+            row.setdefault("draft_year", draft_year)
+            enriched.append(
+                _enrich_draft_review_pick(
+                    session,
+                    row,
+                    team=team,
+                    needs=needs,
+                    board_by_id=board_by_id,
+                    league=league,
+                )
+            )
+        except Exception:
+            # Degrade gracefully — keep a minimal row so the stage still opens.
+            pid = str((pick or {}).get("prospect_id") or "")
+            enriched.append({
+                **{k: v for k, v in (pick or {}).items() if k != "player_ref"},
+                "prospect_id": pid,
+                "prospect_name": (pick or {}).get("prospect_name") or (pick or {}).get("name"),
+                "selection_grade": "C",
+                "selection_verdict": "Uncertain value",
+                "selection_reason": "Incomplete prospect data for full review.",
+                "scouting_confidence_label": "Low",
+                "review_line": "Selection recorded with incomplete evaluation data.",
+                "production": {"league_context": "Season stats unavailable", "data_confidence": "Low"},
+                "development_plan": {
+                    "next_destination": (pick or {}).get("development_path") or "Junior",
+                    "next_destination_label": "Development path under review",
+                    "recommended_role": "Org prospect",
+                    "minutes_target": "Standard development minutes",
+                    "special_teams_role": "TBD",
+                    "season_objective": "Establish a development baseline",
+                    "secondary_objective": "Gather more evaluation data",
+                    "alternate_path": "Reassess at Prospect Rights",
+                    "path_steps": [
+                        {"stage": "Development", "status": "next", "detail": "Evaluation"},
+                        {"stage": "AHL", "status": "future", "detail": "Pro path"},
+                        {"stage": "NHL", "status": "projection", "detail": "Projection"},
+                    ],
+                    "eta_range": "3–5 years",
+                    "eta_confidence": "Low",
+                    "ahl_eligible": False,
+                    "elc_can_slide": True,
+                },
+                "organizational_fit": {
+                    "fit_grade": "B",
+                    "fit_label": "Pipeline addition",
+                    "depth_status": "Depth under review",
+                    "nhl_players_ahead": 0,
+                    "ahl_players_ahead": 0,
+                    "prospects_ahead": 0,
+                    "path_congestion": "Low",
+                    "need_filled": "Organizational depth",
+                    "expected_pipeline_rank": 1,
+                    "blockers": ["Incomplete data"],
+                    "opportunities": ["Earn evaluation through play"],
+                    "environment_grade": "Acceptable environment",
+                    "environment_reason": "Insufficient signals",
+                },
+                "rights_card": {
+                    "rights_status": "exclusive_rights",
+                    "rights_status_label": "Exclusive rights",
+                    "signing_recommendation": "Wait",
+                    "signing_reason": "Review details at Prospect Rights.",
+                    "elc_can_slide": True,
+                    "contract_required_now": False,
+                },
+            })
+
+    haul = _dr_haul_summary(enriched, needs)
+
+    recap = None
+    try:
+        recap = get_draft_recap(session)
+    except Exception:
+        recap = None
+
+    payload = {
+        "version": 4,
+        "draft_year": state.get("draft_year") or (int(session.season_calendar_year) + 1),
+        "total_picks": len(enriched),
+        "user_picks": enriched,
+        "haul_summary": haul,
+        "headline": haul.get("summary_line") or (
+            f"{len(enriched)} selections for your club" if enriched else "Draft complete"
+        ),
+        "next_stage": "prospect_rights",
+        "user_grade": haul.get("haul_grade") or (recap or {}).get("user_grade"),
+        "stage_status": "ready",
+        "can_continue": True,
+        "blocking_reasons": [],
+        "warning_reasons": [],
+        "available_actions": ["continue_to_prospect_rights", "back_to_hub"],
+    }
+    session.draft_review_payload = payload
+    return {"draft_review": payload}
+
+
+def _run_prospect_rights_stage(session: FranchiseSession, *, force: bool = False) -> Dict[str, Any]:
+    """
+    Post-draft rights management: ELC offers, return-to-league, rights review, slots.
+    """
+    from services.draft_rights_engine import process_draft_rights_deadlines, rights_card_payload
+    from services.contract_economy import (
+        CONTRACT_SLOTS_LIMIT,
+        validate_contract_slots,
+        add_to_reserve_list,
+        run_cpu_prospect_rights_pass,
+    )
+
+    existing = getattr(session, "prospect_rights_payload", None)
+    if not force and isinstance(existing, dict) and existing.get("version") == 2 and existing.get("prospects") is not None:
+        return {"prospect_rights": existing}
+
+    league = getattr(session.sim, "league", None)
+    season_year = int(session.season_calendar_year)
+    rights_result = {}
+    if league is not None:
+        rights_result = process_draft_rights_deadlines(session, league, season_year)
+
+    # CPU orgs make rights decisions independently (idempotent via team flags).
+    cpu_rights = {}
+    try:
+        cpu_rights = run_cpu_prospect_rights_pass(session)
+    except Exception:
+        cpu_rights = {}
+
+    team = session.team_by_id.get(session.user_team_id)
+    if team is not None:
+        for p in list(getattr(team, "prospect_pool", None) or []):
+            if bool(getattr(p, "entry_level_contract_eligible", False)):
+                add_to_reserve_list(team, p, added_season=season_year)
+
+    reserve = list(getattr(team, "reserve_list", None) or []) if team is not None else []
+    unsigned = [e for e in reserve if isinstance(e, dict) and str(e.get("signed_status", "unsigned")).lower() != "signed"]
+    expiring = [
+        e for e in unsigned
+        if e.get("rights_expiry_year") is not None and int(e.get("rights_expiry_year") or 0) <= season_year + 1
+    ]
+    slots = validate_contract_slots(team, league, additional=0) if team is not None else {}
+    used = int(slots.get("contract_slots_used") or 0)
+    prospect_cards = []
+    for e in unsigned:
+        pid = str(e.get("player_id") or "")
+        player = None
+        try:
+            from services.draft_player_registry import get_player
+            player = get_player(league, pid) if league is not None else None
+        except Exception:
+            player = None
+        card = rights_card_payload(player) if player is not None else {
+            "rights_through": e.get("rights_expiry_year"),
+            "returning_to": e.get("current_league_id"),
+            "elc_decision": "Unsigned",
+            "available_actions": [{"id": "keep_unsigned", "label": "Keep unsigned", "enabled": True}],
+        }
+        prospect_cards.append({
+            "player_id": pid,
+            "name": e.get("name") or card.get("name"),
+            "position": e.get("position"),
+            "age": e.get("age") or getattr(getattr(player, "identity", None), "age", None) if player else None,
+            "decision_status": "pending",
+            "contract_slot_impact": 1 if card.get("entry_level_contract_eligible", True) else 0,
+            **card,
+        })
+
+    warnings = []
+    if used >= int(slots.get("contract_slots_limit", CONTRACT_SLOTS_LIMIT)):
+        warnings.append("Contract slots full — ELC signings blocked until a slot opens")
+    if expiring:
+        warnings.append(f"{len(expiring)} rights nearing expiry")
+
+    payload = {
+        "version": 2,
+        "season_year": season_year,
+        "contracts": f"{used}/{slots.get('contract_slots_limit', CONTRACT_SLOTS_LIMIT)}",
+        "contract_slots_used": used,
+        "contract_slots_limit": slots.get("contract_slots_limit", CONTRACT_SLOTS_LIMIT),
+        "reserve_rights": len(unsigned),
+        "elc_slots_available": max(0, int(slots.get("contract_slots_limit", CONTRACT_SLOTS_LIMIT)) - used),
+        "expiring_this_year": expiring,
+        "reentry_eligible": rights_result.get("reentry_eligible") or [],
+        "notifications": rights_result.get("notifications") or [],
+        "prospects": prospect_cards,
+        "recommended_signing_priority": [
+            c for c in prospect_cards
+            if c.get("rights_through") is not None and int(c.get("rights_through") or 9999) <= season_year + 1
+        ][:8],
+        "rights_review": rights_result,
+        "cpu_rights": cpu_rights,
+        "stage_status": "ready",
+        "can_continue": True,
+        "blocking_reasons": [],
+        "warning_reasons": warnings,
+        "available_actions": ["sign_elc", "keep_unsigned", "continue_to_re_sign", "back_to_hub", "open_cap_ledger"],
+    }
+    session.prospect_rights_payload = payload
+    session.draft_rights_review_payload = rights_result
+    return {"prospect_rights": payload}
+
+
+def _run_draft_combine(session: FranchiseSession) -> Dict[str, Any]:
+    """Hydrate Draft Combine stage — prospect testing, team impressions, final board prep."""
+    from services.franchise_scouting import run_franchise_draft_combine
+
+    if getattr(session, "draft_combine_done", False) and session.draft_combine_payload:
+        return {"draft_combine": session.draft_combine_payload}
+    if not session.draft_lottery_done:
+        _run_draft_lottery(session)
+    payload = run_franchise_draft_combine(session)
+    session.draft_combine_payload = payload
+    session.draft_combine_done = True
+    return {"draft_combine": payload}
+
+
+def _prepare_draft_payload(session: FranchiseSession) -> Dict[str, Any]:
+    from services.franchise_entry_draft import prepare_offseason_draft_payload
+
+    if not getattr(session, "draft_combine_done", False):
+        raise ValueError("Draft Combine must be completed before the Entry Draft")
+    return prepare_offseason_draft_payload(session)
+
+
+def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -> Dict[str, Any]:
+    from services.contract_economy import build_contract_office, compute_player_demand
+
+    existing = getattr(session, "resign_payload", None)
+    if not force and isinstance(existing, dict) and existing.get("version") == 2:
+        return {"contracts": existing, "re_sign": existing}
+
+    office = build_contract_office(session)
+    expiring = list(office.get("expiring") or [])
+    rfa_rows = list(office.get("rfa_rights") or [])
+    contracts = list(office.get("contracts") or [])
+    summary = dict(office.get("summary") or {})
+    user_team = session.team_by_id.get(session.user_team_id)
+    league = getattr(session.sim, "league", None)
+
+    # Attach demand bands without exposing hidden formulas.
+    for row in expiring:
+        pid = str(row.get("player_id") or "")
+        player = None
+        try:
+            from services.draft_player_registry import get_player
+            player = get_player(league, pid) if league is not None else None
+        except Exception:
+            player = None
+        if player is None and user_team is not None:
+            for p in list(getattr(user_team, "roster", None) or []):
+                if str(getattr(p, "id", "")) == pid:
+                    player = p
+                    break
+        if player is None:
+            continue
+        try:
+            demand = compute_player_demand(player, user_team, league, context="re_sign")
+            ask = demand.get("want_aav_m")
+            years = int(demand.get("want_years") or 2)
+            row["player_ask_aav_m"] = ask
+            row["expected_aav_range"] = [
+                demand.get("min_acceptable_aav_m"),
+                round(float(ask or 0) * 1.08, 3) if ask else None,
+            ]
+            row["expected_term_range"] = [max(1, years - 1), min(8, years + 1)]
+            morale = float(getattr(player, "morale", None) or getattr(player, "happiness", 70) or 70)
+            row["morale"] = round(morale, 1)
+            interest = "High" if morale >= 70 and float(demand.get("importance") or 0) >= 0.45 else (
+                "Low" if morale < 45 else "Medium"
+            )
+            row["interest_label"] = interest
+            row["clause_ask"] = "NMC" if years >= 5 and _safe_attr_float(player, "overall", "ovr") >= 88 else (
+                "NTC" if years >= 4 and _safe_attr_float(player, "overall", "ovr") >= 84 else "None"
+            )
+        except Exception:
+            continue
+
+    grouped = {
+        "pending_ufa": [r for r in expiring if str(r.get("expiry_status") or r.get("rights") or "").upper() == "UFA"],
+        "pending_rfa": [r for r in expiring if str(r.get("expiry_status") or r.get("rights") or "").upper() == "RFA"] + rfa_rows,
+        "buyout_candidates": list(office.get("buyout_candidates") or [])[:12],
+        "signed_next_season": [r for r in contracts if int(r.get("years_remaining") or 0) > 1],
+        "goalies": [r for r in contracts if str(r.get("position") or "").upper() == "G"],
+    }
+    warnings = []
+    if summary.get("ufaCount"):
+        warnings.append(f"{summary.get('ufaCount')} pending UFAs")
+    if summary.get("rfaCount"):
+        warnings.append(f"{summary.get('rfaCount')} RFA situations")
+
+    payload = {
+        "version": 2,
+        "expiring_contracts": expiring,
+        "cap_snapshot": office.get("cap_snapshot") or office.get("team_cap") or {},
+        "contract_slots": office.get("contract_slots") or {},
+        "summary": summary,
+        "grouped": grouped,
+        "rfa_rights": rfa_rows,
+        "needs": (office.get("team") or {}).get("needs") or {},
+        "stage_status": "ready",
+        "can_continue": True,
+        "blocking_reasons": [],
+        "warning_reasons": warnings,
+        "available_actions": ["open_cap_ledger", "continue_to_free_agency", "back_to_hub"],
+    }
+    session.resign_payload = payload
+    return {"contracts": payload, "re_sign": payload}
+
+
+def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict[str, Any]:
+    from services.contract_economy import (
+        build_contract_office,
+        run_cpu_free_agency,
+        run_cpu_rfa_decisions,
+    )
+
+    existing_market = getattr(session, "free_agency_market_payload", None)
+    already_open = bool(session.free_agency_open)
+    wave = int(getattr(session, "cpu_fa_wave", 0) or 0)
+
+    # Idempotent: first entry runs RFA settle + opening FA wave; later hydration refreshes board only.
+    if not already_open or force:
+        if not getattr(session, "cpu_rfa_decisions", None):
+            session.cpu_rfa_decisions = run_cpu_rfa_decisions(session)
+        if wave < 1:
+            session.cpu_fa_signings = run_cpu_free_agency(session, max_signings=24)
+            session.cpu_fa_wave = 1
+        elif force and wave < 2:
+            extra = run_cpu_free_agency(session, max_signings=16)
+            prev = dict(getattr(session, "cpu_fa_signings", None) or {})
+            prev_list = list(prev.get("signings") or [])
+            prev_list.extend(list((extra or {}).get("signings") or []))
+            prev["signings"] = prev_list
+            prev["count"] = len(prev_list)
+            session.cpu_fa_signings = prev
+            session.cpu_fa_wave = 2
+        session.free_agency_open = True
+
+    office = build_contract_office(session)
+    fa_list = list(office.get("free_agents") or office.get("freeAgents") or [])
+    session.free_agents_payload = fa_list
+    bonus = team_signing_bonus_eligibility(session)
+    cap = office.get("cap_snapshot") or {}
+    needs = (office.get("team") or {}).get("needs") or {}
+    summary = office.get("summary") or {}
+    top = fa_list[:12]
+    cpu = getattr(session, "cpu_fa_signings", None) or {}
+    recent = list(cpu.get("signings") or [])[-8:]
+
+    market = {
+        "version": 2,
+        "market_status": "open" if session.free_agency_open else "closed",
+        "wave": int(getattr(session, "cpu_fa_wave", 0) or 0),
+        "available_count": len(fa_list),
+        "major_available": top,
+        "cap_space_m": cap.get("usable_cap_space_m") or cap.get("cap_space_m"),
+        "contract_slots": office.get("contract_slots") or {},
+        "needs": needs,
+        "pending_rfa_count": summary.get("rfaCount") or 0,
+        "signing_bonus": bonus,
+        "recent_league_signings": recent,
+        "cpu_signings_count": len(list(cpu.get("signings") or [])),
+        "stage_status": "ready",
+        "can_continue": True,
+        "blocking_reasons": [],
+        "warning_reasons": (
+            ["Pending RFAs still unresolved"] if (summary.get("rfaCount") or 0) > 0 else []
+        ),
+        "available_actions": ["open_cap_ledger_fa", "continue_to_roster_check", "back_to_hub"],
+    }
+    if isinstance(existing_market, dict) and existing_market.get("version") == 2 and already_open and not force:
+        # Keep wave progress; refresh board counts.
+        market["wave"] = existing_market.get("wave", market["wave"])
+    session.free_agency_market_payload = market
+    return {
+        "free_agents": session.free_agents_payload,
+        "free_agency_market": market,
+        "cpu_signings": session.cpu_fa_signings,
+        "cpu_rfa_decisions": session.cpu_rfa_decisions,
+    }
+
+
+def _run_roster_cleanup(session: FranchiseSession, *, force: bool = False) -> Dict[str, Any]:
+    from services.contract_economy import (
+        resolve_offer_sheets,
+        run_cap_compliance_pipeline,
+        run_prospect_promotion_pass,
+        validate_contract_slots,
+        CONTRACT_SLOTS_LIMIT,
+        get_team_cap_snapshot_full,
+    )
+
+    existing = getattr(session, "roster_cleanup_payload", None)
+    if not force and isinstance(existing, dict) and existing.get("version") == 2 and existing.get("valid") is not None:
+        # Still re-validate lightly so Cap Ledger fixes unlock Generate.
+        pass
+
+    offer_sheets = resolve_offer_sheets(session)
+    session.offer_sheet_resolutions = offer_sheets
+    promo = run_prospect_promotion_pass(session)
+    compliance = run_cap_compliance_pipeline(session, include_buyouts=True)
+    user_team = session.team_by_id.get(session.user_team_id)
+    league = getattr(session.sim, "league", None)
+    sim = session.sim
+    season_year = int(session.season_calendar_year)
+    roster = list(getattr(user_team, "roster", None) or []) if user_team else []
+    roster_count = len(roster)
+
+    forwards = sum(1 for p in roster if str(getattr(p, "position", "")).upper() in ("C", "LW", "RW", "W", "F"))
+    defense = sum(1 for p in roster if str(getattr(p, "position", "")).upper() in ("D", "LD", "RD"))
+    goalies = sum(1 for p in roster if str(getattr(p, "position", "")).upper() == "G")
+
+    blocking: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, Any]] = []
+
+    if roster_count > 23:
+        blocking.append({"code": "roster_max", "message": f"NHL roster over limit ({roster_count}/23)", "route": "roster"})
+    if roster_count < 18:
+        warnings.append({"code": "roster_light", "message": f"NHL roster light ({roster_count})", "route": "free_agency"})
+    if forwards < 8:
+        warnings.append({"code": "forward_depth", "message": f"Forward count low ({forwards})", "route": "free_agency"})
+    if defense < 4:
+        warnings.append({"code": "defense_depth", "message": f"Defense count low ({defense})", "route": "free_agency"})
+    if goalies < 1:
+        blocking.append({"code": "no_goalie", "message": "No NHL goalie on roster", "route": "free_agency"})
+    elif goalies < 2:
+        warnings.append({"code": "goalie_depth", "message": f"Goalie count low ({goalies})", "route": "free_agency"})
+
+    cap_snap = {}
+    try:
+        cap_snap = get_team_cap_snapshot_full(user_team, league, sim, season_year=season_year) if user_team else {}
+        if float(cap_snap.get("usable_cap_space_m") or 0) < -0.01:
+            blocking.append({
+                "code": "cap_over",
+                "message": f"Over salary cap by ${abs(float(cap_snap.get('usable_cap_space_m') or 0)):.2f}M",
+                "route": "cap_ledger",
+            })
+    except Exception:
+        pass
+
+    slots = validate_contract_slots(user_team, league, additional=0) if user_team is not None else {}
+    used = int(slots.get("contract_slots_used") or 0)
+    limit = int(slots.get("contract_slots_limit") or CONTRACT_SLOTS_LIMIT)
+    if used > limit:
+        blocking.append({"code": "contract_slots", "message": f"Contract slots exceeded ({used}/{limit})", "route": "cap_ledger"})
+
+    valid = len(blocking) == 0
+    payload = {
+        "version": 2,
+        "nhl_roster_count": roster_count,
+        "forward_count": forwards,
+        "defense_count": defense,
+        "goalie_count": goalies,
+        "payroll_m": cap_snap.get("total_cap_hit_m"),
+        "cap_space_m": cap_snap.get("usable_cap_space_m"),
+        "contract_slots_used": used,
+        "contract_slots_limit": limit,
+        "prospect_promotions": promo,
+        "cap_compliance": {
+            "buried": len(compliance.get("buried") or []),
+            "waived": len(compliance.get("waived") or []),
+            "claims": len(compliance.get("claims") or []),
+            "cleared": len(compliance.get("cleared") or []),
+            "buyouts": len(compliance.get("buyouts") or []),
+        },
+        "offer_sheets_resolved": offer_sheets.get("count", 0),
+        "blocking": blocking,
+        "warnings": warnings,
+        # Legacy string lists for older UI
+        "issues": [b["message"] for b in blocking],
+        "warning_messages": [w["message"] for w in warnings],
+        "valid": valid,
+        "status": "ready" if valid else "blocking",
+        "can_continue": valid,
+        "blocking_reasons": [b["message"] for b in blocking],
+        "warning_reasons": [w["message"] for w in warnings],
+        "available_actions": (
+            ["generate_next_season", "back_to_hub"] if valid else ["resolve_issues", "open_cap_ledger", "back_to_hub"]
+        ),
+    }
+    session.roster_cleanup_payload = payload
+    session.next_important_event = "generate_next_season"
+    return {"roster_cleanup": payload}
+
+
+def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
+    """Build new schedule/calendar — only increments year when data exists."""
+    from services.contract_economy import run_cap_compliance_before_season
+    # Re-validate roster before generation; never generate with blocking issues.
+    cleanup = _run_roster_cleanup(session, force=True)
+    payload = (cleanup or {}).get("roster_cleanup") or session.roster_cleanup_payload or {}
+    if not payload.get("valid", False):
+        reasons = payload.get("blocking_reasons") or payload.get("issues") or ["Roster not compliant"]
+        raise ValueError("Cannot generate next season: " + "; ".join(str(r) for r in reasons[:4]))
+    run_cap_compliance_before_season(session)
+    from app.sim_engine.league import generate_regular_season_schedule
+    from app.sim_engine.league.schedule_generator import _safe_team_id
+    from app.sim_engine.league.standings import StandingsTable
+    from services.franchise_sim import (
+        _finalize_schedule_after_generation,
+        _merge_abstract_schedule_to_by_day,
+        invalidate_session_payload_caches,
+    )
+
+    if session.next_season_generated and session.next_season_payload:
+        return {"next_season": session.next_season_payload, "already_generated": True}
+
+    sim = session.sim
+    teams = list(getattr(sim, "league", None).teams or [])
+    gp = int(getattr(session, "games_per_team_schedule", 82) or 82)
+    next_sy = int(session.season_calendar_year) + 1
+    source_sy = int(session.season_calendar_year)
+    source_phase = str(getattr(session, "phase", "") or "")
+    if getattr(session, "_audit_lifecycle_trace", None) is not None or getattr(session, "_audit_schedule_invariants", False):
+        trace_row = {
+            "transition": "generate_next_season",
+            "source_phase": source_phase,
+            "source_season_year": source_sy,
+            "source_calendar_year": source_sy,
+            "event": "season_year_increment",
+            "destination_phase": "offseason_roster_cleanup",
+            "destination_season_year": next_sy,
+            "destination_calendar_year": next_sy,
+        }
+        buf = list(getattr(session, "_audit_lifecycle_trace", None) or [])
+        buf.append(trace_row)
+        session._audit_lifecycle_trace = buf
+
+    history_entry = {
+        "season_year": int(session.season_calendar_year),
+        "champion_id": session.champion_id,
+        "game_results_count": len(getattr(session, "game_results", None) or []),
+        "draft_results": list((getattr(session, "draft_state", None) or {}).get("draft_results") or []),
+    }
+    session.season_history.append(history_entry)
+
+    schedule_raw = generate_regular_season_schedule(sim.rng, teams, gp)
+    by_abs: Dict[int, List[Any]] = defaultdict(list)
+    for slot in schedule_raw:
+        by_abs[int(slot.day)].append(slot)
+    abstract_keys = sorted(by_abs.keys())
+
+    cal_objs = build_season_calendar(next_sy)
+    nhl_cal = [calendar_day_to_dict(c) for c in cal_objs]
+    last_reg_idx = last_regular_season_index(cal_objs)
+    day_map = map_abstract_schedule_to_calendar(cal_objs, abstract_keys)
+    by_day, schedule = _merge_abstract_schedule_to_by_day(by_abs, abstract_keys, day_map, nhl_cal)
+    by_day, schedule, _ = _finalize_schedule_after_generation(by_day, nhl_cal, user_id=str(session.user_team_id))
+
+    session.schedule = schedule
+    session.by_day = dict(by_day)
+    session.days_sorted = sorted(by_day.keys())
+    session.nhl_calendar = nhl_cal
+    session.calendar_cursor = 0
+    session.nhl_regular_season_last_index = last_reg_idx
+    session.standings = StandingsTable(teams)
+    session.player_season_stats = {}
+    session.game_results = []
+    session.processed_game_ids = set()
+    session._regular_stats_split_done = False
+    session.regular_season_complete = False
+    session.playoffs_generated = False
+    session.playoffs_simulated = False
+    session.playoffs_done = False
+    session.playoff_payload = {}
+    session.champion_id = None
+    session.stanley_cup_winner = None
+    session.preseason_applied = False
+    # Season-scoped lifecycle flags that previously leaked across years.
+    session._year_end_progression_done = False
+    session.contracts_ticked = False
+    session.development_report_done = False
+    session.development_report_completed_season = 0
+    session.development_report_generated_at = ""
+    # Reset per-team goalie workload state so Year 2+ does not inherit fatigue.
+    try:
+        for team in teams:
+            if hasattr(team, "_gm_goalie_start_state"):
+                setattr(team, "_gm_goalie_start_state", {})
+            if hasattr(team, "_gm_goalie_usage_strategy"):
+                try:
+                    delattr(team, "_gm_goalie_usage_strategy")
+                except Exception:
+                    setattr(team, "_gm_goalie_usage_strategy", None)
+    except Exception:
+        pass
+    # Keep next_season_generated False until payload is ready below; cleared again
+    # when the new season actually starts (_finalize_next_season_reveal).
+    session.season_calendar_year = next_sy
+    session.draft_completed = False
+    session.draft_lottery_done = False
+    session.draft_lottery_payload = {}
+    session.draft_combine_done = False
+    session.draft_combine_payload = {}
+    session.draft_payload = {}
+    session.draft_state = {}
+    session.draft_review_payload = {}
+    session.prospect_rights_payload = {}
+    session.draft_rights_review_payload = {}
+    session.resign_payload = {}
+    session.free_agency_open = False
+    session.free_agents_payload = []
+    session.free_agency_market_payload = {}
+    session.cpu_fa_signings = {}
+    session.cpu_rfa_decisions = {}
+    session.cpu_fa_wave = 0
+    session.roster_cleanup_payload = {}
+    session.offseason_completed_stages = []
+    session.offseason_stage_entered_at = {}
+    session.offseason_stage_completed_at = {}
+    session.draft_rank_prev = {}
+    session.draft_preseason_rank = {}
+    session.draft_midseason_rank = {}
+    session.draft_rank_snapshot_week = ""
+
+    first_opp = ""
+    uid = str(session.user_team_id)
+    for slot in schedule[:40]:
+        hid = str(getattr(slot, "home_id", getattr(slot, "home_team_id", "")) or "")
+        aid = str(getattr(slot, "away_id", getattr(slot, "away_team_id", "")) or "")
+        if uid in (hid, aid):
+            opp_id = aid if hid == uid else hid
+            opp = session.team_by_id.get(opp_id)
+            from services.franchise_sim import _display_team
+            first_opp = _display_team(opp) if opp else opp_id
+            break
+
+    anchors = season_anchor_event_markers(next_sy)
+    opening = next((a for a in anchors if "opening" in str(a.get("key", "")).lower()), None)
+    preseason = next((a for a in anchors if "preseason_start" in str(a.get("key", "")).lower()), None)
+
+    payload = {
+        "season_year": next_sy,
+        "season_label": f"{next_sy}–{next_sy + 1}",
+        "opening_night": opening.get("iso") if opening else None,
+        "preseason_start": preseason.get("iso") if preseason else (nhl_cal[0].get("iso") if nhl_cal else None),
+        "first_opponent": first_opp,
+        "schedule_games": len(schedule),
+        "calendar_markers": [
+            {"key": a.get("key"), "iso": a.get("iso"), "label": a.get("label") or a.get("name")}
+            for a in (anchors or [])[:12]
+            if isinstance(a, dict)
+        ],
+        "salary_cap_m": (getattr(session, "salary_cap_payload", None) or {}).get("new_season_cap"),
+        "generation_status": "ready",
+        "stage_status": "ready",
+        "can_continue": True,
+        "blocking_reasons": [],
+        "warning_reasons": [],
+        "available_actions": ["enter_preseason", "back_to_hub"],
+    }
+    session.next_season_payload = payload
+    session.next_season_generated = True
+    _mark_stage_completed(session, "roster_cleanup")
+    session.offseason_stage = "next_season_reveal"
+    _mark_stage_entered(session, "next_season_reveal")
+    session.next_important_event = "preseason_start"
+    session.phase = "offseason"
+    session.season_phase = "offseason"
+    session.timeline.append(f"NEW SEASON: {next_sy}–{next_sy + 1} schedule generated.")
+    invalidate_session_payload_caches(session, "next_season")
+    _enqueue_offseason_popup(session, "next_season_reveal", "New Season", f"{next_sy}–{next_sy + 1} ready")
+    return {"next_season": payload, "status": "next_season_reveal"}
+
+
+def _finalize_next_season_reveal(session: FranchiseSession) -> Dict[str, Any]:
+    _mark_stage_completed(session, "next_season_reveal")
+    session.phase = "preseason"
+    session.season_phase = "preseason"
+    session.offseason_stage = None
+    session.next_important_event = "preseason_start"
+    # Season has begun — clear the generation latch so the next offseason can regenerate.
+    session.next_season_generated = False
+    return {"next_season": session.next_season_payload, "season_phase": "preseason"}
+
+
+def slim_awards_payload_for_client(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Awards Night needs winners + a short nominee list — not triple-copied full ballots.
+    Full compute payloads routinely exceed 10MB and crash the browser as a Network Error
+    right when playoffs finish / offseason opens.
+    """
+    if not isinstance(payload, dict):
+        return {}
+
+    candidate_cap = 5
+    drop_row_keys = frozenset(
+        {
+            "component_scores",
+            "eligibility",
+            "result",
+            "votes_detail",
+            "raw_components",
+            "debug",
+            "breakdown",
+            "vote_share",
+            "ballot_share",
+        }
+    )
+    drop_award_keys = frozenset({"voting", "result", "frozen_inputs", "ballots", "voters"})
+
+    def _slim_entity(row: Any) -> Any:
+        if not isinstance(row, dict):
+            return row
+        out = {k: v for k, v in row.items() if k not in drop_row_keys}
+        for rk in ("public_rationale", "rationale", "blurb", "summary"):
+            if rk in out and isinstance(out[rk], str) and len(out[rk]) > 220:
+                out[rk] = out[rk][:217] + "..."
+        return out
+
+    def _slim_award(ser: Any) -> Any:
+        if not isinstance(ser, dict):
+            return ser
+        out = {k: v for k, v in ser.items() if k not in drop_award_keys}
+        full = [_slim_entity(x) for x in list(out.get("full_results") or [])[:candidate_cap]]
+        out["full_results"] = full
+        # Avoid shipping candidates + full_results + finalists as three near-copies.
+        out["candidates"] = list(full)
+        finals = list(out.get("finalists") or [])
+        if finals and isinstance(finals[0], dict):
+            out["finalists"] = [_slim_entity(x) for x in finals[: min(3, candidate_cap)]]
+        else:
+            out["finalists"] = list(full[:3])
+        winners = list(out.get("winners") or [])
+        if winners and isinstance(winners[0], dict):
+            out["winners"] = [_slim_entity(x) for x in winners[:3]]
+        for rk in ("public_rationale", "rationale"):
+            if rk in out and isinstance(out[rk], str) and len(out[rk]) > 320:
+                out[rk] = out[rk][:317] + "..."
+        return out
+
+    official = [_slim_award(x) for x in list(payload.get("official_results") or [])]
+    if not official:
+        # Legacy shape: awards dict / items list only.
+        legacy = payload.get("items")
+        if isinstance(legacy, list) and legacy:
+            official = [_slim_award(x) for x in legacy]
+        elif isinstance(payload.get("awards"), dict):
+            official = [_slim_award(v) for v in payload["awards"].values()]
+
+    team_achievements = [_slim_award(x) for x in list(payload.get("team_achievements") or [])]
+    all_star_raw = payload.get("all_star_teams") or {}
+    all_star_teams = (
+        {k: _slim_award(v) for k, v in all_star_raw.items()}
+        if isinstance(all_star_raw, dict)
+        else {}
+    )
+
+    # Thin legacy map — winner fields only (UI prefers official_results).
+    thin_awards: Dict[str, Any] = {}
+    for row in official:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("award_id") or row.get("name") or "").strip()
+        if not key:
+            continue
+        thin_awards[key] = {
+            "name": row.get("name"),
+            "award_id": row.get("award_id"),
+            "winner_name": row.get("winner_name"),
+            "winner_player_id": row.get("winner_player_id"),
+            "winner_team_id": row.get("winner_team_id"),
+            "winner_team_name": row.get("winner_team_name"),
+            "status": row.get("status"),
+            "winners": row.get("winners") or [],
+            "finalists": row.get("finalists") or [],
+            "public_rationale": row.get("public_rationale") or row.get("rationale"),
+            "display_metric": row.get("display_metric"),
+            "recipient_type": row.get("recipient_type"),
+        }
+
+    meta = dict(payload.get("metadata") or {})
+    meta.pop("frozen_inputs", None)
+    seed_val = meta.get("seed")
+    if seed_val is not None and (callable(seed_val) or not isinstance(seed_val, (int, float, str))):
+        meta["seed"] = int(payload.get("season") or 0) & 0xFFFFFFFF
+    elif isinstance(seed_val, float):
+        meta["seed"] = int(seed_val) & 0xFFFFFFFF
+
+    return {
+        "season": payload.get("season"),
+        "status": payload.get("status") or "complete",
+        "official_results": official,
+        "ceremony": payload.get("ceremony") or {},
+        "metadata": meta,
+        "team_achievements": team_achievements,
+        "all_star_teams": all_star_teams,
+        "awards": thin_awards,
+        "items": official,
+    }
+
+
+def build_offseason_state_extras(session: FranchiseSession) -> Dict[str, Any]:
+    """Extra payload fields for build_state_payload."""
+    _sync_phase_fields(session)
+    _ensure_offseason_stage_hydrated(session)
+    phase = str(session.phase)
+    stage = getattr(session, "offseason_stage", None)
+    completed = list(getattr(session, "offseason_completed_stages", None) or [])
+
+    can_advance = (
+        phase in ("preseason", "regular")
+        and len(getattr(session, "pending_decisions", None) or []) == 0
+        and phase not in ("post_cup", "offseason")
+    )
+    can_continue_offseason = phase in ("post_cup", "offseason")
+    roster_payload = session.roster_cleanup_payload or {}
+    can_generate = (
+        phase == "offseason"
+        and stage == "roster_cleanup"
+        and not session.next_season_generated
+        and bool(roster_payload.get("valid", True))
+    )
+    is_terminal = False
+
+    stage_idx = None
+    try:
+        if stage in OFFSEASON_STAGES:
+            stage_idx = OFFSEASON_STAGES.index(str(stage))
+    except Exception:
+        stage_idx = None
+    post_idx = None
+    try:
+        if stage in POST_DRAFT_STAGES:
+            post_idx = POST_DRAFT_STAGES.index(str(stage))
+    except Exception:
+        post_idx = None
+
+    # Pull stage-local gate fields when present.
+    stage_blob = None
+    if stage == "draft_review":
+        stage_blob = getattr(session, "draft_review_payload", None)
+    elif stage == "prospect_rights":
+        stage_blob = getattr(session, "prospect_rights_payload", None)
+    elif stage == "re_sign":
+        stage_blob = getattr(session, "resign_payload", None)
+    elif stage == "free_agency":
+        stage_blob = getattr(session, "free_agency_market_payload", None)
+    elif stage == "roster_cleanup":
+        stage_blob = roster_payload
+    elif stage == "next_season_reveal":
+        stage_blob = session.next_season_payload
+    stage_blob = stage_blob if isinstance(stage_blob, dict) else {}
+
+    blocking = list(stage_blob.get("blocking_reasons") or [])
+    warnings = list(stage_blob.get("warning_reasons") or [])
+    can_continue_stage = bool(stage_blob.get("can_continue", True)) if stage_blob else True
+    if stage == "roster_cleanup":
+        can_continue_stage = bool(roster_payload.get("valid", False))
+
+    timeline = {
+        "season": int(getattr(session, "season_calendar_year", 0) or 0),
+        "current_stage": stage,
+        "previous_stage": completed[-1] if completed else None,
+        "next_stage": STAGE_NEXT_EVENT.get(str(stage or ""), None),
+        "stage_index": stage_idx,
+        "total_stages": len(OFFSEASON_STAGES),
+        "post_draft_index": post_idx,
+        "post_draft_total": len(POST_DRAFT_STAGES),
+        "completed_stages": completed,
+        "current_stage_status": stage_blob.get("stage_status") or stage_blob.get("status") or (
+            "ready" if stage else None
+        ),
+        "can_continue": can_continue_stage,
+        "blocking_reasons": blocking,
+        "warning_reasons": warnings,
+        "resume_available": can_continue_offseason and bool(stage or phase == "post_cup"),
+        "primary_action": (
+            "generate_next_season" if stage == "roster_cleanup"
+            else "enter_preseason" if stage == "next_season_reveal"
+            else "continue_offseason" if can_continue_offseason else "advance_day"
+        ),
+        "secondary_actions": list(stage_blob.get("available_actions") or ["back_to_hub"]),
+        "entered_at": (getattr(session, "offseason_stage_entered_at", None) or {}).get(str(stage or "")),
+        "completed_at": (getattr(session, "offseason_stage_completed_at", None) or {}).get(str(stage or "")),
+        "is_complete": str(stage or "") in completed,
+    }
+
+    return {
+        "offseason_stage": stage,
+        "offseason_timeline": timeline,
+        "playoffs_done": bool(getattr(session, "playoffs_done", session.playoffs_simulated)),
+        "stanley_cup_winner": session.stanley_cup_winner or session.champion_id,
+        "awards": slim_awards_payload_for_client(session.awards_payload),
+        "retirements": session.retirements_payload,
+        "retired_players_archive": list(getattr(session, "retired_players_archive", None) or []),
+        "draft_lottery": session.draft_lottery_payload,
+        "draft_combine": session.draft_combine_payload,
+        "draft": session.draft_payload,
+        "draft_review": getattr(session, "draft_review_payload", None),
+        "prospect_rights": getattr(session, "prospect_rights_payload", None),
+        "free_agents": session.free_agents_payload,
+        "free_agency_market": getattr(session, "free_agency_market_payload", None),
+        "contracts": session.resign_payload,
+        "salary_cap": session.salary_cap_payload,
+        "development_report": session.development_report_payload,
+        "roster_cleanup": session.roster_cleanup_payload,
+        "next_season": session.next_season_payload,
+        "season_history": list(getattr(session, "season_history", None) or []),
+        "flags": {
+            "playoffs_done": bool(getattr(session, "playoffs_done", session.playoffs_simulated)),
+            "can_advance_day": can_advance,
+            "can_enter_playoffs": phase == "playoff_ready",
+            "can_advance_phase": phase in ("regular", "playoff_ready", "post_cup", "preseason"),
+            "can_continue_offseason": can_continue_offseason,
+            "can_generate_next_season": can_generate,
+            "is_terminal_dead_end": is_terminal,
+        },
+    }

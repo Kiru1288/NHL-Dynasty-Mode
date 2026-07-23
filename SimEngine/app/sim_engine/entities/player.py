@@ -74,14 +74,50 @@ class CareerArcType(str, Enum):
 
 
 # ============================================================
-# UTILITIES
+# UTILITIES / LEAGUE RATING TARGETS
 # ============================================================
 
 RATING_MIN = 20
 RATING_MAX = 99
 
+# NHL active-roster balance targets.
+# Ratings are 20–99. Player.ovr() returns 0.0–1.0.
+NHL_MIN_ACTIVE_OVR = 74.0
+NHL_SUPERSTAR_OVR = 90.0
+NHL_TARGET_SUPERSTARS_90_PLUS = 15
+
+# Context-sensitive OVR floors (0–100 scale). Non-NHL pools must not inherit the NHL floor.
+POOL_OVR_FLOORS: Dict[str, float] = {
+    "nhl": 72.0,
+    "ahl": 60.0,
+    "echl": 52.0,
+    "ufa": 55.0,
+    "overseas": 55.0,
+    "junior": 38.0,
+    "college": 42.0,
+    "european_junior": 45.0,
+    "none": 0.0,
+}
+
+# Missing generated ratings should produce usable NHL depth, not 68 OVR sludge.
+DEFAULT_NHL_RATING = 74
+
+
+def get_ovr_floor_for_pool(pool_context: Optional[str]) -> float:
+    """Return the minimum OVR (0–100) for a player pool; 0 disables the floor."""
+    key = str(pool_context or "nhl").strip().lower()
+    if key in POOL_OVR_FLOORS:
+        return float(POOL_OVR_FLOORS[key])
+    if key.startswith("eu_") or key.startswith("chl"):
+        return float(POOL_OVR_FLOORS.get("junior", 38.0))
+    if key in ("ncaa", "ushl"):
+        return float(POOL_OVR_FLOORS.get("college", 42.0))
+    return float(POOL_OVR_FLOORS.get("nhl", NHL_MIN_ACTIVE_OVR))
+
+
 def clamp_rating(x: float) -> int:
-    return int(max(RATING_MIN, min(RATING_MAX, round(x))))
+    return int(max(RATING_MIN, min(RATING_MAX, round(float(x)))))
+
 
 def clamp01(x: float) -> float:
     if x < 0.0:
@@ -99,10 +135,138 @@ def clamp(x: float, lo: float, hi: float) -> float:
     return float(x)
 
 
-def normalize_ratings_dict(r, keys, default=68):
+def normalize_rating(value: Any) -> float:
+    """Return a clamped internal 0.0–1.0 rating.
+
+    Accepts legacy 0–1 fractions and 0–99 / 20–99 display-scale values.
+    Values in (1.5, 20) are treated as malformed display fragments and scaled to 0–1.
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not (v == v):  # NaN
+        return 0.0
+    if v <= 1.5:
+        return clamp01(v)
+    # Display / attribute-adjacent scales → canonical 0–1.
+    if v <= 99.0:
+        return clamp01(v / 99.0)
+    return clamp01(v / 100.0)
+
+
+def display_rating(value: Any) -> int:
+    """Convert canonical internal rating to a displayed 0–99 integer."""
+    return int(max(0, min(99, round(normalize_rating(value) * 99.0))))
+
+
+def normalize_rating_gap(current: Any, ceiling: Any) -> float:
+    """Return a safe non-negative gap using the canonical 0–1 scale."""
+    return max(0.0, normalize_rating(ceiling) - normalize_rating(current))
+
+
+def player_current_ovr_01(player: Any) -> float:
+    """Authoritative current ability on 0–1: prefer compute_ovr from attributes."""
+    ratings = getattr(player, "ratings", None)
+    if isinstance(ratings, dict) and ratings:
+        ovr_fn = getattr(player, "ovr", None)
+        if callable(ovr_fn):
+            try:
+                return normalize_rating(ovr_fn())
+            except Exception:
+                pass
+        pos = getattr(player, "position", None)
+        arch = getattr(player, "archetype", None)
+        try:
+            return normalize_rating(compute_ovr(ratings, pos, arch))
+        except Exception:
+            pass
+    for key in ("overall", "ovr", "true_ovr", "current_ovr"):
+        raw = getattr(player, key, None)
+        if raw is None:
+            continue
+        if callable(raw):
+            try:
+                raw = raw()
+            except Exception:
+                continue
+        return normalize_rating(raw)
+    return 0.55
+
+
+def persist_recomputed_ovr(player: Any) -> float:
+    """Recompute OVR from attributes and persist both 0–1 and display mirrors.
+
+    Direct OVR mutation outside this helper (or controlled migration) is forbidden.
+    """
+    ovr01 = player_current_ovr_01(player)
+    # Sync display mirrors from attributes — never invent overall independently.
+    try:
+        setattr(player, "overall", float(display_rating(ovr01)))
+    except Exception:
+        pass
+    try:
+        # Some legacy fixtures store ovr as a float attribute, not a method.
+        if not callable(getattr(type(player), "ovr", None)):
+            setattr(player, "ovr", float(ovr01))
+    except Exception:
+        pass
+    try:
+        inval = getattr(player, "_invalidate_ovr_memo", None)
+        if callable(inval):
+            inval()
+    except Exception:
+        pass
+    return ovr01
+
+
+def validate_stored_ovr_matches_compute(
+    player: Any,
+    *,
+    allowed_rounding_tolerance: float = 0.015,
+) -> Dict[str, Any]:
+    """Confirm stored OVR matches attribute-derived compute_ovr within tolerance (0–1)."""
+    computed = player_current_ovr_01(player)
+    stored = None
+    ovr_fn = getattr(player, "ovr", None)
+    if callable(ovr_fn):
+        try:
+            stored = normalize_rating(ovr_fn())
+        except Exception:
+            stored = None
+    if stored is None:
+        stored = normalize_rating(getattr(player, "overall", None) or getattr(player, "true_ovr", None) or computed)
+    delta = abs(float(stored) - float(computed))
+    return {
+        "ok": delta <= float(allowed_rounding_tolerance),
+        "stored_ovr": stored,
+        "computed_ovr": computed,
+        "delta": delta,
+        "tolerance": float(allowed_rounding_tolerance),
+    }
+
+
+def normalize_ratings_dict(r, keys, default=DEFAULT_NHL_RATING):
+    """
+    Normalize ratings into the game's real 20–99 scale.
+
+    Important:
+    - Ratings are 20–99 here.
+    - Player.ovr() converts weighted rating into 0–1.
+    - Missing attributes default to 74 instead of 68 so generated NHL players
+      do not become unusable depth by accident.
+    - Meta keys (e.g. _generated_profile) are skipped — not numeric attributes.
+    """
     out = {}
+    src = r or {}
     for k in keys:
-        out[k] = clamp_rating(r.get(k, default))
+        if str(k).startswith("_"):
+            continue
+        raw = src.get(k, default)
+        try:
+            out[k] = clamp_rating(raw)
+        except (TypeError, ValueError):
+            out[k] = clamp_rating(default)
     return out
 
 
@@ -117,29 +281,71 @@ def height_cm_to_imperial(height_cm: int) -> str:
     return f"{ft}'{inch}\""
 
 
-def random_height_cm(rng: random.Random) -> int:
+def minimum_height_cm_for_position(position: Any) -> int:
+    """Plausible NHL floor by position (cm)."""
+    p = str(getattr(position, "value", position) or "").upper()
+    if p == "G":
+        return 183
+    if p in ("D", "LD", "RD", "LHD", "RHD"):
+        return 178
+    return 170
+
+
+def maximum_height_cm_for_position(position: Any) -> int:
+    """Plausible NHL ceiling by position (cm)."""
+    p = str(getattr(position, "value", position) or "").upper()
+    if p == "G":
+        return 204
+    if p in ("D", "LD", "RD", "LHD", "RHD"):
+        return 201
+    return 198
+
+
+def clamp_height_cm_for_position(height_cm: Any, position: Any) -> int:
+    """Clamp stored height into a position-realistic band (no reroll)."""
+    lo = minimum_height_cm_for_position(position)
+    hi = maximum_height_cm_for_position(position)
+    try:
+        v = int(round(float(height_cm)))
+    except (TypeError, ValueError):
+        v = 0
+    if v <= 0:
+        return lo
+    return max(lo, min(hi, v))
+
+
+def random_height_cm(rng: random.Random, position: Any = None) -> int:
+    """Legacy helper — prefer generate_position_height_cm for new players."""
+    if position is not None:
+        from app.sim_engine.generation.prospect_body import generate_position_height_cm
+
+        return generate_position_height_cm(rng, position)
     ft = rng.randint(5, 6)
-    inch = rng.randint(0, 11)
-    if ft == 6 and inch > 6:
-        inch = rng.randint(0, 6)
+    inch = rng.randint(7, 11) if ft == 5 else rng.randint(0, 6)
     return int(round((ft * 12 + inch) * 2.54))
 
 
-def sanitize_height_cm(raw: Any, rng: random.Random) -> int:
-    """Clamp to plausible NHL cm; replace garbage with a valid random height."""
+def sanitize_height_cm(raw: Any, rng: random.Random, position: Any = None) -> int:
+    """Clamp to plausible NHL cm; replace garbage with a valid position-aware height."""
     try:
         v = int(round(float(raw)))
     except (TypeError, ValueError):
         v = 0
-    if v < 160 or v > 213:
+
+    if position is not None:
+        lo = minimum_height_cm_for_position(position)
+        hi = maximum_height_cm_for_position(position)
+        if v < lo or v > hi or v <= 0:
+            return random_height_cm(rng, position)
+        return v
+
+    if v < 170 or v > 213:
         return random_height_cm(rng)
     return v
 
 
-
 # ============================================================
-# ATTRIBUTE KEYS — 100 skater facets + 4 goalie tools (20–99 int)
-# Categories feed weighted OVR + sim systems (decay, stats, chemistry).
+# ATTRIBUTE KEYS — skater facets + goalie tools
 # ============================================================
 
 OFFENSE_ATTRS: List[str] = [
@@ -184,6 +390,7 @@ DEFENSE_ATTRS: List[str] = [
     "def_defensive_iq",
     "def_interception_skill",
     "def_board_battles",
+    "def_faceoffs",
     "def_net_coverage",
     "def_backchecking_effort",
     "def_defensive_reads",
@@ -294,10 +501,67 @@ ATTRIBUTE_KEYS: List[str] = (
 )
 
 ALIASES = {
-    "faceoff": "def_board_battles",
+    # Centers: dedicated faceoff attribute (not board battles).
+    "faceoff": "def_faceoffs",
+    "faceoffs": "def_faceoffs",
+    # Legacy unprefixed gameplay lookups → live attribute keys.
+    "puck_control": "pc_puck_control",
+    "puck_handling": "pc_stickhandling",
+    "deking": "pc_deking",
+    "speed": "skg_speed",
+    "acceleration": "skg_acceleration",
+    "agility": "skg_agility",
+    "wrist_shot_accuracy": "off_wrist_shot_accuracy",
+    "wrist_accuracy": "off_wrist_shot_accuracy",
+    "slap_shot_accuracy": "off_slap_shot_accuracy",
+    "slap_accuracy": "off_slap_shot_accuracy",
+    "shot_power": "off_wrist_shot_power",
+    "wrist_shot_power": "off_wrist_shot_power",
+    "shot_blocking": "def_shot_blocking",
+    "stick_checking": "def_stick_checking",
+    "strength": "phy_strength",
+    "aggression": "phy_aggression",
+    "discipline": "iqm_discipline",
+    "composure": "iqm_composure",
+    "reflexes": "g_reflexes",
+    "positioning": "g_positioning",
 }
 
-# Legacy group names (engine / chemistry / decay)
+# Enum / legacy style labels → ARCHETYPE_CATEGORY_MULT keys (OVR leverage).
+ARCHETYPE_ALIASES: Dict[str, str] = {
+    "STAY_AT_HOME_DEFENSEMAN": "DEFENSIVE_D",
+    "STAY_AT_HOME": "DEFENSIVE_D",
+    "SHUTDOWN_DEFENSEMAN": "DEFENSIVE_D",
+    "SHUTDOWN": "DEFENSIVE_D",
+    "DEFENSIVE_DEFENSEMAN": "DEFENSIVE_D",
+    "TWO_WAY_FORWARD": "TWO_WAY_F",
+    "TWO_WAY_F": "TWO_WAY_F",
+    "TWO_WAY_DEFENSEMAN": "TWO_WAY",
+    "GRINDER": "GRINDER",
+    "ENFORCER": "GRINDER",
+    "ENFORCER_D": "GRINDER",
+    "BUTTERFLY_G": "BUTTERFLY_G",
+    "HYBRID_G": "HYBRID_G",
+    "BALANCED_G": "BALANCED_G",
+}
+
+# Generation role profiles → OVR archetype strings (keeps rating shape + OVR leverage aligned).
+GENERATION_PROFILE_TO_ARCHETYPE: Dict[str, str] = {
+    "sniper": "SNIPER",
+    "playmaker": "PLAYMAKER",
+    "power_forward": "POWER_FORWARD",
+    "grinder": "GRINDER",
+    "two_way": "TWO_WAY_F",
+    "two_way_d": "TWO_WAY",
+    "defensive_d": "DEFENSIVE_D",
+    "offensive_d": "OFFENSIVE_D",
+    "enforcer_d": "GRINDER",
+    "hybrid_g": "HYBRID_G",
+    "butterfly_g": "BUTTERFLY_G",
+    "balanced_g": "BALANCED_G",
+}
+
+# Legacy group names used by engine / chemistry / decay.
 OFFENSE_KEYS = OFFENSE_ATTRS
 PASSING_KEYS = PLAYMAKING_ATTRS
 SKATING_KEYS = SKATING_ATTRS
@@ -310,62 +574,223 @@ PERSONALITY_KEYS = PERSONALITY_ATTRS
 SPECIAL_KEYS = SPECIAL_ATTRS
 GOALIE_KEYS = GOALIE_ATTRS
 
+
+# Current OVR should be current ability.
+# Potential/growth exists, but it should not hard-cap current OVR.
 OVR_CATEGORY_WEIGHTS_SKATER: Dict[str, float] = {
-    "offense": 0.18,
-    "playmaking": 0.14,
-    "defense": 0.16,
-    "skating": 0.14,
+    "offense": 0.19,
+    "playmaking": 0.15,
+    "defense": 0.17,
+    "skating": 0.15,
     "physical": 0.10,
-    "iq": 0.12,
-    "skill": 0.10,
-    "hidden": 0.04,
-    "personality": 0.02,
-    "special": 0.00,
+    "iq": 0.13,
+    "skill": 0.09,
+    "hidden": 0.00,
+    "personality": 0.01,
+    "special": 0.01,
 }
 
+
 ARCHETYPE_CATEGORY_MULT: Dict[str, Dict[str, float]] = {
-    "SNIPER": {"offense": 1.25, "playmaking": 0.90, "defense": 0.80, "skating": 1.02, "physical": 0.95, "iq": 1.0, "skill": 1.06, "hidden": 1.0, "personality": 1.0, "special": 1.0},
-    "PLAYMAKER": {"offense": 1.05, "playmaking": 1.25, "defense": 0.85, "skating": 1.02, "physical": 0.80, "iq": 1.05, "skill": 1.08, "hidden": 1.0, "personality": 1.0, "special": 1.0},
-    "DEFENSIVE_D": {"offense": 0.70, "playmaking": 0.85, "defense": 1.30, "skating": 1.0, "physical": 1.08, "iq": 1.05, "skill": 0.92, "hidden": 1.0, "personality": 1.0, "special": 1.0},
-    "OFFENSIVE_D": {"offense": 1.15, "playmaking": 0.95, "defense": 0.90, "skating": 1.08, "physical": 0.92, "iq": 1.02, "skill": 1.05, "hidden": 1.0, "personality": 1.0, "special": 1.0},
-    "POWER_FORWARD": {"offense": 1.10, "playmaking": 0.92, "defense": 0.88, "skating": 0.95, "physical": 1.30, "iq": 0.98, "skill": 1.02, "hidden": 1.0, "personality": 1.0, "special": 1.0},
-    "TWO_WAY": {"offense": 1.0, "playmaking": 1.0, "defense": 1.15, "skating": 1.05, "physical": 1.02, "iq": 1.10, "skill": 1.0, "hidden": 1.0, "personality": 1.0, "special": 1.0},
-    "TWO_WAY_F": {"offense": 1.0, "playmaking": 1.0, "defense": 1.15, "skating": 1.05, "physical": 1.02, "iq": 1.10, "skill": 1.0, "hidden": 1.0, "personality": 1.0, "special": 1.0},
+    "SNIPER": {
+        "offense": 1.12,
+        "playmaking": 0.96,
+        "defense": 0.80,
+        "skating": 1.02,
+        "physical": 0.95,
+        "iq": 1.00,
+        "skill": 1.06,
+        "hidden": 1.00,
+        "personality": 1.00,
+        "special": 1.00,
+    },
+    "PLAYMAKER": {
+        "offense": 1.02,
+        "playmaking": 1.12,
+        "defense": 0.85,
+        "skating": 1.02,
+        "physical": 0.80,
+        "iq": 1.05,
+        "skill": 1.08,
+        "hidden": 1.00,
+        "personality": 1.00,
+        "special": 1.00,
+    },
+    "DEFENSIVE_D": {
+        "offense": 0.70,
+        "playmaking": 0.85,
+        "defense": 1.30,
+        "skating": 1.00,
+        "physical": 1.08,
+        "iq": 1.05,
+        "skill": 0.92,
+        "hidden": 1.00,
+        "personality": 1.00,
+        "special": 1.00,
+    },
+    "OFFENSIVE_D": {
+        "offense": 1.15,
+        "playmaking": 0.95,
+        "defense": 0.90,
+        "skating": 1.08,
+        "physical": 0.92,
+        "iq": 1.02,
+        "skill": 1.05,
+        "hidden": 1.00,
+        "personality": 1.00,
+        "special": 1.00,
+    },
+    "POWER_FORWARD": {
+        "offense": 1.10,
+        "playmaking": 0.92,
+        "defense": 0.88,
+        "skating": 0.95,
+        "physical": 1.30,
+        "iq": 0.98,
+        "skill": 1.02,
+        "hidden": 1.00,
+        "personality": 1.00,
+        "special": 1.00,
+    },
+    "TWO_WAY": {
+        "offense": 1.00,
+        "playmaking": 1.00,
+        "defense": 1.15,
+        "skating": 1.05,
+        "physical": 1.02,
+        "iq": 1.10,
+        "skill": 1.00,
+        "hidden": 1.00,
+        "personality": 1.00,
+        "special": 1.00,
+    },
+    "TWO_WAY_F": {
+        "offense": 1.00,
+        "playmaking": 1.00,
+        "defense": 1.15,
+        "skating": 1.05,
+        "physical": 1.02,
+        "iq": 1.10,
+        "skill": 1.00,
+        "hidden": 1.00,
+        "personality": 1.00,
+        "special": 1.00,
+    },
+    "GRINDER": {
+        "offense": 0.82,
+        "playmaking": 0.88,
+        "defense": 1.18,
+        "skating": 0.96,
+        "physical": 1.28,
+        "iq": 1.02,
+        "skill": 0.90,
+        "hidden": 1.00,
+        "personality": 1.00,
+        "special": 1.00,
+    },
     "ELITE_FRANCHISE": {},
     "BALANCED": {},
     "BALANCED_G": {},
+    "BUTTERFLY_G": {
+        "offense": 1.00,
+        "playmaking": 1.00,
+        "defense": 1.00,
+        "skating": 0.96,
+        "physical": 1.04,
+        "iq": 1.06,
+        "skill": 1.00,
+        "hidden": 1.00,
+        "personality": 1.00,
+        "special": 1.00,
+    },
+    "HYBRID_G": {
+        "offense": 1.00,
+        "playmaking": 1.00,
+        "defense": 1.00,
+        "skating": 1.08,
+        "physical": 0.98,
+        "iq": 1.04,
+        "skill": 1.00,
+        "hidden": 1.00,
+        "personality": 1.00,
+        "special": 1.00,
+    },
 }
+
+
+def resolve_ovr_archetype_key(archetype: Optional[str]) -> str:
+    """Map enum / legacy / generation labels onto ARCHETYPE_CATEGORY_MULT keys."""
+    raw = str(archetype or "BALANCED").strip().upper()
+    if not raw:
+        return "BALANCED"
+    if raw in ARCHETYPE_CATEGORY_MULT:
+        return raw
+    aliased = ARCHETYPE_ALIASES.get(raw)
+    if aliased and (aliased in ARCHETYPE_CATEGORY_MULT or aliased == "ELITE_FRANCHISE"):
+        return aliased
+    return raw
+
+
+def archetype_from_generation_profile(profile: Optional[str], position: Position) -> Optional[str]:
+    """Convert build_role_shaped_ratings profile → OVR archetype string."""
+    if not profile:
+        return None
+    key = str(profile).strip().lower()
+    mapped = GENERATION_PROFILE_TO_ARCHETYPE.get(key)
+    if mapped:
+        return mapped
+    pos = str(getattr(position, "value", position) or "").upper()
+    if pos == "G":
+        return "BALANCED_G"
+    return None
 
 
 def assign_skater_archetype(position: Position, rng: random.Random) -> str:
     if position == Position.G:
-        return rng.choices(["BALANCED_G", "ELITE_FRANCHISE", "BALANCED_G", "BALANCED_G"], weights=[0.55, 0.08, 0.22, 0.15])[0]
+        return rng.choices(
+            ["BALANCED_G", "BUTTERFLY_G", "HYBRID_G", "ELITE_FRANCHISE"],
+            weights=[0.42, 0.28, 0.22, 0.08],
+            k=1,
+        )[0]
+
     if position == Position.D:
         return rng.choices(
-            ["DEFENSIVE_D", "OFFENSIVE_D", "TWO_WAY", "BALANCED"],
-            weights=[0.34, 0.22, 0.28, 0.16],
+            ["DEFENSIVE_D", "OFFENSIVE_D", "TWO_WAY", "BALANCED", "GRINDER"],
+            weights=[0.32, 0.20, 0.26, 0.14, 0.08],
+            k=1,
         )[0]
+
     return rng.choices(
-        ["SNIPER", "PLAYMAKER", "POWER_FORWARD", "TWO_WAY_F", "BALANCED", "ELITE_FRANCHISE"],
-        weights=[0.17, 0.20, 0.16, 0.28, 0.17, 0.02],
+        ["SNIPER", "PLAYMAKER", "POWER_FORWARD", "TWO_WAY_F", "GRINDER", "BALANCED", "ELITE_FRANCHISE"],
+        weights=[0.16, 0.18, 0.14, 0.24, 0.12, 0.14, 0.02],
+        k=1,
     )[0]
 
 
 def _avg(ratings: Dict[str, Any], keys: List[str]) -> int:
     if not keys:
-        return 68
+        return DEFAULT_NHL_RATING
 
     total = 0
     count = 0
     for k in keys:
         if k in ratings:
-            total += int(float(ratings[k]))
+            v = ratings[k]
+            try:
+                total += int(v)
+            except (TypeError, ValueError):
+                total += int(float(v))
             count += 1
 
     if count == 0:
-        return 68
+        return DEFAULT_NHL_RATING
 
-    return clamp_rating(total / count)
+    avg = int(round(total / count))
+    if avg < RATING_MIN:
+        return RATING_MIN
+    if avg > RATING_MAX:
+        return RATING_MAX
+    return avg
 
 
 def _skater_category_raw_avgs(ratings: Dict[str, Any]) -> Dict[str, int]:
@@ -387,11 +812,12 @@ def _group_avgs(ratings: Dict[str, Any], position: Position) -> Dict[str, float]
     """Backward-compatible group averages for chemistry / debug."""
     if position == Position.G:
         return {
-            "goalie": _avg(ratings, GOALIE_ATTRS),
-            "iq": _avg(ratings, IQ_ATTRS),
-            "physical": _avg(ratings, PHYSICAL_ATTRS),
-            "skating": _avg(ratings, SKATING_ATTRS),
+            "goalie": float(_avg(ratings, GOALIE_ATTRS)),
+            "iq": float(_avg(ratings, IQ_ATTRS)),
+            "physical": float(_avg(ratings, PHYSICAL_ATTRS)),
+            "skating": float(_avg(ratings, SKATING_ATTRS)),
         }
+
     s = _skater_category_raw_avgs(ratings)
     return {
         "skating": float(s["skating"]),
@@ -404,6 +830,16 @@ def _group_avgs(ratings: Dict[str, Any], position: Position) -> Dict[str, float]
 
 
 def compute_ovr(ratings: Dict[str, Any], position: Position, archetype: Optional[str] = None) -> float:
+    """
+    Returns current OVR on a 0.0–1.0 scale.
+
+    Design rule:
+    - Current ability is calculated from current ratings.
+    - Potential/development ratings influence progression, not current OVR hard-capping.
+    - Archetype multipliers redistribute category leverage without free OVR inflation
+      (weights are renormalized after applying style mults).
+    """
+
     def norm_pts(x: float) -> float:
         return clamp01(float(x) / RATING_MAX)
 
@@ -412,43 +848,394 @@ def compute_ovr(ratings: Dict[str, Any], position: Position, archetype: Optional
         sk = _avg(ratings, SKATING_ATTRS)
         iq = _avg(ratings, IQ_ATTRS)
         phy = _avg(ratings, PHYSICAL_ATTRS)
-        pts = 0.62 * g_skill + 0.14 * sk + 0.14 * iq + 0.10 * phy
-        arch = (archetype or "BALANCED_G").upper()
+
+        pts = 0.64 * g_skill + 0.13 * sk + 0.14 * iq + 0.09 * phy
+
+        arch = resolve_ovr_archetype_key(archetype or "BALANCED_G")
+        # Style nudge for goalies without gross OVR inflation.
         if arch == "ELITE_FRANCHISE":
-            pts *= 1.12
-        pot = float(ratings.get("dev_potential", pts))
-        pts = min(pts, pot)
-        return clamp01(pts / RATING_MAX)
+            pts *= 1.04
+        elif arch == "BUTTERFLY_G":
+            pts = 0.68 * g_skill + 0.10 * sk + 0.15 * iq + 0.07 * phy
+        elif arch == "HYBRID_G":
+            pts = 0.60 * g_skill + 0.18 * sk + 0.14 * iq + 0.08 * phy
+
+        return norm_pts(min(99.0, pts))
 
     cats = _skater_category_raw_avgs(ratings)
-    arch_u = (archetype or "BALANCED").upper()
+    arch_u = resolve_ovr_archetype_key(archetype or "BALANCED")
+
     if arch_u == "ELITE_FRANCHISE":
-        mults = {k: 1.15 for k in cats}
+        mults = {
+            "offense": 1.16,
+            "playmaking": 1.14,
+            "defense": 1.06,
+            "skating": 1.10,
+            "physical": 1.04,
+            "iq": 1.14,
+            "skill": 1.12,
+            "hidden": 1.00,
+            "personality": 1.00,
+            "special": 1.06,
+        }
     else:
         table = ARCHETYPE_CATEGORY_MULT.get(arch_u)
         mults = dict(table) if table else {k: 1.0 for k in cats}
 
     weighted_pts = 0.0
+    weight_mass = 0.0
+    base_weight_sum = 0.0
     for cat, base in cats.items():
         w = OVR_CATEGORY_WEIGHTS_SKATER.get(cat, 0.0)
         if w <= 0:
             continue
         m = float(mults.get(cat, 1.0))
         weighted_pts += float(base) * m * w
+        weight_mass += m * w
+        base_weight_sum += w
 
-    cons = float(ratings.get("iqm_consistency", 75))
-    clutch = float(ratings.get("iqm_clutch_factor", 80))
-    weighted_pts += (cons - 75.0) * 0.05
-    weighted_pts += (clutch - 80.0) * 0.03
+    # Renormalize so archetypes reweight categories without printing free OVR.
+    if weight_mass > 1e-9 and base_weight_sum > 1e-9:
+        weighted_pts = weighted_pts / weight_mass * base_weight_sum
 
-    pot = float(ratings.get("dev_potential", weighted_pts))
-    weighted_pts = min(weighted_pts, pot)
+    # Soft situational bonuses removed — those attrs already live in iq/special categories.
 
-    return norm_pts(weighted_pts)
+    return norm_pts(min(99.0, weighted_pts))
+
 
 # ============================================================
-# LIFE PRESSURE (CRITICAL FIX)
-# Stored here so Player has "off-ice life" state.
+# NHL OVR DISTRIBUTION ENFORCEMENT
+# ============================================================
+
+def _player_ovr_0_100(player: Any) -> float:
+    try:
+        fn = getattr(player, "ovr", None)
+        val = float(fn()) if callable(fn) else float(getattr(player, "ovr", 0.0))
+    except Exception:
+        val = 0.0
+
+    if val <= 1.25:
+        return val * 99.0
+    return val
+
+
+def _player_position_for_distribution(player: Any) -> str:
+    pos = getattr(player, "position", None)
+    if hasattr(pos, "value"):
+        return str(pos.value).upper()
+
+    ident = getattr(player, "identity", None)
+    if ident is not None:
+        ipos = getattr(ident, "position", None)
+        if hasattr(ipos, "value"):
+            return str(ipos.value).upper()
+        if ipos:
+            return str(ipos).upper()
+
+    return str(pos or "").upper()
+
+
+def _rating_keys_for_distribution_boost(player: Any) -> List[str]:
+    pos = _player_position_for_distribution(player)
+
+    if pos == "G":
+        return GOALIE_KEYS + IQ_KEYS + SKATING_KEYS + PHYS_KEYS
+
+    if pos == "D":
+        return (
+            DEFENSE_KEYS
+            + SKATING_KEYS
+            + IQ_KEYS
+            + PHYS_KEYS
+            + PASSING_KEYS
+            + SKILL_KEYS
+            + OFFENSE_KEYS
+            + PERSONALITY_KEYS
+            + SPECIAL_KEYS
+        )
+
+    return (
+        OFFENSE_KEYS
+        + PASSING_KEYS
+        + SKATING_KEYS
+        + IQ_KEYS
+        + SKILL_KEYS
+        + PHYS_KEYS
+        + DEFENSE_KEYS
+        + PERSONALITY_KEYS
+        + SPECIAL_KEYS
+    )
+
+
+def _boost_player_toward_ovr(
+    player: Any,
+    target_ovr_100: float,
+    *,
+    max_passes: int = 16,
+    per_key_step: float = 1.9,
+) -> float:
+    """
+    Raises a player toward a target OVR without completely destroying archetype shape.
+    Returns final OVR on 0–100 scale.
+    """
+    ratings = getattr(player, "ratings", None)
+    if not isinstance(ratings, dict) or not ratings:
+        return _player_ovr_0_100(player)
+
+    target = float(max(1.0, min(99.0, target_ovr_100)))
+    keys = [k for k in _rating_keys_for_distribution_boost(player) if k in ratings]
+
+    if not keys:
+        keys = list(ratings.keys())
+
+    for _ in range(max_passes):
+        cur = _player_ovr_0_100(player)
+        if cur >= target:
+            break
+
+        gap = max(0.0, target - cur)
+        step = min(per_key_step, max(0.55, gap * 0.42))
+
+        for k in keys:
+            ratings[k] = clamp_rating(float(ratings.get(k, DEFAULT_NHL_RATING)) + step)
+
+        if "dev_potential" in ratings:
+            ratings["dev_potential"] = clamp_rating(max(float(ratings["dev_potential"]), target))
+
+        # OVR is memoized on Player — invalidate after each attribute write.
+        inval = getattr(player, "_invalidate_ovr_memo", None)
+        if callable(inval):
+            inval()
+
+    return _player_ovr_0_100(player)
+
+
+def _lower_player_toward_ovr(
+    player: Any,
+    target_ovr_100: float,
+    *,
+    max_passes: int = 16,
+    per_key_step: float = 0.75,
+) -> float:
+    """
+    Optional softener for accidental mega-inflation.
+    This does not touch players under the target.
+    """
+    ratings = getattr(player, "ratings", None)
+    if not isinstance(ratings, dict) or not ratings:
+        return _player_ovr_0_100(player)
+
+    target = float(max(1.0, min(99.0, target_ovr_100)))
+    keys = [k for k in _rating_keys_for_distribution_boost(player) if k in ratings]
+
+    if not keys:
+        keys = [k for k in ratings.keys() if not str(k).startswith("_")]
+
+    for _ in range(max_passes):
+        cur = _player_ovr_0_100(player)
+        if cur <= target:
+            break
+
+        gap = max(0.0, cur - target)
+        step = min(per_key_step, max(0.20, gap * 0.15))
+
+        for k in keys:
+            ratings[k] = clamp_rating(float(ratings.get(k, DEFAULT_NHL_RATING)) - step)
+
+        inval = getattr(player, "_invalidate_ovr_memo", None)
+        if callable(inval):
+            inval()
+
+    return _player_ovr_0_100(player)
+
+
+def enforce_minimum_player_ovr(player: Any, min_ovr_100: float = NHL_MIN_ACTIVE_OVR) -> float:
+    """
+    Guarantees an individual NHL player is not below the active-roster floor.
+    Use this on player creation and after major yearly regression.
+    """
+    cur = _player_ovr_0_100(player)
+    if cur < float(min_ovr_100):
+        return _boost_player_toward_ovr(
+            player,
+            float(min_ovr_100),
+            max_passes=12,
+            per_key_step=1.65,
+        )
+    return cur
+
+
+def enforce_nhl_roster_ovr_distribution(
+    players: List[Any],
+    rng: Optional[random.Random] = None,
+    *,
+    min_ovr_100: float = NHL_MIN_ACTIVE_OVR,
+    target_90_plus: int = NHL_TARGET_SUPERSTARS_90_PLUS,
+    superstar_floor_100: float = NHL_SUPERSTAR_OVR,
+    include_goalies: bool = True,
+) -> Dict[str, Any]:
+    """
+    League-wide OVR correction pass.
+
+    Guarantees:
+    - No active NHL player below 74 OVR.
+    - At least 15 players at 90+ OVR.
+    - Superstars are created from the strongest existing players, not random depth guys.
+    - Archetype shape is mostly preserved because boosts use position-relevant keys.
+
+    Call this after all NHL rosters are generated/finalized.
+    """
+    rng = rng or random.Random()
+
+    eligible: List[Any] = []
+    for p in players or []:
+        if p is None or getattr(p, "retired", False):
+            continue
+
+        pos = _player_position_for_distribution(p)
+        if pos == "G" and not include_goalies:
+            continue
+
+        ratings = getattr(p, "ratings", None)
+        if not isinstance(ratings, dict) or not ratings:
+            continue
+
+        eligible.append(p)
+
+    if not eligible:
+        return {
+            "players_seen": 0,
+            "floor_boosted": 0,
+            "superstars_before": 0,
+            "superstars_after": 0,
+            "superstars_created": 0,
+            "min_ovr": None,
+            "max_ovr": None,
+        }
+
+    floor_boosted = 0
+
+    for p in eligible:
+        before = _player_ovr_0_100(p)
+        if before < min_ovr_100:
+            enforce_minimum_player_ovr(p, min_ovr_100)
+            floor_boosted += 1
+
+    def score_for_star_boost(p: Any) -> float:
+        o = _player_ovr_0_100(p)
+        ratings = getattr(p, "ratings", {}) or {}
+
+        iq = float(ratings.get("iqm_hockey_iq", DEFAULT_NHL_RATING))
+        cons = float(ratings.get("iqm_consistency", DEFAULT_NHL_RATING))
+        clutch = float(ratings.get("iqm_clutch_factor", DEFAULT_NHL_RATING))
+        pot = float(ratings.get("dev_potential", DEFAULT_NHL_RATING))
+        big = float(ratings.get("st_big_game_performance", DEFAULT_NHL_RATING))
+
+        return (
+            o * 1.00
+            + iq * 0.055
+            + cons * 0.045
+            + clutch * 0.040
+            + pot * 0.050
+            + big * 0.030
+            + rng.random() * 0.35
+        )
+
+    superstars_before = sum(1 for p in eligible if _player_ovr_0_100(p) >= superstar_floor_100)
+
+    if superstars_before < target_90_plus:
+        needed = int(target_90_plus - superstars_before)
+
+        candidates = sorted(
+            eligible,
+            key=score_for_star_boost,
+            reverse=True,
+        )
+
+        created = 0
+        for p in candidates:
+            if created >= needed:
+                break
+
+            cur = _player_ovr_0_100(p)
+            if cur >= superstar_floor_100:
+                continue
+
+            # The higher the candidate already is, the easier it is to become a real star.
+            target = superstar_floor_100 + rng.uniform(0.0, 2.2)
+            if cur >= 87.0:
+                target += rng.uniform(0.6, 1.6)
+            elif cur < 82.0:
+                target = superstar_floor_100
+
+            final = _boost_player_toward_ovr(
+                p,
+                target,
+                max_passes=36,
+                per_key_step=1.35,
+            )
+
+            if final >= superstar_floor_100:
+                created += 1
+                setattr(p, "_distribution_promoted_to_superstar", True)
+
+                ratings = getattr(p, "ratings", None)
+                if isinstance(ratings, dict):
+                    ratings["dev_potential"] = clamp_rating(max(float(ratings.get("dev_potential", 90)), final))
+                    ratings["iqm_consistency"] = clamp_rating(max(float(ratings.get("iqm_consistency", 80)), 84))
+                    ratings["iqm_clutch_factor"] = clamp_rating(max(float(ratings.get("iqm_clutch_factor", 80)), 84))
+                    ratings["st_pressure_handling"] = clamp_rating(max(float(ratings.get("st_pressure_handling", 80)), 84))
+                    ratings["st_big_game_performance"] = clamp_rating(max(float(ratings.get("st_big_game_performance", 80)), 83))
+
+    superstars_after = sum(1 for p in eligible if _player_ovr_0_100(p) >= superstar_floor_100)
+
+    # Final safety pass. No one under floor.
+    for p in eligible:
+        enforce_minimum_player_ovr(p, min_ovr_100)
+
+    ovrs = [_player_ovr_0_100(p) for p in eligible]
+
+    return {
+        "players_seen": len(eligible),
+        "floor_boosted": floor_boosted,
+        "superstars_before": superstars_before,
+        "superstars_after": superstars_after,
+        "superstars_created": max(0, superstars_after - superstars_before),
+        "min_ovr": round(min(ovrs), 2) if ovrs else None,
+        "max_ovr": round(max(ovrs), 2) if ovrs else None,
+    }
+
+
+def enforce_league_ovr_distribution_from_league(
+    league: Any,
+    rng: Optional[random.Random] = None,
+    *,
+    min_ovr_100: float = NHL_MIN_ACTIVE_OVR,
+    target_90_plus: int = NHL_TARGET_SUPERSTARS_90_PLUS,
+) -> Dict[str, Any]:
+    """
+    Convenience wrapper for your League object.
+
+    Call this after rosters are created:
+        enforce_league_ovr_distribution_from_league(league, rng)
+    """
+    players: List[Any] = []
+
+    for team in getattr(league, "teams", None) or []:
+        for p in getattr(team, "roster", None) or []:
+            if p is not None and not getattr(p, "retired", False):
+                players.append(p)
+
+    return enforce_nhl_roster_ovr_distribution(
+        players,
+        rng=rng,
+        min_ovr_100=min_ovr_100,
+        target_90_plus=target_90_plus,
+    )
+
+
+# ============================================================
+# LIFE PRESSURE
 # ============================================================
 
 @dataclass
@@ -506,7 +1293,6 @@ class BackstoryUpbringing:
 
 @dataclass
 class PersonalityTraits:
-    # AI trait profile (0.0–1.0)
     loyalty: float = 0.5
     ambition: float = 0.5
     money_focus: float = 0.5
@@ -530,21 +1316,21 @@ class PersonalityTraits:
 
     def clamp_all(self) -> None:
         for k, v in self.__dict__.items():
-            self.__dict__[k] = clamp01(v)
+            self.__dict__[k] = clamp01(float(v))
 
 
 @dataclass
 class CareerArcSeeds:
     career_arc: CareerArcType = CareerArcType.STEADY
     expected_peak_age: int = 27
-    decline_rate: float = 0.5                 # 0–1 (higher = declines faster)
-    breakout_probability: float = 0.15         # 0–1
-    bust_probability: float = 0.10             # 0–1
-    prime_duration: float = 0.5               # 0–1 (longer prime)
-    season_consistency: float = 0.5           # 0–1
-    dev_curve_seed: int = 0                   # rng seed for progression engine
-    regression_resistance: float = 0.5        # 0–1
-    ceiling_floor_gap: float = 0.5            # 0–1 (bigger gap = more swing)
+    decline_rate: float = 0.5
+    breakout_probability: float = 0.15
+    bust_probability: float = 0.10
+    prime_duration: float = 0.5
+    season_consistency: float = 0.5
+    dev_curve_seed: int = 0
+    regression_resistance: float = 0.5
+    ceiling_floor_gap: float = 0.5
 
     def clamp_all(self) -> None:
         self.decline_rate = clamp01(self.decline_rate)
@@ -558,13 +1344,13 @@ class CareerArcSeeds:
 
 @dataclass
 class HealthState:
-    fatigue: float = 0.0                      # 0–1
-    max_stamina: float = 1.0                  # 0–1
-    injury_risk_baseline: float = 0.25        # 0–1
-    wear_and_tear: float = 0.0                # 0–1
+    fatigue: float = 0.0
+    max_stamina: float = 1.0
+    injury_risk_baseline: float = 0.25
+    wear_and_tear: float = 0.0
     chronic_flags: List[str] = field(default_factory=list)
-    pain_tolerance: float = 0.5               # 0–1
-    recovery_speed: float = 0.5               # 0–1
+    pain_tolerance: float = 0.5
+    recovery_speed: float = 0.5
     injury_status: InjuryStatus = InjuryStatus.HEALTHY
     days_injured_career: int = 0
     injury_history: List[Dict[str, Any]] = field(default_factory=list)
@@ -580,7 +1366,6 @@ class HealthState:
 
 @dataclass
 class PsychologyState:
-    # Core morale block (0–1)
     morale: float = 0.5
     morale_sensitivity: float = 0.5
     team_success_dependency: float = 0.5
@@ -590,7 +1375,6 @@ class PsychologyState:
     locker_room_fit: float = 0.5
     pressure_response: float = 0.5
 
-    # Expanded psychology (0–1)
     confidence_level: float = 0.5
     confidence_volatility: float = 0.5
     self_doubt_bias: float = 0.5
@@ -607,7 +1391,6 @@ class PsychologyState:
     media_stress: float = 0.5
     internal_motivation: float = 0.5
 
-    # Social/locker room (0–1)
     locker_influence: float = 0.5
     peer_pressure: float = 0.5
     clique_affinity: float = 0.5
@@ -622,7 +1405,6 @@ class PsychologyState:
     cultural_fit: float = 0.5
     chemistry_contribution: float = 0.5
 
-    # Coach/system (0–1)
     coach_trust: float = 0.5
     coach_patience_tolerance: float = 0.5
     system_buy_in: float = 0.5
@@ -634,7 +1416,6 @@ class PsychologyState:
     ice_time_justification_sensitivity: float = 0.5
     coaching_stability_dependency: float = 0.5
 
-    # Game-to-game (0–1)
     decision_fatigue_spillover: float = 0.5
     momentum_carryover: float = 0.5
     performance_memory_length: float = 0.5
@@ -653,7 +1434,6 @@ class PsychologyState:
     game_importance_sensitivity: float = 0.5
     playoff_grind_tolerance: float = 0.5
 
-    # Career context (0–1)
     contract_pressure: float = 0.5
     contract_year_bias: float = 0.5
     trade_rumor_sensitivity: float = 0.5
@@ -670,7 +1450,6 @@ class PsychologyState:
     org_stability_perception: float = 0.5
     long_term_commitment_comfort: float = 0.5
 
-    # Chaos/variance (0–1)
     randomness_amplification: float = 0.5
     consistency_dampener: float = 0.5
     upset_boost: float = 0.5
@@ -692,18 +1471,15 @@ class ContextState:
     current_team_id: Optional[str] = None
     current_contract_id: Optional[str] = None
 
-    # Gameplay usage
-    line_assignment: Optional[str] = None         # e.g., "L1", "D2", "G"
-    special_teams_role: Optional[str] = None      # e.g., "PP1", "PK2"
+    line_assignment: Optional[str] = None
+    special_teams_role: Optional[str] = None
     on_ice: bool = False
 
-    # Trends / streaks
-    recent_performance_trend: float = 0.5         # 0–1
-    hot_cold_state: float = 0.5                   # 0–1 (low=cold, high=hot)
-    momentum_susceptibility: float = 0.5          # 0–1
-    penalty_tendency_mod: float = 0.5             # 0–1
+    recent_performance_trend: float = 0.5
+    hot_cold_state: float = 0.5
+    momentum_susceptibility: float = 0.5
+    penalty_tendency_mod: float = 0.5
 
-    # Seeds / chaos
     chaos_seed: int = 0
 
     def clamp_all(self) -> None:
@@ -714,8 +1490,7 @@ class ContextState:
 
 
 # ============================================================
-# OPTION A: ATTRIBUTE DECAY + INJURY SCARRING HELPERS
-# These mutate self.ratings directly (since your system is unified).
+# ATTRIBUTE DECAY + INJURY SCARRING HELPERS
 # ============================================================
 
 def _decay_targeted(
@@ -726,18 +1501,16 @@ def _decay_targeted(
     noise: float = 0.15,
 ) -> None:
     """
-    Reduce selected ratings by a small amount with mild randomness.
-    amount is absolute (0.0–1.0 space), typically very small (e.g., 0.002).
+    Reduce selected ratings by rating points with mild randomness.
     """
     if not keys:
         return
+
     for k in keys:
         if k not in ratings:
             continue
-        # add some variability so decline isn't perfectly smooth
         d = amount * (1.0 + rng.uniform(-noise, noise))
-        ratings[k] = clamp_rating(ratings[k] - d)
-
+        ratings[k] = clamp_rating(float(ratings[k]) - d)
 
 
 def _apply_global_decay(
@@ -748,8 +1521,7 @@ def _apply_global_decay(
 ) -> None:
     for k in list(ratings.keys()):
         d = amount * (1.0 + rng.uniform(-noise, noise))
-        ratings[k] = clamp_rating(ratings[k] - d)
-
+        ratings[k] = clamp_rating(float(ratings[k]) - d)
 
 
 def _apply_injury_scarring(
@@ -761,11 +1533,10 @@ def _apply_injury_scarring(
 ) -> Dict[str, float]:
     """
     Apply a permanent scar to ratings depending on severity.
-    Returns a small "scar report" dict so your engine can log narrative.
+    Returns a small scar report dict so the engine can log narrative.
     """
     severity = clamp01(injury_severity)
 
-    # pick which groups are most affected
     if position == Position.G:
         target_groups = [
             (GOALIE_KEYS, 0.55),
@@ -779,9 +1550,7 @@ def _apply_injury_scarring(
             (IQ_KEYS, 0.25),
         ]
 
-    # baseline scar magnitude
-    # severity 0.2 -> ~0.01-0.02 hits, severity 0.9 -> ~0.05-0.08 hits (per key group weighting)
-    base = 0.01 + 0.07 * (severity ** 1.35)
+    base = 0.35 + 2.50 * (severity ** 1.35)
 
     for keys, weight in target_groups:
         _decay_targeted(ratings, keys, amount=base * weight, rng=rng, noise=0.25)
@@ -798,13 +1567,13 @@ def _apply_injury_scarring(
 
 class Player:
     """
-    Ultimate Player entity:
+    Player entity:
     - identity + upbringing/backstory
-    - ratings dict (100 keys, 0–1)
+    - ratings dict, 20–99
     - AI traits / career arc seeds
     - psychology + context + health
-    - life pressure (off-ice realism)
-    - option A attribute dynamics (decline + injury scarring)
+    - life pressure
+    - yearly evolution helpers
     """
 
     def __init__(
@@ -820,54 +1589,77 @@ class Player:
         retired: bool = False,
         rng_seed: Optional[int] = None,
         archetype: Optional[str] = None,
+        pool_context: Optional[str] = "nhl",
+        enforce_floor_on_init: bool = True,
     ):
         self.identity = identity
         self.backstory = backstory
 
-        # Unified ratings dict (0–1)
         self.ratings: Dict[str, float] = normalize_ratings_dict(
             ratings or {},
             keys=ATTRIBUTE_KEYS,
-            default=68,
+            default=DEFAULT_NHL_RATING,
         )
 
         self.traits = traits or PersonalityTraits()
-        self.traits.clamp_all()
+        if traits is not None:
+            self.traits.clamp_all()
 
         self.career = career or CareerArcSeeds()
-        self.career.clamp_all()
+        if career is not None:
+            self.career.clamp_all()
 
         self.psych = psychology or PsychologyState()
-        self.psych.clamp_all()
+        if psychology is not None:
+            self.psych.clamp_all()
 
         self.health = health or HealthState()
-        self.health.clamp_all()
+        if health is not None:
+            self.health.clamp_all()
 
-        # NEW: life pressure state (off-ice)
         self.life_pressure = LifePressureState()
-        self.life_pressure.clamp_all()
 
-        # Context includes player-specific chaos seed
         if rng_seed is None:
             rng_seed = random.randint(1, 2_000_000_000)
-        self.context = context or ContextState(chaos_seed=rng_seed)
-        self.context.clamp_all()
-        # Stable player ID (required by engine, contracts, logging)
-        self.id = f"PLAYER_{rng_seed}"
 
+        self.context = context or ContextState(chaos_seed=rng_seed)
+        if not getattr(self.context, "chaos_seed", 0):
+            self.context.chaos_seed = rng_seed
+        if context is not None:
+            self.context.clamp_all()
+
+        self.id = f"PLAYER_{rng_seed}"
         self.retired = retired
 
-        # Dedicated RNG for this player
         self._rng = random.Random(self.context.chaos_seed)
 
         arch_raw = str(archetype or "").strip()
-        self.archetype: str = (
-            arch_raw.upper()
+        # Prefer generation profile → OVR archetype so leverage matches the shaped attributes.
+        gen_prof = ""
+        if isinstance(ratings, dict) and ratings.get("_generated_profile"):
+            gen_prof = str(ratings.get("_generated_profile") or "")
+        if not arch_raw and gen_prof:
+            mapped = archetype_from_generation_profile(gen_prof, self.identity.position)
+            if mapped:
+                arch_raw = mapped
+        resolved = (
+            resolve_ovr_archetype_key(arch_raw)
             if arch_raw
             else assign_skater_archetype(self.identity.position, self._rng)
         )
+        self.archetype: str = str(resolved)
 
-        # Seasonal narrative modifier layer (overwritten by apply_narrative_mechanics_to_rosters)
+        # Preserve generation shaping label when present (popped from ratings dict).
+        self._generated_profile: str = str(getattr(self, "_generated_profile", "") or "") or gen_prof
+        if isinstance(ratings, dict) and ratings.get("_generated_profile"):
+            self._generated_profile = str(ratings.get("_generated_profile") or "")
+            # Keep meta out of live ratings if caller forgot to pop.
+            try:
+                self.ratings.pop("_generated_profile", None)
+            except Exception:
+                pass
+            ratings.pop("_generated_profile", None)
+
         self._narrative_prog_growth_mult: float = 1.0
         self._narrative_regression_rate_mult: float = 1.0
         self._narrative_breakout_p_mult: float = 1.0
@@ -876,7 +1668,6 @@ class Player:
         self._narrative_performance_variance: float = 0.0
         self._narrative_mechanics_year: int = 0
 
-        # Development / pipeline (prospect archetype carries into NHL when promoted)
         self._dev_archetype: str = ""
         self._pipeline_dev_curve: str = "normal"
         self._dev_curve_hint: str = "normal"
@@ -886,12 +1677,19 @@ class Player:
         self._dev_env_growth_mult: float = 1.0
         self._dev_env_variance_mult: float = 1.0
 
-        # Apply upbringing/backstory biases ONCE at creation
+        # Chemistry state (backward-compatible lazy profile fill).
+        self.chemistry_profile: Dict[str, Any] = {}
+        self.chemistry_relationships: Dict[str, float] = {}
+        self.chemistry_history: List[Dict[str, Any]] = []
+
         self._apply_creation_biases()
 
-    # -----------------------------
-    # Convenience properties
-    # -----------------------------
+        self._pool_context = str(pool_context or "nhl").strip().lower()
+        if bool(enforce_floor_on_init):
+            floor = get_ovr_floor_for_pool(self._pool_context)
+            if floor > 0:
+                enforce_minimum_player_ovr(self, floor)
+
     @property
     def name(self) -> str:
         return self.identity.name
@@ -908,10 +1706,7 @@ class Player:
     def shoots(self) -> Shoots:
         return self.identity.shoots
 
-    # -----------------------------
-    # Ratings access
-    # -----------------------------
-    def get(self, key: str, default: int = 68) -> int:
+    def get(self, key: str, default: int = DEFAULT_NHL_RATING) -> int:
         if key in ALIASES:
             key = ALIASES[key]
         return int(self.ratings.get(key, default))
@@ -922,92 +1717,85 @@ class Player:
         if key not in self.ratings:
             raise KeyError(f"Unknown rating key: {key}")
         self.ratings[key] = clamp_rating(value)
-
-
+        self._invalidate_ovr_memo()
 
     def group_averages(self) -> Dict[str, float]:
         return _group_avgs(self.ratings, self.position)
 
     def ovr(self) -> float:
-        return compute_ovr(self.ratings, self.position, getattr(self, "archetype", None))
+        memo = getattr(self, "_ovr_memo", None)
+        if memo is not None:
+            return float(memo)
+        val = compute_ovr(self.ratings, self.position, getattr(self, "archetype", None))
+        self._ovr_memo = val
+        return val
 
-    # -----------------------------
-    # Lifecycle resets
-    # -----------------------------
+    def _invalidate_ovr_memo(self) -> None:
+        self._ovr_memo = None
+
     def reset_game(self) -> None:
         self.context.on_ice = False
 
-        # hot/cold and trend drift toward 0.5
         self.context.hot_cold_state = clamp01(self.context.hot_cold_state * 0.90 + 0.05)
         self.context.recent_performance_trend = clamp01(self.context.recent_performance_trend * 0.90 + 0.05)
 
-        # mental fatigue fades slightly between games
         self.psych.pressure_fatigue = clamp01(self.psych.pressure_fatigue * 0.85)
         self.psych.mental_fatigue = clamp01(self.psych.mental_fatigue * 0.90)
 
-        # fatigue resets partially between games
         self.health.fatigue = clamp01(self.health.fatigue * 0.45)
 
     def reset_season(self) -> None:
         self.context.line_assignment = None
         self.context.special_teams_role = None
 
-        # season morale slight normalization
         self.psych.morale = clamp01(self.psych.morale * 0.70 + 0.15)
 
-        # streak resets
         self.context.hot_cold_state = 0.5
         self.context.recent_performance_trend = 0.5
 
-        # fatigue cleared
         self.health.fatigue = 0.0
-
-        # environment pressure cools off a bit in offseason
         self.life_pressure.environment = clamp01(self.life_pressure.environment * 0.85)
 
-    # -----------------------------
-    # NEW: Yearly evolution hook
-    # (call this once per season/year in your SimEngine)
-    # -----------------------------
     def advance_year(
-    self,
-    *,
-    season_morale: Optional[float] = None,
-    season_injury_risk: Optional[float] = None,
-    major_injury_severity: Optional[float] = None,
-    role_change: float = 0.0,
-    team_instability: float = 0.0,
-    development_modifier: float = 0.0,  # 🔥 NEW (coach impact)
-) -> Dict[str, Any]:
-
+        self,
+        *,
+        season_morale: Optional[float] = None,
+        season_injury_risk: Optional[float] = None,
+        major_injury_severity: Optional[float] = None,
+        role_change: float = 0.0,
+        team_instability: float = 0.0,
+        development_modifier: float = 0.0,
+        apply_peak_decline: bool = True,
+    ) -> Dict[str, Any]:
         """
         One call per simulated year.
-        This is where:
-        - Life pressure accumulates/decays
-        - Personality drifts
-        - Ratings decline with age (Option A)
-        - Optional injury scarring applies
 
-        Returns a small report dict for logging/narrative.
+        This mutates:
+        - age
+        - life pressure
+        - personality drift
+        - young-player growth
+        - age decline (when apply_peak_decline=True)
+        - optional injury scarring
+
+        NOTE:
+        If engine.py already runs a separate progression controller, do not call
+        this twice in the same season. Pick one seasonal aging authority.
+
+        When the career lifecycle owns AGING DECLINE (franchise / universe seasonal
+        pass), pass apply_peak_decline=False so post-peak attribute decay is not
+        stacked with lifecycle cliffs and injury/morale regression.
         """
         report: Dict[str, Any] = {"age_before": self.age}
 
-        # -------------------------
-        # age ticks
-        # -------------------------
         self.identity.age += 1
         report["age_after"] = self.age
 
         morale = self.psych.morale if season_morale is None else clamp01(season_morale)
         injury_risk = self.health.injury_risk_baseline if season_injury_risk is None else clamp01(season_injury_risk)
 
-        # -------------------------
-        # LIFE PRESSURE BUILDUP (fixes the "all zeros forever" problem)
-        # -------------------------
-        # age factor starts rising mid/late 20s and ramps into 30s
         age_factor = clamp01((self.age - 26) / 15.0)
 
-        # accumulate
         self.life_pressure.health = clamp01(self.life_pressure.health + injury_risk * (0.10 + 0.10 * age_factor))
         self.life_pressure.career_identity = clamp01(self.life_pressure.career_identity + (0.05 + 0.06 * age_factor))
         self.life_pressure.family = clamp01(self.life_pressure.family + self.traits.family_priority * (0.02 + 0.04 * age_factor))
@@ -1015,43 +1803,33 @@ class Player:
         self.life_pressure.psychological = clamp01(self.life_pressure.psychological + (1.0 - morale) * (0.07 + 0.08 * age_factor))
         self.life_pressure.environment = clamp01(self.life_pressure.environment + clamp01(team_instability) * 0.10)
 
-        # demotions/promotion ripple into pressure
         if role_change < 0.0:
             self.life_pressure.psychological = clamp01(self.life_pressure.psychological + abs(role_change) * 0.10)
             self.life_pressure.security = clamp01(self.life_pressure.security + abs(role_change) * 0.08)
         elif role_change > 0.0:
             self.life_pressure.career_identity = clamp01(self.life_pressure.career_identity + role_change * 0.04)
 
-        # decay (still persists; doesn’t wipe clean)
         self.life_pressure.decay(rate=0.92)
         self.life_pressure.clamp_all()
         report["life_pressure"] = dict(self.life_pressure.__dict__)
 
-        # -------------------------
-        # PERSONALITY DRIFT (slow epigenetics)
-        # -------------------------
-        # family tends to rise with age
         self.traits.family_priority = clamp01(self.traits.family_priority + 0.004 + 0.008 * age_factor)
 
-        # ego tends to soften late, unless pressure is high
         ego_drop = 0.005 + 0.010 * age_factor
         if self.life_pressure.overall() > 0.60:
-            ego_drop *= 0.6  # stressed people cling to ego a bit more
+            ego_drop *= 0.6
         self.traits.ego = clamp01(self.traits.ego - ego_drop)
 
-        # ambition often declines unless legacy drive is huge
         amb_drop = 0.003 + 0.008 * age_factor
-        amb_drop *= (1.0 - 0.35 * self.traits.legacy_drive)
+        amb_drop *= 1.0 - 0.35 * self.traits.legacy_drive
         self.traits.ambition = clamp01(self.traits.ambition - amb_drop)
 
-        # confidence reacts to morale and pressure
         self.traits.confidence = clamp01(
             self.traits.confidence
             + (morale - 0.5) * 0.05
             - (self.life_pressure.psychological - 0.5) * 0.02
         )
 
-        # volatility rises when pressure rises
         self.traits.volatility = clamp01(
             self.traits.volatility + (self.life_pressure.overall() - 0.30) * 0.02
         )
@@ -1059,44 +1837,21 @@ class Player:
         self.traits.clamp_all()
         report["traits"] = dict(self.traits.__dict__)
 
-        # -------------------------
-        # GROWTH (ages < 27): use development_modifier and age bands; cap so no young 0.99
-        # -------------------------
         years_past_peak = max(0, self.age - int(self.career.expected_peak_age))
-        if self.age < 27 and years_past_peak <= 0:
-            if self.age < 21:
-                growth_band = 0.02 + 0.02 * (1.0 + development_modifier)
-            elif self.age < 24:
-                growth_band = 0.01 + 0.02 * (1.0 + development_modifier)
-            else:
-                growth_band = 0.005 + 0.015 * (1.0 + development_modifier)
-            current_ovr = self.ovr()
-            if current_ovr < 0.88:
-                growth_band *= (1.0 - 0.5 * max(0.0, (current_ovr - 0.78) / 0.10))
-                per_k = growth_band * 99.0 / len(self.ratings)
-                for k in list(self.ratings.keys()):
-                    self.ratings[k] = clamp_rating(self.ratings[k] + per_k)
 
-        # -------------------------
-        # OPTION A: ATTRIBUTE DECAY WITH AGE (ratings finally change)
-        # -------------------------
-        # decline starts after peak age; faster if decline_rate high and regression_resistance low
-        if years_past_peak > 0:
-            # base yearly decay in absolute rating units
-            # tuned to be subtle yearly but meaningful over a decade
-            base = 1.5 + 2.0 * self.career.decline_rate   # points per year
+        # Young-player attribute growth is owned by progression.development
+        # (one seasonal development result). advance_year only ages (+ optional decline).
+        report["yearly_growth_deferred"] = True
 
-            base *= (1.0 - 0.55 * clamp01(self.career.regression_resistance))  # resistance dampens
+        if years_past_peak > 0 and apply_peak_decline:
+            base = 1.5 + 2.0 * self.career.decline_rate
+            base *= 1.0 - 0.55 * clamp01(self.career.regression_resistance)
 
-            # age accelerates late
             accel = 1.0 + 0.06 * min(20, years_past_peak)
-
-            # pressure makes decline harsher (burnout/inconsistency)
             pressure_mult = 1.0 + 0.35 * self.life_pressure.overall()
 
             yearly_decay = base * accel * pressure_mult
 
-            # targeted decay: skating/physical first, IQ last
             if self.position == Position.G:
                 _decay_targeted(self.ratings, GOALIE_KEYS, amount=yearly_decay * 0.55, rng=self._rng, noise=0.20)
                 _decay_targeted(self.ratings, PHYS_KEYS, amount=yearly_decay * 0.30, rng=self._rng, noise=0.20)
@@ -1113,10 +1868,9 @@ class Player:
             report["yearly_decay"] = yearly_decay
         else:
             report["yearly_decay"] = 0.0
+            if years_past_peak > 0 and not apply_peak_decline:
+                report["yearly_decay_deferred_to_lifecycle"] = True
 
-        # -------------------------
-        # OPTIONAL: Injury scarring event (when your injury engine fires)
-        # -------------------------
         if major_injury_severity is not None and clamp01(major_injury_severity) > 0.0:
             scar = _apply_injury_scarring(
                 self.ratings,
@@ -1124,15 +1878,18 @@ class Player:
                 position=self.position,
                 rng=self._rng,
             )
-            self.health.wear_and_tear = clamp01(self.health.wear_and_tear + 0.04 * clamp01(major_injury_severity))
+            self.health.wear_and_tear = clamp01(
+                self.health.wear_and_tear + 0.04 * clamp01(major_injury_severity)
+            )
             report["injury_scar"] = scar
 
-        # clamp ratings
         for k in list(self.ratings.keys()):
             self.ratings[k] = clamp_rating(self.ratings[k])
 
+        floor = get_ovr_floor_for_pool(getattr(self, "_pool_context", "nhl"))
+        if floor > 0:
+            enforce_minimum_player_ovr(self, floor)
 
-        # update wear slightly over time even without major injury
         self.health.wear_and_tear = clamp01(self.health.wear_and_tear + 0.005 + 0.010 * injury_risk)
         report["wear_and_tear"] = self.health.wear_and_tear
 
@@ -1141,19 +1898,14 @@ class Player:
 
         return report
 
-    # -----------------------------
-    # Creation biases (one-time)
-    # -----------------------------
     def _apply_creation_biases(self) -> None:
         """
-        Upbringing/backstory should bias:
+        Upbringing/backstory biases:
         - AI traits
         - psychology baselines
-        - career arc seeds (variance)
-        It should NOT directly give +0.20 shooting or anything like that.
+        - career arc seeds
         """
 
-        # --- Upbringing effects (light biases)
         up = self.backstory.upbringing
 
         if up == UpbringingType.ROUGH:
@@ -1162,58 +1914,89 @@ class Player:
             self.traits.patience -= 0.08
             self.psych.trust_in_management -= 0.08
             self.psych.resilience_after_mistakes += 0.08
+
         elif up == UpbringingType.EXTREME_ADVERSITY:
             self.traits.work_ethic += 0.16
             self.traits.mental_toughness += 0.16
             self.traits.volatility += 0.08
             self.psych.anxiety_level += 0.08
             self.psych.bounce_back_tendency += 0.08
+
         elif up == UpbringingType.PRIVILEGED:
             self.traits.media_comfort += 0.10
             self.traits.confidence += 0.08
             self.psych.market_size_sensitivity += 0.10
             self.psych.contract_pressure += 0.06
             self.traits.loyalty -= 0.05
+
         elif up == UpbringingType.WORKING_CLASS:
             self.traits.work_ethic += 0.08
             self.traits.coachability += 0.06
             self.psych.system_buy_in += 0.06
+
         else:
-            # stable_middle_class default: slight smoothing
             self.traits.volatility -= 0.03
             self.psych.tilt_susceptibility -= 0.03
 
-        # --- Backstory effects (variance + arc flavor)
+        # Use support/pressure/resources fields so they are not decorative.
+        if self.backstory.family_support == SupportLevel.HIGH:
+            self.psych.resilience_after_mistakes += 0.05
+            self.psych.anxiety_level -= 0.04
+            self.traits.confidence += 0.04
+        elif self.backstory.family_support == SupportLevel.LOW:
+            self.psych.anxiety_level += 0.05
+            self.psych.relocation_stress += 0.04
+            self.traits.volatility += 0.03
+
+        if self.backstory.early_pressure == PressureLevel.INTENSE:
+            self.psych.contract_pressure += 0.05
+            self.psych.media_stress += 0.05
+            self.traits.clutch_tendency += 0.03
+            self.career.ceiling_floor_gap += 0.03
+        elif self.backstory.early_pressure == PressureLevel.LOW:
+            self.psych.media_stress -= 0.03
+            self.traits.patience += 0.03
+
+        if self.backstory.dev_resources == DevResources.ELITE:
+            self.career.breakout_probability += 0.03
+            self.career.regression_resistance += 0.03
+            self.traits.coachability += 0.04
+        elif self.backstory.dev_resources == DevResources.UNDERFUNDED:
+            self.career.ceiling_floor_gap += 0.05
+            self.traits.work_ethic += 0.04
+            self.psych.adaptability = clamp01(getattr(self.psych, "adaptability", 0.5) if hasattr(self.psych, "adaptability") else 0.5)
+
         bs = self.backstory.backstory
+
         if bs == BackstoryType.PRODIGY:
             self.career.breakout_probability += 0.08
-            # (kept safe: your PsychologyState doesn't have early_pressure; avoid adding ghost fields)
             self.psych.legacy_anxiety += 0.08
+
         elif bs == BackstoryType.LATE_BLOOMER:
             self.career.breakout_probability += 0.05
             self.career.expected_peak_age = max(self.career.expected_peak_age, 29)
             self.career.regression_resistance += 0.06
+
         elif bs == BackstoryType.GRINDER:
             self.traits.work_ethic += 0.08
             self.traits.coachability += 0.06
             self.career.ceiling_floor_gap -= 0.05
+
         elif bs == BackstoryType.PROJECT:
             self.career.ceiling_floor_gap += 0.10
             self.career.season_consistency -= 0.06
+
         elif bs == BackstoryType.BUST_SURVIVOR:
             self.career.bust_probability -= 0.05
             self.psych.bounce_back_tendency += 0.08
+
         elif bs == BackstoryType.COMEBACK:
             self.psych.internal_motivation += 0.10
             self.psych.contract_year_bias += 0.06
 
-        # clamp after biases
         self.traits.clamp_all()
         self.career.clamp_all()
         self.psych.clamp_all()
 
-    # -----------------------------
-    # Debug / display
-    # -----------------------------
     def __repr__(self) -> str:
         return f"<Player {self.name} {self.position.value} age={self.age} shoots={self.shoots.value}>"

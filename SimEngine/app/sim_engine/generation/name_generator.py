@@ -49,13 +49,19 @@ NAME_POOLS: Dict[str, Dict[str, List[str]]] = {
             "Liam","Noah","Oliver","Ethan","Jacob","Lucas","Logan","Jackson","Aiden","Benjamin",
             "William","Mason","Carter","Wyatt","Owen","Hudson","Leo","Caleb","Dylan","Nathan",
             "Ryan","Cole","Connor","Tyler","Brayden","Matthew","Zachary","Jordan","Alex","Jake",
+            "Nolan","Cameron","Landon","Nathaniel","Reid","Bennett","Colton","Riley","Emmett","Declan",
+            "Xavier","Elliot","Gavin","Isaac","Maxime","Samuel","Félix","Thomas","Nicolas","Antoine",
+            "Théo","Charles","Gabriel","Rafael","Émile","Jayden","Kaeden","Beckett","Griffin","Tanner",
         ],
         "last": [
             "Smith","Johnson","Brown","Wilson","Campbell","MacDonald","Taylor","Anderson","Thompson","Clark",
             "Martin","Lee","Young","Walker","King","Wright","Scott","Green","Baker","Adams",
             "Hughes","Miller","Crosby","McDavid","Dubois","Roy","Giroux","Bouchard","Fleury","McKenzie",
+            "Gauthier","Tremblay","Gagnon","Côté","Bergeron","Pelletier","Lavoie","Fortin","Girard","Beaulieu",
+            "Reinhart","Stamkos","Marchand","Point","Barzal","Hamilton","Sanderson","Cirelli","Suzuki","Byfield",
+            "O'Reilly","Nugent-Hopkins","MacKinnon","Toews","Stone","Scheifele","Duclair","Comtois","Veleno","Perfetti",
         ],
-        "towns": ["Toronto, ON","Montreal, QC","Vancouver, BC","Calgary, AB","Edmonton, AB","Ottawa, ON","Winnipeg, MB","Halifax, NS","Quebec City, QC","Saskatoon, SK"],
+        "towns": ["Toronto, ON","Montreal, QC","Vancouver, BC","Calgary, AB","Edmonton, AB","Ottawa, ON","Winnipeg, MB","Halifax, NS","Quebec City, QC","Saskatoon, SK","Mississauga, ON","Brampton, ON","Surrey, BC","Markham, ON","London, ON","Kitchener, ON","Windsor, ON","Regina, SK","Laval, QC","Gatineau, QC"],
     },
     "USA": {
         "first": [
@@ -456,6 +462,44 @@ _NICKNAMES = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Immigration-hub heritage names
+# ---------------------------------------------------------------------------
+# Canada and the USA are major immigration hubs. A domestic-born prospect keeps
+# their national identity (nationality + hometown) but a minority carry a first
+# and/or last name drawn from a heritage community. This surfaces African, South
+# Asian, East Asian, and other names on Canadian/American players without
+# changing their nationality or where they were born.
+_HERITAGE_POOLS_BY_HOME: Dict[str, List[Tuple[str, float]]] = {
+    "Canada": [
+        ("India", 0.20), ("China", 0.15), ("Philippines", 0.11), ("UK", 0.10),
+        ("France", 0.08), ("Nigeria", 0.07), ("South Korea", 0.07), ("Ukraine", 0.06),
+        ("Poland", 0.05), ("Japan", 0.03), ("Kenya", 0.03), ("South Africa", 0.02),
+        ("Latvia", 0.02),
+    ],
+    "USA": [
+        ("Mexico", 0.26), ("India", 0.13), ("China", 0.12), ("Philippines", 0.10),
+        ("Nigeria", 0.08), ("South Korea", 0.08), ("Japan", 0.05), ("Poland", 0.05),
+        ("Brazil", 0.05), ("UK", 0.04), ("South Africa", 0.02), ("Kenya", 0.02),
+    ],
+}
+_HERITAGE_NAME_CHANCE: Dict[str, float] = {"Canada": 0.14, "USA": 0.12}
+
+
+def _weighted_key(rng, pairs: List[Tuple[str, float]]) -> Optional[str]:
+    items = [(k, float(w)) for k, w in pairs if k and w > 0]
+    if not items:
+        return None
+    total = sum(w for _, w in items)
+    roll = rng.random() * total
+    acc = 0.0
+    for key, weight in items:
+        acc += weight
+        if roll <= acc:
+            return key
+    return items[-1][0]
+
+
 def _nickname_from_name(rng, first: str, last: str) -> str:
     if rng.random() < 0.55:
         return _safe_choice(rng, _NICKNAMES)
@@ -532,8 +576,17 @@ def choose_nationality(rng, *, market_bias: Optional[Dict[str, float]] = None) -
 def generate_human_identity(rng, *, nationality: Optional[str] = None) -> HumanIdentity:
     nat = nationality or choose_nationality(rng)
     pool = NAME_POOLS.get(nat) or NAME_POOLS["Canada"]
-    first = _safe_choice(rng, pool.get("first", []))
-    last = _safe_choice(rng, pool.get("last", []))
+    # Immigration-hub heritage: keep nationality + hometown, occasionally draw the
+    # name itself from a heritage community pool.
+    name_pool = pool
+    heritage_pairs = _HERITAGE_POOLS_BY_HOME.get(nat)
+    if heritage_pairs and rng.random() < _HERITAGE_NAME_CHANCE.get(nat, 0.0):
+        hkey = _weighted_key(rng, heritage_pairs)
+        heritage_pool = NAME_POOLS.get(hkey) if hkey else None
+        if heritage_pool:
+            name_pool = heritage_pool
+    first = _safe_choice(rng, name_pool.get("first", []))
+    last = _safe_choice(rng, name_pool.get("last", []))
     hometown = _safe_choice(rng, pool.get("towns", []))
     full = f"{first} {last}"
 

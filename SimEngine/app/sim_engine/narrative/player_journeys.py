@@ -186,7 +186,11 @@ def _team_name(team: Any) -> str:
 
 
 def _team_id(team: Any) -> str:
-    return str(getattr(team, "team_id", None) or getattr(team, "id", "") or "")
+    # team_id=0 is valid; only fall back to "id" when team_id is truly absent.
+    tid = getattr(team, "team_id", None)
+    if tid is None:
+        tid = getattr(team, "id", None)
+    return str(tid) if tid is not None else ""
 
 
 def _team_context_phrase(team: Any) -> str:

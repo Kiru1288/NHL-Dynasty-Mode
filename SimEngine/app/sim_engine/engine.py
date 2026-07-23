@@ -26,9 +26,50 @@ it means engine.py got overwritten accidentally. Keep those in run_sim.py ONLY.
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Optional, List, Tuple, Callable, Set, Sequence
 import math
+import os
 import random
 import re
 import time
+
+
+# Set True, or export NHL_DEBUG_STATS_PIPELINE=1, for verbose stat ledger tracing.
+DEBUG_STATS_PIPELINE: bool = False
+
+
+def _stats_pipeline_debug() -> bool:
+    return bool(DEBUG_STATS_PIPELINE) or os.environ.get("NHL_DEBUG_STATS_PIPELINE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+_GM_FLOAT_LEDGER_KEYS = frozenset(
+    {"cf", "ca", "ff", "fa", "xgf", "xga", "ixg", "xa", "gf_on", "ga_on", "xgf_pct_sum", "on_ice_shots_for", "on_ice_shots_against", "goalie_xga"}
+)
+
+_SKATER_LEDGER_ANALYTICS_KEYS = (
+    "cf",
+    "ca",
+    "ff",
+    "fa",
+    "xgf",
+    "xga",
+    "ixg",
+    "xa",
+    "gf_on",
+    "ga_on",
+    "missed_shots",
+    "blocked_attempts_for",
+    "ppg",
+    "ppa",
+    "shg",
+    "sha",
+    "primary_assists",
+    "secondary_assists",
+    "xgf_pct_sum",
+    "xgf_pct_gp",
+)
 
 
 # -------------------------------
@@ -104,9 +145,13 @@ from app.sim_engine.entities.player import (
     IQ_KEYS,
     PHYS_KEYS,
     SKATING_KEYS,
+    GOALIE_KEYS,
     clamp_rating,
     compute_ovr,
     assign_skater_archetype,
+    archetype_from_generation_profile,
+    ALIASES,
+    DEFAULT_NHL_RATING,
     random_height_cm,
     sanitize_height_cm,
 )
@@ -158,6 +203,7 @@ from app.sim_engine.economy.waiver_ai import (
     WaiverConfig,
     update_priority_after_claim,
 )
+from app.sim_engine.economy.cap_engine import advance_league_salary_cap
 
 
 # -------------------------------
@@ -237,6 +283,8 @@ class LeagueSeasonResult:
     awards: Dict[str, Any]
     # Game-derived only (no distribution injection). Empty list if aggregation skipped.
     player_season_stats: List[Dict[str, Any]] = field(default_factory=list)
+    # Game-derived goalie season rows (wins/saves/SV%/GAA/shutouts). Empty if none.
+    goalie_season_stats: List[Dict[str, Any]] = field(default_factory=list)
     simulation_meta: Dict[str, Any] = field(default_factory=dict)
     news_events: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -275,6 +323,12 @@ def _get_player_storyline_catalog() -> List[Dict[str, Any]]:
         _PLAYER_STORYLINE_CATALOG_CACHE
         and isinstance(_PLAYER_STORYLINE_CATALOG_CACHE[0], dict)
         and "tier" not in _PLAYER_STORYLINE_CATALOG_CACHE[0]
+    ):
+        _PLAYER_STORYLINE_CATALOG_CACHE = _build_player_storyline_catalog()
+    elif _PLAYER_STORYLINE_CATALOG_CACHE and not any(
+        d.get("legal_severity")
+        for d in _PLAYER_STORYLINE_CATALOG_CACHE
+        if str(d.get("pool") or "") == "legal_crime"
     ):
         _PLAYER_STORYLINE_CATALOG_CACHE = _build_player_storyline_catalog()
     return _PLAYER_STORYLINE_CATALOG_CACHE
@@ -364,6 +418,417 @@ def initialize_league_player_characters(league: Any, rng: random.Random) -> int:
             assign_development_profile(p, rng)
             n += 1
     return n
+# =====================================================================
+# CANONICAL PLAYER CREATION FINALIZER
+# =====================================================================
+# Purpose:
+# Every new Player created inside engine.py must be made compatible with:
+# - real game stat ledger
+# - progression
+# - storylines
+# - roster screens
+# - career summaries
+#
+# Do NOT use Player_Stats.py / League_Stats.py for this.
+# The real game ledger remains the source of truth.
+
+
+def _safe_player_name_for_id(player: Any) -> str:
+    ident = getattr(player, "identity", None)
+    name = ""
+    if ident is not None:
+        name = str(getattr(ident, "name", "") or getattr(ident, "full_name", "") or "")
+    if not name:
+        name = str(getattr(player, "name", "") or "player")
+    name = re.sub(r"[^a-zA-Z0-9]+", "_", name.strip().lower()).strip("_")
+    return name or "player"
+
+
+def _safe_team_id_for_player_creation(team: Any, fallback: Any = "") -> str:
+    for attr in ("team_id", "id", "abbr", "code"):
+        v = getattr(team, attr, None)
+        if v is not None and str(v).strip():
+            return str(v)
+    return str(fallback or "TEAM")
+
+
+def _existing_player_ids_from_league(league: Any) -> Set[str]:
+    ids: Set[str] = set()
+    for p in getattr(league, "players", None) or []:
+        pid = getattr(p, "id", None)
+        if pid is not None and str(pid).strip():
+            ids.add(str(pid))
+    for t in getattr(league, "teams", None) or []:
+        for p in getattr(t, "roster", None) or []:
+            pid = getattr(p, "id", None)
+            if pid is not None and str(pid).strip():
+                ids.add(str(pid))
+    return ids
+
+
+def _assign_stable_player_id(
+    player: Any,
+    league: Any,
+    rng: random.Random,
+    *,
+    team_id: str,
+    source: str,
+    season_year: int,
+) -> str:
+    """
+    The game ledger keys player stats by player.id.
+    If player.id is missing/blank/duplicated, that player can disappear from stats.
+    """
+    existing = _existing_player_ids_from_league(league)
+    cur = getattr(player, "id", None)
+
+    if cur is not None and str(cur).strip() and str(cur) not in existing:
+        return str(cur)
+
+    name_slug = _safe_player_name_for_id(player)
+    base = f"{source}_{season_year}_{team_id}_{name_slug}"
+    base = re.sub(r"[^a-zA-Z0-9_]+", "_", base).strip("_")
+
+    candidate = base
+    n = 1
+    while candidate in existing:
+        n += 1
+        candidate = f"{base}_{n}"
+
+    setattr(player, "id", candidate)
+    setattr(player, "player_id", candidate)
+    return candidate
+
+
+def _infer_player_potential_01(player: Any, rng: random.Random) -> float:
+    """
+    Potential is a ceiling signal, not current OVR.
+    Young players can have bigger gap. Older players should be closer to current.
+    """
+    raw = getattr(player, "potential", None)
+    if raw is not None:
+        try:
+            pf = float(raw)
+            if pf > 1.5:
+                pf /= 99.0
+            return max(0.35, min(0.99, pf))
+        except Exception:
+            pass
+
+    try:
+        ovr = float(player.ovr()) if callable(getattr(player, "ovr", None)) else 0.62
+    except Exception:
+        ovr = 0.62
+
+    age = career_player_age(player)
+
+    if age <= 20:
+        gap = rng.uniform(0.08, 0.18)
+    elif age <= 23:
+        gap = rng.uniform(0.05, 0.14)
+    elif age <= 26:
+        gap = rng.uniform(0.02, 0.09)
+    elif age <= 29:
+        gap = rng.uniform(0.00, 0.05)
+    else:
+        gap = rng.uniform(-0.04, 0.02)
+
+    return max(0.40, min(0.99, ovr + gap))
+
+
+def _infer_dev_type_from_player(player: Any, rng: random.Random) -> str:
+    existing = getattr(player, "dev_type", None)
+    if existing:
+        return str(existing)
+
+    potential = _infer_player_potential_01(player, rng)
+    age = career_player_age(player)
+
+    if potential >= 0.88 and age <= 23:
+        dt = "elite"
+    elif age >= 24 and potential >= 0.78 and rng.random() < 0.28:
+        dt = "late_bloomer"
+    elif potential < 0.58 and age <= 24:
+        dt = "bust" if rng.random() < 0.28 else "slow"
+    elif potential >= 0.72:
+        dt = "standard"
+    else:
+        dt = rng.choices(
+            ["standard", "slow", "late_bloomer", "bust"],
+            weights=[0.50, 0.25, 0.15, 0.10],
+            k=1,
+        )[0]
+
+    setattr(player, "dev_type", dt)
+    return dt
+
+
+def _ensure_player_stat_containers(player: Any) -> None:
+    """
+    These are not the abstract Player_Stats engine.
+    These containers are just safe landing zones for the actual game ledger sync.
+    """
+    if getattr(player, "season_stats", None) is None:
+        setattr(player, "season_stats", {})
+    if getattr(player, "career_stats", None) is None:
+        setattr(player, "career_stats", {})
+    if getattr(player, "game_log", None) is None:
+        setattr(player, "game_log", [])
+
+
+def finalize_created_player_for_game_ledger(
+    player: Any,
+    *,
+    league: Any,
+    team: Any,
+    rng: random.Random,
+    source: str,
+    season_year: int,
+) -> Any:
+    """
+    Call this once immediately after every Player(...) creation in engine.py.
+    """
+    team_id = _safe_team_id_for_player_creation(team)
+
+    pid = _assign_stable_player_id(
+        player,
+        league,
+        rng,
+        team_id=team_id,
+        source=source,
+        season_year=int(season_year),
+    )
+
+    ctx = getattr(player, "context", None)
+    if ctx is not None:
+        try:
+            ctx.current_team_id = str(team_id)
+        except Exception:
+            pass
+
+    setattr(player, "current_team_id", str(team_id))
+    setattr(player, "team_id", str(team_id))
+
+    potential = _infer_player_potential_01(player, rng)
+    setattr(player, "potential", potential)
+
+    _infer_dev_type_from_player(player, rng)
+    ensure_player_character_initialized(player, rng)
+    assign_player_personality_tag_from_character(player)
+
+    try:
+        assign_career_phase_from_age(player)
+    except Exception:
+        pass
+
+    ensure_player_playstyle(player)
+    _ensure_player_stat_containers(player)
+
+    try:
+        from app.sim_engine.generation.player_headshots import ensure_player_headshot
+
+        ensure_player_headshot(player)
+    except Exception:
+        pass
+
+    setattr(player, "_game_ledger_ready", True)
+    setattr(player, "_ledger_player_id", pid)
+
+    return player
+
+
+def _invoke_nhl_promotion_contract_hook(league: Any, player: Any, team: Any, season_year: int) -> None:
+    hook = getattr(league, "_on_nhl_roster_promotion", None)
+    if not callable(hook):
+        return
+    try:
+        hook(player, team, league, int(season_year))
+    except Exception:
+        pass
+
+
+def _invoke_roster_make_room_hook(league: Any, team: Any, incoming_player: Any, season_year: int) -> bool:
+    hook = getattr(league, "_on_roster_make_room", None)
+    if not callable(hook):
+        return False
+    try:
+        result = hook(team, incoming_player, league, int(season_year))
+        return bool(isinstance(result, dict) and result.get("ok"))
+    except Exception:
+        return False
+
+
+def _active_roster_count_on_team(team: Any) -> int:
+    roster = getattr(team, "roster", None) or []
+    return sum(
+        1 for p in roster
+        if not getattr(p, "retired", False)
+        and not getattr(p, "is_buried", False)
+        and not getattr(p, "buried", False)
+        and not getattr(p, "in_minors", False)
+    )
+
+
+def _make_room_before_promotion(
+    league: Any,
+    team: Any,
+    incoming_player: Any,
+    year: int,
+    roster: List[Any],
+    *,
+    prune_ctx_pct_u24: float,
+    player_roster_age_fn: Any,
+) -> None:
+    if _active_roster_count_on_team(team) < 23:
+        return
+    if _invoke_roster_make_room_hook(league, team, incoming_player, year):
+        return
+    try:
+        pu = float(prune_ctx_pct_u24)
+
+        def _p_ovr(p: Any) -> float:
+            f = getattr(p, "ovr", None)
+            o = float(f()) if callable(f) else 0.5
+            a = player_roster_age_fn(p)
+            if pu < 22.0:
+                o -= 0.014 * max(0, a - 28)
+            elif pu > 30.0:
+                o += 0.018 * max(0, 23 - a)
+            return o
+
+        active = [
+            p for p in roster
+            if not getattr(p, "retired", False)
+            and not getattr(p, "is_buried", False)
+            and not getattr(p, "buried", False)
+            and not getattr(p, "in_minors", False)
+        ]
+        if not active:
+            return
+        worst = min(active, key=_p_ovr)
+        try:
+            worst.is_buried = True
+            worst.buried = True
+            worst.in_minors = True
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def build_role_shaped_ratings(
+    *,
+    position: Position,
+    target_ovr: float,
+    rng: random.Random,
+) -> Dict[str, int]:
+    """
+    Creates real player shape.
+    This avoids every generated player becoming the same 74 OVR blob.
+    """
+    base = int(max(0.40, min(0.99, float(target_ovr))) * 99)
+    ratings: Dict[str, int] = {}
+
+    pos_s = str(getattr(position, "value", position)).upper()
+
+    if pos_s == "G":
+        profile = rng.choices(
+            ["balanced_g", "butterfly_g", "hybrid_g"],
+            weights=[0.40, 0.32, 0.28],
+            k=1,
+        )[0]
+        for k in ATTRIBUTE_KEYS:
+            lk = k.lower()
+            bonus = 0
+            if "goalie" in lk or k.startswith("g_"):
+                bonus += rng.randint(2, 7)
+                if profile == "butterfly_g" and ("position" in lk or "rebound" in lk):
+                    bonus += rng.randint(1, 3)
+                if profile == "hybrid_g" and ("reflex" in lk or "athlet" in lk):
+                    bonus += rng.randint(1, 3)
+            elif "off_" in lk or "pm_" in lk:
+                bonus -= rng.randint(5, 13)
+            ratings[k] = clamp_rating(base + bonus + rng.randint(-3, 3))
+        ratings["_generated_profile"] = profile
+        return ratings
+
+    if pos_s == "D":
+        profile = rng.choices(
+            ["two_way_d", "defensive_d", "offensive_d", "enforcer_d"],
+            weights=[0.42, 0.28, 0.22, 0.08],
+            k=1,
+        )[0]
+    else:
+        profile = rng.choices(
+            ["two_way", "sniper", "playmaker", "power_forward", "grinder"],
+            weights=[0.34, 0.20, 0.22, 0.14, 0.10],
+            k=1,
+        )[0]
+
+    for k in ATTRIBUTE_KEYS:
+        lk = k.lower()
+        bonus = 0
+
+        if profile == "sniper":
+            if "shot" in lk or "finishing" in lk or "off_" in lk:
+                bonus += rng.randint(2, 8)
+            if "def_" in lk or "block" in lk:
+                bonus -= rng.randint(1, 6)
+
+        elif profile == "playmaker":
+            if "pass" in lk or "pm_" in lk or "vision" in lk:
+                bonus += rng.randint(3, 8)
+            if "shot" in lk or "hit" in lk:
+                bonus -= rng.randint(1, 5)
+
+        elif profile == "power_forward":
+            if "phy_" in lk or "hit" in lk or "net_front" in lk:
+                bonus += rng.randint(3, 8)
+            if "skating" in lk or "speed" in lk:
+                bonus -= rng.randint(0, 4)
+
+        elif profile == "grinder":
+            if "def_" in lk or "phy_" in lk or "hit" in lk or "block" in lk:
+                bonus += rng.randint(2, 7)
+            if "off_" in lk or "finish" in lk:
+                bonus -= rng.randint(2, 7)
+
+        elif profile == "offensive_d":
+            if "off_" in lk or "pm_" in lk or "shot" in lk:
+                bonus += rng.randint(2, 7)
+            if "def_" in lk or "block" in lk:
+                bonus -= rng.randint(0, 4)
+
+        elif profile == "defensive_d":
+            if "def_" in lk or "block" in lk or "stick" in lk or "iq" in lk:
+                bonus += rng.randint(3, 8)
+            if "off_" in lk:
+                bonus -= rng.randint(1, 5)
+
+        elif profile == "enforcer_d":
+            if "phy_" in lk or "hit" in lk or "strength" in lk:
+                bonus += rng.randint(4, 9)
+            if "off_" in lk or "pm_" in lk:
+                bonus -= rng.randint(2, 7)
+
+        else:
+            if "iq" in lk or "def_" in lk or "pm_" in lk:
+                bonus += rng.randint(0, 4)
+
+        ratings[k] = clamp_rating(base + bonus + rng.randint(-4, 4))
+
+    # Profile is returned as a sidecar meta key; callers must pop + sync archetype.
+    # Kept outside ATTRIBUTE_KEYS / normalize so it never becomes a fake 74 attr.
+    ratings["_generated_profile"] = profile
+    return ratings
+
+
+def pop_generation_profile(ratings: Dict[str, Any]) -> Optional[str]:
+    """Extract and remove `_generated_profile` from a ratings dict."""
+    if not isinstance(ratings, dict):
+        return None
+    prof = ratings.pop("_generated_profile", None)
+    return str(prof) if prof else None
 
 
 # --- Cap / contract economy (shared with run_sim universe; dollars vs millions normalized) ---
@@ -741,6 +1206,47 @@ def calculate_contract_inflation(league: Any) -> float:
     return float(base * chaos_factor)
 
 
+def _id_str(obj: Any, *attrs: str, default: str = "") -> str:
+    """ID-safe attribute extraction: 0 is a valid id; only None/'' count as missing.
+
+    Replaces unsafe `getattr(x, 'team_id', None) or ...` chains that silently
+    remapped team_id=0 (Boston) / player_id=0 to fallbacks.
+    """
+    for a in attrs:
+        v = getattr(obj, a, None)
+        if v is None:
+            continue
+        s = str(v)
+        if s != "":
+            return s
+    return default
+
+
+def _hydrated_identity_name(name: Any, country: Any, rng: random.Random) -> str:
+    """Return a real human name for NHL-visible players.
+
+    Legacy world-pool players could carry procedural placeholder identities such
+    as "Global JUN 2026-65119". Those must be hydrated into proper generated
+    names before entering NHL rosters/stats/awards. Real names pass through
+    unchanged.
+    """
+    nm = str(name or "").strip()
+    looks_placeholder = (
+        not nm
+        or nm.lower() in ("rookie", "prospect", "player", "?")
+        or (nm.startswith("Global ") and any(ch.isdigit() for ch in nm))
+        or (nm.startswith("Prospect ") and any(ch.isdigit() for ch in nm))
+        or nm.startswith("GP_")
+    )
+    if not looks_placeholder:
+        return nm
+    try:
+        ident = generate_human_identity(rng, nationality=str(country) if country else None)
+        return str(ident.full_name)
+    except Exception:
+        return nm or "Rookie"
+
+
 def _player_rating_0_100(player: Any) -> float:
     try:
         ovr = float(player.ovr()) if callable(getattr(player, "ovr", None)) else float(getattr(player, "ovr", 0.5))
@@ -795,7 +1301,9 @@ def is_bad_contract(player: Any) -> bool:
 
     # Expected fair cap hit in millions.
     # Stars can justify money. Depth players cannot.
-    fair = 0.8 + max(0.0, rating - 55.0) * 0.18
+    # Two-slope curve: linear value through the middle class, plus an elite premium
+    # above ~82 so genuine stars ($10M+) are not auto-flagged as bad contracts.
+    fair = 1.0 + max(0.0, rating - 58.0) * 0.16 + max(0.0, rating - 82.0) * 0.45
 
     if production >= 1.0:
         fair *= 1.18
@@ -822,7 +1330,10 @@ def is_bad_contract(player: Any) -> bool:
 
     badness = (cap_hit / max(0.75, fair)) * term_risk
 
-    return bool(badness >= 1.35)
+    # Require both a meaningful relative overpay AND an absolute overpay floor,
+    # so marginal deals and cheap depth contracts do not spam bad-contract flags.
+    overpay_m = cap_hit - fair
+    return bool(badness >= 1.35 and overpay_m >= 1.25 and cap_hit >= 2.0)
 
 
 def sync_bad_contract_flag(player: Any) -> bool:
@@ -2224,6 +2735,26 @@ def apply_league_ovr_soft_regression_if_needed(
     excess = min(5.0, league_avg - avg_trigger)
     scale = excess / 5.0
     for pl in hi_candidates:
+        # Do not claw back players who just posted positive seasonal development.
+        ledger = getattr(pl, "development_ledger", None) or {}
+        if isinstance(ledger, dict) and ledger.get("development_applied"):
+            try:
+                ob = float(ledger.get("ovr_before"))
+                oa = float(ledger.get("ovr_after"))
+                if oa > ob + 0.004:
+                    continue
+            except Exception:
+                pass
+        # Protect young breakout / momentum paths from broad inflation clawbacks.
+        try:
+            age = int(getattr(getattr(pl, "identity", None), "age", None) or getattr(pl, "age", 99) or 99)
+            mom = float(getattr(pl, "_dev_breakout_momentum", 0.0) or 0.0)
+            if age <= 24 and mom >= 0.35:
+                continue
+            if age <= 23:
+                continue
+        except Exception:
+            pass
         lo_mag = 0.5
         hi_mag = min(1.5, 0.5 + scale * 1.0)
         if hi_mag < lo_mag:
@@ -2385,22 +2916,62 @@ def _career_last_season_points(player: Any) -> int:
 
 
 def performance_growth_modifier(player: Any) -> None:
+    """Role-relative season performance nudge — no raw point cliffs."""
     if getattr(player, "major_progression_event_this_season", None) is not None:
-        return
-    pts = _career_last_season_points(player)
-    if pts < 0:
         return
     assign_career_phase_from_age(player)
     phase = str(getattr(player, "career_phase", "") or career_phase_for_age(career_player_age(player)))
-    if pts > 70:
-        d = 0.65
-    elif pts < 20:
-        d = -0.85
-    else:
+    pos = str(getattr(getattr(player, "identity", None), "position", "") or getattr(player, "position", "F") or "F").upper()
+    is_goalie = pos == "G" or "GOALIE" in pos
+    gp = int(getattr(player, "gp", 0) or getattr(player, "games_played", 0) or 0)
+    if gp < 12:
         return
+
+    def _f(name: str, default: float = 0.0) -> float:
+        ss = getattr(player, "season_stats", None) or {}
+        if not ss:
+            return default
+        try:
+            row = max(ss.values(), key=lambda x: int(x.get("season", 0) or 0))
+            return float(row.get(name, default) or default)
+        except Exception:
+            return default
+
+    pts = _f("points", _f("pts", 0))
+    g = _f("goals", _f("g", 0))
+    a = _f("assists", _f("a", 0))
+    toi = _f("toi_sec", 0)
+    ixg = _f("ixg", 0)
+    xgf_pct = _f("xgf_pct", 0.5)
+    xga60 = _f("xga_per_60", 0)
+    blk = _f("blk", _f("blocks", 0))
+    gsax = _f("gsax", 0)
+    sv_pct = _f("save_pct", _f("sv_pct", 0.9))
+
+    p60 = pts / max(1.0, gp) * (60.0 / max(1.0, toi / 60.0)) if toi > 0 else pts / max(1.0, gp)
+    finishing = g - ixg if ixg > 0 else 0.0
+    pt = str(getattr(player, "player_type", "") or getattr(player, "archetype", "") or "").lower()
+
+    score = 0.0
+    if is_goalie:
+        score = (sv_pct - 0.905) * 8.0 + gsax * 0.12
+    elif "defensive" in pt or (pos in ("D", "LD", "RD") and "offensive" not in pt):
+        score = (0.50 - xga60) * 1.8 + (xgf_pct - 0.50) * 2.5 + blk / max(1.0, gp) * 0.35
+    elif "playmaker" in pt:
+        score = a / max(1.0, gp) * 0.55 + (xgf_pct - 0.50) * 3.0 + finishing * 0.08
+    elif "sniper" in pt or "shooter" in pt:
+        score = g / max(1.0, gp) * 0.65 + finishing * 0.22 + p60 * 0.12
+    elif "grinder" in pt or "two" in pt:
+        score = (xgf_pct - 0.50) * 3.2 + (0.50 - xga60) * 0.8 + pts / max(1.0, gp) * 0.18
+    else:
+        score = p60 * 0.28 + (xgf_pct - 0.50) * 2.0 + finishing * 0.10
+
+    d = max(-0.85, min(0.65, score * 0.22))
     if phase == PHASE_PRIME:
         d *= 0.55
-        d = max(-1.2, min(0.85, d))
+    d = max(-1.2, min(0.85, d))
+    if abs(d) < 0.08:
+        return
     _career_apply_rating_delta_0_100(player, d)
     setattr(player, "rating", round(career_ovr_0_100(player), 3))
     _career_clamp_ovr_window(player, 40.0, 99.0)
@@ -2632,13 +3203,13 @@ def team_scoring_pace_bias(team: Any) -> float:
     """Goals-per-game bias in abstract sim (not roster talent)."""
     sys = str(getattr(team, "system", "balanced") or "balanced")
     if sys == "run_and_gun":
-        return 0.16
+        return 0.26
     if sys == "defensive_lock":
-        return -0.14
+        return -0.12
     if sys == "physical":
         return -0.04
     if sys == "young_fast":
-        return 0.08
+        return 0.14
     return 0.0
 
 
@@ -3073,6 +3644,55 @@ def _legal_pool_weight_mult(char: int) -> float:
     return 1.0
 
 
+_LEGAL_CRIME_BASE_CHANCE = 0.000015  # ultra-rare league-wide (~1–2 / season target)
+_MAJOR_STORYLINE_SEASON_CAP = 2
+_LEGAL_MAJOR_SEASON_CAP = 2
+_FRANCHISE_MAJOR_DAY_GATE = 0.0025  # daily chance a major slot opens when under cap
+
+
+def _narr_season_major_count(league: Any, year: int) -> int:
+    return int(getattr(league, f"_narr_major_season_{int(year)}", 0) or 0)
+
+
+def _narr_season_legal_count(league: Any, year: int) -> int:
+    return int(getattr(league, f"_narr_legal_major_season_{int(year)}", 0) or 0)
+
+
+def _bump_narr_season_major(league: Any, year: int, *, legal: bool = False) -> None:
+    sk = int(year)
+    setattr(league, f"_narr_major_season_{sk}", _narr_season_major_count(league, sk) + 1)
+    if legal:
+        setattr(league, f"_narr_legal_major_season_{sk}", _narr_season_legal_count(league, sk) + 1)
+
+
+def _legal_crime_roll_passes(rng: random.Random, char: int, *, franchise_tick: bool = False) -> bool:
+    """Gate legal_crime pool picks — ultra rare; blocked when season legal cap reached."""
+    p = _LEGAL_CRIME_BASE_CHANCE
+    if char < 30:
+        p = 0.00008
+    elif char < 45:
+        p = 0.00003
+    if franchise_tick:
+        p *= 0.85
+    return rng.random() <= p
+
+
+def _legal_fx_for_severity(severity: str) -> Dict[str, float]:
+    if severity == "minor":
+        return {"morale": -0.04, "media_stress": 0.06, "chemistry": -0.03, "confidence": -0.03}
+    if severity == "moderate":
+        return {"morale": -0.10, "media_stress": 0.12, "chemistry": -0.08, "confidence": -0.08}
+    return {"morale": -0.18, "media_stress": 0.20, "chemistry": -0.12, "confidence": -0.14}
+
+
+def _legal_tier_for_severity(severity: str) -> str:
+    if severity == "minor":
+        return "minor"
+    if severity == "moderate":
+        return "mid"
+    return "major"
+
+
 def _pool_weights_for_character(char: int) -> Dict[str, float]:
     if char < 40:
         return {
@@ -3129,6 +3749,9 @@ def _storyline_tier_for_def(d: Dict[str, Any]) -> str:
     t = d.get("tier")
     if t:
         return str(t).lower()
+    ls = str(d.get("legal_severity") or "").lower()
+    if ls:
+        return _legal_tier_for_severity(ls)
     return str(_STORYLINE_POOL_TIER.get(str(d.get("pool", "") or ""), "mid"))
 
 
@@ -3234,7 +3857,13 @@ def _classify_systemic_event_from_storyline(picked: Dict[str, Any], fx: Dict[str
     net = sum(float(v) for v in (fx or {}).values())
     txt = (picked.get("text") or "").lower()
     if legal or pool == "legal_crime":
-        return "legal_trouble", 1.12
+        sev = 1.12
+        ls = str(picked.get("legal_severity") or "").lower()
+        if ls == "minor":
+            sev = 0.62
+        elif ls == "moderate":
+            sev = 0.88
+        return "legal_trouble", sev
     if pool == "media_pressure" and net < -0.02:
         return "scandal", 1.0
     if pool == "team_dynamics":
@@ -3588,9 +4217,24 @@ def _system_archetype_line_bonus(team: Any, styles: List[str]) -> float:
 def calculate_line_chemistry(line: List[Any], team: Any = None) -> float:
     """
     Synergy-based chemistry for forward trios or D pairs (0–1).
+    Prefer canonical systems.chemistry scores when available.
     """
     if not line:
         return 0.5
+    try:
+        from app.sim_engine.systems.chemistry import (  # noqa: WPS433
+            calculate_defense_pair_chemistry,
+            calculate_forward_line_chemistry,
+        )
+
+        pos = [_player_position_label(p) for p in line]
+        if len(line) >= 2 and all(x == "D" for x in pos):
+            score100 = float(calculate_defense_pair_chemistry(line, context={"team": team}).get("chemistry", 50))
+        else:
+            score100 = float(calculate_forward_line_chemistry(line, context={"team": team}).get("chemistry", 50))
+        return clamp(score100 / 100.0, 0.26, 0.91)
+    except Exception:
+        pass
     for p in line:
         ensure_player_playstyle(p)
     styles = [str(getattr(p, "playstyle", "two_way") or "two_way").lower() for p in line]
@@ -4399,86 +5043,64 @@ def _build_player_storyline_catalog() -> List[Dict[str, Any]]:
         })
 
     # ==================================================
-    # LEGAL / CRIME / DISCIPLINE STORYLINES — 60
+    # LEGAL / CRIME / DISCIPLINE STORYLINES — tiered severity
     # ==================================================
 
-    legal_lines = [
-        "Arrested for DUI after a team charity event",
-        "DUI checkpoint failure becomes public after road win",
-        "Pulled over for reckless driving after practice",
-        "Questioned by police after nightclub altercation",
-        "Bar fight investigation names player as person of interest",
-        "Public intoxication incident creates team embarrassment",
-        "Security footage shows player arguing with venue staff",
-        "Airport incident leads to police questioning",
-        "Customs delay sparks media speculation around player",
-        "Driving with suspended license charge surfaces",
-        "Property damage complaint filed after private party",
-        "Noise complaint escalates into police visit at player residence",
-        "Casino dispute triggers internal team review",
-        "Gambling allegation prompts league integrity inquiry",
-        "Illegal betting rumor causes locker room distraction",
-        "Player linked to suspicious betting account",
-        "Tax investigation involving player becomes public",
-        "Financial fraud inquiry connected to player’s advisor",
-        "Agent-related legal dispute drags player into headlines",
-        "Civil lawsuit creates distraction during playoff race",
-        "Assault allegation under preliminary review",
-        "Domestic disturbance call creates major media storm",
-        "Player detained after late-night street confrontation",
-        "Police report mentions teammate during off-day incident",
-        "Club promoter accuses player of unpaid damages",
-        "Lawsuit from former business partner goes public",
-        "League discipline hearing scheduled after off-ice incident",
-        "Team suspends player pending legal clarification",
-        "Player apologizes after police-involved misunderstanding",
-        "Traffic incident becomes viral social media scandal",
-        "Rideshare driver complaint leads to team review",
-        "Fan altercation after game results in investigation",
-        "Player accused of threatening arena employee",
-        "Parking lot confrontation captured on phone video",
-        "Player’s entourage involved in downtown police call",
-        "Legal dispute with landlord becomes public",
-        "Fraudulent investment rumor reaches team executives",
-        "Player named as witness in organized crime case",
-        "Old legal charge resurfaces during contract talks",
-        "Immigration documentation issue delays player travel",
-        "Minor possession charge creates league discipline concern",
-        "Fake ID scandal from junior years resurfaces online",
-        "Player questioned after teammate’s party incident",
-        "Civil complaint filed after offseason boating accident",
-        "Reckless boating incident sparks league conduct review",
-        "Player accused of damaging rental property on road trip",
-        "Security guard files complaint after arena tunnel incident",
-        "Heated argument with police officer creates PR crisis",
-        "Player misses practice after legal appointment",
-        "Court appearance scheduled during important homestand",
-        "Team legal staff involved after late-night incident",
-        "Player cleared legally but reputation takes hit",
-        "League requests explanation after police report leak",
-        "Anonymous complaint triggers internal conduct review",
-        "Former acquaintance makes public legal accusation",
-        "Player denies involvement in gambling-related investigation",
-        "Team captain asked about player’s legal distraction",
-        "Sponsor pauses campaign after legal controversy",
-        "Player enters league assistance program after conduct issue",
-        "Team fines player internally after off-ice incident",
+    _legal_tiered: List[Tuple[str, str]] = [
+        # minor — small morale hit, coach trust drop, media noise
+        ("minor", "Excessive speeding ticket after late-night road trip"),
+        ("minor", "Noise complaint escalates to police visit at player residence"),
+        ("minor", "Public intoxication arrest outside downtown bar"),
+        ("minor", "Breaking curfew during team travel"),
+        ("minor", "Traffic stop for speeding stunt-driving on highway"),
+        ("minor", "Disorderly conduct citation outside hotel after team dinner"),
+        # moderate — suspension chance, sponsor loss, chemistry damage
+        ("moderate", "Bar fight involvement under police review"),
+        ("moderate", "Reckless driving charge after practice"),
+        ("moderate", "Vandalism of property complaint filed against player"),
+        ("moderate", "Harassment complaint filed by arena staff member"),
+        ("moderate", "Hotel room damage incident triggers team review"),
+        ("moderate", "Parking lot confrontation captured on phone video"),
+        ("moderate", "Fan altercation after game results in investigation"),
+        ("moderate", "Driving with suspended license charge surfaces"),
+        ("moderate", "Trespassing incident at closed training facility"),
+        ("moderate", "Breach of peace charge after heated argument with police"),
+        # major — league investigation, indefinite leave, trade value collapse
+        ("major", "DUI / impaired driving arrest after team event"),
+        ("major", "Domestic violence allegation under preliminary review"),
+        ("major", "Betting on games investigation names player"),
+        ("major", "Insider betting information scandal linked to player"),
+        ("major", "Sexual misconduct allegation triggers league review"),
+        ("major", "Fraud investigation involving player business dealings"),
+        ("major", "Drug possession charge creates league discipline concern"),
+        ("major", "Drug trafficking allegation becomes national story"),
+        ("major", "Weapons possession charge after off-ice incident"),
+        ("major", "Tax evasion investigation involving player becomes public"),
+        ("major", "Non-consensual image-sharing allegation leaks publicly"),
+        ("major", "Obstruction of justice allegation during league investigation"),
+        ("major", "Assault charge after nightclub incident"),
+        ("major", "Stalking allegation leads to restraining order filing"),
+        ("major", "Illegal poker room raid connection names player"),
+        ("major", "Prescription drug misuse investigation opened"),
+        ("major", "Hazing investigation names veteran player"),
+        ("major", "Identity fraud allegation tied to off-ice business"),
+        ("major", "Civil lawsuit after off-ice altercation goes public"),
+        ("major", "Animal cruelty allegation triggers media firestorm"),
+        ("major", "Crypto/NFT investment scam connection drags player into headlines"),
     ]
 
-    for i, lt in enumerate(legal_lines):
-        severity = -0.18 if i < 30 else -0.12
+    for i, (sev, lt) in enumerate(_legal_tiered):
+        tier = _legal_tier_for_severity(sev)
         push(
             "legal_crime",
             lt,
-            {
-                "morale": severity,
-                "discipline": -0.22,
-                "chemistry": -0.08,
-                "media": 0.20,
-            },
+            _legal_fx_for_severity(sev),
             legal=True,
-            rarity="rare" if i < 25 else "uncommon",
+            legal_severity=sev,
+            tier=tier,
+            rarity="rare" if sev == "major" else "uncommon",
             tone="negative",
+            polarity="negative",
         )
 
     # ==================================================
@@ -4627,6 +5249,16 @@ def _build_player_storyline_catalog() -> List[Dict[str, Any]]:
         "Player takes leave to handle urgent personal matter",
         "Player’s off-ice happiness translates into better play",
         "Player’s personal adversity becomes rallying point",
+        "Gets married during the offseason",
+        "Has a child and becomes more motivated",
+        "Goes through a breakup/divorce and struggles mentally",
+        "Buys a new home in the city",
+        "Has trouble adjusting to a new city after a trade",
+        "Misses family back home",
+        "Becomes homesick as a young prospect",
+        "Starts dating a celebrity/local influencer",
+        "Gets caught partying too much",
+        "Becomes more mature after settling down",
     ]
 
     for i, pt in enumerate(personal_lines):
@@ -4708,6 +5340,16 @@ def _build_player_storyline_catalog() -> List[Dict[str, Any]]:
         "Player’s slump is dissected frame-by-frame online",
         "Media declares player has turned season around",
         "Player’s reputation improves after accountability interview",
+        "Gives a controversial interview",
+        "Becomes a fan favourite through charity work",
+        "Gets criticized by local media",
+        "Deletes social media after backlash",
+        "Goes viral for a funny locker room clip",
+        "Starts a podcast and creates distractions",
+        "Makes a bad joke publicly and has to apologize",
+        "Becomes the face of the franchise marketing campaign",
+        "Gets booed by home fans after poor play",
+        "Gets praised nationally after a leadership moment",
     ]
 
     for i, ml in enumerate(media_lines):
@@ -4789,6 +5431,16 @@ def _build_player_storyline_catalog() -> List[Dict[str, Any]]:
         "Player’s unselfish play improves line chemistry",
         "Veteran leadership calms team after chaotic week",
         "Player’s attitude turnaround changes internal perception",
+        "Has tension with the head coach",
+        "Becomes close friends with a teammate",
+        "Mentors a rookie",
+        "Clashes with a veteran leader",
+        "Loses confidence after being scratched",
+        "Requests a bigger role privately",
+        "Quietly asks management about a trade",
+        "Is voted alternate captain",
+        "Loses the room's trust after selfish comments",
+        "Organizes a players-only meeting",
     ]
 
     for i, tl in enumerate(team_lines):
@@ -4870,6 +5522,16 @@ def _build_player_storyline_catalog() -> List[Dict[str, Any]]:
         "Player’s camp seeks modified no-trade protection",
         "Management praises player while avoiding contract questions",
         "Player’s future becomes defining offseason storyline",
+        "Signs a major endorsement deal",
+        "Starts a clothing brand",
+        "Invests in a local restaurant",
+        "Gets into financial trouble from bad investments",
+        "Fires his agent",
+        "Changes agents before contract talks",
+        "Public contract dispute hurts morale",
+        "Donates money to a community cause",
+        "Becomes involved in a charity tournament",
+        "Gets named to a league/player association committee",
     ]
 
     for i, cl in enumerate(career_lines):
@@ -4951,6 +5613,16 @@ def _build_player_storyline_catalog() -> List[Dict[str, Any]]:
         "Player’s game matures after midseason reset",
         "Player’s special teams versatility boosts value",
         "Player’s all-around game takes noticeable leap",
+        "Changes offseason trainer and improves skating",
+        "Adds muscle over the summer",
+        "Loses speed due to poor conditioning",
+        "Works with a shooting coach",
+        "Improves faceoffs after extra practice",
+        "Hires a sports psychologist",
+        "Changes diet and improves stamina",
+        "Comes into camp out of shape",
+        "Studies film obsessively and improves hockey IQ",
+        "Switches stick/skate brand and has an adjustment period",
     ]
 
     for i, pl in enumerate(performance_lines):
@@ -5049,6 +5721,82 @@ def _build_player_storyline_catalog() -> List[Dict[str, Any]]:
         )
 
     return out
+
+
+# Modern 32-team NHL-style alignment (8 teams × 4 divisions). Procedural sandbox teams.
+_FRANCHISE_NHL_TEAM_SPECS: List[Tuple[str, str, str, str, str]] = [
+    ("Boston", "Bruins", "BOS", "Atlantic", "Eastern"),
+    ("Buffalo", "Sabres", "BUF", "Atlantic", "Eastern"),
+    ("Detroit", "Red Wings", "DET", "Atlantic", "Eastern"),
+    ("Florida", "Panthers", "FLA", "Atlantic", "Eastern"),
+    ("Montreal", "Canadiens", "MTL", "Atlantic", "Eastern"),
+    ("Ottawa", "Senators", "OTT", "Atlantic", "Eastern"),
+    ("Tampa Bay", "Lightning", "TBL", "Atlantic", "Eastern"),
+    ("Toronto", "Maple Leafs", "TOR", "Atlantic", "Eastern"),
+    ("Carolina", "Hurricanes", "CAR", "Metropolitan", "Eastern"),
+    ("Columbus", "Blue Jackets", "CBJ", "Metropolitan", "Eastern"),
+    ("New Jersey", "Devils", "NJD", "Metropolitan", "Eastern"),
+    ("New York", "Islanders", "NYI", "Metropolitan", "Eastern"),
+    ("New York", "Rangers", "NYR", "Metropolitan", "Eastern"),
+    ("Philadelphia", "Flyers", "PHI", "Metropolitan", "Eastern"),
+    ("Pittsburgh", "Penguins", "PIT", "Metropolitan", "Eastern"),
+    ("Washington", "Capitals", "WSH", "Metropolitan", "Eastern"),
+    ("Chicago", "Blackhawks", "CHI", "Central", "Western"),
+    ("Colorado", "Avalanche", "COL", "Central", "Western"),
+    ("Dallas", "Stars", "DAL", "Central", "Western"),
+    ("Minnesota", "Wild", "MIN", "Central", "Western"),
+    ("Nashville", "Predators", "NSH", "Central", "Western"),
+    ("St. Louis", "Blues", "STL", "Central", "Western"),
+    ("Utah", "Mammoth", "UTA", "Central", "Western"),
+    ("Winnipeg", "Jets", "WPG", "Central", "Western"),
+    ("Anaheim", "Ducks", "ANA", "Pacific", "Western"),
+    ("Calgary", "Flames", "CGY", "Pacific", "Western"),
+    ("Edmonton", "Oilers", "EDM", "Pacific", "Western"),
+    ("Los Angeles", "Kings", "LAK", "Pacific", "Western"),
+    ("San Jose", "Sharks", "SJS", "Pacific", "Western"),
+    ("Seattle", "Kraken", "SEA", "Pacific", "Western"),
+    ("Vancouver", "Canucks", "VAN", "Pacific", "Western"),
+    ("Vegas", "Golden Knights", "VGK", "Pacific", "Western"),
+]
+
+_GM_STRATEGY_BY_ARCHETYPE: Dict[str, Tuple[str, str, str]] = {
+    TeamArchetype.WIN_NOW: ("contender", "aggressive_buyer", "win_now"),
+    TeamArchetype.PATIENT_BUILDER: ("retool", "conservative_builder", "balanced"),
+    TeamArchetype.DRAFT_AND_DEVELOP: ("rebuild", "prospect_pipeline", "draft_focus"),
+    TeamArchetype.MEDIOCRE: ("bubble", "patient_builder", "balanced"),
+    TeamArchetype.CHAOTIC: ("bubble", "aggressive_buyer", "chaotic"),
+}
+
+
+def _assign_franchise_team_personality(team: Any, rng: random.Random) -> None:
+    """Assign GM window, strategy, and named GM for trade AI / franchise screens."""
+    arch = str(getattr(team, "archetype", TeamArchetype.MEDIOCRE) or TeamArchetype.MEDIOCRE)
+    window, strategy, risk_band = _GM_STRATEGY_BY_ARCHETYPE.get(
+        arch,
+        ("bubble", "conservative_builder", "balanced"),
+    )
+    setattr(team, "gm_window", window)
+    setattr(team, "window", window)
+    setattr(team, "gm_strategy", strategy)
+    setattr(team, "gm_risk_band", risk_band)
+    try:
+        ident = generate_human_identity(rng)
+        setattr(team, "gm_name", str(getattr(ident, "full_name", "GM")))
+    except Exception:
+        setattr(team, "gm_name", f"GM {getattr(team, 'abbreviation', getattr(team, 'city', ''))}")
+    try:
+        from app.sim_engine.entities.team import TeamStatus as _TS
+
+        if window == "contender":
+            team.state.status = _TS.CONTENDING
+        elif window == "rebuild":
+            team.state.status = _TS.REBUILDING
+        elif window == "retool":
+            team.state.status = _TS.RETOOLING
+        else:
+            team.state.status = _TS.BUBBLE
+    except Exception:
+        pass
 
 
 # =====================================================================
@@ -5206,6 +5954,9 @@ class SimEngine:
 
     # --------------------------------------------------
     # League initialization (exposes league.teams to universe layer)
+    # Live franchise mode uses this path — NOT engine_universe.py macro sim.
+    # Franchise mode uses game ledger stats only. Do not call abstract season
+    # stat simulation here.
     # --------------------------------------------------
     def initialize_universe(self, team_count: int = 32) -> None:
         """
@@ -5218,85 +5969,109 @@ class SimEngine:
         if not hasattr(self.league, "teams") or self.league.teams is None:
             self.league.teams = []
         rng = random.Random(self.seed)
-        cities = [
-            "New York", "Boston", "Toronto", "Montreal", "Chicago", "Detroit",
-            "Los Angeles", "San Jose", "Dallas", "Calgary", "Edmonton", "Vancouver",
-            "Ottawa", "Buffalo", "Pittsburgh", "Philadelphia", "Washington", "Tampa Bay",
-            "Florida", "Carolina", "Columbus", "Nashville", "Minnesota", "St. Louis",
-            "Winnipeg", "Arizona", "Seattle", "Vegas", "Colorado", "New Jersey",
-            "Anaheim", "Islanders",
+        specs = _FRANCHISE_NHL_TEAM_SPECS[: max(1, min(int(team_count), 32))]
+        archetype_pool = [
+            TeamArchetype.WIN_NOW,
+            TeamArchetype.PATIENT_BUILDER,
+            TeamArchetype.DRAFT_AND_DEVELOP,
+            TeamArchetype.MEDIOCRE,
+            TeamArchetype.CHAOTIC,
         ]
-        names = [
-            "Rangers", "Bruins", "Maple Leafs", "Canadiens", "Blackhawks", "Red Wings",
-            "Kings", "Sharks", "Stars", "Flames", "Oilers", "Canucks", "Senators",
-            "Sabres", "Penguins", "Flyers", "Capitals", "Lightning", "Panthers",
-            "Hurricanes", "Blue Jackets", "Predators", "Wild", "Blues", "Jets",
-            "Coyotes", "Kraken", "Golden Knights", "Avalanche", "Devils", "Ducks",
-            "Islanders",
-        ]
-        divisions = ("Atlantic", "Metropolitan", "Central", "Pacific")
-        for i in range(team_count):
-            city = cities[i % len(cities)]
-            name = names[i % len(names)]
-            division = divisions[i % 4]
-            conference = "Eastern" if (i % 4) < 2 else "Western"
+        for i, (city, name, abbr, division, conference) in enumerate(specs):
+            archetype = archetype_pool[i % len(archetype_pool)]
             team = Team(
                 team_id=i,
                 city=city,
                 name=name,
                 division=division,
                 conference=conference,
-                archetype=TeamArchetype.PATIENT_BUILDER,
+                archetype=archetype,
                 rng=rng,
             )
+            setattr(team, "abbreviation", abbr)
+            setattr(team, "abbr", abbr)
+            setattr(team, "full_name", f"{city} {name}".strip())
             coach = generate_coach(rng, f"COACH_{i:03d}", CoachRole.HEAD_COACH)
-            coach.name = f"Coach_{i:03d}"
-            coach.job_security = 0.6
             team.coach = coach
             assign_team_system(team, rng)
             assign_team_coach_profile(team, rng)
+            _assign_franchise_team_personality(team, rng)
             self.league.teams.append(team)
-        self.league.identity.max_teams = team_count
+        self.league.identity.max_teams = len(specs)
         self._populate_initial_rosters()
 
     def _populate_initial_rosters(self) -> None:
-        """
-        Deterministic roster generation: 12 F (4C, 4LW, 4RW), 6 D, 3 G per team.
-        Uses self.rng only. Populates league.players and each team.roster.
-        """
-        if not getattr(self.league, "teams", None):
+  
+        if not getattr(self.league, "teams", None) or len(self.league.teams) == 0:
             return
+
         rng = self.rng
-        if not hasattr(self.league, "players"):
+
+        if not hasattr(self.league, "players") or self.league.players is None:
             self.league.players = []
-        if not hasattr(self.league, "retired_players"):
+
+        if not hasattr(self.league, "retired_players") or self.league.retired_players is None:
             self.league.retired_players = []
+
+        season_year = int(
+            getattr(self.league, "season_year", None)
+            or getattr(self.league, "current_season", None)
+            or 2025
+        )
+
         age_ranges = (
-            [(31, 36)] * 2 + [(24, 29)] * 6 + [(20, 23)] * 6 + [(26, 32)] * 4 + [(22, 30)] * 3
+            [(31, 36)] * 2
+            + [(24, 29)] * 7
+            + [(20, 23)] * 7
+            + [(26, 32)] * 4
+            + [(22, 30)] * 3
         )
-        fwd_positions = [Position.C] * 4 + [Position.LW] * 4 + [Position.RW] * 4
-        def_positions = [Position.D] * 6
+
+        # 23-man NHL roster target: 13F / 7D / 3G (active lineup UI still uses 12/6/2)
+        fwd_positions = [Position.C] * 5 + [Position.LW] * 4 + [Position.RW] * 4
+        def_positions = [Position.D] * 7
         g_positions = [Position.G] * 3
+        roster_size = len(fwd_positions) + len(def_positions) + len(g_positions)
+
         ovr_tiers = (
-            [(0.58, 0.74)] * 6 + [(0.66, 0.80)] * 5 + [(0.72, 0.86)] * 5 + [(0.78, 0.90)] * 3 + [(0.84, 0.93)] * 2
+            [(0.58, 0.74)] * 7
+            + [(0.66, 0.80)] * 6
+            + [(0.72, 0.86)] * 5
+            + [(0.78, 0.90)] * 3
+            + [(0.84, 0.93)] * 2
         )
-        assert len(ovr_tiers) >= 21
+
         GEN_P, ELITE_P, STAR_P = 0.003, 0.018, 0.045
-        used_names = set()
+        used_names: Set[str] = set()
+
         for team_idx, team in enumerate(self.league.teams):
             if not hasattr(team, "roster") or team.roster is None:
                 team.roster = []
+            if not hasattr(team, "scratches") or team.scratches is None:
+                team.scratches = []
+            if not hasattr(team, "injured_reserve") or team.injured_reserve is None:
+                team.injured_reserve = []
+
             team.roster.clear()
-            tier_cycle = [ovr_tiers[(team_idx * 7 + i) % len(ovr_tiers)] for i in range(21)]
+            team.scratches.clear()
+
+            team_id = _safe_team_id_for_player_creation(team, team_idx)
+
+            tier_cycle = [ovr_tiers[(team_idx * 7 + i) % len(ovr_tiers)] for i in range(roster_size)]
             rng.shuffle(tier_cycle)
+
             age_order = list(age_ranges)
             rng.shuffle(age_order)
+
             slot_idx = 0
+
             for pos_list in (fwd_positions, def_positions, g_positions):
                 for pos in pos_list:
                     lo, hi = tier_cycle[slot_idx]
                     target_ovr = lo + rng.uniform(0, hi - lo)
+
                     roll = rng.random()
+
                     if roll < GEN_P:
                         target_ovr = max(target_ovr, rng.uniform(0.93, 0.96))
                     elif roll < GEN_P + ELITE_P:
@@ -5305,31 +6080,51 @@ class SimEngine:
                         target_ovr = max(target_ovr, rng.uniform(0.86, 0.89))
                     else:
                         target_ovr = min(target_ovr, 0.84)
+
                     if roll >= GEN_P + ELITE_P:
                         target_ovr = min(target_ovr, 0.89)
+
                     age_lo, age_hi = age_order[slot_idx]
                     age = rng.randint(age_lo, age_hi)
-                    birth_year = (2025 - age)
-                    base_rating = int(target_ovr * 99)
-                    ratings = {k: clamp_rating(base_rating + rng.randint(-2, 2)) for k in ATTRIBUTE_KEYS}
+                    birth_year = season_year - age
+
+                    ratings = build_role_shaped_ratings(
+                        position=pos,
+                        target_ovr=target_ovr,
+                        rng=rng,
+                    )
+                    gen_profile = pop_generation_profile(ratings)
+                    synced_arch = archetype_from_generation_profile(gen_profile, pos)
+                    if not synced_arch:
+                        synced_arch = assign_skater_archetype(pos, rng)
+
                     seed = rng.randint(1, 2_000_000_000)
+
                     ident = generate_human_identity(rng)
-                    for _ in range(5):
+                    for _ in range(8):
                         nm = str(getattr(ident, "full_name", "Unknown"))
                         if nm not in used_names:
                             used_names.add(nm)
                             break
                         ident = generate_human_identity(rng)
-                    hometown = str(ident.hometown or "Unknown")
+
+                    hometown = str(getattr(ident, "hometown", "") or "Unknown")
                     birth_city = hometown.split(",")[0].strip() if hometown else "Unknown"
-                    h_cm = random_height_cm(rng)
-                    w_kg = int(78 + (h_cm - 178) * 0.38 + rng.randint(-9, 11))
-                    w_kg = max(65, min(118, w_kg))
+
+                    from app.sim_engine.generation.prospect_body import (
+                        generate_position_height_cm,
+                        generate_realistic_weight_kg,
+                    )
+
+                    arch_str = str(getattr(synced_arch, "value", synced_arch) or "")
+                    h_cm = generate_position_height_cm(rng, pos, archetype=arch_str)
+                    w_kg = generate_realistic_weight_kg(h_cm, pos, archetype=arch_str, age=age)
+
                     identity = IdentityBio(
-                        name=str(ident.full_name),
+                        name=str(getattr(ident, "full_name", "Unknown")),
                         age=age,
                         birth_year=birth_year,
-                        birth_country=str(ident.nationality),
+                        birth_country=str(getattr(ident, "nationality", "Canada")),
                         birth_city=birth_city or "Unknown",
                         height_cm=h_cm,
                         weight_kg=w_kg,
@@ -5339,6 +6134,7 @@ class SimEngine:
                         draft_round=1 + (slot_idx % 3),
                         draft_pick=1 + (slot_idx % 30),
                     )
+
                     backstory = BackstoryUpbringing(
                         backstory=BackstoryType.GRINDER,
                         upbringing=UpbringingType.STABLE_MIDDLE_CLASS,
@@ -5346,22 +6142,54 @@ class SimEngine:
                         early_pressure=PressureLevel.MODERATE,
                         dev_resources=DevResources.LOCAL,
                     )
+
                     player = Player(
                         identity=identity,
                         backstory=backstory,
                         ratings=ratings,
                         rng_seed=seed,
-                        archetype=assign_skater_archetype(pos, rng),
+                        archetype=synced_arch,
+                        pool_context="nhl",
                     )
-                    player.context.current_team_id = str(getattr(team, "team_id", team_idx))
+                    if gen_profile:
+                        try:
+                            setattr(player, "_generated_profile", gen_profile)
+                        except Exception:
+                            pass
+
+                    finalize_created_player_for_game_ledger(
+                        player,
+                        league=self.league,
+                        team=team,
+                        rng=rng,
+                        source="init_roster",
+                        season_year=season_year,
+                    )
+
                     team.roster.append(player)
                     self.league.players.append(player)
+
                     slot_idx += 1
+
             if hasattr(team, "state") and hasattr(team.state, "competitive_score"):
                 roster = getattr(team, "roster", []) or []
                 if roster:
-                    ovrs = sorted((p.ovr() for p in roster if callable(getattr(p, "ovr", None))), reverse=True)[:12]
+                    ovrs = sorted(
+                        (
+                            p.ovr()
+                            for p in roster
+                            if callable(getattr(p, "ovr", None))
+                        ),
+                        reverse=True,
+                    )[:12]
                     team.state.competitive_score = sum(ovrs) / len(ovrs) if ovrs else 0.5
+
+        try:
+            from app.sim_engine.entities.player import enforce_league_ovr_distribution_from_league
+
+            enforce_league_ovr_distribution_from_league(self.league, rng=rng)
+        except Exception:
+            pass
 
     # --------------------------------------------------
     # Injection
@@ -5385,7 +6213,16 @@ class SimEngine:
     def _global_pool_bootstrap_prospect(self, rng: random.Random, year: int, *, age: int, bucket: str) -> Prospect:
         birth_year = int(year) - int(age)
         country = str(rng.choice(["Canada", "Canada", "USA", "Sweden", "Finland", "Russia", "Germany", "Czechia"]))
-        city = "Unknown"
+        # Real human identity for every world-pool player: these players can reach
+        # the NHL, so they must never carry "Global JUN/EUR ..." placeholder text.
+        try:
+            human_ident = generate_human_identity(rng, nationality=country)
+            human_name = str(human_ident.full_name)
+            city = str((human_ident.hometown or "").split(",")[0].strip() or "Unknown")
+        except Exception:
+            human_ident = None
+            human_name = ""
+            city = "Unknown"
         pos_str = str(rng.choice(["C", "C", "LW", "RW", "D", "D", "G"]))
         position = (
             ProspectPosition.C
@@ -5405,15 +6242,24 @@ class SimEngine:
             ]
         )
         seed_val = abs(hash(f"GP|{year}|{age}|{bucket}|{rng.random()}")) % (2**31 - 1) or 1
+        # Height/weight must be correlated (a 6'5" prospect can't be 150 lb). Reuse the
+        # shared position/age-aware body generator instead of two independent rolls.
+        from app.sim_engine.generation.prospect_body import (
+            generate_position_height_cm,
+            generate_realistic_weight_kg,
+        )
+
+        gen_height_cm = generate_position_height_cm(rng, position)
+        gen_weight_kg = generate_realistic_weight_kg(gen_height_cm, position, age=int(age))
         pr = Prospect.create_random(
-            name=f"Global {bucket[:3]} {year}-{seed_val % 100000}",
+            name=human_name or f"Prospect {year}-{seed_val % 100000}",
             birth_year=birth_year,
             birth_country=country,
             birth_city=city,
             position=position,
             shoots=ProspectShoots.L if rng.random() < 0.58 else ProspectShoots.R,
-            height_cm=176 + rng.randint(-10, 14),
-            weight_kg=80 + rng.randint(-12, 16),
+            height_cm=gen_height_cm,
+            weight_kg=gen_weight_kg,
             system=system,
             country=country,
             region="",
@@ -5497,7 +6343,7 @@ class SimEngine:
         hist: Dict[str, int] = {"JUNIOR": 0, "MINOR_LEAGUE": 0, "EUROPE": 0, "UNSIGNED": 0}
         gp = getattr(self.league, "global_player_pool", None) or []
         for p in gp:
-            if getattr(p, "team_id", None):
+            if getattr(p, "team_id", None) is not None:
                 continue
             b = str(getattr(p, "_global_league_bucket", "JUNIOR") or "JUNIOR").upper()
             if b in hist:
@@ -5545,7 +6391,7 @@ class SimEngine:
         eu_post_mids: List[float] = []
 
         for p in list(gp):
-            if getattr(p, "team_id", None):
+            if getattr(p, "team_id", None) is not None:
                 continue
             if str(getattr(p, "status", "") or "") != "global":
                 setattr(p, "status", "global")
@@ -5659,7 +6505,7 @@ class SimEngine:
         want = max(int(self.DRAFT_CLASS_SIZE_MIN), min(int(self.DRAFT_CLASS_SIZE_MAX), int(target_n)))
         elig: List[Prospect] = []
         for p in list(gp):
-            if getattr(p, "team_id", None):
+            if getattr(p, "team_id", None) is not None:
                 continue
             if str(getattr(p, "status", "") or "") != "global":
                 continue
@@ -5739,8 +6585,8 @@ class SimEngine:
             if rng.random() > 0.40:
                 continue
             team = rng.choice(teams)
-            tid = str(getattr(team, "team_id", getattr(team, "id", "")) or "")
-            if not tid:
+            tid = _id_str(team, "team_id", "id")
+            if tid == "":
                 continue
             pool = getattr(team, "prospect_pool", None)
             if pool is None:
@@ -5774,7 +6620,7 @@ class SimEngine:
         gp = getattr(self.league, "global_player_pool", None) or []
         n = 0
         for p in gp:
-            if getattr(p, "team_id", None):
+            if getattr(p, "team_id", None) is not None:
                 continue
             if str(getattr(p, "status", "") or "") != "global":
                 continue
@@ -6775,12 +7621,14 @@ class SimEngine:
                 ovr = max(0.50, min(0.99, ovr))
                 base_rating = int(ovr * 99)
                 ratings = {k: clamp_rating(base_rating + rng.randint(-2, 2)) for k in ATTRIBUTE_KEYS}
-                name = identity_dict.get("name", "Rookie")
+                name = _hydrated_identity_name(
+                    identity_dict.get("name", "Rookie"), identity_dict.get("birth_country"), rng
+                )
                 birth_year = int(identity_dict.get("birth_year", year - 18))
                 age = year - birth_year
                 birth_country = str(identity_dict.get("birth_country", "Canada"))
                 birth_city = str(identity_dict.get("birth_city", "Unknown"))
-                height_cm = sanitize_height_cm(identity_dict.get("height_cm", 180), rng)
+                height_cm = sanitize_height_cm(identity_dict.get("height_cm", 180), rng, position)
                 weight_kg = int(identity_dict.get("weight_kg", 85))
                 pos_val = identity_dict.get("position", "C")
                 if hasattr(pos_val, "value"):
@@ -6818,6 +7666,12 @@ class SimEngine:
                     ratings=ratings,
                     rng_seed=rng.randint(1, 2_000_000_000),
                 )
+                try:
+                    from app.sim_engine.generation.player_headshots import ensure_player_headshot
+
+                    ensure_player_headshot(player)
+                except Exception:
+                    pass
                 player.context.current_team_id = str(team_id)
                 _arches = [
                     "FAST_RISER",
@@ -6955,6 +7809,52 @@ class SimEngine:
         target = int(max(44, min(92, raw)))
         return target, "retirements/roster_need"
 
+    def _promote_existing_player_from_pool(
+        self,
+        team: Any,
+        player: Any,
+        year: int,
+        rng: random.Random,
+        *,
+        promoted_ages: List[int],
+        promoted_potentials: List[float],
+        age: int,
+        potential: float,
+    ) -> bool:
+        MAX_ROSTER = 23
+        try:
+            roster = getattr(team, "roster", None)
+            if roster is None:
+                team.roster = []
+                roster = team.roster
+            prune_ctx = getattr(self.league, "_age_balance_prune", None) or {}
+            _make_room_before_promotion(
+                self.league,
+                team,
+                player,
+                year,
+                roster,
+                prune_ctx_pct_u24=float(prune_ctx.get("pct_u24", 25.0)),
+                player_roster_age_fn=self._player_roster_age,
+            )
+            roster.append(player)
+            if hasattr(self.league, "players") and self.league.players is not None and player not in (self.league.players or []):
+                self.league.players.append(player)
+            pool = getattr(team, "prospect_pool", None) or []
+            if player in pool:
+                pool.remove(player)
+            _invoke_nhl_promotion_contract_hook(self.league, player, team, year)
+            promoted_ages.append(age)
+            promoted_potentials.append(potential)
+            name = str(getattr(getattr(player, "identity", None), "name", getattr(player, "name", "Prospect")) or "Prospect")
+            try:
+                self._pipeline_log_buffer.append(f"PROMOTION EVENT: Pool player promoted to NHL: {name}")
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
     def _promote_prospect_to_roster(
         self,
         team: Any,
@@ -6968,6 +7868,17 @@ class SimEngine:
         potential: float,
     ) -> bool:
         MAX_ROSTER = 23
+        if not callable(getattr(prospect, "convert_to_player_payload", None)):
+            return self._promote_existing_player_from_pool(
+                team,
+                prospect,
+                year,
+                rng,
+                promoted_ages=promoted_ages,
+                promoted_potentials=promoted_potentials,
+                age=age,
+                potential=potential,
+            )
         try:
             payload = prospect.convert_to_player_payload(
                 drafted_by_team_id=getattr(prospect, "team_id", ""),
@@ -6997,17 +7908,19 @@ class SimEngine:
             base_rating = int(ovr * 99)
             ratings = {k: clamp_rating(base_rating + rng.randint(-2, 2)) for k in ATTRIBUTE_KEYS}
             tid = str(getattr(prospect, "team_id", getattr(team, "team_id", "")))
-            name = identity_dict.get("name", "Rookie")
+            name = _hydrated_identity_name(
+                identity_dict.get("name", "Rookie"), identity_dict.get("birth_country"), rng
+            )
             birth_year = int(identity_dict.get("birth_year", year - 18))
             birth_country = str(identity_dict.get("birth_country", "Canada"))
             birth_city = str(identity_dict.get("birth_city", "Unknown"))
-            height_cm = sanitize_height_cm(identity_dict.get("height_cm", 180), rng)
-            weight_kg = int(identity_dict.get("weight_kg", 85))
             pos_val = identity_dict.get("position", "C")
             if hasattr(pos_val, "value"):
                 pos_val = pos_val.value
             pos_val = str(pos_val) if pos_val else "C"
             position = Position(pos_val) if pos_val in ("C", "LW", "RW", "D", "G") else Position.C
+            height_cm = sanitize_height_cm(identity_dict.get("height_cm", 180), rng, position)
+            weight_kg = int(identity_dict.get("weight_kg", 85))
             shoots_val = identity_dict.get("shoots", "R")
             if hasattr(shoots_val, "value"):
                 shoots_val = shoots_val.value
@@ -7040,6 +7953,14 @@ class SimEngine:
                 rng_seed=rng.randint(1, 2_000_000_000),
             )
             player.context.current_team_id = tid
+            finalize_created_player_for_game_ledger(
+    player,
+    league=self.league,
+    team=team,
+    rng=rng,
+    source="prospect_promotion",
+    season_year=int(year),
+)
             pcv = str(getattr(prospect, "_pipeline_dev_curve", "normal") or "normal")
             if not str(getattr(prospect, "_dev_archetype", "") or "").strip():
                 self._assign_prospect_dev_archetype(
@@ -7092,33 +8013,23 @@ class SimEngine:
             if roster is None:
                 team.roster = []
                 roster = team.roster
-            if len(roster) >= MAX_ROSTER:
-                try:
-                    prune_ctx = getattr(self.league, "_age_balance_prune", None) or {}
-                    pu = float(prune_ctx.get("pct_u24", 25.0))
-
-                    def _p_ovr(p: Any) -> float:
-                        f = getattr(p, "ovr", None)
-                        o = float(f()) if callable(f) else 0.5
-                        a = self._player_roster_age(p)
-                        if pu < 22.0:
-                            o -= 0.014 * max(0, a - 28)
-                        elif pu > 30.0:
-                            o += 0.018 * max(0, 23 - a)
-                        return o
-
-                    worst = min(roster, key=_p_ovr)
-                    roster.remove(worst)
-                    if hasattr(self.league, "players") and self.league.players is not None and worst in (self.league.players or []):
-                        self.league.players.remove(worst)
-                except Exception:
-                    pass
+            prune_ctx = getattr(self.league, "_age_balance_prune", None) or {}
+            _make_room_before_promotion(
+                self.league,
+                team,
+                player,
+                year,
+                roster,
+                prune_ctx_pct_u24=float(prune_ctx.get("pct_u24", 25.0)),
+                player_roster_age_fn=self._player_roster_age,
+            )
             roster.append(player)
             if hasattr(self.league, "players") and self.league.players is not None:
                 self.league.players.append(player)
             pool = getattr(team, "prospect_pool", None) or []
             if prospect in pool:
                 pool.remove(prospect)
+            _invoke_nhl_promotion_contract_hook(self.league, player, team, year)
             promoted_ages.append(age)
             promoted_potentials.append(potential)
             try:
@@ -7187,7 +8098,7 @@ class SimEngine:
 
         candidates: List[Dict[str, Any]] = []
         for team in teams:
-            tid = str(getattr(team, "team_id", "") or "")
+            tid = _id_str(team, "team_id", "id")
             arch = arch_map.get(tid, "balanced")
             roster = [p for p in (getattr(team, "roster", None) or []) if not getattr(p, "retired", False)]
             roster_n = len(roster)
@@ -7267,7 +8178,7 @@ class SimEngine:
         )
         if need_relax:
             for team in teams:
-                tid = str(getattr(team, "team_id", "") or "")
+                tid = _id_str(team, "team_id", "id")
                 arch = arch_map.get(tid, "balanced")
                 roster = [p for p in (getattr(team, "roster", None) or []) if not getattr(p, "retired", False)]
                 roster_n = len(roster)
@@ -7578,7 +8489,7 @@ class SimEngine:
         Safe: uses getattr fallbacks so it won't crash if fields aren't present.
         """
         # Identity
-        pid = str(getattr(p, "id", getattr(getattr(p, "identity", None), "id", "")) or "")
+        pid = _id_str(p, "id") or _id_str(getattr(p, "identity", None), "id")
         name = str(getattr(getattr(p, "identity", None), "name", getattr(p, "name", f"Prospect_{pid}")))
         pos = str(getattr(getattr(p, "position", None), "value", getattr(p, "position", "C")))
 
@@ -7672,6 +8583,9 @@ class SimEngine:
                     }
                 )
 
+        season_year = 2025 + int(getattr(self, "year", 0) or 0)
+        cap_row = advance_league_salary_cap(self.league, self.rng, season_year=season_year)
+
         result = self.league.advance_season(
             team_snapshots=team_snapshots,
             team_count=int(getattr(self.league, "max_teams", 32) or 32),
@@ -7680,6 +8594,13 @@ class SimEngine:
         self.last_league_context = result.get("league_context") or {}
         self.last_league_forecast = result.get("forecast") or {}
         self.last_league_shocks = result.get("shocks") or []
+        try:
+            econ_ctx = self.last_league_context.setdefault("economics", {})
+            econ_ctx["salary_cap"] = float(getattr(self.league, "salary_cap_m", cap_row.get("upperLimit", 92.0)))
+            econ_ctx["cap_floor"] = float(getattr(self.league, "cap_floor_m", cap_row.get("lowerLimit", 68.0)))
+            econ_ctx["cap_growth_rate"] = float(getattr(self.league, "cap_growth_rate", 0.05))
+        except Exception:
+            pass
 
         # ------------------------------------
 # Build season-level stat engines from league context
@@ -7829,8 +8750,8 @@ class SimEngine:
         )
 
         mem = PlayerMemory(
-            drafted_by_team_id=str(getattr(self.player, "drafted_by_team_id", None) or getattr(self.team, "id", None) or ""),
-            developed_by_team_id=str(getattr(self.player, "developed_by_team_id", None) or getattr(self.team, "id", None) or ""),
+            drafted_by_team_id=_id_str(self.player, "drafted_by_team_id", default=_id_str(self.team, "id")),
+            developed_by_team_id=_id_str(self.player, "developed_by_team_id", default=_id_str(self.team, "id")),
         )
 
         return PlayerProfile(
@@ -8501,7 +9422,7 @@ class SimEngine:
 
         prospect_by_id = {}
         for p in eligible:
-            pid = str(getattr(p, "id", getattr(getattr(p, "identity", None), "id", "")) or "")
+            pid = _id_str(p, "id") or _id_str(getattr(p, "identity", None), "id")
             prospect_by_id[pid] = p
 
         team_by_id: Dict[str, Any] = {}
@@ -8918,63 +9839,25 @@ class SimEngine:
             getattr(self, "_last_league_sim_calendar_year", 0) or (2025 + int(getattr(self, "year", 0) or 0))
         )
         ledger = getattr(self, "_last_league_season_stat_ledger", None) or {}
-        pid = str(getattr(self.player, "id", "") or "")
+        pid = _id_str(self.player, "id")
         row = ledger.get(pid) if pid else None
         if row:
-            g = int(row.get("g", 0) or 0)
-            a = int(row.get("a", 0) or 0)
-            pts = g + a
-            gp = max(1, int(row.get("gp", 0) or 0))
-            per_gp = pts / float(gp)
-            perf = clamp(28.0 + 62.0 * min(1.35, per_gp / 1.15), 18.0, 98.0)
-            if str(row.get("position", "")).upper() == "G":
-                sa = max(1, int(row.get("shots_against", 0) or 0))
-                sv = int(row.get("saves", 0) or 0)
-                ga_ct = int(row.get("ga", 0) or 0)
-                sv_pct = sv / float(sa)
-                gaa = (ga_ct * 60.0) / max(1, gp)
-                perf_g = clamp(40.0 + 520.0 * (sv_pct - 0.88) - 1.15 * (gaa - 2.85), 22.0, 96.0)
-                season_stats = {
-                    "season": season_tag,
-                    "role": "starter",
-                    "goals": 0,
-                    "assists": 0,
-                    "points": 0,
-                    "ga": ga_ct,
-                    "gp": gp,
-                    "w": int(row.get("w", 0) or 0),
-                    "l": int(row.get("l", 0) or 0),
-                    "otl": int(row.get("otl", 0) or 0),
-                    "saves": sv,
-                    "shots_against": sa,
-                    "save_pct": round(sv_pct, 4),
-                    "gaa": round(gaa, 3),
-                    "performance_score": round(perf_g, 2),
-                    "expected_score": 60.0,
-                    "delta": 0.0,
-                    "war": 0.0,
-                    "xgf_pct": 0.5,
-                }
-            else:
-                season_stats = {
-                    "season": season_tag,
-                    "role": str(row.get("position") or "skater"),
-                    "goals": g,
-                    "assists": a,
-                    "points": pts,
-                    "g": g,
-                    "a": a,
-                    "gp": gp,
-                    "sog": int(row.get("sog", 0) or 0),
-                    "toi_sec": int(row.get("toi_sec", 0) or 0),
-                    "pim": int(row.get("pim", 0) or 0),
-                    "war": round(min(6.5, max(-2.0, (pts / max(1, gp)) * 0.22)), 2),
-                    "xgf_pct": round(0.48 + 0.0016 * float(per_gp), 3),
-                    "performance_score": round(perf, 2),
-                    "expected_score": 62.0,
-                    "delta": round(perf - 62.0, 2),
-                }
+            season_stats = self._season_stat_line_from_ledger_row(dict(row), season_tag)
             self.player.season_stats[int(season_tag)] = season_stats
+            if _stats_pipeline_debug():
+                rname = str(
+                    row.get("name")
+                    or getattr(getattr(self.player, "identity", None), "name", None)
+                    or getattr(self.player, "name", "?")
+                )
+                if str(row.get("position", "")).upper() == "G":
+                    print(
+                        f"[PLAYER SEASON SYNC] {rname} {int(season_tag)} ga={season_stats.get('ga')} gp={season_stats.get('gp')}"
+                    )
+                else:
+                    print(
+                        f"[PLAYER SEASON SYNC] {rname} {int(season_tag)} g={season_stats.get('g')} a={season_stats.get('a')} pts={season_stats.get('pts')} gp={season_stats.get('gp')}"
+                    )
         else:
             perf_fb = clamp(30.0 + 58.0 * float(win_pct), 22.0, 86.0)
             season_stats = {
@@ -9026,7 +9909,7 @@ class SimEngine:
             ),
 
 
-            scratched_recently=0.0,
+            scratched_recently=1.0 if bool(getattr(self.player, "_recently_scratched", False)) else 0.0,
             offer_respect=float(team_ctx.get("stability", 0.5)),
             ufa_pressure=min(1.0, self.year / 7.0),
             market_heat=float(team_ctx.get("market_pressure", 0.5)),
@@ -9359,7 +10242,13 @@ class SimEngine:
     def _build_strength_map(self, teams: List[Any]) -> Dict[str, float]:
         m: Dict[str, float] = {}
         for idx, t in enumerate(teams):
-            tid = getattr(t, "team_id", None) or getattr(t, "id", None) or f"T{idx:02d}"
+            # Explicit None checks: team_id=0 is a valid id (e.g. Boston) and must not
+            # fall through to the synthetic T## fallback.
+            tid = getattr(t, "team_id", None)
+            if tid is None:
+                tid = getattr(t, "id", None)
+            if tid is None:
+                tid = f"T{idx:02d}"
             m[str(tid)] = self._team_strength(t)
         return m
 
@@ -9377,6 +10266,210 @@ class SimEngine:
         ac = sum(cs) / len(cs)
         mult = 1.0 + 0.48 * av - 0.32 * ac
         return max(0.82, min(1.30, mult))
+
+    def _era_combined_gpg_cap(self) -> float:
+        """Clamp stacked era + baseline scoring so normal seasons stay franchise-fun, not arcade."""
+        era = self._active_era_str().lower()
+        era_m = float(getattr(self.league, "_era_scoring_multiplier", 1.0) or 1.0)
+        if "run_and_gun" in era or "chaos" in era:
+            return 7.7
+        if "power_play" in era or era_m >= 1.10:
+            return 7.4
+        return 7.1
+
+    def _era_scoring_mu_factor(self) -> float:
+        """Dampened era lift so new franchise baseline + era modifiers do not stack into 8+ GPG."""
+        era_m = float(getattr(self.league, "_era_scoring_multiplier", 1.0) or 1.0)
+        return float(1.0 + (era_m - 1.0) * 0.55)
+
+    def _gm_player_scoring_tier(self, p: Any) -> str:
+        """Elite concentration tiers for goal/assist distribution (not every star is GOAT-tier)."""
+        explicit = getattr(p, "_scoring_tier", None)
+        if explicit:
+            return str(explicit).lower()
+        try:
+            ovr = float(career_ovr_0_100(p))
+        except Exception:
+            ovr = 70.0
+        raw_pot = getattr(p, "potential", None)
+        if isinstance(raw_pot, str):
+            ps = raw_pot.lower().strip()
+            if ps in ("goat", "generational") and ovr >= 88.0:
+                return "goat" if ovr >= 91.0 else "generational"
+            if ps in ("franchise", "elite", "superstar") and ovr >= 86.0:
+                return "franchise"
+        if bool(getattr(p, "_pipeline_franchise_flag", False)):
+            if ovr >= 93.0:
+                return "goat"
+            if ovr >= 88.0:
+                return "generational"
+            if ovr >= 85.0:
+                return "franchise"
+        if ovr >= 94.0:
+            return "goat"
+        if ovr >= 90.0:
+            return "generational"
+        if ovr >= 87.0:
+            return "franchise"
+        if ovr >= 84.0:
+            return "elite"
+        return "normal"
+
+    def _gm_scoring_involvement_mult(self, p: Any) -> float:
+        """Star concentration: elite forwards pop; defensive D / depth stay grounded."""
+        tier = self._gm_player_scoring_tier(p)
+        tier_mult = {
+            "elite": 1.10,
+            "franchise": 1.18,
+            "generational": 1.28,
+            "goat": 1.14,
+        }.get(tier, 1.0)
+        hist = str(getattr(p, "_historic_scoring_season", "") or "").lower()
+        if hist == "historic":
+            tier_mult *= 1.24
+        elif hist == "goat":
+            tier_mult *= 1.44
+        elif hist == "absurd":
+            tier_mult *= 1.55
+        li = getattr(p, "_gm_game_line_idx", None)
+        rank = int(getattr(p, "_gm_game_line_rank", 0) or 0)
+        fwd_rank = getattr(p, "_gm_game_fwd_rank", None)
+        elite_ids = set(getattr(self.league, "_scoring_elite_player_ids", None) or ())
+        pid = _id_str(p, "id")
+        in_elite_pool = bool(pid and pid in elite_ids)
+        if not hist:
+            if not in_elite_pool:
+                tier_mult = 1.0 + (tier_mult - 1.0) * 0.16
+            if li == 0 and rank == 0:
+                pass
+            elif int(li or 99) == 0:
+                tier_mult = 1.0 + (tier_mult - 1.0) * 0.52
+            elif int(li or 99) == 1:
+                tier_mult = 1.0 + (tier_mult - 1.0) * 0.36
+            else:
+                tier_mult = 1.0 + (tier_mult - 1.0) * 0.20
+            if fwd_rank is not None:
+                fr = int(fwd_rank)
+                if fr == 0:
+                    pass
+                elif fr == 1:
+                    tier_mult = 1.0 + (tier_mult - 1.0) * 0.42
+                elif fr == 2:
+                    tier_mult = 1.0 + (tier_mult - 1.0) * 0.22
+                else:
+                    tier_mult = 1.0 + (tier_mult - 1.0) * 0.10
+            if in_elite_pool and fwd_rank is not None and int(fwd_rank) > 0:
+                tier_mult = 1.0 + (tier_mult - 1.0) * 0.48
+        pos = self._gm_pos_str(p).upper()
+        if pos == "D":
+            off, df = player_offense_defense_proxy(p)
+            if df > off * 1.06:
+                tier_mult = 1.0 + (tier_mult - 1.0) * 0.32
+        usage = self._gm_role_usage_mult(p)
+        if usage < 0.95:
+            tier_mult = 1.0 + (tier_mult - 1.0) * 0.42
+        elif usage < 1.45:
+            tier_mult = 1.0 + (tier_mult - 1.0) * 0.72
+        return float(max(0.85, min(1.58, tier_mult)))
+
+    def _gm_repeat_goal_damp_for(self, p: Any) -> float:
+        """Per-game repeat damping; generational/GOAT historic nights can still explode."""
+        damp = float(self._GM_REPEAT_GOAL_DAMP)
+        tier = self._gm_player_scoring_tier(p)
+        hist = str(getattr(p, "_historic_scoring_season", "") or "").lower()
+        if hist in ("goat", "absurd") and tier in ("goat", "generational"):
+            damp *= 0.48
+        elif hist == "historic" and tier in ("goat", "generational", "franchise"):
+            damp *= 0.62
+        elif tier in ("goat", "generational"):
+            damp *= 0.78
+        return float(max(0.18, min(0.55, damp)))
+
+    def _team_goalie_suppression(self, team: Any) -> float:
+        """Elite goaltending shaves opponent expected goals (SV% stays honest via shot volume)."""
+        goalies = self._gm_goalies(team)
+        if not goalies:
+            return 0.0
+        g = max(goalies, key=lambda x: self._gm_ovr_bonus(x))
+        g_skill = self._gm_rating_avg(g, GOALIE_KEYS) / 99.0
+        era_g = float(getattr(g, "_tuning_goalie_value", 1.0) or 1.0)
+        g_skill = max(0.25, min(0.98, g_skill * (0.94 + 0.06 * era_g)))
+        return float(max(0.0, min(0.32, (g_skill - 0.48) * 0.62)))
+
+    def _team_defense_suppression(self, team: Any) -> float:
+        """Strong team defense slightly suppresses opponent finishing quality."""
+        sk = self._gm_skaters(team)
+        defs = [p for p in sk if str(self._gm_pos_str(p)).upper() == "D"]
+        if not defs:
+            return 0.0
+        rated = sorted((self._gm_ovr_bonus(p) for p in defs), reverse=True)[:4]
+        avg = sum(rated) / max(1, len(rated))
+        return float(max(0.0, min(0.14, (avg - 52.0) / 220.0)))
+
+    def _team_pp_danger(self, team: Any) -> float:
+        """0..1 PP threat proxy for special-teams goal share in the stat ledger."""
+        off = self._team_offense_skill(team)
+        sk = self._gm_skaters(team)
+        fw = [p for p in sk if str(self._gm_pos_str(p)).upper() != "D"]
+        if not fw:
+            return 0.5
+        top = sorted(fw, key=lambda x: self._gm_ovr_bonus(x), reverse=True)[:6]
+        pp_skill = sum(self._gm_offense_weight(p) for p in top) / max(1, len(top))
+        return float(max(0.22, min(0.92, 0.42 * off + 0.38 * min(1.0, pp_skill / 2.4) + 0.20 * off)))
+
+    def _refresh_league_scoring_elite_set(self, teams: List[Any]) -> None:
+        """League-wide top offensive talents — only this pool gets full star scoring gravity."""
+        rated: List[Tuple[float, str]] = []
+        for tm in teams:
+            for p in self._gm_skaters(tm):
+                if str(self._gm_pos_str(p)).upper() == "D":
+                    continue
+                pid = _id_str(p, "id")
+                if pid:
+                    rated.append((self._gm_ovr_bonus(p), pid))
+        rated.sort(key=lambda z: z[0], reverse=True)
+        elite_n = max(12, min(18, int(round(len(teams) * 0.44))))
+        elite_ids = {pid for _, pid in rated[:elite_n]}
+        setattr(self.league, "_scoring_elite_player_ids", elite_ids)
+
+    def _roll_historic_scoring_seasons(self, teams: List[Any], rng: random.Random, year: int) -> None:
+        """Rare GOAT/historic seasons — requires talent, usage, health, and team context."""
+        for tm in teams:
+            off_ctx = self._team_offense_skill(tm)
+            for p in self._gm_skaters(tm):
+                setattr(p, "_historic_scoring_season", None)
+                if self._injury_sidelined(p):
+                    continue
+                tier = self._gm_player_scoring_tier(p)
+                if tier == "normal":
+                    continue
+                try:
+                    ovr = float(career_ovr_0_100(p))
+                except Exception:
+                    ovr = 70.0
+                usage = self._gm_role_usage_mult(p)
+                if tier == "elite" and (ovr < 84.0 or usage < 1.45):
+                    continue
+                psych = getattr(p, "psych", None)
+                conf = float(getattr(psych, "confidence_level", 0.5) or 0.5) if psych else 0.5
+                base_p = {
+                    "elite": 0.004,
+                    "franchise": 0.018,
+                    "generational": 0.048,
+                    "goat": 0.13,
+                }.get(tier, 0.0)
+                base_p *= (0.72 + 0.36 * off_ctx) * (0.80 + 0.32 * conf)
+                if usage >= 1.95:
+                    base_p *= 1.18
+                if rng.random() >= base_p:
+                    continue
+                if tier == "goat" and rng.random() < 0.07:
+                    setattr(p, "_historic_scoring_season", "absurd")
+                elif tier in ("goat", "generational") and rng.random() < 0.34:
+                    setattr(p, "_historic_scoring_season", "goat")
+                else:
+                    setattr(p, "_historic_scoring_season", "historic")
+                setattr(p, "_historic_scoring_season_year", int(year))
 
     def _team_offense_skill(self, team: Any, skaters_subset: Optional[List[Any]] = None) -> float:
         """
@@ -9409,14 +10502,42 @@ class SimEngine:
 
         vals: List[float] = []
         for p in top:
-            r = getattr(p, "ratings", None) or {}
-            shoot = sum(float(r.get(k, 68.0) or 68.0) for k in OFFENSE_KEYS) / max(1, len(OFFENSE_KEYS))
-            aware = sum(float(r.get(k, 68.0) or 68.0) for k in IQ_KEYS) / max(1, len(IQ_KEYS))
-            passq = sum(float(r.get(k, 68.0) or 68.0) for k in PASSING_KEYS) / max(1, len(PASSING_KEYS))
+            shoot = self._gm_rating_avg(p, OFFENSE_KEYS)
+            aware = self._gm_rating_avg(p, IQ_KEYS)
+            passq = self._gm_rating_avg(p, PASSING_KEYS)
             vals.append(0.44 * shoot + 0.32 * aware + 0.24 * passq)
 
         avg = sum(vals) / max(1, len(vals))
         return max(0.25, min(0.95, avg / 99.0))
+
+    def _team_superstar_offense_impact(self, team: Any) -> float:
+        """
+        0..~1 nonlinear star-force proxy.
+        84 OVR is baseline; 95+ bends team scoring environment.
+        """
+        sk = self._gm_skaters(team)
+        fw = [p for p in sk if str(self._gm_pos_str(p)).upper() != "D"]
+        if not fw:
+            return 0.0
+        top = sorted(fw, key=lambda x: self._gm_ovr_bonus(x), reverse=True)[:4]
+        impact = 0.0
+        for p in top:
+            try:
+                ovr = float(career_ovr_0_100(p))
+            except Exception:
+                ovr = 74.0
+            over = max(0.0, ovr - 84.0)
+            if over <= 0.0:
+                continue
+            role_u = self._gm_role_usage_mult(p)
+            usage = max(0.72, min(2.35, role_u))
+            # Nonlinear curve: elite and generational players separate sharply.
+            player_impact = ((over / 10.0) ** 1.78) * (0.72 + 0.28 * min(1.0, usage / 2.0))
+            hist = str(getattr(p, "_historic_scoring_season", "") or "").lower()
+            if hist in ("historic", "goat", "absurd"):
+                player_impact *= 1.08
+            impact += player_impact
+        return float(max(0.0, min(1.05, impact)))
 
     # ------------------------------------------------------------------
     # Unified game stat ledger (single source of truth with franchise UI)
@@ -9439,58 +10560,644 @@ class SimEngine:
         # Hard runtime truth: prefer available goalies; only fall back if none are healthy.
         return healthy or all_goalies
 
-    def _gm_ovr_bonus(self, p: Any) -> float:
+    def _gm_ovr_0_100(self, p: Any) -> float:
+        """Canonical 0-100 overall for usage / scoring allocation (matches UI OVR)."""
+        cache = getattr(p, "_gm_runtime_cache", None)
+        if isinstance(cache, dict) and "ovr_0_100" in cache:
+            return float(cache["ovr_0_100"])
+        o = None
         try:
-            fn = getattr(p, "ovr", None)
-            o = float(fn() if callable(fn) else fn)
-            if o <= 1.5:
-                o *= 99.0
-            return max(14.0, o) ** 1.2
+            from app.sim_engine.franchise.storyline_conduct import (  # noqa: WPS433
+                get_effective_ovr_display,
+            )
+
+            o = float(get_effective_ovr_display(p))
         except Exception:
-            return 52.0
+            o = None
+        if o is None or o <= 0:
+            try:
+                o = float(career_ovr_0_100(p))
+            except Exception:
+                try:
+                    fn = getattr(p, "ovr", None)
+                    o = float(fn() if callable(fn) else fn)
+                    if o <= 1.5:
+                        o *= 99.0
+                except Exception:
+                    o = 68.0
+        o = max(30.0, min(99.0, float(o)))
+        if isinstance(cache, dict):
+            cache["ovr_0_100"] = o
+        return o
+
+    def _gm_ovr_norm(self, p: Any) -> float:
+        return self._gm_ovr_0_100(p) / 99.0
+
+    def _gm_ovr_bonus(self, p: Any) -> float:
+        cache = getattr(p, "_gm_runtime_cache", None)
+        if isinstance(cache, dict) and "ovr_bonus" in cache:
+            return float(cache["ovr_bonus"])
+        # Steeper star curve so 86+ pull away from mid/low OVR depth.
+        val = max(14.0, self._gm_ovr_0_100(p)) ** 1.55
+        if isinstance(cache, dict):
+            cache["ovr_bonus"] = val
+        return val
+
+    def _gm_player_runtime_cache(self, p: Any) -> Dict[str, float]:
+        cache = getattr(p, "_gm_runtime_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            setattr(p, "_gm_runtime_cache", cache)
+        return cache
+
+    def _gm_prime_team_game_caches(self, team: Any) -> None:
+        """Precompute per-game team weights so hot loops never re-sort full rosters."""
+        # Always refresh — line/usage context changes every game.
+        setattr(team, "_gm_team_game_cache_primed", False)
+        sk = self._gm_skaters(team)
+        hub_mult: Dict[int, float] = {}
+        impact = float(self._team_superstar_offense_impact(team))
+        if impact <= 0.04 or not sk:
+            for p in sk:
+                hub_mult[id(p)] = 1.0
+        else:
+            ranked = sorted(sk, key=self._gm_offensive_skill_composite, reverse=True)
+            for p in sk:
+                hub_mult[id(p)] = 1.0
+            if ranked:
+                hub_mult[id(ranked[0])] = 1.0 + impact * 0.92
+                for p in ranked[1:3]:
+                    hub_mult[id(p)] = 1.0 + impact * 0.36
+        setattr(team, "_gm_hub_mult_by_player", hub_mult)
+        setattr(team, "_gm_cached_star_impact", impact)
+        setattr(team, "_gm_team_game_cache_primed", True)
+
+    def _gm_prime_game_player_caches(
+        self,
+        home: Any,
+        away: Any,
+        home_dressed: Sequence[Any],
+        away_dressed: Sequence[Any],
+    ) -> None:
+        """Warm per-player event weights once per game (ratings/OVR are stable in-game)."""
+        for p in list(home_dressed) + list(away_dressed):
+            cache = self._gm_player_runtime_cache(p)
+            # Drop game-sensitive entries so line/TOI changes recompute correctly.
+            for key in (
+                "offensive_skill",
+                "shot_quality",
+                "finishing_adj",
+                "block_weight",
+                "ovr_bonus",
+                "ovr_0_100",
+            ):
+                cache.pop(key, None)
+            setattr(p, "_gm_game_cache_primed", False)
+
+        setattr(home, "_gm_team_game_cache_primed", False)
+        setattr(away, "_gm_team_game_cache_primed", False)
+        self._gm_prime_team_game_caches(home)
+        self._gm_prime_team_game_caches(away)
+        for p in list(home_dressed) + list(away_dressed):
+            cache = self._gm_player_runtime_cache(p)
+            cache["ovr_0_100"] = self._gm_ovr_0_100(p)
+            cache["ovr_bonus"] = self._gm_ovr_bonus(p)
+            cache["offensive_skill"] = self._gm_offensive_skill_composite(p)
+            cache["block_weight"] = self._gm_block_weight(p)
+            cache["shot_quality"] = self._gm_shot_quality_weight(p)
+            cache["finishing_adj"] = self._gm_finishing_adjustment(p)
+            setattr(p, "_gm_game_cache_primed", True)
 
     def _gm_role_usage_mult(self, p: Any) -> float:
+        line_usage_map = (2.06, 1.38, 0.96, 0.72)
+        li = getattr(p, "_gm_game_line_idx", None)
+        if li is not None:
+            line_usage = line_usage_map[min(3, max(0, int(li)))]
+            rank = int(getattr(p, "_gm_game_line_rank", 0) or 0)
+            if int(li) <= 1:
+                line_usage *= (1.0, 0.72, 0.58, 0.48)[min(3, max(0, rank))]
+        else:
+            line_usage = 0.90
         role_raw = str(
             getattr(p, "line_role", None)
             or getattr(p, "role", None)
             or getattr(p, "depth_role", None)
             or ""
         ).lower()
+        role_usage = line_usage
         if "top" in role_raw or "line1" in role_raw or "first" in role_raw:
-            return 2.35
-        if "second" in role_raw or "line2" in role_raw:
-            return 1.65
-        if "third" in role_raw or "line3" in role_raw or "middle" in role_raw:
-            return 0.92
-        if "fourth" in role_raw or "line4" in role_raw or "depth" in role_raw:
-            return 0.58
-        return 0.85
+            role_usage = 2.38
+        elif "second" in role_raw or "line2" in role_raw:
+            role_usage = 1.56
+        elif "third" in role_raw or "line3" in role_raw or "middle" in role_raw:
+            role_usage = 1.00
+        elif "fourth" in role_raw or "line4" in role_raw or "depth" in role_raw:
+            role_usage = 0.70
+        return float(max(line_usage, role_usage))
 
-    def _gm_rating_avg(self, p: Any, keys: List[str], default: float = 68.0) -> float:
-        r = getattr(p, "ratings", None) or {}
-        vals = [float(r.get(k, default) or default) for k in keys]
+    def _gm_rating_avg(self, p: Any, keys: List[str], default: float = None) -> float:
+        if default is None:
+            default = float(DEFAULT_NHL_RATING)
+        vals = [self._gm_rating_lookup(p, k, default=default) for k in keys]
         return sum(vals) / max(1, len(vals))
 
-    def _gm_offense_weight(self, p: Any) -> float:
-        ovr = self._gm_ovr_bonus(p)
-        off = self._gm_rating_avg(p, OFFENSE_KEYS)
-        pm = self._gm_rating_avg(p, PASSING_KEYS)
-        iq = self._gm_rating_avg(p, IQ_KEYS)
-        pos = self._gm_pos_str(p).upper()
-        pos_mult = 0.86 if pos == "D" else 1.0
-        usage_mult = self._gm_role_usage_mult(p)
-        base = (0.40 * off + 0.34 * pm + 0.26 * iq) / 99.0
-        return max(0.04, (ovr ** 1.22) * (base ** 1.08) * usage_mult * pos_mult)
+    def _gm_player_type_str(self, p: Any) -> str:
+        pt = getattr(p, "player_type", None) or getattr(p, "archetype", None) or ""
+        return str(getattr(pt, "value", pt) or "").lower()
 
-    def _gm_forward_lines(self, skaters: List[Any]) -> Tuple[List[List[Any]], List[Any]]:
+    def _gm_rating_lookup(self, p: Any, *keys: str, default: float = None) -> float:
+        """Read a rating with legacy→prefixed alias support. Default matches entity floor."""
+        if default is None:
+            default = float(DEFAULT_NHL_RATING)
+        r = getattr(p, "ratings", None) or {}
+        for key in keys:
+            if key is None:
+                continue
+            if key in r:
+                try:
+                    return float(r.get(key) or default)
+                except (TypeError, ValueError):
+                    continue
+            alias = ALIASES.get(str(key))
+            if alias and alias in r:
+                try:
+                    return float(r.get(alias) or default)
+                except (TypeError, ValueError):
+                    continue
+        return float(default)
+
+    def _gm_readiness_usage_mult(self, p: Any) -> float:
+        """Age/readiness gates opportunity — not event ability."""
+        try:
+            age = int(career_player_age(p) or 0)
+        except Exception:
+            age = 0
+        pos = self._gm_pos_str(p).upper()
+        if pos == "G":
+            ability = self._gm_rating_avg(p, GOALIE_KEYS) / 99.0
+        elif pos == "D":
+            ability = self._gm_rating_avg(p, DEFENSE_KEYS) / 99.0
+        else:
+            ability = self._gm_rating_avg(p, OFFENSE_KEYS) / 99.0
+        if age <= 0:
+            return 1.0
+        if age <= 19:
+            return 0.82 if ability < 0.82 else 0.95
+        if age == 20:
+            return 0.90 if ability < 0.80 else 0.96
+        if age == 21:
+            return 0.96
+        return 1.0
+
+    def _gm_production_balance_score(self, p: Any) -> float:
+        """Harmonic mean of shooting and passing — rewards balanced two-way producers."""
+        shoot = self._gm_rating_avg(p, OFFENSE_KEYS) / 99.0
+        passing = self._gm_rating_avg(p, PASSING_KEYS) / 99.0
+        denom = max(0.08, shoot + passing)
+        return max(0.04, (2.0 * shoot * passing) / denom)
+
+    def _gm_is_certified_sniper(self, p: Any) -> bool:
+        pt = self._gm_player_type_str(p)
+        if "sniper" not in pt and "finisher" not in pt:
+            return False
+        shoot = self._gm_rating_avg(p, OFFENSE_KEYS) / 99.0
+        passing = self._gm_rating_avg(p, PASSING_KEYS) / 99.0
+        return shoot - passing >= 0.14
+
+    def _gm_is_certified_playmaker(self, p: Any) -> bool:
+        pt = self._gm_player_type_str(p)
+        if "playmaker" not in pt:
+            return False
+        shoot = self._gm_rating_avg(p, OFFENSE_KEYS) / 99.0
+        passing = self._gm_rating_avg(p, PASSING_KEYS) / 99.0
+        return passing - shoot >= 0.12
+
+    def _gm_goal_assist_balance_mult(
+        self,
+        p: Any,
+        ledger: Dict[str, Dict[str, Any]],
+        team_id: str,
+        *,
+        role: str,
+    ) -> float:
+        """
+        Season/game running G-A feedback — pushes typical producers toward balanced splits.
+        Only certified sniper/playmaker archetypes may stay extreme.
+        """
+        pid = str(getattr(p, "id", "") or "")
+        row = ledger.get(pid)
+        if not row:
+            return 1.0
+        g = int(row.get("g", 0) or 0)
+        a = int(row.get("a", 0) or 0)
+        if g + a < 1:
+            return 1.0
+        diff = g - a
+        certified_sniper = self._gm_is_certified_sniper(p)
+        certified_playmaker = self._gm_is_certified_playmaker(p)
+
+        if role == "score":
+            if certified_sniper:
+                if diff >= 26:
+                    return 0.88
+                if diff >= 22:
+                    return 0.94
+                return 1.08
+            if certified_playmaker:
+                return 1.08 if diff <= 0 else 0.92
+            if diff <= -4:
+                return 1.14
+            if diff <= 0:
+                return 1.08
+            if diff <= 3:
+                return 0.94
+            if diff <= 6:
+                return 0.82
+            if diff <= 10:
+                return 0.68
+            if diff <= 14:
+                return 0.54
+            if diff <= 17:
+                return 0.44
+            if diff <= 19:
+                return 0.36
+            return 0.30
+
+        if role == "assist":
+            if certified_playmaker:
+                return 1.06 if diff <= 8 else 1.0
+            if certified_sniper and diff >= 10:
+                return 0.84
+            if diff >= 14:
+                return 1.28
+            if diff >= 10:
+                return 1.20
+            if diff >= 6:
+                return 1.14
+            if diff >= 3:
+                return 1.08
+            if diff >= 1:
+                return 1.03
+            if diff <= -6:
+                return 0.86
+            return 1.0
+        return 1.0
+
+    def _gm_scoring_hub_bonus(self, p: Any, team: Any) -> float:
+        """Reduced hub involvement for who takes the shot."""
+        base = self._gm_offensive_hub_bonus(p, team)
+        if base <= 1.0:
+            return 1.0
+        return 1.0 + (base - 1.0) * 0.55
+
+    def _gm_playmaking_hub_bonus(self, p: Any, team: Any) -> float:
+        """Full hub involvement for who creates the chance."""
+        return self._gm_offensive_hub_bonus(p, team)
+
+    def _gm_shot_volume_weight(self, p: Any) -> float:
+        shoot = self._gm_rating_avg(p, OFFENSE_KEYS)
+        aware = self._gm_rating_avg(p, IQ_KEYS)
+        ovr_n = self._gm_ovr_norm(p)
+        usage = self._gm_role_usage_mult(p) * self._gm_readiness_usage_mult(p)
+        pt = self._gm_player_type_str(p)
+        type_mult = 1.08 if "sniper" in pt or "shooter" in pt else (0.94 if "playmaker" in pt else 1.0)
+        pos = self._gm_pos_str(p).upper()
+        pos_mult = 1.08 if pos == "D" and "offensive" in pt else (0.92 if pos == "D" else 1.0)
+        talent = (0.68 * ovr_n + 0.22 * (shoot / 99.0) + 0.10 * (aware / 99.0)) ** 1.55
+        if ovr_n < 0.72:
+            talent *= 0.62
+        elif ovr_n < 0.78:
+            talent *= 0.82
+        return max(0.03, talent * usage * type_mult * pos_mult)
+
+    def _gm_shot_quality_weight(self, p: Any) -> float:
+        cache = getattr(p, "_gm_runtime_cache", None)
+        if isinstance(cache, dict) and "shot_quality" in cache:
+            return float(cache["shot_quality"])
+        aware = sum(self._gm_rating_lookup(p, k) for k in IQ_KEYS) / max(1, len(IQ_KEYS))
+        puck = self._gm_rating_lookup(p, "puck_control", "pc_puck_control")
+        deking = self._gm_rating_lookup(p, "deking", "pc_deking", "agility", "skg_agility")
+        speed = self._gm_rating_lookup(p, "speed", "skg_speed", "acceleration", "skg_acceleration")
+        strength = self._gm_rating_lookup(p, "strength", "phy_strength")
+        pt = self._gm_player_type_str(p)
+        net_front = 1.22 if "power" in pt or "net" in pt else 1.0
+        val = max(0.04, (0.34 * aware + 0.26 * puck + 0.18 * deking + 0.14 * speed + 0.08 * strength) / 99.0 * net_front)
+        if isinstance(cache, dict):
+            cache["shot_quality"] = val
+        return val
+
+    def _gm_finishing_adjustment(self, p: Any) -> float:
+        cache = getattr(p, "_gm_runtime_cache", None)
+        if isinstance(cache, dict) and "finishing_adj" in cache:
+            return float(cache["finishing_adj"])
+        wrist = self._gm_rating_lookup(p, "wrist_shot_accuracy", "off_wrist_shot_accuracy")
+        slap = self._gm_rating_lookup(p, "slap_shot_accuracy", "off_slap_shot_accuracy")
+        power = self._gm_rating_lookup(p, "shot_power", "wrist_shot_power", "off_wrist_shot_power")
+        aware = sum(self._gm_rating_lookup(p, k) for k in IQ_KEYS) / max(1, len(IQ_KEYS))
+        comp = self._gm_rating_lookup(p, "composure", "iqm_composure", default=aware)
+        ovr_n = self._gm_ovr_norm(p)
+        pt = self._gm_player_type_str(p)
+        pos = self._gm_pos_str(p).upper()
+        acc = wrist if pos != "D" else 0.55 * wrist + 0.45 * slap
+        fin = (0.34 * acc + 0.16 * power + 0.12 * aware + 0.08 * comp) / 99.0 + 0.30 * ovr_n
+        if "sniper" in pt or "finisher" in pt:
+            fin *= 1.06
+        elif "playmaker" in pt:
+            fin *= 0.97
+        val = max(0.70, min(1.48, 0.78 + 0.42 * fin + max(0.0, ovr_n - 0.84) * 0.55))
+        if isinstance(cache, dict):
+            cache["finishing_adj"] = val
+        return val
+
+    def _gm_offensive_skill_composite(self, p: Any) -> float:
+        """Ratings + overall + usage — stars must dominate involvement."""
+        cache = getattr(p, "_gm_runtime_cache", None)
+        if isinstance(cache, dict) and "offensive_skill" in cache:
+            return float(cache["offensive_skill"])
+        shoot = self._gm_rating_avg(p, OFFENSE_KEYS) / 99.0
+        passing = self._gm_rating_avg(p, PASSING_KEYS) / 99.0
+        puck = self._gm_rating_lookup(p, "puck_control", "pc_puck_control") / 99.0
+        aware = self._gm_rating_avg(p, IQ_KEYS) / 99.0
+        ovr_n = self._gm_ovr_norm(p)
+        # Overall is the primary talent signal; ratings refine style within that band.
+        base = (
+            0.50 * ovr_n
+            + 0.16 * shoot
+            + 0.14 * passing
+            + 0.10 * puck
+            + 0.10 * aware
+        )
+        usage = self._gm_role_usage_mult(p) * self._gm_readiness_usage_mult(p)
+        # Superstar curve: 86+ OVR pull away hard from mid-80s / depth.
+        star_curve = max(0.0, max(0.0, ovr_n - 0.82) ** 1.15) * 2.85
+        depth_penalty = 1.0
+        if ovr_n < 0.72:
+            depth_penalty = 0.52 + 0.30 * (ovr_n / 0.72)
+        elif ovr_n < 0.78:
+            depth_penalty = 0.78 + 0.22 * ((ovr_n - 0.72) / 0.06)
+        pt = self._gm_player_type_str(p)
+        nudge = 1.02 if "playmaker" in pt else (1.01 if "sniper" in pt or "finisher" in pt else 1.0)
+        val = max(0.04, (base + star_curve * 0.42) * usage * nudge * depth_penalty)
+        if isinstance(cache, dict):
+            cache["offensive_skill"] = val
+        return val
+
+    def _gm_offensive_hub_bonus(self, p: Any, team: Any) -> float:
+        """Stars who bend team offense must also bend their own involvement."""
+        hub = getattr(team, "_gm_hub_mult_by_player", None)
+        if isinstance(hub, dict):
+            return float(hub.get(id(p), 1.0))
+        impact = float(self._team_superstar_offense_impact(team))
+        if impact <= 0.04:
+            return 1.0
+        ranked = sorted(self._gm_skaters(team), key=self._gm_offensive_skill_composite, reverse=True)
+        if not ranked:
+            return 1.0
+        if p is ranked[0]:
+            return 1.0 + impact * 0.62
+        if p in ranked[1:3]:
+            return 1.0 + impact * 0.24
+        return 1.0
+
+    def _gm_sequence_driver_weight(
+        self,
+        p: Any,
+        team: Any,
+        *,
+        last_driver: Any = None,
+        strength: str = "EV",
+    ) -> float:
+        w = self._gm_offensive_skill_composite(p) * self._gm_playmaking_hub_bonus(p, team)
+        if last_driver is p:
+            w *= 1.18
+        elif last_driver is not None and last_driver in (getattr(team, "_gm_cached_hubs", None) or []):
+            w *= 1.08
+        if str(strength or "").upper() == "PP":
+            w *= 1.18
+        line_idx = int(getattr(p, "_gm_game_line_idx", 3) or 3)
+        if line_idx == 0:
+            w *= 1.14
+        elif line_idx >= 2:
+            w *= 0.88
+        return max(0.04, w)
+
+    def _gm_primary_assist_weight(self, p: Any) -> float:
+        balance = self._gm_production_balance_score(p)
+        passing = self._gm_rating_avg(p, PASSING_KEYS) / 99.0
+        ovr_n = self._gm_ovr_norm(p)
+        base = self._gm_offensive_skill_composite(p)
+        combined = 0.44 * (ovr_n ** 1.55) + 0.22 * base + 0.20 * passing + 0.14 * balance
+        pt = self._gm_player_type_str(p)
+        shoot = self._gm_rating_avg(p, OFFENSE_KEYS) / 99.0
+        if "playmaker" in pt and passing - shoot >= 0.10:
+            combined *= 1.06
+        elif "sniper" in pt and shoot - passing >= 0.10:
+            combined *= 0.94
+        if ovr_n < 0.72:
+            combined *= 0.62
+        elif ovr_n < 0.78:
+            combined *= 0.82
+        return max(0.05, combined ** 1.12)
+
+    def _gm_secondary_assist_weight(self, p: Any) -> float:
+        balance = self._gm_production_balance_score(p)
+        base = self._gm_offensive_skill_composite(p)
+        process = self._gm_possession_weight(p)
+        ovr_n = self._gm_ovr_norm(p)
+        combined = 0.34 * (ovr_n ** 1.25) + 0.22 * base + 0.24 * process + 0.20 * balance
+        return max(0.06, combined ** 1.08)
+
+    def _gm_event_involvement_weight(self, p: Any) -> float:
+        return self._gm_offensive_skill_composite(p)
+
+    def _gm_pick_sequence_driver(
+        self,
+        rng: random.Random,
+        unit: Sequence[Any],
+        team: Any,
+        *,
+        last_driver: Any = None,
+        strength: str = "EV",
+    ) -> Any:
+        if not unit:
+            raise ValueError("empty unit")
+        return self._gm_pick_weighted(
+            rng,
+            unit,
+            lambda p: self._gm_sequence_driver_weight(p, team, last_driver=last_driver, strength=strength),
+        )
+
+    def _gm_pick_shooter_from_unit(
+        self,
+        rng: random.Random,
+        unit: Sequence[Any],
+        chance_type: str,
+        strength: str,
+        team: Any,
+        driver: Any,
+        *,
+        ledger: Optional[Dict[str, Dict[str, Any]]] = None,
+        team_id: str = "",
+    ) -> Any:
+        if not unit:
+            raise ValueError("empty unit")
+
+        def _shooter_weight(p: Any) -> float:
+            ovr_n = self._gm_ovr_norm(p)
+            shoot = self._gm_rating_avg(p, OFFENSE_KEYS) / 99.0
+            balance = self._gm_production_balance_score(p)
+            vol = min(1.55, self._gm_shot_volume_weight(p) ** 0.72)
+            # Overall leads finishing share — depth talent should not outscore stars.
+            w = (
+                0.48 * (ovr_n ** 1.85)
+                + 0.16 * shoot
+                + 0.10 * vol
+                + 0.10 * balance
+                + 0.16 * self._gm_offensive_skill_composite(p)
+            )
+            w *= self._gm_scoring_hub_bonus(p, team)
+            if ledger is not None:
+                w *= self._gm_goal_assist_balance_mult(p, ledger, team_id, role="score")
+            if self._gm_is_certified_sniper(p):
+                w *= 1.08
+            elif self._gm_is_certified_playmaker(p):
+                w *= 0.90
+            if p is driver:
+                w *= 1.08
+            ct = str(chance_type or "")
+            if ct in ("RUSH_MEDIUM", "SH_RUSH", "HIGH_DANGER_SLOT", "ONE_TIMER", "PP_ONE_TIMER"):
+                w *= 1.05 if p is driver else 1.0
+            if ovr_n >= 0.88:
+                w *= 1.28
+            elif ovr_n >= 0.84:
+                w *= 1.14
+            elif ovr_n >= 0.78:
+                w *= 1.04
+            elif ovr_n < 0.72:
+                w *= 0.58
+            elif ovr_n < 0.78:
+                w *= 0.78
+            return max(0.04, w)
+
+        # temperature > 1 sharpens toward higher weights (stars finish more)
+        return self._gm_pick_weighted(rng, unit, _shooter_weight, temperature=1.55, weight_floor=0.04)
+
+    def _gm_possession_weight(self, p: Any) -> float:
+        puck = self._gm_rating_lookup(p, "puck_control", "pc_puck_control")
+        pm = self._gm_rating_avg(p, PASSING_KEYS)
+        aware = self._gm_rating_avg(p, IQ_KEYS)
+        df = self._gm_rating_avg(p, DEFENSE_KEYS)
+        speed = self._gm_rating_lookup(p, "speed", "skg_speed")
+        pt = self._gm_player_type_str(p)
+        two_way = 1.10 if "two" in pt else 1.0
+        return max(0.04, (0.28 * puck + 0.26 * pm + 0.22 * aware + 0.14 * df + 0.10 * speed) / 99.0 * two_way)
+
+    def _gm_defensive_suppression_weight(self, p: Any) -> float:
+        df = self._gm_rating_avg(p, DEFENSE_KEYS)
+        stick = self._gm_rating_lookup(p, "stick_checking", "def_stick_checking", default=df)
+        block = self._gm_rating_lookup(p, "shot_blocking", "def_shot_blocking", default=df)
+        speed = self._gm_rating_lookup(p, "speed", "skg_speed")
+        pt = self._gm_player_type_str(p)
+        mult = 1.14 if "defensive" in pt or "shutdown" in pt or "stay_at_home" in pt else (
+            0.92 if "offensive" in pt else 1.0
+        )
+        # Extreme defensive awareness / stick work shows as a real sim strength/flaw.
+        aware = self._gm_rating_lookup(p, "def_defensive_awareness", default=df)
+        extremes = 1.0 + max(-0.12, min(0.14, (aware - float(DEFAULT_NHL_RATING)) / 180.0))
+        return max(0.04, (0.42 * df + 0.28 * stick + 0.18 * block + 0.12 * speed) / 99.0 * mult * extremes)
+
+    def _gm_block_weight(self, p: Any) -> float:
+        cache = getattr(p, "_gm_runtime_cache", None)
+        if isinstance(cache, dict) and "block_weight" in cache:
+            return float(cache["block_weight"])
+        block = self._gm_rating_lookup(p, "shot_blocking", "def_shot_blocking")
+        df = self._gm_rating_avg(p, DEFENSE_KEYS)
+        pos = self._gm_pos_str(p).upper()
+        val = max(0.04, (0.55 * block + 0.45 * df) / 99.0 * (1.12 if pos == "D" else 0.82))
+        if isinstance(cache, dict):
+            cache["block_weight"] = val
+        return val
+
+    def _gm_physical_weight(self, p: Any) -> float:
+        phys = self._gm_rating_avg(p, PHYS_KEYS)
+        strength = self._gm_rating_lookup(p, "strength", "phy_strength", default=phys)
+        agg = self._gm_rating_lookup(p, "aggression", "phy_aggression", default=50.0)
+        pt = self._gm_player_type_str(p)
+        mult = 1.18 if "grinder" in pt or "power" in pt or "enforcer" in pt else 1.0
+        return max(0.04, (0.55 * phys + 0.30 * strength + 0.15 * agg) / 99.0 * mult)
+
+    def _gm_penalty_risk_weight(self, p: Any) -> float:
+        phys = self._gm_rating_avg(p, PHYS_KEYS)
+        agg = self._gm_rating_lookup(p, "aggression", "phy_aggression", default=50.0)
+        discipline = self._gm_rating_lookup(p, "discipline", "iqm_discipline", default=72.0)
+        return max(0.02, (0.35 * agg + 0.35 * phys - 0.30 * discipline + 18.0) / 99.0)
+
+    def _gm_goalie_save_adjustment(self, g: Any, chance_type: str) -> float:
+        g_skill = self._gm_rating_avg(g, GOALIE_KEYS) / 99.0
+        reflex = self._gm_rating_lookup(g, "reflexes", "g_reflexes", default=g_skill * 99.0) / 99.0
+        positioning = self._gm_rating_lookup(g, "positioning", "g_positioning", default=g_skill * 99.0) / 99.0
+        base = 0.88 + 0.24 * g_skill
+        pt = self._gm_player_type_str(g)
+        if "butterfly" in pt:
+            reflex *= 1.04
+            positioning *= 0.98
+        elif "hybrid" in pt:
+            reflex *= 0.98
+            positioning *= 1.03
+        if chance_type in ("HIGH_DANGER_SLOT", "NET_FRONT", "REBOUND", "PP_ONE_TIMER"):
+            base *= 0.94 + 0.10 * reflex
+        else:
+            base *= 0.96 + 0.08 * positioning
+        return max(0.62, min(1.38, base))
+
+    def _gm_offense_weight(self, p: Any) -> float:
+        """Legacy composite — prefer specific event-skill helpers for new code."""
+        vol = self._gm_shot_volume_weight(p)
+        qual = self._gm_shot_quality_weight(p)
+        fin = self._gm_finishing_adjustment(p)
+        return max(0.04, vol * 0.42 + qual * 0.33 + (fin - 0.9) * 0.25)
+
+    def _gm_forward_lines(self, skaters: List[Any], team: Any = None) -> Tuple[List[List[Any]], List[Any]]:
+        deployed = getattr(team, "_franchise_deployed_lineup", None) if team is not None else None
+        if isinstance(deployed, dict) and deployed.get("ok"):
+            lines = [list(ln) for ln in (deployed.get("forward_lines") or [])]
+            while len(lines) < 4:
+                lines.append([])
+            defs = []
+            for pair in deployed.get("defense_pairs") or []:
+                defs.extend(list(pair or []))
+            if not defs:
+                defs = [p for p in skaters if str(self._gm_pos_str(p)).upper() == "D"]
+            return lines[:4], defs
+
+        active = list(skaters)
+        scratched = set(getattr(team, "_tank_scratched_ids", None) or []) if team is not None else set()
+        user_scratch = set(getattr(team, "_user_scratched_ids", None) or []) if team is not None else set()
+        scratched |= user_scratch
+        if scratched:
+            active = [p for p in active if str(getattr(p, "id", "")) not in scratched]
+        tank_pressure = int(getattr(team, "_franchise_tank_pressure", 0) or 0) if team is not None else 0
+
         fw: List[Any] = []
         defs: List[Any] = []
-        for p in skaters:
+        for p in active:
             if str(self._gm_pos_str(p)).upper() == "D":
                 defs.append(p)
             else:
                 fw.append(p)
-        fw.sort(key=lambda x: self._gm_ovr_bonus(x), reverse=True)
+
+        def _line_sort_key(p: Any) -> float:
+            bonus = float(self._gm_ovr_bonus(p))
+            if tank_pressure >= 50:
+                ident = getattr(p, "identity", None)
+                age = int(getattr(ident, "age", getattr(p, "age", 0)) or 0)
+                if age <= 22:
+                    bonus += 2.5 + (tank_pressure / 35.0)
+                elif age >= 32 and tank_pressure >= 70:
+                    bonus -= 3.5
+            return bonus
+
+        fw.sort(key=_line_sort_key, reverse=True)
         lines: List[List[Any]] = [[], [], [], []]
         n = len(fw)
         if n > 0:
@@ -9501,6 +11208,186 @@ class SimEngine:
                 idx += len(chunk)
                 lines[li] = chunk
         return lines, defs
+
+    def _gm_saved_lines_payload(self, team: Any) -> Optional[Dict[str, Any]]:
+        """Raw Edit Lines payload attached by franchise before sim (even_strength.lines)."""
+        raw = getattr(team, "_franchise_saved_lines", None)
+        if isinstance(raw, dict) and (raw.get("forwards") or raw.get("defense") or raw.get("goalies")):
+            return raw
+        bundled = getattr(team, "_franchise_saved_lines_bundle", None)
+        if isinstance(bundled, dict):
+            inner = bundled.get("lines")
+            if isinstance(inner, dict) and (inner.get("forwards") or inner.get("defense") or inner.get("goalies")):
+                return inner
+        return None
+
+    def _gm_roster_by_id(self, team: Any) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        for p in self._gm_active_roster(team):
+            pid = _id_str(p, "id")
+            if pid:
+                out[pid] = p
+        return out
+
+    def _gm_try_resolve_saved_lineup(self, team: Any) -> Optional[Dict[str, Any]]:
+        """
+        Convert session.lines even_strength payload into a deployable lineup.
+        Returns None when missing/invalid (caller falls back to auto OVR dress).
+        """
+        payload = self._gm_saved_lines_payload(team)
+        if not payload:
+            return None
+
+        by_id = self._gm_roster_by_id(team)
+        tank = set(str(x) for x in (getattr(team, "_tank_scratched_ids", None) or []))
+        tank_pressure = int(getattr(team, "_franchise_tank_pressure", 0) or 0)
+
+        def _healthy(pid: Any) -> Optional[Any]:
+            spid = str(pid or "")
+            if not spid or spid in tank:
+                return None
+            p = by_id.get(spid)
+            if p is None or self._injury_sidelined(p):
+                return None
+            return p
+
+        intended: Set[str] = set()
+        for group in ("forwards", "defense"):
+            for unit in payload.get(group) or []:
+                if not isinstance(unit, dict):
+                    continue
+                for pid in (unit.get("slots") or {}).values():
+                    spid = str(pid or "")
+                    if spid and spid in by_id:
+                        intended.add(spid)
+        if len(intended) < 6:
+            return None
+
+        assigned_ids: Set[str] = set()
+
+        def _take_from_scratch_pool(is_d: bool) -> Optional[Any]:
+            """Injury cover only — prefer skaters who were never in the saved lineup."""
+            pool = [
+                p
+                for p in self._gm_skaters(team)
+                if not self._injury_sidelined(p)
+                and _id_str(p, "id") not in assigned_ids
+                and _id_str(p, "id") not in tank
+                and _id_str(p, "id") not in intended
+                and ((str(self._gm_pos_str(p)).upper() == "D") if is_d else (str(self._gm_pos_str(p)).upper() != "D"))
+            ]
+            if not pool:
+                # No pure scratches left — last-resort fill from remaining healthy.
+                pool = [
+                    p
+                    for p in self._gm_skaters(team)
+                    if not self._injury_sidelined(p)
+                    and _id_str(p, "id") not in assigned_ids
+                    and _id_str(p, "id") not in tank
+                    and ((str(self._gm_pos_str(p)).upper() == "D") if is_d else (str(self._gm_pos_str(p)).upper() != "D"))
+                ]
+            pool.sort(key=lambda p: self._gm_lineup_sort_key(p, tank_pressure), reverse=True)
+            for p in pool:
+                pid = _id_str(p, "id")
+                if not pid:
+                    continue
+                assigned_ids.add(pid)
+                return p
+            return None
+
+        # Resolve slots in saved order so later lines are not stolen as injury covers.
+        forward_lines: List[List[Any]] = [[], [], [], []]
+        for i, line in enumerate(list(payload.get("forwards") or [])[:4]):
+            if not isinstance(line, dict):
+                continue
+            slots = line.get("slots") or {}
+            trio: List[Any] = []
+            for slot in ("LW", "C", "RW"):
+                raw_pid = str(slots.get(slot) or "")
+                if not raw_pid:
+                    continue
+                p = _healthy(raw_pid)
+                if p is not None:
+                    pid = _id_str(p, "id")
+                    if not pid or pid in assigned_ids:
+                        continue
+                    assigned_ids.add(pid)
+                    trio.append(p)
+                    continue
+                if raw_pid in by_id:
+                    cover = _take_from_scratch_pool(is_d=False)
+                    if cover is not None:
+                        trio.append(cover)
+            forward_lines[i] = trio
+
+        defense_pairs: List[List[Any]] = [[], [], []]
+        for i, pair in enumerate(list(payload.get("defense") or [])[:3]):
+            if not isinstance(pair, dict):
+                continue
+            slots = pair.get("slots") or {}
+            duo: List[Any] = []
+            for slot in ("LD", "RD"):
+                raw_pid = str(slots.get(slot) or "")
+                if not raw_pid:
+                    continue
+                p = _healthy(raw_pid)
+                if p is not None:
+                    pid = _id_str(p, "id")
+                    if not pid or pid in assigned_ids:
+                        continue
+                    assigned_ids.add(pid)
+                    duo.append(p)
+                    continue
+                if raw_pid in by_id:
+                    cover = _take_from_scratch_pool(is_d=True)
+                    if cover is not None:
+                        duo.append(cover)
+            defense_pairs[i] = duo
+
+        starter_id = backup_id = third_id = ""
+        for gline in list(payload.get("goalies") or [])[:1]:
+            if not isinstance(gline, dict):
+                continue
+            slots = gline.get("slots") or {}
+            for key, dest in (("Starter", "starter"), ("Backup", "backup"), ("Third", "third")):
+                pid = str(slots.get(key) or "")
+                if not pid or pid not in by_id:
+                    continue
+                if dest == "starter":
+                    starter_id = pid
+                elif dest == "backup":
+                    backup_id = pid
+                else:
+                    third_id = pid
+
+        dressed_fw = [p for ln in forward_lines for p in ln]
+        dressed_d = [p for pr in defense_pairs for p in pr]
+        dressed_ids = {_id_str(p, "id") for p in dressed_fw + dressed_d if _id_str(p, "id")}
+
+        if len(dressed_ids) < 6 or len(dressed_fw) < 6 or len(dressed_d) < 2:
+            return None
+
+        scratch_ids: Set[str] = set()
+        for p in self._gm_skaters(team):
+            if self._injury_sidelined(p):
+                continue
+            pid = _id_str(p, "id")
+            if pid and pid not in dressed_ids and pid not in tank:
+                scratch_ids.add(pid)
+
+        return {
+            "ok": True,
+            "source": "user",
+            "forward_lines": forward_lines,
+            "defense_pairs": defense_pairs,
+            "dressed_fw": dressed_fw,
+            "dressed_d": dressed_d,
+            "dressed_ids": dressed_ids,
+            "scratch_ids": scratch_ids,
+            "starter_id": starter_id,
+            "backup_id": backup_id,
+            "third_id": third_id,
+        }
 
     def _gm_line_index_for_player(self, lines: List[List[Any]], p: Any) -> int:
         for i, ln in enumerate(lines):
@@ -9550,7 +11437,7 @@ class SimEngine:
         return out
 
     def _gm_ledger_ensure(self, ledger: Dict[str, Dict[str, Any]], p: Any, team_id: str) -> Dict[str, Any]:
-        pid = str(getattr(p, "id", "") or "")
+        pid = _id_str(p, "id")
         if not pid:
             return {}
         if pid not in ledger:
@@ -9569,12 +11456,39 @@ class SimEngine:
                 "hit": 0,
                 "blk": 0,
                 "toi_sec": 0,
+                "ppg": 0,
+                "ppa": 0,
+                "shg": 0,
+                "sha": 0,
                 "ga": 0,
                 "w": 0,
                 "l": 0,
                 "otl": 0,
                 "saves": 0,
                 "shots_against": 0,
+                "goalie_shots_against": 0,
+                "goalie_ga": 0,
+                "so": 0,
+                "missed_shots": 0,
+                "blocked_attempts_for": 0,
+                "cf": 0.0,
+                "ca": 0.0,
+                "ff": 0.0,
+                "fa": 0.0,
+                "xgf": 0.0,
+                "xga": 0.0,
+                "ixg": 0.0,
+                "xa": 0.0,
+                "gf_on": 0.0,
+                "ga_on": 0.0,
+                "xgf_pct_sum": 0.0,
+                "xgf_pct_gp": 0,
+                "on_ice_shots_for": 0.0,
+                "on_ice_shots_against": 0.0,
+                "goalie_xga": 0.0,
+                "primary_assists": 0,
+                "secondary_assists": 0,
+                "analytics_gp": 0,
             }
         row = ledger[pid]
         row["name"] = str(
@@ -9584,77 +11498,1670 @@ class SimEngine:
         row["team_id"] = str(team_id)
         return row
 
-    def _gm_ledger_add(self, ledger: Dict[str, Dict[str, Any]], p: Any, team_id: str, **kwargs: int) -> None:
+    def _gm_ledger_add(self, ledger: Dict[str, Dict[str, Any]], p: Any, team_id: str, **kwargs: Any) -> None:
         row = self._gm_ledger_ensure(ledger, p, team_id)
         if not row:
             return
+        pos_u = str(row.get("position") or "").upper()
         for k, v in kwargs.items():
-            if v:
-                row[k] = int(row.get(k, 0)) + int(v)
-        if str(row.get("position") or "").upper() != "G":
+            if not v:
+                continue
+            if k in _GM_FLOAT_LEDGER_KEYS:
+                row[k] = round(float(row.get(k, 0) or 0) + float(v), 4)
+            else:
+                row[k] = int(row.get(k, 0) or 0) + int(v)
+        if pos_u != "G":
             row["pts"] = int(row.get("g", 0)) + int(row.get("a", 0))
+        elif "pts" in row:
+            row["pts"] = 0
+        if _stats_pipeline_debug() and ("g" in kwargs or "a" in kwargs):
+            nm = row.get("name") or getattr(getattr(p, "identity", None), "name", None) or getattr(p, "name", "?")
+            print(f"[STAT LEDGER ADD] {nm} {team_id} {kwargs} {dict(row)}")
 
-    def _gm_team_shots_target(self, rng: random.Random, team: Any, goals: int) -> int:
-        off = self._team_offense_skill(team)
-        base = 28.0 + 4.0 * (off - 0.5) + 2.15 * float(goals) + rng.uniform(-1.4, 1.4)
-        return int(round(max(25.0, min(35.0, base))))
 
-    def _gm_team_pk_suppression_factor(self, team: Any) -> float:
-        """0–1 proxy: strong defensive depth slightly suppresses opponent shot volume in stat ledger."""
-        defs = [p for p in self._gm_skaters(team) if str(self._gm_pos_str(p)).upper() == "D"]
-        if not defs:
-            return 0.45
-        xs = sorted((self._gm_ovr_bonus(p) for p in defs), reverse=True)[:6]
-        if not xs:
-            return 0.45
-        m = sum(xs) / float(len(xs))
-        return float(max(0.32, min(0.96, m / 22.0)))
+    def _gm_lineup_sort_key(self, p: Any, tank_pressure: int = 0) -> float:
+        ovr = self._gm_ovr_0_100(p)
+        off = self._gm_rating_avg(p, OFFENSE_KEYS)
+        df = self._gm_rating_avg(p, DEFENSE_KEYS)
+        iq = self._gm_rating_avg(p, IQ_KEYS)
+        pos = self._gm_pos_str(p).upper()
+        role_u = self._gm_role_usage_mult(p)
+        # Overall leads dressing order so stars actually play with stars.
+        score = 0.58 * ovr + 0.22 * off + 0.12 * df + 0.08 * iq
+        score *= 0.90 + 0.10 * min(2.2, role_u)
+        if tank_pressure >= 50:
+            try:
+                age = int(career_player_age(p) or 0)
+            except Exception:
+                age = 0
+            if age <= 22:
+                score += 2.0 + tank_pressure / 40.0
+            elif age >= 32 and tank_pressure >= 70:
+                score -= 3.0
+        if pos == "D":
+            score = 0.52 * ovr + 0.18 * off + 0.24 * df + 0.06 * iq
+        return float(score)
 
-    def _gm_pick_goal_scorer(
+    def _gm_build_dressed_lineup(
+        self, team: Any, rng: random.Random
+    ) -> Tuple[List[Any], List[Any], List[Any], Set[str]]:
+        """Return (dressed_skaters, goalies, scratches_not_dressed, tank_scratches)."""
+        tank_scratches = set(str(x) for x in (getattr(team, "_tank_scratched_ids", None) or []))
+        setattr(team, "_franchise_deployed_lineup", None)
+        setattr(team, "_user_scratched_ids", set())
+
+        deployed = self._gm_try_resolve_saved_lineup(team)
+        if deployed is not None:
+            setattr(team, "_franchise_deployed_lineup", deployed)
+            scratch_ids = set(deployed.get("scratch_ids") or [])
+            setattr(team, "_user_scratched_ids", set(scratch_ids))
+            dressed_fw = list(deployed.get("dressed_fw") or [])
+            dressed_d = list(deployed.get("dressed_d") or [])
+            dressed_ids = set(deployed.get("dressed_ids") or [])
+            available = [
+                p
+                for p in self._gm_skaters(team)
+                if not self._injury_sidelined(p) and _id_str(p, "id") not in tank_scratches
+            ]
+            healthy_scratches = [p for p in available if _id_str(p, "id") not in dressed_ids]
+            for p in available:
+                pid = _id_str(p, "id")
+                if pid and pid in scratch_ids:
+                    setattr(p, "_recently_scratched", True)
+                elif pid and pid in dressed_ids:
+                    setattr(p, "_recently_scratched", False)
+            # Also exclude user scratches from any accidental re-dress later in the game.
+            tank_scratches = set(tank_scratches) | set(scratch_ids)
+            gl = [g for g in self._gm_goalies(team) if not self._injury_sidelined(g)] or self._gm_goalies(team)
+            return dressed_fw + dressed_d, gl, healthy_scratches, tank_scratches
+
+        all_sk = [p for p in self._gm_skaters(team) if not self._injury_sidelined(p)]
+        available = [p for p in all_sk if str(getattr(p, "id", "")) not in tank_scratches]
+        tank_pressure = int(getattr(team, "_franchise_tank_pressure", 0) or 0)
+        fw = [p for p in available if str(self._gm_pos_str(p)).upper() != "D"]
+        defs = [p for p in available if str(self._gm_pos_str(p)).upper() == "D"]
+        fw.sort(key=lambda p: self._gm_lineup_sort_key(p, tank_pressure), reverse=True)
+        defs.sort(key=lambda p: self._gm_lineup_sort_key(p, tank_pressure), reverse=True)
+        target_f, target_d = 12, 6
+        dressed_fw = fw[:target_f]
+        dressed_d = defs[:target_d]
+        if len(dressed_fw) < 10 and len(fw) > len(dressed_fw):
+            dressed_fw = fw[: max(10, min(len(fw), target_f))]
+        if len(dressed_d) < 4 and len(defs) > len(dressed_d):
+            dressed_d = defs[: max(4, min(len(defs), target_d))]
+        if len(dressed_fw) + len(dressed_d) < 16:
+            pool = dressed_fw + dressed_d
+            for p in available:
+                if p not in pool:
+                    pool.append(p)
+                if len(pool) >= 16:
+                    break
+            dressed_fw = [p for p in pool if str(self._gm_pos_str(p)).upper() != "D"]
+            dressed_d = [p for p in pool if str(self._gm_pos_str(p)).upper() == "D"]
+        dressed_ids = {str(getattr(p, "id", "")) for p in dressed_fw + dressed_d}
+        healthy_scratches = [p for p in available if str(getattr(p, "id", "")) not in dressed_ids]
+        gl = [g for g in self._gm_goalies(team) if not self._injury_sidelined(g)] or self._gm_goalies(team)
+        return dressed_fw + dressed_d, gl, healthy_scratches, tank_scratches
+
+    def _gm_build_game_units(
+        self, dressed_sk: List[Any], team: Any = None
+    ) -> Dict[str, Any]:
+        deployed = getattr(team, "_franchise_deployed_lineup", None) if team is not None else None
+        use_saved = isinstance(deployed, dict) and deployed.get("ok")
+
+        if use_saved:
+            lines = [list(ln) for ln in (deployed.get("forward_lines") or [])]
+            while len(lines) < 4:
+                lines.append([])
+            lines = lines[:4]
+            pairs = [list(pr) for pr in (deployed.get("defense_pairs") or [])]
+            while len(pairs) < 3:
+                pairs.append([])
+            pairs = pairs[:3]
+            fw = [p for ln in lines for p in ln]
+            defs = [p for pr in pairs for p in pr]
+            # Include any dressed players missing from saved units (injury fills).
+            dressed_ids = {_id_str(p, "id") for p in fw + defs if _id_str(p, "id")}
+            for p in dressed_sk:
+                pid = _id_str(p, "id")
+                if not pid or pid in dressed_ids:
+                    continue
+                if str(self._gm_pos_str(p)).upper() == "D":
+                    for pr in pairs:
+                        if len(pr) < 2:
+                            pr.append(p)
+                            defs.append(p)
+                            dressed_ids.add(pid)
+                            break
+                else:
+                    for ln in lines:
+                        if len(ln) < 3:
+                            ln.append(p)
+                            fw.append(p)
+                            dressed_ids.add(pid)
+                            break
+        else:
+            fw = [p for p in dressed_sk if str(self._gm_pos_str(p)).upper() != "D"]
+            defs = [p for p in dressed_sk if str(self._gm_pos_str(p)).upper() == "D"]
+            # Auto path: stack by overall so L1/PP1 are the real stars.
+            fw.sort(key=self._gm_ovr_bonus, reverse=True)
+            defs.sort(key=self._gm_ovr_bonus, reverse=True)
+            lines = [[], [], [], []]
+            n = len(fw)
+            if n:
+                q = max(1, (n + 3) // 4)
+                idx = 0
+                for li in range(4):
+                    chunk = fw[idx : idx + q]
+                    idx += len(chunk)
+                    lines[li] = chunk
+            pairs = [[], [], []]
+            for i in range(3):
+                pairs[i] = defs[i * 2 : i * 2 + 2] if len(defs) > i * 2 else (defs[i * 2 :] if len(defs) > i else [])
+
+        def _resolve_special_unit(payload: Any, unit_id: str, slot_order: List[str]) -> List[Any]:
+            if not isinstance(payload, (list, dict)):
+                return []
+            units = payload if isinstance(payload, list) else payload.get("units") or payload.get("lines") or []
+            if isinstance(payload, dict) and not units:
+                # raw list stored under even_strength-like wrapper
+                units = payload.get("lines") if isinstance(payload.get("lines"), list) else []
+            by_id = {_id_str(p, "id"): p for p in (fw + defs) if _id_str(p, "id")}
+            # also allow any healthy dressed skater
+            for p in dressed_sk:
+                pid = _id_str(p, "id")
+                if pid:
+                    by_id.setdefault(pid, p)
+            for unit in units or []:
+                if not isinstance(unit, dict):
+                    continue
+                if str(unit.get("id") or "").lower() != unit_id.lower():
+                    continue
+                slots = unit.get("slots") or {}
+                out: List[Any] = []
+                seen: Set[str] = set()
+                for slot in slot_order:
+                    pid = str(slots.get(slot) or "")
+                    p = by_id.get(pid)
+                    if p is None or pid in seen:
+                        continue
+                    seen.add(pid)
+                    out.append(p)
+                return out
+            return []
+
+        pp_payload = getattr(team, "_franchise_saved_pp", None) if team is not None else None
+        pk_payload = getattr(team, "_franchise_saved_pk", None) if team is not None else None
+        pp1 = _resolve_special_unit(pp_payload, "pp1", ["LW", "C", "RW", "LD", "RD"])
+        pp2 = _resolve_special_unit(pp_payload, "pp2", ["LW", "C", "RW", "LD", "RD"])
+        pk1 = _resolve_special_unit(pk_payload, "pk1", ["F1", "F2", "D1", "D2"])
+        pk2 = _resolve_special_unit(pk_payload, "pk2", ["F1", "F2", "D1", "D2"])
+
+        if len(pp1) < 4 or len(pp2) < 3:
+            pp_pool = sorted(
+                fw + defs[:2],
+                key=lambda p: (
+                    (self._gm_ovr_norm(p) * 0.48)
+                    + (self._gm_production_balance_score(p) * 0.22)
+                    + (self._gm_shot_quality_weight(p) * 0.15)
+                    + (self._gm_primary_assist_weight(p) * 0.15)
+                ),
+                reverse=True,
+            )
+            if len(pp1) < 4:
+                pp1 = pp_pool[:5]
+            if len(pp2) < 3:
+                pp2 = pp_pool[5:10] if len(pp_pool) > 5 else pp_pool[2:7]
+        if len(pk1) < 3 or len(pk2) < 3:
+            pk_pool = sorted(
+                defs + [p for p in fw if self._gm_defensive_suppression_weight(p) > 0.45],
+                key=lambda p: (
+                    self._gm_defensive_suppression_weight(p) * 0.7
+                    + self._gm_ovr_norm(p) * 0.3
+                ),
+                reverse=True,
+            )
+            if len(pk1) < 3:
+                pk1 = pk_pool[:4]
+            if len(pk2) < 3:
+                pk2 = pk_pool[4:8] if len(pk_pool) > 4 else pk_pool[2:6]
+        for fi, fp in enumerate(fw):
+            setattr(fp, "_gm_game_fwd_rank", fi)
+            setattr(fp, "_deployed_line_rank", getattr(fp, "_gm_game_line_idx", fi // 3))
+        for li, ln in enumerate(lines):
+            # Saved lines preserve slot order for TOI; auto path still ranks within line by OVR.
+            ordered = list(ln) if use_saved else sorted(ln, key=self._gm_ovr_bonus, reverse=True)
+            for ri, p in enumerate(ordered):
+                setattr(p, "_gm_game_line_idx", li)
+                setattr(p, "_gm_game_line_rank", ri)
+                setattr(p, "_deployed_line_rank", li)
+        for pi, pair in enumerate(pairs):
+            ordered = list(pair) if use_saved else sorted(pair, key=self._gm_ovr_bonus, reverse=True)
+            for ri, p in enumerate(ordered):
+                setattr(p, "_gm_game_pair_idx", pi)
+                setattr(p, "_gm_game_pair_rank", ri)
+                setattr(p, "_deployed_line_rank", pi)
+        return {
+            "lines": lines,
+            "pairs": pairs,
+            "pp1": pp1,
+            "pp2": pp2,
+            "pk1": pk1,
+            "pk2": pk2,
+            "fw": fw,
+            "defs": defs,
+        }
+
+    def _gm_allocate_conserved_toi(
+        self, rng: random.Random, dressed_sk: List[Any]
+    ) -> Dict[str, int]:
+        fw = [p for p in dressed_sk if str(self._gm_pos_str(p)).upper() != "D"]
+        defs = [p for p in dressed_sk if str(self._gm_pos_str(p)).upper() == "D"]
+        fwd_budget = 10800
+        def_budget = 7200
+        fw_w = [self._gm_toi_usage_weight(p, is_d=False) for p in fw]
+        d_w = [self._gm_toi_usage_weight(p, is_d=True) for p in defs]
+        fw_sec = self._gm_distribute_integer_shares(rng, fw_w, fwd_budget) if fw else []
+        d_sec = self._gm_distribute_integer_shares(rng, d_w, def_budget) if defs else []
+        out: Dict[str, int] = {}
+        for p, sec in zip(fw, fw_sec):
+            pid = _id_str(p, "id")
+            if pid:
+                out[pid] = int(sec)
+        for p, sec in zip(defs, d_sec):
+            pid = _id_str(p, "id")
+            if pid:
+                out[pid] = int(sec)
+        return out
+
+    def _gm_toi_usage_weight(self, p: Any, *, is_d: bool) -> float:
+        """
+        TOI distribution weight only.
+
+        This is intentionally separate from offensive involvement weights. The
+        previous allocator reused scoring/role multipliers, which let elite
+        forwards consume defenseman-level minutes while still conserving team TOI.
+        """
+        if is_d:
+            pair_idx = min(2, max(0, int(getattr(p, "_gm_game_pair_idx", 1) or 1)))
+            pair_weights = (1.38, 1.05, 0.62)
+            base = pair_weights[pair_idx]
+            rank = min(1, max(0, int(getattr(p, "_gm_game_pair_rank", 0) or 0)))
+            return float(max(0.35, base * (1.04 if rank == 0 else 0.96) * self._gm_readiness_usage_mult(p)))
+
+        line_idx = min(3, max(0, int(getattr(p, "_gm_game_line_idx", 2) or 2)))
+        line_weights = (1.52, 1.18, 0.86, 0.48)
+        base = line_weights[line_idx]
+        rank = min(2, max(0, int(getattr(p, "_gm_game_line_rank", 1) or 1)))
+        rank_mult = (1.06, 1.00, 0.94)[rank]
+        return float(max(0.25, base * rank_mult * self._gm_readiness_usage_mult(p)))
+
+    def _gm_team_attempt_environment(
         self,
         rng: random.Random,
-        lines_fw: List[List[Any]],
-        defs: List[Any],
-        skaters_all: List[Any],
-        d_goal_share: float,
-    ) -> Any:
-        if defs and rng.random() < d_goal_share:
-            w = [max(0.04, self._gm_offense_weight(p)) for p in defs]
-            return rng.choices(defs, weights=w, k=1)[0]
-        base_w = [0.38, 0.28, 0.17, 0.07]
-        eff_w: List[float] = []
-        eff_lines: List[List[Any]] = []
-        for i in range(4):
-            ln = lines_fw[i] if i < len(lines_fw) else []
-            if ln:
-                eff_w.append(base_w[i])
-                eff_lines.append(ln)
-        if not eff_lines:
-            w2 = [max(0.04, self._gm_offense_weight(p)) for p in skaters_all]
-            return rng.choices(skaters_all, weights=w2, k=1)[0]
-        s = sum(eff_w) or 1.0
-        eff_w = [w / s for w in eff_w]
-        li = rng.choices(range(len(eff_lines)), weights=eff_w, k=1)[0]
-        pool = eff_lines[li]
-        w3 = [max(0.04, self._gm_offense_weight(p) ** 1.15) for p in pool]
-        return rng.choices(pool, weights=w3, k=1)[0]
+        team: Any,
+        opponent: Any,
+        *,
+        strength_scale: float = 1.0,
+        is_home: bool = False,
+        chem_mod: float = 1.0,
+        fatigue_mod: float = 1.0,
+        momentum_mod: float = 1.0,
+        score_state: float = 0.0,
+    ) -> int:
+        """Target shot attempts (CF) for one team — independent of goals."""
+        off = self._team_offense_skill(team)
+        opp_def = self._team_defense_suppression(opponent)
+        opp_g = self._team_goalie_suppression(opponent)
+        cached_star = getattr(team, "_gm_cached_star_impact", None)
+        star = (float(cached_star) if cached_star is not None else self._team_superstar_offense_impact(team)) * 0.42
+        base = 58.0 + 24.0 * (off - 0.5) - 12.0 * opp_def - 5.5 * opp_g + 6.0 * star
+        base *= float(strength_scale) * float(chem_mod) * float(fatigue_mod) * float(momentum_mod)
+        if is_home:
+            base += 1.8
+        base += 4.0 * score_state
+        base += rng.uniform(-7.0, 7.0)
+        return int(round(max(42.0, min(86.0, base))))
 
-    def _gm_pick_assists(
-        self, rng: random.Random, team_skaters: List[Any], scorer: Any, min_one: bool = True
+    def _gm_regulation_attempt_split(
+        self,
+        rng: random.Random,
+        home: Any,
+        away: Any,
+        *,
+        home_strength_scale: float = 1.0,
+        away_strength_scale: float = 1.0,
+        chem_h: float = 1.0,
+        chem_a: float = 1.0,
+    ) -> Tuple[int, int]:
+        """
+        Zero-sum regulation attempt budget from team talent gap.
+        Produces wider seasonal CF%/xGF% spread than independent attempt budgets.
+        """
+        home_off = self._team_offense_skill(home)
+        away_off = self._team_offense_skill(away)
+        home_def = self._team_defense_suppression(home)
+        away_def = self._team_defense_suppression(away)
+        home_star = getattr(home, "_gm_cached_star_impact", None)
+        away_star = getattr(away, "_gm_cached_star_impact", None)
+        if home_star is None:
+            home_star = self._team_superstar_offense_impact(home)
+        if away_star is None:
+            away_star = self._team_superstar_offense_impact(away)
+
+        edge = (
+            (home_off - away_off) * 1.45
+            - (home_def - away_def) * 0.95
+            + (float(home_star) - float(away_star)) * 0.62
+            + 0.050
+        )
+        edge *= float(home_strength_scale) / max(0.85, float(away_strength_scale))
+        edge += (float(chem_h) - float(chem_a)) * 0.12
+
+        home_share = 0.50 + edge * 0.95
+        home_share += rng.uniform(-0.045, 0.045)
+        home_share = max(0.30, min(0.70, home_share))
+
+        pace = 108.0 + 18.0 * ((home_off + away_off) * 0.5 - 0.5)
+        pace += rng.uniform(-10.0, 10.0)
+        total_attempts = int(round(max(94.0, min(136.0, pace))))
+
+        h_attempts = max(26, int(round(total_attempts * home_share)))
+        a_attempts = max(26, total_attempts - h_attempts)
+        return h_attempts, a_attempts
+
+    def _gm_pick_weighted(
+        self,
+        rng: random.Random,
+        pool: Sequence[Any],
+        weight_fn: Callable[[Any], float],
+        *,
+        temperature: float = 1.0,
+        weight_floor: float = 0.02,
+    ) -> Any:
+        if not pool:
+            raise ValueError("empty pool")
+        temp = max(0.05, float(temperature))
+        w = [max(weight_floor, float(weight_fn(p)) ** temp) for p in pool]
+        return rng.choices(list(pool), weights=w, k=1)[0]
+
+    def _gm_on_ice_unit(
+        self, units: Dict[str, Any], strength: str, rng: random.Random
+    ) -> Tuple[List[Any], List[Any]]:
+        st = str(strength or "EV").upper()
+        if st == "PP":
+            pp_share = 0.78 + 0.06 * min(1.0, sum(self._gm_primary_assist_weight(p) for p in units.get("pp1", [])[:3]) / 3.0)
+            pp = units["pp1"] if rng.random() < pp_share else units["pp2"]
+            return list(pp), []
+        if st in ("SH", "PK"):
+            pk_share = 0.74
+            pk = units["pk1"] if rng.random() < pk_share else units["pk2"]
+            return list(pk), []
+        li = rng.choices(range(4), weights=[0.42, 0.28, 0.19, 0.11], k=1)[0]
+        pi = rng.choices(range(3), weights=[0.48, 0.33, 0.19], k=1)[0]
+        line = list(units["lines"][li] if li < len(units["lines"]) else [])
+        pair = list(units["pairs"][pi] if pi < len(units["pairs"]) else [])
+        return line + pair, []
+
+    def _gm_goalie_role_weight(self, g: Any) -> float:
+        role = str(
+            getattr(g, "goalie_role", None)
+            or getattr(g, "role", None)
+            or getattr(getattr(g, "identity", None), "goalie_role", None)
+            or ""
+        ).lower()
+        if role in ("starter", "starting", "start"):
+            return 2.35
+        if role in ("backup", "secondary"):
+            return 0.72
+        if role in ("third", "emergency", "ahl"):
+            return 0.35
+        return 1.0
+
+    def _gm_goalie_ovr_0_100(self, g: Any) -> float:
+        try:
+            ovr = float(career_ovr_0_100(g))
+        except Exception:
+            ovr = 78.0
+        if ovr <= 1.5:
+            ovr *= 99.0
+        return float(ovr)
+
+    def _gm_goalie_workhorse_factor(self, g: Any) -> float:
+        ovr = self._gm_goalie_ovr_0_100(g)
+        role_w = self._gm_goalie_role_weight(g)
+        return 1.0 if role_w >= 1.8 and ovr >= 86.0 else (0.55 if role_w >= 1.8 else 0.0)
+
+    def _gm_goalie_start_state(self, team: Any) -> Dict[str, Dict[str, int]]:
+        st = getattr(team, "_gm_goalie_start_state", None)
+        if not isinstance(st, dict):
+            st = {}
+            setattr(team, "_gm_goalie_start_state", st)
+        return st
+
+    def _gm_goalie_usage_strategy(self, goalies: List[Any]) -> str:
+        """
+        Derive a season usage strategy from live goalie quality/role gap.
+        Does not assign fixed GP targets — workload emerges from rest decisions.
+        """
+        if not goalies:
+            return "NORMAL_STARTER"
+        ranked = sorted(goalies, key=lambda g: (self._gm_goalie_role_weight(g), self._gm_goalie_ovr_0_100(g)), reverse=True)
+        top = ranked[0]
+        second = ranked[1] if len(ranked) > 1 else None
+        top_ovr = self._gm_goalie_ovr_0_100(top)
+        gap = (top_ovr - self._gm_goalie_ovr_0_100(second)) if second is not None else 99.0
+        top_role = self._gm_goalie_role_weight(top)
+        if second is None:
+            return "WORKHORSE"
+        if gap >= 10.0 and top_ovr >= 90.0:
+            return "WORKHORSE"
+        if gap >= 7.0 and (top_role >= 1.8 or top_ovr >= 88.0):
+            return "STARTER_HEAVY"
+        if gap <= 2.0:
+            return "TRUE_TANDEM"
+        if gap <= 4.5:
+            return "SOFT_TANDEM"
+        return "NORMAL_STARTER"
+
+    def _gm_determine_preferred_goalie(self, goalies: List[Any], team: Any = None) -> Any:
+        if not goalies:
+            return None
+        deployed = getattr(team, "_franchise_deployed_lineup", None) if team is not None else None
+        if isinstance(deployed, dict) and deployed.get("ok"):
+            by_id = {_id_str(g, "id"): g for g in goalies if _id_str(g, "id")}
+            for key in ("starter_id", "backup_id", "third_id"):
+                pid = str(deployed.get(key) or "")
+                if pid and pid in by_id:
+                    return by_id[pid]
+        return max(
+            goalies,
+            key=lambda g: (
+                self._gm_goalie_role_weight(g),
+                self._gm_goalie_ovr_0_100(g),
+                float(self._gm_ovr_bonus(g)),
+            ),
+        )
+
+    def _gm_should_rest_preferred_goalie(
+        self,
+        preferred: Any,
+        backup: Any,
+        team: Any,
+        *,
+        strategy: str,
+        is_b2b: bool,
+        rng: random.Random,
+    ) -> bool:
+        if preferred is None or backup is None:
+            return False
+        history = self._gm_goalie_start_state(team)
+        pid = _id_str(preferred, "id")
+        rec = history.get(pid, {}) if pid else {}
+        consec = int(rec.get("consecutive", 0) or 0)
+        recent5 = int(rec.get("starts_last_5", 0) or 0)
+        gap = self._gm_goalie_ovr_0_100(preferred) - self._gm_goalie_ovr_0_100(backup)
+
+        # Hard rest triggers — hierarchy first, lottery never decides the starter.
+        if is_b2b:
+            if strategy in ("WORKHORSE", "STARTER_HEAVY"):
+                return consec >= 3 or recent5 >= 4
+            if strategy == "NORMAL_STARTER":
+                return consec >= 2 or recent5 >= 3
+            # Soft/true tandem: B2B almost always rests preferred.
+            return True
+
+        if strategy == "WORKHORSE":
+            if consec >= 12:
+                return True
+            if consec >= 9 and rng.random() < 0.35:
+                return True
+            return False
+        if strategy == "STARTER_HEAVY":
+            if consec >= 8:
+                return True
+            if consec >= 6 and rng.random() < 0.40:
+                return True
+            return False
+        if strategy == "NORMAL_STARTER":
+            if consec >= 5:
+                return True
+            if consec >= 3 and rng.random() < 0.28:
+                return True
+            return False
+        if strategy == "SOFT_TANDEM":
+            # Prefer ~55/45-ish without nightly lottery: rest every 2–3 starts.
+            if consec >= 2:
+                return True
+            return rng.random() < 0.22
+        # TRUE_TANDEM
+        if consec >= 1:
+            return True
+        return rng.random() < 0.45 if gap < 1.5 else rng.random() < 0.35
+
+    def _gm_select_starting_goalie(
+        self,
+        rng: random.Random,
+        goalies: List[Any],
+        team: Any,
+        *,
+        calendar_day: int = 0,
+        is_b2b: bool = False,
+    ) -> Any:
+        """
+        Hierarchy + rest model (not a nightly weighted lottery).
+
+        1) Derive usage strategy from quality/role gap.
+        2) Identify preferred starter.
+        3) Rest preferred only for real workload/B2B/tandem reasons.
+        4) Otherwise start preferred.
+        """
+        if not goalies:
+            return None
+        available = [g for g in goalies if not self._injury_sidelined(g)]
+        if not available:
+            available = list(goalies)
+        if len(available) == 1:
+            chosen = available[0]
+        else:
+            strategy = self._gm_goalie_usage_strategy(available)
+            preferred = self._gm_determine_preferred_goalie(available, team)
+            others = [g for g in available if g is not preferred]
+            backup = self._gm_determine_preferred_goalie(others, team) if others else None
+            setattr(team, "_gm_goalie_usage_strategy", strategy)
+            if backup is not None and self._gm_should_rest_preferred_goalie(
+                preferred,
+                backup,
+                team,
+                strategy=strategy,
+                is_b2b=bool(is_b2b),
+                rng=rng,
+            ):
+                # Among non-preferred options, pick the next-best (still hierarchical).
+                chosen = backup
+                hist = self._gm_goalie_start_state(team)
+                team_rec = hist.setdefault("_team", {})
+                team_rec["rest_decisions"] = int(team_rec.get("rest_decisions", 0) or 0) + 1
+            else:
+                chosen = preferred
+
+        history = self._gm_goalie_start_state(team)
+        cid = _id_str(chosen, "id")
+        for g in goalies:
+            gid = _id_str(g, "id")
+            if not gid:
+                continue
+            rec = history.setdefault(gid, {"gp": 0, "consecutive": 0, "starts_last_5": 0, "last_day": -1})
+            if gid == cid:
+                rec["gp"] = int(rec.get("gp", 0) or 0) + 1
+                rec["consecutive"] = int(rec.get("consecutive", 0) or 0) + 1
+                prev_max = int(rec.get("max_consecutive", 0) or 0)
+                rec["max_consecutive"] = max(prev_max, int(rec["consecutive"]))
+                rec["last_day"] = int(calendar_day)
+                recent = list(rec.get("recent_starts", []) or [])
+                recent.append(1)
+                rec["recent_starts"] = recent[-5:]
+                rec["starts_last_5"] = sum(rec["recent_starts"])
+                if is_b2b:
+                    rec["b2b_starts"] = int(rec.get("b2b_starts", 0) or 0) + 1
+            else:
+                rec["consecutive"] = 0
+                recent = list(rec.get("recent_starts", []) or [])
+                recent.append(0)
+                rec["recent_starts"] = recent[-5:]
+                rec["starts_last_5"] = sum(rec["recent_starts"])
+        return chosen
+
+    def _gm_update_goalie_recent_performance(self, team: Any, goalie: Any, saves: int, sa: int) -> None:
+        if not goalie or sa <= 0:
+            return
+        gid = _id_str(goalie, "id")
+        if not gid:
+            return
+        history = self._gm_goalie_start_state(team)
+        rec = history.setdefault(gid, {})
+        sv_pct = saves / float(sa)
+        prev = float(rec.get("recent_save_pct", sv_pct) or sv_pct)
+        rec["recent_save_pct"] = round(prev * 0.72 + sv_pct * 0.28, 4)
+
+    def _gm_generate_penalties(
+        self,
+        rng: random.Random,
+        dressed_sk: List[Any],
+        team_id: str,
+        ledger: Dict[str, Dict[str, Any]],
+        *,
+        intensity: float = 1.0,
+    ) -> Tuple[int, int, float, List[Tuple[float, float]]]:
+        """Return (total_pim, pp_opportunities_for_opponent, pp_seconds_for_opponent, penalty_intervals).
+
+        penalty_intervals: (start_sec, duration_sec) within regulation for each infraction.
+        """
+        if not dressed_sk:
+            return 0, 0, 0.0, []
+        team_risk = sum(self._gm_penalty_risk_weight(p) for p in dressed_sk) / max(1, len(dressed_sk))
+        target_events = max(0, int(round(rng.gauss(3.15, 1.05) * (0.92 + 0.16 * team_risk * intensity))))
+        n_events = min(6, max(0, target_events))
+        pim_total = 0
+        ppo = 0
+        pp_seconds = 0.0
+        intervals: List[Tuple[float, float]] = []
+        for _ in range(n_events):
+            mins = int(rng.choices([2, 4, 5], weights=[0.78, 0.16, 0.06], k=1)[0])
+            offender = self._gm_pick_weighted(rng, dressed_sk, self._gm_penalty_risk_weight)
+            self._gm_ledger_add(ledger, offender, team_id, pim=mins)
+            pim_total += mins
+            ppo += 1
+            duration = float(mins) * 60.0
+            pp_seconds += duration
+            start = float(rng.uniform(45.0, max(90.0, 3540.0 - duration)))
+            intervals.append((start, duration))
+        return pim_total, ppo, pp_seconds, intervals
+
+    def _gm_pick_assists_from_unit(
+        self,
+        rng: random.Random,
+        unit: Sequence[Any],
+        scorer: Any,
+        chance_type: str,
+        strength: str,
+        driver: Any = None,
+        *,
+        ledger: Optional[Dict[str, Dict[str, Any]]] = None,
+        team_id: str = "",
     ) -> List[Any]:
-        pool = [p for p in team_skaters if p is not scorer]
+        from app.sim_engine.gameplay.game_analytics_ledger import assist_count_probability
+
+        pool = [p for p in unit if p is not scorer]
         if not pool:
             return []
+        p0, p1, p2 = assist_count_probability(chance_type, strength)
+        n = int(rng.choices([0, 1, 2], weights=[p0, p1, p2], k=1)[0])
+        n = min(n, len(pool))
+        if n <= 0:
+            return []
         out: List[Any] = []
-        if min_one:
-            w = [max(0.04, self._gm_offense_weight(p) ** 1.25) for p in pool]
-            out.append(rng.choices(pool, weights=w, k=1)[0])
-        if len(pool) >= 2 and rng.random() < 0.58:
-            pool2 = [p for p in pool if p is not out[0]]
+
+        def _primary_w(p: Any) -> float:
+            w = self._gm_primary_assist_weight(p)
+            if ledger is not None:
+                w *= self._gm_goal_assist_balance_mult(p, ledger, team_id, role="assist")
+            if driver is not None and p is driver:
+                w *= 1.14
+            return max(0.10, w)
+
+        if n >= 1:
+            out.append(self._gm_pick_weighted(rng, pool, _primary_w, temperature=1.42, weight_floor=0.04))
+        if n >= 2:
+            pool2 = [p for p in pool if p not in out]
             if pool2:
-                w2 = [max(0.04, self._gm_offense_weight(p) ** 1.12) for p in pool2]
-                out.append(rng.choices(pool2, weights=w2, k=1)[0])
+                def _secondary_w(p: Any) -> float:
+                    w = self._gm_secondary_assist_weight(p)
+                    if ledger is not None:
+                        w *= self._gm_goal_assist_balance_mult(p, ledger, team_id, role="assist")
+                    return max(0.08, w)
+                out.append(self._gm_pick_weighted(rng, pool2, _secondary_w, temperature=1.32, weight_floor=0.04))
         return out[:2]
+
+    def _run_event_driven_game(
+        self,
+        rng: random.Random,
+        home: Any,
+        away: Any,
+        hid: str,
+        aid: str,
+        ledger: Dict[str, Dict[str, Any]],
+        *,
+        strength_map: Optional[Dict[str, float]] = None,
+        home_strength_scale: float = 1.0,
+        away_strength_scale: float = 1.0,
+        noise_scale: float = 1.0,
+        light_mode: bool = False,
+        is_playoff: bool = False,
+        calendar_day: int = 0,
+        home_b2b: bool = False,
+        away_b2b: bool = False,
+    ) -> Dict[str, Any]:
+        from app.sim_engine.gameplay.game_analytics_ledger import (
+            CHANCE_TYPE_RAW_XG,
+            credit_assist_xa,
+            credit_shot_attempt_event,
+            pick_chance_type,
+            raw_xg_for_chance,
+            resolve_goal_probability,
+            validate_game_integrity,
+        )
+
+        strength_map = strength_map or {}
+        home_dressed, home_gl, home_scratches, _ = self._gm_build_dressed_lineup(home, rng)
+        away_dressed, away_gl, away_scratches, _ = self._gm_build_dressed_lineup(away, rng)
+        home_units = self._gm_build_game_units(home_dressed, home)
+        away_units = self._gm_build_game_units(away_dressed, away)
+        home_toi = self._gm_allocate_conserved_toi(rng, home_dressed)
+        away_toi = self._gm_allocate_conserved_toi(rng, away_dressed)
+        home_starter = self._gm_select_starting_goalie(rng, home_gl, home, calendar_day=int(calendar_day), is_b2b=bool(home_b2b))
+        away_starter = self._gm_select_starting_goalie(rng, away_gl, away, calendar_day=int(calendar_day), is_b2b=bool(away_b2b))
+        self._gm_prime_game_player_caches(home, away, home_dressed, away_dressed)
+        setattr(home, "_gm_cached_hubs", sorted(self._gm_skaters(home), key=self._gm_offensive_skill_composite, reverse=True)[:3])
+        setattr(away, "_gm_cached_hubs", sorted(self._gm_skaters(away), key=self._gm_offensive_skill_composite, reverse=True)[:3])
+        last_driver_by_team: Dict[str, Any] = {hid: None, aid: None}
+
+        chem_h = self._chemistry_game_modifier(home, situation="even")
+        chem_a = self._chemistry_game_modifier(away, situation="even")
+
+        home_pim, away_ppo_from_home, away_pp_sec_from_home, home_penalty_intervals = self._gm_generate_penalties(rng, home_dressed, hid, ledger, intensity=noise_scale)
+        away_pim, home_ppo_from_away, home_pp_sec_from_away, away_penalty_intervals = self._gm_generate_penalties(rng, away_dressed, aid, ledger, intensity=noise_scale)
+        _GM_ATTEMPT_GAME_SECONDS = 18.0
+
+        reg_home = reg_away = 0
+        home_pp_goals = away_pp_goals = 0
+        scoring_events: List[Dict[str, Any]] = []
+        home_team_event_stats: Dict[str, float] = {
+            "cf": 0.0,
+            "ff": 0.0,
+            "sog": 0.0,
+            "goals": 0.0,
+            "xgf": 0.0,
+            "missed": 0.0,
+            "blocked_for": 0.0,
+        }
+        away_team_event_stats: Dict[str, float] = dict(home_team_event_stats)
+        event_period = 1
+        _REGULATION_GAME_SECONDS = 3600.0
+        _audit_pp = bool(getattr(self, "_audit_pp_event_ownership", False))
+        _chance_types = list(CHANCE_TYPE_RAW_XG.keys()) if _audit_pp else []
+
+        def _new_strength_funnel_block() -> Dict[str, Any]:
+            return {
+                "opportunity_slots": 0,
+                "possessions": 0,
+                "shot_attempts": 0,
+                "blocked_attempts": 0,
+                "missed_attempts": 0,
+                "unblocked_attempts": 0,
+                "shots_on_goal": 0,
+                "xg": 0.0,
+                "goals": 0,
+                "chance_types": {ct: 0 for ct in _chance_types},
+                "chance_type_xg": {ct: 0.0 for ct in _chance_types},
+            }
+
+        _pp_own: Dict[str, Any] = {
+            "main_events": 0,
+            "main_ev": 0,
+            "main_pp": 0,
+            "main_sh": 0,
+            "post_main_events": 0,
+            "post_main_pp_sog": 0,
+            "post_main_pp_goals": 0,
+            "ev_environment_target": 0,
+            "ev_opportunity_slots": 0,
+            "pp_opportunity_slots": 0,
+            "sh_opportunity_slots": 0,
+            "ev_events_during_active_pp": 0,
+            "ev_sec_during_active_pp": 0.0,
+            "pp_sec_consumed_ev": 0.0,
+            "pp_sec_consumed_pp": 0.0,
+            "pp_sec_consumed_sh": 0.0,
+            "pp_sec_reaching_post_main": 0.0,
+            "unconsumed_pp_sec": 0.0,
+            "timeline_5v5_sec": 0.0,
+            "timeline_home_adv_sec": 0.0,
+            "timeline_away_adv_sec": 0.0,
+            "timeline_four_four_sec": 0.0,
+            "game_sec_elapsed": 0.0,
+            "strength_funnel": {
+                "EV": _new_strength_funnel_block(),
+                "PP": _new_strength_funnel_block(),
+                "SH": _new_strength_funnel_block(),
+            },
+            "pp_possession": {
+                "pp_cycles": 0,
+                "pp_cycles_before_shot_total": 0,
+                "pp_possession_seconds": 0.0,
+                "pk_cycle_seconds": 0.0,
+                "pp_controlled_seconds": 0.0,
+                "sh_attack_seconds": 0.0,
+                "pp_possessions_ending_in_shot": 0,
+                "pp_rebound_shots": 0,
+                "pp_rebound_goals": 0,
+            },
+            "pp_pre_modifier_block_p_samples": [],
+            "pp_shot_counterfactual_attempts": [],
+            "timeline_segment_audit": {},
+        }
+        _audit_game_key = f"{int(calendar_day)}|{hid}|{aid}"
+        _pp_shot_attempt_seq = 0
+        _last_regulation_tick_audit: Optional[Dict[str, Any]] = None
+        _pp_cycles_since_shot = 0
+        _pp_rebound_next = False
+
+        def _audit_strength_key(st: str) -> str:
+            s = str(st or "EV").upper()
+            return s if s in ("EV", "PP", "SH") else "EV"
+
+        def _audit_bump_opportunity(st: str) -> None:
+            if not _audit_pp:
+                return
+            sk = _audit_strength_key(st)
+            _pp_own["strength_funnel"][sk]["opportunity_slots"] += 1
+
+        def _audit_bump_possession(st: str) -> None:
+            if not _audit_pp:
+                return
+            sk = _audit_strength_key(st)
+            _pp_own["strength_funnel"][sk]["possessions"] += 1
+
+        def _audit_record_shot(
+            st: str,
+            chance: str,
+            outcome: str,
+            raw_xg: float,
+            *,
+            is_rebound: bool = False,
+        ) -> None:
+            if not _audit_pp:
+                return
+            nonlocal _pp_cycles_since_shot
+            sk = _audit_strength_key(st)
+            blk = _pp_own["strength_funnel"][sk]
+            blk["shot_attempts"] += 1
+            ct = str(chance or "")
+            if ct in blk["chance_types"]:
+                blk["chance_types"][ct] += 1
+            if ct in blk.get("chance_type_xg", {}):
+                blk["chance_type_xg"][ct] += float(raw_xg)
+            blk["xg"] += float(raw_xg)
+            oc = str(outcome or "").upper()
+            if oc == "BLOCKED":
+                blk["blocked_attempts"] += 1
+            elif oc == "MISSED":
+                blk["missed_attempts"] += 1
+            elif oc in ("SAVED", "GOAL"):
+                blk["shots_on_goal"] += 1
+            else:
+                blk["missed_attempts"] += 1
+            if oc != "BLOCKED":
+                blk["unblocked_attempts"] += 1
+            if oc == "GOAL":
+                blk["goals"] += 1
+            if sk == "PP":
+                ppf = _pp_own["pp_possession"]
+                ppf["pp_possessions_ending_in_shot"] += 1
+                ppf["pp_cycles_before_shot_total"] += int(_pp_cycles_since_shot)
+                _pp_cycles_since_shot = 0
+                if is_rebound:
+                    ppf["pp_rebound_shots"] += 1
+                    if outcome == "GOAL":
+                        ppf["pp_rebound_goals"] += 1
+
+        def _active_penalty_count(intervals: List[Tuple[float, float]], t: float) -> int:
+            return sum(1 for start, dur in intervals if start <= t < start + dur)
+
+        def _remaining_pp_seconds(opponent_intervals: List[Tuple[float, float]], t: float) -> float:
+            return sum(max(0.0, (start + dur) - t) for start, dur in opponent_intervals if t < start + dur)
+
+        def _expire_one_active_penalty(intervals: List[Tuple[float, float]], t: float) -> None:
+            for idx, (start, dur) in enumerate(intervals):
+                if start <= t < start + dur:
+                    intervals[idx] = (start, max(0.0, t - start))
+                    return
+
+        def _manpower_at(t: float) -> Tuple[int, int]:
+            home_box = _active_penalty_count(home_penalty_intervals, t)
+            away_box = _active_penalty_count(away_penalty_intervals, t)
+            return max(3, 5 - home_box), max(3, 5 - away_box)
+
+        def _resolve_manpower_state(t: float) -> str:
+            sk_h, sk_a = _manpower_at(t)
+            if sk_h == 5 and sk_a == 5:
+                return "ev"
+            if sk_h > sk_a:
+                return "home_pp"
+            if sk_a > sk_h:
+                return "away_pp"
+            return "four_four"
+
+        def _team_agg(sk: List[Any], tid: str) -> Dict[str, int]:
+            cf = ff = sog = goals = 0
+            for p in sk:
+                pid = _id_str(p, "id")
+                if not pid:
+                    continue
+                row = ledger.get(pid, {})
+                cf += int(float(row.get("cf", 0) or 0))
+                ff += int(float(row.get("ff", 0) or 0))
+                sog += int(row.get("sog", 0) or 0)
+                goals += int(row.get("g", 0) or 0)
+            return {"cf": cf, "ff": ff, "sog": sog, "goals": goals, "team_id": tid}
+
+        def _record_team_attempt(side_label: str, outcome: str, raw_xg_value: float) -> None:
+            stats = home_team_event_stats if side_label == "home" else away_team_event_stats
+            stats["cf"] += 1.0
+            stats["xgf"] += float(raw_xg_value)
+            oc = str(outcome or "").upper()
+            if oc == "BLOCKED":
+                stats["blocked_for"] += 1.0
+                return
+            stats["ff"] += 1.0
+            if oc == "MISSED":
+                stats["missed"] += 1.0
+                return
+            if oc in ("SAVED", "GOAL"):
+                stats["sog"] += 1.0
+            if oc == "GOAL":
+                stats["goals"] += 1.0
+
+        def _simulate_segment(
+            attempts_home: int,
+            attempts_away: int,
+            *,
+            track_goals: bool = True,
+            sudden_death: bool = False,
+            chronological: bool = False,
+            ev_mean_delay: float = 31.0,
+        ) -> bool:
+            nonlocal reg_home, reg_away, home_pp_goals, away_pp_goals, event_period, _pp_rebound_next, _pp_cycles_since_shot, _pp_shot_attempt_seq, _last_regulation_tick_audit
+            total = max(1, attempts_home + attempts_away)
+            home_share = attempts_home / float(max(1, attempts_home + attempts_away))
+            _event_i = 0
+            game_sec_elapsed = 0.0
+            if chronological:
+                _pp_own["ev_environment_target"] = int(h_attempts + a_attempts)
+
+            while True:
+                if chronological:
+                    if game_sec_elapsed >= _REGULATION_GAME_SECONDS:
+                        break
+                elif _event_i >= total:
+                    break
+                if sudden_death and reg_home != reg_away:
+                    return True
+
+                side: str = ""
+                strength: str = "EV"
+                mp_state = "ev"
+                cycle_only = False
+                is_pp_rebound = bool(_pp_rebound_next)
+                _pp_rebound_next = False
+
+                if chronological:
+                    mp_state = _resolve_manpower_state(game_sec_elapsed)
+                    if mp_state == "ev":
+                        side = "home" if rng.random() < home_share else "away"
+                        strength = "EV"
+                    elif mp_state == "home_pp":
+                        r = rng.random()
+                        if r < 0.10:
+                            side, strength = "away", "SH"
+                        elif r < 0.64:
+                            cycle_only = True
+                        else:
+                            side, strength = "home", "PP"
+                    elif mp_state == "away_pp":
+                        r = rng.random()
+                        if r < 0.10:
+                            side, strength = "home", "SH"
+                        elif r < 0.64:
+                            cycle_only = True
+                        else:
+                            side, strength = "away", "PP"
+                    else:
+                        side = "home" if rng.random() < 0.5 else "away"
+                        strength = "EV"
+                else:
+                    sk_h, sk_a = _manpower_at(game_sec_elapsed)
+                    if sk_h > 5 and sk_a < 5:
+                        side = "home" if rng.random() < 0.86 else "away"
+                    elif sk_a > 5 and sk_h < 5:
+                        side = "away" if rng.random() < 0.86 else "home"
+                    else:
+                        side = "home" if rng.random() < home_share else "away"
+
+                if not chronological:
+                    sk_h, sk_a = _manpower_at(game_sec_elapsed)
+                    if side == "home":
+                        if sk_h > sk_a and sk_a < 5:
+                            strength = "PP"
+                        elif sk_a > sk_h and sk_h < 5:
+                            strength = "SH"
+                        else:
+                            strength = "EV"
+                    else:
+                        if sk_a > sk_h and sk_h < 5:
+                            strength = "PP"
+                        elif sk_h > sk_a and sk_a < 5:
+                            strength = "SH"
+                        else:
+                            strength = "EV"
+
+                if chronological and cycle_only:
+                    delay = rng.uniform(8.0, 12.0)
+                    if _audit_pp and mp_state in ("home_pp", "away_pp"):
+                        _pp_own["pp_possession"]["pp_cycles"] += 1
+                        _pp_cycles_since_shot += 1
+                        _audit_bump_opportunity("PP")
+                    game_sec_before = float(game_sec_elapsed)
+                    if mp_state == "home_pp":
+                        _pp_own["timeline_home_adv_sec"] += delay
+                        _pp_own["pp_sec_consumed_pp"] += delay
+                        _pp_own["pp_possession"]["pk_cycle_seconds"] += delay
+                    elif mp_state == "away_pp":
+                        _pp_own["timeline_away_adv_sec"] += delay
+                        _pp_own["pp_sec_consumed_pp"] += delay
+                        _pp_own["pp_possession"]["pk_cycle_seconds"] += delay
+                    game_sec_elapsed += delay
+                    if _audit_pp:
+                        _last_regulation_tick_audit = {
+                            "tick_sec": round(float(delay), 6),
+                            "remaining_before_tick_sec": round(
+                                max(0.0, _REGULATION_GAME_SECONDS - game_sec_before), 6
+                            ),
+                            "game_sec_before": round(game_sec_before, 6),
+                            "game_sec_after": round(float(game_sec_elapsed), 6),
+                            "mp_state": str(mp_state),
+                            "strength": "PK_CYCLE",
+                            "cycle_only": True,
+                        }
+                    _event_i += 1
+                    continue
+
+                if chronological and strength == "EV" and mp_state in ("home_pp", "away_pp"):
+                    _pp_own["ev_events_during_active_pp"] += 1
+
+                if _audit_pp:
+                    _audit_bump_opportunity(strength)
+                    if strength == "PP":
+                        _audit_bump_possession("PP")
+                    elif strength == "SH":
+                        _audit_bump_possession("SH")
+                    elif strength == "EV" and mp_state == "ev":
+                        _audit_bump_possession("EV")
+
+                if side == "home":
+                    if not chronological:
+                        sk_h, sk_a = _manpower_at(game_sec_elapsed)
+                        if sk_h > sk_a and sk_a < 5:
+                            strength = "PP"
+                        elif sk_a > sk_h and sk_h < 5:
+                            strength = "SH"
+                        else:
+                            strength = "EV"
+                    atk_team, def_team = home, away
+                    atk_sk, def_sk = home_dressed, away_dressed
+                    atk_units, def_units = home_units, away_units
+                    atk_gl, def_gl = home_gl, away_gl
+                    tid, oid = hid, aid
+                    score_state = 0.12 if reg_home < reg_away else (-0.08 if reg_home > reg_away else 0.0)
+                else:
+                    if not chronological:
+                        sk_h, sk_a = _manpower_at(game_sec_elapsed)
+                        if sk_a > sk_h and sk_h < 5:
+                            strength = "PP"
+                        elif sk_h > sk_a and sk_a < 5:
+                            strength = "SH"
+                        else:
+                            strength = "EV"
+                    atk_team, def_team = away, home
+                    atk_sk, def_sk = away_dressed, home_dressed
+                    atk_units, def_units = away_units, home_units
+                    atk_gl, def_gl = away_gl, home_gl
+                    tid, oid = aid, hid
+                    score_state = 0.12 if reg_away < reg_home else (-0.08 if reg_away > reg_home else 0.0)
+
+                atk_unit, _ = self._gm_on_ice_unit(atk_units, strength, rng)
+                def_unit, _ = self._gm_on_ice_unit(def_units, "PK" if strength == "PP" else ("PP" if strength == "SH" else "EV"), rng)
+                if not atk_unit:
+                    atk_unit = atk_sk[:5] if atk_sk else atk_sk
+                if not def_unit:
+                    def_unit = def_sk[:5] if def_sk else def_sk
+
+                chance = pick_chance_type(
+                    rng,
+                    strength,
+                    quality_bias=max((self._gm_shot_quality_weight(p) for p in atk_unit), default=0.5),
+                )
+                driver = self._gm_pick_sequence_driver(
+                    rng,
+                    atk_unit,
+                    atk_team,
+                    last_driver=last_driver_by_team.get(tid),
+                    strength=strength,
+                )
+                shooter = self._gm_pick_shooter_from_unit(
+                    rng, atk_unit, chance, strength, atk_team, driver, ledger=ledger, team_id=tid,
+                )
+                last_driver_by_team[tid] = driver
+                qual = self._gm_shot_quality_weight(shooter)
+                raw_xg = raw_xg_for_chance(chance, rng)
+                atk_off = self._team_offense_skill(atk_team)
+                def_sup = self._team_defense_suppression(def_team)
+                raw_xg *= max(0.82, min(1.22, 0.96 + (atk_off - def_sup) * 0.55 + (qual - 0.5) * 0.08))
+
+                base_block_p = min(0.38, 0.12 + 0.18 * sum(self._gm_block_weight(p) for p in def_unit) / max(1, len(def_unit)))
+                avg_def_block_weight = sum(self._gm_block_weight(p) for p in def_unit) / max(1, len(def_unit))
+                base_on_goal_p = 0.62 + 0.08 * qual
+                block_p = base_block_p
+                if strength == "PP":
+                    if _audit_pp:
+                        _pp_own["pp_pre_modifier_block_p_samples"].append(round(base_block_p, 6))
+                        post_live_block_p = base_block_p * 0.64
+                        post_live_on_goal_p = min(0.86, base_on_goal_p + 0.10)
+                        _pp_own["pp_shot_counterfactual_attempts"].append({
+                            "audit_game_key": _audit_game_key,
+                            "calendar_day": int(calendar_day),
+                            "home_team_id": str(hid),
+                            "away_team_id": str(aid),
+                            "pp_attempt_index": int(_pp_shot_attempt_seq),
+                            "attacking_side": str(side),
+                            "strength": "PP",
+                            "chance_type": str(chance or ""),
+                            "raw_xg": round(float(raw_xg), 6),
+                            "qual": round(float(qual), 6),
+                            "pre_pp_block_p": round(float(base_block_p), 6),
+                            "post_modifier_live_block_p": round(float(post_live_block_p), 6),
+                            "base_on_goal_p": round(float(base_on_goal_p), 6),
+                            "post_modifier_live_on_goal_p": round(float(post_live_on_goal_p), 6),
+                            "avg_def_block_weight": round(float(avg_def_block_weight), 6),
+                            "def_unit_size": int(len(def_unit)),
+                            "def_block_weights": [
+                                round(float(self._gm_block_weight(p)), 6) for p in def_unit
+                            ],
+                            "is_rebound": bool(is_pp_rebound),
+                        })
+                        _pp_shot_attempt_seq += 1
+                    block_p *= 0.64
+                elif strength == "SH":
+                    block_p = min(0.42, block_p * 1.12)
+                blocker = None
+                outcome = "MISSED"
+                if rng.random() < block_p:
+                    outcome = "BLOCKED"
+                    blocker = self._gm_pick_weighted(rng, def_unit, self._gm_block_weight)
+                else:
+                    on_goal_p = 0.62 + 0.08 * qual
+                    if strength == "PP":
+                        on_goal_p = min(0.86, on_goal_p + 0.10)
+                    elif strength == "SH":
+                        on_goal_p = max(0.45, on_goal_p - 0.06)
+                    if rng.random() < on_goal_p:
+                        d0 = away_starter if side == "home" else home_starter
+                        if d0 is None and def_gl:
+                            d0 = max(def_gl, key=lambda x: self._gm_ovr_bonus(x))
+                        fin = self._gm_finishing_adjustment(shooter)
+                        g_adj = self._gm_goalie_save_adjustment(d0, chance) if d0 else 1.0
+                        g_adj = 2.0 - g_adj
+                        prob = resolve_goal_probability(raw_xg, fin, g_adj)
+                        outcome = "GOAL" if rng.random() < prob else "SAVED"
+                    else:
+                        outcome = "MISSED"
+
+                def_goalie = away_starter if side == "home" else home_starter
+                if def_goalie is None and def_gl:
+                    def_goalie = max(def_gl, key=lambda x: self._gm_ovr_bonus(x))
+
+                if not light_mode:
+                    credit_shot_attempt_event(
+                        ledger,
+                        attacking_skaters=atk_unit,
+                        defending_skaters=def_unit,
+                        shooter=shooter,
+                        defending_goalie=def_goalie if def_goalie and outcome in ("SAVED", "GOAL") else None,
+                        team_id=tid,
+                        opp_team_id=oid,
+                        raw_xg=raw_xg,
+                        outcome=outcome,
+                        blocker=blocker,
+                        ledger_add=self._gm_ledger_add,
+                        player_id=lambda p: _id_str(p, "id"),
+                        strength=strength,
+                    )
+                else:
+                    for p in atk_unit:
+                        self._gm_ledger_add(ledger, p, tid, cf=1.0)
+                    for p in def_unit:
+                        self._gm_ledger_add(ledger, p, oid, ca=1.0)
+                    if outcome != "BLOCKED":
+                        for p in atk_unit:
+                            self._gm_ledger_add(ledger, p, tid, ff=1.0)
+                        for p in def_unit:
+                            self._gm_ledger_add(ledger, p, oid, fa=1.0)
+                    if outcome in ("SAVED", "GOAL"):
+                        self._gm_ledger_add(ledger, shooter, tid, sog=1, ixg=raw_xg)
+                        if strength == "PP":
+                            self._gm_ledger_add(ledger, shooter, tid, pp_sog=1)
+                        for p in atk_unit:
+                            self._gm_ledger_add(ledger, p, tid, xgf=raw_xg, on_ice_shots_for=1)
+                        for p in def_unit:
+                            self._gm_ledger_add(ledger, p, oid, xga=raw_xg, on_ice_shots_against=1)
+                        if def_goalie is not None:
+                            gkw: Dict[str, Any] = {"goalie_xga": raw_xg, "goalie_shots_against": 1}
+                            if outcome == "GOAL":
+                                gkw["goalie_ga"] = 1
+                            self._gm_ledger_add(ledger, def_goalie, oid, **gkw)
+                    if outcome == "BLOCKED" and blocker is not None:
+                        self._gm_ledger_add(ledger, blocker, oid, blk=1)
+                    if outcome == "GOAL":
+                        gkw: Dict[str, Any] = {"g": 1, "gf_on": 1.0}
+                        if strength == "PP":
+                            gkw["ppg"] = 1
+                        elif strength == "SH":
+                            gkw["shg"] = 1
+                        self._gm_ledger_add(ledger, shooter, tid, **gkw)
+                        for p in atk_unit:
+                            if p is not shooter:
+                                self._gm_ledger_add(ledger, p, tid, gf_on=1.0)
+                        for p in def_unit:
+                            self._gm_ledger_add(ledger, p, oid, ga_on=1.0)
+
+                _record_team_attempt(side, outcome, raw_xg)
+
+                if _audit_pp:
+                    _audit_record_shot(
+                        strength, chance, outcome, raw_xg, is_rebound=is_pp_rebound,
+                    )
+
+                if outcome == "GOAL" and track_goals:
+                    if side == "home":
+                        reg_home += 1
+                        if strength == "PP":
+                            home_pp_goals += 1
+                            _expire_one_active_penalty(away_penalty_intervals, game_sec_elapsed)
+                    else:
+                        reg_away += 1
+                        if strength == "PP":
+                            away_pp_goals += 1
+                            _expire_one_active_penalty(home_penalty_intervals, game_sec_elapsed)
+                    assists = self._gm_pick_assists_from_unit(
+                        rng, atk_unit, shooter, chance, strength, driver, ledger=ledger, team_id=tid,
+                    )
+                    for i, ap in enumerate(assists):
+                        akw: Dict[str, int] = {"a": 1}
+                        if i == 0:
+                            akw["primary_assists"] = 1
+                        else:
+                            akw["secondary_assists"] = 1
+                        if strength == "PP":
+                            akw["ppa"] = 1
+                        elif strength == "SH":
+                            akw["sha"] = 1
+                        self._gm_ledger_add(ledger, ap, tid, **akw)
+                        if not light_mode:
+                            credit_assist_xa(
+                                ledger, ap, tid,
+                                ledger_add=self._gm_ledger_add,
+                                primary_assist_weight=self._gm_primary_assist_weight,
+                            )
+                    scoring_events.append({
+                        "for_team_id": tid,
+                        "period": event_period,
+                        "clock": f"{rng.randint(0, 19)}:{rng.choice([0, 15, 30, 45]):02d}",
+                        "scorer": str(getattr(getattr(shooter, "identity", None), "name", None) or getattr(shooter, "name", "?")),
+                        "scorer_id": _id_str(shooter, "id"),
+                        "assists": [str(getattr(getattr(a, "identity", None), "name", None) or getattr(a, "name", "?")) for a in assists],
+                        "assist_ids": [_id_str(a, "id") for a in assists],
+                        "assist_count": len(assists),
+                        "strength": strength,
+                        "goalie_in_net": bool(def_goalie is not None),
+                        "defending_goalie_id": _id_str(def_goalie, "id") if def_goalie is not None else "",
+                        "empty_net": bool(def_goalie is None),
+                    })
+                    if event_period < 3:
+                        event_period += int(rng.random() < 0.12)
+                if sudden_death and outcome == "GOAL":
+                    return True
+
+                pp_live = strength in ("PP", "SH")
+                _pp_rebound_continuation = False
+                if chronological:
+                    if strength == "PP" and outcome == "SAVED" and rng.random() < 0.25:
+                        tick = 3.0
+                        _pp_rebound_continuation = True
+                    elif strength == "PP":
+                        tick = rng.uniform(32.0, 46.0)
+                    elif strength == "SH":
+                        tick = rng.uniform(10.0, 14.0)
+                    elif mp_state == "four_four":
+                        tick = max(14.0, min(65.0, rng.expovariate(1.0 / max(12.0, ev_mean_delay * 1.4))))
+                    else:
+                        tick = max(12.0, min(65.0, rng.expovariate(1.0 / max(12.0, ev_mean_delay))))
+                    remaining = _REGULATION_GAME_SECONDS - game_sec_elapsed
+                    tick = min(tick, max(0.5, remaining))
+                    game_sec_before = float(game_sec_elapsed)
+                    game_sec_elapsed += tick
+                    if _audit_pp:
+                        _last_regulation_tick_audit = {
+                            "tick_sec": round(float(tick), 6),
+                            "remaining_before_tick_sec": round(float(remaining), 6),
+                            "game_sec_before": round(game_sec_before, 6),
+                            "game_sec_after": round(float(game_sec_elapsed), 6),
+                            "mp_state": str(mp_state),
+                            "strength": str(strength),
+                            "cycle_only": False,
+                        }
+                    if mp_state == "ev":
+                        _pp_own["timeline_5v5_sec"] += tick
+                    elif mp_state == "four_four":
+                        _pp_own["timeline_four_four_sec"] += tick
+                    elif mp_state == "home_pp":
+                        _pp_own["timeline_home_adv_sec"] += tick
+                    elif mp_state == "away_pp":
+                        _pp_own["timeline_away_adv_sec"] += tick
+                    if mp_state in ("home_pp", "away_pp"):
+                        _pp_own["pp_possession"]["pp_possession_seconds"] += tick
+                        if strength == "EV":
+                            _pp_own["pp_sec_consumed_ev"] += tick
+                            _pp_own["ev_sec_during_active_pp"] += tick
+                        elif strength == "PP":
+                            _pp_own["pp_sec_consumed_pp"] += tick
+                            _pp_own["pp_possession"]["pp_controlled_seconds"] += tick
+                        elif strength == "SH":
+                            _pp_own["pp_sec_consumed_sh"] += tick
+                            _pp_own["pp_possession"]["sh_attack_seconds"] += tick
+                    _pp_own["main_events"] += 1
+                    if strength == "EV":
+                        _pp_own["main_ev"] += 1
+                        if mp_state == "ev":
+                            _pp_own["ev_opportunity_slots"] += 1
+                    elif strength == "PP":
+                        _pp_own["main_pp"] += 1
+                        _pp_own["pp_opportunity_slots"] += 1
+                    elif strength == "SH":
+                        _pp_own["main_sh"] += 1
+                        _pp_own["sh_opportunity_slots"] += 1
+                    if _pp_rebound_continuation:
+                        _pp_rebound_next = True
+                else:
+                    if pp_live:
+                        tick = 7.0
+                    else:
+                        tick = _GM_ATTEMPT_GAME_SECONDS
+                    game_sec_elapsed += tick
+                _event_i += 1
+            if chronological:
+                _pp_own["game_sec_elapsed"] = float(game_sec_elapsed)
+                _pp_own["unconsumed_pp_sec"] = float(
+                    _remaining_pp_seconds(away_penalty_intervals, game_sec_elapsed)
+                    + _remaining_pp_seconds(home_penalty_intervals, game_sec_elapsed)
+                )
+                if _audit_pp:
+                    t5 = float(_pp_own["timeline_5v5_sec"])
+                    th = float(_pp_own["timeline_home_adv_sec"])
+                    ta = float(_pp_own["timeline_away_adv_sec"])
+                    t4 = float(_pp_own["timeline_four_four_sec"])
+                    bucket_sum = t5 + th + ta + t4
+                    state_delta = bucket_sum - _REGULATION_GAME_SECONDS
+                    clock_delta = float(game_sec_elapsed) - _REGULATION_GAME_SECONDS
+                    _pp_own["timeline_segment_audit"] = {
+                        "regulation_target_sec": _REGULATION_GAME_SECONDS,
+                        "final_regulation_clock": round(float(game_sec_elapsed), 6),
+                        "timeline_5v5_sec": round(t5, 6),
+                        "timeline_home_adv_sec": round(th, 6),
+                        "timeline_away_adv_sec": round(ta, 6),
+                        "timeline_four_four_sec": round(t4, 6),
+                        "timeline_bucket_sum": round(bucket_sum, 6),
+                        "timeline_state_sum_delta": round(state_delta, 6),
+                        "game_clock_vs_target_delta": round(clock_delta, 6),
+                        "bucket_sum_vs_clock_delta": round(bucket_sum - float(game_sec_elapsed), 6),
+                        "last_regulation_tick": _last_regulation_tick_audit,
+                        "pk_cycle_seconds": round(float(_pp_own["pp_possession"].get("pk_cycle_seconds", 0) or 0), 6),
+                        "pp_controlled_seconds": round(float(_pp_own["pp_possession"].get("pp_controlled_seconds", 0) or 0), 6),
+                        "sh_attack_seconds": round(float(_pp_own["pp_possession"].get("sh_attack_seconds", 0) or 0), 6),
+                    }
+            return sudden_death and reg_home != reg_away
+
+        h_attempts, a_attempts = self._gm_regulation_attempt_split(
+            rng, home, away,
+            home_strength_scale=home_strength_scale,
+            away_strength_scale=away_strength_scale,
+            chem_h=chem_h,
+            chem_a=chem_a,
+        )
+        ev_active_budget = _REGULATION_GAME_SECONDS * 0.91
+        ev_mean_delay = (ev_active_budget / max(1.0, float(h_attempts + a_attempts))) * 1.12
+        _simulate_segment(
+            h_attempts, a_attempts,
+            track_goals=True, sudden_death=False,
+            chronological=True, ev_mean_delay=ev_mean_delay,
+        )
+        if _audit_pp and _pp_own["unconsumed_pp_sec"] > 0.5:
+            _pp_own["pp_sec_reaching_post_main"] = float(_pp_own["unconsumed_pp_sec"])
+
+        ot_home = ot_away = 0
+        goalie_ot_toi_bonus = 0
+        overtime = False
+        shootout = False
+        shootout_home_win = False
+        if reg_home == reg_away:
+            overtime = True
+            if is_playoff:
+                ot_period = 0
+                while reg_home == reg_away:
+                    ot_period += 1
+                    ot_attempts_h = rng.randint(14, 22)
+                    ot_attempts_a = rng.randint(14, 22)
+                    before_h, before_a = reg_home, reg_away
+                    _simulate_segment(ot_attempts_h, ot_attempts_a, track_goals=True, sudden_death=True)
+                    ot_home += reg_home - before_h
+                    ot_away += reg_away - before_a
+                    ot_toi_bonus = rng.randint(180, 300)
+                    goalie_ot_toi_bonus += int(ot_toi_bonus)
+                    for p in home_dressed:
+                        pid = _id_str(p, "id")
+                        if pid:
+                            home_toi[pid] = int(home_toi.get(pid, 0) or 0) + ot_toi_bonus
+                    for p in away_dressed:
+                        pid = _id_str(p, "id")
+                        if pid:
+                            away_toi[pid] = int(away_toi.get(pid, 0) or 0) + ot_toi_bonus
+                    if ot_period > 12:
+                        break
+            else:
+                ot_attempts_h = rng.randint(4, 8)
+                ot_attempts_a = rng.randint(4, 8)
+                before_h, before_a = reg_home, reg_away
+                _simulate_segment(ot_attempts_h, ot_attempts_a, track_goals=True, sudden_death=True)
+                ot_home = reg_home - before_h
+                ot_away = reg_away - before_a
+                ot_toi_bonus = rng.randint(90, 180)
+                goalie_ot_toi_bonus += int(ot_toi_bonus)
+                for p in home_dressed:
+                    pid = _id_str(p, "id")
+                    if pid:
+                        home_toi[pid] = int(home_toi.get(pid, 0) or 0) + ot_toi_bonus
+                for p in away_dressed:
+                    pid = _id_str(p, "id")
+                    if pid:
+                        away_toi[pid] = int(away_toi.get(pid, 0) or 0) + ot_toi_bonus
+                if reg_home == reg_away and not is_playoff:
+                    shootout = True
+                    shootout_home_win = rng.random() < 0.52
+
+        for p in home_dressed + away_dressed:
+            pid = _id_str(p, "id")
+            tid = hid if p in home_dressed else aid
+            toi = int(home_toi.get(pid, 0) if p in home_dressed else away_toi.get(pid, 0))
+            self._gm_ledger_add(ledger, p, tid, gp=1, toi_sec=toi, analytics_gp=1)
+
+        hit_targets_h = int(18 + 8 * (1.0 - self._team_offense_skill(home)))
+        hit_targets_a = int(18 + 8 * (1.0 - self._team_offense_skill(away)))
+        if home_dressed:
+            hit_shares = self._gm_distribute_integer_shares(rng, [self._gm_physical_weight(p) * (home_toi.get(_id_str(p, "id"), 600) / 600.0) for p in home_dressed], hit_targets_h)
+            for p, h in zip(home_dressed, hit_shares):
+                if h:
+                    self._gm_ledger_add(ledger, p, hid, hit=h)
+        if away_dressed:
+            hit_shares = self._gm_distribute_integer_shares(rng, [self._gm_physical_weight(p) * (away_toi.get(_id_str(p, "id"), 600) / 600.0) for p in away_dressed], hit_targets_a)
+            for p, h in zip(away_dressed, hit_shares):
+                if h:
+                    self._gm_ledger_add(ledger, p, aid, hit=h)
+
+        def _goalie_rows(goalies: List[Any], tid: str, team_ga: int, opp_sog: int, won: bool, otl: bool, starter: Any, team: Any) -> List[Dict[str, Any]]:
+            if not goalies:
+                return []
+            rows: List[Dict[str, Any]] = []
+            full_toi = int(3600 + max(0, goalie_ot_toi_bonus))
+            for g0 in goalies:
+                pid = _id_str(g0, "id")
+                if not pid:
+                    continue
+                gr = ledger.get(pid, {})
+                is_starter = bool(starter is not None and pid == _id_str(starter, "id"))
+                faced_sa = int(gr.get("goalie_shots_against", 0) or 0)
+                faced_ga = int(gr.get("goalie_ga", 0) or 0)
+                if is_starter and faced_sa <= 0 and int(opp_sog) > 0:
+                    faced_sa = int(opp_sog)
+                    faced_ga = int(team_ga)
+                appeared = is_starter or faced_sa > 0 or faced_ga > 0
+                if not appeared:
+                    continue
+                saves = max(0, faced_sa - faced_ga)
+                gkw: Dict[str, int] = {
+                    "gp": 1,
+                    "ga": int(faced_ga),
+                    "shots_against": int(faced_sa),
+                    "saves": int(saves),
+                    "toi_sec": int(gr.get("goalie_toi_sec", 0) or (full_toi if is_starter else 0)),
+                }
+                if is_starter:
+                    if won:
+                        gkw["w"] = 1
+                        if int(team_ga) == 0:
+                            gkw["so"] = 1
+                    elif otl:
+                        gkw["otl"] = 1
+                    else:
+                        gkw["l"] = 1
+                self._gm_ledger_add(ledger, g0, tid, **gkw)
+                gr = self._gm_ledger_ensure(ledger, g0, tid)
+                xga_sum = float(gr.get("goalie_xga", 0) or 0)
+                if xga_sum > 0:
+                    gr["xga"] = round(xga_sum, 4)
+                if is_starter:
+                    self._gm_update_goalie_recent_performance(team, g0, saves, faced_sa)
+                rows.append({
+                    "player_id": pid,
+                    "name": str(getattr(getattr(g0, "identity", None), "name", None) or getattr(g0, "name", "?")),
+                    "ga": int(faced_ga),
+                    "saves": int(saves),
+                    "shots_against": int(faced_sa),
+                    "starter": bool(is_starter),
+                })
+            return rows
+
+        # reg_* already includes OT goals (OT segments mutate the same counters).
+        # Do NOT add ot_* again — that double-counts OT in player-box metadata.
+        player_goals_home = int(reg_home)
+        player_goals_away = int(reg_away)
+        regulation_only_home = int(reg_home) - int(ot_home)
+        regulation_only_away = int(reg_away) - int(ot_away)
+        home_sog = sum(int(ledger.get(_id_str(p, "id"), {}).get("sog", 0) or 0) for p in home_dressed)
+        away_sog = sum(int(ledger.get(_id_str(p, "id"), {}).get("sog", 0) or 0) for p in away_dressed)
+
+        display_home = player_goals_home + (1 if shootout and shootout_home_win else 0)
+        display_away = player_goals_away + (1 if shootout and not shootout_home_win else 0)
+        if shootout and regulation_only_home == regulation_only_away and ot_home == ot_away:
+            if shootout_home_win:
+                display_home = player_goals_home + 1
+            else:
+                display_away = player_goals_away + 1
+
+        home_won = display_home > display_away
+        away_won = not home_won
+        home_goalies_box = _goalie_rows(home_gl, hid, player_goals_away, away_sog, home_won, bool(overtime and away_won), home_starter, home)
+        away_goalies_box = _goalie_rows(away_gl, aid, player_goals_home, home_sog, away_won, bool(overtime and home_won), away_starter, away)
+        hgk = next((row for row in home_goalies_box if row.get("starter")), home_goalies_box[0] if home_goalies_box else None)
+        agk = next((row for row in away_goalies_box if row.get("starter")), away_goalies_box[0] if away_goalies_box else None)
+
+        home_agg = _team_agg(home_dressed, hid)
+        away_agg = _team_agg(away_dressed, aid)
+        home_agg["goalie_sa"] = away_sog
+        away_agg["goalie_sa"] = home_sog
+        for key, value in home_team_event_stats.items():
+            home_agg[f"team_{key}"] = int(value) if float(value).is_integer() else round(float(value), 4)
+        for key, value in away_team_event_stats.items():
+            away_agg[f"team_{key}"] = int(value) if float(value).is_integer() else round(float(value), 4)
+        integrity = validate_game_integrity(home_agg, away_agg)
+
+        # Optional audit invariant: skater box goals must equal canonical scoring events.
+        if bool(getattr(self, "_audit_goal_reconciliation", False)):
+            event_goals = len(scoring_events or [])
+            box_skater_goals = int(home_agg.get("goals", 0) or 0) + int(away_agg.get("goals", 0) or 0)
+            if box_skater_goals != event_goals or box_skater_goals != player_goals_home + player_goals_away:
+                raise RuntimeError(
+                    "GOAL RECONCILIATION FAILURE: "
+                    f"box_skater_goals={box_skater_goals} event_goals={event_goals} "
+                    f"player_meta={player_goals_home + player_goals_away} "
+                    f"reg={regulation_only_home}-{regulation_only_away} "
+                    f"ot={ot_home}-{ot_away} so={shootout} "
+                    f"home={hid} away={aid} day={calendar_day}"
+                )
+
+        if _audit_pp:
+            for sk in ("EV", "PP", "SH"):
+                sf = _pp_own["strength_funnel"][sk]
+                ba = int(sf.get("blocked_attempts", 0) or 0)
+                ma = int(sf.get("missed_attempts", 0) or 0)
+                sog = int(sf.get("shots_on_goal", 0) or 0)
+                sa = int(sf.get("shot_attempts", 0) or 0)
+                if ba + ma + sog != sa:
+                    raise RuntimeError(
+                        "OUTCOME ACCOUNTING FAILURE: "
+                        f"strength={sk} blocked={ba} missed={ma} sog={sog} attempts={sa} "
+                        f"home={hid} away={aid} day={calendar_day}"
+                    )
+
+        out: Dict[str, Any] = {
+            "home_goals": int(display_home),
+            "away_goals": int(display_away),
+            "display_home_goals": int(display_home),
+            "display_away_goals": int(display_away),
+            "regulation_home_goals": int(regulation_only_home),
+            "regulation_away_goals": int(regulation_only_away),
+            "overtime_home_goals": int(ot_home),
+            "overtime_away_goals": int(ot_away),
+            "player_home_goals": int(player_goals_home),
+            "player_away_goals": int(player_goals_away),
+            "hockey_home_goals": int(player_goals_home),
+            "hockey_away_goals": int(player_goals_away),
+            "overtime": bool(overtime),
+            "shootout": bool(shootout),
+            "shootout_home_win": bool(shootout_home_win),
+            "home_shot_attempts": int(home_team_event_stats["cf"]),
+            "away_shot_attempts": int(away_team_event_stats["cf"]),
+            "home_ff": int(home_team_event_stats["ff"]),
+            "away_ff": int(away_team_event_stats["ff"]),
+            "home_blocked_attempts_for": int(home_team_event_stats["blocked_for"]),
+            "away_blocked_attempts_for": int(away_team_event_stats["blocked_for"]),
+            "home_missed_shots": int(home_team_event_stats["missed"]),
+            "away_missed_shots": int(away_team_event_stats["missed"]),
+            "home_sog": int(home_team_event_stats["sog"]),
+            "away_sog": int(away_team_event_stats["sog"]),
+            "home_pp_goals": int(home_pp_goals),
+            "away_pp_goals": int(away_pp_goals),
+            "home_ppo": int(home_ppo_from_away),
+            "away_ppo": int(away_ppo_from_home),
+            "home_pp_seconds": float(home_pp_sec_from_away),
+            "away_pp_seconds": float(away_pp_sec_from_home),
+            "home_pim": int(home_pim),
+            "away_pim": int(away_pim),
+            "scoring_events": scoring_events,
+            "home_goalie": hgk,
+            "away_goalie": agk,
+            "home_goalies": home_goalies_box,
+            "away_goalies": away_goalies_box,
+            "home_dressed": home_dressed,
+            "away_dressed": away_dressed,
+            "integrity_issues": integrity,
+            "home_xgf": round(float(home_team_event_stats["xgf"]), 4),
+            "away_xgf": round(float(away_team_event_stats["xgf"]), 4),
+        }
+        if _audit_pp:
+            out["pp_event_ownership"] = dict(_pp_own)
+            if not hasattr(self, "_pp_ownership_season_audit"):
+                self._pp_ownership_season_audit = []
+            self._pp_ownership_season_audit.append(dict(_pp_own))
+        return out
 
     def _injury_sidelined(self, player: Any) -> bool:
         """True when player should not dress / produce counting stats this game."""
@@ -9678,6 +13185,201 @@ class SimEngine:
         ratio = len(active) / max(9.0, float(len(all_sk)))
         return max(0.87, min(1.0, 0.88 + 0.14 * ratio))
 
+    def _accumulate_light_strength_game_stats(
+        self,
+        rng: random.Random,
+        home: Any,
+        away: Any,
+        hid: str,
+        aid: str,
+        hg: int,
+        ag: int,
+        ot: bool,
+        ledger: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Fallback bulk path when event-driven is unavailable.
+        Allocates G/A/SOG only — does NOT invent CF/xGF/PP analytics.
+        Prefer event-driven season sims for real analytics.
+        """
+        hg = max(0, int(hg))
+        ag = max(0, int(ag))
+        home_dressed, home_gl, _, _ = self._gm_build_dressed_lineup(home, rng)
+        away_dressed, away_gl, _, _ = self._gm_build_dressed_lineup(away, rng)
+        home_sk = [p for p in home_dressed if self._gm_pos_str(p).upper() != "G"]
+        away_sk = [p for p in away_dressed if self._gm_pos_str(p).upper() != "G"]
+        home_toi = self._gm_allocate_conserved_toi(rng, home_dressed) if home_dressed else {}
+        away_toi = self._gm_allocate_conserved_toi(rng, away_dressed) if away_dressed else {}
+
+        home_starter = self._gm_determine_preferred_goalie(home_gl, home) if home_gl else None
+        away_starter = self._gm_determine_preferred_goalie(away_gl, away) if away_gl else None
+
+        for p in home_dressed:
+            pid = _id_str(p, "id")
+            self._gm_ledger_add(ledger, p, hid, gp=1, toi_sec=int(home_toi.get(pid, 0) or 0))
+        for p in away_dressed:
+            pid = _id_str(p, "id")
+            self._gm_ledger_add(ledger, p, aid, gp=1, toi_sec=int(away_toi.get(pid, 0) or 0))
+
+        def _credit_team_goals(skaters: List[Any], tid: str, goals: int, team: Any) -> None:
+            if goals <= 0 or not skaters:
+                return
+
+            def _off_w(p: Any) -> float:
+                ovr_n = self._gm_ovr_norm(p)
+                pos = self._gm_pos_str(p).upper()
+                try:
+                    shoot = float(self._gm_rating_avg(p, OFFENSE_KEYS)) / 99.0
+                except Exception:
+                    shoot = ovr_n
+                w = 0.55 * (ovr_n ** 1.85) + 0.25 * shoot + 0.20 * self._gm_ovr_bonus(p)
+                w *= self._gm_role_usage_mult(p)
+                w *= self._gm_scoring_hub_bonus(p, team)
+                # Forwards score goals; D get a real but smaller share.
+                if pos == "D":
+                    w *= 0.28
+                elif pos in ("C", "LW", "RW", "F"):
+                    w *= 1.12
+                if ovr_n >= 0.88:
+                    w *= 1.30
+                elif ovr_n >= 0.84:
+                    w *= 1.16
+                elif ovr_n >= 0.78:
+                    w *= 1.06
+                elif ovr_n < 0.72:
+                    w *= 0.55
+                elif ovr_n < 0.78:
+                    w *= 0.76
+                return max(0.04, w)
+
+            def _ast_w(p: Any) -> float:
+                ovr_n = self._gm_ovr_norm(p)
+                pos = self._gm_pos_str(p).upper()
+                try:
+                    iq = float(self._gm_rating_avg(p, IQ_KEYS)) / 99.0
+                    off = float(self._gm_rating_avg(p, OFFENSE_KEYS)) / 99.0
+                except Exception:
+                    iq, off = ovr_n, ovr_n
+                w = 0.42 * (ovr_n ** 1.55) + 0.33 * iq + 0.25 * off
+                w *= self._gm_role_usage_mult(p)
+                if pos == "D":
+                    w *= 0.55
+                if ovr_n >= 0.84:
+                    w *= 1.12
+                elif ovr_n < 0.72:
+                    w *= 0.70
+                return max(0.04, w)
+
+            for _ in range(goals):
+                scorer = self._gm_pick_weighted(rng, skaters, _off_w, temperature=1.55, weight_floor=0.04)
+                self._gm_ledger_add(ledger, scorer, tid, g=1)
+                remaining = [p for p in skaters if p is not scorer]
+                n_ast = 1 if rng.random() < 0.22 else 2
+                n_ast = min(n_ast, len(remaining))
+                for _a in range(n_ast):
+                    if not remaining:
+                        break
+                    assister = self._gm_pick_weighted(rng, remaining, _ast_w, temperature=1.35, weight_floor=0.04)
+                    self._gm_ledger_add(ledger, assister, tid, a=1)
+                    remaining = [p for p in remaining if p is not assister]
+
+        _credit_team_goals(home_sk, hid, hg, home)
+        _credit_team_goals(away_sk, aid, ag, away)
+
+        home_sog_n = max(hg + 12, int(round(rng.gauss(28 + hg * 1.2, 4))))
+        away_sog_n = max(ag + 12, int(round(rng.gauss(27 + ag * 1.2, 4))))
+        if home_sk:
+            shares = self._gm_distribute_integer_shares(
+                rng,
+                [
+                    max(
+                        0.08,
+                        (self._gm_ovr_norm(p) ** 1.6) * 40.0
+                        + float(self._gm_rating_avg(p, OFFENSE_KEYS)) * 0.55
+                        * (0.35 if self._gm_pos_str(p).upper() == "D" else 1.0),
+                    )
+                    for p in home_sk
+                ],
+                home_sog_n,
+            )
+            for p, n in zip(home_sk, shares):
+                if n:
+                    self._gm_ledger_add(ledger, p, hid, sog=int(n))
+        if away_sk:
+            shares = self._gm_distribute_integer_shares(
+                rng,
+                [
+                    max(
+                        0.08,
+                        (self._gm_ovr_norm(p) ** 1.6) * 40.0
+                        + float(self._gm_rating_avg(p, OFFENSE_KEYS)) * 0.55
+                        * (0.35 if self._gm_pos_str(p).upper() == "D" else 1.0),
+                    )
+                    for p in away_sk
+                ],
+                away_sog_n,
+            )
+            for p, n in zip(away_sk, shares):
+                if n:
+                    self._gm_ledger_add(ledger, p, aid, sog=int(n))
+
+        if home_starter is not None:
+            sa = max(ag, away_sog_n)
+            saves = max(0, sa - ag)
+            kw: Dict[str, Any] = {
+                "gp": 1,
+                "shots_against": sa,
+                "goalie_shots_against": sa,
+                "saves": saves,
+                "ga": ag,
+                "goalie_ga": ag,
+            }
+            if hg > ag:
+                kw["w"] = 1
+            elif ot:
+                kw["otl"] = 1
+            else:
+                kw["l"] = 1
+            if ag == 0:
+                kw["so"] = 1
+            self._gm_ledger_add(ledger, home_starter, hid, **kw)
+        if away_starter is not None:
+            sa = max(hg, home_sog_n)
+            saves = max(0, sa - hg)
+            kw = {
+                "gp": 1,
+                "shots_against": sa,
+                "goalie_shots_against": sa,
+                "saves": saves,
+                "ga": hg,
+                "goalie_ga": hg,
+            }
+            if ag > hg:
+                kw["w"] = 1
+            elif ot:
+                kw["otl"] = 1
+            else:
+                kw["l"] = 1
+            if hg == 0:
+                kw["so"] = 1
+            self._gm_ledger_add(ledger, away_starter, aid, **kw)
+
+        return {
+            "home_goals": hg,
+            "away_goals": ag,
+            "overtime": bool(ot),
+            "shootout": False,
+            "scoring_events": [],
+            "home_dressed": home_dressed,
+            "away_dressed": away_dressed,
+            "home_sog": int(home_sog_n),
+            "away_sog": int(away_sog_n),
+            "home_shots": int(home_sog_n),
+            "away_shots": int(away_sog_n),
+            "light_box": True,
+            "stat_source": "light_strength",
+        }
+
     def accumulate_unified_game_stats(
         self,
         rng: random.Random,
@@ -9691,210 +13393,147 @@ class SimEngine:
         ledger: Dict[str, Dict[str, Any]],
         *,
         build_game_payload: bool = False,
+        light_mode: bool = False,
         calendar_day: int = 0,
         calendar_iso: str = "",
         game_id: str = "",
+        stat_scope: str = "regular_season",
+        strength_map: Optional[Dict[str, float]] = None,
+        home_strength_scale: float = 1.0,
+        away_strength_scale: float = 1.0,
+        noise_scale: float = 1.0,
+        is_playoff: bool = False,
+        home_b2b: bool = False,
+        away_b2b: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
-        Single pipeline for skater/goalie counting stats from one simulated game.
-        Mutates ledger (player_id -> row). Optionally returns a franchise-style game box dict.
+        Event-driven game stat pipeline. Score and stats share one simulation universe.
+        Uses cached result from _simulate_game when scores match; otherwise runs fresh.
+
+        light_mode=True (bulk franchise): never re-roll an event game — that would change
+        the score and crash franchise integrity checks. Use strength light allocation.
         """
-        home_sk = [p for p in self._gm_skaters(home) if not self._injury_sidelined(p)]
-        away_sk = [p for p in self._gm_skaters(away) if not self._injury_sidelined(p)]
+        from app.sim_engine.gameplay.game_analytics_ledger import estimate_pp_opportunities
 
-        # Goalie pools respect injuries; if everyone is sidelined, fall back to raw list so the
-        # game can still be simulated, but injured goalies will only be used as a last resort.
-        home_gl = [g for g in self._gm_goalies(home) if not self._injury_sidelined(g)]
-        if not home_gl:
-            home_gl = self._gm_goalies(home)
-        away_gl = [g for g in self._gm_goalies(away) if not self._injury_sidelined(g)]
-        if not away_gl:
-            away_gl = self._gm_goalies(away)
-
-        h_sog_tgt = self._gm_team_shots_target(rng, home, int(hg))
-        a_sog_tgt = self._gm_team_shots_target(rng, away, int(ag))
-        h_pk = self._gm_team_pk_suppression_factor(home)
-        a_pk = self._gm_team_pk_suppression_factor(away)
-        a_sog_tgt = max(18, int(round(float(a_sog_tgt) * (1.0 - 0.065 * h_pk))))
-        h_sog_tgt = max(18, int(round(float(h_sog_tgt) * (1.0 - 0.065 * a_pk))))
-
-        def _dress_team(team_sk: List[Any], tid: str, sog_tgt: int) -> Dict[str, Dict[str, Any]]:
-            rows: Dict[str, Dict[str, Any]] = {}
-            if not team_sk:
-                return rows
-            lines_fw, defs = self._gm_forward_lines(team_sk)
-            tois: List[int] = []
-            pp_bias: List[float] = []
-            for p in team_sk:
-                li = self._gm_line_index_for_player(lines_fw, p)
-                is_d = str(self._gm_pos_str(p)).upper() == "D"
-                toi = self._gm_toi_seconds_for_line(rng, li if not is_d else 1, is_d)
-                toi = int(round(toi * max(0.72, min(1.35, self._gm_role_usage_mult(p) / 1.25))))
-                tois.append(toi)
-                if is_d:
-                    pp_bias.append(1.04 + 0.10 * (1.0 if li <= 1 else 0.0))
-                else:
-                    if li <= 0:
-                        pp_bias.append(1.24)
-                    elif li == 1:
-                        pp_bias.append(1.12)
-                    elif li == 2:
-                        pp_bias.append(1.05)
-                    else:
-                        pp_bias.append(1.0)
-            w_sh: List[float] = []
-            for p, toi, pb in zip(team_sk, tois, pp_bias):
-                base_w = max(0.04, self._gm_offense_weight(p))
-                toi_s = max(300, int(toi))
-                w_sh.append(base_w * pb * ((float(toi_s) / 3600.0) ** 0.48))
-            shots = self._gm_distribute_integer_shares(rng, w_sh, int(sog_tgt))
-            for i, p in enumerate(team_sk):
-                self._gm_ledger_add(ledger, p, tid, gp=1)
-                toi = tois[i]
-                is_d = str(self._gm_pos_str(p)).upper() == "D"
-                pim = int(rng.choices([0, 2, 4, 6], weights=[0.56, 0.28, 0.12, 0.04], k=1)[0])
-                if is_d:
-                    hit = int(rng.choices([0, 1, 2, 3, 4], weights=[0.17, 0.28, 0.30, 0.18, 0.07], k=1)[0])
-                    blk = int(rng.choices([0, 1, 2, 3, 4], weights=[0.10, 0.26, 0.33, 0.21, 0.10], k=1)[0])
-                else:
-                    hit = int(rng.choices([0, 1, 2, 3], weights=[0.29, 0.37, 0.24, 0.10], k=1)[0])
-                    blk = int(rng.choices([0, 1, 2], weights=[0.64, 0.29, 0.07], k=1)[0])
-                self._gm_ledger_add(ledger, p, tid, sog=int(shots[i]), pim=pim, hit=hit, blk=blk, toi_sec=toi)
-                pid = str(getattr(p, "id", "") or "")
-                if pid:
-                    row = ledger.get(pid, {})
-                    rows[pid] = {
-                        "player_id": pid,
-                        "name": row.get("name", "?"),
-                        "position": row.get("position", "?"),
-                        "g": 0,
-                        "a": 0,
-                        "sog": int(shots[i]),
-                        "pim": pim,
-                        "hit": hit,
-                        "blk": blk,
-                        "toi_sec": toi,
-                    }
-            return rows
-
-        home_rows = _dress_team(home_sk, hid, h_sog_tgt)
-        away_rows = _dress_team(away_sk, aid, a_sog_tgt)
-
-        def _goals_side(
-            team_sk: List[Any],
-            tid: str,
-            goals: int,
-            lines_fw: List[List[Any]],
-            defs: List[Any],
-            rows_by_pid: Dict[str, Dict[str, Any]],
-        ) -> Tuple[List[str], List[Dict[str, Any]]]:
-            high: List[str] = []
-            events: List[Dict[str, Any]] = []
-            if goals <= 0 or not team_sk:
-                return high, events
-            for _ in range(int(goals)):
-                rv0 = rng.random()
-                strength = "EV"
-                d_share = 0.125
-                if rv0 < 0.23:
-                    strength = "PP"
-                    d_share = 0.068
-                elif rv0 < 0.29:
-                    strength = "SH"
-                    d_share = 0.185
-                scorer = self._gm_pick_goal_scorer(rng, lines_fw, defs, team_sk, d_share)
-                self._gm_ledger_add(ledger, scorer, tid, g=1)
-                spid = str(getattr(scorer, "id", "") or "")
-                if spid in rows_by_pid:
-                    rows_by_pid[spid]["g"] = int(rows_by_pid[spid].get("g", 0)) + 1
-                assists = self._gm_pick_assists(rng, team_sk, scorer, min_one=bool(len(team_sk) >= 2))
-                if strength == "PP" and assists and rng.random() < 0.14:
-                    assists = assists[:1]
-                anames: List[str] = []
-                for ap in assists:
-                    self._gm_ledger_add(ledger, ap, tid, a=1)
-                    apid = str(getattr(ap, "id", "") or "")
-                    if apid in rows_by_pid:
-                        rows_by_pid[apid]["a"] = int(rows_by_pid[apid].get("a", 0)) + 1
-                    anames.append(
-                        str(getattr(getattr(ap, "identity", None), "name", None) or getattr(ap, "name", None) or "?")
-                    )
-                per = int(rng.choices([1, 2, 3], weights=[0.34, 0.42, 0.24])[0])
-                mm = int(rng.randint(0, 19))
-                ss = int(rng.choice([0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]))
-                events.append(
-                    {
-                        "for_team_id": str(tid),
-                        "period": per,
-                        "clock": f"{mm}:{ss:02d}",
-                        "scorer": str(
-                            getattr(getattr(scorer, "identity", None), "name", None)
-                            or getattr(scorer, "name", None)
-                            or "?"
-                        ),
-                        "scorer_id": spid,
-                        "assists": anames,
-                        "strength": strength,
-                    }
-                )
-                high.append(
-                    str(
-                        getattr(getattr(scorer, "identity", None), "name", None)
-                        or getattr(scorer, "name", None)
-                        or "?"
-                    )
-                )
-            return high, events
-
-        hfw, hdef = self._gm_forward_lines(home_sk)
-        afw, adef = self._gm_forward_lines(away_sk)
-        home_high, home_ev = _goals_side(home_sk, hid, int(hg), hfw, hdef, home_rows)
-        away_high, away_ev = _goals_side(away_sk, aid, int(ag), afw, adef, away_rows)
-
-        home_won = int(hg) > int(ag)
-        away_won = int(ag) > int(hg)
-
-        def _goalie_side(goalies: List[Any], tid: str, ga: int, won: bool, otl_loss: bool) -> Optional[Dict[str, Any]]:
-            if not goalies:
-                return None
-            w = [self._gm_ovr_bonus(g) for g in goalies]
-            g0 = rng.choices(goalies, weights=w, k=1)[0]
-            opp_sog = int(a_sog_tgt if str(tid) == str(hid) else h_sog_tgt)
-            sa = int(max(int(ga) + 12, opp_sog))
-            saves = int(max(0, sa - int(ga)))
-            if won:
-                self._gm_ledger_add(ledger, g0, tid, gp=1, ga=int(ga), w=1)
-            elif otl_loss:
-                self._gm_ledger_add(ledger, g0, tid, gp=1, ga=int(ga), otl=1)
+        if light_mode:
+            setattr(self, "_pending_event_game", None)
+            result = self._accumulate_light_strength_game_stats(
+                rng, home, away, str(hid), str(aid), int(hg), int(ag), bool(ot), ledger
+            )
+            if not build_game_payload:
+                return {
+                    "scoring_events": [],
+                    "home_goals": int(hg),
+                    "away_goals": int(ag),
+                    "overtime": bool(ot),
+                    "shootout": False,
+                    "stat_scope": str(stat_scope or "regular_season"),
+                    "home_sog": int(result.get("home_sog", 0) or 0),
+                    "away_sog": int(result.get("away_sog", 0) or 0),
+                    "home_shots": int(result.get("home_shots", 0) or 0),
+                    "away_shots": int(result.get("away_shots", 0) or 0),
+                    "light_box": True,
+                    "stat_source": "light_strength",
+                }
+            # Fall through with forced result for rare heavy+light callers.
+        else:
+            cache = getattr(self, "_pending_event_game", None)
+            cache_key = (str(hid), str(aid), int(hg), int(ag), bool(ot), False)
+            if isinstance(cache, dict) and cache.get("_key") == cache_key:
+                result = cache["result"]
+                self._merge_game_ledger(ledger, cache.get("scratch") or {})
             else:
-                self._gm_ledger_add(ledger, g0, tid, gp=1, ga=int(ga), l=1)
-            gr = self._gm_ledger_ensure(ledger, g0, tid)
-            gr["shots_against"] = int(gr.get("shots_against", 0)) + sa
-            gr["saves"] = int(gr.get("saves", 0)) + saves
-            return {
-                "player_id": str(getattr(g0, "id", "") or ""),
-                "name": str(getattr(getattr(g0, "identity", None), "name", None) or getattr(g0, "name", None) or "?"),
-                "ga": int(ga),
-                "saves": saves,
-                "shots_against": sa,
-            }
+                result = self._run_event_driven_game(
+                    rng, home, away, str(hid), str(aid), ledger,
+                    strength_map=strength_map,
+                    home_strength_scale=home_strength_scale,
+                    away_strength_scale=away_strength_scale,
+                    noise_scale=noise_scale,
+                    light_mode=False,
+                    is_playoff=is_playoff,
+                    calendar_day=int(calendar_day),
+                    home_b2b=bool(home_b2b),
+                    away_b2b=bool(away_b2b),
+                )
 
-        hgk = _goalie_side(home_gl, hid, int(ag), home_won, bool(ot) and not home_won)
-        agk = _goalie_side(away_gl, aid, int(hg), away_won, bool(ot) and not away_won)
+        if _stats_pipeline_debug():
+            issues = result.get("integrity_issues") or []
+            print(f"[STAT LEDGER GAME DONE] {hid} {aid} {result.get('home_goals')} {result.get('away_goals')} issues={issues}")
+
+        setattr(self, "_pending_event_game", None)
 
         if not build_game_payload:
-            return None
+            light_out: Dict[str, Any] = {
+                "scoring_events": list(result.get("scoring_events") or []),
+                "home_goals": int(result.get("home_goals", hg)),
+                "away_goals": int(result.get("away_goals", ag)),
+                "player_home_goals": int(result.get("player_home_goals", 0)),
+                "player_away_goals": int(result.get("player_away_goals", 0)),
+                "regulation_home_goals": int(result.get("regulation_home_goals", 0)),
+                "regulation_away_goals": int(result.get("regulation_away_goals", 0)),
+                "overtime_home_goals": int(result.get("overtime_home_goals", 0)),
+                "overtime_away_goals": int(result.get("overtime_away_goals", 0)),
+                "overtime": bool(result.get("overtime", ot)),
+                "shootout": bool(result.get("shootout", False)),
+                "stat_scope": str(stat_scope or "regular_season"),
+                "home_pp_goals": int(result.get("home_pp_goals", 0)),
+                "away_pp_goals": int(result.get("away_pp_goals", 0)),
+                "home_ppo": int(result.get("home_ppo", 0)),
+                "away_ppo": int(result.get("away_ppo", 0)),
+                "home_pp_seconds": float(result.get("home_pp_seconds", 0) or 0),
+                "away_pp_seconds": float(result.get("away_pp_seconds", 0) or 0),
+                "home_pim": int(result.get("home_pim", 0)),
+                "away_pim": int(result.get("away_pim", 0)),
+                "home_shot_attempts": int(result.get("home_shot_attempts", 0)),
+                "away_shot_attempts": int(result.get("away_shot_attempts", 0)),
+                "home_shots": int(result.get("home_sog", 0)),
+                "away_shots": int(result.get("away_sog", 0)),
+                "home_sog": int(result.get("home_sog", 0)),
+                "away_sog": int(result.get("away_sog", 0)),
+                "home_ff": int(result.get("home_ff", 0)),
+                "away_ff": int(result.get("away_ff", 0)),
+                "home_xgf": round(float(result.get("home_xgf", 0) or 0), 4),
+                "away_xgf": round(float(result.get("away_xgf", 0) or 0), 4),
+                "light_box": True,
+            }
+            if result.get("pp_event_ownership"):
+                light_out["pp_event_ownership"] = dict(result["pp_event_ownership"])
+            return light_out
 
-        home_sk_list = sorted(
-            home_rows.values(), key=lambda x: (-int(x.get("g", 0)), -int(x.get("a", 0)), str(x.get("name", "")))
-        )
-        away_sk_list = sorted(
-            away_rows.values(), key=lambda x: (-int(x.get("g", 0)), -int(x.get("a", 0)), str(x.get("name", "")))
-        )
-        home_sog = sum(int(x.get("sog", 0) or 0) for x in home_sk_list)
-        away_sog = sum(int(x.get("sog", 0) or 0) for x in away_sk_list)
-        home_pim = sum(int(x.get("pim", 0) or 0) for x in home_sk_list)
-        away_pim = sum(int(x.get("pim", 0) or 0) for x in away_sk_list)
+        home_dressed = result.get("home_dressed") or []
+        away_dressed = result.get("away_dressed") or []
+
+        def _skater_box_list(dressed: List[Any], tid: str) -> List[Dict[str, Any]]:
+            out: List[Dict[str, Any]] = []
+            for p in dressed:
+                pid = _id_str(p, "id")
+                if not pid:
+                    continue
+                row = ledger.get(pid, {})
+                out.append({
+                    "player_id": pid,
+                    "name": row.get("name", "?"),
+                    "position": row.get("position", "?"),
+                    "g": int(row.get("g", 0) or 0),
+                    "a": int(row.get("a", 0) or 0),
+                    "sog": int(row.get("sog", 0) or 0),
+                    "pim": int(row.get("pim", 0) or 0),
+                    "hit": int(row.get("hit", 0) or 0),
+                    "blk": int(row.get("blk", 0) or 0),
+                    "toi_sec": int(row.get("toi_sec", 0) or 0),
+                })
+            return sorted(out, key=lambda x: (-int(x.get("g", 0)), -int(x.get("a", 0)), str(x.get("name", ""))))
+
+        home_sk_list = _skater_box_list(home_dressed, hid)
+        away_sk_list = _skater_box_list(away_dressed, aid)
+        home_high = [str(e.get("scorer", "")) for e in result.get("scoring_events", []) if str(e.get("for_team_id")) == str(hid)]
+        away_high = [str(e.get("scorer", "")) for e in result.get("scoring_events", []) if str(e.get("for_team_id")) == str(aid)]
+        hxgf = float(result.get("home_xgf", 0) or 0)
+        axgf = float(result.get("away_xgf", 0) or 0)
+        home_xga = axgf
+        away_xga = hxgf
+        home_game_xgf_pct = hxgf / (hxgf + home_xga) if (hxgf + home_xga) > 0 else 0.5
+        away_game_xgf_pct = axgf / (axgf + away_xga) if (axgf + away_xga) > 0 else 0.5
         gid = str(game_id or "").strip() or f"g{calendar_day}{hid}{aid}"[:18]
         return {
             "game_id": gid,
@@ -9904,21 +13543,164 @@ class SimEngine:
             "away_id": aid,
             "home_name": str(getattr(home, "city", "") or "").strip() + " " + str(getattr(home, "name", "") or "").strip(),
             "away_name": str(getattr(away, "city", "") or "").strip() + " " + str(getattr(away, "name", "") or "").strip(),
-            "home_goals": int(hg),
-            "away_goals": int(ag),
-            "overtime": bool(ot),
+            "home_goals": int(result.get("home_goals", hg)),
+            "away_goals": int(result.get("away_goals", ag)),
+            "display_home_goals": int(result.get("home_goals", hg)),
+            "display_away_goals": int(result.get("away_goals", ag)),
+            "overtime": bool(result.get("overtime", ot)),
+            "shootout": bool(result.get("shootout", False)),
+            "stat_scope": str(stat_scope or "regular_season"),
             "home_scoring": home_high[:14],
             "away_scoring": away_high[:14],
-            "scoring_events": sorted(home_ev + away_ev, key=lambda e: (int(e.get("period") or 0), str(e.get("clock") or ""))),
+            "scoring_events": sorted(result.get("scoring_events") or [], key=lambda e: (int(e.get("period") or 0), str(e.get("clock") or ""))),
             "home_skaters": home_sk_list,
             "away_skaters": away_sk_list,
-            "home_goalie": hgk,
-            "away_goalie": agk,
-            "home_shots": int(home_sog),
-            "away_shots": int(away_sog),
-            "home_pim": int(home_pim),
-            "away_pim": int(away_pim),
+            "home_goalie": result.get("home_goalie"),
+            "away_goalie": result.get("away_goalie"),
+            "home_goalies": list(result.get("home_goalies") or []),
+            "away_goalies": list(result.get("away_goalies") or []),
+            "home_shots": int(result.get("home_sog", 0)),
+            "away_shots": int(result.get("away_sog", 0)),
+            "home_shot_attempts": int(result.get("home_shot_attempts", 0)),
+            "away_shot_attempts": int(result.get("away_shot_attempts", 0)),
+            "home_ff": int(result.get("home_ff", 0)),
+            "away_ff": int(result.get("away_ff", 0)),
+            "home_missed_shots": int(result.get("home_missed_shots", 0)),
+            "away_missed_shots": int(result.get("away_missed_shots", 0)),
+            "home_blocked_attempts_for": int(result.get("home_blocked_attempts_for", 0)),
+            "away_blocked_attempts_for": int(result.get("away_blocked_attempts_for", 0)),
+            "home_xgf": round(float(result.get("home_xgf", 0) or 0), 4),
+            "away_xgf": round(float(result.get("away_xgf", 0) or 0), 4),
+            "home_pim": int(result.get("home_pim", 0)),
+            "away_pim": int(result.get("away_pim", 0)),
+            "home_pp_goals": int(result.get("home_pp_goals", 0)),
+            "away_pp_goals": int(result.get("away_pp_goals", 0)),
+            "home_ppo": int(estimate_pp_opportunities(rng, int(result.get("home_pp_goals", 0)), int(result.get("away_pim", 0)), explicit_ppo=int(result.get("home_ppo", 0)))),
+            "away_ppo": int(estimate_pp_opportunities(rng, int(result.get("away_pp_goals", 0)), int(result.get("home_pim", 0)), explicit_ppo=int(result.get("away_ppo", 0)))),
+            "home_ppga": int(result.get("away_pp_goals", 0)),
+            "away_ppga": int(result.get("home_pp_goals", 0)),
+            "home_opp_ppo": int(result.get("away_ppo", 0)),
+            "away_opp_ppo": int(result.get("home_ppo", 0)),
+            "home_xgf_pct": round(float(home_game_xgf_pct), 4),
+            "away_xgf_pct": round(float(away_game_xgf_pct), 4),
+            "regulation_home_goals": int(result.get("regulation_home_goals", 0)),
+            "regulation_away_goals": int(result.get("regulation_away_goals", 0)),
+            "overtime_home_goals": int(result.get("overtime_home_goals", 0)),
+            "overtime_away_goals": int(result.get("overtime_away_goals", 0)),
+            "player_home_goals": int(result.get("player_home_goals", 0)),
+            "player_away_goals": int(result.get("player_away_goals", 0)),
+            "hockey_home_goals": int(result.get("player_home_goals", 0)),
+            "hockey_away_goals": int(result.get("player_away_goals", 0)),
+            "scoring_events": list(result.get("scoring_events") or []),
+            "home_pp_seconds": float(result.get("home_pp_seconds", 0) or 0),
+            "away_pp_seconds": float(result.get("away_pp_seconds", 0) or 0),
         }
+        if result.get("pp_event_ownership"):
+            out["pp_event_ownership"] = dict(result["pp_event_ownership"])
+        return out
+
+    def _season_stat_line_from_ledger_row(self, row: Dict[str, Any], season_year: int) -> Dict[str, Any]:
+        """Build one player season stat dict from a game ledger row (source of truth)."""
+        from app.sim_engine.gameplay.game_analytics_ledger import season_xgf_pct_from_row
+
+        pos_u = str(row.get("position") or "").upper()
+        gp = max(0, int(row.get("gp", 0) or 0))
+        g = int(row.get("g", 0) or 0)
+        a = int(row.get("a", 0) or 0)
+        pts = g + a
+        gp_div = max(1, gp)
+        per_gp = pts / float(gp_div)
+
+        if pos_u == "G":
+            sa = int(row.get("shots_against", row.get("goalie_shots_against", 0)) or 0)
+            sv = int(row.get("saves", 0) or 0)
+            ga_ct = int(row.get("ga", row.get("goalie_ga", 0)) or 0)
+            if sa <= 0 and (sv > 0 or ga_ct > 0):
+                sa = max(sv + ga_ct, 0)
+            sv_pct = (sv / float(sa)) if sa > 0 else 0.0
+            toi_sec = int(row.get("toi_sec", 0) or 0)
+            if toi_sec <= 0 and gp > 0:
+                toi_sec = gp * 3600
+            gaa = (float(ga_ct) * 3600.0 / float(toi_sec)) if toi_sec > 0 else 0.0
+            perf_g = clamp(40.0 + 520.0 * (sv_pct - 0.88) - 1.15 * (gaa - 2.85), 22.0, 96.0)
+            out: Dict[str, Any] = {
+                "season": int(season_year),
+                "stat_source": "game_ledger",
+                "role": "starter",
+                "goals": 0,
+                "assists": 0,
+                "points": 0,
+                "ga": ga_ct,
+                "goals_against": ga_ct,
+                "gp": gp,
+                "games_played": gp,
+                "w": int(row.get("w", 0) or 0),
+                "wins": int(row.get("w", 0) or 0),
+                "l": int(row.get("l", 0) or 0),
+                "losses": int(row.get("l", 0) or 0),
+                "otl": int(row.get("otl", 0) or 0),
+                "saves": sv,
+                "shots_against": sa,
+                "sa": sa,
+                "save_pct": round(sv_pct, 4),
+                "gaa": round(gaa, 3),
+                "shutouts": int(row.get("so", 0) or 0),
+                "so": int(row.get("so", 0) or 0),
+                "toi_sec": toi_sec,
+                "performance_score": round(perf_g, 2),
+                "expected_score": 60.0,
+                "delta": 0.0,
+                "war": 0.0,
+                "xgf_pct": 0.5,
+            }
+            for k in _SKATER_LEDGER_ANALYTICS_KEYS:
+                if k in row and row[k] is not None:
+                    if k in _GM_FLOAT_LEDGER_KEYS:
+                        out[k] = round(float(row[k]), 4)
+                    else:
+                        out[k] = int(row[k])
+            out["xgf_pct"] = round(season_xgf_pct_from_row(row), 3)
+            return out
+
+        perf = clamp(28.0 + 62.0 * min(1.35, per_gp / 1.15), 18.0, 98.0)
+        toi_sec = int(row.get("toi_sec", 0) or 0)
+        toi_pg_min = round((float(toi_sec) / float(gp_div)) / 60.0, 1) if gp > 0 else 0.0
+        xgf_pct_v = round(season_xgf_pct_from_row(row), 3)
+        out_sk: Dict[str, Any] = {
+            "season": int(season_year),
+            "stat_source": "game_ledger",
+            "role": str(row.get("position") or "skater"),
+            "goals": g,
+            "assists": a,
+            "points": pts,
+            "g": g,
+            "a": a,
+            "pts": pts,
+            "gp": gp,
+            "games_played": gp,
+            "sog": int(row.get("sog", 0) or 0),
+            "toi_sec": toi_sec,
+            "toi": toi_pg_min,
+            "pim": int(row.get("pim", 0) or 0),
+            "hit": int(row.get("hit", 0) or 0),
+            "blk": int(row.get("blk", 0) or 0),
+            "ppg": int(row.get("ppg", 0) or 0),
+            "ppa": int(row.get("ppa", 0) or 0),
+            "shg": int(row.get("shg", 0) or 0),
+            "sha": int(row.get("sha", 0) or 0),
+            "war": round(min(6.5, max(-2.0, (pts / float(max(1, gp))) * 0.22)), 2),
+            "xgf_pct": xgf_pct_v,
+            "performance_score": round(perf, 2),
+            "expected_score": 62.0,
+            "delta": round(perf - 62.0, 2),
+        }
+        for k in _SKATER_LEDGER_ANALYTICS_KEYS:
+            if k in row and row[k] is not None:
+                if k in _GM_FLOAT_LEDGER_KEYS:
+                    out_sk[k] = round(float(row[k]), 4)
+                else:
+                    out_sk[k] = int(row[k])
+        return out_sk
 
     def _sync_ledger_to_player_season_stats(self, ledger: Dict[str, Dict[str, Any]], season_year: int) -> None:
         """Write game-derived totals onto player.season_stats for tooling that reads player objects."""
@@ -9926,69 +13708,31 @@ class SimEngine:
         by_id: Dict[str, Any] = {}
         for tm in teams:
             for p in getattr(tm, "roster", None) or []:
-                pid = str(getattr(p, "id", "") or "")
+                pid = _id_str(p, "id")
                 if pid:
                     by_id[pid] = p
         for pid, row in ledger.items():
             pl = by_id.get(pid)
             if pl is None:
                 continue
-            gp = max(1, int(row.get("gp", 0) or 0))
-            g = int(row.get("g", 0) or 0)
-            a = int(row.get("a", 0) or 0)
-            pts = g + a
-            pos_u = str(row.get("position") or "").upper()
-            per_gp = pts / float(gp)
-            perf = clamp(28.0 + 62.0 * min(1.35, per_gp / 1.15), 18.0, 98.0)
             if not hasattr(pl, "season_stats") or pl.season_stats is None:
                 pl.season_stats = {}
-            if pos_u == "G":
-                sa = max(1, int(row.get("shots_against", 0) or 0))
-                sv = int(row.get("saves", 0) or 0)
-                ga_ct = int(row.get("ga", 0) or 0)
-                sv_pct = sv / float(sa)
-                gaa = (ga_ct * 60.0) / max(1, gp)
-                perf_g = clamp(40.0 + 520.0 * (sv_pct - 0.88) - 1.15 * (gaa - 2.85), 22.0, 96.0)
-                pl.season_stats[int(season_year)] = {
-                    "season": int(season_year),
-                    "role": "starter",
-                    "goals": 0,
-                    "assists": 0,
-                    "points": 0,
-                    "ga": ga_ct,
-                    "gp": gp,
-                    "w": int(row.get("w", 0) or 0),
-                    "l": int(row.get("l", 0) or 0),
-                    "otl": int(row.get("otl", 0) or 0),
-                    "saves": sv,
-                    "shots_against": sa,
-                    "save_pct": round(sv_pct, 4),
-                    "gaa": round(gaa, 3),
-                    "performance_score": round(perf_g, 2),
-                    "expected_score": 60.0,
-                    "delta": 0.0,
-                    "war": 0.0,
-                    "xgf_pct": 0.5,
-                }
-            else:
-                pl.season_stats[int(season_year)] = {
-                    "season": int(season_year),
-                    "role": str(row.get("position") or "skater"),
-                    "goals": g,
-                    "assists": a,
-                    "points": pts,
-                    "g": g,
-                    "a": a,
-                    "gp": gp,
-                    "sog": int(row.get("sog", 0) or 0),
-                    "toi_sec": int(row.get("toi_sec", 0) or 0),
-                    "pim": int(row.get("pim", 0) or 0),
-                    "war": round(min(6.5, max(-2.0, (pts / max(1, gp)) * 0.22)), 2),
-                    "xgf_pct": round(0.48 + 0.0016 * float(per_gp), 3),
-                    "performance_score": round(perf, 2),
-                    "expected_score": 62.0,
-                    "delta": round(perf - 62.0, 2),
-                }
+            line = self._season_stat_line_from_ledger_row(dict(row), int(season_year))
+            pl.season_stats[int(season_year)] = line
+            if _stats_pipeline_debug():
+                rname = str(
+                    row.get("name")
+                    or getattr(getattr(pl, "identity", None), "name", None)
+                    or getattr(pl, "name", "?")
+                )
+                if str(row.get("position") or "").upper() == "G":
+                    print(
+                        f"[PLAYER SEASON SYNC] {rname} {int(season_year)} ga={line.get('ga')} gp={line.get('gp')} sv%={line.get('save_pct')}"
+                    )
+                else:
+                    print(
+                        f"[PLAYER SEASON SYNC] {rname} {int(season_year)} g={line.get('g')} a={line.get('a')} pts={line.get('pts')} gp={line.get('gp')}"
+                    )
 
     def _validate_league_season_scoring(
         self,
@@ -10004,21 +13748,127 @@ class SimEngine:
         meta["league_goals_total"] = int(tg)
         meta["league_avg_goals_per_game"] = round(tg / float(n_games), 3)
         sk = [
-            (int(v.get("g", 0)) + int(v.get("a", 0)), str(v.get("name", "?")))
+            (
+                int(v.get("g", 0)) + int(v.get("a", 0)),
+                int(v.get("g", 0)),
+                str(v.get("name", "?")),
+            )
             for v in ledger.values()
             if str(v.get("position") or "").upper() != "G"
         ]
         sk.sort(reverse=True)
-        meta["top_scorers"] = [{"name": n, "points": p} for p, n in sk[:10]]
+        meta["top_scorers"] = [{"name": n, "points": p, "goals": g} for p, g, n in sk[:10]]
         top_pts = int(sk[0][0]) if sk else 0
+        top_goals = max((g for _, g, _ in sk), default=0)
+        n_100pt = sum(1 for p, _, _ in sk if p >= 100)
+        n_120pt = sum(1 for p, _, _ in sk if p >= 120)
+        n_140pt = sum(1 for p, _, _ in sk if p >= 140)
+        n_50g = sum(1 for _, g, _ in sk if g >= 50)
+        n_60g = sum(1 for _, g, _ in sk if g >= 60)
+        n_70g = sum(1 for _, g, _ in sk if g >= 70)
+        meta["top_scorer_points"] = top_pts
+        meta["rocket_goals"] = int(top_goals)
+        meta["players_100pt"] = int(n_100pt)
+        meta["players_120pt"] = int(n_120pt)
+        meta["players_140pt"] = int(n_140pt)
+        meta["players_50g"] = int(n_50g)
+        meta["players_60g"] = int(n_60g)
+        meta["players_70g"] = int(n_70g)
+
+        gk_rows = [v for v in ledger.values() if str(v.get("position") or "").upper() == "G"]
+        sa_total = sum(int(v.get("shots_against", 0) or 0) for v in gk_rows)
+        sv_total = sum(int(v.get("saves", 0) or 0) for v in gk_rows)
+        league_sv_pct = (sv_total / float(sa_total)) if sa_total > 0 else 0.0
+        meta["league_avg_save_pct"] = round(league_sv_pct, 4)
+        team_gf = [int(rec.gf) for rec in standings.records.values() if int(getattr(rec, "gp", 0) or 0) > 0]
+        if team_gf:
+            meta["league_avg_team_gf"] = round(sum(team_gf) / float(len(team_gf)), 1)
+
         warnings: List[str] = []
-        if meta["league_avg_goals_per_game"] < 5.0:
-            warnings.append(
-                f"LOW_SCORING: league avg goals/game {meta['league_avg_goals_per_game']:.3f} < 5.0 "
-                f"(target combined ~5.8–6.4)."
+        structured: List[Dict[str, Any]] = []
+
+        def _warn(severity: str, code: str, message: str, **extra: Any) -> None:
+            warnings.append(f"{code}: {message}")
+            w: Dict[str, Any] = {"severity": severity, "code": code, "message": message}
+            w.update(extra)
+            structured.append(w)
+
+        gpg = float(meta["league_avg_goals_per_game"])
+        if gpg < 6.1:
+            _warn("P1", "LOW_SCORING", f"league avg goals/game {gpg:.3f} < 6.1 (franchise target combined ~6.4-7.1).")
+        elif gpg < 6.4 or gpg > 7.1:
+            _warn("P2", "GPG_OUT_OF_RANGE", f"league avg goals/game {gpg:.3f} outside ideal ~6.4-7.1.")
+        if gpg > 7.4:
+            _warn("P1", "HIGH_SCORING", f"league avg goals/game {gpg:.3f} > 7.4 (arcade drift).")
+        if top_pts < 95:
+            _warn("P2", "LOW_LEADER", f"top skater points {top_pts} < 95 (ideal Art Ross ~110-130).")
+        elif top_pts < 110 or top_pts > 130:
+            _warn("P2", "LEADER_OUT_OF_IDEAL", f"top skater points {top_pts} outside ideal ~110-130.")
+        if top_pts >= 165:
+            _warn("P1", "INFLATED_LEADER", f"top skater points {top_pts} >= 165 (absurd outlier cap).")
+        if n_100pt < 3:
+            _warn("P2", "FEW_100PT", f"{n_100pt} players at 100+ points (ideal 5-10).")
+        elif n_100pt > 14:
+            _warn("P1", "TOO_MANY_100PT", f"{n_100pt} players at 100+ points (ideal 5-10).")
+        if n_120pt > 5:
+            _warn("P1", "TOO_MANY_120PT", f"{n_120pt} players at 120+ points (ideal 1-3).")
+        if n_140pt > 2:
+            _warn("P1", "TOO_MANY_140PT", f"{n_140pt} players at 140+ points (rare 0-1).")
+        if n_50g < 2:
+            _warn("P2", "FEW_50G", f"{n_50g} players at 50+ goals (ideal 3-8).")
+        elif n_50g > 12:
+            _warn("P1", "TOO_MANY_50G", f"{n_50g} players at 50+ goals (ideal 3-8).")
+        if n_60g > 5:
+            _warn("P1", "TOO_MANY_60G", f"{n_60g} players at 60+ goals (ideal 1-3).")
+        if n_70g > 2:
+            _warn("P1", "TOO_MANY_70G", f"{n_70g} players at 70+ goals (should be rare).")
+        if sa_total > 0:
+            if league_sv_pct < 0.895:
+                _warn("P1", "LOW_LEAGUE_SV", f"league avg save % {league_sv_pct:.3f} < .895.")
+            elif league_sv_pct < 0.900 or league_sv_pct > 0.907:
+                _warn("P2", "SV_OUT_OF_IDEAL", f"league avg save % {league_sv_pct:.3f} outside ideal .900-.907.")
+            if league_sv_pct > 0.914:
+                _warn("P1", "HIGH_LEAGUE_SV", f"league avg save % {league_sv_pct:.3f} > .914.")
+
+        # P0: any team that played zero games after a full season schedule.
+        for tid, rec in standings.records.items():
+            if int(getattr(rec, "gp", 0) or 0) == 0:
+                _warn(
+                    "P0",
+                    "TEAM_ZERO_GP",
+                    f"team played 0 games after regular season (falsy-id or schedule mapping bug).",
+                    team_id=str(tid),
+                    abbr=str(getattr(rec, "abbr", "") or ""),
+                )
+
+        # P0: schedule references team ids missing from the standings lookup.
+        sched_ids: Set[str] = set()
+        for sl in schedule:
+            sched_ids.add(str(getattr(sl, "home_id", "")))
+            sched_ids.add(str(getattr(sl, "away_id", "")))
+        known_ids = {str(k) for k in standings.records.keys()}
+        missing_ids = sorted(i for i in sched_ids if i and i not in known_ids)
+        if missing_ids:
+            _warn(
+                "P0",
+                "SCHEDULE_TEAM_MISMATCH",
+                f"schedule references team ids not present in standings: {missing_ids[:8]}",
             )
-        if top_pts < 70:
-            warnings.append(f"LOW_LEADER: top skater points {top_pts} < 70 (target elite 90+).")
+
+        # P1: placeholder identities must never reach NHL-visible leader lists.
+        placeholder_leaders = [n for _, _, n in sk[:30] if n.startswith("Global ") or n.startswith("GP_")]
+        if placeholder_leaders:
+            _warn(
+                "P1",
+                "PLACEHOLDER_NAME_IN_LEADERS",
+                f"placeholder identities in top-30 scorers: {placeholder_leaders[:5]}",
+            )
+
+        # P2: goalie rows must exist in the ledger for exports/awards.
+        n_goalies = sum(1 for v in ledger.values() if str(v.get("position") or "").upper() == "G")
+        meta["goalie_rows"] = int(n_goalies)
+        if n_goalies == 0 and ledger:
+            _warn("P2", "MISSING_GOALIE_STATS", "no goalie rows present in the season stat ledger.")
 
         ct = counters or {}
         meta["trade_executions"] = int(ct.get("trade_executions", 0))
@@ -10027,19 +13877,91 @@ class SimEngine:
         inj_per_team_gp = float(meta["major_injuries"]) / max(1.0, float(n_games) * 0.5)
         meta["injury_event_density"] = round(inj_per_team_gp, 4)
         if meta["trade_executions"] < 1:
-            warnings.append("LOW_TRADES: fewer than 1 executed in-season trade (expect deadline lift).")
+            _warn("P3", "LOW_TRADES", "fewer than 1 executed in-season trade (expect deadline lift).")
         if meta["major_injuries"] < 2:
-            warnings.append("LOW_INJURIES: very few major injury events logged (check world injury layer).")
+            _warn("P3", "LOW_INJURIES", "very few major injury events logged (check world injury layer).")
         if meta["major_injuries"] > int(len(standings.records) * 4.5):
-            warnings.append("HIGH_INJURIES: major injury count unusually high vs team count.")
+            _warn("P3", "HIGH_INJURIES", "major injury count unusually high vs team count.")
 
         meta["warnings"] = warnings
+        meta["validation_warnings"] = structured
+        meta["stat_source"] = "game_ledger"
         if warnings and self.debug:
             for w in warnings:
                 print(f"[SimEngine season {year}] WARNING: {w}")
         return meta
 
-    def _simulate_game(
+    def _chemistry_game_modifier(self, team: Any, players: Optional[List[Any]] = None, situation: Optional[str] = None) -> float:
+        """
+        Soft chemistry probability hook (never hard-sets scores).
+        Consumes canonical systems.chemistry room cache; may refresh from it.
+        """
+        room = {}
+        try:
+            room = dict(getattr(team, "_chemistry_cache", None) or {})
+        except Exception:
+            room = {}
+        if not room:
+            try:
+                from app.sim_engine.systems.chemistry import calculate_team_room_chemistry  # noqa: WPS433
+
+                room = calculate_team_room_chemistry(team, session=None)
+                setattr(team, "_chemistry_cache", room)
+                # Derived world chemistry summary (0–1) from canonical room score.
+                setattr(team, "_world_chemistry", max(0.08, min(0.96, float(room.get("overall", 50)) / 100.0)))
+            except Exception:
+                room = {}
+        overall = float(room.get("overall", 50.0) or 50.0)
+        tension = float(room.get("tension", 25.0) or 25.0)
+        buy_in = float(room.get("buy_in", 50.0) or 50.0)
+        confidence = float(room.get("confidence", 50.0) or 50.0)
+        chaos_res = float(room.get("chaos_resistance", 50.0) or 50.0)
+        chaos = float(getattr(getattr(self, "league", None), "chaos_index", 0.35) or 0.35)
+
+        # Optional line-level boost when canonical deployed units are present.
+        line_boost = 0.0
+        try:
+            deployed = getattr(team, "_franchise_deployed_lineup", None)
+            if isinstance(deployed, dict) and deployed.get("ok"):
+                from app.sim_engine.systems.chemistry import calculate_forward_line_chemistry  # noqa: WPS433
+
+                scores = []
+                for ln in (deployed.get("forward_lines") or [])[:2]:
+                    if ln and len(ln) >= 2:
+                        scores.append(float(calculate_forward_line_chemistry(ln, context={"team": team}).get("chemistry", 50)))
+                if scores:
+                    line_boost = (sum(scores) / len(scores) - 55.0) * 0.00035
+        except Exception:
+            line_boost = 0.0
+
+        m = 1.0
+        m += (overall - 55.0) * 0.0008
+        m += (buy_in - 50.0) * 0.00035
+        m += (confidence - 50.0) * 0.00025
+        m -= max(0.0, tension - 42.0) * 0.0006
+        m -= max(0.0, chaos * 100.0 - chaos_res) * 0.00022
+        m += line_boost
+
+        if situation == "penalty_risk":
+            m += max(0.0, tension - 48.0) * 0.0009
+            m -= max(0.0, buy_in - 60.0) * 0.0004
+        return max(0.94, min(1.06, m))
+
+    def _merge_game_ledger(self, target: Dict[str, Dict[str, Any]], source: Dict[str, Dict[str, Any]]) -> None:
+        for pid, row in source.items():
+            if pid not in target:
+                target[pid] = dict(row)
+                continue
+            dst = target[pid]
+            for k, v in row.items():
+                if k in _GM_FLOAT_LEDGER_KEYS:
+                    dst[k] = round(float(dst.get(k, 0) or 0) + float(v or 0), 4)
+                elif k in ("gp", "g", "a", "pts", "sog", "pp_sog", "pim", "hit", "blk", "toi_sec", "ppg", "ppa", "shg", "sha", "ga", "w", "l", "otl", "saves", "shots_against", "goalie_shots_against", "goalie_ga", "so", "missed_shots", "blocked_attempts_for", "analytics_gp", "primary_assists", "secondary_assists", "xgf_pct_gp"):
+                    dst[k] = int(dst.get(k, 0) or 0) + int(v or 0)
+                elif k not in dst or dst[k] in (None, "", 0, 0.0):
+                    dst[k] = v
+
+    def _simulate_game_strength(
         self,
         rng: random.Random,
         home: Any,
@@ -10049,51 +13971,30 @@ class SimEngine:
         away_strength_scale: float = 1.0,
         noise_scale: float = 1.0,
     ) -> Tuple[int, int, bool]:
-        """
-        Abstract single-game simulation returning (home_goals, away_goals, overtime_flag).
-
-        Tuned for ~5.8–6.4 combined goals per game (modern NHL pace) with 25–35 shots/team
-        and ~9–11% shooting implied by shot-based means.
-        """
+        """Fast franchise/bulk score path — strength + variance (not event loop)."""
         hid = str(getattr(home, "team_id", getattr(home, "id", "H")))
         aid = str(getattr(away, "team_id", getattr(away, "id", "A")))
-        s_home = max(0.15, min(0.92, strength_map.get(hid, 0.5) * float(home_strength_scale)))
-        s_away = max(0.15, min(0.92, strength_map.get(aid, 0.5) * float(away_strength_scale)))
+        s_home = max(0.15, min(0.92, float(strength_map.get(hid, 0.5)) * float(home_strength_scale)))
+        s_away = max(0.15, min(0.92, float(strength_map.get(aid, 0.5)) * float(away_strength_scale)))
+
+        base = 2.8
         diff = s_home - s_away
+        home_mu = base + 1.0 * diff + 0.25
+        away_mu = base - 1.0 * diff
+        try:
+            home_mu += float(team_scoring_pace_bias(home))
+            away_mu += float(team_scoring_pace_bias(away))
+        except Exception:
+            pass
 
-        home_off_skill = self._team_offense_skill(home)
-        away_off_skill = self._team_offense_skill(away)
-
-        home_mu = team_scoring_pace_bias(home)
-        away_mu = team_scoring_pace_bias(away)
-
-        sog_home = 28.0 + 4.0 * (home_off_skill - 0.5) + 3.2 * diff + rng.uniform(-1.2, 1.2)
-        sog_away = 28.0 + 4.0 * (away_off_skill - 0.5) - 3.2 * diff + rng.uniform(-1.2, 1.2)
-        sog_home = max(25.0, min(35.0, sog_home))
-        sog_away = max(25.0, min(35.0, sog_away))
-
-        sh_home = max(0.09, min(0.11, 0.100 + 0.012 * (home_off_skill - 0.5)))
-        sh_away = max(0.09, min(0.11, 0.100 + 0.012 * (away_off_skill - 0.5)))
-
-        pp_home = max(0.18, min(0.24, 0.21 + 0.05 * (home_off_skill - 0.5)))
-        pp_away = max(0.18, min(0.24, 0.21 + 0.05 * (away_off_skill - 0.5)))
-
-        home_mu += sog_home * sh_home * (1.0 + 0.24 * pp_home)
-        away_mu += sog_away * sh_away * (1.0 + 0.24 * pp_away)
-
-        home_mu += 0.26 + 0.48 * diff
-        away_mu -= 0.42 * diff
-        home_mu *= 1.035
-        away_mu *= 1.035
-
-        home_mu = max(2.35, min(5.4, home_mu))
-        away_mu = max(2.15, min(5.2, away_mu))
+        home_mu = max(1.3, min(5.5, home_mu))
+        away_mu = max(1.0, min(5.0, away_mu))
 
         sg = max(0.75, min(1.25, float(noise_scale)))
         nh = self._narrative_team_goal_sigma_multiplier(home)
         na = self._narrative_team_goal_sigma_multiplier(away)
-        home_goals = max(0, int(round(rng.gauss(home_mu, 1.02 * sg * nh))))
-        away_goals = max(0, int(round(rng.gauss(away_mu, 1.02 * sg * na))))
+        home_goals = max(0, int(round(rng.gauss(home_mu, 1.2 * sg * nh))))
+        away_goals = max(0, int(round(rng.gauss(away_mu, 1.2 * sg * na))))
 
         overtime = False
         if home_goals == away_goals:
@@ -10104,6 +14005,66 @@ class SimEngine:
                 away_goals += 1
 
         return home_goals, away_goals, overtime
+
+    def _simulate_game(
+        self,
+        rng: random.Random,
+        home: Any,
+        away: Any,
+        strength_map: Dict[str, float],
+        home_strength_scale: float = 1.0,
+        away_strength_scale: float = 1.0,
+        noise_scale: float = 1.0,
+        *,
+        is_playoff: bool = False,
+        calendar_day: int = 0,
+        home_b2b: bool = False,
+        away_b2b: bool = False,
+        light_mode: bool = False,
+    ) -> Tuple[int, int, bool]:
+        """
+        Single-game simulation.
+
+        - light_mode=True (bulk season / Sim Regular Season): fast strength+variance path.
+          Event-driven GM games are far too expensive for ~1,300 league games.
+        - light_mode=False: event-driven score for detailed day/playoff presentation.
+        """
+        if light_mode:
+            setattr(self, "_pending_event_game", None)
+            return self._simulate_game_strength(
+                rng,
+                home,
+                away,
+                strength_map,
+                home_strength_scale=home_strength_scale,
+                away_strength_scale=away_strength_scale,
+                noise_scale=noise_scale,
+            )
+
+        hid = str(getattr(home, "team_id", getattr(home, "id", "H")))
+        aid = str(getattr(away, "team_id", getattr(away, "id", "A")))
+        scratch: Dict[str, Dict[str, Any]] = {}
+        result = self._run_event_driven_game(
+            rng, home, away, hid, aid, scratch,
+            strength_map=strength_map,
+            home_strength_scale=home_strength_scale,
+            away_strength_scale=away_strength_scale,
+            noise_scale=noise_scale,
+            light_mode=False,
+            is_playoff=is_playoff,
+            calendar_day=int(calendar_day),
+            home_b2b=bool(home_b2b),
+            away_b2b=bool(away_b2b),
+        )
+        hg = int(result.get("home_goals", 0))
+        ag = int(result.get("away_goals", 0))
+        ot = bool(result.get("overtime", False))
+        setattr(self, "_pending_event_game", {
+            "_key": (hid, aid, hg, ag, ot, False),
+            "result": result,
+            "scratch": scratch,
+        })
+        return hg, ag, ot
 
     def _standings_sync_team_metrics(self, standings: StandingsTable, teams: List[Any]) -> None:
         """Mirror standings rows onto team objects for waiver/trade heuristics."""
@@ -10165,10 +14126,95 @@ class SimEngine:
             )
 
         md = max(40, int(max(120, max_day) * 0.56))
-        deadline_phase = max(0.0, min(1.0, (float(day) - float(md)) / max(20.0, float(max_day) * 0.2)))
+        deadline_window = max(20.0, float(max_day) * 0.2)
+        deadline_day = int(md + deadline_window)
+        deadline_phase = max(0.0, min(1.0, (float(day) - float(md)) / deadline_window))
+        # Hard stop: no standard NHL trades after the trade deadline calendar day.
+        post_deadline = int(day) > int(deadline_day)
         trade_prob = 0.032 + 0.36 * deadline_phase
-        if rng.random() < trade_prob:
-            tr = evaluate_trade_market(self.league, max_executions=1)
+        # League-mean trade-frequency preference slightly modulates market cadence.
+        try:
+            profiles = dict(getattr(self.league, "cpu_franchise_profiles", None) or {})
+            freqs = [
+                float((p or {}).get("ideology", {}).get("trade_frequency_preference", 0.5) or 0.5)
+                for p in profiles.values()
+                if isinstance(p, dict)
+            ]
+            if freqs:
+                trade_prob += (sum(freqs) / len(freqs) - 0.5) * 0.04
+        except Exception:
+            pass
+        market_state = getattr(self.league, "cpu_market_runtime", None)
+        if not isinstance(market_state, dict):
+            market_state = {}
+            setattr(self.league, "cpu_market_runtime", market_state)
+        last_day = int(market_state.get("last_day", -1) or -1)
+        if last_day > int(day):
+            market_state = {}
+            setattr(self.league, "cpu_market_runtime", market_state)
+        market_state["last_day"] = int(day)
+        market_state["deadline_day"] = int(deadline_day)
+        market_state["post_deadline"] = bool(post_deadline)
+        seen_ids = market_state.get("seen_trade_ids")
+        if not isinstance(seen_ids, set):
+            seen_ids = set(seen_ids or [])
+            market_state["seen_trade_ids"] = seen_ids
+        season_cpu_trades = int(market_state.get("season_cpu_trades", 0) or 0)
+        for row in list(getattr(self.league, "trade_history", None) or []):
+            if not isinstance(row, dict):
+                continue
+            if bool(row.get("user_involved")):
+                continue
+            tid = str(row.get("trade_id") or "")
+            if not tid or tid in seen_ids:
+                continue
+            seen_ids.add(tid)
+            season_cpu_trades += 1
+        market_state["season_cpu_trades"] = int(season_cpu_trades)
+
+        day_ratio = max(0.0, min(1.0, float(day) / max(1.0, float(max_day))))
+        # Believable league target with deadline-heavy pacing.
+        if "seasonal_target" not in market_state:
+            market_state["seasonal_target"] = int(45 + round((rng.random() - 0.5) * 10))
+        seasonal_target = int(market_state.get("seasonal_target", 50) or 50)
+        seasonal_target = max(38, min(65, seasonal_target))
+        if day_ratio < 0.25:
+            expected_curve = 0.12
+        elif day_ratio < 0.5:
+            expected_curve = 0.32
+        elif day_ratio < 0.75:
+            expected_curve = 0.60
+        elif day_ratio < 0.9:
+            expected_curve = 0.82
+        else:
+            expected_curve = 0.96
+        expected_by_now = max(0, int(round(float(seasonal_target) * expected_curve)))
+        trade_deficit = max(0, expected_by_now - season_cpu_trades)
+        if trade_deficit >= 2:
+            trade_prob += min(0.12, 0.02 * trade_deficit)
+        if deadline_phase > 0.7:
+            trade_prob += 0.05
+        trade_prob = max(0.01, min(0.86, trade_prob))
+        if getattr(self.league, "transcendent_active", False):
+            tank_sellers = sum(1 for tm in teams if int(getattr(tm, "_franchise_tank_pressure", 0) or 0) >= 50)
+            if tank_sellers:
+                trade_prob += min(0.09, 0.012 * tank_sellers)
+        max_exec = 1
+        if deadline_phase > 0.52 or trade_deficit >= 3:
+            max_exec += 1
+        if deadline_phase > 0.78 or trade_deficit >= 6:
+            max_exec += 1
+        if deadline_phase > 0.9 and trade_deficit >= 8:
+            max_exec += 1
+        max_exec = max(1, min(4, max_exec))
+        forced_market_check = (not post_deadline) and trade_deficit >= 4 and (int(day) % 3 == 0)
+        if (not post_deadline) and (rng.random() < trade_prob or forced_market_check):
+            tr = evaluate_trade_market(
+                self.league,
+                max_executions=max_exec,
+                calendar_cursor=int(day),
+                regular_season_last_index=int(max_day),
+            )
             counters["trade_executions"] = int(counters.get("trade_executions", 0)) + len(tr)
             for t in tr:
                 news_out.append(
@@ -10179,9 +14225,17 @@ class SimEngine:
                         "team": str(t.get("to_team_id") or ""),
                         "from_team_id": str(t.get("from_team_id") or ""),
                         "players": list(t.get("outgoing") or []) + list(t.get("incoming") or []),
+                        "trade_id": str(t.get("trade_id") or ""),
+                        "execution": dict(t.get("execution") or {}),
+                        "trade_category": str(t.get("trade_category") or ""),
+                        "importance": str(t.get("importance") or "standard"),
+                        "reason_codes": list(t.get("reason_codes") or []),
+                        "reason_text": str(t.get("reason_text") or ""),
                         "priority": "HIGH",
                     }
                 )
+        elif post_deadline:
+            counters["post_deadline_blocked"] = int(counters.get("post_deadline_blocked", 0)) + 1
 
         rm = RosterManager()
         tbl = standings.league_table()
@@ -10266,13 +14320,21 @@ class SimEngine:
         schedule = generate_regular_season_schedule(r, teams, games_per_team=82)
         standings = StandingsTable(teams)
         self._preseason_line_synergy_refresh(teams, r)
+        self._refresh_league_scoring_elite_set(teams)
+        self._roll_historic_scoring_seasons(teams, r, int(year))
         strength_map = self._build_strength_map(teams)
 
         # id -> team mapping for quick lookup
+        # Explicit None checks: team_id=0 is a valid id (Boston) and must not be
+        # remapped to T00 while the schedule references "0" (P0 fix: skipped games).
         team_by_id: Dict[str, Any] = {}
         team_ids: List[str] = []
         for idx, t in enumerate(teams):
-            tid = getattr(t, "team_id", None) or getattr(t, "id", None) or f"T{idx:02d}"
+            tid = getattr(t, "team_id", None)
+            if tid is None:
+                tid = getattr(t, "id", None)
+            if tid is None:
+                tid = f"T{idx:02d}"
             tid = str(tid)
             team_ids.append(tid)
             team_by_id[tid] = t
@@ -10404,7 +14466,7 @@ class SimEngine:
                         ev = world_injuries.maybe_injure_roster_subset(tm, r, chaos_index, max_checks=8)
                         for label, tier, games, _pid in ev:
                             if tier == "major":
-                                tid_inj = str(getattr(tm, "team_id", None) or getattr(tm, "id", None) or "")
+                                tid_inj = _id_str(tm, "team_id", "id")
                                 injury_log_major.append(
                                     {
                                         "player": label,
@@ -10437,14 +14499,23 @@ class SimEngine:
                         noise_scale=id_noise,
                     )
 
-                self.accumulate_unified_game_stats(
+                game_box = self.accumulate_unified_game_stats(
                     r, home, away, hid, aid, int(hg), int(ag), bool(ot), stat_ledger
                 )
-                standings.record_game(slot.home_id, slot.away_id, hg, ag, overtime=ot)
+                standings.record_game(
+                    slot.home_id,
+                    slot.away_id,
+                    hg,
+                    ag,
+                    overtime=ot,
+                    shootout=bool((game_box or {}).get("shootout", False)),
+                    stats_home_goals=int((game_box or {}).get("player_home_goals", hg) or 0),
+                    stats_away_goals=int((game_box or {}).get("player_away_goals", ag) or 0),
+                )
 
                 for tm_m, tid_m in ((home, hid), (away, aid)):
                     for p in self._gm_skaters(tm_m):
-                        pid = str(getattr(p, "id", "") or "")
+                        pid = _id_str(p, "id")
                         if not pid:
                             continue
                         row = stat_ledger.get(pid)
@@ -10543,6 +14614,27 @@ class SimEngine:
         sk_export = [v for v in stat_ledger.values() if str(v.get("position", "")).upper() != "G"]
         sk_export.sort(key=lambda z: -(int(z.get("g", 0)) + int(z.get("a", 0))))
         player_stat_export = sk_export[:520]
+        # Goalie export rows: derive SV%/GAA honestly from accumulated totals;
+        # fields that cannot be computed are left as None rather than faked.
+        g_export: List[Dict[str, Any]] = []
+        for v in stat_ledger.values():
+            if str(v.get("position", "")).upper() != "G":
+                continue
+            row = dict(v)
+            sa = int(row.get("shots_against", 0) or 0)
+            sv = int(row.get("saves", 0) or 0)
+            gp_g = int(row.get("gp", 0) or 0)
+            row["save_pct"] = round(sv / sa, 4) if sa > 0 else None
+            toi_sec = int(row.get("toi_sec", 0) or 0)
+            if toi_sec <= 0 and gp_g > 0:
+                toi_sec = gp_g * 3600
+                row["toi_sec"] = toi_sec
+            row["gaa"] = round(float(row.get("ga", 0) or 0) * 3600.0 / toi_sec, 3) if toi_sec > 0 else None
+            row["shutouts"] = int(row.get("so", 0) or 0)
+            row["stat_source"] = "game_ledger"
+            g_export.append(row)
+        g_export.sort(key=lambda z: (-int(z.get("w", 0) or 0), -(float(z.get("save_pct") or 0.0))))
+        goalie_stat_export = g_export[:120]
         award_stat_rows = list(stat_ledger.values())
         awards = compute_awards(standings, playoff_result, teams, player_season_stats=award_stat_rows)
 
@@ -10598,6 +14690,7 @@ class SimEngine:
             playoff_result=playoff_result,
             awards=awards,
             player_season_stats=list(player_stat_export),
+            goalie_season_stats=list(goalie_stat_export),
             simulation_meta=dict(sim_meta),
             news_events=list(news_sorted),
         )
@@ -10863,9 +14956,13 @@ class SimEngine:
             "rookie_spam_trimmed": 0,
         }
         if franchise_tick:
-            major_cap = r.randint(0, 1)
-            mid_cap = r.randint(1, 3)
-            minor_cap = r.randint(2, 5)
+            sk = int(year)
+            maj_used = _narr_season_major_count(league, sk)
+            major_cap = 0
+            if maj_used < _MAJOR_STORYLINE_SEASON_CAP and r.random() < _FRANCHISE_MAJOR_DAY_GATE:
+                major_cap = 1
+            mid_cap = r.randint(0, 1)
+            minor_cap = r.randint(0, 2)
         else:
             major_cap = r.randint(8, 15)
             mid_cap = r.randint(20, 35)
@@ -10904,6 +15001,8 @@ class SimEngine:
             if rem_m <= 0 and rem_i <= 0 and rem_n <= 0:
                 return None
             rw_m = float(max(0, rem_m))
+            if franchise_tick and _narr_season_major_count(league, int(year)) >= _MAJOR_STORYLINE_SEASON_CAP:
+                rw_m = 0.0
             blocked_cd = lmaj is not None and year - int(lmaj) < 2
             if blocked_cd:
                 if rem_m > 0 and int(getattr(pl, "_narr_major_cd_log_year", -1) or -1) != int(year):
@@ -10924,9 +15023,13 @@ class SimEngine:
                 return "mid"
             return "minor"
 
+        uid_fr = str(getattr(league, "_franchise_user_team_id", "") or "")
+
         for team in teams:
             roster = list(getattr(team, "roster", None) or [])
-            tid = str(getattr(team, "team_id", "") or getattr(team, "id", "") or "")
+            tid = _id_str(team, "team_id", "id")
+            if franchise_tick and uid_fr and tid == uid_fr:
+                continue
             tname = str(getattr(team, "name", "") or getattr(team, "team_name", "") or tid)
             seed_mix = r.randint(1, 2**30) ^ sum((ord(c) & 0xFF) for c in tid[:24])
             tr_local = random.Random(seed_mix & 0x7FFFFFFF)
@@ -10980,11 +15083,11 @@ class SimEngine:
                 )
                 won_roll = False
                 if may_assign:
-                    p_try = 0.036 if char < 40 else 0.023 if char < 70 else 0.014
+                    p_try = 0.012 if char < 40 else 0.008 if char < 70 else 0.005
                     if abs(perf_delta) >= 0.035:
-                        p_try *= 1.12
+                        p_try *= 1.08
                     if franchise_tick:
-                        p_try *= 2.85
+                        p_try *= 1.25
                     won_roll = r.random() <= p_try
 
                 if may_assign and won_roll:
@@ -11013,7 +15116,14 @@ class SimEngine:
                                 weights = [max(0.001, float(pw.get(p, 0.04))) for p in pools_tier]
                                 li = pools_tier.index("legal_crime") if "legal_crime" in pools_tier else -1
                                 if li >= 0:
-                                    weights[li] *= _legal_pool_weight_mult(char)
+                                    leg_cap_hit = _narr_season_legal_count(league, int(year)) >= _LEGAL_MAJOR_SEASON_CAP
+                                    if (
+                                        not leg_cap_hit
+                                        and _legal_crime_roll_passes(r, char, franchise_tick=franchise_tick)
+                                    ):
+                                        weights[li] *= _legal_pool_weight_mult(char)
+                                    else:
+                                        weights[li] = 0.0
                                 sw = sum(weights)
                                 pool = pools_tier[-1]
                                 if sw > 0:
@@ -11116,6 +15226,12 @@ class SimEngine:
                         total_assignments += 1
                         if eff_tier == "major":
                             bal["major_arcs"] += 1
+                            _bump_narr_season_major(
+                                league,
+                                int(year),
+                                legal=str(picked.get("pool") or "") == "legal_crime"
+                                or str(picked.get("legal_severity") or "").lower() == "major",
+                            )
                         elif eff_tier == "minor":
                             bal["minor_events"] += 1
                         else:
@@ -11135,7 +15251,11 @@ class SimEngine:
                         log_rec["player_name"] = pname
                         log_rec["team_name"] = tname
                         log_rec["team_id"] = tid
+                        log_rec["player_id"] = str(getattr(player, "id", "") or "")
                         log_rec["storyline_text"] = event_obj.get("storyline", "")
+                        log_rec["event_type"] = etype
+                        log_rec["pool"] = str(picked.get("pool") or "")
+                        log_rec["legal_severity"] = str(picked.get("legal_severity") or "")
                         log_rec["teammates_rippled"] = ripple_n
                         log_rec["storyline_polarity"] = pol
                         log_rec["arc_tier"] = eff_tier
@@ -11197,15 +15317,21 @@ class SimEngine:
         for rec in report:
             rec.pop("_narr_sort", None)
 
-        if len(consequence_log) > 82:
+        cons_cap = 3 if franchise_tick else 82
+        if franchise_tick and uid_fr:
+            consequence_log = [
+                row for row in consequence_log
+                if str(row.get("team_id") or "") != uid_fr
+            ]
+        if len(consequence_log) > cons_cap:
             consequence_log.sort(
                 key=lambda x: (
                     0 if str(x.get("arc_tier")) == "major" else 1 if str(x.get("arc_tier")) == "mid" else 2,
                     str(x.get("team_name") or ""),
                 )
             )
-            bal["suppressed_events"] += len(consequence_log) - 82
-            consequence_log = consequence_log[:82]
+            bal["suppressed_events"] += len(consequence_log) - cons_cap
+            consequence_log = consequence_log[:cons_cap]
 
         try:
             dec_stem = {k: max(0, int(v) - 1) for k, v in stem_season.items() if int(v) > 0}
@@ -11380,4 +15506,99 @@ class SimEngine:
             return {}
         setattr(league, "_tuning_context", tuning_context)
         return apply_era_to_league(tuning_context, league, teams)
+
+
+# ---------------------------------------------------------------------------
+# Franchise Trade Hub — fan attachment / window tolerance helpers
+# ---------------------------------------------------------------------------
+
+def _clamp_fan_score(value: float, low: int = 0, high: int = 100) -> int:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        v = 50.0
+    return int(max(low, min(high, round(v))))
+
+
+def _franchise_player_ovr99(player: Any) -> float:
+    fn = getattr(player, "ovr", None)
+    try:
+        v = float(fn() if callable(fn) else fn or 0)
+    except Exception:
+        v = 0.0
+    return v * 99.0 if v <= 1.5 else v
+
+
+def _franchise_team_window_fan_tolerance(team: Any) -> Dict[str, float]:
+    """How forgiving fans are when selling/buying by competitive window."""
+    direction = str(getattr(team, "gm_window", getattr(team, "window", "unknown")) or "unknown").lower()
+    if direction in ("rebuild", "rebuilding", "emerging", "seller", "tank", "tanking"):
+        return {
+            "sell_veteran_relief": 0.55,
+            "sell_youth_penalty": 1.35,
+            "sell_star_penalty": 1.05,
+            "buy_prospect_bonus": 1.25,
+            "buy_star_penalty": 0.85,
+        }
+    if direction in ("contender", "playoff", "buyer"):
+        return {
+            "sell_veteran_relief": 0.75,
+            "sell_youth_penalty": 1.55,
+            "sell_star_penalty": 1.45,
+            "buy_prospect_bonus": 0.85,
+            "buy_star_bonus": 1.35,
+        }
+    return {
+        "sell_veteran_relief": 0.9,
+        "sell_youth_penalty": 1.25,
+        "sell_star_penalty": 1.2,
+        "buy_prospect_bonus": 1.0,
+        "buy_star_bonus": 1.1,
+    }
+
+
+def _franchise_player_fan_attachment(player: Any, team: Any = None, *, session_stats: Optional[Dict[str, Any]] = None) -> float:
+    """0–100 fan attachment score for a roster player."""
+    if player is None:
+        return 20.0
+    ovr = _franchise_player_ovr99(player)
+    ident = getattr(player, "identity", None)
+    age = int(getattr(ident, "age", getattr(player, "age", 26)) or 26)
+    score = 18.0 + min(38.0, ovr * 0.38)
+    if ovr >= 88:
+        score += 14.0
+    elif ovr >= 84:
+        score += 9.0
+    elif ovr >= 80:
+        score += 5.0
+    if age <= 24 and ovr >= 78:
+        score += 8.0
+    if age >= 30 and ovr >= 82:
+        score += 4.0
+    ratings = getattr(player, "ratings", None) or {}
+    try:
+        leadership = float(ratings.get("per_leadership", 0) or 0)
+        if leadership >= 85:
+            score += 6.0
+        elif leadership >= 78:
+            score += 3.0
+    except (TypeError, ValueError):
+        pass
+    if bool(getattr(player, "is_captain", False)) or str(getattr(player, "captaincy", "") or "").upper() in ("C", "CAPTAIN"):
+        score += 16.0
+    elif str(getattr(player, "captaincy", "") or "").upper() in ("A", "ALT", "ALTERNATE"):
+        score += 8.0
+    drafted = str(getattr(player, "drafted_by_team_id", "") or getattr(player, "origin_team_id", "") or "")
+    tid = str(getattr(team, "team_id", getattr(team, "id", "")) or "") if team else ""
+    if drafted and tid and drafted == tid:
+        score += 5.0
+    pst = getattr(player, "_franchise_storyline_state", None) or {}
+    if bool(pst.get("was_recently_shopped")):
+        score -= 4.0
+    if session_stats:
+        gp = int(session_stats.get("gp", 0) or 0)
+        pts = int(session_stats.get("pts", 0) or 0)
+        if gp >= 20 and pts / max(1, gp) >= 0.75:
+            score += 4.0
+    return float(max(5.0, min(100.0, score)))
 

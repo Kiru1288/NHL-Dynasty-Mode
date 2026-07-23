@@ -2,6 +2,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
+import { advanceFranchise } from "../services/franchiseService";
+import { formatFranchiseApiError } from "../services/api";
+import WorldJuniorsEvent from "../events/worldJuniors/WorldJuniorsEvent";
+import { resolveWorldJuniorsPayload } from "../events/worldJuniors/WorldJuniorsMenu";
 
 /**
  * CalendarScreen.js
@@ -70,7 +74,7 @@ const SCREEN_KEYS = {
 const NAV_ALIAS_TO_SCREEN = {
   [SCREEN_KEYS.lineup]: SCREENS.ROSTER,
   [SCREEN_KEYS.roster]: SCREENS.ROSTER,
-  [SCREEN_KEYS.scouting]: SCREENS.STATS,
+  [SCREEN_KEYS.scouting]: SCREENS.SCOUTING,
   [SCREEN_KEYS.analytics]: SCREENS.STATS,
   [SCREEN_KEYS.finances]: SCREENS.OFFICE,
   [SCREEN_KEYS.inbox]: SCREENS.OFFICE,
@@ -176,6 +180,133 @@ const TEAM_LOGO_NAME_OVERRIDES = {
   WPG: "Winnipeg",
 };
 
+const TEAM_ABBR_LOGO_ALIASES = {
+  WIN: "WPG",
+  WPG: "WPG",
+  NJ: "NJD",
+  DEV: "NJD",
+  LAS: "VGK",
+  VEG: "VGK",
+  MON: "MTL",
+  CAL: "CGY",
+  WAS: "WSH",
+  TB: "TBL",
+  SJ: "SJS",
+  LA: "LAK",
+  NAS: "NSH",
+  CLB: "CBJ",
+  ARZ: "ARI",
+  UTA: "UTA",
+  STL: "STL",
+  ST: "STL",
+};
+
+/** Canonical NHL name / city → abbreviation (never "NEW" / "ST." / "CAL"). */
+const NHL_NAME_TO_ABBR = {
+  "anaheim ducks": "ANA",
+  anaheim: "ANA",
+  ducks: "ANA",
+  "arizona coyotes": "ARI",
+  arizona: "ARI",
+  coyotes: "ARI",
+  "boston bruins": "BOS",
+  boston: "BOS",
+  bruins: "BOS",
+  "buffalo sabres": "BUF",
+  buffalo: "BUF",
+  sabres: "BUF",
+  "calgary flames": "CGY",
+  calgary: "CGY",
+  flames: "CGY",
+  "carolina hurricanes": "CAR",
+  carolina: "CAR",
+  hurricanes: "CAR",
+  "chicago blackhawks": "CHI",
+  chicago: "CHI",
+  blackhawks: "CHI",
+  "colorado avalanche": "COL",
+  colorado: "COL",
+  avalanche: "COL",
+  "columbus blue jackets": "CBJ",
+  columbus: "CBJ",
+  "blue jackets": "CBJ",
+  "dallas stars": "DAL",
+  dallas: "DAL",
+  stars: "DAL",
+  "detroit red wings": "DET",
+  detroit: "DET",
+  "red wings": "DET",
+  "edmonton oilers": "EDM",
+  edmonton: "EDM",
+  oilers: "EDM",
+  "florida panthers": "FLA",
+  florida: "FLA",
+  panthers: "FLA",
+  "los angeles kings": "LAK",
+  "los angeles": "LAK",
+  kings: "LAK",
+  "minnesota wild": "MIN",
+  minnesota: "MIN",
+  wild: "MIN",
+  "montreal canadiens": "MTL",
+  montreal: "MTL",
+  canadiens: "MTL",
+  "nashville predators": "NSH",
+  nashville: "NSH",
+  predators: "NSH",
+  "new jersey devils": "NJD",
+  "new jersey": "NJD",
+  devils: "NJD",
+  "new york islanders": "NYI",
+  islanders: "NYI",
+  "ny islanders": "NYI",
+  "new york rangers": "NYR",
+  rangers: "NYR",
+  "ny rangers": "NYR",
+  "ottawa senators": "OTT",
+  ottawa: "OTT",
+  senators: "OTT",
+  "philadelphia flyers": "PHI",
+  philadelphia: "PHI",
+  flyers: "PHI",
+  "pittsburgh penguins": "PIT",
+  pittsburgh: "PIT",
+  penguins: "PIT",
+  "san jose sharks": "SJS",
+  "san jose": "SJS",
+  sharks: "SJS",
+  "seattle kraken": "SEA",
+  seattle: "SEA",
+  kraken: "SEA",
+  "st louis blues": "STL",
+  "st. louis blues": "STL",
+  "st louis": "STL",
+  "st. louis": "STL",
+  blues: "STL",
+  "tampa bay lightning": "TBL",
+  "tampa bay": "TBL",
+  lightning: "TBL",
+  "toronto maple leafs": "TOR",
+  toronto: "TOR",
+  "maple leafs": "TOR",
+  "utah hockey club": "UTA",
+  utah: "UTA",
+  "vancouver canucks": "VAN",
+  vancouver: "VAN",
+  canucks: "VAN",
+  "vegas golden knights": "VGK",
+  vegas: "VGK",
+  "golden knights": "VGK",
+  "washington capitals": "WSH",
+  washington: "WSH",
+  capitals: "WSH",
+  "winnipeg jets": "WPG",
+  winnipeg: "WPG",
+  jets: "WPG",
+};
+
+const KNOWN_NHL_ABBRS = new Set(Object.values(NHL_NAME_TO_ABBR));
+
 const TEAM_LOGO_MAP = (() => {
   const map = new Map();
   if (!LOGO_CONTEXT) return map;
@@ -212,6 +343,24 @@ function normalizeKey(value) {
     .replace(/[^a-z0-9_]+/g, "_")
     .replace(/_+/g, "_")
     .replace(/^_|_$/g, "");
+}
+
+function sanitizeDisplayText(value) {
+  if (value === null || value === undefined) return "";
+
+  return String(value)
+    .replace(/ΓÇÖ/g, "'")
+    .replace(/ΓÇ£/g, '"')
+    .replace(/ΓÇ¥/g, '"')
+    .replace(/ΓÇô/g, "-")
+    .replace(/ΓÇö/g, "-")
+    .replace(/â€™/g, "'")
+    .replace(/â€œ/g, '"')
+    .replace(/â€\x9d/g, '"')
+    .replace(/â€"/g, "-")
+    .replace(/â€˜/g, "'")
+    .replace(/\uFFFD/g, "'")
+    .trim();
 }
 
 const SPECIAL_EVENT_LOGO_STEMS = {
@@ -541,6 +690,110 @@ function getSpecialEventTone(type, priority) {
   return p === "HIGH" ? "important" : "league";
 }
 
+function getWorldJuniorsEventPayload(franchiseState) {
+  const resolved = resolveWorldJuniorsPayload(franchiseState, null);
+  if (resolved.hasData && resolved.raw) return resolved.raw;
+  return EMPTY_OBJECT;
+}
+
+function isWorldJuniorsCalendarEvent(event) {
+  if (!event || typeof event !== "object") return false;
+
+  const type = normalizeKey(
+    event.type || event.kind || event.event_type || event.eventType || event.category || ""
+  );
+  const id = normalizeKey(event.id || event.event_id || event.eventId || "");
+
+  return (
+    type.includes("wjc") ||
+    type.includes("world_junior") ||
+    type.includes("world_juniors") ||
+    id.includes("wjc") ||
+    id.includes("world_junior")
+  );
+}
+
+function isWorldJuniorsWindowActive(franchiseState) {
+  if (findPendingWjcPopup(franchiseState)) return true;
+  const wjc = getWorldJuniorsEventPayload(franchiseState);
+  const status = normalizeKey(
+    wjc?.status || wjc?.tournament_status || wjc?.phase || wjc?.wjc_phase || ""
+  );
+
+  return status === "active" || status === "live" || status === "complete";
+}
+
+function findPendingWjcPopup(franchiseState) {
+  const pops = normalizeArrayMerged(
+    franchiseState?.pending_ui_popups,
+    franchiseState?.pendingUiPopups
+  );
+
+  return (
+    pops.find(
+      (pop) =>
+        pop &&
+        (pop.kind === "wjc_tournament" || pop.wjc_live === true || pop.wjc_phase)
+    ) || null
+  );
+}
+
+function getPlayoffEventPayload(franchiseState) {
+  return (
+    franchiseState?.playoffs ||
+    franchiseState?.playoff_data ||
+    franchiseState?.playoffData ||
+    EMPTY_OBJECT
+  );
+}
+
+function isPlayoffReady(franchiseState) {
+  const phase = String(
+    franchiseState?.season_phase || franchiseState?.phase || ""
+  ).toLowerCase();
+  return phase === "playoff_ready" || Boolean(franchiseState?.flags?.can_enter_playoffs);
+}
+
+function isPlayoffsStartCalendarEvent(event) {
+  if (!event || typeof event !== "object") return false;
+  const type = normalizeKey(
+    event.type || event.kind || event.event_type || event.eventType || event.category || ""
+  );
+  const id = normalizeKey(event.id || event.event_id || event.eventId || "");
+  return (
+    type.includes("playoffs_start") ||
+    type.includes("playoff_start") ||
+    id.includes("playoffs_start") ||
+    id.includes("playoff_start")
+  );
+}
+
+function findPendingPlayoffPopup(franchiseState) {
+  const pops = normalizeArrayMerged(
+    franchiseState?.pending_ui_popups,
+    franchiseState?.pendingUiPopups
+  );
+
+  return pops.find((pop) => pop && pop.kind === "playoff_start") || null;
+}
+
+function isDateInWorldJuniorsWindow(iso, seasonYear) {
+  if (!iso || !seasonYear) return false;
+
+  try {
+    const [y, m, d] = iso.split("-").map((part) => Number(part));
+    const dt = new Date(y, m - 1, d);
+    const sy = Number(seasonYear);
+
+    if (dt.getMonth() === 11 && dt.getDate() >= 26 && dt.getFullYear() === sy) return true;
+    if (dt.getMonth() === 0 && dt.getDate() <= 5 && dt.getFullYear() === sy + 1) return true;
+  } catch {
+    return false;
+  }
+
+  return false;
+}
+
 function normalizeCalendarSpecialEvent(event, index = 0) {
   if (typeof event === "string") {
     return {
@@ -597,24 +850,26 @@ function normalizeCalendarSpecialEvent(event, index = 0) {
     event.iso ||
     "";
 
-  const title =
+  const title = sanitizeDisplayText(
     event.title ||
-    event.headline ||
-    event.name ||
-    event.summary ||
-    event.label ||
-    event.subject ||
-    getSpecialEventDefaultTitle(type);
+      event.headline ||
+      event.name ||
+      event.summary ||
+      event.label ||
+      event.subject ||
+      getSpecialEventDefaultTitle(type)
+  );
 
-  const description =
+  const description = sanitizeDisplayText(
     event.description ||
-    event.details ||
-    event.body ||
-    event.message ||
-    event.text ||
-    event.effect_summary ||
-    event.summary ||
-    "";
+      event.details ||
+      event.body ||
+      event.message ||
+      event.text ||
+      event.effect_summary ||
+      event.summary ||
+      ""
+  );
 
   const priority = getSpecialEventPriority(type, event.priority || event.importance || event.severity);
 
@@ -633,7 +888,7 @@ function normalizeCalendarSpecialEvent(event, index = 0) {
     id,
     date,
     title,
-    headline: event.headline || title,
+    headline: sanitizeDisplayText(event.headline || title),
     type,
     priority,
     description,
@@ -774,14 +1029,18 @@ function CalendarSpecialEventTile({ event, compact, onOpen }) {
       </div>
 
       <div className="nhlcal-special-event-copy">
-        <strong>{event?.title || "League Event"}</strong>
-        {!compact && event?.description ? <span>{event.description}</span> : null}
+        <strong title={event?.title || "League Event"}>
+          {event?.title || "League Event"}
+        </strong>
+        {!compact && event?.description ? (
+          <span title={event.description}>{event.description}</span>
+        ) : null}
       </div>
     </div>
   );
 }
 
-function SpecialEventDetailsModal({ event, dateLabel, onClose }) {
+function SpecialEventDetailsModal({ event, dateLabel, onClose, onOpenWorldJuniors, onOpenPlayoffs }) {
   if (!event) return null;
 
   const effects = event.effects && typeof event.effects === "object" ? Object.entries(event.effects) : [];
@@ -807,7 +1066,7 @@ function SpecialEventDetailsModal({ event, dateLabel, onClose }) {
 
           <div>
             <p>{event.priority || "LEAGUE"} EVENT · {dateLabel || formatLongDate(event.date)}</p>
-            <h2 id="nhlcal-event-title">{event.title || "League Event"}</h2>
+            <h2 id="nhlcal-event-title">{sanitizeDisplayText(event.title) || "League Event"}</h2>
           </div>
 
           <button type="button" onClick={onClose} aria-label="Close event details">
@@ -816,12 +1075,14 @@ function SpecialEventDetailsModal({ event, dateLabel, onClose }) {
         </header>
 
         <div className="nhlcal-event-modal-body">
-          {event.description ? <p className="nhlcal-event-modal-description">{event.description}</p> : null}
+          {event.description ? (
+            <p className="nhlcal-event-modal-description">{sanitizeDisplayText(event.description)}</p>
+          ) : null}
 
           {event.effect_summary ? (
             <article className="nhlcal-event-modal-callout">
               <span>Effect</span>
-              <strong>{event.effect_summary}</strong>
+              <strong>{sanitizeDisplayText(event.effect_summary)}</strong>
             </article>
           ) : null}
 
@@ -851,6 +1112,22 @@ function SpecialEventDetailsModal({ event, dateLabel, onClose }) {
               <span>Team</span>
               <strong>{event.team_id}</strong>
             </article>
+          ) : null}
+
+          {typeof onOpenWorldJuniors === "function" ? (
+            <footer className="nhlcal-event-modal-actions">
+              <button type="button" className="nhlcal-wjc-hub-button is-modal" onClick={onOpenWorldJuniors}>
+                Open World Juniors Hub
+              </button>
+            </footer>
+          ) : null}
+
+          {typeof onOpenPlayoffs === "function" ? (
+            <footer className="nhlcal-event-modal-actions">
+              <button type="button" className="nhlcal-wjc-hub-button is-modal" onClick={onOpenPlayoffs}>
+                Enter Playoffs
+              </button>
+            </footer>
           ) : null}
         </div>
       </div>
@@ -1008,12 +1285,30 @@ function CalendarScreen(props = {}) {
   const [injuryReportOpen, setInjuryReportOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [advanceBusy, setAdvanceBusy] = useState(false);
-  const [advanceError, setAdvanceError] = useState("");
   const [choiceBusyId, setChoiceBusyId] = useState("");
   const [choiceError, setChoiceError] = useState("");
-  const [advanceBlocked, setAdvanceBlocked] = useState(null);
+  const [worldJuniorsMenuOpen, setWorldJuniorsMenuOpen] = useState(false);
+  const [wjcMenuSnapshot, setWjcMenuSnapshot] = useState(null);
 
   const calendarRootRef = useRef(null);
+  const isAdvancing = advanceBusy || Boolean(gameUI?.advancing);
+
+  const worldJuniorsEventData = useMemo(() => getWorldJuniorsEventPayload(rootState), [rootState]);
+
+  const worldJuniorsWindowOpen = useMemo(() => {
+    return (
+      isWorldJuniorsWindowActive(rootState) ||
+      isDateInWorldJuniorsWindow(toISODate(currentDate), rootState?.season_year || rootState?.seasonYear)
+    );
+  }, [rootState, currentDate]);
+
+  useEffect(() => {
+    const state = gameUI?.franchiseState || rootState;
+    if (!isPlayoffReady(state)) return;
+    if (findPendingPlayoffPopup(state) || state?.playoffs_generated) {
+      gameUI?.openFranchiseEvent?.();
+    }
+  }, [gameUI?.franchiseState, rootState, gameUI]);
 
   useEffect(() => {
     const nextDate = toDateObject(currentDate);
@@ -1175,8 +1470,18 @@ function CalendarScreen(props = {}) {
   }, [selectedDayGamesRaw]);
 
   const selectedTeamGame = useMemo(() => {
-    return selectedDayGames.find((game) => isTeamGame(game, activeTeam)) || selectedDayGames[0] || null;
-  }, [selectedDayGames, activeTeam]);
+    const userGame = selectedDayGamesRaw.find((game) => isTeamGame(game, activeTeam));
+    if (userGame) return userGame;
+    return selectedDayGamesRaw[0] || null;
+  }, [selectedDayGamesRaw, activeTeam]);
+
+  const selectedPreviewIsUserGame = useMemo(() => {
+    return Boolean(selectedTeamGame && isTeamGame(selectedTeamGame, activeTeam));
+  }, [selectedTeamGame, activeTeam]);
+
+  const selectedDayTeamGameCount = useMemo(() => {
+    return selectedDayGamesRaw.filter((game) => isTeamGame(game, activeTeam)).length;
+  }, [selectedDayGamesRaw, activeTeam]);
 
   const todayTeamGame = useMemo(() => {
     const todayISO = toISODate(currentDate || new Date());
@@ -1226,8 +1531,20 @@ function CalendarScreen(props = {}) {
       .slice(0, 5);
   }, [teamGames, currentDate]);
 
-  const divisionStandings = useMemo(() => {
-    return buildDivisionStandings(standings, allTeams, activeTeam).slice(0, 6);
+  const leagueStandingsSnapshot = useMemo(() => {
+    const divisionName = getDivisionName(activeTeam);
+    if (divisionName && divisionName !== "League") {
+      const div = buildDivisionStandings(standings, allTeams, activeTeam);
+      if (div.rows.length >= 3) {
+        return {
+          ...div,
+          label: `${divisionName} Division`,
+          rows: div.rows.slice(0, 10),
+        };
+      }
+    }
+    const league = buildLeagueStandings(standings, allTeams);
+    return { ...league, rows: league.rows.slice(0, 10) };
   }, [standings, allTeams, activeTeam]);
 
   const scheduleDiagnostics = useMemo(() => {
@@ -1241,11 +1558,58 @@ function CalendarScreen(props = {}) {
   }, [games, currentDate, activeTeam, showOnlyTeamGames]);
 
   const gamePreview = useMemo(() => {
-    return buildGamePreview(selectedTeamGame, activeTeam, allTeams, previousTeamGame, standings, statsCentral);
-  }, [selectedTeamGame, activeTeam, allTeams, previousTeamGame, standings, statsCentral]);
+    return buildGamePreview(
+      selectedTeamGame,
+      activeTeam,
+      allTeams,
+      previousTeamGame,
+      standings,
+      statsCentral,
+      {
+        isUserTeamGame: selectedPreviewIsUserGame,
+        games,
+        currentDate,
+      }
+    );
+  }, [
+    selectedTeamGame,
+    activeTeam,
+    allTeams,
+    previousTeamGame,
+    standings,
+    statsCentral,
+    selectedPreviewIsUserGame,
+    games,
+    currentDate,
+  ]);
 
   const quickTeamStats = useMemo(() => {
-    return buildQuickTeamStats(activeTeam, standings, games, currentDate);
+    return buildQuickTeamStats(activeTeam, standings, games, currentDate, statsCentral, allTeams);
+  }, [activeTeam, standings, games, currentDate, statsCentral, allTeams]);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    if (!activeTeam) return;
+
+    const row = findStandingForTeam(standings, activeTeam);
+    if (standings.length && !row) {
+      console.warn("[CalendarScreen] activeTeam could not be matched to standings row.", {
+        team: getTeamDisplayName(activeTeam),
+        teamId: getTeamId(activeTeam),
+      });
+    }
+
+    const completed = completedTeamGamesUpTo(games, activeTeam, currentDate);
+    if (completed.length > 0) {
+      const gf = calculateGoalsFor(games, activeTeam, currentDate);
+      const ga = calculateGoalsAgainst(games, activeTeam, currentDate);
+      if (gf === 0 && ga === 0) {
+        console.warn("[CalendarScreen] Completed team games exist but GF/GA ledger is zero.", {
+          team: getTeamDisplayName(activeTeam),
+          completedCount: completed.length,
+        });
+      }
+    }
   }, [activeTeam, standings, games, currentDate]);
 
   const calendarInsights = useMemo(() => {
@@ -1293,7 +1657,7 @@ function CalendarScreen(props = {}) {
         if (typeof ev === "string") {
           return {
             id: `evt-${idx}`,
-            headline: ev,
+            headline: sanitizeDisplayText(ev),
             date: "",
             priority: "MEDIUM",
             type: "storyline",
@@ -1302,14 +1666,16 @@ function CalendarScreen(props = {}) {
 
         return {
           id: ev?.id || ev?.storyline_id || `evt-${idx}`,
-          headline: ev?.headline || ev?.title || ev?.text || ev?.summary || "Storyline update",
+          headline: sanitizeDisplayText(
+            ev?.headline || ev?.title || ev?.text || ev?.summary || "Storyline update"
+          ),
           date: ev?.calendar_iso || ev?.date || "",
           priority: String(ev?.priority || "MEDIUM").toUpperCase(),
           type: String(ev?.type || ev?.event_type || "storyline").toLowerCase(),
           team_id: ev?.team_id || ev?.team,
-          cause: ev?.cause || "",
+          cause: sanitizeDisplayText(ev?.cause || ""),
           effects: ev?.effects || {},
-          effect_summary: ev?.effect_summary || ev?.effectSummary || "",
+          effect_summary: sanitizeDisplayText(ev?.effect_summary || ev?.effectSummary || ""),
         };
       })
       .filter((ev) => ev.headline)
@@ -1362,84 +1728,108 @@ function CalendarScreen(props = {}) {
     [setScreen, navigate, onNavigate]
   );
 
-  const handleAdvanceDay = useCallback(async () => {
-    if (advanceBusy) return;
-  
-    setAdvanceBusy(true);
-    setAdvanceError("");
-    setAdvanceBlocked(null);
-  
-    const payload = {
-      mode: "day",
-      count: 1,
-      auto_resolve: true,
-    };
-  
-    try {
-      let result = null;
-  
-      if (typeof advanceDay === "function") {
-        result = await advanceDay(payload);
-      } else if (typeof onAdvanceDay === "function") {
-        result = await onAdvanceDay(payload);
-      } else if (typeof gameUI?.onAdvanceFranchise === "function") {
-        result = await gameUI.onAdvanceFranchise(payload);
-      } else if (typeof gameUI?.onAdvanceDay === "function") {
-        result = await gameUI.onAdvanceDay(payload);
+  const handleAdvanceCalendar = useCallback(
+    async ({ mode = "day", count = 1 } = {}) => {
+      if (isAdvancing) return;
+
+      setAdvanceBusy(true);
+
+      const payload = {
+        mode,
+        count: Math.max(1, Number(count) || 1),
+        auto_resolve: true,
+      };
+
+      try {
+        const result = await advanceFranchise(payload);
+
+        if (typeof gameUI?.setFranchiseState === "function" && result?.state) {
+          gameUI.setFranchiseState(result.state);
+        } else if (typeof gameUI?.refreshFranchise === "function") {
+          await gameUI.refreshFranchise();
+        }
+
+        const step = result?.step || {};
+        const lastStep = step?.bulk ? step.last_step || step : step;
+        const status = String(lastStep?.status || step?.status || "").toLowerCase();
+        const nextState = result?.state || gameUI?.franchiseState || rootState;
+
+        if (status === "blocked") {
+          setActivePanel("events");
+          return;
+        }
+
+        const bulkCompleted = Number(step?.steps_completed || 0);
+        const bulkStopped = String(step?.stopped_reason || "").toLowerCase();
+
+        if (step?.bulk && bulkCompleted <= 0) {
+          if (bulkStopped === "pending_decisions") {
+            setActivePanel("events");
+          }
+          return;
+        }
+
+        if (
+          status &&
+          !["ok", "complete", "postseason", "post_cup", "offseason", "preseason", "playoff_ready"].includes(status)
+        ) {
+          return;
+        }
+
+        const landedIso = toISODate(nextState?.nhl_today?.iso || nextState?.nhlToday?.iso || "");
+
+        if (status === "post_cup" || status === "offseason") {
+          gameUI?.openFranchiseEvent?.();
+        }
+
+        const playoffTriggered =
+          status === "playoff_ready" ||
+          isPlayoffReady(nextState) ||
+          Boolean(findPendingPlayoffPopup(nextState));
+
+        if (playoffTriggered) {
+          const playoffPop = findPendingPlayoffPopup(nextState);
+          if (playoffPop?.id && typeof gameUI?.onDismissShowcasePopups === "function") {
+            try {
+              await gameUI.onDismissShowcasePopups([playoffPop.id]);
+            } catch {
+              /* menu still opens */
+            }
+          }
+          gameUI?.openFranchiseEvent?.();
+        }
+
+        const wjcTriggered =
+          Boolean(findPendingWjcPopup(nextState)) ||
+          isWorldJuniorsWindowActive(nextState) ||
+          isDateInWorldJuniorsWindow(landedIso, nextState?.season_year || nextState?.seasonYear);
+
+        if (wjcTriggered) {
+          const wjcPop = findPendingWjcPopup(nextState);
+          const resolved = resolveWorldJuniorsPayload(nextState, wjcPop);
+          if (resolved.hasData && resolved.raw) {
+            setWjcMenuSnapshot({ ...resolved.raw });
+          }
+          setWorldJuniorsMenuOpen(true);
+        }
+      } catch (error) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("[CalendarScreen] advance failed:", formatFranchiseApiError(error) || error);
+        }
+      } finally {
+        setAdvanceBusy(false);
       }
-  
-      const rawResult =
-        result?.data ||
-        result?.result ||
-        result?.advance_result ||
-        result?.advanceResult ||
-        result ||
-        null;
-  
-      const lastStep =
-        rawResult?.last_step ||
-        rawResult?.lastStep ||
-        rawResult?.advance_result?.last_step ||
-        rawResult;
-  
-      const status = String(lastStep?.status || rawResult?.status || "").toLowerCase();
-  
-      if (status === "blocked") {
-        setAdvanceBlocked({
-          reason: lastStep?.reason || rawResult?.stopped_reason || "blocked",
-          message:
-            lastStep?.message ||
-            rawResult?.message ||
-            "A decision needs your attention before advancing.",
-          pending_decisions:
-            lastStep?.pending_decisions ||
-            rawResult?.pending_decisions ||
-            [],
-        });
-  
-        setActivePanel("events");
-        return;
-      }
-  
-      if (status && !["ok", "complete", "postseason"].includes(status)) {
-        setAdvanceError(
-          lastStep?.message ||
-            rawResult?.message ||
-            `Advance stopped: ${status}`
-        );
-      }
-    } catch (error) {
-      const message =
-        error?.response?.data?.detail ||
-        error?.response?.data?.message ||
-        error?.message ||
-        "Advance Day failed.";
-  
-      setAdvanceError(String(message));
-    } finally {
-      setAdvanceBusy(false);
-    }
-  }, [advanceBusy, advanceDay, onAdvanceDay, gameUI]);
+    },
+    [isAdvancing, gameUI, rootState]
+  );
+
+  const handleAdvanceDay = useCallback(() => {
+    return handleAdvanceCalendar({ mode: "day", count: 1 });
+  }, [handleAdvanceCalendar]);
+
+  const handleAdvance15Days = useCallback(() => {
+    return handleAdvanceCalendar({ mode: "days", count: 15 });
+  }, [handleAdvanceCalendar]);
 
   const handleStorylineChoice = useCallback(
     async (storylineId, choiceId) => {
@@ -1481,13 +1871,73 @@ function CalendarScreen(props = {}) {
     [gameUI, rootState]
   );
 
+  const openFranchiseEventMenu = useCallback(async () => {
+    setDrawerOpen(false);
+    setSettingsOpen(false);
+    setInjuryReportOpen(false);
+    setSelectedEvent(null);
+
+    const playoffPop = findPendingPlayoffPopup(gameUI?.franchiseState || rootState);
+    if (playoffPop?.id && typeof gameUI?.onDismissShowcasePopups === "function") {
+      try {
+        await gameUI.onDismissShowcasePopups([playoffPop.id]);
+      } catch {
+        /* keep menu open even if dismiss fails */
+      }
+    }
+
+    gameUI?.openFranchiseEvent?.();
+  }, [gameUI, rootState]);
+
+  const handleEnterPlayoffs = useCallback(async () => {
+    if (typeof gameUI?.onEnterPlayoffs !== "function") {
+      throw new Error("Playoff entry handler is not connected.");
+    }
+    await gameUI.onEnterPlayoffs();
+    gameUI?.openFranchiseEvent?.();
+  }, [gameUI]);
+
+  const closeWorldJuniorsMenu = useCallback(async () => {
+    setWorldJuniorsMenuOpen(false);
+    const state = gameUI?.franchiseState || rootState;
+    const wjcPop = findPendingWjcPopup(state);
+    if (wjcPop?.id && typeof gameUI?.onDismissShowcasePopups === "function") {
+      try {
+        await gameUI.onDismissShowcasePopups([wjcPop.id]);
+      } catch {
+        /* menu already closed */
+      }
+    }
+    setWjcMenuSnapshot(null);
+  }, [gameUI, rootState]);
+
+  const openWorldJuniorsMenu = useCallback(() => {
+    setDrawerOpen(false);
+    setSettingsOpen(false);
+    setInjuryReportOpen(false);
+    setSelectedEvent(null);
+
+    const state = gameUI?.franchiseState || rootState;
+    const wjcPop = findPendingWjcPopup(state);
+    const resolved = resolveWorldJuniorsPayload(state, wjcPop);
+    if (resolved.hasData && resolved.raw) {
+      setWjcMenuSnapshot({ ...resolved.raw });
+    } else {
+      setWjcMenuSnapshot(null);
+    }
+
+    setWorldJuniorsMenuOpen(true);
+  }, [gameUI, rootState]);
+
   const closeAllOverlays = useCallback(() => {
     setDrawerOpen(false);
     setSettingsOpen(false);
     setInjuryReportOpen(false);
     setSelectedEvent(null);
+    setWorldJuniorsMenuOpen(false);
+    setWjcMenuSnapshot(null);
   }, []);
-  
+
   const openDrawer = useCallback(() => {
     setSettingsOpen(false);
     setInjuryReportOpen(false);
@@ -1517,12 +1967,25 @@ function CalendarScreen(props = {}) {
     setInjuryReportOpen(false);
   }, []);
   
-  const openSpecialEvent = useCallback((event) => {
-    setDrawerOpen(false);
-    setSettingsOpen(false);
-    setInjuryReportOpen(false);
-    setSelectedEvent(event);
-  }, []);
+  const openSpecialEvent = useCallback(
+    (event) => {
+      if (isWorldJuniorsCalendarEvent(event)) {
+        openWorldJuniorsMenu();
+        return;
+      }
+
+      if (isPlayoffsStartCalendarEvent(event) || isPlayoffReady(gameUI?.franchiseState || rootState)) {
+        openFranchiseEventMenu();
+        return;
+      }
+
+      setDrawerOpen(false);
+      setSettingsOpen(false);
+      setInjuryReportOpen(false);
+      setSelectedEvent(event);
+    },
+    [openWorldJuniorsMenu, openFranchiseEventMenu, gameUI, rootState]
+  );
   
   const closeSpecialEvent = useCallback(() => {
     setSelectedEvent(null);
@@ -1550,6 +2013,25 @@ function CalendarScreen(props = {}) {
     setShowOnlyTeamGames(false);
   }, []);
 
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+
+      const target = event.target;
+      const tag = String(target?.tagName || "").toUpperCase();
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) {
+        return;
+      }
+
+      event.preventDefault();
+      if (event.key === "ArrowLeft") goPreviousMonth();
+      else goNextMonth();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [goPreviousMonth, goNextMonth]);
+
   return (
     <div className="nhlcal-root" ref={calendarRootRef}>
       <CalendarStyles />
@@ -1564,7 +2046,7 @@ function CalendarScreen(props = {}) {
           <span className="nhlcal-shield-icon">⌂</span>
         </button>
 
-        <nav className="nhlcal-side-nav" aria-label="Franchise navigation">
+        <nav className="nhlcal-side-nav" aria-label="Main navigation">
           <SideNavButton
             active={false}
             icon="▦"
@@ -1597,8 +2079,9 @@ function CalendarScreen(props = {}) {
             active={false}
             icon="✉"
             label="Inbox"
-            badge={inboxCount}
+            badge={inboxCount > 99 ? "99+" : inboxCount > 0 ? inboxCount : null}
             onClick={() => handleNavigate(SCREEN_KEYS.inbox)}
+            title={inboxCount ? `${inboxCount} unread messages` : "Inbox"}
           />
         </nav>
 
@@ -1624,7 +2107,6 @@ function CalendarScreen(props = {}) {
           </section>
 
           <section className="nhlcal-month-control" aria-label="Calendar month controls">
-            <p>Franchise Calendar</p>
             <div className="nhlcal-month-row">
               <button type="button" onClick={goPreviousMonth} aria-label="Previous month">
                 ‹
@@ -1633,66 +2115,88 @@ function CalendarScreen(props = {}) {
               <button type="button" onClick={goNextMonth} aria-label="Next month">
                 ›
               </button>
+              <button type="button" className="nhlcal-today-chip" onClick={goCurrentMonth}>
+                Today
+              </button>
             </div>
           </section>
 
           <section className="nhlcal-action-cluster">
-            <button
-              className="nhlcal-menu-toggle"
-              type="button"
-              onClick={openDrawer}
-              aria-label="Open franchise drawer"
-              title="Open franchise drawer"
-            >
-              <span />
-              <span />
-              <span />
-            </button>
+            <div className="nhlcal-action-primary">
+              {worldJuniorsWindowOpen ? (
+                <button
+                  className="nhlcal-wjc-hub-button"
+                  type="button"
+                  onClick={openWorldJuniorsMenu}
+                  title="Open U-20 World Juniors tournament hub"
+                >
+                  <span>🌍</span>
+                  World Juniors
+                </button>
+              ) : null}
 
-            <button
-              className="nhlcal-quick-link"
-              type="button"
-              onClick={() => handleNavigate(SCREEN_KEYS.storylines_report)}
-            >
-              Storylines
-            </button>
+              <button
+                className={`nhlcal-advance-button ${isAdvancing ? "is-busy" : ""}`}
+                type="button"
+                onClick={handleAdvanceDay}
+                disabled={isAdvancing}
+              >
+                <span>{isAdvancing ? "…" : "▶"}</span>
+                {isAdvancing ? "Advancing" : "Advance Day"}
+              </button>
 
-            <button className="nhlcal-quick-link" type="button" onClick={openInjuryReport}>
-              Injury Report
-            </button>
-
-            <button
-              className="nhlcal-quick-link"
-              type="button"
-              onClick={openDrawer}
-            >
-              Command
-            </button>
-
-            <div className="nhlcal-online-chip">
-              <strong>{rootState?.gm_name || rootState?.general_manager || "GM"}</strong>
-              <span>Online</span>
+              <button
+                className={`nhlcal-advance-button nhlcal-advance-button-secondary ${isAdvancing ? "is-busy" : ""}`}
+                type="button"
+                onClick={handleAdvance15Days}
+                disabled={isAdvancing}
+                title="Sim 15 calendar days"
+              >
+                +15 Days
+              </button>
             </div>
 
-            <div className="nhlcal-date-chip">
-              <span className="nhlcal-date-icon">◫</span>
-              <div>
-                <strong>{formatShortDate(currentDate)}</strong>
-                <span>{formatWeekday(currentDate)}</span>
+            <div className="nhlcal-action-secondary">
+              <button
+                className="nhlcal-menu-toggle"
+                type="button"
+                onClick={openDrawer}
+                aria-label="Open command drawer"
+                title="Open command drawer"
+              >
+                <span />
+                <span />
+                <span />
+              </button>
+
+              <button
+                className="nhlcal-quick-link"
+                type="button"
+                onClick={() => handleNavigate(SCREEN_KEYS.storylines_report)}
+              >
+                Storylines
+              </button>
+
+              <button className="nhlcal-quick-link" type="button" onClick={openInjuryReport}>
+                Injuries
+              </button>
+
+              <div className="nhlcal-date-chip compact">
+                <span className="nhlcal-date-icon">◫</span>
+                <div>
+                  <strong>{formatShortDate(currentDate)}</strong>
+                  <span>{formatWeekday(currentDate)}</span>
+                </div>
               </div>
             </div>
-
-            <button
-  className={`nhlcal-advance-button ${advanceBusy ? "is-busy" : ""}`}
-  type="button"
-  onClick={handleAdvanceDay}
-  disabled={advanceBusy}
->
-  <span>{advanceBusy ? "…" : "▶"}</span>
-  {advanceBusy ? "Advancing" : "Advance Day"}
-</button>
           </section>
         </header>
+
+        {!games.length ? (
+          <div className="nhlcal-schedule-alert">
+            Schedule data is missing or not loaded from the backend yet.
+          </div>
+        ) : null}
 
         <section className="nhlcal-stat-strip">
           {quickTeamStats.map((stat) => (
@@ -1703,19 +2207,47 @@ function CalendarScreen(props = {}) {
               value={stat.value}
               sub={stat.sub}
               tone={stat.tone}
+              tooltip={stat.tooltip}
+              loading={isAdvancing}
             />
           ))}
         </section>
 
         <section className="nhlcal-content-grid">
           <section className="nhlcal-calendar-panel">
+            <div className="nhlcal-calendar-toolbar">
+              <div className="nhlcal-calendar-toolbar-group">
+                <button type="button" onClick={goCurrentMonth}>
+                  Today
+                </button>
+                <button type="button" onClick={() => setDenseMode((value) => !value)}>
+                  {denseMode ? "Comfort" : "Dense"}
+                </button>
+                <button
+                  type="button"
+                  className={showOnlyTeamGames ? "is-active" : ""}
+                  onClick={setCalendarModeTeamOnly}
+                  title="Show only your team's games on the calendar"
+                >
+                  Team Only
+                </button>
+                <button
+                  type="button"
+                  className={!showOnlyTeamGames ? "is-active" : ""}
+                  onClick={setCalendarModeLeague}
+                  title="Show the full league slate plus calendar events"
+                >
+                  League + Events
+                </button>
+              </div>
+            </div>
             <div className="nhlcal-week-header">
               {WEEKDAY_NAMES.map((day) => (
                 <div key={day}>{day}</div>
               ))}
             </div>
 
-            <div className={`nhlcal-month-grid ${denseMode ? "is-dense" : ""}`}>
+            <div className={`nhlcal-month-grid nhlcal-scroll-surface ${denseMode ? "is-dense" : ""}`}>
               {monthGrid.map((dayCell) => {
                 const iso = toISODate(dayCell.date);
                 const dayGamesRaw = gamesByDate.get(iso) || EMPTY_ARRAY;
@@ -1765,6 +2297,9 @@ function CalendarScreen(props = {}) {
                   <button
                     key={iso}
                     type="button"
+                    aria-label={`${formatLongDate(iso)}${teamGame ? ", your team plays" : ""}${
+                      hasSpecialEvents ? `, ${daySpecialEvents.length} events` : ""
+                    }${isToday ? ", today" : ""}`}
                     className={[
                       "nhlcal-day-cell",
                       isSelected ? "is-selected" : "",
@@ -1801,7 +2336,9 @@ function CalendarScreen(props = {}) {
                         </span>
                       ) : null}
 
-                        {teamGame ? <span className="nhlcal-corner-cut" /> : null}
+                        {teamGame ? (
+                          <span className="nhlcal-corner-cut" title="Your team plays this day" aria-label="Your team plays" />
+                        ) : null}
                       </span>
                     </div>
 
@@ -1853,6 +2390,7 @@ function CalendarScreen(props = {}) {
                               game={game}
                               activeTeam={activeTeam}
                               allTeams={allTeams}
+                              standings={standings}
                               compact={denseMode}
                               expanded={isSelected && expandedGameKey === gameKey}
                               onToggle={() => {
@@ -1870,7 +2408,16 @@ function CalendarScreen(props = {}) {
                         ) : null}
 
                         {!visibleGames.length && !daySpecialEvents.length ? (
-                          <div className="nhlcal-empty-day-line">No slate</div>
+                          <div
+                            className="nhlcal-empty-day-line"
+                            title={
+                              showOnlyTeamGames && hasRawGames
+                                ? `${dayGamesRaw.length} league game(s) hidden by Team Only filter`
+                                : undefined
+                            }
+                          >
+                            {showOnlyTeamGames && hasRawGames ? "League slate" : "Off day"}
+                          </div>
                         ) : null}
                       </div>
                     </div>
@@ -1914,6 +2461,18 @@ function CalendarScreen(props = {}) {
                   Team Game
                 </span>
                 <span>
+                  <i className="dot win" />
+                  Win
+                </span>
+                <span>
+                  <i className="dot loss" />
+                  Loss
+                </span>
+                <span>
+                  <i className="dot otl" />
+                  OTL
+                </span>
+                <span>
                   <i className="dot special" />
                   Special Event
                 </span>
@@ -1924,102 +2483,56 @@ function CalendarScreen(props = {}) {
               </div>
 
               <div className="nhlcal-calendar-actions">
-                <button type="button" onClick={goCurrentMonth}>
-                  Today
-                </button>
-
-                <button type="button" onClick={() => setDenseMode((value) => !value)}>
-                  {denseMode ? "Comfort View" : "Dense View"}
-                </button>
-
-                <button
-                  type="button"
-                  className={showOnlyTeamGames ? "is-active" : ""}
-                  onClick={setCalendarModeTeamOnly}
-                >
-                  Team Only
-                </button>
-
-                <button
-                  type="button"
-                  className={!showOnlyTeamGames ? "is-active" : ""}
-                  onClick={setCalendarModeLeague}
-                >
-                  League + Events
-                </button>
-
                 <button type="button" onClick={() => setSettingsOpen(true)}>
-                  ⚙ Calendar Settings
+                  Calendar Settings
                 </button>
               </div>
             </footer>
           </section>
 
           <aside className="nhlcal-right-rail">
-            <GamePreviewCard
-              activePanel={activePanel}
-              setActivePanel={setActivePanel}
-              preview={gamePreview}
-              selectedDateHeader={selectedDateHeader}
-              activeTeam={activeTeam}
-              allTeams={allTeams}
-              selectedDayGames={selectedDayGames}
-              selectedDayGamesRaw={selectedDayGamesRaw}
-              selectedDayEvents={selectedDayEvents}
-              selectedDayInjuryRows={selectedDayInjuryRows}
-              todayTeamGame={todayTeamGame}
-              todaySpecialEvents={todaySpecialEvents}
-              onNavigate={handleNavigate}
-              onOpenEvent={openSpecialEvent}
-              onOpenInjuryReport={openInjuryReport}
-            />
+            <div className="nhlcal-rail-preview-wrap">
+              <GamePreviewCard
+                activePanel={activePanel}
+                setActivePanel={setActivePanel}
+                preview={gamePreview}
+                selectedDateHeader={selectedDateHeader}
+                activeTeam={activeTeam}
+                allTeams={allTeams}
+                standings={standings}
+                selectedDayGames={selectedDayGames}
+                selectedDayGamesRaw={selectedDayGamesRaw}
+                selectedDayEvents={selectedDayEvents}
+                selectedDayInjuryRows={selectedDayInjuryRows}
+                selectedDayTeamGameCount={selectedDayTeamGameCount}
+                todayTeamGame={todayTeamGame}
+                todaySpecialEvents={todaySpecialEvents}
+                onNavigate={handleNavigate}
+                onOpenEvent={openSpecialEvent}
+                onOpenInjuryReport={openInjuryReport}
+              />
+            </div>
 
             <StandingsCard
               activeTeam={activeTeam}
-              rows={divisionStandings}
+              allTeams={allTeams}
+              rows={leagueStandingsSnapshot.rows}
+              groupLabel={leagueStandingsSnapshot.label}
+              extended
               onOpenFull={() => handleNavigate(SCREEN_KEYS.standings)}
             />
 
-            <section className="nhlcal-mini-card-row">
-              <StorylinesReportCard
-                rows={recentStorylines}
-                storylineChoices={storylineChoices}
-                onChoose={handleStorylineChoice}
-                busyChoiceId={choiceBusyId}
+            {nextTeamGames.length ? (
+              <UpcomingStretchCard
+                games={nextTeamGames}
+                activeTeam={activeTeam}
+                allTeams={allTeams}
               />
-
-              <InjuryReportCard
-                rows={recentInjuryRows}
-                team={activeTeam}
-                onOpenFull={openInjuryReport}
-              />
-            </section>
-            {choiceError ? (
-              <section className="nhlcal-advance-alert is-error">
-                <div>
-                  <strong>Choice Failed</strong>
-                  <p>{choiceError}</p>
-                </div>
-                <button type="button" onClick={() => setChoiceError("")}>
-                  Dismiss
-                </button>
-              </section>
-            ) : null}
-            {Array.isArray(rootState?.pending_decisions) && rootState.pending_decisions.length ? (
-              <section className="nhlcal-advance-alert is-blocked">
-                <div>
-                  <strong>Pending Front Office Decisions</strong>
-                  <p>{rootState.pending_decisions.length} item(s) need attention before the sim should continue.</p>
-                </div>
-                <button type="button" onClick={() => handleNavigate(SCREEN_KEYS.storylines_report)}>
-                  Review
-                </button>
-              </section>
             ) : null}
           </aside>
         </section>
 
-        <section className="nhlcal-bottom-grid">
+        <section className="nhlcal-bottom-grid nhlcal-bottom-grid--collapsed">
           <DiagnosticsPanel
             diagnostics={scheduleDiagnostics}
             insights={calendarInsights}
@@ -2083,36 +2596,88 @@ function CalendarScreen(props = {}) {
           event={selectedEvent}
           dateLabel={formatLongDate(selectedEvent.date)}
           onClose={closeSpecialEvent}
+          onOpenWorldJuniors={
+            isWorldJuniorsCalendarEvent(selectedEvent) ? openWorldJuniorsMenu : undefined
+          }
+          onOpenPlayoffs={
+            isPlayoffsStartCalendarEvent(selectedEvent) || isPlayoffReady(gameUI?.franchiseState || rootState)
+              ? openFranchiseEventMenu
+              : undefined
+          }
         />
+      ) : null}
+
+      {worldJuniorsMenuOpen ? (
+        <div className="nhlcal-wjc-menu-host" role="presentation">
+          <WorldJuniorsEvent
+            franchiseState={gameUI?.franchiseState || rootState}
+            eventData={wjcMenuSnapshot || worldJuniorsEventData}
+            onClose={closeWorldJuniorsMenu}
+            onBackToHub={closeWorldJuniorsMenu}
+            onSimNextTournamentDay={handleAdvanceDay}
+            onOpenDraftBoard={(prospectId) => {
+              closeWorldJuniorsMenu();
+              if (typeof gameUI?.openDraftClassFromWjc === "function") {
+                gameUI.openDraftClassFromWjc(prospectId);
+              } else {
+                handleNavigate(SCREEN_KEYS.draft);
+              }
+            }}
+          />
+        </div>
       ) : null}
     </div>
   );
 }
 
-function SideNavButton({ active, icon, label, badge, onClick }) {
+function SideNavButton({ active, icon, label, badge, onClick, title }) {
   return (
-    <button type="button" className={`nhlcal-side-button ${active ? "is-active" : ""}`} onClick={onClick}>
+    <button
+      type="button"
+      className={`nhlcal-side-button ${active ? "is-active" : ""}`}
+      onClick={onClick}
+      title={title || label}
+      aria-label={title || label}
+    >
       <span className="nhlcal-side-icon">{icon}</span>
       <span className="nhlcal-side-label">{label}</span>
-      {badge ? <em>{badge}</em> : null}
+      {badge ? <em aria-label={`${badge} unread`}>{badge}</em> : null}
     </button>
   );
 }
 
-function StatPill({ icon, label, value, sub, tone }) {
+function StatPill({ icon, label, value, sub, tone, tooltip, loading = false }) {
+  if (loading) {
+    return (
+      <article className="nhlcal-stat-pill is-skeleton">
+        <div className="nhlcal-stat-icon" />
+        <div>
+          <span>{label}</span>
+          <strong className="nhlcal-skeleton-bar" />
+          <small className="nhlcal-skeleton-bar short" />
+        </div>
+      </article>
+    );
+  }
+
   return (
-    <article className={`nhlcal-stat-pill ${tone ? `tone-${tone}` : ""}`}>
+    <article
+      className={`nhlcal-stat-pill ${tone ? `tone-${tone}` : ""}`}
+      title={tooltip || undefined}
+    >
       <div className="nhlcal-stat-icon">{icon}</div>
       <div>
         <span>{label}</span>
-        <strong>{value}</strong>
-        <small>{sub}</small>
+        <strong className={value === "—" || value == null || value === "" ? "is-missing" : undefined}>
+          {value == null || value === "" ? "—" : value}
+        </strong>
+        {sub ? <small>{sub}</small> : null}
       </div>
     </article>
   );
 }
 
-function CalendarGameTile({ game, activeTeam, allTeams, compact, expanded, onToggle }) {
+function CalendarGameTile({ game, activeTeam, allTeams, standings = [], compact, expanded, onToggle }) {
   const opponent = getOpponentFromGame(game, activeTeam, allTeams);
   const isHome = isHomeGame(game, activeTeam);
   const isUserGame = isTeamGame(game, activeTeam);
@@ -2140,20 +2705,32 @@ function CalendarGameTile({ game, activeTeam, allTeams, compact, expanded, onTog
 
   const resultClass =
     completed && isUserGame
-      ? resultToken.startsWith("W")
-        ? "result-win"
-        : resultToken.startsWith("L")
-          ? "result-loss"
-          : resultToken.startsWith("OTL")
-            ? "result-otl"
+      ? resultToken.startsWith("OTL") || resultToken === "OT" || resultToken === "SO"
+        ? "result-otl"
+        : resultToken.startsWith("W")
+          ? "result-win"
+          : resultToken.startsWith("L")
+            ? "result-loss"
             : ""
       : "";
+
+  const opponentFullName = getTeamDisplayName(opponent);
+  const awayFullName = getTeamDisplayName(awayTeam);
+  const homeFullName = getTeamDisplayName(homeTeam);
+  const scoreTooltip =
+    hasVisibleScore && completed ? ` ${awayScore}-${homeScore}` : completed && result ? ` — ${result}` : "";
+  const tileTooltip = isUserGame
+    ? `${relation} ${opponentFullName}${completed && result ? ` — ${result}` : detailsTime ? ` · ${detailsTime}` : ""}`
+    : `${awayFullName} @ ${homeFullName}${scoreTooltip || (detailsTime ? ` · ${detailsTime}` : "")}`;
+  const tileAriaLabel = tileTooltip;
 
   return (
     <div
       className={`nhlcal-game-tile ${completed ? "is-final" : "is-upcoming"} ${isHome ? "is-home" : "is-away"} ${resultClass} ${
         expanded ? "is-expanded" : ""
       }`}
+      title={tileTooltip}
+      aria-label={tileAriaLabel}
       onClick={(event) => {
         event.stopPropagation();
         onToggle?.();
@@ -2215,20 +2792,20 @@ function CalendarGameTile({ game, activeTeam, allTeams, compact, expanded, onTog
         <div className="nhlcal-game-expand-details">
           <div className="nhlcal-game-expand-header">
             <strong>{finalLabel}</strong>
-            <span>{venue || "Arena TBD"}</span>
+            <span>{venue || getArenaName(homeTeam) || "TBD"}</span>
           </div>
 
           <div className="nhlcal-game-expand-row">
             <div>
               <TeamIdentityBadge team={awayTeam} size="mini" />
               <span>{getTeamAbbreviation(awayTeam)}</span>
-              <small>{formatTeamRecord(awayTeam)}</small>
+              <small>{formatTeamRecord(awayTeam, standings)}</small>
             </div>
 
             <div>
               <TeamIdentityBadge team={homeTeam} size="mini" />
               <span>{getTeamAbbreviation(homeTeam)}</span>
-              <small>{formatTeamRecord(homeTeam)}</small>
+              <small>{formatTeamRecord(homeTeam, standings)}</small>
             </div>
           </div>
         </div>
@@ -2255,10 +2832,12 @@ function GamePreviewCard({
   selectedDateHeader,
   activeTeam,
   allTeams,
+  standings = [],
   selectedDayGames,
   selectedDayGamesRaw,
   selectedDayEvents,
   selectedDayInjuryRows,
+  selectedDayTeamGameCount = 0,
   todayTeamGame,
   todaySpecialEvents,
   onNavigate,
@@ -2268,6 +2847,7 @@ function GamePreviewCard({
   const game = preview?.game || null;
   const home = preview?.homeTeam || null;
   const away = preview?.awayTeam || null;
+  const previewTitle = preview?.previewLabel || (game ? "Game Preview" : "Calendar Day");
 
   const hasEvents = Array.isArray(selectedDayEvents) && selectedDayEvents.length > 0;
   const hasRawGames = Array.isArray(selectedDayGamesRaw) && selectedDayGamesRaw.length > 0;
@@ -2275,21 +2855,31 @@ function GamePreviewCard({
 
   const eventCount = selectedDayEvents?.length || 0;
   const gameCount = selectedDayGamesRaw?.length || selectedDayGames?.length || 0;
+  const venue = preview?.venue || game?.venue || game?.arena || getArenaName(home);
+  const hasAnalysis = Array.isArray(preview?.analysis) && preview.analysis.length > 0;
+  const completedPreview = game ? isCompletedGame(game) : false;
 
   return (
-    <section className="nhlcal-card nhlcal-preview-card">
+    <section className="nhlcal-card nhlcal-preview-card nhlcal-scroll-surface">
       <header className="nhlcal-card-header">
         <div>
           <p>{selectedDateHeader}</p>
-          <h3>{game ? "Game Preview" : hasEvents ? "Calendar Events" : "Calendar Day"}</h3>
+          <h3>{game ? previewTitle : hasEvents ? "Calendar Events" : "Calendar Day"}</h3>
         </div>
 
         <span className="nhlcal-header-pill">
-          {gameCount} game{gameCount === 1 ? "" : "s"} · {eventCount} event{eventCount === 1 ? "" : "s"}
+          {gameCount} game{gameCount === 1 ? "" : "s"} · {selectedDayTeamGameCount} team · {eventCount} event
+          {eventCount === 1 ? "" : "s"}
         </span>
       </header>
 
-      <div className="nhlcal-tab-row nhlcal-tab-row-three">
+      <div className="nhlcal-selected-summary-strip">
+        <span>{gameCount} league games</span>
+        <span>{selectedDayTeamGameCount} team games</span>
+        <span>{eventCount} events</span>
+      </div>
+
+      <div className={`nhlcal-tab-row ${hasAnalysis ? "nhlcal-tab-row-three" : "nhlcal-tab-row-two"}`}>
         <button
           type="button"
           className={activePanel === "game_preview" ? "is-active" : ""}
@@ -2298,13 +2888,15 @@ function GamePreviewCard({
           Preview
         </button>
 
-        <button
-          type="button"
-          className={activePanel === "matchup_analysis" ? "is-active" : ""}
-          onClick={() => setActivePanel("matchup_analysis")}
-        >
-          Matchup
-        </button>
+        {hasAnalysis ? (
+          <button
+            type="button"
+            className={activePanel === "matchup_analysis" ? "is-active" : ""}
+            onClick={() => setActivePanel("matchup_analysis")}
+          >
+            Matchup
+          </button>
+        ) : null}
 
         <button
           type="button"
@@ -2327,37 +2919,53 @@ function GamePreviewCard({
         />
       ) : game ? (
         <>
-          <div className="nhlcal-matchup-stage">
+          {!preview?.isUserTeamGame ? (
+            <div className="nhlcal-preview-mode-banner">League Game Preview - your club is not on the ice this date.</div>
+          ) : null}
+
+          {preview?.missingFields?.length ? (
+            <div className="nhlcal-preview-missing">
+              Backend data missing for: {preview.missingFields.join(", ")}.
+            </div>
+          ) : null}
+
+          <div className="nhlcal-matchup-stage nhlcal-matchup-stage-compact">
             <div className="nhlcal-matchup-team">
               <TeamIdentityBadge team={away} size="matchup" />
               <strong>{getTeamAbbreviation(away)}</strong>
-              <span>{formatTeamRecord(away)}</span>
+              {preview?.awayRecord ? <span>{preview.awayRecord}</span> : null}
             </div>
 
             <div className="nhlcal-versus">
-              <strong>VS</strong>
-              <span>{normalizeGameTime(game.time || game.start_time || game.startTime)}</span>
-              <small>{game.venue || game.arena || getArenaName(home)}</small>
+              <strong>{completedPreview ? "FINAL" : "VS"}</strong>
+              <span>
+                {completedPreview
+                  ? getScoreLine(game)
+                  : normalizeGameTime(game.time || game.start_time || game.startTime) || "Time TBD"}
+              </span>
+              {venue ? <small>{venue}</small> : null}
             </div>
 
             <div className="nhlcal-matchup-team">
               <TeamIdentityBadge team={home} size="matchup" />
               <strong>{getTeamAbbreviation(home)}</strong>
-              <span>{formatTeamRecord(home)}</span>
+              {preview?.homeRecord ? <span>{preview.homeRecord}</span> : null}
             </div>
           </div>
 
           {activePanel === "game_preview" ? (
-            <div className="nhlcal-preview-lines">
-              {preview.lines.map((line) => (
-                <div key={line.label}>
-                  <span>{line.label}</span>
-                  <strong>{line.value}</strong>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="nhlcal-preview-lines">
+            preview.lines.length ? (
+              <div className="nhlcal-preview-lines nhlcal-preview-lines-compact">
+                {preview.lines.map((line) => (
+                  <div key={line.label}>
+                    <span>{line.label}</span>
+                    <strong>{line.value}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : null
+          ) : preview.analysis.length ? (
+            <div className="nhlcal-preview-lines nhlcal-preview-lines-compact">
               {preview.analysis.map((line) => (
                 <div key={line.label}>
                   <span>{line.label}</span>
@@ -2365,6 +2973,8 @@ function GamePreviewCard({
                 </div>
               ))}
             </div>
+          ) : (
+            <div className="nhlcal-preview-empty-stats">Team stats will appear when backend data is available.</div>
           )}
 
           {hasEvents ? (
@@ -2374,12 +2984,24 @@ function GamePreviewCard({
                   type="button"
                   key={event.id}
                   className={`nhlcal-selected-event-chip tone-${normalizeKey(event.tone || "league")}`}
+                  title={event.title || event.description || "League Event"}
                   onClick={() => onOpenEvent?.(event)}
                 >
                   <span>{event.icon || "◆"}</span>
-                  <strong>{event.title}</strong>
+                  <strong title={event.title || event.description || "League Event"}>{event.title}</strong>
                 </button>
               ))}
+              {activePanel === "game_preview" && !preview?.isUserTeamGame ? (
+                <button
+                  type="button"
+                  className="nhlcal-selected-event-chip tone-league"
+                  title="Open the Events tab for full details"
+                  onClick={() => setActivePanel("events")}
+                >
+                  <span>◆</span>
+                  <strong title="Open Events tab">View all events ({eventCount})</strong>
+                </button>
+              ) : null}
             </div>
           ) : null}
 
@@ -2393,20 +3015,36 @@ function GamePreviewCard({
           <h4>{hasEvents ? "Special Events Scheduled" : "No Featured Team Game"}</h4>
           <p>
             {hasEvents
-              ? "This date has league calendar events. Open the Events tab to see what matters on this day."
+              ? `${eventCount} league calendar event${eventCount === 1 ? "" : "s"} on this date — open Events for details, deadlines, and actions.`
               : `This day has ${selectedDayGames.length || "no"} visible game${
                   selectedDayGames.length === 1 ? "" : "s"
-                }. Select another date or advance the franchise calendar.`}
+                }. Select another date or advance the calendar.`}
           </p>
 
           {hasEvents ? (
-            <button
-              type="button"
-              className="nhlcal-wide-action"
-              onClick={() => setActivePanel("events")}
-            >
-              View Events
-            </button>
+            <>
+              <div className="nhlcal-selected-event-strip">
+                {selectedDayEvents.slice(0, 3).map((event) => (
+                  <button
+                    type="button"
+                    key={event.id}
+                    className={`nhlcal-selected-event-chip tone-${normalizeKey(event.tone || "league")}`}
+                    title={event.title || event.description || "League Event"}
+                    onClick={() => onOpenEvent?.(event)}
+                  >
+                    <span>{event.icon || "◆"}</span>
+                    <strong title={event.title || event.description || "League Event"}>{event.title}</strong>
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="nhlcal-wide-action"
+                onClick={() => setActivePanel("events")}
+              >
+                Open Events Panel
+              </button>
+            </>
           ) : null}
 
           {!hasEvents && todayTeamGame ? (
@@ -2455,11 +3093,14 @@ function SelectedDayEventsPanel({
                 key={event.id}
                 type="button"
                 className={`nhlcal-selected-event-row tone-${normalizeKey(event.tone || "league")}`}
+                title={event.title || event.description || "League Event"}
                 onClick={() => onOpenEvent?.(event)}
               >
                 <span className="nhlcal-selected-event-icon">{event.icon || "◆"}</span>
                 <div>
-                  <strong>{event.title || "League Event"}</strong>
+                  <strong title={event.title || event.description || "League Event"}>
+                    {event.title || "League Event"}
+                  </strong>
                   <small>
                     {event.priority || "MEDIUM"}
                     {event.description ? ` · ${event.description}` : ""}
@@ -2538,60 +3179,73 @@ function SelectedDayEventsPanel({
   );
 }
 
-function StandingsCard({ activeTeam, rows, onOpenFull }) {
-  const divisionLabel = getDivisionName(activeTeam);
-
+function StandingsCard({ activeTeam, allTeams = [], rows, groupLabel = "League Standings", extended = false, onOpenFull }) {
   return (
-    <section className="nhlcal-card nhlcal-standings-card">
-      <header className="nhlcal-card-header compact">
+    <section className={`nhlcal-card nhlcal-standings-card ${extended ? "nhlcal-standings-card--extended" : ""}`}>
+      <header className="nhlcal-card-header compact nhlcal-standings-header">
         <div>
-          <p>{divisionLabel}</p>
+          <p>{groupLabel}</p>
           <h3>Standings Snapshot</h3>
         </div>
 
-        <button type="button" onClick={onOpenFull}>
-          Full ›
-        </button>
+        <div className="nhlcal-standings-header-actions">
+          {rows.length ? <span className="nhlcal-standings-count">{rows.length} teams</span> : null}
+          <button type="button" className="nhlcal-standings-full-link" onClick={onOpenFull}>
+            Full Standings
+          </button>
+        </div>
       </header>
 
-      <div className="nhlcal-standings-table">
-        <div className="nhlcal-standings-head">
-          <span>Team</span>
-          <span>GP</span>
-          <span>W</span>
-          <span>L</span>
-          <span>OTL</span>
-          <span>PTS</span>
-          <span>P%</span>
+      <div className="nhlcal-standings-table" role="table" aria-label={`${groupLabel} standings`}>
+        <div className="nhlcal-standings-head" role="row">
+          <span role="columnheader">#</span>
+          <span role="columnheader">Team</span>
+          <span role="columnheader">GP</span>
+          <span role="columnheader">W</span>
+          <span role="columnheader">L</span>
+          <span role="columnheader">OTL</span>
+          <span role="columnheader">PTS</span>
+          <span role="columnheader">P%</span>
         </div>
 
-        {rows.length ? (
-          rows.map((row, index) => (
-            <div
-              key={row.id || row.abbr || row.name || index}
-              className={`nhlcal-standings-row ${isSameTeam(row.team, activeTeam) ? "is-user-team" : ""}`}
-            >
-              <span>
-                <em>{row.rank || index + 1}</em>
-                <TeamIdentityBadge team={row.team} size="mini" />
-                <strong>{getTeamDisplayName(row.team)}</strong>
-              </span>
-              <span>{safeNumber(row.gp, 0)}</span>
-              <span>{safeNumber(row.w, 0)}</span>
-              <span>{safeNumber(row.l, 0)}</span>
-              <span>{safeNumber(row.otl, 0)}</span>
-              <span>{safeNumber(row.pts, 0)}</span>
-              <span>{formatPointPct(row.pointPct)}</span>
-            </div>
-          ))
-        ) : (
-          <div className="nhlcal-table-empty">Standings will appear once the season begins.</div>
-        )}
+        <div className="nhlcal-standings-body nhlcal-scroll-surface" role="rowgroup">
+          {rows.length ? (
+            rows.map((row, index) => {
+              const team = resolveStandingsTeamRow(row, allTeams);
+              const isUserTeam = isSameTeam(team, activeTeam);
+              const gp = safeNumber(row.gp, 0);
+
+              return (
+                <div
+                  key={row.id || getTeamId(team) || row.abbr || index}
+                  className={`nhlcal-standings-row ${isUserTeam ? "is-user-team" : ""}`}
+                  role="row"
+                >
+                  <span role="cell">{row.rank || index + 1}</span>
+                  <span role="cell">
+                    <TeamIdentityBadge team={team} size="mini" />
+                    <strong title={getTeamDisplayName(team)}>{getTeamAbbreviation(team)}</strong>
+                  </span>
+                  <span role="cell">{gp}</span>
+                  <span role="cell">{safeNumber(row.w, 0)}</span>
+                  <span role="cell">{safeNumber(row.l, 0)}</span>
+                  <span role="cell">{safeNumber(row.otl, 0)}</span>
+                  <span role="cell">{safeNumber(row.pts, 0)}</span>
+                  <span role="cell">{gp === 0 ? "—" : formatPointPct(row.pointPct, gp)}</span>
+                </div>
+              );
+            })
+          ) : (
+            <div className="nhlcal-table-empty">Standings will appear once the season begins.</div>
+          )}
+        </div>
       </div>
 
-      <button type="button" className="nhlcal-wide-action muted" onClick={onOpenFull}>
-        Full Standings
-      </button>
+      <footer className="nhlcal-standings-footer">
+        <button type="button" className="nhlcal-standings-full-button" onClick={onOpenFull}>
+          Open Full Standings
+        </button>
+      </footer>
     </section>
   );
 }
@@ -2779,7 +3433,7 @@ function DiagnosticsPanel({ diagnostics, insights }) {
       <header className="nhlcal-section-title">
         <div>
           <p>Schedule Diagnostics & Insights</p>
-          <h3>Franchise Calendar Intelligence</h3>
+          <h3>Calendar Intelligence</h3>
         </div>
         <span>{diagnostics?.scheduleStrengthLabel || "Live"}</span>
       </header>
@@ -3019,8 +3673,8 @@ function FranchiseDrawer({
         return !playerTeamId || isSameTeamIdentifier(playerTeamId, activeTeam);
       })
       .sort((a, b) => {
-        const aEta = Number(a.eta || a.nhl_eta || a.arrival_year || 9999);
-        const bEta = Number(b.eta || b.nhl_eta || b.arrival_year || 9999);
+        const aEta = nhlEtaSortValue(a.eta || a.nhl_eta || a.arrival_year);
+        const bEta = nhlEtaSortValue(b.eta || b.nhl_eta || b.arrival_year);
         if (aEta !== bEta) return aEta - bEta;
         return getPotentialScore(b) - getPotentialScore(a);
       })
@@ -3071,7 +3725,7 @@ function FranchiseDrawer({
       <aside className="nhlcal-drawer" onMouseDown={(event) => event.stopPropagation()}>
         <header className="nhlcal-drawer-header">
           <div>
-            <p>Franchise Command</p>
+            <p>Command Menu</p>
             <h2>{getTeamDisplayName(activeTeam)}</h2>
           </div>
 
@@ -3299,7 +3953,7 @@ function FranchiseDrawer({
                 <DrawerNavCard title="Inbox" sub="Messages and tasks" onClick={() => onNavigate(SCREEN_KEYS.inbox)} />
                 <DrawerNavCard title="Finances" sub="Cap and revenue" onClick={() => onNavigate(SCREEN_KEYS.finances)} />
                 <DrawerNavCard title="Analytics" sub="Reports and trends" onClick={() => onNavigate(SCREEN_KEYS.analytics)} />
-                <DrawerNavCard title="Settings" sub="Franchise options" onClick={() => onNavigate(SCREEN_KEYS.settings)} />
+                <DrawerNavCard title="Settings" sub="Game options" onClick={() => onNavigate(SCREEN_KEYS.settings)} />
               </div>
             </DrawerSection>
           </div>
@@ -3381,6 +4035,36 @@ function DraftMiniRow({ player, index }) {
   );
 }
 
+function formatNhlEta(value, fallback = "TBD") {
+  if (value == null || value === "") return fallback;
+  if (typeof value === "object") {
+    const label = value.label;
+    const years = value.years;
+    if (label === "Now" || years === 0) return "NHL Ready";
+    if (label != null && label !== "") return String(label);
+    if (years != null && years !== "") return `${years}Y`;
+    return fallback;
+  }
+  return String(value);
+}
+
+function nhlEtaSortValue(value) {
+  if (value == null || value === "") return 9999;
+  if (typeof value === "object") {
+    const years = Number(value.years);
+    if (Number.isFinite(years)) return years;
+    const label = String(value.label || "");
+    if (label === "Now") return 0;
+    const match = label.match(/(\d+)/);
+    if (match) return Number(match[1]);
+    return 9999;
+  }
+  const n = Number(value);
+  if (Number.isFinite(n)) return n;
+  const match = String(value).match(/(\d+)/);
+  return match ? Number(match[1]) : 9999;
+}
+
 function ProspectMiniRow({ player, index }) {
   return (
     <article className="nhlcal-player-mini-row">
@@ -3388,7 +4072,7 @@ function ProspectMiniRow({ player, index }) {
       <div>
         <strong>{getPlayerName(player)}</strong>
         <small>
-          {getPlayerPosition(player)} · ETA {player.eta || player.nhl_eta || player.arrival_year || "TBD"}
+          {getPlayerPosition(player)} · ETA {formatNhlEta(player.eta || player.nhl_eta || player.arrival_year, "TBD")}
         </small>
       </div>
       <em>{player.potential || player.ceiling || player.grade || "—"}</em>
@@ -3511,11 +4195,14 @@ function TeamInitialBadge({ team, size = "small" }) {
 function getTeamLogoSrc(team) {
   if (!team) return null;
 
-  const abbr = String(getTeamAbbreviation(team) || "").toUpperCase();
-  const preferredName = TEAM_LOGO_NAME_OVERRIDES[abbr] || "";
+  const rawAbbr = String(getTeamAbbreviation(team) || "").toUpperCase();
+  const mappedAbbr = TEAM_ABBR_LOGO_ALIASES[rawAbbr] || rawAbbr;
+  const preferredName =
+    TEAM_LOGO_NAME_OVERRIDES[mappedAbbr] || TEAM_LOGO_NAME_OVERRIDES[rawAbbr] || "";
 
   const candidates = [
     preferredName,
+    TEAM_LOGO_NAME_OVERRIDES[rawAbbr],
     team.full_name,
     team.fullName,
     team.name,
@@ -3523,17 +4210,84 @@ function getTeamLogoSrc(team) {
     team.nickname,
     [team.city, team.name].filter(Boolean).join(" "),
     team.city,
-    abbr,
+    mappedAbbr,
+    rawAbbr,
   ]
     .map((value) => String(value || "").trim())
     .filter(Boolean);
 
+  const seen = new Set();
+
   for (let i = 0; i < candidates.length; i += 1) {
-    const src = TEAM_LOGO_MAP.get(normalizeLogoToken(candidates[i]));
+    const key = normalizeLogoToken(candidates[i]);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+
+    const src = TEAM_LOGO_MAP.get(key);
     if (src) return src;
   }
 
   return null;
+}
+
+function resolveStandingsTeamRow(row, allTeams = []) {
+  if (!row) return null;
+
+  const refs = [
+    row.team,
+    row.team_id,
+    row.teamId,
+    row.id,
+    row.abbreviation,
+    row.abbr,
+    row.team_abbrev,
+    row.team_abbreviation,
+    row.name,
+    row.team_name,
+  ];
+
+  let team = null;
+
+  for (const ref of refs) {
+    if (!ref) continue;
+    team = findTeamByAny(allTeams, ref);
+    if (team) break;
+  }
+
+  if (!team && row.team && typeof row.team === "object") {
+    team = row.team;
+  }
+
+  if (!team) {
+    team = normalizeTeam(row, 0);
+  }
+
+  return enrichTeamWithStandings(
+    normalizeTeam(
+      {
+        ...team,
+        abbreviation:
+          canonicalizeTeamAbbr(
+            team.abbreviation ||
+              team.abbr ||
+              row.abbreviation ||
+              row.abbr ||
+              row.abbrev ||
+              row.team_abbrev ||
+              row.team_abbreviation
+          ) ||
+          lookupNhlAbbrFromLabel(team.name || row.name || row.team_name) ||
+          team.abbreviation ||
+          team.abbr,
+        name: team.name || row.name || row.team_name,
+        city: team.city || row.city,
+        division: team.division || row.division,
+        conference: team.conference || row.conference,
+      },
+      0
+    ),
+    [row]
+  );
 }
 
 function TeamIdentityBadge({ team, size = "small" }) {
@@ -3631,6 +4385,10 @@ function normalizeFranchiseState(rootState, controlledTeamId) {
     draftClass,
     leagueState: rootState.league_state || rootState.leagueState || EMPTY_OBJECT,
     statsCentral: rootState.stats_central || rootState.statsCentral || EMPTY_OBJECT,
+    preseasonPlayerStats:
+      rootState.preseason_player_stats_snapshot ||
+      rootState.preseasonPlayerStats ||
+      EMPTY_OBJECT,
     finance: rootState.finance || rootState.finances || EMPTY_OBJECT,
     inbox,
   };
@@ -3726,7 +4484,7 @@ function normalizeTeams(rootState) {
         id: "USER",
         abbreviation: "CLB",
         name: "Club",
-        city: "Franchise",
+        city: "",
         wins: 0,
         losses: 0,
         otl: 0,
@@ -3813,7 +4571,7 @@ function findActiveTeam(rootState, allTeams, controlledTeamId) {
   const found = allTeams.find((team) => isSameTeamIdentifier(id, team));
   if (found) return found;
 
-  return allTeams[0] || normalizeTeam({ abbreviation: "CLB", name: "Club", city: "Franchise" }, 0);
+  return allTeams[0] || normalizeTeam({ abbreviation: "CLB", name: "Club", city: "" }, 0);
 }
 
 function normalizeGames(rootState, allTeams) {
@@ -4054,11 +4812,19 @@ function normalizeStandings(rootState, allTeams) {
       const otl = firstNumber(row.otl, row.ot, row.overtime_losses, row.record?.otl, team.otl);
       const gp = firstNumber(row.gp, row.games_played, row.gamesPlayed, wins + losses + otl);
       const pts = firstNumber(row.points, row.pts, wins * 2 + otl, team.points);
+      const abbreviation =
+        canonicalizeTeamAbbr(
+          row.abbreviation || row.abbr || row.abbrev || row.team_abbrev || row.team_abbreviation || team.abbreviation || team.abbr
+        ) ||
+        lookupNhlAbbrFromLabel(team.name || row.name || row.team_name || row.team) ||
+        getTeamAbbreviation(team);
 
       return {
         ...row,
         team,
         id: getTeamId(team),
+        abbreviation,
+        abbr: abbreviation,
         gp,
         w: wins,
         l: losses,
@@ -4068,10 +4834,10 @@ function normalizeStandings(rootState, allTeams) {
         pointPct: gp ? pts / (gp * 2) : 0,
         division: row.division || team.division || "League",
         conference: row.conference || team.conference || "League",
-        goals_for: firstNumber(row.goals_for, row.gf, row.team?.goals_for, row.team?.gf),
-        goals_against: firstNumber(row.goals_against, row.ga, row.team?.goals_against, row.team?.ga),
-        pp_pct: firstNumber(row.pp_pct, row.power_play_pct, row.team?.pp_pct, row.team?.power_play_pct),
-        pk_pct: firstNumber(row.pk_pct, row.penalty_kill_pct, row.team?.pk_pct, row.team?.penalty_kill_pct),
+        goals_for: firstNumberOrNull(row.goals_for, row.gf, row.team?.goals_for, row.team?.gf),
+        goals_against: firstNumberOrNull(row.goals_against, row.ga, row.team?.goals_against, row.team?.ga),
+        pp_pct: firstNumberOrNull(row.pp_pct, row.power_play_pct, row.team?.pp_pct, row.team?.power_play_pct),
+        pk_pct: firstNumberOrNull(row.pk_pct, row.penalty_kill_pct, row.team?.pk_pct, row.team?.penalty_kill_pct),
       };
     });
   }
@@ -4082,10 +4848,16 @@ function normalizeStandings(rootState, allTeams) {
     const otl = firstNumber(team.otl, team.ot);
     const gp = firstNumber(team.gp, wins + losses + otl);
     const pts = firstNumber(team.points, team.pts, wins * 2 + otl);
+    const abbreviation =
+      canonicalizeTeamAbbr(team.abbreviation || team.abbr) ||
+      lookupNhlAbbrFromLabel(team.name || team.team_name || team.full_name) ||
+      getTeamAbbreviation(team);
 
     return {
       team,
       id: getTeamId(team),
+      abbreviation,
+      abbr: abbreviation,
       gp,
       w: wins,
       l: losses,
@@ -4095,10 +4867,10 @@ function normalizeStandings(rootState, allTeams) {
       pointPct: gp ? pts / (gp * 2) : 0,
       division: team.division || "League",
       conference: team.conference || "League",
-      goals_for: firstNumber(team.goals_for, team.goalsFor, team.gf),
-      goals_against: firstNumber(team.goals_against, team.goalsAgainst, team.ga),
-      pp_pct: firstNumber(team.pp_pct, team.power_play_pct, team.powerPlayPct),
-      pk_pct: firstNumber(team.pk_pct, team.penalty_kill_pct, team.penaltyKillPct),
+      goals_for: firstNumberOrNull(team.goals_for, team.goalsFor, team.gf),
+      goals_against: firstNumberOrNull(team.goals_against, team.goalsAgainst, team.ga),
+      pp_pct: firstNumberOrNull(team.pp_pct, team.power_play_pct, team.powerPlayPct),
+      pk_pct: firstNumberOrNull(team.pk_pct, team.penalty_kill_pct, team.penaltyKillPct),
     };
   });
 }
@@ -4126,51 +4898,263 @@ function buildMonthGrid(viewDate) {
   return cells;
 }
 
-function buildQuickTeamStats(activeTeam, standings, games, currentDate) {
+function findStatsCentralTeamRow(statsCentral, team) {
+  if (!statsCentral || !team) return null;
+
+  const direct = statsCentral.user_team_stats || statsCentral.userTeamStats || statsCentral.team_stats;
+  if (direct && typeof direct === "object" && !Array.isArray(direct)) {
+    if (isSameTeam(direct, team) || isSameTeamIdentifier(direct.team_id || direct.teamId, team)) {
+      return direct;
+    }
+  }
+
+  const pools = normalizeArrayMerged(
+    statsCentral.league_team_stats,
+    statsCentral.leagueTeamStats,
+    statsCentral.teams,
+    statsCentral.team_rows
+  );
+
+  return (
+    pools.find(
+      (row) =>
+        isSameTeamIdentifier(row?.team_id || row?.teamId || row?.abbr || row?.name, team) ||
+        isSameTeam(row, team)
+    ) || null
+  );
+}
+
+function completedTeamGamesUpTo(games, activeTeam, currentDate) {
+  const currentTime = startOfDay(toDateObject(currentDate) || new Date()).getTime();
+
+  return games.filter((game) => {
+    if (!isTeamGame(game, activeTeam) || !isCompletedGame(game)) return false;
+
+    const date = toDateObject(game.date);
+    if (date && startOfDay(date).getTime() > currentTime) return false;
+
+    return true;
+  });
+}
+
+function normalizePctValue(value) {
+  const n = firstNumberOrNull(value);
+  if (n === null) return null;
+  if (n > 0 && n <= 1) return n * 100;
+  return n;
+}
+
+function isUsableSpecialTeamsPct(value, gp = 0) {
+  const n = normalizePctValue(value);
+  if (n === null) return false;
+  if (!Number.isFinite(n)) return false;
+  if (n <= 0) return false;
+  if (gp < 0) return false;
+  return true;
+}
+
+function resolveMetricWithSource(candidates) {
+  for (const candidate of candidates) {
+    const n = firstNumberOrNull(candidate.value);
+    if (n === null) continue;
+    if (candidate.requirePositive && n <= 0) continue;
+    if (candidate.allowZeroIfGp && n === 0 && candidate.gp <= 0) continue;
+    return { value: n, source: candidate.source };
+  }
+  return { value: null, source: "unavailable" };
+}
+
+function deriveSpecialTeamsFromGames(games, activeTeam, currentDate) {
+  const completed = completedTeamGamesUpTo(games, activeTeam, currentDate);
+  if (!completed.length) return { ppPct: null, pkPct: null, ppg: 0, ppo: 0, ppga: 0, oppPpo: 0 };
+
+  let ppg = 0;
+  let ppo = 0;
+  let ppga = 0;
+  let oppPpo = 0;
+
+  completed.forEach((game) => {
+    const home = isHomeGame(game, activeTeam);
+    const pick = (...keys) => {
+      for (const key of keys) {
+        const n = firstNumberOrNull(game?.[key]);
+        if (n !== null) return n;
+      }
+      return 0;
+    };
+
+    if (home) {
+      ppg += pick("home_pp_goals", "homePpg", "home_ppg", "pp_goals");
+      ppo += pick("home_ppo", "homePpo", "ppo");
+      ppga += pick("home_ppga", "homePpga", "away_pp_goals");
+      oppPpo += pick("home_opp_ppo", "homeOppPpo", "away_ppo");
+    } else {
+      ppg += pick("away_pp_goals", "awayPpg", "away_ppg", "pp_goals");
+      ppo += pick("away_ppo", "awayPpo", "ppo");
+      ppga += pick("away_ppga", "awayPpga", "home_pp_goals");
+      oppPpo += pick("away_opp_ppo", "awayOppPpo", "home_ppo");
+    }
+  });
+
+  return {
+    ppPct: ppo > 0 ? (ppg / ppo) * 100 : null,
+    pkPct: oppPpo > 0 ? (1 - ppga / oppPpo) * 100 : null,
+    ppg,
+    ppo,
+    ppga,
+    oppPpo,
+  };
+}
+
+function buildTeamSeasonStatsBundle(activeTeam, standings, games, statsCentral, currentDate) {
   const row = findStandingForTeam(standings, activeTeam);
+  const scRow = findStatsCentralTeamRow(statsCentral, activeTeam);
+  const scRates = deriveMatchupTeamRates(statsCentral, activeTeam);
+  const completed = completedTeamGamesUpTo(games, activeTeam, currentDate);
+  const ledgerGF = completed.reduce((total, game) => total + getTeamScoreFromGame(game, activeTeam), 0);
+  const ledgerGA = completed.reduce((total, game) => total + getOpponentScoreFromGame(game, activeTeam), 0);
+  const gp = firstNumber(row?.gp, completed.length, activeTeam?.gp, 0);
+  const derivedST = deriveSpecialTeamsFromGames(games, activeTeam, currentDate);
+
+  const goalsFor = resolveMetricWithSource([
+    { value: completed.length ? ledgerGF : null, source: "completed_games" },
+    { value: row?.goals_for ?? row?.gf, source: "standings", allowZeroIfGp: true, gp },
+    { value: scRow?.goals_for ?? scRow?.gf ?? scRates.gf, source: "stats_central", requirePositive: true },
+    { value: activeTeam?.goals_for ?? activeTeam?.goalsFor ?? activeTeam?.gf, source: "team_object", requirePositive: true },
+  ]);
+
+  const goalsAgainst = resolveMetricWithSource([
+    { value: completed.length ? ledgerGA : null, source: "completed_games" },
+    { value: row?.goals_against ?? row?.ga, source: "standings", allowZeroIfGp: true, gp },
+    { value: scRow?.goals_against ?? scRow?.ga ?? scRates.ga, source: "stats_central", requirePositive: true },
+    { value: activeTeam?.goals_against ?? activeTeam?.goalsAgainst ?? activeTeam?.ga, source: "team_object", requirePositive: true },
+  ]);
+
+  const ppCandidates = [
+    derivedST.ppPct,
+    row?.pp_pct,
+    row?.power_play_pct,
+    scRow?.pp_pct,
+    scRow?.power_play_pct,
+    scRates.pp_pct > 0 ? scRates.pp_pct : null,
+    activeTeam?.pp_pct,
+    activeTeam?.power_play_pct,
+  ];
+
+  let ppPct = null;
+  let ppSource = "unavailable";
+  for (const candidate of ppCandidates) {
+    if (!isUsableSpecialTeamsPct(candidate, gp)) continue;
+    ppPct = normalizePctValue(candidate);
+    ppSource =
+      candidate === derivedST.ppPct
+        ? "completed_games"
+        : candidate === row?.pp_pct || candidate === row?.power_play_pct
+          ? "standings"
+          : candidate === scRow?.pp_pct || candidate === scRow?.power_play_pct || candidate === scRates.pp_pct
+            ? "stats_central"
+            : "team_object";
+    break;
+  }
+
+  const pkCandidates = [
+    derivedST.pkPct,
+    row?.pk_pct,
+    row?.penalty_kill_pct,
+    scRow?.pk_pct,
+    scRow?.penalty_kill_pct,
+    scRates.pk_pct > 0 ? scRates.pk_pct : null,
+    activeTeam?.pk_pct,
+    activeTeam?.penalty_kill_pct,
+  ];
+
+  let pkPct = null;
+  let pkSource = "unavailable";
+  for (const candidate of pkCandidates) {
+    if (!isUsableSpecialTeamsPct(candidate, gp)) continue;
+    pkPct = normalizePctValue(candidate);
+    pkSource =
+      candidate === derivedST.pkPct
+        ? "completed_games"
+        : candidate === row?.pk_pct || candidate === row?.penalty_kill_pct
+          ? "standings"
+          : candidate === scRow?.pk_pct || candidate === scRow?.penalty_kill_pct || candidate === scRates.pk_pct
+            ? "stats_central"
+            : "team_object";
+    break;
+  }
+
+  return {
+    row,
+    gp,
+    completedCount: completed.length,
+    goalsFor,
+    goalsAgainst,
+    ppPct,
+    pkPct,
+    sources: {
+      goalsFor: goalsFor.source,
+      goalsAgainst: goalsAgainst.source,
+      ppPct: ppSource,
+      pkPct: pkSource,
+    },
+  };
+}
+
+function logCalendarStatsDebug(bundle, activeTeam, standings) {
+  if (process.env.NODE_ENV === "production") return;
+
+  const row = findStandingForTeam(standings, activeTeam);
+  if (!row && standings?.length) {
+    console.warn("[CalendarScreen] activeTeam not matched in standings:", getTeamDisplayName(activeTeam));
+  }
+
+  if (bundle.completedCount > 0 && bundle.goalsFor.value === 0 && bundle.goalsAgainst.value === 0) {
+    console.warn("[CalendarScreen] Completed games exist but GF/GA calculated to zero.", {
+      team: getTeamDisplayName(activeTeam),
+      completedCount: bundle.completedCount,
+    });
+  }
+
+  console.debug("[CalendarScreen] quick stats sources", {
+    team: getTeamDisplayName(activeTeam),
+    gf: bundle.goalsFor,
+    ga: bundle.goalsAgainst,
+    pp: { value: bundle.ppPct, source: bundle.sources.ppPct },
+    pk: { value: bundle.pkPct, source: bundle.sources.pkPct },
+  });
+}
+
+function buildQuickTeamStats(activeTeam, standings, games, currentDate, statsCentral, allTeams = []) {
+  const bundle = buildTeamSeasonStatsBundle(activeTeam, standings, games, statsCentral, currentDate);
+  logCalendarStatsDebug(bundle, activeTeam, standings);
+
+  const row = bundle.row;
   const wins = firstNumber(row?.w, activeTeam?.wins, activeTeam?.w);
   const losses = firstNumber(row?.l, activeTeam?.losses, activeTeam?.l);
   const otl = firstNumber(row?.otl, activeTeam?.otl, activeTeam?.ot);
-  const gp = firstNumber(row?.gp, activeTeam?.gp, wins + losses + otl);
+  const gp = firstNumber(row?.gp, bundle.completedCount, wins + losses + otl);
   const pts = firstNumber(row?.pts, activeTeam?.points, activeTeam?.pts, wins * 2 + otl);
 
   const homeRecord = calculateHomeRoadRecord(games, activeTeam, "home", currentDate);
   const roadRecord = calculateHomeRoadRecord(games, activeTeam, "road", currentDate);
 
-  const goalsForValue = firstNumberOrNull(
-    activeTeam?.goals_for,
-    activeTeam?.goalsFor,
-    activeTeam?.gf,
-    row?.goals_for,
-    row?.gf
-  );
+  const goalsFor = bundle.goalsFor.value;
+  const goalsAgainst = bundle.goalsAgainst.value;
+  const ppPct = bundle.ppPct;
+  const pkPct = bundle.pkPct;
 
-  const goalsAgainstValue = firstNumberOrNull(
-    activeTeam?.goals_against,
-    activeTeam?.goalsAgainst,
-    activeTeam?.ga,
-    row?.goals_against,
-    row?.ga
-  );
+  const rankContext = { standings, games, statsCentral, currentDate, allTeams };
 
-  const goalsFor = goalsForValue ?? calculateGoalsFor(games, activeTeam);
-  const goalsAgainst = goalsAgainstValue ?? calculateGoalsAgainst(games, activeTeam);
-
-  const ppPct = firstNumberOrNull(
-    activeTeam?.pp_pct,
-    activeTeam?.power_play_pct,
-    activeTeam?.powerPlayPct,
-    row?.pp_pct,
-    row?.power_play_pct
-  );
-
-  const pkPct = firstNumberOrNull(
-    activeTeam?.pk_pct,
-    activeTeam?.penalty_kill_pct,
-    activeTeam?.penaltyKillPct,
-    row?.pk_pct,
-    row?.penalty_kill_pct
-  );
+  const sourceLabel = (key) => {
+    const source = bundle.sources[key];
+    if (!source || source === "unavailable") return "Data unavailable";
+    if (source === "completed_games") return "Calculated from completed games";
+    if (source === "standings") return "Loaded from league standings";
+    if (source === "stats_central") return "Loaded from stats central";
+    if (source === "team_object") return "Loaded from team season object";
+    return source;
+  };
 
   return [
     {
@@ -4180,6 +5164,7 @@ function buildQuickTeamStats(activeTeam, standings, games, currentDate) {
       value: `${wins}-${losses}-${otl}`,
       sub: `${pts} pts${gp ? ` · ${gp} GP` : ""}`,
       tone: "cyan",
+      tooltip: "Loaded from league standings",
     },
     {
       key: "home",
@@ -4188,6 +5173,7 @@ function buildQuickTeamStats(activeTeam, standings, games, currentDate) {
       value: homeRecord.record,
       sub: `${homeRecord.points} pts`,
       tone: "neutral",
+      tooltip: "Calculated from completed home games",
     },
     {
       key: "road",
@@ -4196,174 +5182,233 @@ function buildQuickTeamStats(activeTeam, standings, games, currentDate) {
       value: roadRecord.record,
       sub: `${roadRecord.points} pts`,
       tone: "neutral",
+      tooltip: "Calculated from completed road games",
     },
     {
       key: "goals_for",
       icon: "◎",
       label: "Goals For",
-      value: safeNumber(goalsFor, 0),
-      sub: rankLabel(activeTeam, standings, "goals_for", "NHL"),
+      value: goalsFor === null ? "—" : safeNumber(goalsFor, 0),
+      sub: resolveLeagueRankLabel(activeTeam, "goals_for", rankContext) || null,
       tone: "green",
+      tooltip: sourceLabel("goalsFor"),
     },
     {
       key: "goals_against",
       icon: "△",
       label: "Goals Against",
-      value: safeNumber(goalsAgainst, 0),
-      sub: rankLabel(activeTeam, standings, "goals_against", "NHL", true),
+      value: goalsAgainst === null ? "—" : safeNumber(goalsAgainst, 0),
+      sub: resolveLeagueRankLabel(activeTeam, "goals_against", { ...rankContext, lowerIsBetter: true }) || null,
       tone: "danger",
+      tooltip: sourceLabel("goalsAgainst"),
     },
     {
       key: "power_play",
       icon: "↯",
       label: "Power Play",
       value: ppPct === null ? "—" : formatPercentLoose(ppPct),
-      sub: rankLabel(activeTeam, standings, "pp_pct", "NHL"),
+      sub: resolveLeagueRankLabel(activeTeam, "pp_pct", rankContext) || null,
       tone: "gold",
+      tooltip: sourceLabel("ppPct") === "Data unavailable"
+        ? "Special teams % unavailable until PP opportunities are logged"
+        : sourceLabel("ppPct"),
     },
     {
       key: "penalty_kill",
       icon: "▣",
       label: "Penalty Kill",
       value: pkPct === null ? "—" : formatPercentLoose(pkPct),
-      sub: rankLabel(activeTeam, standings, "pk_pct", "NHL"),
+      sub: resolveLeagueRankLabel(activeTeam, "pk_pct", rankContext) || null,
       tone: "blue",
+      tooltip: sourceLabel("pkPct") === "Data unavailable"
+        ? "Special teams % unavailable until shorthanded opportunities are logged"
+        : sourceLabel("pkPct"),
     },
   ];
 }
 
-function buildGamePreview(game, activeTeam, allTeams, previousTeamGame, standings, statsCentral) {
+function isVerifiedRecord(team, standings) {
+  const row = findStandingForTeam(standings, team);
+  const gp = firstNumber(row?.gp, 0);
+  return gp > 0;
+}
+
+function getVerifiedTeamRecord(team, standings) {
+  if (!isVerifiedRecord(team, standings)) return null;
+  return formatTeamRecord(team, standings);
+}
+
+function isVerifiedGoalMetric(bundle, key) {
+  const metric = key === "goalsFor" ? bundle.goalsFor : bundle.goalsAgainst;
+  if (metric.value === null || metric.value === undefined) return false;
+  return ["completed_games", "standings", "stats_central"].includes(metric.source);
+}
+
+function isVerifiedSpecialTeamsBundle(bundle) {
+  return bundle.ppPct !== null && bundle.pkPct !== null;
+}
+
+function isVerifiedGoalieLabel(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  return !/tbd|—/i.test(text);
+}
+
+function isVerifiedMeetingLabel(value) {
+  const text = String(value || "").trim();
+  return Boolean(text && text !== "No recent meeting");
+}
+
+function isVerifiedSeriesLabel(value) {
+  const text = String(value || "").trim();
+  return Boolean(text && text !== "—");
+}
+
+function buildGamePreview(
+  game,
+  activeTeam,
+  allTeams,
+  previousTeamGame,
+  standings,
+  statsCentral,
+  options = {}
+) {
+  const { isUserTeamGame = true } = options;
+
   if (!game) {
     return {
       game: null,
       homeTeam: null,
       awayTeam: null,
+      isUserTeamGame,
+      previewLabel: "Calendar Day",
+      awayRecord: null,
+      homeRecord: null,
       lines: [],
       analysis: [],
+      missingFields: [],
     };
   }
 
   const homeTeam = enrichTeamWithStandings(getHomeTeam(game, allTeams), standings);
   const awayTeam = enrichTeamWithStandings(getAwayTeam(game, allTeams), standings);
-  const userOpponent = enrichTeamWithStandings(getOpponentFromGame(game, activeTeam, allTeams), standings);
+  const userInGame = isTeamGame(game, activeTeam);
+  const userOpponent = userInGame
+    ? enrichTeamWithStandings(getOpponentFromGame(game, activeTeam, allTeams), standings)
+    : null;
 
-  const activeGoalie = getProjectedGoalie(game, activeTeam, "active");
-  const opponentGoalie = getProjectedGoalie(game, userOpponent, "opponent");
+  const previewSideTeam = userInGame ? activeTeam : homeTeam;
+  const previewOpponent = userInGame ? userOpponent : awayTeam;
 
-  const lastMeeting = getLastMeetingLabel(previousTeamGame, activeTeam, userOpponent);
-  const series = getSeasonSeriesLabel(game, activeTeam, userOpponent);
+  if (process.env.NODE_ENV !== "production" && (!homeTeam || !awayTeam)) {
+    console.warn("[CalendarScreen] GamePreviewCard missing home/away team data.", {
+      gameId: game.id,
+      home: game.homeId || game.home,
+      away: game.awayId || game.away,
+    });
+  }
 
-  const activeRates = deriveMatchupTeamRates(statsCentral, activeTeam);
-  const oppRates = deriveMatchupTeamRates(statsCentral, userOpponent);
+  const missingFields = [];
+  if (!homeTeam?.abbreviation && !homeTeam?.name) missingFields.push("home_team");
+  if (!awayTeam?.abbreviation && !awayTeam?.name) missingFields.push("away_team");
 
-  const activeDerived = deriveGoalsForAgainstFromStandings(standings, activeTeam);
-  const oppDerived = deriveGoalsForAgainstFromStandings(standings, userOpponent);
+  const activeGoalie = userInGame
+    ? getProjectedGoalie(game, activeTeam, "active")
+    : getProjectedGoalie(game, homeTeam, "active");
+  const opponentGoalie = userInGame
+    ? getProjectedGoalie(game, userOpponent, "opponent")
+    : getProjectedGoalie(game, awayTeam, "opponent");
 
-  const activeGF = firstNumber(
-    activeTeam?.goals_for,
-    activeTeam?.goalsFor,
-    activeTeam?.gf,
-    activeRates.gf,
-    activeDerived.gf
-  );
+  const lastMeeting =
+    userInGame && previousTeamGame
+      ? getLastMeetingLabel(previousTeamGame, activeTeam, userOpponent)
+      : "No recent meeting";
+  const series = userInGame
+    ? getSeasonSeriesLabel(game, activeTeam, userOpponent)
+    : getSeasonSeriesLabel(game, homeTeam, awayTeam);
 
-  const activeGA = firstNumber(
-    activeTeam?.goals_against,
-    activeTeam?.goalsAgainst,
-    activeTeam?.ga,
-    activeRates.ga,
-    activeDerived.ga
-  );
+  const activeBundle = buildTeamSeasonStatsBundle(previewSideTeam, standings, options.games || [], statsCentral, options.currentDate);
+  const oppBundle = buildTeamSeasonStatsBundle(previewOpponent, standings, options.games || [], statsCentral, options.currentDate);
 
-  const oppGF = firstNumber(
-    userOpponent?.goals_for,
-    userOpponent?.goalsFor,
-    userOpponent?.gf,
-    oppRates.gf,
-    oppDerived.gf
-  );
+  const venue =
+    game.venue ||
+    game.arena ||
+    game.location ||
+    getArenaName(homeTeam) ||
+    null;
 
-  const oppGA = firstNumber(
-    userOpponent?.goals_against,
-    userOpponent?.goalsAgainst,
-    userOpponent?.ga,
-    oppRates.ga,
-    oppDerived.ga
-  );
+  const lines = [];
 
-  const activePP = formatPercentLoose(
-    firstNumber(activeTeam?.pp_pct, activeTeam?.power_play_pct, activeTeam?.powerPlayPct, activeRates.pp_pct * 100)
-  );
+  lines.push({
+    label: `Goalie (${getTeamAbbreviation(previewSideTeam)})`,
+    value: isVerifiedGoalieLabel(activeGoalie) ? activeGoalie : "Starter TBD",
+  });
 
-  const activePK = formatPercentLoose(
-    firstNumber(activeTeam?.pk_pct, activeTeam?.penalty_kill_pct, activeTeam?.penaltyKillPct, activeRates.pk_pct * 100)
-  );
+  lines.push({
+    label: `Goalie (${getTeamAbbreviation(previewOpponent)})`,
+    value: isVerifiedGoalieLabel(opponentGoalie) ? opponentGoalie : "Starter TBD",
+  });
 
-  const oppPP = formatPercentLoose(
-    firstNumber(userOpponent?.pp_pct, userOpponent?.power_play_pct, userOpponent?.powerPlayPct, oppRates.pp_pct * 100)
-  );
+  if (isVerifiedMeetingLabel(lastMeeting)) {
+    lines.push({ label: "Last Meeting", value: lastMeeting });
+  }
 
-  const oppPK = formatPercentLoose(
-    firstNumber(userOpponent?.pk_pct, userOpponent?.penalty_kill_pct, userOpponent?.penaltyKillPct, oppRates.pk_pct * 100)
-  );
+  if (isVerifiedSeriesLabel(series)) {
+    lines.push({ label: "Season Series", value: series });
+  }
+
+  const analysis = [];
+
+  if (isVerifiedGoalMetric(activeBundle, "goalsFor") && isVerifiedGoalMetric(activeBundle, "goalsAgainst")) {
+    analysis.push({
+      label: `${getTeamAbbreviation(previewSideTeam)} GF / GA`,
+      value: `${safeNumber(activeBundle.goalsFor.value, 0)} / ${safeNumber(activeBundle.goalsAgainst.value, 0)}`,
+    });
+  }
+
+  if (isVerifiedGoalMetric(oppBundle, "goalsFor") && isVerifiedGoalMetric(oppBundle, "goalsAgainst")) {
+    analysis.push({
+      label: `${getTeamAbbreviation(previewOpponent)} GF / GA`,
+      value: `${safeNumber(oppBundle.goalsFor.value, 0)} / ${safeNumber(oppBundle.goalsAgainst.value, 0)}`,
+    });
+  }
+
+  if (isVerifiedSpecialTeamsBundle(activeBundle)) {
+    analysis.push({
+      label: `${getTeamAbbreviation(previewSideTeam)} PP / PK`,
+      value: `${formatPercentLoose(activeBundle.ppPct)} / ${formatPercentLoose(activeBundle.pkPct)}`,
+    });
+  }
+
+  if (isVerifiedSpecialTeamsBundle(oppBundle)) {
+    analysis.push({
+      label: `${getTeamAbbreviation(previewOpponent)} PP / PK`,
+      value: `${formatPercentLoose(oppBundle.ppPct)} / ${formatPercentLoose(oppBundle.pkPct)}`,
+    });
+  }
 
   return {
     game,
     homeTeam,
     awayTeam,
     userOpponent,
-    lines: [
-      {
-        label: `Goalie (${getTeamAbbreviation(activeTeam)})`,
-        value: activeGoalie,
-      },
-      {
-        label: `Goalie (${getTeamAbbreviation(userOpponent)})`,
-        value: opponentGoalie,
-      },
-      {
-        label: "Last Meeting",
-        value: lastMeeting,
-      },
-      {
-        label: "Season Series",
-        value: series,
-      },
-    ],
-    analysis: [
-      {
-        label: `${getTeamAbbreviation(activeTeam)} GF / GA`,
-        value: `${safeNumber(activeGF, 0)} / ${safeNumber(activeGA, 0)}`,
-      },
-      {
-        label: `${getTeamAbbreviation(userOpponent)} GF / GA`,
-        value: `${safeNumber(oppGF, 0)} / ${safeNumber(oppGA, 0)}`,
-      },
-      {
-        label: `${getTeamAbbreviation(activeTeam)} PP / PK`,
-        value: `${activePP} / ${activePK}`,
-      },
-      {
-        label: `${getTeamAbbreviation(userOpponent)} PP / PK`,
-        value: `${oppPP} / ${oppPK}`,
-      },
-    ],
+    isUserTeamGame: isUserTeamGame && userInGame,
+    previewLabel: isUserTeamGame && userInGame ? "Game Preview" : "League Game Preview",
+    venue,
+    missingFields,
+    awayRecord: getVerifiedTeamRecord(awayTeam, standings),
+    homeRecord: getVerifiedTeamRecord(homeTeam, standings),
+    lines,
+    analysis,
   };
 }
 
-function buildDivisionStandings(standings, allTeams, activeTeam) {
-  const activeDivision = getDivisionName(activeTeam);
-
+function buildLeagueStandings(standings, allTeams) {
   const rows = standings
     .map((row) => ({
       ...row,
-      team: row.team || findTeamByAny(allTeams, row.id || row.team_id || row.teamId),
+      team: resolveStandingsTeamRow(row, allTeams),
     }))
-    .filter((row) => {
-      const rowDivision = row.division || row.team?.division || "League";
-      if (!activeDivision || activeDivision === "League") return true;
-      return rowDivision === activeDivision;
-    })
     .sort((a, b) => {
       if (b.pts !== a.pts) return b.pts - a.pts;
       if (b.pointPct !== a.pointPct) return b.pointPct - a.pointPct;
@@ -4371,10 +5416,25 @@ function buildDivisionStandings(standings, allTeams, activeTeam) {
       return getTeamDisplayName(a.team).localeCompare(getTeamDisplayName(b.team));
     });
 
-  return rows.map((row, index) => ({
-    ...row,
-    rank: index + 1,
-  }));
+  return {
+    label: "League Standings",
+    rows: rows.map((row, index) => ({
+      ...row,
+      rank: index + 1,
+    })),
+  };
+}
+
+function buildDivisionStandings(standings, allTeams, activeTeam) {
+  const division = getDivisionName(activeTeam);
+  const filtered = (standings || []).filter((row) => {
+    const team = resolveStandingsTeamRow(row, allTeams);
+    const rowDiv = String(row.division || team?.division || "").trim();
+    if (!division || division === "League") return true;
+    return rowDiv && rowDiv.toLowerCase() === String(division).toLowerCase();
+  });
+  const scope = filtered.length ? filtered : standings;
+  return buildLeagueStandings(scope, allTeams);
 }
 
 function deriveGoalsForAgainstFromStandings(standings, team) {
@@ -4394,14 +5454,20 @@ function deriveMatchupTeamRates(statsCentral, team) {
 
   if (!rows.length || !team) return { gf: 0, ga: 0, pp_pct: 0, pk_pct: 0 };
 
-  const row = rows.find((r) => isSameTeamIdentifier(r.team_id || r.name || r.abbr, team) || isSameTeam(r, team));
+  const row =
+    rows.find(
+      (r) =>
+        isSameTeamIdentifier(r.team_id || r.teamId || r.abbr || r.abbreviation || r.name, team) ||
+        isSameTeam(r, team)
+    ) || null;
+
   if (!row) return { gf: 0, ga: 0, pp_pct: 0, pk_pct: 0 };
 
   return {
     gf: firstNumber(row.gf, row.goals_for),
     ga: firstNumber(row.ga, row.goals_against),
-    pp_pct: Number(row.pp_pct || 0),
-    pk_pct: Number(row.pk_pct || 0),
+    pp_pct: firstNumberOrNull(row.pp_pct, row.power_play_pct) || 0,
+    pk_pct: firstNumberOrNull(row.pk_pct, row.penalty_kill_pct) || 0,
   };
 }
 
@@ -4574,16 +5640,30 @@ function calculateHomeRoadRecord(games, activeTeam, type, currentDate) {
   };
 }
 
-function calculateGoalsFor(games, activeTeam) {
+function calculateGoalsFor(games, activeTeam, currentDate = null) {
   return games.reduce((total, game) => {
     if (!isTeamGame(game, activeTeam) || !isCompletedGame(game)) return total;
+
+    if (currentDate) {
+      const date = toDateObject(game.date);
+      const current = toDateObject(currentDate);
+      if (date && current && startOfDay(date).getTime() > startOfDay(current).getTime()) return total;
+    }
+
     return total + getTeamScoreFromGame(game, activeTeam);
   }, 0);
 }
 
-function calculateGoalsAgainst(games, activeTeam) {
+function calculateGoalsAgainst(games, activeTeam, currentDate = null) {
   return games.reduce((total, game) => {
     if (!isTeamGame(game, activeTeam) || !isCompletedGame(game)) return total;
+
+    if (currentDate) {
+      const date = toDateObject(game.date);
+      const current = toDateObject(currentDate);
+      if (date && current && startOfDay(date).getTime() > startOfDay(current).getTime()) return total;
+    }
+
     return total + getOpponentScoreFromGame(game, activeTeam);
   }, 0);
 }
@@ -4716,7 +5796,7 @@ function getNextGames(games, currentDate, limit = 10) {
 }
 
 function getProjectedGoalie(game, team, type) {
-  if (!game || !team) return "TBD";
+  if (!game || !team) return "Projected goalie TBD";
 
   const teamId = getTeamId(team);
   const abbr = getTeamAbbreviation(team);
@@ -4740,11 +5820,11 @@ function getProjectedGoalie(game, team, type) {
       ? game.home_goalie || game.homeGoalie || game.projected_home_goalie || game.projectedHomeGoalie
       : game.away_goalie || game.awayGoalie || game.projected_away_goalie || game.projectedAwayGoalie) || null;
 
-  return goalie ? formatGoalieValue(goalie) : "TBD";
+  return goalie ? formatGoalieValue(goalie) : "Projected goalie TBD";
 }
 
 function formatGoalieValue(goalie) {
-  if (!goalie) return "TBD";
+  if (!goalie) return "Projected goalie TBD";
   if (typeof goalie === "string") return goalie;
 
   const name = goalie.name || goalie.player_name || goalie.full_name || "Goalie";
@@ -4766,7 +5846,7 @@ function getLastMeetingLabel(previousTeamGame, activeTeam, opponent) {
 }
 
 function getSeasonSeriesLabel(game, activeTeam, opponent) {
-  if (!game) return "Series data pending";
+  if (!game) return "—";
 
   const userSeriesWins = firstNumberOrNull(
     game.user_series_wins,
@@ -4797,47 +5877,76 @@ function getSeasonSeriesLabel(game, activeTeam, opponent) {
       .replaceAll("{OPP}", opponentAbbr);
   }
 
-  return "Series data pending";
+  return "—";
+}
+
+function getTeamMetricForRanking(team, metricKey, standings, games, statsCentral, currentDate) {
+  const bundle = buildTeamSeasonStatsBundle(team, standings, games, statsCentral, currentDate);
+
+  if (metricKey === "goals_for") return bundle.goalsFor.value;
+  if (metricKey === "goals_against") return bundle.goalsAgainst.value;
+  if (metricKey === "pp_pct") return bundle.ppPct;
+  if (metricKey === "pk_pct") return bundle.pkPct;
+
+  return null;
+}
+
+function resolveLeagueRankLabel(activeTeam, metricKey, options = {}) {
+  const { standings = [], statsCentral = {}, allTeams = [] } = options;
+
+  const totalTeams = allTeams.length || standings.length || 32;
+  const scRow = findStatsCentralTeamRow(statsCentral, activeTeam);
+
+  const rankFieldByMetric = {
+    goals_for: ["gf_league_rank", "goals_for_league_rank"],
+    goals_against: ["ga_league_rank", "goals_against_league_rank"],
+    pp_pct: ["pp_pct_league_rank", "pp_league_rank", "power_play_league_rank"],
+    pk_pct: ["pk_pct_league_rank", "pk_league_rank", "penalty_kill_league_rank"],
+  };
+
+  for (const field of rankFieldByMetric[metricKey] || []) {
+    const rank = firstNumberOrNull(scRow?.[field]);
+    if (rank !== null && rank > 0) {
+      return `League #${rank} of ${totalTeams}`;
+    }
+  }
+
+  return "";
 }
 
 function rankLabel(activeTeam, standings, key, label = "NHL", lowerIsBetter = false) {
-  if (!standings || !standings.length) return `${label} rank pending`;
-
-  const valueFor = (row) => {
-    if (key === "goals_for") {
-      return firstNumberOrNull(row.goals_for, row.gf, row.team?.goals_for, row.team?.gf);
-    }
-
-    if (key === "goals_against") {
-      return firstNumberOrNull(row.goals_against, row.ga, row.team?.goals_against, row.team?.ga);
-    }
-
-    if (key === "pp_pct") {
-      return firstNumberOrNull(row.pp_pct, row.power_play_pct, row.team?.pp_pct, row.team?.power_play_pct);
-    }
-
-    if (key === "pk_pct") {
-      return firstNumberOrNull(row.pk_pct, row.penalty_kill_pct, row.team?.pk_pct, row.team?.penalty_kill_pct);
-    }
-
-    return firstNumberOrNull(row[key], row.team?.[key]);
-  };
-
-  const sorted = [...standings]
-    .filter((row) => valueFor(row) !== null && valueFor(row) !== undefined)
-    .sort((a, b) => {
-      const diff = valueFor(a) - valueFor(b);
-      return lowerIsBetter ? diff : -diff;
-    });
-
-  const index = sorted.findIndex((row) => isSameTeam(row.team || row, activeTeam));
-
-  if (index < 0) return `${label} rank pending`;
-  return `${ordinal(index + 1)} ${label}`;
+  return resolveLeagueRankLabel(activeTeam, key, { standings, lowerIsBetter });
 }
 
 function findStandingForTeam(standings, team) {
-  return standings.find((row) => isSameTeam(row.team || row, team)) || null;
+  if (!team || !standings?.length) return null;
+
+  const direct = standings.find((row) => isSameTeam(row.team || row, team));
+  if (direct) return direct;
+
+  const abbr = getTeamAbbreviation(team).toLowerCase();
+  if (abbr && abbr !== "TBD") {
+    const byAbbr = standings.find((row) => {
+      const candidate = row.team || row;
+      return getTeamAbbreviation(candidate).toLowerCase() === abbr;
+    });
+    if (byAbbr) return byAbbr;
+  }
+
+  const teamId = getTeamId(team).toLowerCase();
+  if (teamId) {
+    return (
+      standings.find((row) => {
+        const candidate = row.team || row;
+        return (
+          String(row.team_id || row.teamId || row.id || "").toLowerCase() === teamId ||
+          getTeamId(candidate).toLowerCase() === teamId
+        );
+      }) || null
+    );
+  }
+
+  return null;
 }
 
 function findTeamByAny(teams, value) {
@@ -4881,7 +5990,21 @@ function getOpponentFromGame(game, activeTeam, allTeams = []) {
 
 function isTeamGame(game, activeTeam) {
   if (!game || !activeTeam) return false;
-  return isSameTeam(game.homeTeam, activeTeam) || isSameTeam(game.awayTeam, activeTeam);
+
+  if (isSameTeam(game.homeTeam, activeTeam) || isSameTeam(game.awayTeam, activeTeam)) {
+    return true;
+  }
+
+  const activeId = getTeamId(activeTeam);
+  const homeRef = game.homeId || game.home_team_id || game.homeTeamId || game.home;
+  const awayRef = game.awayId || game.away_team_id || game.awayTeamId || game.away;
+
+  return (
+    isSameTeamIdentifier(homeRef, activeTeam) ||
+    isSameTeamIdentifier(awayRef, activeTeam) ||
+    isSameTeamIdentifier(homeRef, activeId) ||
+    isSameTeamIdentifier(awayRef, activeId)
+  );
 }
 
 function isHomeGame(game, activeTeam) {
@@ -5076,42 +6199,92 @@ function getTeamDisplayName(team) {
 }
 
 function getTeamCity(team) {
-  if (!team || typeof team !== "object") return "Franchise";
-  return team.city || team.location || team.market || team.region || "Franchise";
+  if (!team || typeof team !== "object") return "";
+  return team.city || team.location || team.market || team.region || "";
+}
+
+function lookupNhlAbbrFromLabel(label) {
+  const raw = String(label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\./g, "")
+    .replace(/\s+/g, " ");
+  if (!raw) return "";
+  if (NHL_NAME_TO_ABBR[raw]) return NHL_NAME_TO_ABBR[raw];
+
+  // Disambiguate New York clubs — never collapse to a single abbr from "new york" alone.
+  if (raw === "new york" || raw === "ny") return "";
+
+  const keys = Object.keys(NHL_NAME_TO_ABBR).sort((a, b) => b.length - a.length);
+  for (const key of keys) {
+    if (key.length < 4) continue;
+    if (raw.includes(key)) return NHL_NAME_TO_ABBR[key];
+  }
+  return "";
+}
+
+function canonicalizeTeamAbbr(raw) {
+  const cleaned = String(raw || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  if (!cleaned) return "";
+  if (TEAM_ABBR_LOGO_ALIASES[cleaned]) return TEAM_ABBR_LOGO_ALIASES[cleaned];
+  if (KNOWN_NHL_ABBRS.has(cleaned)) return cleaned;
+  // Ambiguous / broken truncations — never show these on the board.
+  if (cleaned === "NEW" || cleaned === "NY") return "";
+  return cleaned.length >= 2 && cleaned.length <= 3 ? cleaned : cleaned.slice(0, 3);
 }
 
 function getTeamAbbreviation(team) {
   if (!team) return "TBD";
 
   if (typeof team === "string") {
-    const s = String(team).trim();
-    if (!s) return "TBD";
-    if (s.includes(" ")) return s.split(/\s+/)[0].slice(0, 3).toUpperCase();
-    return s.slice(0, 3).toUpperCase();
+    const fromName = lookupNhlAbbrFromLabel(team);
+    if (fromName) return fromName;
+    const asAbbr = canonicalizeTeamAbbr(team);
+    if (asAbbr && KNOWN_NHL_ABBRS.has(asAbbr)) return asAbbr;
+    return asAbbr || "TBD";
+  }
+
+  const nameBits = [
+    team.name,
+    team.team_name,
+    team.full_name,
+    team.fullName,
+    [team.city || team.location || team.market, team.nickname || team.mascot].filter(Boolean).join(" "),
+    team.city || team.location || team.market,
+  ]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+
+  for (const bit of nameBits) {
+    const hit = lookupNhlAbbrFromLabel(bit);
+    if (hit) return hit;
   }
 
   const rawExplicit =
     team.abbreviation ||
     team.abbr ||
+    team.team_abbrev ||
+    team.team_abbreviation ||
     team.short_name ||
     team.shortName ||
     team.code ||
     "";
 
-  if (rawExplicit) return String(rawExplicit).slice(0, 3).toUpperCase();
-
-  const city = String(team.city || team.location || team.market || "").trim();
-  if (city) return city.slice(0, 3).toUpperCase();
-
-  const nm = String(team.name || team.team_name || team.full_name || "").trim();
-
-  if (nm) {
-    if (nm.includes(" ")) return nm.split(/\s+/)[0].slice(0, 3).toUpperCase();
-    return nm.slice(0, 3).toUpperCase();
+  const explicit = canonicalizeTeamAbbr(rawExplicit);
+  if (explicit && KNOWN_NHL_ABBRS.has(explicit)) return explicit;
+  // Allow non-NHL custom clubs with a clean 2–3 letter code, but never "NEW"/"CAL" truncations.
+  if (explicit && explicit.length >= 2 && explicit.length <= 3 && !["NEW", "CAL", "ST"].includes(explicit)) {
+    return explicit;
   }
 
-  const rawFallback = team.id || team.team_id || "TBD";
-  return String(rawFallback).slice(0, 3).toUpperCase();
+  const rawFallback = team.id || team.team_id || "";
+  const fromId = canonicalizeTeamAbbr(rawFallback);
+  if (fromId && KNOWN_NHL_ABBRS.has(fromId)) return fromId;
+
+  return "TBD";
 }
 
 function getDivisionName(team) {
@@ -5119,9 +6292,14 @@ function getDivisionName(team) {
   return team.division || team.division_name || team.div || "League";
 }
 
+function getConferenceName(team) {
+  if (!team || typeof team !== "object") return "League";
+  return team.conference || team.conference_name || team.conf || "League";
+}
+
 function getArenaName(team) {
-  if (!team || typeof team !== "object") return "Arena TBD";
-  return team.arena || team.venue || team.home_arena || team.homeArena || "Arena TBD";
+  if (!team || typeof team !== "object") return "";
+  return team.arena || team.venue || team.home_arena || team.homeArena || "";
 }
 
 function getTeamColorSeed(team) {
@@ -5301,9 +6479,12 @@ function getPotentialScore(player) {
   return 0;
 }
 
-function formatPointPct(value) {
+function formatPointPct(value, gp) {
+  if (gp != null && Number(gp) === 0) return "—";
+
   const number = Number(value);
-  if (!Number.isFinite(number) || number <= 0) return ".000";
+  if (!Number.isFinite(number)) return "—";
+  if (number <= 0) return ".000";
 
   return number.toFixed(3).replace(/^0/, "");
 }
@@ -5460,12 +6641,26 @@ function normalizeGameTime(value) {
   return raw;
 }
 
-function formatTeamRecord(team) {
-  if (!team || typeof team !== "object") return "0-0-0";
+function formatTeamRecord(team, standings = []) {
+  if (!team || typeof team !== "object") return "—";
 
-  const wins = firstNumber(team.wins, team.w, team.record?.wins, team.record?.w);
-  const losses = firstNumber(team.losses, team.l, team.record?.losses, team.record?.l);
-  const otl = firstNumber(team.otl, team.ot, team.overtime_losses, team.record?.otl, team.record?.ot);
+  const row = findStandingForTeam(standings, team);
+  const enriched = enrichTeamWithStandings(team, standings);
+
+  const wins = firstNumber(row?.w, row?.wins, enriched.wins, enriched.w, enriched.record?.wins, enriched.record?.w);
+  const losses = firstNumber(row?.l, row?.losses, enriched.losses, enriched.l, enriched.record?.losses, enriched.record?.l);
+  const otl = firstNumber(
+    row?.otl,
+    row?.ot,
+    enriched.otl,
+    enriched.ot,
+    enriched.overtime_losses,
+    enriched.record?.otl,
+    enriched.record?.ot
+  );
+  const gp = firstNumber(row?.gp, enriched.gp, wins + losses + otl);
+
+  if (gp <= 0 && wins + losses + otl <= 0) return "—";
 
   return `${wins}-${losses}-${otl}`;
 }
@@ -5499,6 +6694,7 @@ function CalendarStyles() {
         --shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
 
         min-height: 100vh;
+        height: 100vh;
         width: 100%;
         background:
           radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.12), transparent 30%),
@@ -5663,48 +6859,86 @@ function CalendarStyles() {
       .nhlcal-main {
         min-width: 0;
         height: 100vh;
-        overflow: auto;
-        padding: 24px 26px 26px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        padding: 10px 14px 10px;
       }
 
       .nhlcal-main::-webkit-scrollbar {
         width: 10px;
       }
 
-      .nhlcal-main::-webkit-scrollbar-thumb {
-        background: rgba(110, 173, 191, 0.25);
+      .nhlcal-main::-webkit-scrollbar-track {
+        background: rgba(4, 16, 26, 0.72);
         border-radius: 999px;
       }
 
+      .nhlcal-main::-webkit-scrollbar-thumb {
+        background: rgba(110, 173, 191, 0.25);
+        border-radius: 999px;
+        border: 2px solid rgba(4, 16, 26, 0.72);
+      }
+
+      .nhlcal-main::-webkit-scrollbar-thumb:hover {
+        background: rgba(19, 216, 231, 0.38);
+      }
+
+      .nhlcal-scroll-surface {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(110, 173, 191, 0.35) rgba(4, 16, 26, 0.72);
+      }
+
+      .nhlcal-scroll-surface::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      .nhlcal-scroll-surface::-webkit-scrollbar-track {
+        background: rgba(4, 16, 26, 0.72);
+        border-radius: 999px;
+      }
+
+      .nhlcal-scroll-surface::-webkit-scrollbar-thumb {
+        background: linear-gradient(180deg, rgba(19, 216, 231, 0.34), rgba(110, 173, 191, 0.28));
+        border-radius: 999px;
+        border: 2px solid rgba(4, 16, 26, 0.72);
+      }
+
+      .nhlcal-scroll-surface::-webkit-scrollbar-thumb:hover {
+        background: linear-gradient(180deg, rgba(19, 216, 231, 0.52), rgba(110, 173, 191, 0.42));
+      }
+
       .nhlcal-topbar {
-        min-height: 102px;
+        min-height: 56px;
+        flex: 0 0 auto;
         display: grid;
-        grid-template-columns: minmax(250px, 1fr) minmax(360px, 1.35fr) minmax(430px, 1.3fr);
+        grid-template-columns: minmax(180px, 0.9fr) minmax(240px, 1fr) minmax(260px, 0.95fr);
         align-items: center;
-        gap: 22px;
+        gap: 10px;
       }
 
       .nhlcal-team-identity {
         display: flex;
         align-items: center;
-        gap: 18px;
+        gap: 12px;
         min-width: 0;
       }
 
       .nhlcal-team-city {
-        margin: 0 0 2px;
+        margin: 0 0 1px;
         color: rgba(233, 247, 251, 0.78);
-        font-size: 15px;
+        font-size: 11px;
         font-weight: 900;
-        letter-spacing: 0.1em;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
       }
 
       .nhlcal-team-identity h1 {
         margin: 0;
-        font-size: clamp(31px, 3vw, 48px);
-        line-height: 0.92;
-        letter-spacing: 0.12em;
+        font-size: clamp(20px, 2vw, 30px);
+        line-height: 0.95;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
         color: var(--text);
         text-shadow: 0 0 24px rgba(19, 216, 231, 0.12);
@@ -5728,15 +6962,16 @@ function CalendarStyles() {
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 22px;
+        gap: 8px;
+        flex-wrap: nowrap;
       }
 
       .nhlcal-month-row h2 {
         margin: 0;
-        font-size: clamp(34px, 3vw, 52px);
-        line-height: 0.92;
+        font-size: clamp(18px, 1.8vw, 26px);
+        line-height: 1;
         text-transform: uppercase;
-        letter-spacing: 0.2em;
+        letter-spacing: 0.06em;
         white-space: nowrap;
       }
 
@@ -5745,13 +6980,13 @@ function CalendarStyles() {
       }
 
       .nhlcal-month-row button {
-        width: 46px;
-        height: 46px;
+        width: 34px;
+        height: 34px;
         border-radius: 999px;
         border: 1px solid var(--line);
         background: rgba(12, 31, 47, 0.72);
         color: var(--text);
-        font-size: 34px;
+        font-size: 24px;
         line-height: 1;
         cursor: pointer;
         transition:
@@ -5769,11 +7004,77 @@ function CalendarStyles() {
       .nhlcal-action-cluster {
         justify-self: end;
         display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .nhlcal-action-primary,
+      .nhlcal-action-secondary {
+        display: flex;
         align-items: center;
         justify-content: flex-end;
-        gap: 12px;
-        min-width: 0;
+        gap: 8px;
         flex-wrap: wrap;
+      }
+
+      .nhlcal-today-chip {
+        height: 32px;
+        min-width: 60px;
+        border: 1px solid rgba(233, 168, 60, 0.35);
+        border-radius: 8px;
+        background: rgba(233, 168, 60, 0.08);
+        color: #ffd88d;
+        padding: 0 10px;
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        cursor: pointer;
+        align-self: center;
+      }
+
+      .nhlcal-today-chip:hover {
+        border-color: rgba(233, 168, 60, 0.55);
+        background: rgba(233, 168, 60, 0.14);
+      }
+
+      .nhlcal-date-chip.compact {
+        min-width: 0;
+        height: auto;
+        border-left: 0;
+        padding-left: 0;
+      }
+
+      .nhlcal-advance-error-banner {
+        flex: 0 0 auto;
+        margin-top: 6px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 96, 109, 0.28);
+        background: rgba(255, 96, 109, 0.08);
+        color: #ffc4c9;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .nhlcal-advance-error-banner.is-blocked {
+        border-color: rgba(233, 168, 60, 0.32);
+        background: rgba(233, 168, 60, 0.1);
+        color: #ffd88d;
+      }
+
+      .nhlcal-schedule-alert {
+        flex: 0 0 auto;
+        margin-top: 8px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 96, 109, 0.28);
+        background: rgba(255, 96, 109, 0.08);
+        color: #ffc4c9;
+        font-size: 12px;
+        font-weight: 700;
       }
 
       .nhlcal-menu-toggle {
@@ -5879,9 +7180,61 @@ function CalendarStyles() {
         font-weight: 800;
       }
 
+      .nhlcal-wjc-hub-button {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border-radius: 14px;
+        border: 1px solid rgba(0, 216, 223, 0.28);
+        background:
+          linear-gradient(180deg, rgba(0, 216, 223, 0.14), rgba(255, 255, 255, 0.03)),
+          rgba(7, 22, 35, 0.88);
+        color: #dffcff;
+        cursor: pointer;
+        padding: 0 14px;
+        font-size: 0.72rem;
+        font-weight: 900;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        transition: 150ms ease;
+      }
+
+      .nhlcal-wjc-hub-button:hover {
+        border-color: rgba(232, 165, 54, 0.38);
+        transform: translateY(-1px);
+      }
+
+      .nhlcal-wjc-hub-button.is-modal {
+        width: 100%;
+        justify-content: center;
+        min-height: 42px;
+        margin-top: 12px;
+      }
+
+      .nhlcal-event-modal-actions {
+        margin-top: 4px;
+      }
+
+      .nhlcal-wjc-menu-host {
+        position: fixed;
+        inset: 0;
+        z-index: 12050;
+        background: #08090c;
+        overflow: hidden;
+      }
+
+      .nhlcal-wjc-menu-host .wjc-event-shell,
+      .nhlcal-wjc-menu-host .wjc-stage-root {
+        width: 100%;
+        height: 100%;
+        min-height: 100vh;
+        min-height: 100dvh;
+      }
+
       .nhlcal-advance-button {
-        height: 58px;
-        min-width: 190px;
+        height: 44px;
+        min-width: 132px;
         border: 0;
         border-radius: 7px;
         background:
@@ -5889,8 +7242,8 @@ function CalendarStyles() {
           radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.5), transparent 30%);
         color: #1b1002;
         text-transform: uppercase;
-        letter-spacing: 0.14em;
-        font-size: 13px;
+        letter-spacing: 0.1em;
+        font-size: 11px;
         font-weight: 1000;
         cursor: pointer;
         box-shadow:
@@ -5899,7 +7252,24 @@ function CalendarStyles() {
         transition:
           transform 0.2s ease,
           filter 0.2s ease;
-      }.nhlcal-advance-button:disabled {
+      }
+
+      .nhlcal-advance-button-secondary {
+        min-width: 92px;
+        background:
+          linear-gradient(180deg, rgba(19, 216, 231, 0.22), rgba(19, 216, 231, 0.08)),
+          rgba(7, 22, 35, 0.92);
+        color: #dffcff;
+        border: 1px solid rgba(19, 216, 231, 0.32);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      }
+
+      .nhlcal-advance-button-secondary:hover:not(:disabled) {
+        border-color: rgba(19, 216, 231, 0.52);
+        filter: brightness(1.06);
+      }
+
+      .nhlcal-advance-button:disabled {
         cursor: not-allowed;
         opacity: 0.72;
         transform: none;
@@ -5992,22 +7362,24 @@ function CalendarStyles() {
       }
 
       .nhlcal-stat-strip {
+        flex: 0 0 auto;
+        margin-top: 6px;
         display: grid;
         grid-template-columns: repeat(7, minmax(0, 1fr));
         gap: 0;
         border: 1px solid var(--line);
         background: rgba(8, 23, 35, 0.86);
-        border-radius: 12px;
+        border-radius: 8px;
         overflow: hidden;
         box-shadow: var(--shadow);
       }
 
       .nhlcal-stat-pill {
-        min-height: 86px;
-        padding: 15px 18px;
+        min-height: 48px;
+        padding: 6px 8px;
         display: flex;
         align-items: center;
-        gap: 14px;
+        gap: 8px;
         border-right: 1px solid rgba(156, 218, 236, 0.08);
         background:
           linear-gradient(180deg, rgba(18, 42, 61, 0.45), rgba(6, 20, 31, 0.34)),
@@ -6019,16 +7391,16 @@ function CalendarStyles() {
       }
 
       .nhlcal-stat-icon {
-        width: 42px;
-        height: 42px;
+        width: 28px;
+        height: 28px;
         flex: 0 0 auto;
         display: grid;
         place-items: center;
-        border-radius: 14px;
+        border-radius: 8px;
         background: rgba(148, 185, 205, 0.12);
         border: 1px solid rgba(148, 185, 205, 0.12);
         color: rgba(233, 247, 251, 0.8);
-        font-size: 18px;
+        font-size: 13px;
       }
 
       .nhlcal-stat-pill span,
@@ -6038,9 +7410,9 @@ function CalendarStyles() {
 
       .nhlcal-stat-pill span {
         color: var(--muted);
-        font-size: 10px;
+        font-size: 9px;
         text-transform: uppercase;
-        letter-spacing: 0.14em;
+        letter-spacing: 0.1em;
         font-weight: 1000;
       }
 
@@ -6048,17 +7420,57 @@ function CalendarStyles() {
         display: block;
         margin-top: 2px;
         color: var(--text);
-        font-size: 23px;
+        font-size: 16px;
         line-height: 1;
         font-weight: 1000;
+        letter-spacing: 0.02em;
+        min-height: 16px;
+      }
+
+      .nhlcal-stat-pill strong.is-missing {
+        color: rgba(233, 247, 251, 0.45);
+      }
+
+      .nhlcal-stat-pill.is-skeleton .nhlcal-stat-icon,
+      .nhlcal-skeleton-bar {
+        background: linear-gradient(90deg, rgba(255,255,255,0.05), rgba(255,255,255,0.12), rgba(255,255,255,0.05));
+        background-size: 200% 100%;
+        animation: nhlcal-skeleton 1.2s ease infinite;
+        border-radius: 8px;
+      }
+
+      .nhlcal-stat-pill.is-skeleton .nhlcal-stat-icon {
+        width: 34px;
+        height: 34px;
+      }
+
+      .nhlcal-skeleton-bar {
+        display: block;
+        height: 18px;
+        margin-top: 4px;
+      }
+
+      .nhlcal-skeleton-bar.short {
+        height: 10px;
+        width: 70%;
+        margin-top: 8px;
+      }
+
+      @keyframes nhlcal-skeleton {
+        0% { background-position: 100% 0; }
+        100% { background-position: -100% 0; }
       }
 
       .nhlcal-stat-pill small {
-        margin-top: 6px;
+        margin-top: 4px;
         color: var(--muted);
-        font-size: 10px;
+        font-size: 9px;
         font-weight: 800;
         text-transform: uppercase;
+        letter-spacing: 0.04em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .nhlcal-stat-pill.tone-cyan .nhlcal-stat-icon {
@@ -6087,28 +7499,67 @@ function CalendarStyles() {
       }
 
       .nhlcal-content-grid {
-        margin-top: 16px;
+        margin-top: 6px;
+        flex: 1 1 auto;
+        min-height: 0;
         display: grid;
-        grid-template-columns: minmax(680px, 1fr) 400px;
-        gap: 16px;
-        align-items: start;
+        grid-template-columns: minmax(0, 1fr) minmax(272px, 318px);
+        gap: 8px;
+        overflow: hidden;
       }
 
       .nhlcal-calendar-panel {
         min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
         border: 1px solid var(--line);
         border-radius: 12px;
         background:
           linear-gradient(180deg, rgba(9, 27, 40, 0.94), rgba(5, 17, 27, 0.94)),
           radial-gradient(circle at 66% 20%, rgba(19, 216, 231, 0.07), transparent 35%);
-        overflow: visible;
+        overflow: hidden;
         box-shadow: var(--shadow);
+      }
+
+      .nhlcal-calendar-toolbar {
+        flex: 0 0 auto;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(5, 17, 27, 0.72);
+      }
+
+      .nhlcal-calendar-toolbar-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .nhlcal-calendar-toolbar-group button {
+        height: 30px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(14, 35, 50, 0.9);
+        color: rgba(233, 247, 251, 0.82);
+        padding: 0 10px;
+        font-size: 10px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        cursor: pointer;
+      }
+
+      .nhlcal-calendar-toolbar-group button.is-active,
+      .nhlcal-calendar-toolbar-group button:hover {
+        border-color: var(--line-strong);
+        color: var(--text);
+        background: rgba(19, 216, 231, 0.11);
       }
 
       .nhlcal-week-header {
         display: grid;
         grid-template-columns: repeat(7, 1fr);
-        height: 42px;
+        height: 34px;
         border-bottom: 1px solid var(--line);
         background: rgba(5, 17, 27, 0.62);
         border-radius: 12px 12px 0 0;
@@ -6118,11 +7569,11 @@ function CalendarStyles() {
       .nhlcal-week-header div {
         display: grid;
         place-items: center;
-        color: rgba(233, 247, 251, 0.72);
+        color: rgba(233, 247, 251, 0.88);
         text-transform: uppercase;
-        font-size: 13px;
-        font-weight: 1000;
-        letter-spacing: 0.1em;
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: 0.12em;
         border-right: 1px solid rgba(156, 218, 236, 0.08);
       }
 
@@ -6133,12 +7584,18 @@ function CalendarStyles() {
       .nhlcal-month-grid {
         display: grid;
         grid-template-columns: repeat(7, 1fr);
-        min-height: 560px;
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .nhlcal-month-grid.nhlcal-scroll-surface {
+        scrollbar-gutter: stable;
       }
 
       .nhlcal-day-cell {
         position: relative;
-        min-height: 142px;
+        min-height: 104px;
         border: 0;
         border-right: 1px solid rgba(156, 218, 236, 0.11);
         border-bottom: 1px solid rgba(156, 218, 236, 0.11);
@@ -6157,8 +7614,31 @@ function CalendarStyles() {
       }
 
       .nhlcal-month-grid.is-dense .nhlcal-day-cell {
-        min-height: 112px;
-        padding: 8px;
+        min-height: 96px;
+        padding: 7px;
+      }
+
+      .nhlcal-day-cell.is-selected {
+        box-shadow:
+          inset 0 0 0 2px rgba(19, 216, 231, 0.95),
+          0 0 24px rgba(19, 216, 231, 0.28);
+        z-index: 5;
+      }
+
+      .nhlcal-day-cell.is-today:not(.is-selected)::after {
+        content: "";
+        position: absolute;
+        inset: 5px;
+        border: 1px dashed rgba(233, 168, 60, 0.42);
+        border-radius: 8px;
+        pointer-events: none;
+      }
+
+      .nhlcal-empty-day-line {
+        color: rgba(128, 150, 168, 0.42);
+        font-size: 12px;
+        text-align: center;
+        padding-top: 8px;
       }
 
       .nhlcal-day-cell:nth-child(7n) {
@@ -6204,22 +7684,6 @@ function CalendarStyles() {
         background:
           radial-gradient(circle at 12% 6%, rgba(233, 168, 60, 0.17), transparent 36%),
           linear-gradient(180deg, rgba(31, 35, 37, 0.86), rgba(7, 22, 34, 0.86));
-      }
-
-      .nhlcal-day-cell.is-selected {
-        box-shadow:
-          inset 0 0 0 2px rgba(19, 216, 231, 0.82),
-          0 0 28px rgba(19, 216, 231, 0.22);
-        z-index: 3;
-      }
-
-      .nhlcal-day-cell.is-today::after {
-        content: "";
-        position: absolute;
-        inset: 5px;
-        border: 1px solid rgba(233, 168, 60, 0.5);
-        border-radius: 8px;
-        pointer-events: none;
       }
 
       .nhlcal-day-number-row {
@@ -6304,12 +7768,13 @@ function CalendarStyles() {
       .nhlcal-corner-cut {
         width: 0;
         height: 0;
-        border-top: 13px solid var(--cyan);
+        border-top: 13px solid rgba(19, 216, 231, 0.62);
         border-left: 13px solid transparent;
         position: absolute;
         top: -10px;
         right: -11px;
-        filter: drop-shadow(0 0 10px rgba(19, 216, 231, 0.52));
+        filter: drop-shadow(0 0 8px rgba(19, 216, 231, 0.28));
+        opacity: 0.85;
       }
 
       .nhlcal-day-content {
@@ -6390,22 +7855,28 @@ function CalendarStyles() {
         min-width: 0;
         color: rgba(255, 239, 211, 0.96);
         font-size: 10px;
-        font-weight: 1000;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
+        font-weight: 900;
+        letter-spacing: 0.01em;
+        text-transform: none;
         overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        line-height: 1.2;
+        max-height: 2.4em;
+        word-break: break-word;
       }
 
       .nhlcal-special-event-copy span {
         min-width: 0;
         color: rgba(232, 203, 160, 0.72);
         font-size: 9px;
-        font-weight: 800;
+        font-weight: 700;
         overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 1;
+        line-height: 1.2;
       }
 
       .nhlcal-special-event-tile.priority-critical {
@@ -6853,15 +8324,20 @@ function CalendarStyles() {
       }
 
       .nhlcal-calendar-footer {
-        min-height: 66px;
+        flex: 0 0 auto;
+        min-height: 52px;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 14px;
-        padding: 12px 18px;
+        gap: 10px;
+        padding: 8px 12px;
         border-top: 1px solid var(--line);
         background: rgba(5, 16, 25, 0.72);
         border-radius: 0 0 12px 12px;
+      }
+
+      .nhlcal-week-header {
+        flex: 0 0 auto;
       }
 
       .nhlcal-legend {
@@ -6901,6 +8377,18 @@ function CalendarStyles() {
         background: #0b707c;
       }
 
+      .dot.win {
+        background: #2fd67b;
+      }
+
+      .dot.loss {
+        background: #ff6070;
+      }
+
+      .dot.otl {
+        background: #e9a83c;
+      }
+
       .dot.special {
         background: var(--gold);
       }
@@ -6937,10 +8425,89 @@ function CalendarStyles() {
         color: var(--text);
         background: rgba(19, 216, 231, 0.11);
       }
+      .nhlcal-calendar-footer .nhlcal-calendar-actions {
+        display: none;
+      }
+
+      .nhlcal-calendar-footer {
+        flex: 0 0 auto;
+        min-height: 36px;
+        padding: 6px 10px;
+      }
+
               .nhlcal-right-rail {
         min-width: 0;
-        display: grid;
-        gap: 14px;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .nhlcal-rail-preview-wrap {
+        flex: 0 0 auto;
+        min-height: 0;
+        max-height: 32%;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .nhlcal-rail-preview-wrap .nhlcal-preview-card {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .nhlcal-rail-preview-wrap .nhlcal-preview-card.nhlcal-scroll-surface {
+        scrollbar-gutter: stable;
+      }
+
+      .nhlcal-selected-summary-strip {
+        display: none;
+      }
+
+      .nhlcal-selected-summary-strip span {
+        padding: 4px 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(156, 218, 236, 0.12);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .nhlcal-preview-mode-banner,
+      .nhlcal-preview-missing {
+        margin: 0 14px 10px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .nhlcal-preview-mode-banner {
+        border: 1px solid rgba(136, 180, 255, 0.24);
+        background: rgba(136, 180, 255, 0.08);
+        color: #cfe0ff;
+      }
+
+      .nhlcal-preview-missing {
+        border: 1px solid rgba(255, 96, 109, 0.24);
+        background: rgba(255, 96, 109, 0.08);
+        color: #ffc4c9;
+      }
+
+      .nhlcal-tab-row button.is-active {
+        border-color: var(--line-strong);
+        background: rgba(19, 216, 231, 0.14);
+        color: var(--text);
+        box-shadow: inset 0 -2px 0 var(--cyan);
       }
 
       .nhlcal-card {
@@ -7017,13 +8584,26 @@ function CalendarStyles() {
         overflow: hidden;
       }
 
+      .nhlcal-preview-card .nhlcal-card-header {
+        min-height: 46px;
+        padding: 10px 12px 6px;
+      }
+
+      .nhlcal-preview-card .nhlcal-card-header h3 {
+        font-size: 12px;
+      }
+
+      .nhlcal-preview-card .nhlcal-header-pill {
+        font-size: 9px;
+      }
+
       .nhlcal-matchup-stage {
-        min-height: 154px;
+        min-height: 118px;
         display: grid;
-        grid-template-columns: 1fr 0.86fr 1fr;
+        grid-template-columns: 1fr 0.72fr 1fr;
         align-items: center;
-        gap: 8px;
-        padding: 4px 20px 18px;
+        gap: 6px;
+        padding: 6px 12px 12px;
       }
 
       .nhlcal-matchup-team {
@@ -7034,10 +8614,10 @@ function CalendarStyles() {
       }
 
       .nhlcal-matchup-team strong {
-        font-size: 25px;
+        font-size: 20px;
         line-height: 1;
         font-weight: 1000;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.06em;
       }
 
       .nhlcal-matchup-team span {
@@ -7053,14 +8633,14 @@ function CalendarStyles() {
       }
 
       .nhlcal-versus strong {
-        width: 56px;
-        height: 56px;
+        width: 44px;
+        height: 44px;
         border-radius: 999px;
         display: grid;
         place-items: center;
         background: rgba(255, 255, 255, 0.08);
         color: rgba(233, 247, 251, 0.72);
-        font-size: 20px;
+        font-size: 16px;
         font-weight: 1000;
       }
 
@@ -7423,88 +9003,176 @@ function CalendarStyles() {
       }
 
       .nhlcal-standings-card {
-        padding-bottom: 1px;
+        flex: 1 1 0;
+        min-height: 0;
+        max-height: none;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        border-color: rgba(19, 216, 231, 0.22);
+        box-shadow:
+          0 12px 28px rgba(0, 0, 0, 0.28),
+          inset 0 1px 0 rgba(19, 216, 231, 0.08);
+      }
+
+      .nhlcal-standings-card--extended {
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+
+      .nhlcal-standings-header {
+        flex: 0 0 auto;
+        min-height: 46px;
+        padding: 10px 12px 6px;
+      }
+
+      .nhlcal-standings-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .nhlcal-standings-count {
+        padding: 4px 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(156, 218, 236, 0.14);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .nhlcal-standings-full-link {
+        border: 1px solid rgba(19, 216, 231, 0.24);
+        border-radius: 8px;
+        background: rgba(19, 216, 231, 0.08);
+        color: var(--cyan);
+        padding: 6px 10px;
+        font-size: 10px;
+        font-weight: 1000;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        cursor: pointer;
       }
 
       .nhlcal-standings-table {
-        padding: 0 14px;
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        padding: 0 10px 6px;
+      }
+
+      .nhlcal-standings-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+        border-top: 1px solid rgba(156, 218, 236, 0.08);
+        scrollbar-gutter: stable;
+        padding-right: 2px;
+      }
+
+      .nhlcal-standings-footer {
+        flex: 0 0 auto;
+        padding: 0 10px 10px;
+      }
+
+      .nhlcal-standings-full-button {
+        width: 100%;
+        min-height: 34px;
+        border: 1px solid rgba(156, 218, 236, 0.18);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.04);
+        color: rgba(233, 247, 251, 0.88);
+        font-size: 10px;
+        font-weight: 1000;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+
+      .nhlcal-standings-full-button:hover,
+      .nhlcal-standings-full-link:hover {
+        border-color: rgba(19, 216, 231, 0.42);
+        background: rgba(19, 216, 231, 0.1);
       }
 
       .nhlcal-standings-head,
       .nhlcal-standings-row {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 34px 30px 30px 36px 38px 44px;
+        grid-template-columns: 22px minmax(0, 1fr) 24px 22px 22px 26px 28px 34px;
         align-items: center;
-        gap: 7px;
+        gap: 4px;
       }
 
       .nhlcal-standings-head {
-        height: 30px;
+        flex: 0 0 auto;
+        height: 26px;
         color: rgba(233, 247, 251, 0.64);
         text-transform: uppercase;
-        font-size: 10px;
+        font-size: 9px;
         font-weight: 1000;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.06em;
         border-bottom: 1px solid rgba(156, 218, 236, 0.12);
       }
 
       .nhlcal-standings-row {
         min-height: 34px;
         color: rgba(233, 247, 251, 0.8);
-        font-size: 11px;
+        font-size: 10px;
         font-weight: 800;
         border-bottom: 1px solid rgba(156, 218, 236, 0.07);
       }
 
-      .nhlcal-standings-row:last-child {
-        border-bottom: 0;
-      }
-
-      .nhlcal-standings-row > span:not(:first-child),
-      .nhlcal-standings-head > span:not(:first-child) {
-        text-align: right;
-      }
-
-      .nhlcal-standings-row > span:first-child {
+      .nhlcal-standings-row > span:nth-child(2) {
         display: flex;
         align-items: center;
         gap: 7px;
         min-width: 0;
       }
 
-      .nhlcal-standings-row > span:first-child strong {
+      .nhlcal-standings-row > span:nth-child(2) strong {
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
 
-      .nhlcal-standings-row em {
-        width: 18px;
-        color: var(--muted);
-        font-style: normal;
+      .nhlcal-standings-row > span:not(:nth-child(2)),
+      .nhlcal-standings-head > span:not(:nth-child(2)) {
         text-align: right;
       }
 
       .nhlcal-standings-row.is-user-team {
         color: var(--cyan);
+        background: rgba(19, 216, 231, 0.1);
+        box-shadow: inset 3px 0 0 var(--cyan);
       }
 
       .nhlcal-standings-row.is-user-team strong {
         color: var(--cyan);
       }
 
-      .nhlcal-table-empty {
-        padding: 18px 0;
-        color: var(--muted);
-        font-size: 12px;
-        text-align: center;
-      }
-
       .nhlcal-mini-card-row {
+        flex: 0 0 auto;
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 14px;
+        gap: 8px;
+        max-height: 96px;
+        overflow: hidden;
+      }
+
+      .nhlcal-table-empty {
+        padding: 14px 0;
+        color: var(--muted);
+        font-size: 11px;
+        text-align: center;
       }
 
       .nhlcal-stretch-card,
@@ -7780,6 +9448,10 @@ function CalendarStyles() {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 400px;
         gap: 16px;
+      }
+
+      .nhlcal-bottom-grid--collapsed {
+        display: none;
       }
 
       .nhlcal-diagnostics-panel,
@@ -8084,17 +9756,52 @@ function CalendarStyles() {
       }
 
       .nhlcal-team-logo.size-large {
-        width: 94px;
-        height: 94px;
-        border-radius: 24px;
-        padding: 8px;
+        width: 76px;
+        height: 76px;
+        border-radius: 18px;
+        padding: 7px;
+      }
+
+      .nhlcal-matchup-stage-compact {
+        min-height: 88px;
+        padding: 4px 10px 8px;
+      }
+
+      .nhlcal-matchup-stage-compact .nhlcal-matchup-team strong {
+        font-size: 16px;
+      }
+
+      .nhlcal-matchup-stage-compact .nhlcal-versus strong {
+        width: 34px;
+        height: 34px;
+        font-size: 12px;
+      }
+
+      .nhlcal-preview-lines-compact div {
+        min-height: 28px;
+        padding: 4px 12px;
+      }
+
+      .nhlcal-preview-empty-stats {
+        margin: 0 12px 10px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px dashed rgba(156, 218, 236, 0.18);
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 700;
+        text-align: center;
+      }
+
+      .nhlcal-tab-row-two {
+        grid-template-columns: 1fr 1fr;
       }
 
       .nhlcal-team-logo.size-matchup {
-        width: 86px;
-        height: 86px;
-        border-radius: 22px;
-        padding: 7px;
+        width: 44px;
+        height: 44px;
+        border-radius: 11px;
+        padding: 4px;
       }
 
       .nhlcal-team-logo.size-small {
@@ -8110,8 +9817,8 @@ function CalendarStyles() {
       }
 
       .nhlcal-team-logo.size-mini {
-        width: 18px;
-        height: 18px;
+        width: 20px;
+        height: 20px;
         padding: 1px;
       }
 
@@ -8923,9 +10630,12 @@ function CalendarStyles() {
 
         .nhlcal-content-grid,
         .nhlcal-bottom-grid,
-        .nhlcal-right-rail,
-        .nhlcal-mini-card-row {
+        .nhlcal-right-rail {
           grid-template-columns: 1fr;
+        }
+
+        .nhlcal-standings-card--extended {
+          min-height: 280px;
         }
 
         .nhlcal-calendar-footer {

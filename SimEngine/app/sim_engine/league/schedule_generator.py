@@ -30,6 +30,7 @@ It also tries to protect each team from:
 """
 
 from dataclasses import dataclass
+from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 import random
 
@@ -39,6 +40,13 @@ import random
 # ---------------------------------------------------------------------------
 
 
+def _safe_id_str(value: Any) -> str:
+    """Stringify an id; 0 is valid and must not collapse to empty."""
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _safe_team_id(team: Any, fallback_index: int) -> str:
     tid = getattr(team, "team_id", None)
     if tid is None:
@@ -46,6 +54,10 @@ def _safe_team_id(team: Any, fallback_index: int) -> str:
     if tid is None:
         return f"T{fallback_index:02d}"
     return str(tid)
+
+
+def _safe_slot_team_id(slot: Any, attr: str) -> str:
+    return _safe_id_str(getattr(slot, attr, None))
 
 
 def _safe_team_name(team: Any, team_id: str) -> str:
@@ -411,6 +423,85 @@ def _build_unslotted_games(
 
     rng.shuffle(games)
     return games
+
+
+def _team_game_totals(games: List[_UnslottedGame]) -> Dict[str, int]:
+    counts: Dict[str, int] = defaultdict(int)
+    for game in games:
+        counts[game.home_id] += 1
+        counts[game.away_id] += 1
+    return counts
+
+
+def _balance_unslotted_games_to_target(
+    rng: random.Random,
+    meta: List[TeamScheduleMeta],
+    games: List[_UnslottedGame],
+    games_per_team: int,
+) -> List[_UnslottedGame]:
+    """
+    Add or remove unslotted games so every team lands on games_per_team exactly.
+    """
+    games_per_team = max(1, int(games_per_team))
+    team_ids = [t.team_id for t in meta]
+    out = list(games)
+    max_iterations = max(500, games_per_team * max(2, len(meta)) * 6)
+
+    for _ in range(max_iterations):
+        counts = _team_game_totals(out)
+        under = [tid for tid in team_ids if counts.get(tid, 0) < games_per_team]
+        over = [tid for tid in team_ids if counts.get(tid, 0) > games_per_team]
+
+        if not under and not over:
+            break
+
+        if under:
+            anchor = min(under, key=lambda tid: counts.get(tid, 0))
+            candidates = [
+                other
+                for other in team_ids
+                if other != anchor and counts.get(other, 0) < games_per_team + 1
+            ]
+            if not candidates:
+                break
+            opponent = rng.choice(candidates)
+            out.append(
+                _make_game_for_pair(
+                    rng,
+                    anchor,
+                    opponent,
+                    defaultdict(int),
+                    defaultdict(int),
+                )
+            )
+            continue
+
+        anchor = max(over, key=lambda tid: counts.get(tid, 0))
+        removable_idx = -1
+
+        for idx, game in enumerate(out):
+            if anchor not in (game.home_id, game.away_id):
+                continue
+
+            other_id = game.away_id if game.home_id == anchor else game.home_id
+            if counts.get(other_id, 0) <= games_per_team:
+                continue
+
+            removable_idx = idx
+            break
+
+        if removable_idx < 0:
+            for idx, game in enumerate(out):
+                if anchor in (game.home_id, game.away_id):
+                    removable_idx = idx
+                    break
+
+        if removable_idx < 0:
+            break
+
+        out.pop(removable_idx)
+
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -927,6 +1018,12 @@ def generate_regular_season_schedule(
         meta,
         games_per_team,
     )
+    unslotted_games = _balance_unslotted_games_to_target(
+        rng,
+        meta,
+        unslotted_games,
+        games_per_team,
+    )
 
     team_ids = [t.team_id for t in meta]
 
@@ -939,6 +1036,28 @@ def generate_regular_season_schedule(
 
     # Stable sort by day, then home/away IDs.
     schedule.sort(key=lambda g: (g.day, g.home_id, g.away_id))
+
+    for tid in team_ids:
+        if games_for_team(schedule, tid) != games_per_team:
+            raise RuntimeError(
+                f"Schedule generation failed GP target for team {tid}: "
+                f"expected {games_per_team}, found {games_for_team(schedule, tid)}"
+            )
+
+    by_day_games: Dict[int, List[GameSlot]] = defaultdict(list)
+    for game in schedule:
+        by_day_games[int(game.day)].append(game)
+
+    for day, day_games in by_day_games.items():
+        teams_today = {
+            tid
+            for game in day_games
+            for tid in (game.home_id, game.away_id)
+        }
+        if len(teams_today) != len(day_games) * 2:
+            raise RuntimeError(
+                f"Abstract schedule double-booked a team on slate day {day}"
+            )
 
     return schedule
 

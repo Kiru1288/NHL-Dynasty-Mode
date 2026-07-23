@@ -19,3 +19,14 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Oversized local art assets (GitHub 100MB limit)
+frontend/src/styles/Retro Office Pack/Itch Upload/
+frontend/src/styles/blenderkit-v3.19.2.260411/
+SimEngine/runs/
+SimEngine/runs_diag/
+SimEngine/runs_diag10/
+SimEngine/runs_verify/
+SimEngine/runs_verify2/
+_audit_temp/
+backend/audit_20_results.json

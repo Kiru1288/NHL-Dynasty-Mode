@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Panel } from "../components/ui/Panel";
 import { Button } from "../components/ui/Button";
-import { listTeams, startFranchise } from "../services/franchiseService";
+import { listTeams, resetFranchiseStateCache, startFranchise } from "../services/franchiseService";
 import {
   setFranchiseSessionId,
   clearFranchiseSession,
@@ -20,6 +20,7 @@ export function FranchiseSetup() {
 
   useEffect(() => {
     clearFranchiseSession();
+    resetFranchiseStateCache();
   }, []);
 
   useEffect(() => {

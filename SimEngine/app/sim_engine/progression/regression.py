@@ -141,13 +141,28 @@ def _archetype_modifiers(player: Any, age: int) -> Tuple[float, float]:
             prob_m *= 0.92
             sev_m *= 0.95
         return prob_m, sev_m
+    speed_profile = bool(getattr(player, "_speed_reliant_profile", False))
+    if not speed_profile and isinstance(getattr(player, "ratings", None), dict):
+        r = getattr(player, "ratings", None) or {}
+        sp = [float(v) for k, v in r.items() if "speed" in str(k).lower() or "accel" in str(k).lower() or "skating" in str(k).lower()]
+        iq = [float(v) for k, v in r.items() if "iq" in str(k).lower() or "vision" in str(k).lower() or "awareness" in str(k).lower()]
+        if sp and iq:
+            speed_profile = (sum(sp) / len(sp)) >= (sum(iq) / len(iq)) + 6.5
+            setattr(player, "_speed_reliant_profile", bool(speed_profile))
+
     if sty in ("sniper", "offensive_d") or "offensive" in sty:
         if age >= 31:
             prob_m *= 1.14
             sev_m *= 1.08
+        if speed_profile and age >= 30:
+            prob_m *= 1.08
+            sev_m *= 1.10
     elif sty == "playmaker":
         prob_m *= 0.88
         sev_m *= 0.90
+        if age >= 32:
+            prob_m *= 0.92
+            sev_m *= 0.84
     elif sty in ("grinder", "enforcer", "enforcer_d") or "power" in sty:
         if age >= 28:
             prob_m *= 1.10

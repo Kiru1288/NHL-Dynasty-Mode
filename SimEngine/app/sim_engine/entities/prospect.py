@@ -580,6 +580,20 @@ class Prospect:
         """
         rng = random.Random(seed)
 
+        # Defensive body sanity for ALL callers: if the supplied weight is implausible for
+        # the height/position (e.g. a 6'5" prospect at 150 lb), derive a realistic weight.
+        try:
+            from app.sim_engine.generation.prospect_body import generate_realistic_weight_kg
+
+            h = int(height_cm or 0)
+            w = int(weight_kg or 0)
+            if h > 0:
+                realistic = generate_realistic_weight_kg(h, position, age=int(age))
+                if w <= 0 or abs(w - realistic) > 16:
+                    weight_kg = realistic
+        except Exception:
+            pass
+
         identity = ProspectIdentity(
             name=name,
             birth_year=birth_year,
@@ -1551,6 +1565,21 @@ class Prospect:
         base_gain = max(-1.0, min(5.5, base_gain))
         if abs(base_gain) > 0.05:
             self.identity.weight_kg = int(max(45, min(125, round(self.identity.weight_kg + base_gain))))
+
+        # After any height growth, enforce a realistic minimum weight for the current frame so a
+        # prospect who grew several cm can't stay unrealistically light (e.g. 6'5" at 150 lb).
+        try:
+            from app.sim_engine.generation.prospect_body import generate_realistic_weight_kg
+
+            realistic = generate_realistic_weight_kg(
+                int(self.identity.height_cm), self.identity.position, age=int(self.age)
+            )
+            frame_floor = realistic - 12  # allow lean builds, disallow toy bodies
+            if self.identity.weight_kg < frame_floor:
+                # ease toward the floor rather than snapping, so growth still reads naturally
+                self.identity.weight_kg = int(min(125, max(self.identity.weight_kg + 2, frame_floor)))
+        except Exception:
+            pass
 
     def _size_projection_score(self) -> float:
         """

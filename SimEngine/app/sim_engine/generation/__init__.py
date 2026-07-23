@@ -18,6 +18,12 @@ from app.sim_engine.generation.attribute_generator import (
 )
 from app.sim_engine.generation.trait_generator import generate_traits
 from app.sim_engine.generation.draft_class_generator import generate_draft_class, generate_player_profile
+from app.sim_engine.generation.player_headshots import (
+    attach_headshot_to_profile_dict,
+    ensure_player_headshot,
+    generate_player_headshot_metadata,
+    merge_headshot_into_row,
+)
 
 __all__ = [
     "Archetype",
@@ -29,5 +35,9 @@ __all__ = [
     "generate_traits",
     "generate_player_profile",
     "generate_draft_class",
+    "attach_headshot_to_profile_dict",
+    "ensure_player_headshot",
+    "generate_player_headshot_metadata",
+    "merge_headshot_into_row",
 ]
 

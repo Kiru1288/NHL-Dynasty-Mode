@@ -40,11 +40,57 @@ class FranchiseSession:
 
     chaos_index: float = 0.5
     use_world: bool = False
+    injuries_enabled: bool = True
     preseason_applied: bool = False
 
-    phase: str = "regular"  # regular | complete
+    phase: str = "regular"  # regular | playoff_ready | playoffs | post_cup | offseason | preseason
+    season_phase: str = "regular"  # mirrors phase; legacy compat
+    offseason_stage: Optional[str] = None  # awards | retirements | salary_cap | ...
+    regular_season_complete: bool = False
+    playoffs_generated: bool = False
+    playoff_payload: Dict[str, Any] = field(default_factory=dict)
     playoffs_simulated: bool = False
+    playoffs_done: bool = False
     champion_id: Optional[str] = None
+    stanley_cup_winner: Optional[str] = None
+
+    # Offseason progression flags
+    awards_generated: bool = False
+    awards_payload: Dict[str, Any] = field(default_factory=dict)
+    retirements_processed: bool = False
+    retirements_payload: Dict[str, Any] = field(default_factory=dict)
+    retired_players_archive: List[Dict[str, Any]] = field(default_factory=list)
+    contracts_ticked: bool = False
+    salary_cap_payload: Dict[str, Any] = field(default_factory=dict)
+    development_report_payload: Dict[str, Any] = field(default_factory=dict)
+    development_report_done: bool = False
+    development_report_completed_season: int = 0
+    development_report_generated_at: str = ""
+    draft_lottery_done: bool = False
+    draft_lottery_payload: Dict[str, Any] = field(default_factory=dict)
+    draft_combine_done: bool = False
+    draft_combine_payload: Dict[str, Any] = field(default_factory=dict)
+    draft_completed: bool = False
+    draft_payload: Dict[str, Any] = field(default_factory=dict)
+    draft_review_payload: Dict[str, Any] = field(default_factory=dict)
+    prospect_rights_payload: Dict[str, Any] = field(default_factory=dict)
+    draft_rights_review_payload: Dict[str, Any] = field(default_factory=dict)
+    resign_payload: Dict[str, Any] = field(default_factory=dict)
+    free_agency_open: bool = False
+    free_agents_payload: List[Dict[str, Any]] = field(default_factory=list)
+    free_agency_market_payload: Dict[str, Any] = field(default_factory=dict)
+    cpu_fa_signings: Dict[str, Any] = field(default_factory=dict)
+    cpu_rfa_decisions: Dict[str, Any] = field(default_factory=dict)
+    cpu_fa_wave: int = 0
+    roster_cleanup_payload: Dict[str, Any] = field(default_factory=dict)
+    next_season_generated: bool = False
+    next_season_payload: Dict[str, Any] = field(default_factory=dict)
+    next_important_event: str = ""
+    # Ordered list of completed offseason stage ids (for resume / timeline UI).
+    offseason_completed_stages: List[str] = field(default_factory=list)
+    offseason_stage_entered_at: Dict[str, str] = field(default_factory=dict)
+    offseason_stage_completed_at: Dict[str, str] = field(default_factory=dict)
+    season_history: List[Dict[str, Any]] = field(default_factory=list)
 
     pending_decisions: List[Dict[str, Any]] = field(default_factory=list)
     notifications: List[Any] = field(default_factory=list)
@@ -54,20 +100,64 @@ class FranchiseSession:
 
     # Central-style draft list: player_key -> rank (1 = best), updated after each advance day
     draft_rank_prev: Dict[str, int] = field(default_factory=dict)
+    draft_preseason_rank: Dict[str, int] = field(default_factory=dict)
+    draft_midseason_rank: Dict[str, int] = field(default_factory=dict)
+    draft_rank_snapshot_week: str = ""
+    draft_stock_history: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    draft_state: Dict[str, Any] = field(default_factory=dict)
+    draft_results_archive: List[Dict[str, Any]] = field(default_factory=list)
 
+    # GM scouting assignments, coverage overlays, and budget (see franchise_scouting.py)
+    scouting_state: Dict[str, Any] = field(default_factory=dict)
+
+    # General Manager's World progression (skill tree, goals, modifiers)
     # Sim output: every league game + running skater/goalie counting numbers (franchise session only)
     game_results: List[Dict[str, Any]] = field(default_factory=list)
     player_season_stats: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    processed_game_ids: Set[str] = field(default_factory=set)
 
     # One-off UI recaps (WJC, outdoor games, All-Star) — shown until dismissed
     pending_ui_popups: List[Dict[str, Any]] = field(default_factory=list)
     shown_event_keys: Set[str] = field(default_factory=set)
     showcase_archive: List[Dict[str, Any]] = field(default_factory=list)
+    # CPU franchise cognition/state (optional; safe for older saves)
+    cpu_franchise_profiles: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    cpu_scheduler_state: Dict[str, Any] = field(default_factory=dict)
+    cpu_trade_event_seen_ids: Set[str] = field(default_factory=set)
 
     # World Juniors (national teams only — NHL U20 only if user loans them)
     wjc_tournament_bundle: Optional[Dict[str, Any]] = None
     wjc_loan_prompts_enqueued: bool = False
     wjc_nhl_u20_loan: Dict[str, bool] = field(default_factory=dict)  # player_id -> True if loaned to WJC
+    wjc_draft_score_boosts: Dict[str, float] = field(default_factory=dict)
+    wjc_stock_evaluated_seasons: Set[int] = field(default_factory=set)
+
+    # Contract/cap bootstrap health: ready | repaired | partial | failed
+    financials_status: str = "partial"
+
+    # Saved lineups (even-strength / PP / PK) keyed by unit type; source of truth for Edit Lines
+    lines: Dict[str, Any] = field(default_factory=dict)
+
+    # Code fingerprint at session create time — mismatched vs live → session is expired
+    code_revision: str = ""
+
+    # Preseason archive (set when regular season starts)
+    preseason_player_stats_snapshot: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    preseason_standings_snapshot: Any = None
+    preseason_game_results_snapshot: List[Dict[str, Any]] = field(default_factory=list)
+
+    # Cached read-model payloads (invalidated on advance/trade/scouting)
+    _cached_draft_class_rankings: Optional[Dict[str, Any]] = None
+    _draft_rankings_cache_state: str = "missing"  # missing | dirty | valid
+    _cached_scouting_prospects_payload: Optional[Dict[str, Any]] = None
+    _cached_scouting_world_payload: Optional[Dict[str, Any]] = None
+    _cached_roster_browser_payload: Optional[Dict[str, Any]] = None
+    _cached_trade_assets_payload: Optional[Dict[str, Any]] = None
+
+    # Cause-and-effect storyline system (decision log + active arcs)
+    decision_event_log: List[Dict[str, Any]] = field(default_factory=list)
+    active_cause_storylines: List[Dict[str, Any]] = field(default_factory=list)
+    _storyline_blocked_log: List[Dict[str, Any]] = field(default_factory=list)
 
     @staticmethod
     def new_id() -> str:

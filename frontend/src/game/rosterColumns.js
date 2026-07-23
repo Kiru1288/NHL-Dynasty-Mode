@@ -3,10 +3,21 @@
  * Backend sends: name, position, ovr, morale
  */
 
+import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
+
 function hashStr(s) {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h << 5) - h + s.charCodeAt(i);
   return Math.abs(h);
+}
+
+export function heightFromCm(heightCm) {
+  const cm = Number(heightCm);
+  if (!Number.isFinite(cm) || cm <= 0) return "";
+  const totalIn = Math.round(cm / 2.54);
+  const ft = Math.floor(totalIn / 12);
+  const inch = totalIn % 12;
+  return `${ft}'${inch}"`;
 }
 
 export function enrichRosterPlayer(p, index) {
@@ -33,20 +44,17 @@ export function enrichRosterPlayer(p, index) {
   const age = p.age != null && p.age > 0 ? p.age : 18 + (h % 18);
   const natFromApi = (p.nationality || "").slice(0, 3).toUpperCase();
   const nat = natFromApi || ["CAN", "USA", "SWE", "FIN", "RUS"][(h >> 2) % 5];
-  let hgt = p.height_display || "";
+  let hgt = p.height_display || p.height || "";
   if (!hgt && p.height_cm > 0) {
-    const totalIn = Math.round(p.height_cm / 2.54);
-    const ft = Math.floor(totalIn / 12);
-    const inch = totalIn % 12;
-    hgt = `${ft}'${inch}"`;
+    hgt = heightFromCm(p.height_cm);
   }
-  if (!hgt) {
-    const totalIn = 66 + (h % 13);
-    const ft = Math.floor(totalIn / 12);
-    const inch = totalIn % 12;
-    hgt = `${ft}'${inch}"`;
+  let wgt = "";
+  if (p.weight > 0) {
+    wgt = `${Math.round(Number(p.weight))} lb`;
+  } else if (p.weight_kg > 0) {
+    wgt = `${Math.round(Number(p.weight_kg) * 2.20462)} lb`;
   }
-  return {
+  return ensurePlayerHeadshotFields({
     ...p,
     num,
     cpt,
@@ -54,8 +62,9 @@ export function enrichRosterPlayer(p, index) {
     off,
     age,
     hgt,
-    wgt: `${185 + (h % 40)}`,
+    wgt,
     nat,
+    nationality: p.nationality || nat,
     shot: h % 2 === 0 ? "L" : "R",
-  };
+  });
 }

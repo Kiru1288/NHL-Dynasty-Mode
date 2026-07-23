@@ -929,9 +929,27 @@ def draft_sim(
             sel.position = str(get_attr(p, "position", "N/A"))
             sel.rationale = "fallback (already taken)"
             sel.tag = "fallback"
-            available.pop(pid, None)
+            chosen_obj = available.pop(pid, None)
 
         picks.append(sel)
+        # Shared rights engine (optional): universe draft and franchise use the same claim model.
+        if chosen_obj is not None:
+            try:
+                from services.draft_selection_engine import apply_universe_selection_rights
+
+                rnd = int(getattr(getattr(sel, "pick", None), "round", 1) or 1)
+                overall = int(getattr(getattr(sel, "pick", None), "overall", pick_idx + 1) or (pick_idx + 1))
+                apply_universe_selection_rights(
+                    chosen_obj,
+                    nhl_team_id=str(team_id),
+                    draft_year=int(cfg.year),
+                    overall_pick=overall,
+                    round_num=rnd,
+                    pick_in_round=((overall - 1) % max(1, int(cfg.teams))) + 1,
+                    league_code=str(get_attr(chosen_obj, "league_code", get_attr(chosen_obj, "league", "")) or ""),
+                )
+            except Exception:
+                pass
         pick_idx += 1
 
     narratives = build_narratives(picks, consensus_rank, cfg)

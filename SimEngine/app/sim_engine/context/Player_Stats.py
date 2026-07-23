@@ -65,6 +65,13 @@ class PlayerStatsEngine:
         Simulate one season of performance and apply rating deltas.
         """
 
+        # Never override real game-derived totals (franchise / league ledger sync).
+        existing = getattr(player, "season_stats", None) or {}
+        if isinstance(existing, dict):
+            prev = existing.get(int(season)) or existing.get(season)
+            if isinstance(prev, dict) and str(prev.get("stat_source", "")).lower() == "game_ledger":
+                return prev
+
         role = self._determine_role(player)
 
         # -------------------------
@@ -107,6 +114,7 @@ class PlayerStatsEngine:
         stat_line = {
             "season": season,
             "role": role,
+            "stat_source": "distribution_sample",
             "goals": int(goals),
             "assists": int(assists),
             "points": int(points),

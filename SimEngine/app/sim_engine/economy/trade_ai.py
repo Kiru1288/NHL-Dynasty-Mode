@@ -1,229 +1,74 @@
 """
-Trade AI.
+Trade AI — ambient CPU-CPU trades via the full trade engine.
 
 Expose:
 - class TradeAI
 - evaluate_trade_market(league)
-
-Trades should occur 2–6 times per season (scaled by chaos).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from app.sim_engine.economy.player_value import PlayerValue
-from app.sim_engine.economy.team_needs import TeamNeeds
-
-
-def _safe_float(x: Any, default: float = 0.0) -> float:
-    try:
-        if x is None:
-            return default
-        return float(x)
-    except Exception:
-        return default
-
-
-def _safe_int(x: Any, default: int = 0) -> int:
-    try:
-        if x is None:
-            return default
-        return int(x)
-    except Exception:
-        return default
-
-
-def _player_ovr(player: Any) -> float:
-    fn = getattr(player, "ovr", None)
-    if callable(fn):
-        try:
-            return float(fn())
-        except Exception:
-            return 0.0
-    return _safe_float(getattr(player, "ovr", None), 0.0)
-
-
-def _is_prospect(player: Any) -> bool:
-    age = _safe_int(getattr(player, "age", 25), 25)
-    return age <= 21
+from app.sim_engine.trades.cpu_trade_proposer import propose_and_execute_cpu_trades
 
 
 @dataclass
 class TradeAI:
-    """
-    Lightweight, chaos-responsive trade generator.
-    """
-
     base_trades: int = 2
     max_trades: int = 6
-    fairness_tolerance: float = 0.12  # allowed value mismatch
+    fairness_tolerance: float = 7.0
 
-    def __post_init__(self) -> None:
-        self.value_model = PlayerValue()
-        self.needs_model = TeamNeeds()
-
-    def evaluate_trade_market(self, league: Any, *, max_executions: Optional[int] = None) -> List[Dict[str, Any]]:
-        """
-        Returns list of trade dicts with keys:
-        - from_team_id, to_team_id
-        - outgoing (list player names), incoming (list player names)
-        - headline string for logging
-
-        max_executions: when set (e.g. daily sim tick), caps how many trades are executed this call.
-        """
-        teams: List[Any] = list(getattr(league, "teams", None) or [])
-        if len(teams) < 2:
+    def evaluate_trade_market(
+        self,
+        league: Any,
+        *,
+        max_executions: Optional[int] = None,
+        calendar_cursor: int = 0,
+        regular_season_last_index: int = 192,
+    ) -> List[Dict[str, Any]]:
+        if len(list(getattr(league, "teams", None) or [])) < 2:
             return []
 
-        # Determine trade volume by chaos if present
-        chaos = _safe_float(getattr(getattr(league, "balance", None), "chaos_index", None), _safe_float(getattr(league, "chaos_index", None), 0.5))
-        target_trades = self.base_trades + int(round(chaos * 4.0))
-        target_trades = max(self.base_trades, min(self.max_trades, target_trades))
+        chaos = 0.5
+        try:
+            chaos = float(
+                getattr(getattr(league, "balance", None), "chaos_index", None)
+                or getattr(league, "chaos_index", 0.5)
+                or 0.5
+            )
+        except Exception:
+            pass
+        target = self.base_trades + int(round(chaos * 4.0))
+        target = max(self.base_trades, min(self.max_trades, target))
         if max_executions is not None:
-            target_trades = max(0, min(int(max_executions), target_trades))
+            target = max(0, min(int(max_executions), target))
 
-        # Precompute needs
-        needs_by_id: Dict[str, Dict[str, float]] = {}
-        for t in teams:
-            tid = str(getattr(t, "team_id", getattr(t, "id", "")))
-            needs_by_id[tid] = getattr(t, "needs", None) or self.needs_model.evaluate(t)
-
-        # Candidate sellers: rebuild/declining; buyers: contenders/emerging bubble
-        def gm_window(t: Any) -> str:
-            w = str(getattr(t, "window", getattr(t, "gm_window", "")) or "").lower()
-            if w in ("rebuild", "emerging", "contender", "declining"):
-                return w
-            st = str(getattr(t, "status", "") or "").lower()
-            ar = str(getattr(t, "archetype", "") or "").lower()
-            blob = st + " " + ar
-            if "rebuild" in blob or "tank" in blob:
-                return "rebuild"
-            if "declin" in blob:
-                return "declining"
-            if "contend" in blob or "win" in blob:
-                return "contender"
-            return "emerging"
-
-        def _pt_pct(t: Any) -> float:
-            try:
-                return float(getattr(t, "point_pct", None))
-            except Exception:
-                return 0.5
-
-        sellers = [
-            t
-            for t in teams
-            if gm_window(t) in ("rebuild", "declining")
-            or ("rebuild" in str(getattr(t, "status", "")).lower())
-            or _pt_pct(t) < 0.46
-        ]
-        buyers = [
-            t
-            for t in teams
-            if gm_window(t) in ("contender", "emerging") or ("contend" in str(getattr(t, "status", "")).lower()) or _pt_pct(t) > 0.54
-        ]
-        bubble = [t for t in teams if 0.46 <= _pt_pct(t) <= 0.54]
-        if not sellers:
-            sellers = teams[:]
-        if not buyers:
-            buyers = teams[:]
-
-        trades: List[Dict[str, Any]] = []
-        used_pairs = set()
-
-        for _ in range(target_trades * 3):  # attempt budget
-            if len(trades) >= target_trades:
-                break
-            if len(bubble) >= 2 and _safe_int(_, 0) % 5 == 0 and chaos < 0.62:
-                seller = bubble[_ % len(bubble)]
-                buyer = bubble[(_ * 3) % len(bubble)]
-            else:
-                seller = sellers[_safe_int(_ % len(sellers), 0)]
-                buyer = buyers[_safe_int((_ * 7) % len(buyers), 0)]
-            if seller is buyer:
-                continue
-            sid = str(getattr(seller, "team_id", "S"))
-            bid = str(getattr(buyer, "team_id", "B"))
-            key = (sid, bid)
-            if key in used_pairs:
-                continue
-            used_pairs.add(key)
-
-            s_roster = list(getattr(seller, "roster", None) or [])
-            b_roster = list(getattr(buyer, "roster", None) or [])
-            if not s_roster or not b_roster:
-                continue
-
-            # Seller offers: best non-prospect skater or goalie if seller has surplus
-            s_candidates = sorted(
-                s_roster,
-                key=lambda p: (self.value_model.evaluate(p, team=seller), _player_ovr(p)),
-                reverse=True,
-            )
-            s_offer = next((p for p in s_candidates if not _is_prospect(p)), None) or s_candidates[0]
-
-            # Buyer sends: prospect + low-value contract (value close to offer)
-            b_candidates = sorted(
-                b_roster,
-                key=lambda p: (self.value_model.evaluate(p, team=buyer), _player_ovr(p)),
-                reverse=True,
-            )
-            b_prospect = next((p for p in reversed(b_candidates) if _is_prospect(p)), None)
-            if b_prospect is None:
-                # fallback: mid roster piece
-                b_prospect = b_candidates[-1]
-
-            v_offer = self.value_model.evaluate(s_offer, team=buyer)
-            v_back = self.value_model.evaluate(b_prospect, team=seller)
-
-            # Fairness check
-            if abs(v_offer - v_back) > self.fairness_tolerance:
-                continue
-
-            # Execute trade (mutate rosters)
-            extra_names: List[str] = []
-            try:
-                s_roster.remove(s_offer)
-                b_roster.append(s_offer)
-                b_roster.remove(b_prospect)
-                s_roster.append(b_prospect)
-                if len(b_candidates) >= 4 and (id(s_offer) % 113) < 26:
-                    pick2 = next((p for p in b_candidates if p is not b_prospect and p is not s_offer), None)
-                    if pick2 is not None and pick2 in b_roster and _player_ovr(pick2) < _player_ovr(b_prospect) + 0.08:
-                        b_roster.remove(pick2)
-                        s_roster.append(pick2)
-                        extra_names.append(getattr(pick2, "name", "Piece"))
-                seller.roster = s_roster
-                buyer.roster = b_roster
-            except Exception:
-                continue
-
-            headline = (
-                "TRADE: "
-                + f"{getattr(buyer, 'name', bid)} acquire {getattr(s_offer, 'name', 'Player')}; "
-                + f"{getattr(seller, 'name', sid)} receive {getattr(b_prospect, 'name', 'Asset')}"
-            )
-            if extra_names:
-                headline += f" + {extra_names[0]}"
-            inc_list = [getattr(b_prospect, "name", "Asset")] + extra_names
-            trades.append(
-                {
-                    "from_team_id": sid,
-                    "to_team_id": bid,
-                    "outgoing": [getattr(s_offer, "name", "Player")],
-                    "incoming": inc_list,
-                    "headline": headline,
-                }
-            )
-
-        return trades
+        return propose_and_execute_cpu_trades(
+            league,
+            max_executions=target,
+            calendar_cursor=int(calendar_cursor or getattr(league, "calendar_cursor", 0) or 0),
+            regular_season_last_index=int(
+                regular_season_last_index or getattr(league, "regular_season_last_index", 192) or 192
+            ),
+            fairness_gap_max=float(self.fairness_tolerance),
+        )
 
 
 _DEFAULT = TradeAI()
 
 
-def evaluate_trade_market(league: Any, *, max_executions: Optional[int] = None) -> List[Dict[str, Any]]:
-    return _DEFAULT.evaluate_trade_market(league, max_executions=max_executions)
-
+def evaluate_trade_market(
+    league: Any,
+    *,
+    max_executions: Optional[int] = None,
+    calendar_cursor: int = 0,
+    regular_season_last_index: int = 192,
+) -> List[Dict[str, Any]]:
+    return _DEFAULT.evaluate_trade_market(
+        league,
+        max_executions=max_executions,
+        calendar_cursor=calendar_cursor,
+        regular_season_last_index=regular_season_last_index,
+    )

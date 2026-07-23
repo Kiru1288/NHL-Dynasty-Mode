@@ -27,12 +27,20 @@ from .standings import (
 from .playoffs import (
     PlayoffSeries,
     PlayoffResult,
+    build_playoff_first_round,
     simulate_playoffs,
 )
 
 from .awards import (
     Award,
+    AWARD_REGISTRY,
+    apply_career_award_history,
+    build_awards_payload,
+    calder_eligibility,
     compute_awards,
+    compute_official_watch_lists,
+    normalize_percentage,
+    serialize_award,
 )
 
 __all__ = [
@@ -49,9 +57,17 @@ __all__ = [
     # playoffs
     "PlayoffSeries",
     "PlayoffResult",
+    "build_playoff_first_round",
     "simulate_playoffs",
     # awards
     "Award",
+    "AWARD_REGISTRY",
     "compute_awards",
+    "build_awards_payload",
+    "serialize_award",
+    "calder_eligibility",
+    "normalize_percentage",
+    "compute_official_watch_lists",
+    "apply_career_award_history",
 ]
 

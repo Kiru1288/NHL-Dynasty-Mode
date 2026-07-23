@@ -32,10 +32,17 @@ class TeamStorylineState:
     storyline_tags: List[str] = field(default_factory=list)
 
 
+def _standing_team_id(s: Any) -> str:
+    # team_id=0 is valid; only fall back to "id" when team_id is truly absent.
+    tid = getattr(s, "team_id", None)
+    if tid is None:
+        tid = getattr(s, "id", None)
+    return str(tid) if tid is not None else ""
+
+
 def _standings_rank(standings: List[Any], team_id: str) -> Optional[int]:
     for i, s in enumerate(standings):
-        tid = getattr(s, "team_id", None) or getattr(s, "id", None)
-        if str(tid) == str(team_id):
+        if _standing_team_id(s) == str(team_id):
             return i + 1
     return None
 
@@ -69,7 +76,7 @@ def update_storylines(
 
     n_teams = len(standings) or 1
     for i, s in enumerate(standings or []):
-        tid = str(getattr(s, "team_id", None) or getattr(s, "id", "") or "")
+        tid = _standing_team_id(s)
         tname = _team_name_from_standing(s)
         pts = int(getattr(s, "points", 0) or 0)
         rank = i + 1
@@ -165,7 +172,7 @@ def update_storylines(
 
     # --- Rivalry: two teams repeatedly near top (top 4 or close in standings)
     if len(standings) >= 4:
-        top4 = [str(getattr(s, "team_id", None) or getattr(s, "id", "")) for s in standings[:4]]
+        top4 = [_standing_team_id(s) for s in standings[:4]]
         for tid in top4:
             ts = team_states.get(tid)
             if not ts or len(ts.recent_standings_rank) < 3:
