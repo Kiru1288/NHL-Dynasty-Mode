@@ -771,7 +771,7 @@ def simulate_offseason_cycle(session: Any) -> SeasonSnapshot:
                 "total_hit_m": full["total_cap_hit_m"],
             })
         legacy = team_cap_snapshot_legacy_compat(full)
-        simple = _team_cap_snapshot(team, session.sim)
+        simple = _team_cap_snapshot(team, session.sim, season_year=season_year)
         if abs(legacy["cap_space"] - simple["cap_space"]) > 0.05:
             cap_mismatch.append(tid)
 

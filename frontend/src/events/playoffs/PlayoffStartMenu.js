@@ -851,7 +851,7 @@ export default function PlayoffStartMenu({
   );
 
   return (
-    <div className="nhlcal-root po-hub-root">
+    <div className="nhlcal-root po-hub-root register-ops" data-register="ops">
       <style>{PO_HUB_CSS}</style>
       <aside className="nhlcal-sidebar">
         <button type="button" className="nhlcal-brand-button" onClick={onBack}>
@@ -996,28 +996,31 @@ export default function PlayoffStartMenu({
 }
 
 const PO_HUB_CSS = `
+.po-hub-root.nhlcal-root {
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+}
 .po-hub-root {
-  height: 100vh;
-  height: 100dvh;
-  max-height: 100vh;
-  max-height: 100dvh;
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
   overflow: hidden;
 }
 .po-start-menu-host {
-  height: 100vh;
-  height: 100dvh;
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
   width: 100%;
   overflow: hidden;
 }
 .nhlcal-main {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  height: 100dvh;
-  max-height: 100vh;
-  max-height: 100dvh;
-  overflow: hidden;
+  height: 100%;
   min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
 }
 .po-hub-topbar { align-items: flex-start; gap: 12px; padding: 10px 14px 6px; flex-shrink: 0; }
 .po-hub-directive {
@@ -1032,7 +1035,7 @@ const PO_HUB_CSS = `
   border: 1px solid var(--line-2);
   background: rgba(8, 24, 36, 0.9);
   color: var(--text);
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   padding: 10px 14px;
   font-size: 12px;
   font-weight: 800;
@@ -1065,9 +1068,9 @@ const PO_HUB_CSS = `
   margin-bottom: 8px;
   padding: 6px 10px;
   border: 1px solid rgba(233,168,60,0.28);
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   background: linear-gradient(90deg, rgba(233,168,60,0.12), rgba(19,216,231,0.08), rgba(233,168,60,0.12));
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1135,7 +1138,7 @@ const PO_HUB_CSS = `
   width: 100%;
   text-align: left;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   background: linear-gradient(180deg, rgba(12,35,52,0.98), rgba(6,18,28,0.98));
   color: var(--text);
   padding: 6px 7px;
@@ -1164,7 +1167,7 @@ const PO_HUB_CSS = `
   display: flex;
   justify-content: space-between;
   gap: 6px;
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--muted);
@@ -1191,7 +1194,7 @@ const PO_HUB_CSS = `
 }
 .po-hub-series-info { display: flex; flex-direction: column; min-width: 0; gap: 0; }
 .po-hub-series-info strong { font-size: 12px; font-weight: 1000; letter-spacing: 0.02em; }
-.po-hub-series-info small { color: #b7c9d6; font-size: 10px; font-weight: 800; }
+.po-hub-series-info small { color: #b7c9d6; font-size: 11px; font-weight: 800; }
 .po-hub-series-row em {
   font-style: normal;
   font-weight: 1000;
@@ -1201,20 +1204,20 @@ const PO_HUB_CSS = `
 }
 .po-hub-series-scoreline {
   margin-top: 2px;
-  font-size: 10px;
+  font-size: 11px;
   color: #d5e6f0;
   font-weight: 800;
 }
 .po-hub-series-last {
   margin-top: 1px;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--cyan);
   font-weight: 800;
 }
 .po-hub-team-mark {
   display: inline-grid;
   place-items: center;
-  border-radius: 5px;
+  border-radius: var(--radius-hud);
   overflow: hidden;
   background: rgba(255,255,255,0.04);
   border: 1px solid var(--line);
@@ -1222,19 +1225,19 @@ const PO_HUB_CSS = `
 }
 .po-hub-team-mark img { width: 100%; height: 100%; object-fit: contain; }
 .po-hub-team-mark.is-dimmed { filter: grayscale(0.85); opacity: 0.45; }
-.po-hub-fallback { font-size: 8px; font-weight: 900; }
+.po-hub-fallback { font-size: 11px; font-weight: 900; }
 .po-hub-tbd {
   display: inline-grid;
   place-items: center;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
   font-weight: 800;
   border: 1px dashed var(--line);
-  border-radius: 5px;
+  border-radius: var(--radius-hud);
 }
 .po-hub-empty-slot {
   border: 1px dashed var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   min-height: 64px;
   display: grid;
   place-items: center;
@@ -1246,7 +1249,7 @@ const PO_HUB_CSS = `
   min-height: 0;
   padding: 10px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-panel);
   background: var(--panel);
   overflow: hidden;
   display: flex;
@@ -1257,7 +1260,7 @@ const PO_HUB_CSS = `
 .po-hub-side .nhlcal-panel-head p {
   margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -1271,9 +1274,9 @@ const PO_HUB_CSS = `
 }
 .po-hub-side-score > div { display: grid; gap: 2px; justify-items: center; text-align: center; }
 .po-hub-side-score strong { font-size: 12px; }
-.po-hub-side-score small { color: #b7c9d6; font-size: 10px; font-weight: 800; }
+.po-hub-side-score small { color: #b7c9d6; font-size: 11px; font-weight: 800; }
 .po-hub-side-score em { font-style: normal; font-size: 20px; font-weight: 1000; color: var(--cyan); }
-.po-hub-side-score > span { font-size: 9px; letter-spacing: 0.12em; color: var(--muted); }
+.po-hub-side-score > span { font-size: 11px; letter-spacing: 0.12em; color: var(--muted); }
 .po-hub-side-status, .po-hub-side-next, .po-hub-muted {
   color: #b7c9d6;
   font-size: 11px;
@@ -1295,7 +1298,7 @@ const PO_HUB_CSS = `
   gap: 6px;
   align-items: center;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   padding: 4px 6px;
   background: rgba(0,0,0,0.18);
   font-size: 11px;
@@ -1303,7 +1306,7 @@ const PO_HUB_CSS = `
 .po-hub-game-slot.is-empty { opacity: 0.5; }
 .po-hub-game-slot.is-ot strong { color: var(--gold); }
 .po-hub-game-slot.is-latest strong { color: var(--cyan); }
-.po-hub-game-pending { font-weight: 700; color: var(--muted); font-size: 10px; }
+.po-hub-game-pending { font-weight: 700; color: var(--muted); font-size: 11px; }
 .po-hub-side-actions { display: grid; gap: 6px; flex-shrink: 0; }
 .po-hub-actionbar {
   display: flex;
@@ -1321,7 +1324,7 @@ const PO_HUB_CSS = `
 .po-hub-side-actions .nhlcal-advance-button-secondary {
   height: 40px;
   min-width: 108px;
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.08em;
 }
 .po-hub-actionbar .nhlcal-advance-button,
@@ -1351,13 +1354,39 @@ const PO_HUB_CSS = `
 .nhlcal-eyebrow {
   margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   font-weight: 900;
 }
-.nhlcal-topbar h1 { margin: 2px 0 0; font-size: 22px; letter-spacing: 0.02em; }
+.nhlcal-topbar h1 {
+  margin: 2px 0 0;
+  font-family: var(--font-broadcast-display, "Archivo Black", sans-serif);
+  font-size: clamp(1.35rem, 2.4vw, 1.85rem);
+  font-weight: 400;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  line-height: 1.05;
+}
+.nhlcal-topbar h1::after {
+  content: "";
+  display: block;
+  width: 56px;
+  height: 2px;
+  margin-top: 4px;
+  background: linear-gradient(90deg, var(--gold), var(--cyan));
+}
+.po-hub-topbar .nhlcal-eyebrow { color: var(--gold); }
 @media (max-width: 1100px) {
   .po-hub-layout { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .po-hub-series-card,
+  .po-hub-series-card:hover,
+  .po-hub-series-card.is-just-set {
+    animation: none !important;
+    transform: none !important;
+    transition: none !important;
+  }
 }
 `;

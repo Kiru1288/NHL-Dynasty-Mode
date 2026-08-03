@@ -240,6 +240,20 @@ def player_available_for_game(player: Any) -> bool:
     if is_world_injured(player):
         return False
 
+    try:
+        from app.sim_engine.franchise.conduct_incidents import player_eligible_to_dress
+
+        if not player_eligible_to_dress(player):
+            return False
+    except Exception:
+        # Fail closed on legacy suspension games if import fails mid-cycle.
+        try:
+            if int(getattr(player, "_world_conduct_games_remaining", 0) or 0) > 0:
+                if not bool(getattr(player, "_conduct_eligible_to_play", False)):
+                    return False
+        except Exception:
+            pass
+
     health_name = _health_status_name(player)
     if health_name not in {"UNKNOWN", "HEALTHY"}:
         return False

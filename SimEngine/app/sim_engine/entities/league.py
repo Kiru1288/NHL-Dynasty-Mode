@@ -121,8 +121,8 @@ class EconomicEnvironment:
     """
     League cap philosophy + revenue sharing climate.
     """
-    salary_cap: float = 88.0
-    cap_floor: float = 65.0
+    salary_cap: float = 95.5
+    cap_floor: float = 79.5
 
     cap_growth_rate: float = 0.045     # baseline, then modulated by health/shocks
     cap_volatility: float = 0.20       # 0=stable era, 1=wild swings

@@ -760,25 +760,68 @@ def _open_free_agency(session: FranchiseSession) -> Dict[str, Any]:
 
 
 def _run_roster_cleanup(session: FranchiseSession) -> Dict[str, Any]:
+    """Legacy SimEngine path — delegates to backend roster_compliance when available."""
+    try:
+        from services.roster_compliance import evaluate_roster_compliance
+
+        user_team = session.team_by_id.get(session.user_team_id)
+        league = getattr(getattr(session, "sim", None), "league", None)
+        sim = getattr(session, "sim", None)
+        season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
+        evaluation = evaluate_roster_compliance(
+            user_team, league=league, sim=sim, season_year=season_year
+        )
+        payload = {
+            "nhl_roster_count": evaluation.get("nhl_roster_count"),
+            "forward_count": evaluation.get("forward_count"),
+            "defense_count": evaluation.get("defense_count"),
+            "goalie_count": evaluation.get("goalie_count"),
+            "issues": list(evaluation.get("issues") or []),
+            "warnings": list(evaluation.get("warning_messages") or []),
+            "valid": bool(evaluation.get("valid")),
+            "blocking": list(evaluation.get("blocking") or []),
+            "blocking_reasons": list(evaluation.get("blocking_reasons") or []),
+        }
+        session.roster_cleanup_payload = payload
+        session.next_important_event = "generate_next_season"
+        return {"roster_cleanup": payload}
+    except Exception:
+        pass
+
     user_team = session.team_by_id.get(session.user_team_id)
-    roster_count = len(getattr(user_team, "roster", None) or []) if user_team else 0
+    roster = [
+        p for p in (getattr(user_team, "roster", None) or [])
+        if not getattr(p, "retired", False)
+        and not getattr(p, "is_buried", False)
+        and not getattr(p, "buried", False)
+        and not getattr(p, "in_minors", False)
+    ] if user_team else []
+    roster_count = len(roster)
     issues: List[str] = []
     warnings: List[str] = []
 
-    if roster_count < 18:
-        warnings.append(f"NHL roster light ({roster_count} skaters)")
+    if roster_count < 20:
+        issues.append(f"NHL roster under minimum ({roster_count}/20)")
     if roster_count > 23:
-        issues.append(f"NHL roster over limit ({roster_count})")
+        issues.append(f"NHL roster over limit ({roster_count}/23)")
 
-    goalies = sum(
-        1 for p in (getattr(user_team, "roster", None) or [])
-        if str(getattr(p, "position", "")).upper() == "G"
-    ) if user_team else 0
+    def _pos(p: Any) -> str:
+        return str(getattr(getattr(p, "position", None), "value", getattr(p, "position", "")) or "").upper()
+
+    forwards = sum(1 for p in roster if _pos(p) in ("C", "LW", "RW", "W", "F"))
+    defense = sum(1 for p in roster if _pos(p) in ("D", "LD", "RD"))
+    goalies = sum(1 for p in roster if _pos(p) == "G")
+    if forwards < 12:
+        issues.append(f"Need at least 12 forwards ({forwards})")
+    if defense < 6:
+        issues.append(f"Need at least 6 defensemen ({defense})")
     if goalies < 2:
-        warnings.append(f"Goalie count low ({goalies})")
+        issues.append(f"Need at least 2 goalies ({goalies})")
 
     payload = {
         "nhl_roster_count": roster_count,
+        "forward_count": forwards,
+        "defense_count": defense,
         "goalie_count": goalies,
         "issues": issues,
         "warnings": warnings,

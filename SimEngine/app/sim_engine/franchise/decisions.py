@@ -284,6 +284,72 @@ def _apply_ice_time_decision_effect(
         effects.update({"role_satisfaction_delta": 1})
 
     return effects
+
+
+def _apply_legal_conduct_decision_effect(
+    session: FranchiseSession,
+    decision: Dict[str, Any],
+    choice: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Wire GM legal popup choices into the conduct incident state machine."""
+    from app.sim_engine.franchise.conduct_incidents import apply_gm_conduct_choice  # noqa: WPS433
+
+    meta = dict(decision.get("meta") or {})
+    cid = str(choice.get("id") or choice.get("choice_id") or "")
+    incident_id = str(meta.get("incident_id") or meta.get("storyline_id") or decision.get("id") or "")
+    tid = str(meta.get("team_id") or session.user_team_id or "")
+    team = session.team_by_id.get(tid) or session.team_by_id.get(str(session.user_team_id))
+    player = None
+    if team is not None:
+        player = _find_player_on_team_by_id_or_name(
+            team,
+            player_id=str(meta.get("player_id") or ""),
+            player_name=str(meta.get("player_name") or ""),
+        )
+    if not incident_id and player is not None:
+        incident_id = str(getattr(player, "_conduct_incident_id", "") or "")
+
+    result = apply_gm_conduct_choice(
+        session,
+        incident_id=incident_id,
+        choice_id=cid,
+        player=player,
+        statement_tone=str(choice.get("statement_tone") or meta.get("statement_tone") or ""),
+        rng=getattr(getattr(session, "sim", None), "rng", None),
+    )
+    if not result.get("ok"):
+        return {
+            "conduct_ok": 0,
+            "reason": str(result.get("reason") or "incident_not_found"),
+            "effect_summary": "No matching conduct incident found — choice recorded without state change.",
+        }
+
+    summary = str(result.get("effect_summary") or choice.get("effect_summary") or "")
+    if summary:
+        choice["effect_summary"] = summary
+    out: Dict[str, Any] = {
+        "conduct_ok": 1,
+        "incident_id": result.get("incident_id"),
+        "eligible_to_play": result.get("eligible_to_play"),
+        "status": result.get("status"),
+        "effect_summary": summary,
+    }
+    org = result.get("org") or {}
+    if org:
+        out["owner_confidence"] = org.get("owner_confidence")
+        out["fan_approval"] = org.get("fan_approval")
+        out["media_heat"] = org.get("media_heat")
+        out["sponsor_confidence"] = org.get("sponsor_confidence")
+        out["revenue_modifier"] = org.get("revenue_modifier")
+    if result.get("trade_market_restricted") and player is not None:
+        out["trade_market_restricted"] = 1
+        try:
+            setattr(player, "_conduct_trade_restricted", True)
+        except Exception:
+            pass
+    return out
+
+
 def _apply_generic_storyline_choice_effect(
     session: FranchiseSession,
     decision: Dict[str, Any],
@@ -516,6 +582,9 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
             from app.sim_engine.franchise.retirement import apply_retirement_decision
 
             effects.update(apply_retirement_decision(session, d, cid))
+
+        elif kind == "legal_storyline_decision":
+            effects.update(_apply_legal_conduct_decision_effect(session, d, chosen))
 
         else:
             effects.update(_apply_generic_storyline_choice_effect(session, d, chosen))

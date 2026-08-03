@@ -12,11 +12,16 @@ from app.sim_engine.trades.trade_asset import (
     TradePackage,
     normalize_trade_package,
 )
-from app.sim_engine.trades.trade_pick_registry import ensure_draft_pick_registry
+from app.sim_engine.trades.trade_pick_registry import (
+    draft_year_from_context,
+    ensure_draft_pick_registry,
+)
 from app.sim_engine.trades.trade_rules import validate_trade_rules
 
-CPU_AMBIENT_FAIRNESS_GAP_MAX = 7.0
+CPU_AMBIENT_FAIRNESS_GAP_MAX = 14.0
 CPU_AMBIENT_MIN_INTEREST = 0.50
+CPU_DESPERATION_FAIRNESS_GAP_MAX = 28.0
+CPU_DESPERATION_MIN_INTEREST = 0.28
 from app.sim_engine.trades.trade_value import (
     evaluate_asset_value,
     evaluate_package_value,
@@ -132,6 +137,7 @@ def _pick_sale_guardrails(
     if team is None:
         return reasons
     season_year = int((context or {}).get("season_year", 2025) or 2025)
+    draft_year = int(draft_year_from_context(context, league=league))
     window = _team_window(team)
     outgoing = package.outgoing_by_team.get(team_id, [])
     incoming = package.incoming_by_team.get(team_id, [])
@@ -154,7 +160,7 @@ def _pick_sale_guardrails(
             continue
         row = get_pick_by_id(league, asset.pick_id) or {}
         rnd = int(row.get("round", asset.round or 7) or 7)
-        yr = int(row.get("year", asset.year or season_year) or season_year)
+        yr = int(row.get("year", asset.year or draft_year) or draft_year)
         orig = str(row.get("original_team_id") or "")
         owner = str(row.get("current_owner_team_id") or "")
         protection = row.get("protection")
@@ -165,7 +171,8 @@ def _pick_sale_guardrails(
         likely_lottery = rnd == 1 and (
             risk >= 9.0 or (points_pct is not None and float(points_pct) < 0.5)
         )
-        premium_pick = rnd == 1 and (yr <= season_year + 1 or likely_lottery or not protection)
+        # Protect current + next Entry Draft firsts (not calendar-year phantoms).
+        premium_pick = rnd == 1 and (yr <= draft_year + 1 or likely_lottery or not protection)
 
         if premium_pick and not has_strong_or_better:
             reasons.append(
@@ -177,13 +184,13 @@ def _pick_sale_guardrails(
                 "AI rejected: package lacks a premium asset for a likely lottery first."
             )
 
-        if window == "rebuild" and owner == team_id and rnd == 1 and yr <= season_year + 1 and not protection:
+        if window == "rebuild" and owner == team_id and rnd == 1 and yr <= draft_year + 1 and not protection:
             if not _draft_floor_pick_swap(context, league, incoming, yr, rnd):
                 reasons.append(
                     "AI rejected: rebuilding team will not move its own unprotected first."
                 )
 
-        if window != "contender" and owner == team_id and rnd == 1 and yr <= season_year + 1:
+        if window != "contender" and owner == team_id and rnd == 1 and yr <= draft_year + 1:
             if not _draft_floor_pick_swap(context, league, incoming, yr, rnd):
                 reasons.append(
                     "AI rejected: non-contender heavily protects current/next-year first-round picks."
@@ -237,23 +244,33 @@ def _ai_interest_for_team(
     elif net >= -8:
         interest = 0.38
         # Ambient CPU market: near-even hockey swaps should not die on float noise.
-        if (context or {}).get("cpu_ambient_trade") and net >= -2.75:
+        if (context or {}).get("cpu_ambient_trade") and net >= -1.25:
             interest = 0.55
     else:
         interest = 0.18
         reasons.append(f"Package net value ({net:.1f}) is too unfavorable")
 
-    # Rebuilder pick protection
+    # Rebuilder pick protection — soften when the return is a clear premium NHL piece.
     if window == "rebuild":
         for asset in package.outgoing_by_team.get(team_id, []):
             if isinstance(asset, DraftPickTradeAsset):
                 row = get_pick_by_id(league, asset.pick_id) or {}
                 rnd = int(row.get("round", asset.round) or 7)
                 if rnd == 1:
-                    interest = min(interest, 0.22)
-                    reasons.append("Team is rebuilding and will not move a first-round pick without a premium return")
+                    if net >= 12:
+                        interest = min(interest, 0.58)
+                    elif net >= 5:
+                        interest = min(interest, 0.42)
+                        reasons.append(
+                            "Team is rebuilding and needs a premium return for a first-round pick"
+                        )
+                    else:
+                        interest = min(interest, 0.22)
+                        reasons.append(
+                            "Team is rebuilding and will not move a first-round pick without a premium return"
+                        )
                 elif rnd == 2:
-                    interest = min(interest, 0.42)
+                    interest = min(interest, 0.48 if net >= 5 else 0.42)
             if isinstance(asset, PlayerTradeAsset):
                 src = team_by_id.get(team_id)
                 if src:
@@ -350,6 +367,13 @@ def _ai_interest_for_team(
                 interest = max(0.12, interest - 0.14)
                 reasons.append("Tank mode — not buying rentals at the deadline")
                 break
+
+    if (context or {}).get("cpu_ambient_trade") and (context or {}).get("cpu_desperation_trade"):
+        # Desperate GMs still care about legality, but accept worse nets.
+        if net >= -14:
+            interest = max(interest, 0.34)
+        elif net >= -20:
+            interest = max(interest, 0.28)
 
     interest = max(0.0, min(1.0, interest))
     # Draft-floor same-class pick swaps: allow slot moves without premium futures tax.
@@ -615,9 +639,10 @@ def evaluate_trade_package(
     user_team_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     ctx = dict(context or {})
+    start_y = draft_year_from_context(ctx, league=league) if ctx else None
     ensure_draft_pick_registry(
         league,
-        start_year=ctx.get("season_year"),
+        start_year=start_y if start_y is not None else ctx.get("season_year"),
         years_ahead=4,
     )
 
@@ -663,7 +688,11 @@ def evaluate_trade_package(
     # cap_casualty_trade bypasses AI interest: over-cap teams may need salary relief
     # even when a partner would normally reject the package. Hard validation still applies.
     accepted = can_execute
-    if accepted and (ctx or {}).get("cap_casualty_trade"):
+    # Published draft-floor packages the user is accepting already cleared value
+    # checks when generated — re-run must not soft-reject on AI interest.
+    if accepted and (ctx or {}).get("user_accepted_draft_floor_offer"):
+        accepted = True
+    elif accepted and (ctx or {}).get("cap_casualty_trade"):
         accepted = True
     elif accepted:
         for tid in package.participating_team_ids:
@@ -672,11 +701,20 @@ def evaluate_trade_package(
             team_obj = team_by_id.get(tid)
             threshold = _accept_threshold_for_team(team_obj) if team_obj is not None else 0.55
             if (ctx or {}).get("cpu_ambient_trade"):
-                # Keep a firm floor, but do not let rebuild thresholds (0.58) block
-                # near-fair ambient depth swaps that already pass fairness_gap.
-                threshold = max(0.50, min(0.55, threshold))
-                if fairness_gap <= CPU_AMBIENT_FAIRNESS_GAP_MAX and interest_level.get(tid, 0.0) >= 0.50:
-                    threshold = min(threshold, 0.50)
+                if (ctx or {}).get("cpu_desperation_trade"):
+                    # Rare controlled unfairness — lower interest floor, wider gap elsewhere.
+                    threshold = min(threshold, CPU_DESPERATION_MIN_INTEREST)
+                    if (
+                        fairness_gap <= CPU_DESPERATION_FAIRNESS_GAP_MAX
+                        and interest_level.get(tid, 0.0) >= CPU_DESPERATION_MIN_INTEREST
+                    ):
+                        threshold = CPU_DESPERATION_MIN_INTEREST
+                else:
+                    # Keep a firm floor, but do not let rebuild thresholds (0.58) block
+                    # near-fair ambient depth swaps that already pass fairness_gap.
+                    threshold = max(0.50, min(0.55, threshold))
+                    if fairness_gap <= CPU_AMBIENT_FAIRNESS_GAP_MAX and interest_level.get(tid, 0.0) >= 0.50:
+                        threshold = min(threshold, 0.50)
             if interest_level.get(tid, 0.0) < threshold:
                 accepted = False
                 tname = _team_display(team_obj, tid)
@@ -685,8 +723,12 @@ def evaluate_trade_package(
                     if msg not in rejection_reasons:
                         rejection_reasons.append(msg)
         if accepted and (ctx or {}).get("cpu_ambient_trade") and fairness_gap > CPU_AMBIENT_FAIRNESS_GAP_MAX:
-            # Draft-floor same-class pick swaps can have larger projected-value gaps by slot.
-            draft_gap_max = 22.0 if (ctx or {}).get("draft_day_trade") else CPU_AMBIENT_FAIRNESS_GAP_MAX
+            # Draft-floor swaps price known slots, so they only need a little more
+            # headroom than ambient trades for the sweeteners to land inexactly.
+            # Rare desperation mode allows controlled unfairness up to CPU_DESPERATION_FAIRNESS_GAP_MAX.
+            draft_gap_max = 10.0 if (ctx or {}).get("draft_day_trade") else CPU_AMBIENT_FAIRNESS_GAP_MAX
+            if (ctx or {}).get("cpu_desperation_trade"):
+                draft_gap_max = max(draft_gap_max, CPU_DESPERATION_FAIRNESS_GAP_MAX)
             if fairness_gap > draft_gap_max:
                 accepted = False
                 msg = f"Ambient CPU trade fairness gap too wide ({fairness_gap} > {draft_gap_max})"

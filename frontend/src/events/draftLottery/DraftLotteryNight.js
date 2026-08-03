@@ -53,6 +53,12 @@ function PickCard({ pick, active, pending, isUser }) {
           <TeamLogo src={pick.logoSrc} label={pick.team_name} size="md" />
           <div>
             <strong>{pick.team_name}</strong>
+            {pick.is_traded && pick.via_abbr ? (
+              <div className="dlot-via">
+                {pick.viaLogoSrc ? <TeamLogo src={pick.viaLogoSrc} label={pick.via_abbr} size="xs" /> : null}
+                <span>via {pick.via_abbr}</span>
+              </div>
+            ) : null}
             <div className="dlot-card-details">
               <span>Was #{pick.original_rank}</span>
               <span className={`tone-${movement.tone}`}>{movement.label}</span>
@@ -65,17 +71,36 @@ function PickCard({ pick, active, pending, isUser }) {
   );
 }
 
-function RevealOverlay({ pick, revealIndex, revealTotal, onSkip }) {
+function RevealOverlay({ pick, revealIndex, revealTotal, onSkip, isUser }) {
   const isTopPick = pick.pick <= 3;
 
   return (
-    <div className="dlot-reveal-overlay">
+    <>
+      <div className={`dlot-lower-third${isUser ? " is-user" : ""}`} aria-live="polite">
+        <div className="dlot-lower-third__panel">
+          <div className="dlot-lower-third__pick">#{pick.pick}</div>
+          <div className="dlot-lower-third__body">
+            <strong>{pick.team_name}</strong>
+            <span>
+              {isUser ? "Your franchise · " : ""}
+              {pickOrdinal(pick.pick).toUpperCase()} overall
+            </span>
+          </div>
+        </div>
+      </div>
+      <div className={`dlot-reveal-overlay${isUser ? " is-user-team" : ""}`}>
       <p className="dlot-reveal-kicker">
         {isTopPick ? "THE" : "WITH THE"} {pickOrdinal(pick.pick).toUpperCase()} OVERALL PICK
       </p>
       <p className="dlot-reveal-pick">#{pick.pick}</p>
       <TeamLogo src={pick.logoSrc} label={pick.team_name} size="xl" />
       <h2 className="dlot-reveal-team">{pick.team_name}</h2>
+      {pick.is_traded && (pick.via_team_name || pick.via_abbr) ? (
+        <p className="dlot-reveal-via">
+          {pick.viaLogoSrc ? <TeamLogo src={pick.viaLogoSrc} label={pick.via_abbr} size="sm" /> : null}
+          <span>via {pick.via_team_name || pick.via_abbr}</span>
+        </p>
+      ) : null}
       <div className="dlot-reveal-meta">
         <MovementChip movement={pick.movement} />
         <span className="dlot-chip">Projected #{pick.original_rank}</span>
@@ -87,7 +112,8 @@ function RevealOverlay({ pick, revealIndex, revealTotal, onSkip }) {
       <button type="button" className="dlot-skip-btn" onClick={onSkip} style={{ marginTop: 20 }}>
         Skip to All Picks
       </button>
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -102,11 +128,12 @@ function ResultsBoard({ picks, userTeamId }) {
         {picks.map((pick) => {
           const isUser =
             userTeamId &&
-            String(pick.team_id).toLowerCase() === String(userTeamId).toLowerCase();
+            (String(pick.team_id).toLowerCase() === String(userTeamId).toLowerCase() ||
+              String(pick.lottery_team_id || "").toLowerCase() === String(userTeamId).toLowerCase());
           const jumped = Number(pick.movement) > 0;
           return (
             <article
-              key={`${pick.pick}-${pick.team_id}`}
+              key={`${pick.pick}-${pick.team_id}-${pick.lottery_team_id || ""}`}
               className={[
                 "dlot-board-row",
                 isUser ? "is-user" : "",
@@ -120,7 +147,14 @@ function ResultsBoard({ picks, userTeamId }) {
               <div className="dlot-board-team">
                 <div>
                   <strong>{pick.team_name}</strong>
-                  {isUser ? <span>Your team</span> : null}
+                  {pick.is_traded && pick.via_abbr ? (
+                    <span className="dlot-via-inline">
+                      {pick.viaLogoSrc ? <TeamLogo src={pick.viaLogoSrc} label={pick.via_abbr} size="xs" /> : null}
+                      via {pick.via_abbr}
+                    </span>
+                  ) : isUser ? (
+                    <span>Your team</span>
+                  ) : null}
                 </div>
               </div>
               <div className="dlot-board-col">Was #{pick.original_rank}</div>
@@ -250,7 +284,8 @@ export default function DraftLotteryNight({
                   const active = currentReveal?.pick === pick.pick;
                   const isUser =
                     userTeamId &&
-                    String(pick.team_id).toLowerCase() === String(userTeamId).toLowerCase();
+                    (String(pick.team_id).toLowerCase() === String(userTeamId).toLowerCase() ||
+                      String(pick.lottery_team_id || "").toLowerCase() === String(userTeamId).toLowerCase());
                   return (
                     <PickCard
                       key={pick.pick}
@@ -270,6 +305,11 @@ export default function DraftLotteryNight({
               revealIndex={revealIndex}
               revealTotal={revealSequence.length}
               onSkip={skipToResults}
+              isUser={
+                Boolean(userTeamId) &&
+                (String(currentReveal.team_id).toLowerCase() === String(userTeamId).toLowerCase() ||
+                  String(currentReveal.lottery_team_id || "").toLowerCase() === String(userTeamId).toLowerCase())
+              }
             />
           ) : null}
         </>

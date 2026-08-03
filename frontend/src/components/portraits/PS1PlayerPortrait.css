@@ -6,7 +6,7 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: 10px;
   border: 2px solid rgba(201, 168, 106, 0.55);
   background:
     linear-gradient(180deg, rgba(8, 14, 28, 0.98) 0%, rgba(12, 20, 38, 0.96) 55%, rgba(6, 10, 18, 1) 100%);
@@ -56,13 +56,13 @@
 .ps1-portrait[data-size="profile"] {
   width: 180px;
   height: 200px;
-  border-radius: 16px;
+  border-radius: 10px;
 }
 
 .ps1-portrait[data-size="xl"] {
   width: clamp(200px, 32vw, 280px);
   height: clamp(220px, 36vw, 300px);
-  border-radius: 18px;
+  border-radius: 12px;
 }
 
 .ps1-portrait--fallback {
@@ -102,7 +102,7 @@
 .trade-asset-hero-visual .ps1-portrait[data-size="xl"] {
   width: clamp(240px, 38vw, 340px);
   height: clamp(300px, 48vw, 420px);
-  border-radius: 20px;
+  border-radius: 12px;
   border-color: rgba(0, 216, 223, 0.32);
   box-shadow:
     0 24px 64px rgba(0, 0, 0, 0.5),
@@ -138,7 +138,7 @@
 .dc-profile-identity__avatar-ring .ps1-portrait[data-size="profile"] {
   width: min(180px, 100%);
   height: 200px;
-  border-radius: 16px;
+  border-radius: 10px;
   border-color: rgba(118, 200, 245, 0.42);
   box-shadow:
     0 16px 36px rgba(0, 0, 0, 0.48),

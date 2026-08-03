@@ -11,6 +11,13 @@ import {
   buryContract,
   signFreeAgent,
   getFreeAgentDetail,
+  submitOfferSheet,
+  matchOfferSheet,
+  declineOfferSheet,
+  fileArbitration,
+  settleArbitration,
+  getRosterMoves,
+  moveRosterPlayer,
 } from "../services/franchiseService";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import PlayerHeadshot from "../components/PlayerHeadshot";
@@ -30,25 +37,47 @@ function resolveUserOrganization(franchiseState, teamId) {
 function buildRosterSlotSummary(franchiseState, snap, teamId) {
   const org = resolveUserOrganization(franchiseState, teamId);
   const nhlUsed = safeNum(
-    snap.active_roster_count,
+    snap?.active_roster_count,
     Array.isArray(org?.nhl) ? org.nhl.length : 0,
   );
   const ahlUsed = Array.isArray(org?.ahl) ? org.ahl.length : 0;
   const echlUsed = Array.isArray(org?.echl) ? org.echl.length : 0;
+  // Backend org SPC total (assignment-agnostic). Prefer nhl_spcs_used alias, then contract_slots_used.
+  const spcUsedRaw =
+    snap?.nhl_spcs_used ??
+    snap?.contract_slots_used ??
+    franchiseState?.contract_slots?.used ??
+    franchiseState?.team?.contract_slots_used;
+  const spcUsed = Number.isFinite(Number(spcUsedRaw)) ? Number(spcUsedRaw) : null;
+  const spcLimit = safeNum(
+    snap?.nhl_spcs_limit ?? snap?.contract_slots_limit,
+    50,
+  );
 
   return {
     nhl: { used: nhlUsed, limit: NHL_ROSTER_LIMIT },
     ahl: { used: ahlUsed, limit: AHL_ROSTER_LIMIT },
     echl: { used: echlUsed, limit: ECHL_ROSTER_LIMIT },
-    compact: `NHL ${nhlUsed}/${NHL_ROSTER_LIMIT}`,
-    subline: `AHL ${ahlUsed}/${AHL_ROSTER_LIMIT} · ECHL ${echlUsed}/${ECHL_ROSTER_LIMIT}`,
-    full: `NHL ${nhlUsed}/${NHL_ROSTER_LIMIT} · AHL ${ahlUsed}/${AHL_ROSTER_LIMIT} · ECHL ${echlUsed}/${ECHL_ROSTER_LIMIT}`,
+    spc: spcUsed == null ? null : { used: spcUsed, limit: spcLimit },
+    compact:
+      spcUsed == null
+        ? `NHL ${nhlUsed}/${NHL_ROSTER_LIMIT}`
+        : `NHL SPCs ${spcUsed}/${spcLimit}`,
+    subline:
+      spcUsed == null
+        ? `AHL ${ahlUsed}/${AHL_ROSTER_LIMIT} · ECHL ${echlUsed}/${ECHL_ROSTER_LIMIT}`
+        : `NHL ${nhlUsed}/${NHL_ROSTER_LIMIT} · AHL ${ahlUsed}/${AHL_ROSTER_LIMIT} · ECHL ${echlUsed}/${ECHL_ROSTER_LIMIT}`,
+    full:
+      spcUsed == null
+        ? `NHL ${nhlUsed}/${NHL_ROSTER_LIMIT} · AHL ${ahlUsed}/${AHL_ROSTER_LIMIT} · ECHL ${echlUsed}/${ECHL_ROSTER_LIMIT}`
+        : `NHL SPCs ${spcUsed}/${spcLimit} · NHL ${nhlUsed}/${NHL_ROSTER_LIMIT} · AHL ${ahlUsed}/${AHL_ROSTER_LIMIT} · ECHL ${echlUsed}/${ECHL_ROSTER_LIMIT}`,
   };
 }
 
 const TABS = [
   { id: "ledger", label: "Board" },
   { id: "freeAgents", label: "Free Agents" },
+  { id: "rfa", label: "RFA / Sheets" },
   { id: "cap", label: "Cap" },
 ];
 
@@ -335,11 +364,113 @@ function LedgerTab({ data, onSelect, selectedId }) {
   );
 }
 
-function ContractActionPanel({ row, onClose, onAction, busy }) {
+function ContractRosterMoves({ row, onMoved }) {
+  const playerId = String(row?.player_id || row?.id || "");
+  const [moves, setMoves] = useState([]);
+  const [meta, setMeta] = useState({});
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setError("");
+    setNote("");
+    setMoves([]);
+    if (!playerId || row?.own_ufa || row?.contract_status === "own_ufa") {
+      return undefined;
+    }
+    getRosterMoves(playerId)
+      .then((data) => {
+        if (cancelled) return;
+        setMeta(data || {});
+        setMoves(Array.isArray(data?.actions) ? data.actions : []);
+        if (data && data.ok === false && data.reason) setError(String(data.reason));
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err?.message || "Could not load roster moves");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [playerId, row?.own_ufa, row?.contract_status]);
+
+  if (!playerId || row?.own_ufa || row?.contract_status === "own_ufa") {
+    return null;
+  }
+
+  const runMove = async (action) => {
+    setBusy(action);
+    setError("");
+    setNote("");
+    try {
+      let result = await moveRosterPlayer({ player_id: playerId, action });
+      if (!result?.ok && result?.requires_waivers) {
+        const ok = window.confirm(
+          `${row.name || "Player"} requires waivers to leave the NHL roster. Place on waivers and send down?`
+        );
+        if (!ok) {
+          setError("Waivers required — move cancelled");
+          return;
+        }
+        result = await moveRosterPlayer({
+          player_id: playerId,
+          action,
+          confirm_waivers: true,
+        });
+      }
+      if (!result?.ok) {
+        setError(result?.reason || "Move failed");
+        return;
+      }
+      setNote(result.moved || "Move completed");
+      setMoves(Array.isArray(result.available_moves) ? result.available_moves : []);
+      if (typeof onMoved === "function") onMoved(result);
+    } catch (err) {
+      setError(err?.message || "Move failed");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <div className="cap-action-panel__moves">
+      <h4>Call up / Send down</h4>
+      <p className="cap-action-panel__moves-meta">
+        Location: {meta.location || "—"}
+        {meta.nhl_gp != null ? ` · NHL GP ${meta.nhl_gp}` : ""}
+        {meta.waiver_exempt ? " · Waiver exempt" : ""}
+      </p>
+      <div className="cap-action-panel__actions">
+        {moves.length ? (
+          moves.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              className="cap-action-btn"
+              disabled={Boolean(busy) || m.enabled === false}
+              title={m.reason || m.note || ""}
+              onClick={() => runMove(m.id)}
+            >
+              {busy === m.id ? "…" : m.label}
+              {m.requires_waivers ? " (waivers)" : ""}
+            </button>
+          ))
+        ) : (
+          <span className="cap-chip">{error || "No assignment moves for this player"}</span>
+        )}
+      </div>
+      {note ? <p className="cap-action-panel__moves-note">{note}</p> : null}
+      {error && moves.length ? <p className="cap-action-panel__moves-error">{error}</p> : null}
+    </div>
+  );
+}
+
+function ContractActionPanel({ row, onClose, onAction, busy, onRosterMoved }) {
   if (!row) {
     return (
       <section className="cap-action-panel cap-action-panel--empty">
-        <p>Select a player to re-sign, buy out, or manage their contract.</p>
+        <p>Select a player to re-sign, buy out, call up / send down, or manage their contract.</p>
       </section>
     );
   }
@@ -358,6 +489,16 @@ function ContractActionPanel({ row, onClose, onAction, busy }) {
   if (row.can_negotiate) actions.push({ id: "re-sign", label: "Re-sign" });
   if (row.can_qualify) actions.push({ id: "qualify-rfa", label: "Qualify RFA" });
   if (row.can_release_rights) actions.push({ id: "release-rights", label: "Release Rights" });
+  if (row.can_file_arbitration || (row.arbitration_eligible && !row.arbitration_filed)) {
+    actions.push({ id: "arbitration-file", label: "File Arbitration" });
+  }
+  if (row.arbitration_filed && !row.award_aav_m) {
+    actions.push({ id: "arbitration-settle", label: "Settle Arbitration" });
+  }
+  if (row.offer_sheet_pending || row.pending_offer_sheet) {
+    actions.push({ id: "match-offer-sheet", label: "Match Offer Sheet" });
+    actions.push({ id: "decline-offer-sheet", label: "Decline Offer Sheet" });
+  }
   if (row.can_buyout) actions.push({ id: "buyout", label: "Buyout" });
   if (row.can_waive) actions.push({ id: "waive", label: "Waive" });
   if (row.can_bury || row.can_waive) actions.push({ id: "bury", label: "Bury" });
@@ -430,9 +571,11 @@ function ContractActionPanel({ row, onClose, onAction, busy }) {
             </button>
           ))
         ) : (
-          <span className="cap-chip">No actions available</span>
+          <span className="cap-chip">No contract actions</span>
         )}
       </div>
+
+      <ContractRosterMoves row={row} onMoved={onRosterMoved} />
     </section>
   );
 }
@@ -769,6 +912,156 @@ function CapTile({ label, value, danger = false }) {
   );
 }
 
+function RfaSheetsTab({
+  data,
+  onSelect,
+  selectedId,
+  sheetDraft,
+  setSheetDraft,
+  onFileSheet,
+  onResolveSheet,
+  busy,
+}) {
+  const ownRfa = safeArray(data?.rfa_rights);
+  const targets = safeArray(data?.offer_sheet_targets);
+  const pending = safeArray(data?.pending_offer_sheets);
+  const selected =
+    targets.find((r) => String(r.player_id) === String(selectedId)) ||
+    ownRfa.find((r) => String(r.player_id) === String(selectedId)) ||
+    null;
+
+  return (
+    <section className="cap-board-panel">
+      <div className="cap-board-toolbar">
+        <h2>RFA desk</h2>
+        <p className="cap-empty-state" style={{ margin: 0, padding: 0 }}>
+          Qualify your RFAs, settle arbitration, match sheets against you, or file sheets on other clubs.
+        </p>
+      </div>
+
+      {pending.length ? (
+        <div className="cap-contract-list" style={{ marginBottom: "0.75rem" }}>
+          <h3 style={{ fontSize: "0.75rem", margin: "0 0 0.35rem" }}>Pending offer sheets</h3>
+          {pending.map((sheet) => (
+            <div key={`${sheet.player_id}-${sheet.offering_team_id}`} className="cap-fa-row" style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+              <strong>{safeText(sheet.name || sheet.player_id)}</strong>
+              <span>{formatMoneyM(sheet.aav_m)} × {sheet.years || 1}yr</span>
+              <span>{safeText(sheet.compensation_label || sheet.compensation_tier)}</span>
+              <button type="button" className="cap-action-btn" disabled={busy} onClick={() => onResolveSheet("match", sheet)}>
+                Match
+              </button>
+              <button type="button" className="cap-action-btn cap-action-btn--danger" disabled={busy} onClick={() => onResolveSheet("decline", sheet)}>
+                Decline
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="cap-board-head" style={{ gridTemplateColumns: "2fr 0.5fr 0.5fr 0.8fr 1fr" }}>
+        <span>Your RFA rights</span>
+        <span>Pos</span>
+        <span>OVR</span>
+        <span>QO</span>
+        <span>Status</span>
+      </div>
+      <div className="cap-contract-list cap-board-list" style={{ maxHeight: "28vh", marginBottom: "0.85rem" }}>
+        {ownRfa.length ? (
+          ownRfa.map((row) => (
+            <button
+              key={row.player_id}
+              type="button"
+              className={`cap-fa-row ${selectedId === row.player_id ? "is-selected" : ""}`}
+              style={{ display: "grid", gridTemplateColumns: "2fr 0.5fr 0.5fr 0.8fr 1fr", width: "100%", textAlign: "left" }}
+              onClick={() => onSelect(row)}
+            >
+              <span>{safeText(row.name)}</span>
+              <span>{safeText(row.position)}</span>
+              <span>{safeNum(row.overall)}</span>
+              <span>{formatMoneyM(row.qualifying_offer_aav_m)}</span>
+              <span>
+                {row.arbitration_filed ? "Arb filed" : row.offer_sheet_pending ? "Sheet pending" : "Rights"}
+              </span>
+            </button>
+          ))
+        ) : (
+          <div className="cap-empty-state">No RFA rights on file.</div>
+        )}
+      </div>
+
+      <div className="cap-board-head" style={{ gridTemplateColumns: "2fr 0.5fr 0.5fr 0.8fr 1.2fr" }}>
+        <span>Offer-sheet targets</span>
+        <span>Pos</span>
+        <span>OVR</span>
+        <span>QO</span>
+        <span>Comp @ suggest</span>
+      </div>
+      <div className="cap-contract-list cap-board-list" style={{ maxHeight: "28vh" }}>
+        {targets.length ? (
+          targets.map((row) => (
+            <button
+              key={`${row.rights_team_id}-${row.player_id}`}
+              type="button"
+              className={`cap-fa-row ${selectedId === row.player_id ? "is-selected" : ""}`}
+              style={{ display: "grid", gridTemplateColumns: "2fr 0.5fr 0.5fr 0.8fr 1.2fr", width: "100%", textAlign: "left" }}
+              onClick={() => {
+                onSelect(row);
+                setSheetDraft({
+                  aav_m: String(row.suggested_aav_m || row.qualifying_offer_aav_m || 1),
+                  years: "4",
+                });
+              }}
+            >
+              <span>{safeText(row.name)} <em style={{ opacity: 0.65 }}>{safeText(row.rights_team_id)}</em></span>
+              <span>{safeText(row.position)}</span>
+              <span>{safeNum(row.overall)}</span>
+              <span>{formatMoneyM(row.qualifying_offer_aav_m)}</span>
+              <span>{safeText(row.compensation_preview?.label)}</span>
+            </button>
+          ))
+        ) : (
+          <div className="cap-empty-state">No other-club RFAs available for offer sheets.</div>
+        )}
+      </div>
+
+      {selected?.offer_sheet_eligible && selected?.rights_team_id ? (
+        <div className="cap-action-panel" style={{ marginTop: "0.75rem" }}>
+          <h3>File offer sheet — {safeText(selected.name)}</h3>
+          <div className="cap-action-panel__stats">
+            <label>
+              <span>AAV ($M)</span>
+              <input
+                type="number"
+                step="0.025"
+                value={sheetDraft.aav_m}
+                onChange={(e) => setSheetDraft((d) => ({ ...d, aav_m: e.target.value }))}
+              />
+            </label>
+            <label>
+              <span>Years</span>
+              <input
+                type="number"
+                min="1"
+                max="8"
+                value={sheetDraft.years}
+                onChange={(e) => setSheetDraft((d) => ({ ...d, years: e.target.value }))}
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            className="cap-action-btn"
+            disabled={busy}
+            onClick={() => onFileSheet(selected, sheetDraft)}
+          >
+            Submit offer sheet
+          </button>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function CapTab({ data, slotSummary }) {
   const snap = getCapSnap(data);
   const used = safeNum(snap.total_cap_hit_m);
@@ -788,6 +1081,7 @@ function CapTab({ data, slotSummary }) {
     ["Dead", formatMoneyM(snap.other_dead_cap_m || 0)],
     ["Buried", formatMoneyM(snap.buried_cap_hit_m)],
     ["Retained", formatMoneyM(snap.retained_salary_m)],
+    ["NHL SPCs", slots.spc ? `${slots.spc.used}/${slots.spc.limit}` : "—"],
     ["NHL", `${slots.nhl.used}/${slots.nhl.limit}`],
     ["AHL", `${slots.ahl.used}/${slots.ahl.limit}`],
     ["ECHL", `${slots.echl.used}/${slots.echl.limit}`],
@@ -884,7 +1178,15 @@ function OfficeTopBar({ team, snap, slotSummary, teamLogo, onBack }) {
 }
 
 export default function CapLedger() {
-  const { franchiseState, setScreen, capLedgerTab, setCapLedgerTab } = useGameUI();
+  const {
+    franchiseState,
+    setScreen,
+    setCapLedgerTab,
+    capLedgerTab,
+    refreshFranchise,
+    openFranchiseEvent,
+    onReopenOffseasonStage,
+  } = useGameUI();
 
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -893,6 +1195,7 @@ export default function CapLedger() {
   const [error, setError] = useState("");
   const [faDetail, setFaDetail] = useState(null);
   const [faDetailLoading, setFaDetailLoading] = useState(false);
+  const [sheetDraft, setSheetDraft] = useState({ aav_m: "2.000", years: "4" });
 
   const tab =
     capLedgerTab === "salaryCap"
@@ -901,6 +1204,8 @@ export default function CapLedger() {
         ? "ledger"
       : capLedgerTab === "freeAgency" || capLedgerTab === "freeAgents"
         ? "freeAgents"
+      : capLedgerTab === "rfa" || capLedgerTab === "offerSheets"
+        ? "rfa"
       : capLedgerTab === "contracts"
         ? "ledger"
         : capLedgerTab === "cap"
@@ -1010,6 +1315,17 @@ export default function CapLedger() {
         result = await waiveContract(base);
       } else if (action === "bury") {
         result = await buryContract(base);
+      } else if (action === "arbitration-file") {
+        result = await fileArbitration({
+          ...base,
+          player_ask_m: safeNum(row.player_ask_m || row.requested_cap_hit || row.qualifying_offer_aav_m, 1) * 1.15,
+        });
+      } else if (action === "arbitration-settle") {
+        result = await settleArbitration(base);
+      } else if (action === "match-offer-sheet") {
+        result = await matchOfferSheet(base);
+      } else if (action === "decline-offer-sheet") {
+        result = await declineOfferSheet(base);
       }
 
       if (result?.office) {
@@ -1025,6 +1341,52 @@ export default function CapLedger() {
       setSelected(null);
     } catch (e) {
       setError(String(e?.message || "Action failed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleFileOfferSheet = async (row, draft) => {
+    const pid = row.player_id || row.id;
+    if (!pid || !row.rights_team_id) {
+      setError("Missing offer-sheet target");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const result = await submitOfferSheet({
+        player_id: pid,
+        rights_team_id: row.rights_team_id,
+        aav_m: safeNum(draft.aav_m, 2),
+        years: Math.max(1, safeNum(draft.years, 4)),
+      });
+      if (result?.office) setData(result.office);
+      else await loadData();
+      if (!result?.ok && result?.reason) setError(result.reason);
+      else setSelected(null);
+    } catch (e) {
+      setError(String(e?.message || "Offer sheet failed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleResolveSheet = async (decision, sheet) => {
+    const pid = sheet.player_id;
+    if (!pid) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result =
+        decision === "match"
+          ? await matchOfferSheet({ player_id: pid })
+          : await declineOfferSheet({ player_id: pid });
+      if (result?.office) setData(result.office);
+      else await loadData();
+      if (!result?.ok && result?.reason) setError(result.reason);
+    } catch (e) {
+      setError(String(e?.message || "Offer sheet resolution failed"));
     } finally {
       setBusy(false);
     }
@@ -1124,26 +1486,51 @@ export default function CapLedger() {
                 onClose={() => setSelected(null)}
                 onAction={handleAction}
                 busy={busy}
+                onRosterMoved={() => loadData()}
               />
             </div>
           ) : null}
 
           {tab === "freeAgents" ? (
             <div className="cap-board-layout">
-              <FreeAgentsTab
+              <div className="cap-ledger-empty" style={{ padding: "2rem", maxWidth: 520 }}>
+                <h3 style={{ marginTop: 0 }}>Free Agency Wire</h3>
+                <p>
+                  Free agency runs on the same offseason Free Agency Wire used in the
+                  timeline — bids, Sim Day, and the signing desk.
+                </p>
+                <button
+                  type="button"
+                  className="cap-ledger-primary-btn"
+                  disabled={busy}
+                  onClick={() => {
+                    if (typeof setScreen === "function") setScreen(SCREENS.FREE_AGENCY);
+                  }}
+                >
+                  Open Free Agency Wire
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {tab === "rfa" ? (
+            <div className="cap-board-layout">
+              <RfaSheetsTab
                 data={data}
                 onSelect={setSelected}
                 selectedId={selected?.player_id || selected?.id}
-              />
-              <FreeAgentDetailPanel
-                row={selected}
-                detail={faDetail}
-                loading={faDetailLoading}
-                onClose={() => setSelected(null)}
-                onSign={handleSign}
+                sheetDraft={sheetDraft}
+                setSheetDraft={setSheetDraft}
+                onFileSheet={handleFileOfferSheet}
+                onResolveSheet={handleResolveSheet}
                 busy={busy}
-                slots={data.contract_slots}
-                capSpace={safeNum(snap.usable_cap_space_m, NaN)}
+              />
+              <ContractActionPanel
+                row={selected && !selected.rights_team_id ? selected : null}
+                onClose={() => setSelected(null)}
+                onAction={handleAction}
+                busy={busy}
+                onRosterMoved={() => loadData()}
               />
             </div>
           ) : null}

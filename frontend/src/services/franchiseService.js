@@ -131,6 +131,21 @@ export async function continueOffseason(payload = {}) {
   return data;
 }
 
+/** @param {{ stage?: string }} [payload] */
+export async function reopenOffseasonStage(payload = {}) {
+  const { data } = await api.post("/api/franchise/offseason/reopen-stage", payload, {
+    timeout: 120000,
+  });
+  return data;
+}
+
+export async function getFreeAgencyDesk() {
+  const { data } = await api.get("/api/franchise/free-agency/desk", {
+    timeout: 120000,
+  });
+  return data;
+}
+
 export async function generateNextSeason() {
   const { data } = await api.post("/api/franchise/next-season/generate");
   return data;
@@ -208,6 +223,11 @@ export function reSignContract(payload) {
   return postContractAction("re-sign", payload);
 }
 
+/** Preview player response without persisting a deal. */
+export function evaluateContractOffer(payload) {
+  return postContractAction("re-sign", { ...payload, evaluate_only: true });
+}
+
 export function signFreeAgent(payload) {
   return postContractAction("sign-free-agent", payload);
 }
@@ -232,8 +252,74 @@ export function buryContract(payload) {
   return postContractAction("bury", payload);
 }
 
+export async function getRosterMoves(playerId) {
+  const { data } = await api.get("/api/franchise/roster/moves", {
+    params: { player_id: playerId },
+  });
+  return data;
+}
+
+export async function moveRosterPlayer(payload) {
+  const { data } = await api.post("/api/franchise/roster/move", payload || {});
+  return data;
+}
+
 export function signElcContract(payload) {
   return postContractAction("sign-elc", payload);
+}
+
+/** Preview structured ELC offer (acceptance, cap, slots) — no mutation. */
+export function previewElcOffer(payload) {
+  return postContractAction("preview-elc-offer", payload);
+}
+
+/** Submit structured ELC offer (persists exact terms on accept). */
+export function submitElcOffer(payload) {
+  return postContractAction("submit-elc-offer", payload);
+}
+
+/** Prospect Rights stage decision (ELC, keep path, expire, etc.). */
+export function prospectRightsDecision(payload) {
+  return postContractAction("prospect-rights", payload);
+}
+
+export function evaluateElcSigning(payload) {
+  return postContractAction("evaluate-elc", payload);
+}
+
+export function submitOfferSheet(payload) {
+  return postContractAction("offer-sheet", payload);
+}
+
+export function matchOfferSheet(payload) {
+  return postContractAction("match-offer-sheet", payload);
+}
+
+export function declineOfferSheet(payload) {
+  return postContractAction("decline-offer-sheet", payload);
+}
+
+export function fileArbitration(payload) {
+  return postContractAction("arbitration-file", payload);
+}
+
+export function settleArbitration(payload) {
+  return postContractAction("arbitration-settle", payload);
+}
+
+export async function advanceFreeAgencyDay(days = 1) {
+  const { data } = await api.post("/api/franchise/free-agency/advance-day", {
+    days: Math.max(1, Number(days) || 1),
+  });
+  return data;
+}
+
+/** Advance exclusive own-FA negotiating window and resolve pending offers. */
+export async function advanceContractNegotiationDay(days = 1) {
+  const { data } = await api.post("/api/franchise/contracts/advance-day", {
+    days: Math.max(1, Number(days) || 1),
+  });
+  return data;
 }
 
 export async function getFranchiseChemistry() {
@@ -353,6 +439,11 @@ export async function simEntryDraftToUserPick() {
 
 export async function completeEntryDraft() {
   const { data } = await api.post("/api/franchise/entry-draft/complete");
+  return data;
+}
+
+export async function acceptEntryDraftTrade(offer) {
+  const { data } = await api.post("/api/franchise/entry-draft/accept-trade", { offer: offer || {} });
   return data;
 }
 

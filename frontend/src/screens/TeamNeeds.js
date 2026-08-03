@@ -138,7 +138,7 @@ function TeamNeeds(props = {}) {
   }
 
   return (
-    <div className="teamneeds-root">
+    <div className="teamneeds-root register-ops" data-register="ops">
       <TeamNeedsStyles />
 
       <aside className="teamneeds-sidebar">
@@ -187,34 +187,31 @@ function TeamNeeds(props = {}) {
           </section>
         </header>
 
-        <section className="teamneeds-stat-strip">
-          <StatPill
-            icon="▦"
-            label="Roster Loaded"
-            value={report.totalRoster}
-            sub={`${report.nhlRosterCount} NHL / ${report.prospectCount} prospects`}
-            tone="cyan"
+        <section className="teamneeds-ops-context" aria-label="Draft planning context">
+          <ContextCell
+            code="ROS"
+            label="Roster"
+            value={report.totalRoster || "—"}
+            sub={`${report.nhlRosterCount} NHL · ${report.prospectCount} pipeline`}
           />
-          <StatPill
-            icon="!"
-            label="Biggest Need"
+          <ContextCell
+            code="PRI"
+            label="Priority"
             value={report.biggestNeed?.position || "—"}
-            sub={report.biggestNeed?.headline || "No major hole detected"}
-            tone={report.biggestNeed?.severity === "CRITICAL" ? "danger" : "gold"}
+            sub={report.biggestNeed ? formatNeedContext(report.biggestNeed) : "No roster data loaded"}
+            tone={report.biggestNeed?.tone}
           />
-          <StatPill
-            icon="◈"
-            label="Draft Strategy"
+          <ContextCell
+            code="STR"
+            label="Strategy"
             value={report.strategyLabel}
             sub={report.strategySub}
-            tone="green"
           />
-          <StatPill
-            icon="★"
-            label="Best Fit"
-            value={report.bestDraftFit?.name || "TBD"}
-            sub={report.bestDraftFit?.sub || "No draft class loaded"}
-            tone="blue"
+          <ContextCell
+            code="FIT"
+            label="Best fit"
+            value={report.bestDraftFit ? getPlayerName(report.bestDraftFit) : "—"}
+            sub={report.bestDraftFit?.sub || "Load draft class to match needs"}
           />
         </section>
 
@@ -228,38 +225,62 @@ function TeamNeeds(props = {}) {
               <span>{report.positionReports.length} position groups</span>
             </header>
 
-            <div className="teamneeds-priority-grid">
-              {report.positionReports.map((need) => (
-                <button
-                  key={need.position}
-                  type="button"
-                  className={`teamneeds-priority-card tone-${need.tone} ${
-                    activeNeed?.position === need.position ? "is-active" : ""
-                  }`}
-                  onClick={() => setSelectedNeed(need.position)}
-                >
-                  <div className="teamneeds-priority-icon">{POSITION_BUCKETS[need.position]?.icon || "◆"}</div>
+            <div className="teamneeds-depth-board">
+              <div className="teamneeds-depth-head">
+                <span>#</span>
+                <span>Pos</span>
+                <span>Organizational depth</span>
+                <span>Context</span>
+                <span>Score</span>
+              </div>
 
-                  <div className="teamneeds-priority-main">
-                    <div className="teamneeds-priority-topline">
+              {report.positionReports.map((need, index) => {
+                const config = POSITION_BUCKETS[need.position] || {};
+                return (
+                  <button
+                    key={need.position}
+                    type="button"
+                    className={`teamneeds-depth-row tone-${need.tone} ${
+                      activeNeed?.position === need.position ? "is-active" : ""
+                    }`}
+                    onClick={() => setSelectedNeed(need.position)}
+                  >
+                    <span className="teamneeds-depth-rank">{index + 1}</span>
+                    <span className="teamneeds-depth-pos">
                       <strong>{need.position}</strong>
-                      <span>{need.severity}</span>
+                      <small>{config.label}</small>
+                    </span>
+
+                    <div className="teamneeds-depth-layers">
+                      <DepthLayer
+                        label="NHL"
+                        current={need.nhlCount}
+                        target={config.minNhl}
+                        tone={need.tone}
+                      />
+                      <DepthLayer
+                        label="Org"
+                        current={need.orgCount}
+                        target={config.minOrg}
+                        tone={need.tone}
+                      />
+                      <DepthLayer
+                        label="Pipe"
+                        current={need.pipelineCount}
+                        target={2}
+                        tone={need.tone}
+                      />
                     </div>
 
-                    <h4>{need.headline}</h4>
-                    <p>{need.summary}</p>
-
-                    <div className="teamneeds-meter">
-                      <i style={{ width: `${Math.min(100, Math.max(0, need.needScore))}%` }} />
+                    <div className="teamneeds-depth-context">
+                      <strong>{need.headline}</strong>
+                      <p>{formatNeedContext(need)}</p>
                     </div>
 
-                    <footer>
-                      <span>Need Score</span>
-                      <b>{Math.round(need.needScore)}</b>
-                    </footer>
-                  </div>
-                </button>
-              ))}
+                    <span className="teamneeds-depth-score">{Math.round(need.needScore)}</span>
+                  </button>
+                );
+              })}
             </div>
           </section>
 
@@ -267,18 +288,41 @@ function TeamNeeds(props = {}) {
             <section className={`teamneeds-card teamneeds-spotlight tone-${activeNeed?.tone || "medium"}`}>
               <header className="teamneeds-card-header">
                 <div>
-                  <p>Selected Need</p>
-                  <h3>{activeNeed?.draftLabel || "Draft Strategy"}</h3>
+                  <p>Selected need</p>
+                  <h3>{activeNeed?.draftLabel || "Draft strategy"}</h3>
                 </div>
-                <span>{activeNeed?.severity || "LOW"}</span>
+                <span className="teamneeds-context-badge">
+                  {activeNeed ? formatNeedContext(activeNeed) : "—"}
+                </span>
               </header>
 
               <div className="teamneeds-spotlight-body">
-                <div className="teamneeds-big-icon">{POSITION_BUCKETS[activeNeed?.position]?.icon || "◈"}</div>
-
                 <h4>{activeNeed?.archetype || "Best player available with positional awareness"}</h4>
 
                 <p>{activeNeed?.explanation || "The roster does not show a severe weakness here, but the draft board should still be monitored."}</p>
+
+                {activeNeed ? (
+                  <div className="teamneeds-depth-layers teamneeds-depth-layers--detail">
+                    <DepthLayer
+                      label="NHL"
+                      current={activeNeed.nhlCount}
+                      target={POSITION_BUCKETS[activeNeed.position]?.minNhl}
+                      tone={activeNeed.tone}
+                    />
+                    <DepthLayer
+                      label="Org"
+                      current={activeNeed.orgCount}
+                      target={POSITION_BUCKETS[activeNeed.position]?.minOrg}
+                      tone={activeNeed.tone}
+                    />
+                    <DepthLayer
+                      label="Pipe"
+                      current={activeNeed.pipelineCount}
+                      target={2}
+                      tone={activeNeed.tone}
+                    />
+                  </div>
+                ) : null}
 
                 <div className="teamneeds-detail-grid">
                   <Detail label="NHL Count" value={activeNeed?.nhlCount} />
@@ -349,7 +393,7 @@ function TeamNeeds(props = {}) {
                   <span>{formatNumber(row.topOverall, 0)}</span>
                   <span>{formatNumber(row.avgAge, 1)}</span>
                   <span>{row.pipelineCount}</span>
-                  <span>{row.severity}</span>
+                  <span>{formatNeedContext(row)}</span>
                 </div>
               ))}
             </div>
@@ -391,17 +435,62 @@ function SideButton({ active, icon, label, onClick }) {
   );
 }
 
-function StatPill({ icon, label, value, sub, tone }) {
+function ContextCell({ code, label, value, sub, tone }) {
   return (
-    <article className={`teamneeds-stat-pill tone-${tone || "neutral"}`}>
-      <div>{icon}</div>
-      <section>
-        <span>{label}</span>
-        <strong>{value ?? "—"}</strong>
-        <small>{sub || "—"}</small>
-      </section>
+    <article className={`teamneeds-context-cell${tone ? ` tone-${tone}` : ""}`}>
+      <span className="teamneeds-context-cell__icon" aria-hidden="true">
+        {code || "OPS"}
+      </span>
+      <div>
+        <span className="teamneeds-context-cell__label">{label}</span>
+        <strong className="teamneeds-context-cell__value">{value ?? "—"}</strong>
+        <small className="teamneeds-context-cell__sub">{sub || "—"}</small>
+      </div>
     </article>
   );
+}
+
+function DepthLayer({ label, current, target, tone = "medium" }) {
+  const safeCurrent = Number(current) || 0;
+  const safeTarget = Number(target) || 1;
+  const pct = Math.min(100, Math.round((safeCurrent / safeTarget) * 100));
+  const gap = Math.max(0, safeTarget - safeCurrent);
+
+  return (
+    <div className={`teamneeds-depth-layer tone-${tone}`}>
+      <div className="teamneeds-depth-layer__head">
+        <span>{label}</span>
+        <strong>
+          {safeCurrent}
+          <em>/{safeTarget}</em>
+        </strong>
+      </div>
+      <div className="teamneeds-depth-layer__track" aria-hidden="true">
+        <i style={{ width: `${pct}%` }} />
+      </div>
+      {gap > 0 ? <small>{gap} below target</small> : <small>At target</small>}
+    </div>
+  );
+}
+
+function formatNeedContext(need) {
+  if (!need) return "—";
+  const config = POSITION_BUCKETS[need.position] || {};
+  const nhlGap = Math.max(0, (config.minNhl || 0) - (need.nhlCount || 0));
+  const orgGap = Math.max(0, (config.minOrg || 0) - (need.orgCount || 0));
+  const parts = [];
+
+  if (nhlGap > 0) parts.push(`${nhlGap} below NHL min`);
+  if (orgGap > 0) parts.push(`${orgGap} below org min`);
+  if ((need.pipelineCount || 0) <= 1) parts.push("thin pipeline");
+  if (need.avgOverall > 0 && need.avgOverall < (config.idealAvg || 79)) {
+    parts.push(`${formatNumber(config.idealAvg - need.avgOverall, 1)} OVR below target`);
+  }
+  if (!parts.length) {
+    if (need.severity === "STRENGTH") return "Organizational strength";
+    return `${need.nhlCount || 0} NHL · ${formatNumber(need.avgOverall, 1)} avg OVR`;
+  }
+  return parts.slice(0, 2).join(" · ");
 }
 
 function Detail({ label, value }) {
@@ -1098,49 +1187,37 @@ function TeamNeedsStyles() {
   return (
     <style>{`
       .teamneeds-root {
-        --bg: #04101a;
-        --bg-2: #061522;
-        --panel: rgba(9, 25, 38, 0.94);
-        --panel-2: rgba(12, 35, 52, 0.94);
-        --panel-3: rgba(15, 46, 66, 0.78);
-        --line: rgba(156, 218, 236, 0.14);
-        --line-2: rgba(115, 229, 241, 0.25);
-        --line-strong: rgba(73, 231, 240, 0.5);
-        --text: #e9f7fb;
-        --muted: #8096a8;
-        --muted-2: #607789;
-        --cyan: #13d8e7;
-        --cyan-soft: rgba(19, 216, 231, 0.13);
-        --gold: #e9a83c;
-        --gold-soft: rgba(233, 168, 60, 0.14);
-        --green: #52df94;
-        --green-soft: rgba(82, 223, 148, 0.13);
-        --red: #ff606d;
-        --red-soft: rgba(255, 96, 109, 0.13);
-        --blue: #8ab4ff;
-        --blue-soft: rgba(138, 180, 255, 0.13);
-        --purple: #c992ff;
-        --purple-soft: rgba(201, 146, 255, 0.14);
-        --shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+        --bg: var(--ops-navy);
+        --bg-2: var(--ops-black);
+        --panel: var(--ops-panel);
+        --panel-2: var(--ops-panel-2);
+        --line: var(--ops-grid);
+        --line-2: var(--ops-grid-2);
+        --line-strong: var(--ops-grid-strong);
+        --text: var(--ops-text);
+        --muted: var(--ops-text-secondary);
+        --cyan: var(--ops-cyan);
+        --cyan-soft: var(--ops-cyan-soft);
+        --gold: var(--ops-gold);
+        --gold-soft: var(--ops-gold-soft);
+        --green: var(--ops-success);
+        --green-soft: var(--ops-success-soft);
+        --red: var(--ops-injury);
+        --red-soft: var(--ops-injury-soft);
+        --blue: var(--ops-info);
+        --blue-soft: var(--ops-info-soft);
+        --shadow: var(--depth-overlay);
 
         min-height: 100vh;
         width: 100%;
         background:
-          radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.12), transparent 30%),
-          radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.08), transparent 26%),
-          linear-gradient(180deg, #06131f 0%, #020a11 100%);
+          radial-gradient(circle at 18% 0%, rgba(19, 216, 231, 0.08), transparent 28%),
+          linear-gradient(180deg, var(--ops-black) 0%, var(--ops-navy-deep) 100%);
         color: var(--text);
         display: grid;
         grid-template-columns: 94px minmax(0, 1fr);
         overflow: hidden;
-        font-family:
-          Inter,
-          ui-sans-serif,
-          system-ui,
-          -apple-system,
-          BlinkMacSystemFont,
-          "Segoe UI",
-          sans-serif;
+        font-family: var(--font-ops-ui);
       }
 
       .teamneeds-root *,
@@ -1205,7 +1282,10 @@ function TeamNeedsStyles() {
         gap: 4px;
         cursor: pointer;
         position: relative;
-        transition: 0.2s ease;
+        transition:
+          color 140ms ease,
+          background-color 140ms ease,
+          border-color 140ms ease;
       }
 
       .teamneeds-side-button:hover {
@@ -1213,23 +1293,23 @@ function TeamNeedsStyles() {
         background: rgba(255, 255, 255, 0.035);
       }
 
+      /* Command rail matches the network standard: hard rail, notched plate. */
       .teamneeds-side-button.is-active {
         color: var(--cyan);
-        background:
-          linear-gradient(90deg, rgba(19, 216, 231, 0.17), rgba(19, 216, 231, 0.03)),
-          radial-gradient(circle at 100% 50%, rgba(19, 216, 231, 0.24), transparent 52%);
+        background: linear-gradient(90deg, rgba(19, 216, 231, 0.16), rgba(19, 216, 231, 0.02));
+        clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
       }
 
       .teamneeds-side-button.is-active::before {
         content: "";
         position: absolute;
         left: 0;
-        top: 12px;
-        bottom: 12px;
+        top: 0;
+        bottom: 0;
         width: 3px;
-        border-radius: 999px;
+        border-radius: 0;
         background: var(--cyan);
-        box-shadow: 0 0 22px rgba(19, 216, 231, 0.8);
+        box-shadow: none;
       }
 
       .teamneeds-side-button span {
@@ -1237,7 +1317,7 @@ function TeamNeedsStyles() {
       }
 
       .teamneeds-side-button small {
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 900;
         letter-spacing: 0.02em;
       }
@@ -1259,11 +1339,11 @@ function TeamNeedsStyles() {
       }
 
       .teamneeds-topbar {
-        min-height: 102px;
+        min-height: 0;
         display: grid;
-        grid-template-columns: minmax(250px, 1fr) minmax(360px, 1.35fr) minmax(300px, 0.9fr);
+        grid-template-columns: minmax(250px, 1fr) minmax(220px, 1fr) auto;
         align-items: center;
-        gap: 22px;
+        gap: 18px;
       }
 
       .teamneeds-team-identity {
@@ -1274,9 +1354,9 @@ function TeamNeedsStyles() {
       }
 
       .teamneeds-team-logo {
-        width: 82px;
-        height: 82px;
-        border-radius: 24px;
+        width: 54px;
+        height: 54px;
+        border-radius: var(--radius-hud, 4px);
         display: grid;
         place-items: center;
         background:
@@ -1308,8 +1388,8 @@ function TeamNeedsStyles() {
 
       .teamneeds-team-identity h1 {
         margin: 0;
-        font-size: clamp(31px, 3vw, 48px);
-        line-height: 0.92;
+        font-size: clamp(20px, 1.7vw, 26px);
+        line-height: 1;
         letter-spacing: 0.12em;
         text-transform: uppercase;
       }
@@ -1322,16 +1402,21 @@ function TeamNeedsStyles() {
         font-weight: 800;
       }
 
+      /* Screen identity lives on the left; the report name is a document
+         subject line, not a second display headline competing with it. */
       .teamneeds-draft-board-title {
-        text-align: center;
+        text-align: left;
+        padding-left: 16px;
+        border-left: 2px solid rgba(19, 216, 231, 0.35);
       }
 
       .teamneeds-draft-board-title h2 {
         margin: 0;
-        font-size: clamp(31px, 3vw, 50px);
-        line-height: 0.92;
-        letter-spacing: 0.14em;
+        font-size: 13px;
+        line-height: 1.2;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
+        color: rgba(214, 234, 244, 0.9);
       }
 
       .teamneeds-actions {
@@ -1344,10 +1429,10 @@ function TeamNeedsStyles() {
       .teamneeds-actions button,
       .teamneeds-card-header button {
         border: 1px solid var(--line);
-        border-radius: 999px;
+        border-radius: var(--radius-hud, 4px);
         background: rgba(12, 31, 47, 0.72);
         color: var(--text);
-        padding: 11px 16px;
+        padding: 8px 14px;
         font-size: 11px;
         font-weight: 1000;
         letter-spacing: 0.08em;
@@ -1360,82 +1445,83 @@ function TeamNeedsStyles() {
       .teamneeds-card-header button:hover {
         border-color: var(--line-strong);
         background: rgba(19, 216, 231, 0.12);
-        transform: translateY(-1px);
       }
 
-      .teamneeds-stat-strip {
+      .teamneeds-ops-context {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 0;
         border: 1px solid var(--line);
-        background: rgba(8, 23, 35, 0.86);
-        border-radius: 12px;
+        border-radius: var(--radius-card);
         overflow: hidden;
-        box-shadow: var(--shadow);
-        margin-top: 18px;
+        margin-top: var(--space-4);
+        background: rgba(6, 21, 34, 0.72);
       }
 
-      .teamneeds-stat-pill {
-        min-height: 92px;
-        padding: 17px 18px;
+      .teamneeds-context-cell {
+        min-height: 72px;
+        padding: var(--space-3);
         display: flex;
-        align-items: center;
-        gap: 14px;
+        align-items: flex-start;
+        gap: var(--space-2);
         border-right: 1px solid rgba(156, 218, 236, 0.08);
-        background:
-          linear-gradient(180deg, rgba(18, 42, 61, 0.45), rgba(6, 20, 31, 0.34)),
-          radial-gradient(circle at 100% 0%, rgba(19, 216, 231, 0.05), transparent 52%);
       }
 
-      .teamneeds-stat-pill:last-child {
+      .teamneeds-context-cell:last-child {
         border-right: 0;
       }
 
-      .teamneeds-stat-pill > div {
-        width: 44px;
-        height: 44px;
+      .teamneeds-context-cell__icon {
         flex: 0 0 auto;
-        display: grid;
-        place-items: center;
-        border-radius: 14px;
-        background: rgba(148, 185, 205, 0.12);
-        border: 1px solid rgba(148, 185, 205, 0.12);
-        font-size: 18px;
-      }
-
-      .teamneeds-stat-pill span,
-      .teamneeds-stat-pill small {
-        display: block;
-      }
-
-      .teamneeds-stat-pill span {
-        color: var(--muted);
-        font-size: 10px;
-        text-transform: uppercase;
-        letter-spacing: 0.14em;
-        font-weight: 1000;
-      }
-
-      .teamneeds-stat-pill strong {
-        display: block;
-        margin-top: 3px;
-        font-size: 24px;
-        line-height: 1;
-        color: var(--text);
-      }
-
-      .teamneeds-stat-pill small {
-        margin-top: 5px;
-        color: var(--muted);
+        min-width: 28px;
+        padding: 3px 5px;
+        margin-top: 1px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-ops, 2px);
+        color: var(--cyan);
         font-size: 11px;
-        font-weight: 800;
+        font-weight: 900;
+        letter-spacing: 0.08em;
+        line-height: 1.2;
+        text-align: center;
       }
 
-      .teamneeds-stat-pill.tone-cyan > div { color: var(--cyan); background: var(--cyan-soft); }
-      .teamneeds-stat-pill.tone-gold > div { color: var(--gold); background: var(--gold-soft); }
-      .teamneeds-stat-pill.tone-green > div { color: var(--green); background: var(--green-soft); }
-      .teamneeds-stat-pill.tone-blue > div { color: var(--blue); background: var(--blue-soft); }
-      .teamneeds-stat-pill.tone-danger > div { color: var(--red); background: var(--red-soft); }
+      .teamneeds-context-cell__label,
+      .teamneeds-context-cell__sub {
+        display: block;
+      }
+
+      .teamneeds-context-cell__label {
+        color: var(--muted);
+        font-size: var(--type-phase-label-size);
+        font-weight: 900;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .teamneeds-context-cell__value {
+        display: block;
+        margin-top: 2px;
+        font-size: var(--type-compact-size);
+        font-weight: 800;
+        line-height: 1.2;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .teamneeds-context-cell__sub {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: var(--type-table-meta-size);
+        font-weight: 700;
+        line-height: 1.35;
+      }
+
+      .teamneeds-context-cell.tone-critical .teamneeds-context-cell__icon { color: var(--red); }
+      .teamneeds-context-cell.tone-high .teamneeds-context-cell__icon { color: var(--gold); }
+      .teamneeds-context-cell.tone-medium .teamneeds-context-cell__icon { color: var(--blue); }
+      .teamneeds-context-cell.tone-low .teamneeds-context-cell__icon,
+      .teamneeds-context-cell.tone-strength .teamneeds-context-cell__icon { color: var(--green); }
 
       .teamneeds-content-grid {
         display: grid;
@@ -1446,12 +1532,9 @@ function TeamNeedsStyles() {
 
       .teamneeds-board-panel,
       .teamneeds-card {
-        background:
-          linear-gradient(180deg, rgba(13, 31, 46, 0.94), rgba(5, 17, 28, 0.94)),
-          radial-gradient(circle at 50% 0%, rgba(19, 216, 231, 0.08), transparent 40%);
+        background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 20px;
-        box-shadow: var(--shadow);
+        border-radius: var(--radius-card);
         overflow: hidden;
       }
 
@@ -1487,168 +1570,181 @@ function TeamNeedsStyles() {
         min-height: 68px;
       }
 
-      .teamneeds-priority-grid {
-        display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 14px;
-        padding: 18px;
+      .teamneeds-depth-board {
+        padding: var(--space-2) var(--space-3) var(--space-3);
       }
 
-      .teamneeds-priority-card {
-        min-height: 330px;
-        border: 1px solid rgba(156, 218, 236, 0.12);
-        border-radius: 18px;
-        background:
-          radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.05), transparent 36%),
-          rgba(7, 22, 35, 0.88);
+      .teamneeds-depth-head,
+      .teamneeds-depth-row {
+        display: grid;
+        grid-template-columns: 36px 72px minmax(220px, 1.2fr) minmax(180px, 1fr) 52px;
+        align-items: center;
+        gap: var(--space-3);
+      }
+
+      .teamneeds-depth-head {
+        min-height: 32px;
+        padding: 0 var(--space-2);
+        color: var(--muted);
+        font-size: var(--type-phase-label-size);
+        font-weight: 900;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .teamneeds-depth-row {
+        width: 100%;
+        min-height: 74px;
+        margin-top: var(--space-1);
+        padding: var(--space-2);
+        border: 1px solid rgba(156, 218, 236, 0.08);
+        border-radius: var(--radius-control);
+        background: rgba(6, 21, 34, 0.45);
         color: var(--text);
-        padding: 16px;
         text-align: left;
         cursor: pointer;
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-        transition: 0.2s ease;
+        transition: background var(--motion-micro), border-color var(--motion-micro);
       }
 
-      .teamneeds-priority-card:hover,
-      .teamneeds-priority-card.is-active {
-        transform: translateY(-2px);
+      .teamneeds-depth-row:hover,
+      .teamneeds-depth-row.is-active {
         border-color: var(--line-strong);
-        box-shadow: 0 20px 46px rgba(0, 0, 0, 0.25);
+        background: var(--cyan-soft);
       }
 
-      .teamneeds-priority-icon {
-        width: 52px;
-        height: 52px;
-        border-radius: 18px;
+      .teamneeds-depth-rank {
+        font-family: var(--font-mono-data);
+        font-size: var(--type-table-meta-size);
+        font-weight: 800;
+        color: var(--muted);
+      }
+
+      .teamneeds-depth-pos strong,
+      .teamneeds-depth-pos small {
+        display: block;
+      }
+
+      .teamneeds-depth-pos strong {
+        font-size: var(--type-compact-size);
+        letter-spacing: 0.06em;
+      }
+
+      .teamneeds-depth-pos small {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: var(--type-table-meta-size);
+      }
+
+      .teamneeds-depth-layers {
         display: grid;
-        place-items: center;
-        font-size: 22px;
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.08);
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: var(--space-2);
       }
 
-      .teamneeds-priority-main {
-        display: flex;
-        flex-direction: column;
-        flex: 1;
+      .teamneeds-depth-layers--detail {
+        margin: var(--space-3) 0;
       }
 
-      .teamneeds-priority-topline {
+      .teamneeds-depth-layer__head {
         display: flex;
-        align-items: center;
         justify-content: space-between;
-        gap: 12px;
-      }
-
-      .teamneeds-priority-topline strong {
-        font-size: 28px;
-        letter-spacing: 0.08em;
-      }
-
-      .teamneeds-priority-topline span {
-        font-size: 9px;
-        font-weight: 1000;
-        letter-spacing: 0.11em;
+        gap: var(--space-1);
+        font-size: var(--type-table-meta-size);
+        font-weight: 800;
+        letter-spacing: 0.06em;
         text-transform: uppercase;
         color: var(--muted);
       }
 
-      .teamneeds-priority-card h4 {
-        margin: 14px 0 0;
-        font-size: 18px;
-        line-height: 1.1;
+      .teamneeds-depth-layer__head strong {
+        color: var(--text);
+        font-family: var(--font-mono-data);
       }
 
-      .teamneeds-priority-card p {
-        margin: 10px 0 0;
+      .teamneeds-depth-layer__head em {
+        font-style: normal;
         color: var(--muted);
-        font-size: 12px;
-        line-height: 1.45;
         font-weight: 700;
       }
 
-      .teamneeds-meter {
-        height: 8px;
-        margin-top: auto;
-        background: rgba(255, 255, 255, 0.08);
-        border-radius: 999px;
+      /* Department signature: the organizational depth stack. Each layer is
+         divided into roster slots so a shortage reads as missing bodies,
+         not as a percentage bar. */
+      .teamneeds-depth-layer__track {
+        position: relative;
+        height: 6px;
+        margin-top: 4px;
+        background: rgba(255, 255, 255, 0.06);
+        border-radius: 0;
         overflow: hidden;
       }
 
-      .teamneeds-meter i {
+      .teamneeds-depth-layer__track::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background: repeating-linear-gradient(
+          90deg,
+          transparent 0 calc(20% - 1px),
+          rgba(4, 16, 26, 0.9) calc(20% - 1px) 20%
+        );
+      }
+
+      .teamneeds-depth-layer__track i {
         display: block;
         height: 100%;
-        border-radius: inherit;
         background: var(--cyan);
+        border-radius: 0;
       }
 
-      .teamneeds-priority-card footer {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-top: 10px;
+      .teamneeds-depth-layer small {
+        display: block;
+        margin-top: 3px;
         color: var(--muted);
-        font-size: 11px;
-        font-weight: 1000;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
+        font-size: 0.6875rem;
+        font-weight: 700;
       }
 
-      .teamneeds-priority-card footer b {
-        color: var(--text);
-        font-size: 18px;
+      .teamneeds-depth-layer.tone-critical .teamneeds-depth-layer__track i { background: var(--red); }
+      .teamneeds-depth-layer.tone-high .teamneeds-depth-layer__track i { background: var(--gold); }
+      .teamneeds-depth-layer.tone-medium .teamneeds-depth-layer__track i { background: var(--blue); }
+      .teamneeds-depth-layer.tone-low .teamneeds-depth-layer__track i,
+      .teamneeds-depth-layer.tone-strength .teamneeds-depth-layer__track i { background: var(--green); }
+
+      .teamneeds-depth-context strong,
+      .teamneeds-depth-context p {
+        display: block;
+        margin: 0;
       }
 
-      .teamneeds-priority-card.tone-critical {
-        border-color: rgba(255, 96, 109, 0.34);
-        background:
-          radial-gradient(circle at 50% 0%, rgba(255, 96, 109, 0.14), transparent 40%),
-          rgba(7, 22, 35, 0.88);
+      .teamneeds-depth-context strong {
+        font-size: var(--type-compact-size);
+        line-height: 1.25;
       }
 
-      .teamneeds-priority-card.tone-critical .teamneeds-priority-icon,
-      .teamneeds-spotlight.tone-critical .teamneeds-big-icon {
-        color: var(--red);
-        background: var(--red-soft);
+      .teamneeds-depth-context p {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: var(--type-table-meta-size);
+        line-height: 1.35;
       }
 
-      .teamneeds-priority-card.tone-critical .teamneeds-meter i {
-        background: var(--red);
+      .teamneeds-depth-score {
+        text-align: right;
+        font-family: var(--font-mono-data);
+        font-size: var(--type-compact-size);
+        font-weight: 800;
       }
 
-      .teamneeds-priority-card.tone-high .teamneeds-priority-icon,
-      .teamneeds-spotlight.tone-high .teamneeds-big-icon {
-        color: var(--gold);
-        background: var(--gold-soft);
-      }
-
-      .teamneeds-priority-card.tone-high .teamneeds-meter i {
-        background: var(--gold);
-      }
-
-      .teamneeds-priority-card.tone-medium .teamneeds-priority-icon,
-      .teamneeds-spotlight.tone-medium .teamneeds-big-icon {
-        color: var(--blue);
-        background: var(--blue-soft);
-      }
-
-      .teamneeds-priority-card.tone-medium .teamneeds-meter i {
-        background: var(--blue);
-      }
-
-      .teamneeds-priority-card.tone-low .teamneeds-priority-icon,
-      .teamneeds-spotlight.tone-low .teamneeds-big-icon,
-      .teamneeds-priority-card.tone-strength .teamneeds-priority-icon,
-      .teamneeds-spotlight.tone-strength .teamneeds-big-icon {
-        color: var(--green);
-        background: var(--green-soft);
-      }
-
-      .teamneeds-priority-card.tone-low .teamneeds-meter i,
-      .teamneeds-priority-card.tone-strength .teamneeds-meter i {
-        background: var(--green);
+      .teamneeds-context-badge {
+        max-width: 220px;
+        text-align: right;
+        color: var(--muted);
+        font-size: var(--type-table-meta-size);
+        font-weight: 800;
+        line-height: 1.35;
       }
 
       .teamneeds-right-rail {
@@ -1661,20 +1757,11 @@ function TeamNeedsStyles() {
         padding: 22px;
       }
 
-      .teamneeds-big-icon {
-        width: 72px;
-        height: 72px;
-        border-radius: 24px;
-        display: grid;
-        place-items: center;
-        font-size: 32px;
-        margin-bottom: 18px;
-      }
-
       .teamneeds-spotlight-body h4 {
         margin: 0;
-        font-size: 22px;
-        line-height: 1.12;
+        font-size: var(--type-compact-size);
+        line-height: 1.35;
+        font-weight: 800;
       }
 
       .teamneeds-spotlight-body p {
@@ -1685,25 +1772,32 @@ function TeamNeedsStyles() {
         font-weight: 750;
       }
 
+      /* Position facts are a ruled register, not six equal metric cards. */
       .teamneeds-detail-grid {
-        margin-top: 20px;
+        margin-top: 12px;
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
+        column-gap: 18px;
+        border-top: 1px solid rgba(255, 255, 255, 0.09);
       }
 
       .teamneeds-detail-grid article {
-        min-height: 70px;
-        padding: 12px;
-        border-radius: 14px;
-        background: rgba(255, 255, 255, 0.045);
-        border: 1px solid rgba(255, 255, 255, 0.07);
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: baseline;
+        gap: 10px;
+        padding: 5px 0;
+        border-radius: 0;
+        background: transparent;
+        border: 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.07);
       }
 
       .teamneeds-detail-grid span {
         display: block;
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.1em;
         font-weight: 1000;
@@ -1711,37 +1805,43 @@ function TeamNeedsStyles() {
 
       .teamneeds-detail-grid strong {
         display: block;
-        margin-top: 7px;
-        font-size: 22px;
+        margin-top: 0;
+        font-size: 14px;
+        font-variant-numeric: tabular-nums;
       }
 
       .teamneeds-target-list {
-        padding: 14px;
+        padding: 6px 12px 10px;
         display: grid;
-        gap: 10px;
+        gap: 0;
       }
 
       .teamneeds-target-row {
-        min-height: 58px;
+        min-height: 40px;
         display: grid;
         grid-template-columns: 38px minmax(0, 1fr) 46px;
         align-items: center;
         gap: 10px;
-        padding: 10px;
-        border-radius: 14px;
-        border: 1px solid rgba(156, 218, 236, 0.09);
-        background: rgba(255, 255, 255, 0.04);
+        padding: 6px 8px;
+        border-radius: 0;
+        border: 0;
+        border-bottom: 1px solid rgba(156, 218, 236, 0.09);
+        background: transparent;
       }
 
+      /* Priority index reads as a stencilled position plate. */
       .teamneeds-target-row > span {
-        width: 34px;
-        height: 34px;
+        width: 32px;
+        height: 24px;
         display: grid;
         place-items: center;
-        border-radius: 12px;
-        background: rgba(19, 216, 231, 0.1);
+        border-radius: var(--radius-ops, 2px);
+        border: 1px solid rgba(19, 216, 231, 0.3);
+        background: rgba(19, 216, 231, 0.08);
         color: var(--cyan);
         font-weight: 1000;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.04em;
       }
 
       .teamneeds-target-row strong,
@@ -1802,7 +1902,7 @@ function TeamNeedsStyles() {
         height: 36px;
         color: rgba(233, 247, 251, 0.64);
         text-transform: uppercase;
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         letter-spacing: 0.08em;
         border-bottom: 1px solid rgba(156, 218, 236, 0.12);
@@ -1837,7 +1937,7 @@ function TeamNeedsStyles() {
       .teamneeds-table-row small {
         margin-top: 3px;
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
       }
 
       .teamneeds-table-row.tone-critical > span:last-child {
@@ -1868,7 +1968,7 @@ function TeamNeedsStyles() {
         grid-template-columns: 42px minmax(0, 1fr);
         gap: 14px;
         padding: 16px;
-        border-radius: 16px;
+        border-radius: 6px;
         background: rgba(255, 255, 255, 0.045);
         border: 1px solid rgba(156, 218, 236, 0.09);
       }
@@ -1876,7 +1976,7 @@ function TeamNeedsStyles() {
       .teamneeds-plan-card > span {
         width: 42px;
         height: 42px;
-        border-radius: 14px;
+        border-radius: 10px;
         display: grid;
         place-items: center;
         font-weight: 1000;
@@ -1922,11 +2022,24 @@ function TeamNeedsStyles() {
 
       .teamneeds-empty {
         margin: 0;
-        padding: 18px;
+        padding: 14px 16px;
+        border: 1px dashed var(--line);
+        border-radius: var(--radius-control, 6px);
+        background: rgba(6, 21, 34, 0.55);
         color: var(--muted);
         line-height: 1.5;
         font-size: 13px;
         font-weight: 800;
+      }
+
+      .teamneeds-empty::before {
+        content: "DEPTH BOARD · STANDBY";
+        display: block;
+        margin-bottom: 6px;
+        color: var(--cyan);
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: 0.14em;
       }
 
       @media (max-width: 1320px) {
@@ -1942,10 +2055,6 @@ function TeamNeedsStyles() {
 
         .teamneeds-actions {
           justify-content: flex-start;
-        }
-
-        .teamneeds-priority-grid {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
 
@@ -1963,18 +2072,25 @@ function TeamNeedsStyles() {
         }
 
         .teamneeds-stat-strip,
-        .teamneeds-priority-grid,
+        .teamneeds-ops-context,
+        .teamneeds-depth-layers,
         .teamneeds-detail-grid {
           grid-template-columns: 1fr;
         }
 
-        .teamneeds-stat-pill {
+        .teamneeds-context-cell {
           border-right: 0;
           border-bottom: 1px solid rgba(156, 218, 236, 0.08);
         }
 
-        .teamneeds-stat-pill:last-child {
+        .teamneeds-context-cell:last-child {
           border-bottom: 0;
+        }
+
+        .teamneeds-depth-head,
+        .teamneeds-depth-row {
+          grid-template-columns: 1fr;
+          gap: var(--space-2);
         }
 
         .teamneeds-table {
@@ -1995,7 +2111,7 @@ function TeamNeedsStyles() {
         .teamneeds-team-logo {
           width: 62px;
           height: 62px;
-          border-radius: 18px;
+          border-radius: 6px;
         }
 
         .teamneeds-team-logo span {
@@ -2005,10 +2121,6 @@ function TeamNeedsStyles() {
         .teamneeds-team-identity h1,
         .teamneeds-draft-board-title h2 {
           font-size: 30px;
-        }
-
-        .teamneeds-priority-card {
-          min-height: 260px;
         }
       }
     `}</style>

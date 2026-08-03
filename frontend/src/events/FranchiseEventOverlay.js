@@ -9,6 +9,7 @@ export default function FranchiseEventOverlay({
   franchiseState,
   onClose,
   onContinueOffseason,
+  onReopenOffseasonStage,
   onGenerateNextSeason,
   onEnterPlayoffs,
   onAdvancePhase,
@@ -20,6 +21,14 @@ export default function FranchiseEventOverlay({
     try {
       if (key === "roster_cleanup") {
         if (!franchiseState?.flags?.can_generate_next_season) {
+          const route =
+            franchiseState?.roster_cleanup?.blocking?.[0]?.route ||
+            franchiseState?.roster_cleanup?.blocking_reasons?.[0]?.route ||
+            "free_agency";
+          const stage = String(route).includes("cap") ? "free_agency" : String(route || "free_agency");
+          if (typeof onReopenOffseasonStage === "function") {
+            await onReopenOffseasonStage(stage === "re_sign" ? "re_sign" : "free_agency");
+          }
           return;
         }
         if (typeof onGenerateNextSeason === "function") await onGenerateNextSeason();
@@ -37,12 +46,20 @@ export default function FranchiseEventOverlay({
     } catch (err) {
       throw err;
     }
-  }, [current?.key, franchiseState, onContinueOffseason, onGenerateNextSeason, onEnterPlayoffs, onAdvancePhase]);
+  }, [
+    current?.key,
+    franchiseState,
+    onContinueOffseason,
+    onReopenOffseasonStage,
+    onGenerateNextSeason,
+    onEnterPlayoffs,
+    onAdvancePhase,
+  ]);
 
   if (!current?.component) return null;
 
   return (
-    <div className="franchise-event-overlay" role="presentation">
+    <div className="franchise-event-overlay register-ops" data-register="ops" role="presentation">
       <EventRouter
         typeKey={current.key}
         franchiseState={franchiseState}

@@ -17,8 +17,10 @@ from app.sim_engine.trades.trade_executor import execute_validated_trade  # noqa
 from app.sim_engine.trades.trade_history import get_trade_history  # noqa: E402
 from app.sim_engine.trades.trade_pick_registry import (  # noqa: E402
     audit_pick_registry_integrity,
-    ensure_draft_pick_registry,
+    ensure_franchise_pick_registry,
     serialize_team_picks,
+    tradeable_draft_year,
+    upcoming_draft_year,
 )
 from app.sim_engine.trades.trade_value import evaluate_pick_asset_value, pick_value_hint  # noqa: E402
 from app.sim_engine.economy.cap_engine import calculate_team_cap_snapshot  # noqa: E402
@@ -104,12 +106,21 @@ def _trade_context(session: Any) -> Dict[str, Any]:
     if 0 <= cursor < len(cal):
         calendar_iso = str(cal[cursor].get("iso") or "")
 
+    season_y = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    draft_y = upcoming_draft_year(season_y)
+    draft_done = bool(getattr(session, "draft_completed", False))
+    trade_y = tradeable_draft_year(season_y, draft_completed=draft_done)
     return {
         "sim": sim,
         "league": league,
         "team_by_id": dict(session.team_by_id or {}),
         "user_team_id": str(session.user_team_id),
-        "season_year": int(getattr(session, "season_calendar_year", 2025) or 2025),
+        "season_year": season_y,
+        "draft_year": draft_y,
+        "tradeable_draft_year": trade_y,
+        "draft_completed": draft_done,
+        "season_is_calendar": True,
+        "use_upcoming_draft_year": True,
         "calendar_cursor": cursor,
         "calendar_iso": calendar_iso,
         "regular_season_last_index": max_d,
@@ -122,7 +133,20 @@ def _ensure_trade_infrastructure(session: Any) -> None:
     league = ctx["league"]
     if league is None:
         return
-    ensure_draft_pick_registry(league, start_year=ctx["season_year"], years_ahead=4)
+    try:
+        setattr(league, "season_year", int(ctx["season_year"]))
+        setattr(league, "current_season", int(ctx["season_year"]))
+        setattr(league, "draft_year", int(ctx.get("tradeable_draft_year") or ctx["draft_year"]))
+        setattr(league, "draft_completed", bool(ctx.get("draft_completed")))
+        setattr(league, "season_is_calendar", True)
+    except Exception:
+        pass
+    ensure_franchise_pick_registry(
+        league,
+        season_calendar_year=int(ctx["season_year"]),
+        years_ahead=4,
+        draft_completed=bool(ctx.get("draft_completed")),
+    )
 
 
 def evaluate_franchise_trade(
@@ -261,7 +285,7 @@ def build_trade_assets_payload(session: Any) -> Dict[str, Any]:
     if os.environ.get("NHL_FRANCHISE_DEBUG", "0") == "1":
         audit = audit_pick_registry_integrity(
             league,
-            start_year=int(ctx["season_year"]),
+            start_year=int(ctx["draft_year"]),
             years_ahead=4,
             rounds=7,
         )
@@ -286,6 +310,7 @@ def build_trade_assets_payload(session: Any) -> Dict[str, Any]:
             league,
             tid,
             value_hint_fn=lambda row: pick_value_hint(row, league, team, context=ctx),
+            min_year=int(ctx.get("tradeable_draft_year") or ctx.get("draft_year") or ctx["season_year"]),
         )
         for item in picks:
             try:

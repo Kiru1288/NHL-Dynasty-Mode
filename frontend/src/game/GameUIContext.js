@@ -1,6 +1,7 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   advanceFranchise,
+  advanceFreeAgencyDay,
   advanceSeasonPhase,
   continueOffseason,
   dismissFranchisePopups,
@@ -8,6 +9,7 @@ import {
   getFranchiseState,
   getFranchiseStateHeavy,
   listTeams,
+  reopenOffseasonStage,
   resetFranchiseStateCache,
   startFranchise,
   submitDecision,
@@ -23,6 +25,7 @@ import {
   setFranchiseSessionId,
   syncFranchiseSessionWithBackend,
 } from "../services/api";
+import { markNavigation, record as perfRecord } from "../services/perfProfiler";
 import { HUB_MENU, SCREENS, buildDefaultFranchiseTeamList } from "./constants";
 import { ShowcasePopupLayer } from "../components/game/ShowcasePopupLayer";
 import { FranchiseEventLayer } from "../components/game/FranchiseEventLayer";
@@ -50,9 +53,19 @@ export function useGameUI() {
 }
 
 export function GameUIProvider({ children }) {
-  const [screen, setScreen] = useState(() =>
+  const [screen, setScreenState] = useState(() =>
     getFranchiseSessionId() ? SCREENS.HUB : SCREENS.SETUP
   );
+  const screenRef = useRef(screen);
+  const setScreen = useCallback((next) => {
+    const to = typeof next === "function" ? next(screenRef.current) : next;
+    const from = screenRef.current;
+    if (to !== from) {
+      markNavigation(from, to);
+    }
+    screenRef.current = to;
+    setScreenState(to);
+  }, []);
   const [hubMenuIndex, setHubMenuIndex] = useState(1);
   const [rosterRowIndex, setRosterRowIndex] = useState(0);
   const [settingsRowIndex, setSettingsRowIndex] = useState(0);
@@ -65,6 +78,7 @@ export function GameUIProvider({ children }) {
   const [teams, setTeams] = useState([]);
   const [teamsLoading, setTeamsLoading] = useState(false);
   const [gmName, setGmName] = useState("Pat Quinn");
+  const [playerUniverse, setPlayerUniverse] = useState("generated");
   const [injuriesEnabled, setInjuriesEnabledState] = useState(readInjuriesPref);
   const [franchiseState, setFranchiseState] = useState(null);
   const [error, setError] = useState(null);
@@ -108,6 +122,7 @@ export function GameUIProvider({ children }) {
   const refreshFranchise = useCallback(async () => {
     if (!getFranchiseSessionId()) return;
     setError(null);
+    const t0 = performance.now();
     try {
       const s = await getFranchiseState();
       // Authoritative lean state always wins for identity fields that can change
@@ -128,7 +143,9 @@ export function GameUIProvider({ children }) {
           draft_class_hud: s?.draft_class_hud ?? prev.draft_class_hud,
         };
       });
+      perfRecord("ui.refresh_franchise", performance.now() - t0);
     } catch (e) {
+      perfRecord("ui.refresh_franchise", performance.now() - t0, { error: true });
       if (handleFranchiseApiError(e)) return;
     }
   }, [handleFranchiseApiError]);
@@ -268,12 +285,15 @@ export function GameUIProvider({ children }) {
       if (!teamQuery) {
         throw new Error("No valid team id was found for the selected team.");
       }
+      const universe =
+        playerUniverse === "real_nhl" ? "real_nhl" : "generated";
       const res = await startFranchise({
         team_query: teamQuery,
         head_coach_name: gmName.trim() || "General Manager",
         coach_archetype: "balanced",
         games_per_team: Number(setupGamesPerTeam) || 82,
         injuries_enabled: injuriesEnabled,
+        player_universe: universe,
       });
       const nextSessionId = String(res?.session_id || "").trim();
       let nextState = res?.state ?? res?.franchiseState;
@@ -307,14 +327,40 @@ export function GameUIProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  }, [teams, setupTeamIndex, gmName, setupGamesPerTeam, injuriesEnabled]);
+  }, [teams, setupTeamIndex, gmName, setupGamesPerTeam, injuriesEnabled, playerUniverse]);
 
   const onAdvanceFranchise = useCallback(
     async ({ mode = "day", count = 1, auto_resolve: autoResolve } = {}) => {
       if (!franchiseState) return null;
       const phase = String(franchiseState.phase || franchiseState.season_phase || "");
       if (phase === "complete") return null;
-      if (["post_cup", "offseason"].includes(phase)) return null;
+      // Free agency: Hub day/week/month advances the living FA market clock.
+      if (["post_cup", "offseason"].includes(phase)) {
+        const stage = String(franchiseState.offseason_stage || "");
+        const faOpen =
+          stage === "free_agency" ||
+          Boolean(franchiseState.free_agency_open) ||
+          String(franchiseState.free_agency_market?.market_status || "") === "open";
+        if (!faOpen) return null;
+        const faMode = String(mode || "day").toLowerCase();
+        const faCount = Math.max(1, Number(count) || 1);
+        let days = faCount;
+        if (faMode === "week" || faMode === "weeks") days = 7 * faCount;
+        else if (faMode === "month" || faMode === "months") days = 30 * faCount;
+        else if (faMode === "season") days = 14;
+        setAdvancing(true);
+        setError(null);
+        try {
+          const res = await advanceFreeAgencyDay(days);
+          if (res?.state) mergeFranchiseState(res.state);
+          return res;
+        } catch (e) {
+          handleFranchiseApiError(e);
+          return null;
+        } finally {
+          setAdvancing(false);
+        }
+      }
       const m = String(mode || "day").toLowerCase();
       const c = Math.max(1, Number(count) || 1);
       const soloDay = m === "day" && c === 1;
@@ -406,7 +452,14 @@ export function GameUIProvider({ children }) {
       const res = await continueOffseason({ from_stage: fromStage });
       if (res?.state) {
         mergeFranchiseState(res.state);
-        setFranchiseEventForceOpen(true);
+        const nextPhase = String(res.state.phase || res.state.season_phase || "").toLowerCase();
+        // After Enter Preseason, land on the hub — do not reopen last year's
+        // awards / playoff cinematic from a stale pending popup.
+        if (nextPhase !== "preseason" && nextPhase !== "regular") {
+          setFranchiseEventForceOpen(true);
+        } else {
+          setFranchiseEventForceOpen(false);
+        }
       }
       return res;
     } catch (e) {
@@ -416,6 +469,27 @@ export function GameUIProvider({ children }) {
       setAdvancing(false);
     }
   }, [franchiseState, handleFranchiseApiError, setFranchiseEventForceOpen]);
+
+  const onReopenOffseasonStage = useCallback(
+    async (stage = "free_agency") => {
+      setAdvancing(true);
+      setError(null);
+      try {
+        const res = await reopenOffseasonStage({ stage });
+        if (res?.state) {
+          mergeFranchiseState(res.state);
+          setFranchiseEventForceOpen(true);
+        }
+        return res;
+      } catch (e) {
+        handleFranchiseApiError(e);
+        return null;
+      } finally {
+        setAdvancing(false);
+      }
+    },
+    [handleFranchiseApiError, setFranchiseEventForceOpen]
+  );
 
   const openFranchiseEvent = useCallback(() => {
     setFranchiseEventForceOpen(true);
@@ -452,7 +526,11 @@ export function GameUIProvider({ children }) {
     setError(null);
     try {
       const res = await generateNextSeason();
-      if (res?.state) mergeFranchiseState(res.state);
+      if (res?.state) {
+        mergeFranchiseState(res.state);
+        // Roster Check → Generate lands on the September hub, not another cinematic.
+        setFranchiseEventForceOpen(false);
+      }
       return res;
     } catch (e) {
       handleFranchiseApiError(e);
@@ -460,7 +538,7 @@ export function GameUIProvider({ children }) {
     } finally {
       setAdvancing(false);
     }
-  }, [handleFranchiseApiError]);
+  }, [handleFranchiseApiError, setFranchiseEventForceOpen]);
 
   const onResolveDecision = useCallback(async (decisionId, choiceId) => {
     setError(null);
@@ -594,6 +672,8 @@ export function GameUIProvider({ children }) {
       loadTeams,
       gmName,
       setGmName,
+      playerUniverse,
+      setPlayerUniverse,
       injuriesEnabled,
       setInjuriesEnabled,
       franchiseState,
@@ -613,6 +693,7 @@ export function GameUIProvider({ children }) {
       onEnterPlayoffs,
       onAdvanceSeasonPhase,
       onContinueOffseason,
+      onReopenOffseasonStage,
       onGenerateNextSeason,
       openFranchiseEvent,
       franchiseEventForceOpen,
@@ -648,6 +729,7 @@ export function GameUIProvider({ children }) {
       teamsLoading,
       loadTeams,
       gmName,
+      playerUniverse,
       injuriesEnabled,
       setInjuriesEnabled,
       franchiseState,
@@ -665,6 +747,7 @@ export function GameUIProvider({ children }) {
       onEnterPlayoffs,
       onAdvanceSeasonPhase,
       onContinueOffseason,
+      onReopenOffseasonStage,
       onGenerateNextSeason,
       openFranchiseEvent,
       franchiseEventForceOpen,

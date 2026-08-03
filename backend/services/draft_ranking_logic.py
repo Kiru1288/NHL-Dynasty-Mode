@@ -335,6 +335,46 @@ _LEAGUE_PPG_SCALE: Dict[str, float] = {
 }
 
 
+# Rating-key → bucket classification is identical for players that share a ratings
+# schema. Cache by frozenset(keys) so draft-board scans don't re-tokenize strings
+# six times per prospect (~3s → tens of ms on a full junior pool).
+_RATING_KEY_BUCKET_CACHE: Dict[frozenset, Dict[str, List[str]]] = {}
+
+
+def _rating_key_buckets(ratings: Mapping[str, Any]) -> Dict[str, List[str]]:
+    keyset = frozenset(ratings.keys())
+    cached = _RATING_KEY_BUCKET_CACHE.get(keyset)
+    if cached is not None:
+        return cached
+    buckets: Dict[str, List[str]] = {
+        "def": [],
+        "skate": [],
+        "iq": [],
+        "phys": [],
+        "shoot": [],
+        "pass": [],
+    }
+    for k in keyset:
+        kl = str(k).lower()
+        if any(x in kl for x in ("def", "stick", "gap", "block", "poke")):
+            buckets["def"].append(k)
+        if "skat" in kl:
+            buckets["skate"].append(k)
+        if any(x in kl for x in ("iq", "sense", "awareness")):
+            buckets["iq"].append(k)
+        if any(x in kl for x in ("strength", "physical", "reach", "body")):
+            buckets["phys"].append(k)
+        if any(x in kl for x in ("shoot", "shot", "finish", "release", "wrist", "one_timer", "snap")):
+            buckets["shoot"].append(k)
+        if any(x in kl for x in ("pass", "playmak", "vision", "distribut", "puck_skill", "hands")):
+            buckets["pass"].append(k)
+    # Bound cache growth for long-running servers with many ad-hoc schemas.
+    if len(_RATING_KEY_BUCKET_CACHE) > 64:
+        _RATING_KEY_BUCKET_CACHE.clear()
+    _RATING_KEY_BUCKET_CACHE[keyset] = buckets
+    return buckets
+
+
 def enrich_prospect_row_from_player(player: Any, row: Dict[str, Any]) -> None:
     """Attach playstyle, archetype, and rating summaries for role-aware ranking."""
     chem = getattr(player, "chemistry_profile", None)
@@ -357,12 +397,13 @@ def enrich_prospect_row_from_player(player: Any, row: Dict[str, Any]) -> None:
         vals = [float(ratings[k]) for k in keys if ratings.get(k) is not None]
         return sum(vals) / len(vals) if vals else 0.0
 
-    def_keys = [k for k in ratings if any(x in str(k).lower() for x in ("def", "stick", "gap", "block", "poke"))]
-    skate_keys = [k for k in ratings if "skat" in str(k).lower()]
-    iq_keys = [k for k in ratings if any(x in str(k).lower() for x in ("iq", "sense", "awareness"))]
-    phys_keys = [k for k in ratings if any(x in str(k).lower() for x in ("strength", "physical", "reach", "body"))]
-    shoot_keys = [k for k in ratings if any(x in str(k).lower() for x in ("shoot", "shot", "finish", "release", "wrist", "one_timer", "snap"))]
-    pass_keys = [k for k in ratings if any(x in str(k).lower() for x in ("pass", "playmak", "vision", "distribut", "puck_skill", "hands"))]
+    buckets = _rating_key_buckets(ratings)
+    def_keys = buckets["def"]
+    skate_keys = buckets["skate"]
+    iq_keys = buckets["iq"]
+    phys_keys = buckets["phys"]
+    shoot_keys = buckets["shoot"]
+    pass_keys = buckets["pass"]
 
     if def_keys:
         row.setdefault("def_rating", round(_avg_keys(def_keys), 1))
@@ -1588,15 +1629,20 @@ def calculate_prospect_eta(
     if ovr <= 0:
         return {"label": "Unknown", "years": 4, "confidence": 40.0}
 
+    # Underagers are never NHL-ready no matter how inflated current ability looks.
+    if age <= 16:
+        return {"label": "3Y", "years": 3, "confidence": 58.0}
+
     # NHL-readiness is driven by CURRENT ability. Elite draft position and high
     # ceiling raise confidence and modestly shorten timelines, but never declare a
     # raw prospect NHL-ready on rank/potential alone.
-    if is_transcendent and ovr >= 68 and not is_goalie:
+    if is_transcendent and ovr >= 68 and not is_goalie and age >= 18:
         return {"label": "Now", "years": 0, "confidence": 90.0}
 
     if not is_goalie and rank <= 10:
-        # True NHL-ready ability can arrive immediately even as a top pick.
-        if ovr >= 76:
+        # True NHL-ready ability can arrive immediately even as a top pick —
+        # but not before draft-eligible age 18.
+        if ovr >= 76 and age >= 18:
             return {"label": "Now", "years": 0, "confidence": 88.0}
         if ovr >= 70:
             return {"label": "1Y", "years": 1, "confidence": 82.0}
@@ -1637,8 +1683,10 @@ def calculate_prospect_eta(
     elif age <= 18 and rank <= 32:
         readiness -= 1.0
 
-    if readiness >= 76:
+    if readiness >= 76 and age >= 18:
         years, label = 0, "Now"
+    elif readiness >= 76:
+        years, label = 1, "1Y"
     elif readiness >= 70:
         years, label = 1, "1Y"
     elif readiness >= 64:

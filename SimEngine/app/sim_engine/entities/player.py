@@ -206,8 +206,13 @@ def persist_recomputed_ovr(player: Any) -> float:
     except Exception:
         pass
     try:
-        # Some legacy fixtures store ovr as a float attribute, not a method.
-        if not callable(getattr(type(player), "ovr", None)):
+        # Some legacy fixtures store ovr as a float attribute, not a method. Check the
+        # instance attribute (not the type) — plain objects/SimpleNamespaces never have
+        # class-level attributes, so `type(player).ovr` is always None for them even when
+        # the instance itself already holds a callable (e.g. `ovr=lambda: 0.6`), which
+        # used to overwrite that callable with a float and break every later `player.ovr()`.
+        existing = getattr(player, "ovr", None)
+        if existing is not None and not callable(existing):
             setattr(player, "ovr", float(ovr01))
     except Exception:
         pass
@@ -767,33 +772,42 @@ def assign_skater_archetype(position: Position, rng: random.Random) -> str:
     )[0]
 
 
-def _avg(ratings: Dict[str, Any], keys: List[str]) -> int:
-    if not keys:
-        return DEFAULT_NHL_RATING
+def _avg(ratings: Dict[str, Any], keys: List[str]) -> float:
+    """Category average feeding compute_ovr.
 
-    total = 0
+    Kept as an unrounded float: rounding here (categories can span 10-20+ raw
+    attributes) used to swallow any single-season progression/decline event, since a
+    1-2 point nudge on one or two attributes moves a 15-key category average by well
+    under 0.5 and used to vanish under int(round(...)) before it ever reached the
+    weighted OVR sum. Individual attribute values in `ratings` are still stored/clamped
+    as ints via clamp_rating(); only this aggregate stays continuous.
+    """
+    if not keys:
+        return float(DEFAULT_NHL_RATING)
+
+    total = 0.0
     count = 0
     for k in keys:
         if k in ratings:
             v = ratings[k]
             try:
-                total += int(v)
+                total += float(v)
             except (TypeError, ValueError):
-                total += int(float(v))
+                continue
             count += 1
 
     if count == 0:
-        return DEFAULT_NHL_RATING
+        return float(DEFAULT_NHL_RATING)
 
-    avg = int(round(total / count))
+    avg = total / count
     if avg < RATING_MIN:
-        return RATING_MIN
+        return float(RATING_MIN)
     if avg > RATING_MAX:
-        return RATING_MAX
+        return float(RATING_MAX)
     return avg
 
 
-def _skater_category_raw_avgs(ratings: Dict[str, Any]) -> Dict[str, int]:
+def _skater_category_raw_avgs(ratings: Dict[str, Any]) -> Dict[str, float]:
     return {
         "offense": _avg(ratings, OFFENSE_ATTRS),
         "playmaking": _avg(ratings, PLAYMAKING_ATTRS),

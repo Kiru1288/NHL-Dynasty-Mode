@@ -484,7 +484,7 @@ export const AWARD_FAN_REACTION_TEMPLATES = {
 function normalizeKey(value) {
   return String(value || "")
     .toLowerCase()
-    .replace(/['ù]/g, "")
+    .replace(/['?]/g, "")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }
@@ -504,19 +504,19 @@ function asNumber(value, fallback = null) {
 
 function roundStat(value) {
   const n = asNumber(value);
-  if (n === null) return "ù";
+  if (n === null) return "?";
   return String(Math.round(n));
 }
 
 function oneDecimal(value) {
   const n = asNumber(value);
-  if (n === null) return "ù";
+  if (n === null) return "?";
   return n.toFixed(1);
 }
 
 function percent(value) {
   const n = asNumber(value);
-  if (n === null) return "ù";
+  if (n === null) return "?";
   if (n <= 1) return `${Math.round(n * 100)}%`;
   return `${Math.round(n)}%`;
 }
@@ -530,7 +530,7 @@ function compactRecord(team) {
 }
 
 function getPlayerName(player) {
-  return String(player?.name || player?.full_name || player?.fullName || "ù").trim();
+  return String(player?.name || player?.full_name || player?.fullName || "?").trim();
 }
 
 function getTeamName(team) {
@@ -540,7 +540,7 @@ function getTeamName(team) {
       team?.name ||
       team?.team_name ||
       team?.winnerLabel ||
-      "ù"
+      "?"
   ).trim();
 }
 
@@ -590,13 +590,13 @@ function trimTweet(text, maxLength = 180) {
     .trim();
 
   if (clean.length <= maxLength) return clean;
-  return `${clean.slice(0, maxLength - 1).trim()}ù`;
+  return `${clean.slice(0, maxLength - 1).trim()}?`;
 }
 
 function replaceTemplate(template, values) {
   return String(template || "").replace(/\{([a-zA-Z0-9_]+)\}/g, (_, key) => {
     const value = values?.[key];
-    return value === undefined || value === null || value === "" ? "ù" : String(value);
+    return value === undefined || value === null || value === "" ? "?" : String(value);
   });
 }
 
@@ -756,8 +756,8 @@ export function resolveWinnerTeam(award, franchiseState) {
   if (!base) {
     base = {
       team_id: teamId,
-      full_name: winnerName || "ù",
-      name: winnerName || "ù",
+      full_name: winnerName || "?",
+      name: winnerName || "?",
     };
   }
 
@@ -793,7 +793,7 @@ export function getAwardWinnerLabel(award, franchiseState) {
   if (meta.kind === "team") {
     return getTeamName(resolveWinnerTeam(award, franchiseState));
   }
-  return String(firstDefined(award?.winner_name, award?.winnerName, award?.winner) || "ù");
+  return String(firstDefined(award?.winner_name, award?.winnerName, award?.winner) || "?");
 }
 
 export function getTeamLogoSrc(team, franchiseState) {
@@ -831,7 +831,7 @@ function buildPlayerStatCards(award, player) {
 
   if (key === "vezina") {
     const svRaw = savePct;
-    let svDisplay = "ù";
+    let svDisplay = "?";
 
     if (svRaw != null && svRaw !== "") {
       const n = Number(svRaw);
@@ -843,7 +843,7 @@ function buildPlayerStatCards(award, player) {
     return [
       { label: "Wins", value: roundStat(wins), tone: "primary" },
       { label: "Save %", value: svDisplay, suffix: "%" },
-      { label: "GAA", value: gaa ? oneDecimal(gaa) : "ù" },
+      { label: "GAA", value: gaa ? oneDecimal(gaa) : "?" },
       { label: "Shutouts", value: roundStat(shutouts) },
     ];
   }
@@ -852,7 +852,7 @@ function buildPlayerStatCards(award, player) {
     return [
       { label: "Points", value: roundStat(points), tone: "primary" },
       { label: "Goals", value: roundStat(goals) },
-      { label: "Avg TOI", value: toi ? String(toi) : "ù" },
+      { label: "Avg TOI", value: toi ? String(toi) : "?" },
       { label: "Blocks", value: roundStat(blocks) },
     ];
   }
@@ -867,7 +867,7 @@ function buildPlayerStatCards(award, player) {
         value:
           plusMinus !== undefined
             ? `${Number(plusMinus) > 0 ? "+" : ""}${roundStat(plusMinus)}`
-            : "ù",
+            : "?",
       },
     ];
   }
@@ -890,7 +890,7 @@ function buildPlayerStatCards(award, player) {
       value:
         plusMinus !== undefined
           ? `${Number(plusMinus) > 0 ? "+" : ""}${roundStat(plusMinus)}`
-          : "ù",
+          : "?",
     },
   ];
 }
@@ -913,7 +913,7 @@ function buildTeamStatCards(award, team) {
     return [
       { label: "Champions", value: "Cup", tone: "primary" },
       { label: "Playoffs", value: firstDefined(award?.playoff_record, team?.playoff_record) || "Won" },
-      { label: "Record", value: record || "ù" },
+      { label: "Record", value: record || "?" },
       { label: "Season", value: roundStat(points), suffix: " pts" },
     ];
   }
@@ -927,7 +927,7 @@ function buildTeamStatCards(award, team) {
       value:
         goalDiff !== null && Number.isFinite(goalDiff)
           ? `${goalDiff > 0 ? "+" : ""}${goalDiff}`
-          : "ù",
+          : "?",
     },
   ];
 }
@@ -1002,7 +1002,7 @@ function ordinal(n) {
 
 function seasonYearLabel(franchiseState) {
   const y = franchiseState?.season_year || franchiseState?.seasonYear;
-  return y ? `${y}ù${Number(y) + 1}` : "This season";
+  return y ? `${y}?${Number(y) + 1}` : "This season";
 }
 
 function teamShortName(name = "") {
@@ -1070,7 +1070,7 @@ function buildHeroBadges(award, entity, franchiseState) {
   if (wins !== undefined && key === "vezina") badges.push({ label: `${roundStat(wins)} W`, tone: "gold" });
   if (savePct !== undefined && key === "vezina") {
     const n = Number(savePct);
-    const sv = Number.isFinite(n) ? (n <= 1 ? (n * 100).toFixed(1) : n.toFixed(1)) : "ù";
+    const sv = Number.isFinite(n) ? (n <= 1 ? (n * 100).toFixed(1) : n.toFixed(1)) : "?";
     badges.push({ label: `${sv}% SV`, tone: "accent" });
   }
   if (plusMinus !== undefined) {
@@ -1167,7 +1167,7 @@ function buildSeasonSnapshot(award, entity, franchiseState) {
     if (pp !== undefined) rows.push({ label: "Power Play", value: percent(pp) });
     if (pk !== undefined) rows.push({ label: "Penalty Kill", value: percent(pk) });
     if (sv !== undefined) rows.push({ label: "Save %", value: percent(sv) });
-    return rows.filter((r) => r.value && r.value !== "ù").slice(0, 8);
+    return rows.filter((r) => r.value && r.value !== "?").slice(0, 8);
   }
 
   rows.push(
@@ -1183,7 +1183,7 @@ function buildSeasonSnapshot(award, entity, franchiseState) {
       { label: "GAA", value: oneDecimal(firstDefined(source.gaa, source.goals_against_average)) }
     );
   }
-  return rows.filter((r) => r.value && r.value !== "ù").slice(0, 8);
+  return rows.filter((r) => r.value && r.value !== "?").slice(0, 8);
 }
 
 function resolveTeamNameById(teamId, franchiseState) {
@@ -1205,7 +1205,7 @@ function buildPreviousWinners(award, franchiseState) {
     history.forEach((row) => {
       const y = row?.season_year;
       const champion = resolveTeamNameById(row?.champion_id, franchiseState);
-      if (y && champion) entries.push({ season: `${y}ù${Number(y) + 1}`, winner: champion });
+      if (y && champion) entries.push({ season: `${y}?${Number(y) + 1}`, winner: champion });
     });
   }
 
@@ -1325,7 +1325,7 @@ function buildLegacyLine(award, entity) {
   const draftYear = firstDefined(source.draft_year, source.draftYear);
   const draftPick = firstDefined(source.draft_pick, source.draftPick, source.overall_pick);
 
-  if (age && draftYear && draftPick) return `Age ${age} ù Drafted ${draftYear} (${draftPick})`;
+  if (age && draftYear && draftPick) return `Age ${age} ? Drafted ${draftYear} (${draftPick})`;
   if (age) return `Age ${age}`;
   return "";
 }
@@ -1436,7 +1436,7 @@ function buildCandidateCards(award, franchiseState) {
 
     const statLine = isTeamAward
       ? item.record
-        ? `${item.record} ù ${roundStat(firstDefined(item.points, item.pts))} pts`
+        ? `${item.record} ? ${roundStat(firstDefined(item.points, item.pts))} pts`
         : teamName
       : points
         ? `${roundStat(points)} PTS`
@@ -1459,7 +1459,7 @@ function buildCandidateCards(award, franchiseState) {
       votes,
       voteLabel: candidateVoteLabel(award.awardKey, votes),
       stat: statLine,
-      subline: isWinner ? "Winner" : `Finalist ù ${candidateVoteLabel(award.awardKey, votes) || "ù"}`,
+      subline: isWinner ? "Winner" : `Finalist ? ${candidateVoteLabel(award.awardKey, votes) || "?"}`,
       isWinner,
     };
   });
@@ -1471,8 +1471,8 @@ function buildFinalistCards(award, franchiseState) {
 
 function getTopStatCard(award) {
   return (
-    safeArray(award?.statCards).find((s) => s?.tone === "primary" && s?.value && s.value !== "ù") ||
-    safeArray(award?.statCards).find((s) => s?.value && s.value !== "ù") ||
+    safeArray(award?.statCards).find((s) => s?.tone === "primary" && s?.value && s.value !== "?") ||
+    safeArray(award?.statCards).find((s) => s?.value && s.value !== "?") ||
     null
   );
 }
@@ -1927,7 +1927,10 @@ export function normalizeAwardsPayload(franchiseState, eventData) {
         displayMetric,
         calculationQuality: row.calculation_quality || "full",
         voting: row.voting || null,
-        includeInReveal: true,
+        includeInReveal:
+          (catalogFromBackend?.ceremony_enabled !== false) &&
+          (row.ceremony_enabled !== false) &&
+          (!revealOrder?.length || revealOrder.includes(awardKey)),
       };
 
       const parsedStats =
@@ -1991,14 +1994,7 @@ export function normalizeAwardsPayload(franchiseState, eventData) {
       const row = byKey.get(key);
       if (row && row.includeInReveal !== false && !row.unavailable) ordered.push(row);
     }
-    for (const row of normalized) {
-      if (row.unavailable) continue;
-      if (!ordered.includes(row) && row.includeInReveal !== false) ordered.push(row);
-    }
-    // Keep unavailable cards after revealable winners for intentional display.
-    for (const row of normalized) {
-      if (row.unavailable) ordered.push(row);
-    }
+    // Do not append secondary hardware ? reveal_order is the ceremony script.
     return ordered;
   }
 
@@ -2016,7 +2012,7 @@ export function buildAwardTickerItems(awards) {
   const chunks = [];
 
   for (const award of awards) {
-    chunks.push(`${award.awardLabel} ù ${award.winnerLabel}`);
+    chunks.push(`${award.awardLabel} ? ${award.winnerLabel}`);
 
     if (award.awardKey === "stanley") {
       chunks.push(`${award.winnerLabel} crowned Stanley Cup champions`);
@@ -2024,7 +2020,7 @@ export function buildAwardTickerItems(awards) {
 
     if (award.statCards?.length) {
       const top = award.statCards.find((s) => s.tone === "primary") || award.statCards[0];
-      if (top?.value && top.value !== "ù") {
+      if (top?.value && top.value !== "?") {
         chunks.push(`${award.winnerLabel}: ${top.value}${top.suffix || ""} ${top.label}`);
       }
     }
@@ -2148,7 +2144,7 @@ export function buildAwardsNightSummary(awards) {
   };
 }
 /* ============================================================================
- * ENTRY DRAFT ù shared Award Show Twitter Universe extension
+ * ENTRY DRAFT ? shared Award Show Twitter Universe extension
  * Reuses seededFloat/seededPick/normalizeFanProfile/buildFallbackAwardFans.
  * ============================================================================ */
 
@@ -2263,7 +2259,7 @@ export const DRAFT_REACTION_TEMPLATES = [
   { id: "draft_first_recap_01", tags: ["firstRoundComplete"], text: "The first round is complete. Day two begins with plenty of talent available." },
   { id: "draft_trade_up_01", tags: ["tradeUp"], text: "{acquiringTeam} moved up to {pickNumber}. They clearly had a target." },
   { id: "draft_trade_down_01", tags: ["tradeDown"], text: "{movingTeam} moves back and adds {tradedAssets}." },
-  { id: "draft_lupul_homage", tags: ["lupulHomage"], text: "I want the leafs to keep lupul soley based upon the fact that he banged phangeuds wife" },
+  { id: "draft_lupul_homage", tags: ["lupulHomage"], text: "I want the Leafs to keep Lupul solely based upon the fact that he banged Dion Phaneuf's wife" },
 ];
 
 const CANADIAN_TEAM_IDS = new Set([
@@ -2365,7 +2361,7 @@ export function classifyDraftSelectionEvent(pick, draftContext = {}) {
   if (recent.filter((p) => p === "C").length >= 3) tags.add("centreRun");
   if (recent.filter((p) => p === "G").length >= 2) tags.add("goalieRun");
 
-  // 1% homage ù independent of pick context, seeded so it is deterministic per pick.
+  // 1% homage ? independent of pick context, seeded so it is deterministic per pick.
   const homageRoll = seededFloat(`${draftContext?.franchiseSeed || "draft"}:lupul:${pickNumber}:${pick?.prospect_id || pick?.prospect_name || ""}`);
   if (homageRoll < 0.01) tags.add("lupulHomage");
 
@@ -2490,9 +2486,23 @@ export function buildDraftFanTweets(picks, options = {}) {
         topStat: `Pick ${values.pickNumber}`,
         selectionLabel: classified.valueLabel,
         tags: classified.tags,
+        overallPick: Number(values.pickNumber) || null,
+        isHomage: classified.tags.includes("lupulHomage"),
       },
     });
   });
 
   return tweets.slice(-maxTweets);
+}
+
+/** Single draft-night tweet for a completed pick (Draft Log ? profile sheet). */
+export function buildDraftPickReactionTweet(pick, options = {}) {
+  if (!pick) return null;
+  const tweets = buildDraftFanTweets([pick], {
+    maxTweets: 1,
+    seed: options.seed || "entry-draft-pick",
+    draftContext: options.draftContext || {},
+    fans: options.fans,
+  });
+  return tweets[0] || null;
 }

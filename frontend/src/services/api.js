@@ -1,4 +1,5 @@
 import axios from "axios";
+import { record as perfRecord } from "./perfProfiler";
 
 export const baseURL = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000";
 
@@ -29,6 +30,7 @@ export const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
+  config.metadata = { ...(config.metadata || {}), start: performance.now() };
   const url = config.url || "";
   if (url.includes("/franchise/start") || url.includes("/franchise/teams")) {
     return config;
@@ -218,13 +220,49 @@ function noteBackendIdentityFromHeaders(headers) {
   rememberBackendIdentity(instanceId, codeRevision);
 }
 
+function _perfNoteAxios(config, error) {
+  try {
+    const start = config?.metadata?.start;
+    if (start == null) return;
+    const ms = performance.now() - start;
+    const url = String(config?.url || config?.baseURL || "unknown");
+    const method = String(config?.method || "get").toUpperCase();
+    const bytes = error
+      ? 0
+      : Number(
+          (typeof config?.__responseSize === "number" && config.__responseSize) ||
+            (config?.__responseData && JSON.stringify(config.__responseData).length) ||
+            0
+        );
+    perfRecord(`api.${method} ${url.split("?")[0]}`, ms, {
+      status: error?.response?.status || config?.__status,
+      bytes: bytes || undefined,
+      error: error ? String(error.code || error.message || "error") : undefined,
+    });
+  } catch {
+    // never break API on profiler failure
+  }
+}
+
 api.interceptors.response.use(
   (response) => {
     noteBackendIdentityFromHeaders(response?.headers);
+    try {
+      if (response?.config) {
+        response.config.__status = response.status;
+        // Avoid double-stringify cost on huge payloads — sample Content-Length when present.
+        const cl = response.headers?.["content-length"] || response.headers?.["Content-Length"];
+        if (cl) response.config.__responseSize = Number(cl);
+      }
+    } catch {
+      // ignore
+    }
+    _perfNoteAxios(response?.config);
     return response;
   },
   (error) => {
     noteBackendIdentityFromHeaders(error?.response?.headers);
+    _perfNoteAxios(error?.config, error);
     if (isExpiredFranchiseSessionError(error)) {
       clearFranchiseClientCaches();
     }

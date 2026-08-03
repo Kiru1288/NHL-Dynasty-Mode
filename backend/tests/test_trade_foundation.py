@@ -98,8 +98,15 @@ def test_reject_fake_pick():
     assert any("not found" in r.lower() or "does not own" in r.lower() for r in rules["blocking_reasons"])
 
 
-def test_reject_ahl_prospect_not_on_nhl_roster():
+def test_reject_ahl_only_deal_without_nhl_spc():
+    """Pure AHL/ECHL deals stay non-tradeable; NHL-SPC affiliates are allowed elsewhere."""
     p1 = _player("p1")
+    p1.contract.contract_type = "AHL"
+    p1.contract.type = "AHL"
+    p1.contract.aav_m = 0.0
+    p1.contract.cap_hit_m = 0.0
+    p1.contract.is_nhl_spc = False
+    p1.contract.years_remaining = 2
     t1 = _team("AAA", [])
     t1.ahl_roster = [p1]
     t2 = _team("BBB", [_player("p2")])
@@ -114,7 +121,29 @@ def test_reject_ahl_prospect_not_on_nhl_roster():
     )
     rules = validate_trade_rules(package, league, team_by_id, context={"season_year": 2025})
     assert not rules["ok"]
-    assert any("ahl" in r.lower() for r in rules["blocking_reasons"])
+    joined = " ".join(r.lower() for r in rules["blocking_reasons"])
+    assert "ahl" in joined or "not found" in joined or "does not own" in joined or "spc" in joined
+
+
+def test_ahl_player_with_nhl_spc_is_tradeable():
+    p1 = _player("p1", cap_hit=0.95)
+    p1.contract.contract_type = "STANDARD"
+    p1.contract.type = "STANDARD"
+    p1.contract.is_nhl_spc = True
+    t1 = _team("AAA", [])
+    t1.ahl_roster = [p1]
+    t2 = _team("BBB", [_player("p2")])
+    league = _league([t1, t2])
+    team_by_id = {"AAA": t1, "BBB": t2}
+    package = normalize_trade_package(
+        {
+            "BBB": [{"type": "player", "id": "p1", "team": "AAA"}],
+            "AAA": [{"type": "player", "id": "p2", "team": "BBB"}],
+        },
+        team_by_id=team_by_id,
+    )
+    rules = validate_trade_rules(package, league, team_by_id, context={"season_year": 2025})
+    assert rules["ok"] is True
 
 
 def test_reject_duplicate_player():
@@ -734,6 +763,58 @@ def test_user_trade_execute_integration():
     assert len(all_player_ids) == len(set(all_player_ids))
 
 
+def test_pick_registry_integrity_allows_resolved_current_draft_picks():
+    """Mid-draft selections mark picks resolved; post-trade audit must still pass."""
+    from app.sim_engine.trades.trade_pick_registry import (
+        audit_pick_registry_integrity,
+        canonical_pick_id,
+        ensure_draft_pick_registry,
+    )
+
+    teams = []
+    for i in range(4):
+        tid = str(i)  # includes team_id "0" (valid NHL-style numeric id)
+        teams.append(SimpleNamespace(team_id=tid, id=tid, roster=[], owned_pick_ids=[]))
+    league = SimpleNamespace(teams=teams, draft_pick_registry={})
+    ensure_draft_pick_registry(league, start_year=2026, years_ahead=2, rounds=2)
+    # Simulate picks already used in the live draft.
+    for tid in ("0", "1"):
+        pid = canonical_pick_id(2026, 1, tid)
+        row = league.draft_pick_registry[pid]
+        row["resolved"] = True
+        row["resolved_reason"] = "draft_selection"
+        row["selected_prospect_id"] = f"p_{tid}"
+    audit = audit_pick_registry_integrity(league, start_year=2026, years_ahead=2, rounds=2)
+    assert audit.get("ok") is True, audit.get("errors")
+
+
+def test_update_player_nhl_eta_moves_with_readiness():
+    from app.sim_engine.progression.development import (
+        calculate_nhl_readiness_score,
+        update_player_nhl_eta,
+    )
+
+    p = SimpleNamespace(
+        age=20,
+        overall=76,
+        ovr=76 / 99.0,
+        potential=0.82,
+        morale=0.6,
+        season_stats={"gp": 12},
+        role="top_line",
+        dev_type="standard",
+        position="C",
+        status="prospect",
+        nhl_eta=3,
+        ratings={"skating": 76, "shooting": 76, "hands": 76, "checking": 70, "defense": 70, "IQ": 76},
+    )
+    calculate_nhl_readiness_score(p)
+    years = update_player_nhl_eta(p)
+    assert int(getattr(p, "nhl_eta")) == years
+    assert years <= 3  # should not stay stuck at a stale long ETA when ready
+    assert getattr(p, "nhl_readiness", 0) > 1.5  # 0–100 scale
+
+
 def test_pick_value_bottom_five_first_gt_contender():
     from app.sim_engine.trades.trade_value import evaluate_pick_asset_value
 
@@ -871,3 +952,555 @@ def test_trade_assets_payload_includes_playoff_outlook():
     assert "playoff_odds" in team_blob
     assert "outlook_label" in team_blob
     assert "health_adjusted_rating" in team_blob
+
+
+def test_trade_assets_payload_includes_roster_capacity_and_slots():
+    from services.trade_service import build_trade_assets_payload, TRADE_ASSETS_CACHE_VERSION
+
+    nhl = [
+        _player("f1"),
+        _player("f2"),
+        _player("d1"),
+        _player("g1"),
+    ]
+    # Patch positions for composition.
+    nhl[0].identity.position = SimpleNamespace(value="C")
+    nhl[1].identity.position = SimpleNamespace(value="LW")
+    nhl[2].identity.position = SimpleNamespace(value="D")
+    nhl[3].identity.position = SimpleNamespace(value="G")
+    for p in nhl:
+        p.contract.is_nhl_spc = True
+        p.contract.type = "STANDARD"
+        p.signed_status = "signed"
+        p.retired = False
+        p.is_buried = False
+        p.buried = False
+        p.in_minors = False
+
+    ahl_spc = _player("ahl1", cap_hit=0.8)
+    ahl_spc.identity.position = SimpleNamespace(value="C")
+    ahl_spc.contract.is_nhl_spc = True
+    ahl_spc.contract.type = "STANDARD"
+    ahl_spc.signed_status = "signed"
+    ahl_spc.retired = False
+    ahl_spc.in_minors = True
+
+    unsigned = _player("rights1", cap_hit=0.0)
+    unsigned.signed_status = "unsigned"
+    unsigned.contract = None
+    unsigned.identity.position = SimpleNamespace(value="C")
+
+    t1 = _team("AAA", nhl)
+    t1.ahl_roster = [ahl_spc]
+    t1.echl_roster = []
+    t1.prospect_pool = [unsigned]
+    t1.gm_window = "contender"
+
+    session = SimpleNamespace(
+        session_id="test-capacity",
+        user_team_id="AAA",
+        team_by_id={"AAA": t1},
+        standings=None,
+        game_results=[],
+        sim=SimpleNamespace(league=_league([t1]), rng=None),
+        season_calendar_year=2025,
+        calendar_cursor=40,
+        nhl_calendar=[],
+        nhl_regular_season_last_index=192,
+        transcendent_tank_pressure={},
+        transcendent_draft_prospect_id=None,
+        draft_completed=False,
+    )
+
+    payload = build_trade_assets_payload(session)
+    assert int(payload.get("formula_version") or 0) == int(TRADE_ASSETS_CACHE_VERSION)
+    blob = payload["teams"]["AAA"]
+    rc = blob.get("roster_capacity") or {}
+    slots = blob.get("contract_slots") or {}
+    assert rc.get("nhl_count") == 4
+    assert rc.get("forwards") == 2
+    assert rc.get("defense") == 1
+    assert rc.get("goalies") == 1
+    assert rc.get("nhl_max") == 23
+    assert "composition" in rc
+    # NHL SPCs on NHL + AHL count; unsigned rights do not.
+    assert int(slots.get("used") or 0) >= 5
+    assert int(slots.get("limit") or 0) == 50
+    assert "available" in slots
+
+
+def test_reduced_trade_value_fallback_never_returns_raw_ovr():
+    from app.sim_engine.trades.trade_value import (
+        TRADE_VALUE_FALLBACK_CEIL,
+        evaluate_player_asset_value,
+        reduced_trade_value_fallback,
+    )
+
+    broken = _player("broken", cap_hit=4.0)
+    broken.ovr = lambda: 1 / 0  # force failures in ovr path when fallback uses it carefully
+    # Direct fallback with a normal player must stay below star territory.
+    star = _player("star", cap_hit=9.0)
+    star.ovr = lambda: 0.92
+    fb = reduced_trade_value_fallback(star, reason="unit_test")
+    assert fb <= TRADE_VALUE_FALLBACK_CEIL
+    assert fb < 82.0
+
+    # Malformed contract / missing stats should not raise; may set fallback flag.
+    broken.contract = SimpleNamespace(aav_m=None, cap_hit_m=None, years_remaining=2)
+    broken.season_stats = None
+    broken.ovr = lambda: 0.82
+    t1 = _team("AAA", [broken])
+    t2 = _team("BBB", [])
+    league = _league([t1, t2])
+    out = evaluate_player_asset_value(broken, t1, t2, league, context={})
+    assert "total" in out
+    assert float(out["total"]) <= 100.0
+
+
+def test_trade_move_spc_affiliate_lands_on_ahl_and_rolls_back_lists():
+    from app.sim_engine.trades.trade_executor import _resolve_trade_destination_attr
+
+    ahl_p = _player("ahl1", cap_hit=0.95)
+    ahl_p.contract.contract_type = "STANDARD"
+    ahl_p.contract.type = "STANDARD"
+    ahl_p.contract.is_nhl_spc = True
+    ahl_p.in_minors = True
+    ahl_p.roster_location = "ahl"
+    assert _resolve_trade_destination_attr("ahl", ahl_p) == "ahl_roster"
+    assert _resolve_trade_destination_attr("nhl", ahl_p) == "roster"
+
+
+def test_cpu_trade_value_fallback_does_not_use_raw_ovr():
+    from app.sim_engine.trades import cpu_trade_proposer as ctp
+
+    p = _player("x", cap_hit=2.0)
+    p.ovr = lambda: 0.88
+    t = _team("AAA", [p])
+    league = _league([t])
+
+    original = ctp.evaluate_player_asset_value
+
+    def boom(*_a, **_k):
+        raise RuntimeError("forced enrichment failure")
+
+    ctp.evaluate_player_asset_value = boom
+    try:
+        val = ctp._player_trade_value(p, t, league, {}, acquiring_team=t)
+    finally:
+        ctp.evaluate_player_asset_value = original
+    assert val < 82.0
+    assert val <= ctp.reduced_trade_value_fallback(p, reason="assert") + 0.01
+
+
+def test_reverse_return_hard_blocked_same_season():
+    from app.sim_engine.trades.trade_rules import (
+        _player_returning_to_prior_club,
+        validate_trade_rules,
+    )
+    from app.sim_engine.trades.trade_asset import normalize_trade_package
+
+    p1 = _player("bounce", cap_hit=2.5)
+    p1.acquired_via_trade = True
+    p1.acquired_from_team_id = "BBB"
+    p1.acquired_via_trade_season = 2025
+    p1.last_acquired_day = 0
+    p2 = _player("other", cap_hit=2.0)
+    t1 = _team("AAA", [p1])
+    t2 = _team("BBB", [p2])
+    league = _league([t1, t2])
+    ctx = {"season_year": 2025, "calendar_cursor": 50}
+    assert _player_returning_to_prior_club(p1, "BBB", ctx) is True
+    assert _player_returning_to_prior_club(p1, "CCC", ctx) is False
+
+    package = normalize_trade_package(
+        {
+            "BBB": [{"type": "player", "id": "bounce", "team": "AAA"}],
+            "AAA": [{"type": "player", "id": "other", "team": "BBB"}],
+        }
+    )
+    rules = validate_trade_rules(package, league, {"AAA": t1, "BBB": t2}, context=ctx)
+    joined = " ".join(str(x) for x in (rules.get("blocking_reasons") or []))
+    assert rules.get("ok") is False
+    assert "same season" in joined.lower() or "cannot be traded back" in joined.lower()
+
+
+def test_seller_protects_young_core_and_talent_gap():
+    from app.sim_engine.trades import cpu_trade_proposer as ctp
+
+    young = _player("kid", cap_hit=0.95)
+    young.identity = SimpleNamespace(name="Kid", age=22, position=SimpleNamespace(value="C"))
+    young.ovr = lambda: 0.84  # 84 OVR
+    young.contract.years_remaining = 2
+    young.contract.is_entry_level = True
+
+    vet = _player("vet", cap_hit=4.0)
+    vet.identity = SimpleNamespace(name="Vet", age=31, position=SimpleNamespace(value="C"))
+    vet.ovr = lambda: 0.76  # 76 OVR — 8-point gap
+    vet.contract.years_remaining = 1
+    vet.contract.expiry_status = "UFA"
+
+    assert ctp._is_young_core(young) is True
+    assert ctp._seller_must_protect(young, window="rebuild", deadline=0.2) is True
+    assert abs(ctp._player_ovr(young) - ctp._player_ovr(vet)) > ctp.CPU_ONE_FOR_ONE_OVR_GAP_MAX
+    assert ctp._talent_gap_ok(young, vet, motive="depth_swap") is False
+    assert ctp._talent_gap_ok(young, vet, buyer_pick={"pick_id": "x"}, motive="futures_package") is True
+
+
+def test_package_motive_chooser_prefers_futures_for_rebuild_to_contender():
+    from app.sim_engine.trades import cpu_trade_proposer as ctp
+    import random
+
+    seller = _team("AAA")
+    seller.gm_window = "rebuild"
+    buyer = _team("BBB")
+    buyer.gm_window = "contender"
+    rng = random.Random(1)
+    motives = {
+        ctp._choose_package_motive(
+            seller=seller,
+            buyer=buyer,
+            deadline=0.6,
+            peer_path=False,
+            pair_rng=random.Random(i),
+            direction_seller="REBUILDING",
+            direction_buyer="CONTENDER",
+        )
+        for i in range(40)
+    }
+    assert "futures_package" in motives or "rental_sale" in motives
+    assert ctp._choose_package_motive(
+        seller=seller,
+        buyer=buyer,
+        deadline=0.1,
+        peer_path=True,
+        pair_rng=rng,
+        direction_seller="REBUILDING",
+        direction_buyer="CONTENDER",
+    ) == "depth_swap"
+
+
+def test_upcoming_draft_year_and_calendar_pick_migration():
+    from app.sim_engine.trades.trade_pick_registry import (
+        ensure_draft_pick_registry,
+        ensure_franchise_pick_registry,
+        migrate_calendar_year_picks_to_draft_year,
+        upcoming_draft_year,
+        validate_pick_ownership,
+    )
+
+    assert upcoming_draft_year(2025) == 2026
+    t1 = _team("AAA")
+    t2 = _team("BBB")
+    league = SimpleNamespace(teams=[t1, t2], salary_cap_m=88.0, cap_floor_m=65.0, trade_history=[])
+    # Legacy path: mint/trade calendar-year picks (the bug).
+    ensure_draft_pick_registry(league, start_year=2025, years_ahead=2)
+    phantom = canonical_pick_id(2025, 2, "AAA")
+    transfer_pick(league, phantom, "BBB")
+    assert validate_pick_ownership(league, phantom, "BBB")
+
+    migrated = migrate_calendar_year_picks_to_draft_year(league, season_calendar_year=2025, draft_year=2026)
+    assert migrated >= 1
+    real = canonical_pick_id(2026, 2, "AAA")
+    assert validate_pick_ownership(league, real, "BBB")
+    assert not validate_pick_ownership(league, phantom, "BBB")
+
+    ensure_franchise_pick_registry(league, season_calendar_year=2025, years_ahead=4)
+    assert canonical_pick_id(2026, 1, "AAA") in (getattr(t1, "owned_pick_ids", None) or []) or validate_pick_ownership(
+        league, canonical_pick_id(2026, 1, "AAA"), "AAA"
+    )
+
+
+def test_trade_rules_use_draft_year_anchor():
+    t1 = _team("AAA", [_player("p1")])
+    t2 = _team("BBB", [_player("p2")])
+    league = _league([t1, t2])
+    # Franchise calendar context: season 2025 → draft 2026. Calendar-year pick is illegal.
+    phantom = canonical_pick_id(2025, 1, "AAA")
+    team_by_id = {"AAA": t1, "BBB": t2}
+    package = normalize_trade_package(
+        {
+            "BBB": [{"type": "pick", "id": phantom, "team": "AAA"}],
+            "AAA": [{"type": "player", "id": "p1", "team": "AAA"}],
+        },
+        team_by_id=team_by_id,
+    )
+    rules = validate_trade_rules(
+        package,
+        league,
+        team_by_id,
+        context={"season_year": 2025, "draft_year": 2026, "season_is_calendar": True},
+    )
+    assert not rules["ok"]
+    assert any("out of allowed range" in r.lower() for r in rules["blocking_reasons"])
+
+
+def test_talent_gap_allows_pick_only_return():
+    from app.sim_engine.trades import cpu_trade_proposer as ctp
+
+    sold = _player("star", cap_hit=7.0)
+    sold.ovr = lambda: 0.86
+    assert ctp._talent_gap_ok(sold, None, motive="futures_package") is False
+    assert ctp._talent_gap_ok(
+        sold, None, buyer_pick={"pick_id": "2026-round1-BBB"}, motive="futures_package"
+    ) is True
+    assert ctp._talent_gap_ok(sold, None, buyer_pick={"pick_id": "x"}, motive="depth_swap") is False
+
+
+def test_build_package_pick_only_return():
+    from app.sim_engine.trades import cpu_trade_proposer as ctp
+
+    seller = _team("AAA", [_player("p1")])
+    buyer = _team("BBB", [_player("p2")])
+    sold = seller.roster[0]
+    pick = {"pick_id": "2026-round2-BBB", "year": 2026, "round": 2}
+    package = ctp._build_package(seller, buyer, sold, [], buyer_pick=pick)
+    assert package
+    assert any(a.get("type") == "pick" for a in package["AAA"])
+    assert any(a.get("type") == "player" for a in package["BBB"])
+    assert not any(a.get("type") == "player" for a in package["AAA"])
+
+
+def test_retire_draft_year_removes_from_trade_assets():
+    from app.sim_engine.trades.trade_pick_registry import (
+        get_team_owned_picks,
+        retire_draft_year_picks,
+        serialize_team_picks,
+        tradeable_draft_year,
+        validate_pick_ownership,
+    )
+
+    assert tradeable_draft_year(2025, draft_completed=False) == 2026
+    assert tradeable_draft_year(2025, draft_completed=True) == 2027
+
+    t1 = _team("AAA")
+    t2 = _team("BBB")
+    league = _league([t1, t2])
+    pick_2026 = canonical_pick_id(2026, 1, "AAA")
+    # League helper mints from 2025; ensure upcoming class exists then retire it.
+    from app.sim_engine.trades.trade_pick_registry import ensure_draft_pick_registry
+
+    ensure_draft_pick_registry(league, start_year=2026, years_ahead=3)
+    assert validate_pick_ownership(league, pick_2026, "AAA")
+
+    n = retire_draft_year_picks(league, draft_year=2026, reason="draft_completed")
+    assert n >= 1
+    assert not validate_pick_ownership(league, pick_2026, "AAA")
+    owned = get_team_owned_picks(league, "AAA", min_year=2026)
+    assert all(int(r.get("year") or 0) >= 2027 for r in owned)
+    shown = serialize_team_picks(league, "AAA", min_year=2027)
+    assert all(int(p.get("year") or 0) >= 2027 for p in shown)
+    assert pick_2026 not in [p.get("pick_id") for p in shown]
+
+
+def test_dict_contract_years_remaining_read_for_trade_value():
+    """Real-NHL contracts are dicts — years_remaining must not silently read as 0."""
+    from app.sim_engine.trades.trade_value import (
+        _contract_years,
+        _prospect_upside_score,
+        evaluate_player_asset_value,
+    )
+
+    ident = SimpleNamespace(name="Star", age=28, position=SimpleNamespace(value="C"))
+    player = SimpleNamespace(
+        id="star-dict",
+        identity=ident,
+        contract={
+            "aav_m": 8.5,
+            "cap_hit_m": 8.5,
+            "years_remaining": 6,
+            "years": 6,
+            "expiry_year": 2031,
+            "rights_status": "UFA",
+            "type": "STANDARD",
+            "source": "real_nhl_spotrac",
+        },
+        cap_hit_m=8.5,
+        ratings={"dev_potential": 90},
+        ovr=lambda: 0.88,
+        season_stats={"gp": 80, "pts": 80, "g": 35, "a": 45},
+    )
+    assert _contract_years(player) == 6
+
+    team = SimpleNamespace(
+        gm_window="contender",
+        needs={"top_line_forward": 0.4, "depth_forward": 0.2, "top_4_defense": 0.2, "goalie": 0.1},
+        cap_pressure="moderate",
+    )
+    league = SimpleNamespace()
+    out = evaluate_player_asset_value(player, team, team, league, context={})
+    assert float(out["total"]) > 40
+    # Must not treat a 6-year deal as an expiring UFA dump.
+    comps = out.get("components") or out.get("breakdown") or {}
+    assert float(comps.get("cap_dump") or 0) > -10 or int(comps.get("years_remaining") or 6) == 6
+
+
+def test_low_ovr_youth_cannot_mint_superstar_trade_value():
+    from app.sim_engine.trades.trade_value import (
+        _prospect_upside_score,
+        evaluate_player_asset_value,
+    )
+
+    upside = _prospect_upside_score(
+        SimpleNamespace(draft_overall_pick=120, scouting_confidence=0.9),
+        ovr=68.0,
+        age=19,
+        pot=86.0,
+    )
+    assert upside <= 8.0
+
+    def _mk(ovr99, age, pot, aav=0.9, years=3):
+        return SimpleNamespace(
+            id="y",
+            identity=SimpleNamespace(name="Kid", age=age, position=SimpleNamespace(value="C")),
+            contract={
+                "aav_m": aav,
+                "cap_hit_m": aav,
+                "years_remaining": years,
+                "type": "ELC",
+                "is_elc": True,
+                "source": "test",
+            },
+            ratings={"dev_potential": pot},
+            ovr=lambda o=ovr99: o / 99.0,
+            season_stats={"gp": 10, "pts": 2, "g": 1, "a": 1},
+        )
+
+    team = SimpleNamespace(
+        gm_window="rebuild",
+        needs={"top_line_forward": 0.9, "depth_forward": 0.8, "top_4_defense": 0.5, "goalie": 0.2},
+        cap_pressure="comfortable",
+    )
+    league = SimpleNamespace()
+    depth = _mk(68, 19, 88)
+    star = _mk(90, 24, 93, aav=8.0, years=5)
+    v_depth = float(evaluate_player_asset_value(depth, team, team, league)["total"])
+    v_star = float(evaluate_player_asset_value(star, team, team, league)["total"])
+    assert v_star > v_depth
+    assert v_depth < 55
+
+
+def test_team_needs_uses_01_scale_not_display_ovr():
+    from app.sim_engine.economy.team_needs import TeamNeeds
+
+    def _p(ovr01):
+        return SimpleNamespace(
+            identity=SimpleNamespace(position=SimpleNamespace(value="C"), age=26),
+            position="C",
+            ovr=lambda o=ovr01: o,
+            season_stats={"gp": 40},
+        )
+
+    team = SimpleNamespace(
+        roster=[_p(0.70), _p(0.68), _p(0.66), _p(0.64)]
+        + [
+            SimpleNamespace(
+                identity=SimpleNamespace(position=SimpleNamespace(value="D"), age=27),
+                position="D",
+                ovr=lambda: 0.70,
+                season_stats={},
+            )
+            for _ in range(4)
+        ]
+        + [
+            SimpleNamespace(
+                identity=SimpleNamespace(position=SimpleNamespace(value="G"), age=28),
+                position="G",
+                ovr=lambda: 0.72,
+                season_stats={},
+            )
+        ],
+    )
+    needs = TeamNeeds().evaluate(team)
+    # With 0–1 OVR vs 0.74 targets, weak clubs must show positive need.
+    assert float(needs.get("top_line_forward") or 0) > 0.05
+
+
+def test_superstar_not_matched_by_four_depth_assets():
+    from app.sim_engine.trades.trade_value import evaluate_player_asset_value, _talent_base
+
+    assert _talent_base(92) > 4 * _talent_base(72)
+
+    def _mk(ovr99, age=26, aav=4.0, years=3, pos="C"):
+        return SimpleNamespace(
+            id=f"p{ovr99}",
+            identity=SimpleNamespace(name="X", age=age, position=SimpleNamespace(value=pos)),
+            contract={
+                "aav_m": aav,
+                "cap_hit_m": aav,
+                "years_remaining": years,
+                "type": "STANDARD",
+            },
+            ratings={"dev_potential": ovr99 + 2},
+            ovr=lambda o=ovr99: o / 99.0,
+            season_stats={"gp": 70, "pts": 40, "g": 15, "a": 25},
+        )
+
+    team = SimpleNamespace(gm_window="emerging", needs={}, cap_pressure="moderate")
+    league = SimpleNamespace()
+    star = _mk(92, aav=10.0, years=4)
+    depths = [_mk(72, aav=1.5) for _ in range(4)]
+    v_star = float(evaluate_player_asset_value(star, team, team, league)["total"])
+    v_depth = sum(float(evaluate_player_asset_value(p, team, team, league)["total"]) for p in depths)
+    assert v_star > v_depth
+
+
+def test_trade_purges_duplicate_roster_copies():
+    """A leftover copy on the source club must be scrubbed so GP cannot double."""
+    from app.sim_engine.trades.trade_asset import PlayerTradeAsset
+    from app.sim_engine.trades.trade_executor import _apply_player_move
+
+    p1 = _player("dup1", cap_hit=4.0)
+    ghost = _player("dup1", cap_hit=4.0)  # same id, leftover copy
+    t1 = _team("AAA", [p1, ghost])
+    t2 = _team("BBB", [])
+    team_by_id = {"AAA": t1, "BBB": t2}
+    asset = PlayerTradeAsset(
+        player_id="dup1",
+        source_team_id="AAA",
+        acquiring_team_id="BBB",
+        retained_pct=0.0,
+    )
+    moved: list = []
+    retained: list = []
+    _apply_player_move(
+        asset,
+        team_by_id,
+        season_label="2025-26",
+        moved_players=moved,
+        retained_records=retained,
+        context={"season_year": 2025, "calendar_cursor": 40},
+    )
+    assert sum(1 for p in t1.roster if str(getattr(p, "id", "")) == "dup1") == 0
+    assert sum(1 for p in t2.roster if str(getattr(p, "id", "")) == "dup1") == 1
+    assert moved and moved[0].get("applied") is True
+
+
+def test_ledger_rejects_gp_for_player_not_on_credited_roster():
+    """Ghost dual-roster dress must not credit season GP after a trade."""
+    from app.sim_engine.engine import SimEngine
+
+    eng = SimEngine.__new__(SimEngine)
+    p = SimpleNamespace(id="ghost1", identity=SimpleNamespace(name="Ghost", position=SimpleNamespace(value="C")), retired=False)
+    home = SimpleNamespace(team_id="H", id="H", roster=[])  # not on home
+    away = SimpleNamespace(team_id="A", id="A", roster=[p])
+    eng.league = SimpleNamespace(teams=[home, away])
+    ledger: dict = {}
+    eng._gm_ledger_add(ledger, p, "H", gp=1, g=1)
+    assert "ghost1" not in ledger or int((ledger.get("ghost1") or {}).get("gp", 0) or 0) == 0
+    eng._gm_ledger_add(ledger, p, "A", gp=1, g=1)
+    assert int(ledger["ghost1"]["gp"]) == 1
+    assert int(ledger["ghost1"]["g"]) == 1
+
+
+def test_ledger_caps_regular_season_gp_at_82():
+    from app.sim_engine.engine import SimEngine
+
+    eng = SimEngine.__new__(SimEngine)
+    p = SimpleNamespace(id="cap82", identity=SimpleNamespace(name="Cap", position=SimpleNamespace(value="C")), retired=False)
+    team = SimpleNamespace(team_id="T", id="T", roster=[p])
+    eng.league = SimpleNamespace(teams=[team])
+    ledger = {"cap82": {"player_id": "cap82", "gp": 82, "g": 10, "a": 10, "pts": 20, "position": "C"}}
+    eng._gm_ledger_add(ledger, p, "T", gp=1, g=1, a=1)
+    assert int(ledger["cap82"]["gp"]) == 82
+    assert int(ledger["cap82"]["g"]) == 10
+

@@ -268,6 +268,18 @@ def bootstrap_full_league_hierarchy(league: Any, rng: random.Random) -> None:
     ECHL_F, ECHL_D, ECHL_G = 11, 5, 2
 
     for team in teams:
+        # Keep real-NHL overflow already assigned to the affiliate (23-man trim).
+        preserved_ahl = [
+            p
+            for p in (getattr(team, "ahl_roster", None) or [])
+            if getattr(p, "real_nhl_import", False)
+        ]
+        preserved_echl = [
+            p
+            for p in (getattr(team, "echl_roster", None) or [])
+            if getattr(p, "real_nhl_import", False)
+        ]
+
         if not hasattr(team, "ahl_roster") or team.ahl_roster is None:
             team.ahl_roster = []
         else:
@@ -280,20 +292,46 @@ def bootstrap_full_league_hierarchy(league: Any, rng: random.Random) -> None:
         tid = str(getattr(team, "team_id", ""))
 
         ahl_slots = _positions_for_block(rng, forwards=AHL_F, defense=AHL_D, goalies=AHL_G)
-        for pos in ahl_slots:
+        # Leave room for preserved real NHL overflow so affiliates aren't bloated.
+        generated_ahl_budget = max(0, len(ahl_slots) - len(preserved_ahl))
+        for pos in ahl_slots[:generated_ahl_budget]:
             lo, hi = (0.42, 0.62) if pos != Position.G else (0.48, 0.68)
             p = _spawn_player(rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=20, age_hi=28, used_names=used_names, league_players=league_players, pool_context="ahl")
             p.context.current_team_id = f"AHL_{tid}"
             _set_assignment(p, org_nhl_team_id=tid, level="ahl", club=_team_label(team))
             team.ahl_roster.append(p)
+        for p in preserved_ahl:
+            try:
+                p.in_minors = True
+                p.is_buried = True
+                p.buried = True
+                p.roster_location = "ahl"
+            except Exception:
+                pass
+            try:
+                p.context.current_team_id = f"AHL_{tid}"
+            except Exception:
+                pass
+            _set_assignment(p, org_nhl_team_id=tid, level="ahl", club=_team_label(team))
+            if p not in team.ahl_roster:
+                team.ahl_roster.append(p)
 
         echl_slots = _positions_for_block(rng, forwards=ECHL_F, defense=ECHL_D, goalies=ECHL_G)
-        for pos in echl_slots:
+        generated_echl_budget = max(0, len(echl_slots) - len(preserved_echl))
+        for pos in echl_slots[:generated_echl_budget]:
             lo, hi = (0.36, 0.55) if pos != Position.G else (0.42, 0.60)
             p = _spawn_player(rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=21, age_hi=30, used_names=used_names, league_players=league_players, pool_context="echl")
             p.context.current_team_id = f"ECHL_{tid}"
             _set_assignment(p, org_nhl_team_id=tid, level="echl", club=_team_label(team))
             team.echl_roster.append(p)
+        for p in preserved_echl:
+            try:
+                p.in_minors = True
+                p.roster_location = "echl"
+            except Exception:
+                pass
+            if p not in team.echl_roster:
+                team.echl_roster.append(p)
 
     # --- Free agents (NHL-contract eligible pool) ---
     league.free_agents = []
@@ -417,23 +455,23 @@ def bootstrap_full_league_hierarchy(league: Any, rng: random.Random) -> None:
 
 
 # Star-power tiers: (label, weight, franchise/elite/top slot counts, top target ovr)
-# Current ability is NHL-scale. Top picks must sit ABOVE nhl_floor / mid-round bands
-# so a #1 overall is a near-NHL talent (~68–76), not a raw 50 OVR junior.
+# Current ability is NHL-scale. Top picks should look like near-NHL talents a GM
+# would promote within 1–3 years (~78–86 current), not mid-60s juniors.
 _CLASS_STRENGTH_TIERS = [
-    ("weak", 0.20, 1, 3, 6, (0.66, 0.71)),
-    ("average", 0.40, 1, 4, 8, (0.69, 0.74)),
-    ("strong", 0.24, 2, 5, 9, (0.72, 0.77)),
-    ("elite", 0.12, 2, 6, 10, (0.74, 0.79)),
-    ("generational", 0.04, 3, 6, 12, (0.77, 0.83)),
+    ("weak", 0.20, 1, 3, 6, (0.76, 0.81)),
+    ("average", 0.40, 1, 4, 8, (0.78, 0.84)),
+    ("strong", 0.24, 2, 5, 9, (0.80, 0.86)),
+    ("elite", 0.12, 2, 6, 10, (0.82, 0.88)),
+    ("generational", 0.04, 3, 6, 12, (0.84, 0.90)),
 ]
 
 # Minimum current OVR (0–1) for shaped pipeline stars — used to repair older saves
 # that were generated under the too-low 0.50–0.58 franchise bands.
 _PIPELINE_OVR_REPAIR = {
-    "transcendent": (0.76, 0.78, 0.86),
-    "franchise": (0.68, 0.69, 0.76),
-    "elite": (0.64, 0.64, 0.72),
-    "top": (0.60, 0.60, 0.68),
+    "transcendent": (0.82, 0.84, 0.90),
+    "franchise": (0.78, 0.79, 0.86),
+    "elite": (0.74, 0.74, 0.82),
+    "top": (0.70, 0.70, 0.78),
 }
 
 # Depth quality is independent of star power — a class can be top-heavy or deep.
@@ -646,6 +684,13 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
         code = str(block.get("league_code") or "JUNIOR")
         for tm in block.get("teams") or []:
             for p in tm.get("players") or []:
+                # Already-drafted prospects keep their current ability — this pass only
+                # shapes the fresh, undrafted cohort feeding the next draft class. Reshaping
+                # drafted players here would randomly re-roll (and often crater) their OVR.
+                if bool(getattr(p, "drafted", False)) or getattr(p, "nhl_rights_team_id", None) or getattr(
+                    p, "rights_team_id", None
+                ) or getattr(p, "drafted_by", None):
+                    continue
                 ident = getattr(p, "identity", None)
                 age = int(getattr(ident, "age", 99) or 99) if ident else 99
                 if 17 <= age <= 20:
@@ -908,10 +953,10 @@ def ensure_board_prospect_ovr_floors(
         return 0
     rng_inst = rng if rng is not None else random.Random(42)
     floors = (
-        (3, "franchise", 0.68, 0.69, 0.76, 88, 97),
-        (10, "elite", 0.64, 0.64, 0.72, 82, 92),
-        (20, "top", 0.60, 0.60, 0.68, 76, 86),
-        (32, "round1_tail", 0.56, 0.56, 0.64, 72, 84),
+        (3, "franchise", 0.78, 0.79, 0.86, 90, 98),
+        (10, "elite", 0.74, 0.74, 0.82, 86, 94),
+        (20, "top", 0.70, 0.70, 0.78, 80, 90),
+        (32, "round1_tail", 0.66, 0.66, 0.74, 76, 86),
     )
     repaired = 0
     lookup = player_by_key or {}
@@ -934,6 +979,13 @@ def ensure_board_prospect_ovr_floors(
             cur99 = 0.0
         if p is not None:
             cur99 = max(cur99, _player_ovr_frac(p) * 99.0)
+        # Do not NHL-floor underagers — year-roll inject bugs already over-rated them.
+        try:
+            age = int((getattr(getattr(p, "identity", None), "age", None) if p is not None else None) or row.get("age") or 18)
+        except Exception:
+            age = int(row.get("age") or 18)
+        if age < 17:
+            continue
         if cur99 + 1e-6 >= floor * 99.0:
             continue
         if p is None:
@@ -1009,6 +1061,71 @@ def tick_extra_league_development(sim: Any, rng: random.Random) -> None:
                 elif getattr(p, "pipeline_steal", False):
                     setattr(p, "dev_type", "elite")
                 _tick_ratings(rng, p, overseas=False, junior=True)
+
+
+def ensure_overseas_fa_pool(
+    league: Any,
+    rng: random.Random,
+    *,
+    min_count: int = 120,
+    min_goalies: int = 12,
+) -> int:
+    """Top up the overseas / Euro free-agent runway so the Wire is never empty.
+
+    Real-NHL franchises and long saves can drain this pool; the FA Wire should
+    still list overseas talent alongside unsigned summer UFAs. Always keeps a
+    replacement-level goalie lane so clubs can sign a netminder in July / camp.
+    """
+    if league is None:
+        return 0
+    pool = list(getattr(league, "overseas_free_agents", None) or [])
+    need = max(0, int(min_count) - len(pool))
+    g_have = sum(
+        1
+        for p in pool
+        if str(getattr(getattr(p, "identity", None), "position", "") or "").upper() in ("G", "GOALIE")
+        or str(getattr(getattr(getattr(p, "identity", None), "position", None), "value", "") or "").upper() == "G"
+    )
+    need_g = max(0, int(min_goalies) - g_have)
+    if need <= 0 and need_g <= 0:
+        league.overseas_free_agents = pool
+        return 0
+
+    used_names: set = set()
+    for p in list(getattr(league, "players", None) or []) + pool + list(getattr(league, "free_agents", None) or []):
+        ident = getattr(p, "identity", None)
+        nm = str(getattr(ident, "name", "") or "")
+        if nm:
+            used_names.add(nm)
+    league_players = list(getattr(league, "players", None) or [])
+    added = 0
+    total_spawn = need + need_g
+    for i in range(total_spawn):
+        force_g = i < need_g
+        pos = Position.G if force_g else rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.G])
+        lo, hi = (0.40, 0.62) if pos != Position.G else (0.48, 0.70)
+        p = _spawn_player(
+            rng,
+            pos=pos,
+            ovr_lo=lo,
+            ovr_hi=hi,
+            age_lo=23,
+            age_hi=32,
+            used_names=used_names,
+            league_players=league_players,
+            pool_context="overseas",
+        )
+        p.context.current_team_id = "OVERSEAS"
+        _set_assignment(
+            p,
+            level="ufa",
+            overseas=True,
+            overseas_league=rng.choice(["KHL", "SHL", "Liiga", "NL", "DEL", "Czech Extraliga"]),
+        )
+        pool.append(p)
+        added += 1
+    league.overseas_free_agents = pool
+    return added
 
 
 def count_pool_players(league: Any) -> Dict[str, int]:

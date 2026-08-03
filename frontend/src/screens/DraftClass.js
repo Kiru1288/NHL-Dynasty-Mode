@@ -178,48 +178,52 @@ function talentGrade(rank, seed) {
   return swing > 1 ? "C+" : "C";
 }
 
+/**
+ * Nation mark for a prospect. Scouting files identify players by federation
+ * code, so this returns the three-letter code used on the board rather than a
+ * platform-dependent flag glyph. Flag artwork is handled separately by
+ * flagApiUrl where a real image is available.
+ */
 function countryFlag(country) {
   const map = {
-    Canada: "🇨🇦",
-    CAN: "🇨🇦",
-    CA: "🇨🇦",
-    USA: "🇺🇸",
-    US: "🇺🇸",
-    "United States": "🇺🇸",
-    "United States of America": "🇺🇸",
-    Sweden: "🇸🇪",
-    SWE: "🇸🇪",
-    SE: "🇸🇪",
-    Finland: "🇫🇮",
-    FIN: "🇫🇮",
-    FI: "🇫🇮",
-    Czechia: "🇨🇿",
-    "Czech Republic": "🇨🇿",
-    CZE: "🇨🇿",
-    CZ: "🇨🇿",
-    Slovakia: "🇸🇰",
-    SVK: "🇸🇰",
-    SK: "🇸🇰",
-    Germany: "🇩🇪",
-    GER: "🇩🇪",
-    DE: "🇩🇪",
-    Switzerland: "🇨🇭",
-    SUI: "🇨🇭",
-    CH: "🇨🇭",
-    Russia: "🇷🇺",
-    RUS: "🇷🇺",
-    RU: "🇷🇺",
+    Canada: "CAN",
+    CAN: "CAN",
+    CA: "CAN",
+    USA: "USA",
+    US: "USA",
+    "United States": "USA",
+    "United States of America": "USA",
+    Sweden: "SWE",
+    SWE: "SWE",
+    SE: "SWE",
+    Finland: "FIN",
+    FIN: "FIN",
+    FI: "FIN",
+    Czechia: "CZE",
+    "Czech Republic": "CZE",
+    CZE: "CZE",
+    CZ: "CZE",
+    Slovakia: "SVK",
+    SVK: "SVK",
+    SK: "SVK",
+    Germany: "GER",
+    GER: "GER",
+    DE: "GER",
+    Switzerland: "SUI",
+    SUI: "SUI",
+    CH: "SUI",
+    Russia: "RUS",
+    RUS: "RUS",
+    RU: "RUS",
   };
   const raw = String(country || "").trim();
-  if (!raw) return "🌐";
+  if (!raw) return "—";
   if (map[raw]) return map[raw];
   if (map[raw.toUpperCase()]) return map[raw.toUpperCase()];
   const iso = resolveCountryCode(raw);
   if (iso && map[iso]) return map[iso];
-  if (iso && /^[A-Z]{2}$/.test(iso)) {
-    return String.fromCodePoint(...[...iso].map((c) => 127397 + c.charCodeAt(0)));
-  }
-  return "🌐";
+  if (iso && /^[A-Z]{2,3}$/.test(iso)) return iso;
+  return "—";
 }
 
 function humanizeScoutReason(raw) {
@@ -494,41 +498,67 @@ function prospectConfidenceFogClass(pct) {
   return "dc-conf-fog--blind";
 }
 
-function prospectPotentialDisplay(player) {
+/**
+ * Ceiling tiers reuse peakProjectionBand's thresholds so the board column and the
+ * profile panel never disagree about what a potential number is worth. The ramp runs
+ * cold to hot — slate, steel, blue, ice, cyan, gold — and the top two tiers earn a
+ * filled chip so a franchise ceiling is unmistakable while scanning 300+ rows.
+ */
+const POTENTIAL_TIERS = [
+  { min: 92, key: "generational", label: "Generational" },
+  { min: 88, key: "elite", label: "Elite" },
+  { min: 84, key: "high", label: "High upside" },
+  { min: 80, key: "strong", label: "Strong upside" },
+  { min: 75, key: "moderate", label: "Moderate upside" },
+  { min: 70, key: "depth", label: "Depth upside" },
+  { min: 0, key: "fringe", label: "Limited upside" },
+];
+
+function potentialTier(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return POTENTIAL_TIERS.find((t) => n >= t.min) || null;
+}
+
+/**
+ * Projected ceiling for the board column. Fog controls precision — an unscouted kid
+ * shows a range, never a settled grade — but the tier ramp reads off whatever the
+ * scouts will commit to, so a range still carries its colour.
+ */
+function resolvePotentialEstimate(player) {
+  const blank = (detail) => ({ text: "—", value: null, exact: false, tier: null, detail });
+  if (player?.ceilingHidden) return blank("Ceiling unreported — assign a scout");
+
   const pct = prospectScoutingPct(player);
-  if (pct == null || pct < 15) {
-    return "—";
-  }
+  if (pct == null || pct < 15) return blank("Ceiling not scouted");
+
   const range = player?.potentialRange;
   const score = Number(player?.potentialScore);
   const hasScore = Number.isFinite(score) && score > 0;
+  const lo = range?.low != null ? Math.round(Number(range.low)) : NaN;
+  const hi = range?.high != null ? Math.round(Number(range.high)) : NaN;
+  const hasRange = Number.isFinite(lo) && Number.isFinite(hi) && hi >= lo;
 
-  if (pct >= 91 && hasScore) {
-    return Math.round(score);
+  // A grade only settles once the file is deep enough, or the band has closed to a
+  // few points. Everything else stays a range so the colour can't oversell a guess.
+  if (hasScore && (pct >= 91 || (pct >= 76 && hasRange && hi - lo <= 5))) {
+    const v = Math.round(score);
+    return { text: String(v), value: v, exact: true, tier: potentialTier(v), detail: "Projected ceiling" };
   }
-
-  if (range && range.low != null && range.high != null) {
-    const lo = Math.round(Number(range.low));
-    const hi = Math.round(Number(range.high));
-    if (Number.isFinite(lo) && Number.isFinite(hi)) {
-      if (pct >= 76 && hi - lo <= 5 && hasScore) {
-        return Math.round(score);
-      }
-      if (hi > lo) {
-        return `${lo}–${hi}`;
-      }
-      if (hi === lo) {
-        return lo;
-      }
-    }
+  if (hasRange && hi > lo) {
+    const mid = (lo + hi) / 2;
+    return { text: `${lo}–${hi}`, value: mid, exact: false, tier: potentialTier(mid), detail: "Ceiling range" };
   }
-
+  if (hasRange) {
+    return { text: String(lo), value: lo, exact: false, tier: potentialTier(lo), detail: "Ceiling range" };
+  }
   if (hasScore) {
-    return Math.round(score);
+    const v = Math.round(score);
+    return { text: String(v), value: v, exact: false, tier: potentialTier(v), detail: "Ceiling estimate" };
   }
   const label = coalesce(player?.potentialLabel, player?.potential_label);
-  if (label) return String(label);
-  return "—";
+  if (label) return { text: String(label), value: null, exact: false, tier: null, detail: "Scout grade" };
+  return blank("Ceiling not scouted");
 }
 
 function ScoutConfidenceMetric({ player }) {
@@ -555,15 +585,14 @@ function ScoutConfidenceMetric({ player }) {
 function ProspectBoardColumnHeader() {
   return (
     <div className="dc-prospect-board__columns" aria-hidden="true">
-      <span className="dc-prospect-board__col dc-prospect-board__col--rank">Rank</span>
-      <span className="dc-prospect-board__col dc-prospect-board__col--avatar" />
+      <span className="dc-prospect-board__col dc-prospect-board__col--rank">#</span>
       <span className="dc-prospect-board__col dc-prospect-board__col--player">Player</span>
-      <div className="dc-prospect-board__metrics-head">
-        <span className="dc-prospect-board__col dc-prospect-board__col--stats">Season Stats</span>
-        <span className="dc-prospect-board__col dc-prospect-board__col--scout">Scout %</span>
-        <span className="dc-prospect-board__col dc-prospect-board__col--potential">Potential</span>
-        <span className="dc-prospect-board__col dc-prospect-board__col--stock">Stock</span>
-      </div>
+      <span className="dc-prospect-board__col dc-prospect-board__col--pos">Pos</span>
+      <span className="dc-prospect-board__col dc-prospect-board__col--league">League</span>
+      <span className="dc-prospect-board__col dc-prospect-board__col--pot">Pot</span>
+      <span className="dc-prospect-board__col dc-prospect-board__col--proj">Proj</span>
+      <span className="dc-prospect-board__col dc-prospect-board__col--conf">Conf</span>
+      <span className="dc-prospect-board__col dc-prospect-board__col--stock">Stock</span>
     </div>
   );
 }
@@ -2622,7 +2651,7 @@ function CommandStatStrip({ franchiseState, onOpenWjc }) {
 function ProspectBadges({ player, meta, showStockTier = false }) {
   const badges = [];
   if (meta.watchlist) badges.push({ key: "wl", text: "★ Watchlist", cls: "dc-badge--watch" });
-  if (meta.target) badges.push({ key: "tg", text: "🎯 Target", cls: "dc-badge--target" });
+  if (meta.target) badges.push({ key: "tg", text: "◎ Target", cls: "dc-badge--target" });
   if (meta.doNotDraft) badges.push({ key: "dnd", text: "⚠ DND", cls: "dc-badge--dnd" });
   if (showStockTier) {
     const stockTone = getStockTone(player.draftStock);
@@ -2630,8 +2659,8 @@ function ProspectBadges({ player, meta, showStockTier = false }) {
     if (stockTone === "fall") badges.push({ key: "dn", text: player.draftStock?.label || "↓ Falling", cls: "dc-badge--fall" });
     if (player.franchiseTier?.available) badges.push({ key: "tier", text: player.franchiseTier.label, cls: `dc-badge--tier-${getTierTone(player.franchiseTier)}` });
   }
-  if (player.isGem) badges.push({ key: "gem", text: "💎 Gem", cls: "dc-badge--gem" });
-  if (player.isBustRisk) badges.push({ key: "bust", text: "🧨 Risk", cls: "dc-badge--bust" });
+  if (player.isGem) badges.push({ key: "gem", text: "◆ Gem", cls: "dc-badge--gem" });
+  if (player.isBustRisk) badges.push({ key: "bust", text: "▲ Risk", cls: "dc-badge--bust" });
   if (player.characterConcerns) badges.push({ key: "char", text: "⚠ Character", cls: "dc-badge--bust" });
   if (!badges.length) return null;
   return (
@@ -2696,83 +2725,56 @@ function ProspectIdentityBlock({ player }) {
 function ProspectBoardRow({ player, index, selected, onSelect, meta }) {
   const rank = prospectRank(player, index);
   const countryCode = normalizeCountryCode(player);
-  const isGoalie = isGoaliePosition(player.position);
-  const gp = Number(player?.gp ?? player?.gamesPlayed ?? player?.games_played) || 0;
-  const points = Number(player?.points) || 0;
-  const ppg = prospectPpgValue(player);
-  const ppgText = gp > 0 ? ppg.toFixed(2) : "0.00";
-  const hand = formatHandedness(player.handedness);
   const movementCls = movementIndicator(player.draftStock).cls;
   const scoutPct = prospectScoutingPct(player);
   const fogClass = prospectConfidenceFogClass(scoutPct);
   const ceilingHidden = Boolean(player?.ceilingHidden);
-  const potentialDisplay = ceilingHidden
-    ? "—"
-    : prospectPotentialDisplay(player);
-  const potentialTitle = ceilingHidden
-    ? "Ceiling ungraded at this draft position — project upside from stats, age, size and attributes."
-    : (scoutPct != null
-      ? `${prospectIntelTier(scoutPct) || "Scouting"} · ${scoutPct}% · Potential estimate`
-      : "Potential estimate");
-  const league = player.leagueDisplay || player.league || "Unknown";
-  const team = player.team || "Unknown";
-  const posLine = [player.position, hand].filter(Boolean).join(" · ");
-  const nationFull = player.country || player.nationality || countryCode || "—";
-  const nationLabel = countryCode || player.country || "—";
-  const rowFlagUrl = flagApiUrl(nationFull, 32);
-
-  const statsLine = isGoalie
-    ? `${gp} GP · ${Number(player.wins) || 0} W · SV% ${player.savePct || "—"}`
-    : `${gp} GP · ${points} PTS · ${ppgText} PPG`;
-
+  const profile = player?.profile || null;
+  const ovr = resolveCurrentEstimate(player, profile, ceilingHidden, Boolean(profile?.dedicatedScoutFile));
+  const pot = resolvePotentialEstimate(player);
+  const league = player.leagueDisplay || player.league || "—";
+  const pos = player.position || "—";
+  const nationFull = player.country || player.nationality || countryCode || "";
+  const rowFlagUrl = flagApiUrl(countryCode || nationFull, 32);
   const stockText = movementDisplayText(player.draftStock);
+  const projection = player.projection || projectionForRank(rank);
+  const confText = scoutPct != null ? `${Math.round(scoutPct)}%` : "—";
 
   return (
     <button
       type="button"
-      className={`dc-prospect-row${selected ? " is-selected" : ""}${meta.doNotDraft ? " is-dnd" : ""}${player?.isTranscendent ? " prospect-card--transcendent" : ""}`}
+      className={`dc-prospect-row${selected ? " is-selected" : ""}${meta.doNotDraft ? " is-dnd" : ""}${player?.isTranscendent ? " prospect-card--transcendent" : ""}${rank > 32 ? " is-late-round" : ""}`}
       onClick={onSelect}
     >
       <div className="dc-prospect-row__rank" aria-label={`Rank ${rank}`}>
-        <span>#{rank}</span>
+        <span>{rank}</span>
       </div>
 
-      <ProspectIdentityBlock player={player} />
-
-      <div className="dc-prospect-row__identity">
+      <div className="dc-prospect-row__player">
+        {rowFlagUrl ? (
+          <img
+            className="dc-prospect-row__flag"
+            src={rowFlagUrl}
+            alt={nationFull || ""}
+            title={nationFull || undefined}
+            loading="lazy"
+            onError={(e) => { e.currentTarget.style.display = "none"; }}
+          />
+        ) : null}
         <strong className="dc-prospect-row__name">{player.firstName} {player.lastName}</strong>
-        <p className="dc-prospect-row__sub">{posLine || "—"} · {league}</p>
-        <p className="dc-prospect-row__team">{team}</p>
-        <p className="dc-prospect-row__nation-label">
-          {rowFlagUrl ? (
-            <img
-              className="dc-prospect-row__nation-flag"
-              src={rowFlagUrl}
-              alt=""
-              loading="lazy"
-            />
-          ) : null}
-          <span>{nationFull}</span>
-        </p>
       </div>
 
-      <div className="dc-prospect-row__metrics">
-        <ProspectMetric label="Season Stats" value={statsLine} />
-        <ScoutConfidenceMetric player={player} />
-        <ProspectMetric
-          label={ceilingHidden ? "Potential" : "Potential"}
-          value={potentialDisplay}
-          align="center"
-          tone={`is-potential ${ceilingHidden ? "is-ceiling-hidden" : ""} ${fogClass}`}
-          title={potentialTitle}
-        />
-        <ProspectMetric
-          label="Stock"
-          value={stockText}
-          align="right"
-          tone={movementCls}
-        />
-      </div>
+      <span className="dc-prospect-row__cell dc-prospect-row__pos">{pos}</span>
+      <span className="dc-prospect-row__cell dc-prospect-row__league" title={league}>{league}</span>
+      <span
+        className={`dc-prospect-row__cell dc-prospect-row__pot${pot.tier ? ` is-pot-${pot.tier.key}` : ""}${pot.exact ? "" : " is-range"}`}
+        title={`${pot.tier ? `${pot.tier.label} · ` : ""}${pot.detail} · Now ${ovr.text}`}
+      >
+        {pot.text}
+      </span>
+      <span className="dc-prospect-row__cell dc-prospect-row__proj">{projection}</span>
+      <span className={`dc-prospect-row__cell dc-prospect-row__conf ${fogClass}`}>{confText}</span>
+      <span className={`dc-prospect-row__cell dc-prospect-row__stock ${movementCls}`}>{stockText}</span>
     </button>
   );
 }
@@ -2792,7 +2794,16 @@ function ProspectBoardPanel({ prospects, selectedProspectId, onOpenProspect, sco
       <div className="dc-prospect-board__list dc-scroll-surface">
         <ProspectBoardColumnHeader />
         {!prospects.length ? (
-          <p className="dc-empty-note dc-prospect-board__empty">No prospects match current filters.</p>
+          <div className="dc-board-standby">
+            <span className="dc-board-standby__label">
+              {filterLabel ? "No matching prospects" : "Board not yet populated"}
+            </span>
+            <p className="dc-empty-note dc-prospect-board__empty">
+              {filterLabel
+                ? `Nothing on the board matches the ${filterLabel} filter.`
+                : "No prospects have been published to this draft class yet."}
+            </p>
+          </div>
         ) : (
           prospects.map((player, index) => (
             <ProspectBoardRow
@@ -3787,7 +3798,7 @@ function ProspectProfileModal({
 
   return (
     <div
-      className={`dc-profile-modal${isTranscendent ? " prospect-modal--transcendent" : ""}`}
+      className={`dc-profile-modal dc-profile-modal--prospect${isTranscendent ? " prospect-modal--transcendent" : ""}${rank > 32 || (confPct != null && confPct < 45) ? " dc-profile-modal--uncertain" : ""}`}
       role="dialog"
       aria-modal="true"
       aria-label={`${player.firstName} ${player.lastName} scouting profile`}
@@ -4170,12 +4181,15 @@ function IntelFeed({ boardMeta, prospects }) {
   if (summary?.no_movement_count > 0) {
     lines.push(`${summary.no_movement_count} no history`);
   }
-  if (!lines.length) {
-    lines.push("Waiting");
+  // Honest standby: no movement to report yet, stated plainly on one line
+  // instead of an empty broadcast band.
+  const idle = !lines.length;
+  if (idle) {
+    lines.push("No rank movement reported yet");
   }
   return (
-    <footer className="dc-intel-feed">
-      <h3>Ticker</h3>
+    <footer className={`dc-intel-feed${idle ? " is-idle" : ""}`}>
+      <h3>Scouting Wire</h3>
       <ul>
         {lines.map((line, i) => <li key={i}>{line}</li>)}
       </ul>
@@ -4513,7 +4527,7 @@ function ScoutingActions({ meta, onToggleWatchlist, onToggleTarget, onToggleDND,
   return (
     <div className="dc-scout-actions">
       <button type="button" className={`dc-btn dc-btn--primary ${scoutOpen ? "is-active" : ""}`} onClick={() => setScoutOpen((v) => !v)}>
-        🔭 Scout
+        ◎ Scout
       </button>
       {scoutOpen ? (
         <div className="dc-scout-menu">
@@ -4527,7 +4541,7 @@ function ScoutingActions({ meta, onToggleWatchlist, onToggleTarget, onToggleDND,
         ★ Watch
       </button>
       <button type="button" className={`dc-btn dc-btn--secondary ${meta.target ? "is-active" : ""}`} onClick={onToggleTarget}>
-        🎯 Pin
+        ◉ Pin
       </button>
       <button type="button" className={`dc-btn dc-btn--secondary ${compareFull ? "is-disabled" : ""}`} onClick={onCompare} disabled={compareFull}>
         ⚖ Compare
@@ -4922,8 +4936,6 @@ export default function DraftClass() {
     setPendingDraftProspectId,
   } = useGameUI();
   const dateContext = useMemo(() => buildDateContext(franchiseState), [franchiseState]);
-  const [tradeAssetsPayload, setTradeAssetsPayload] = useState(null);
-
   const [activeBoardView, setActiveBoardView] = useState("rank");
   const [leaderMode, setLeaderMode] = useState("points");
   const [leadersModalOpen, setLeadersModalOpen] = useState(false);
@@ -4987,55 +4999,16 @@ export default function DraftClass() {
   }, [franchiseState?.draft_class_rankings?.entries, franchiseState?.draft_class_hud?.prospect_profiles_by_id, dateContext]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadScoutingStore() {
-      try {
-        const res = await api.get(SCOUTING_ENDPOINTS.prospects);
-        if (cancelled) return;
-        const fromApi = scoutingStoreFromApiProspects(res?.data?.prospects);
-        const fromState = scoutingStoreFromFranchiseState(franchiseState);
-        setScoutingStore((prev) => mergeScoutingStores(fromState, fromApi, prev));
-      } catch {
-        if (cancelled) return;
-        const fromState = scoutingStoreFromFranchiseState(franchiseState);
-        if (Object.keys(fromState).length) {
-          setScoutingStore((prev) => mergeScoutingStores(fromState, prev));
-        }
-      }
+    // Prefer local board + franchise scouting overlays. Hitting /scouting/prospects
+    // on every Draft Class open rebuilt the same board again (~30s) in parallel
+    // with state/heavy — keep that endpoint for the Scouting screen itself.
+    const fromState = scoutingStoreFromFranchiseState(franchiseState);
+    if (Object.keys(fromState).length) {
+      setScoutingStore((prev) => mergeScoutingStores(fromState, prev));
     }
+  }, [franchiseState?.session_id, franchiseState?.scouting_state, franchiseState?.draft_class_rankings?.entries]);
 
-    loadScoutingStore();
-    return () => {
-      cancelled = true;
-    };
-  }, [franchiseState?.session_id, franchiseState?.scouting_state]);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadTradeAssets() {
-      try {
-        const res = await api.get("/api/franchise/trade/assets");
-        if (cancelled) return;
-        const payload = res?.data;
-        if (payload && typeof payload === "object" && payload.teams) {
-          setTradeAssetsPayload(payload);
-        }
-      } catch {
-        if (!cancelled) setTradeAssetsPayload(null);
-      }
-    }
-    loadTradeAssets();
-    return () => {
-      cancelled = true;
-    };
-  }, [franchiseState?.session_id, franchiseState?.user_team_id, franchiseState?.team?.id]);
-
-  const franchiseStateForHeader = useMemo(() => {
-    if (!franchiseState) return franchiseState;
-    if (!tradeAssetsPayload?.teams) return franchiseState;
-    return { ...franchiseState, trade_assets: tradeAssetsPayload };
-  }, [franchiseState, tradeAssetsPayload]);
+  const franchiseStateForHeader = franchiseState;
 
   useEffect(() => {
     const fromBoard = {};
@@ -5148,7 +5121,7 @@ export default function DraftClass() {
   return (
     <div className="game-root">
       <div className="game-canvas">
-        <main className="dc-root dc-screen">
+        <main className="dc-root dc-screen register-ops" data-register="ops">
           <TopHeader
             onBack={handleBack}
             dateContext={dateContext}
@@ -5230,24 +5203,36 @@ export default function DraftClass() {
 
         <style>{`
           .dc-root.dc-screen {
-            --dc-font-title: var(--g-font-head, "Segoe UI");
-            --dc-font-number: var(--g-font-head, "Segoe UI");
-            --dc-font-ui: Inter, "Segoe UI", sans-serif;
-            --dc-font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
-            --dc-text: #e9f6ff;
-            --dc-muted: #8aa0b6;
-            --dc-line: rgba(118, 200, 245, 0.2);
-            --dc-cyan: #2be4ff;
-            --dc-green: #6cf7a6;
-            --dc-red: #ff6f7e;
-            --dc-gold: #f4c66e;
-            --dc-panel: rgba(8, 21, 34, 0.9);
-            --dc-panel-soft: rgba(10, 26, 41, 0.75);
+            --dc-font-title: var(--font-broadcast-display);
+            --dc-font-number: var(--font-mono-data);
+            --dc-font-ui: var(--font-ops-ui);
+            --dc-font-mono: var(--font-mono-data);
+            --dc-text: var(--ops-text);
+            --dc-muted: var(--ops-text-secondary);
+            --dc-line: var(--ops-grid);
+            --dc-cyan: var(--ops-cyan);
+            --dc-green: var(--ops-success);
+            --dc-red: var(--ops-injury);
+            --dc-gold: var(--ops-gold);
+            --dc-panel: var(--ops-panel);
+            --dc-panel-soft: rgba(6, 21, 34, 0.72);
+
+            /* Ceiling ramp: cold slate to hot gold, lightness climbing with the tier so
+               the column reads as a gradient even without hue perception. */
+            --dc-pot-fringe: #74849a;
+            --dc-pot-depth: #9db0c6;
+            --dc-pot-moderate: #8ab4ff;
+            --dc-pot-strong: #38bdf8;
+            --dc-pot-high: #13d8e7;
+            --dc-pot-elite: #e9a83c;
+            --dc-pot-generational: #ffc94d;
 
             height: 100%;
             width: 100%;
             display: grid;
-            grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+            /* Four children: header, stat strip, board, wire. The board owns the
+               flexible track — a fifth declared track handed it to the wire. */
+            grid-template-rows: auto auto minmax(0, 1fr) auto;
             gap: 10px;
             padding: 12px;
             color: var(--dc-text);
@@ -5281,7 +5266,7 @@ export default function DraftClass() {
           .dc-stock-rail,
           .dc-intel-feed {
             border: 1px solid var(--dc-line);
-            border-radius: 14px;
+            border-radius: 10px;
             background: var(--dc-panel);
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 18px 40px rgba(0,0,0,0.35);
           }
@@ -5413,11 +5398,11 @@ export default function DraftClass() {
           .dc-topbar__right { padding-right: 6px; }
           .dc-back-btn, .dc-nav-chip, .dc-lens-btn, .dc-sort, .dc-mini-select, .dc-profile-tab, .dc-view-full {
             border: 1px solid var(--dc-line);
-            border-radius: 999px;
+            border-radius: 4px;
             background: rgba(7, 18, 30, 0.9);
             color: var(--dc-text);
             cursor: pointer;
-            font-size: 0.67rem;
+            font-size: 0.6875rem;
             padding: 5px 10px;
           }
           .dc-back-btn:hover, .dc-nav-chip:hover, .dc-lens-btn:hover, .dc-profile-tab:hover { border-color: rgba(43,228,255,0.55); }
@@ -5430,7 +5415,7 @@ export default function DraftClass() {
             gap: 4px;
             min-height: 66px;
             padding: 8px 14px;
-            border-radius: 14px;
+            border-radius: 10px;
             background:
               linear-gradient(180deg, rgba(4, 12, 20, 0.98), rgba(3, 9, 16, 0.98)),
               radial-gradient(circle at 50% -8%, rgba(43,228,255,0.045), transparent 65%);
@@ -5480,7 +5465,7 @@ export default function DraftClass() {
             gap: 1px;
           }
           .dc-hud-strip__text small {
-            font-size: 0.56rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             color: var(--dc-muted);
@@ -5502,7 +5487,7 @@ export default function DraftClass() {
             padding: 8px 5px;
             display: flex;
             flex-direction: column;
-            border-radius: 14px;
+            border-radius: 10px;
             background:
               linear-gradient(180deg, rgba(4, 12, 20, 0.98), rgba(3, 9, 16, 0.98)),
               radial-gradient(circle at 50% -8%, rgba(43,228,255,0.045), transparent 65%);
@@ -5514,7 +5499,9 @@ export default function DraftClass() {
             min-height: 0;
             display: flex;
             flex-direction: column;
-            justify-content: space-evenly;
+            /* Lens selector reads as a stacked rail at the top of the board,
+               not four buttons floated apart down 500px of empty rail. */
+            justify-content: flex-start;
             gap: 2px;
           }
           .dc-board-nav__item {
@@ -5525,7 +5512,7 @@ export default function DraftClass() {
             gap: 5px;
             padding: 7px 4px;
             border: 0;
-            border-radius: 10px;
+            border-radius: var(--radius-hud, 4px);
             background: transparent;
             color: rgba(138, 160, 182, 0.9);
             cursor: pointer;
@@ -5541,7 +5528,7 @@ export default function DraftClass() {
             box-shadow: inset 0 0 0 1px rgba(43, 228, 255, 0.28);
           }
           .dc-board-nav__label {
-            font-size: 0.56rem;
+            font-size: 0.6875rem;
             font-weight: 700;
             letter-spacing: 0.07em;
             line-height: 1;
@@ -5648,7 +5635,7 @@ export default function DraftClass() {
           }
           .dc-prospect-board__head span {
             color: var(--dc-muted);
-            font-size: 0.66rem;
+            font-size: 0.6875rem;
             font-family: var(--dc-font-mono);
           }
           .dc-prospect-board__list {
@@ -5657,90 +5644,226 @@ export default function DraftClass() {
             overflow-y: auto;
             padding: 0 4px 12px;
           }
-          .dc-prospect-board__empty { padding: 16px 12px; }
+          .dc-prospect-board__empty { padding: 0; }
+
+          /* Intentional board-closed state instead of a stray sentence. */
+          .dc-board-standby {
+            margin: 14px 12px;
+            padding: 14px 16px;
+            border: 1px solid var(--dc-line);
+            border-left: 3px solid var(--dc-gold);
+            background: rgba(6, 21, 34, 0.6);
+            max-width: 460px;
+          }
+          .dc-board-standby__label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 0.6875rem;
+            font-weight: 900;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--dc-gold);
+          }
 
           .dc-prospect-board__columns,
           .dc-prospect-row {
             display: grid;
-            grid-template-columns: 72px 100px minmax(200px, 1.65fr) minmax(420px, 2fr);
+            grid-template-columns: 44px minmax(160px, 1.5fr) 42px minmax(68px, 0.8fr) 68px 66px 52px 56px;
             align-items: center;
-            gap: 14px;
-            padding: 0 16px;
+            gap: 10px;
+            padding: 0 12px;
           }
 
           .dc-prospect-board__columns {
             position: sticky;
             top: 0;
             z-index: 2;
-            min-height: 34px;
-            margin-bottom: 4px;
+            min-height: 30px;
+            margin-bottom: 2px;
             padding-top: 6px;
-            padding-bottom: 8px;
-            border-bottom: 1px solid rgba(118, 200, 245, 0.28);
-            background: linear-gradient(180deg, rgba(6, 16, 28, 0.98), rgba(6, 16, 28, 0.92));
-            backdrop-filter: blur(6px);
+            padding-bottom: 6px;
+            border-bottom: 1px solid var(--dc-line);
+            background: rgba(6, 16, 28, 0.98);
           }
-          .dc-prospect-board__columns .dc-prospect-board__metrics-head {
-            display: grid;
-            grid-template-columns: minmax(150px, 1.2fr) 80px 80px 96px;
-            gap: 14px;
-          }
+
           .dc-prospect-board__col {
-            font-size: 0.62rem;
+            font-size: var(--type-phase-label-size);
             letter-spacing: 0.1em;
             text-transform: uppercase;
             color: var(--dc-muted);
-            font-weight: 600;
+            font-weight: 900;
           }
-          .dc-prospect-board__col--scout,
-          .dc-prospect-board__col--potential { text-align: center; }
+
+          .dc-prospect-board__col--pot,
+          .dc-prospect-board__col--conf,
           .dc-prospect-board__col--stock { text-align: right; }
 
-          .dc-prospect-row__metrics {
-            display: grid;
-            grid-template-columns: minmax(150px, 1.2fr) 80px 80px 96px;
-            gap: 14px;
-            align-items: center;
-            min-width: 0;
-          }
+          /* The Pot header sits over a padded chip, so pull it back into alignment. */
+          .dc-prospect-board__col--pot { padding-right: 7px; }
 
           .dc-prospect-row {
             width: 100%;
-            min-height: 102px;
+            min-height: 40px;
             border: none;
-            border-bottom: 1px solid rgba(118, 200, 245, 0.12);
+            border-bottom: 1px solid rgba(156, 218, 236, 0.08);
             border-radius: 0;
             background: transparent;
             color: var(--dc-text);
-            padding-top: 12px;
-            padding-bottom: 12px;
+            padding-top: 6px;
+            padding-bottom: 6px;
             margin-bottom: 0;
             text-align: left;
             cursor: pointer;
-            transition: background 0.15s ease, border-color 0.15s ease;
+            transition: background var(--motion-micro);
+            font-size: var(--type-compact-size);
           }
-          .dc-prospect-row:hover {
-            background: rgba(43, 228, 255, 0.05);
-          }
-          .dc-prospect-row.is-selected {
-            background: rgba(43, 228, 255, 0.09);
-            box-shadow: inset 3px 0 0 var(--dc-cyan);
-          }
-          .dc-prospect-row.is-dnd { opacity: 0.55; }
 
+          .dc-prospect-row:hover {
+            background: var(--ops-cyan-soft);
+          }
+
+          .dc-prospect-row.is-selected {
+            background: var(--ops-table-sel);
+            box-shadow: inset 2px 0 0 var(--dc-cyan);
+          }
+
+          /* Late-round noise recedes — but never the ceiling, which is the whole
+             reason to keep reading past pick 32. */
+          .dc-prospect-row.is-late-round .dc-prospect-row__conf {
+            color: var(--dc-muted);
+          }
+
+          /* Department signature: the rank ticket. Every board position is a
+             numbered draft ticket with a perforated tear edge. */
           .dc-prospect-row__rank {
+            position: relative;
             display: flex;
             align-items: center;
-            justify-content: flex-start;
+            padding-right: 8px;
           }
+
+          .dc-prospect-row__rank::after {
+            content: "";
+            position: absolute;
+            right: 0;
+            top: 20%;
+            bottom: 20%;
+            width: 1px;
+            background: repeating-linear-gradient(
+              180deg,
+              rgba(233, 168, 60, 0.5) 0 3px,
+              transparent 3px 6px
+            );
+          }
+
           .dc-prospect-row__rank span {
             font-family: var(--dc-font-number);
-            font-size: 1.65rem;
+            font-size: var(--type-table-value-size);
             font-weight: 800;
-            letter-spacing: 0.02em;
             color: var(--dc-gold);
             line-height: 1;
+            font-variant-numeric: tabular-nums;
           }
+
+          .dc-prospect-row.is-selected .dc-prospect-row__rank::after {
+            background: var(--dc-cyan);
+          }
+
+          .dc-prospect-row__player {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+          }
+
+          .dc-prospect-row__flag {
+            width: 18px;
+            height: 12px;
+            object-fit: cover;
+            border-radius: 1px;
+            flex: 0 0 auto;
+          }
+
+          .dc-prospect-row__name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: var(--type-compact-size);
+            font-weight: 700;
+          }
+
+          .dc-prospect-row__cell {
+            font-family: var(--dc-font-mono);
+            font-size: var(--type-table-value-size);
+            font-weight: 700;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .dc-prospect-row__league {
+            color: var(--dc-muted);
+            font-weight: 600;
+          }
+
+          /* The chip hugs its number and hangs off the right edge, so a filled tier
+             reads as a badge on the grade rather than a highlight on the row. */
+          .dc-prospect-row__pot {
+            justify-self: end;
+            display: inline-flex;
+            align-items: center;
+            box-sizing: border-box;
+            padding: 2px 7px;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            color: var(--dc-text);
+            font-variant-numeric: tabular-nums;
+            transition: background var(--motion-micro), box-shadow var(--motion-micro);
+          }
+
+          .dc-prospect-row__pot.is-pot-fringe { color: var(--dc-pot-fringe); }
+          .dc-prospect-row__pot.is-pot-depth { color: var(--dc-pot-depth); }
+          .dc-prospect-row__pot.is-pot-moderate { color: var(--dc-pot-moderate); }
+          .dc-prospect-row__pot.is-pot-strong { color: var(--dc-pot-strong); }
+
+          /* Hue alone separates the cool tiers too weakly to scan, so the top three
+             climb a second axis — wash, then border, then glow. */
+          .dc-prospect-row__pot.is-pot-high {
+            color: var(--dc-pot-high);
+            background: rgba(19, 216, 231, 0.1);
+            border-color: rgba(19, 216, 231, 0.24);
+          }
+
+          .dc-prospect-row__pot.is-pot-elite {
+            color: var(--dc-pot-elite);
+            background: rgba(233, 168, 60, 0.14);
+            border-color: rgba(233, 168, 60, 0.36);
+          }
+
+          .dc-prospect-row__pot.is-pot-generational {
+            color: var(--dc-pot-generational);
+            background: linear-gradient(90deg, rgba(255, 201, 77, 0.05), rgba(255, 201, 77, 0.22));
+            border-color: rgba(255, 201, 77, 0.52);
+            box-shadow: 0 1px 12px rgba(255, 201, 77, 0.26);
+          }
+
+          /* An unsettled read keeps its hue but not the chip — the ceremony is earned
+             by scouting the kid, so a fogged range can never masquerade as a lock. */
+          .dc-prospect-row__pot.is-range {
+            background: none;
+            border-color: transparent;
+            box-shadow: none;
+            font-weight: 600;
+          }
+
+          .dc-prospect-row__conf.is-fog-heavy,
+          .dc-prospect-row__conf.is-fog-medium {
+            color: var(--dc-muted);
+          }
+
+          .dc-prospect-row__stock.is-up { color: var(--dc-green); }
+          .dc-prospect-row__stock.is-down { color: var(--dc-red); }
 
           .dc-prospect-identity__avatar-wrap {
             position: relative;
@@ -5900,8 +6023,11 @@ export default function DraftClass() {
             max-width: 56px;
             height: 4px;
             margin: 0 auto;
-            border-radius: 999px;
-            background: rgba(118, 200, 245, 0.14);
+            /* Confidence aperture: a measured scale, not a rounded meter. */
+            border-radius: 1px;
+            background:
+              repeating-linear-gradient(90deg, rgba(255,255,255,0.16) 0 1px, transparent 1px 25%),
+              rgba(118, 200, 245, 0.14);
             overflow: hidden;
           }
           .dc-scout-confidence__fill {
@@ -5909,7 +6035,7 @@ export default function DraftClass() {
             height: 100%;
             border-radius: inherit;
             background: linear-gradient(90deg, rgba(43, 228, 255, 0.55), var(--dc-cyan));
-            transition: width 0.2s ease;
+            transition: opacity 0.2s ease;
           }
           .dc-conf-fog--locked .dc-prospect-metric__value,
           .dc-conf-fog--locked .dc-scout-confidence__fill {
@@ -5954,7 +6080,7 @@ export default function DraftClass() {
             margin-bottom: 2px;
           }
           .dc-prospect-metric__label {
-            font-size: 0.62rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             color: var(--dc-muted);
@@ -5976,22 +6102,24 @@ export default function DraftClass() {
           .dc-selected-file__rank { color: var(--dc-gold); font-size: 0.7rem; letter-spacing: 0.08em; }
           .dc-selected-file__quick { margin-left: auto; display: grid; grid-template-columns: repeat(3, minmax(58px,1fr)); gap: 6px; }
           .dc-selected-file__quick div { border: 1px solid var(--dc-line); border-radius: 8px; background: var(--dc-panel-soft); padding: 5px; text-align: center; }
-          .dc-selected-file__quick span { display: block; color: var(--dc-muted); font-size: 0.52rem; text-transform: uppercase; }
+          .dc-selected-file__quick span { display: block; color: var(--dc-muted); font-size: 0.6875rem; text-transform: uppercase; }
           .dc-selected-file__quick strong { font-family: var(--dc-font-number); }
 
           .dc-selected-file__grid { padding: 8px 10px; display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 6px; }
           .dc-glass-card { border: 1px solid var(--dc-line); border-radius: 10px; background: var(--dc-panel-soft); padding: 7px; min-height: 66px; }
-          .dc-glass-card h3 { margin: 0 0 4px; font-size: 0.58rem; color: var(--dc-muted); text-transform: uppercase; letter-spacing: 0.07em; }
-          .dc-glass-card p, .dc-glass-card small { margin: 0; font-size: 0.68rem; }
+          .dc-glass-card h3 { margin: 0 0 4px; font-size: 0.6875rem; color: var(--dc-muted); text-transform: uppercase; letter-spacing: 0.07em; }
+          .dc-glass-card p, .dc-glass-card small { margin: 0; font-size: 0.6875rem; }
 
+          /* War-board marks are squared board notation, not pills. */
           .dc-stock-badge, .dc-tier-badge, .dc-badge {
             display: inline-flex;
             align-items: center;
             border: 1px solid var(--dc-line);
-            border-radius: 999px;
-            padding: 2px 8px;
-            font-size: 0.58rem;
+            border-radius: var(--radius-ops, 2px);
+            padding: 2px 6px;
+            font-size: 0.6875rem;
             line-height: 1;
+            letter-spacing: 0.06em;
             background: rgba(255,255,255,0.04);
           }
           .dc-stock-badge--rise { color: var(--dc-green); border-color: rgba(108,247,166,0.4); }
@@ -5999,7 +6127,7 @@ export default function DraftClass() {
           .dc-stock-badge--new { color: var(--dc-cyan); border-color: rgba(43,228,255,0.45); }
           .dc-tier-badge--gold { color: var(--dc-gold); border-color: rgba(244,198,110,0.45); }
           .dc-tier-badge--cyan { color: var(--dc-cyan); border-color: rgba(43,228,255,0.45); }
-          .dc-tier-badge--purple { color: #ca9cff; border-color: rgba(202,156,255,0.45); }
+          .dc-tier-badge--purple { color: #d8eeff; border-color: rgba(216,238,255,0.4); }
           .dc-badges { display: inline-flex; gap: 4px; flex-wrap: wrap; }
           .dc-badge--watch { color: #ffe39e; }
           .dc-badge--target { color: #a5e9ff; }
@@ -6007,12 +6135,12 @@ export default function DraftClass() {
 
           .dc-action-strip { padding: 2px 10px 8px; }
           .dc-scout-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-          .dc-scout-menu { display: inline-flex; gap: 5px; padding: 4px 6px; border: 1px solid var(--dc-line); border-radius: 999px; background: rgba(7,18,30,0.7); }
+          .dc-scout-menu { display: inline-flex; gap: 5px; padding: 4px 6px; border: 1px solid var(--dc-line); border-radius: var(--radius-hud, 4px); background: rgba(7,18,30,0.7); }
           .dc-btn {
             border: 1px solid var(--dc-line);
             border-radius: 999px;
             padding: 6px 10px;
-            font-size: 0.66rem;
+            font-size: 0.6875rem;
             cursor: pointer;
             color: var(--dc-text);
             background: rgba(8, 22, 36, 0.92);
@@ -6030,10 +6158,10 @@ export default function DraftClass() {
 
           .dc-stock-card { padding: 8px 10px; border-bottom: 1px solid var(--dc-line); position: relative; }
           .dc-stock-card::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(43,228,255,0.5), transparent); opacity: .55; }
-          .dc-stock-card h4 { margin: 0 0 5px; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dc-muted); }
+          .dc-stock-card h4 { margin: 0 0 5px; font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dc-muted); }
           .dc-stock-card--rise h4 { color: var(--dc-green); }
           .dc-stock-card--fall h4 { color: var(--dc-red); }
-          .dc-stock-row { width: 100%; border: 0; background: transparent; color: var(--dc-text); display: grid; grid-template-columns: 36px 1fr auto; gap: 5px; padding: 4px 0; text-align: left; cursor: pointer; font-family: var(--dc-font-mono); font-size: 0.67rem; }
+          .dc-stock-row { width: 100%; border: 0; background: transparent; color: var(--dc-text); display: grid; grid-template-columns: 36px 1fr auto; gap: 5px; padding: 4px 0; text-align: left; cursor: pointer; font-family: var(--dc-font-mono); font-size: 0.6875rem; }
           .dc-stock-row:hover { color: var(--dc-cyan); }
           .dc-stock-row__delta.is-up { color: var(--dc-green); }
           .dc-stock-row__delta.is-down { color: var(--dc-red); }
@@ -6060,7 +6188,7 @@ export default function DraftClass() {
             height: 100%;
             padding: 8px 10px 10px;
           }
-          .dc-leaders-panel--compact .dc-side-title h2 { font-size: 0.65rem; }
+          .dc-leaders-panel--compact .dc-side-title h2 { font-size: 0.6875rem; }
           .dc-side-title {
             display: flex;
             align-items: baseline;
@@ -6070,21 +6198,21 @@ export default function DraftClass() {
           }
           .dc-side-title h2 {
             margin: 0;
-            font-size: 0.68rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.1em;
             text-transform: uppercase;
             color: var(--dc-cyan);
           }
           .dc-leaders-date {
-            font-size: 0.56rem;
+            font-size: 0.6875rem;
             color: var(--dc-muted);
             font-family: var(--dc-font-mono);
             white-space: nowrap;
           }
           .dc-leaders-panel--compact .dc-leader-tabs { flex-wrap: wrap; gap: 4px; }
-          .dc-leaders-panel--compact .dc-leader-tab { font-size: 0.52rem; padding: 4px 7px; }
+          .dc-leaders-panel--compact .dc-leader-tab { font-size: 0.6875rem; padding: 4px 7px; }
           .dc-leaders-panel--compact .dc-leader-row {
-            font-size: 0.62rem;
+            font-size: 0.6875rem;
             grid-template-columns: minmax(0, 1fr) auto;
             gap: 6px;
             padding: 5px 0;
@@ -6108,7 +6236,7 @@ export default function DraftClass() {
             margin-top: 8px;
             width: 100%;
             padding: 8px 10px;
-            font-size: 0.62rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             border-radius: 10px;
@@ -6129,11 +6257,11 @@ export default function DraftClass() {
           }
           .dc-leader-tab {
             border: 1px solid rgba(118, 200, 245, 0.22);
-            border-radius: 999px;
+            border-radius: var(--radius-ops, 2px);
             background: rgba(255,255,255,0.03);
             color: var(--dc-muted);
             padding: 4px 8px;
-            font-size: 0.58rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.06em;
             text-transform: uppercase;
             cursor: pointer;
@@ -6156,15 +6284,15 @@ export default function DraftClass() {
             border-bottom: 1px solid rgba(118, 200, 245, 0.08);
             text-align: left;
             cursor: pointer;
-            font-size: 0.64rem;
+            font-size: 0.6875rem;
           }
           .dc-leader-row:hover { color: var(--dc-cyan); }
           .dc-leader-row strong { font-family: var(--dc-font-mono); color: #d8eeff; white-space: nowrap; }
-          .dc-leader-meta { color: var(--dc-muted); font-size: 0.56rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .dc-leader-meta { color: var(--dc-muted); font-size: 0.6875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
           .dc-leaders-modal {
             position: fixed;
             inset: 0;
-            z-index: 1200;
+            z-index: var(--z-modal, 1200);
             display: grid;
             place-items: center;
             padding: 16px;
@@ -6183,7 +6311,7 @@ export default function DraftClass() {
             width: min(70vw, 1280px);
             height: min(70vh, 860px);
             border: 1px solid rgba(118, 200, 245, 0.38);
-            border-radius: 22px;
+            border-radius: 8px;
             background:
               radial-gradient(circle at 18% 12%, rgba(43, 228, 255, 0.1), transparent 34%),
               radial-gradient(circle at 88% 12%, rgba(232, 165, 54, 0.08), transparent 24%),
@@ -6205,7 +6333,7 @@ export default function DraftClass() {
           .dc-lm-eyebrow {
             margin: 0 0 4px;
             color: var(--lm-muted, var(--dc-muted));
-            font-size: 0.64rem;
+            font-size: 0.6875rem;
             line-height: 1;
             text-transform: uppercase;
             letter-spacing: 0.2em;
@@ -6220,7 +6348,7 @@ export default function DraftClass() {
           }
           .dc-leaders-modal__context {
             margin: 6px 0 0;
-            font-size: 0.68rem;
+            font-size: 0.6875rem;
             color: var(--lm-muted, var(--dc-muted));
             font-family: var(--dc-font-mono);
           }
@@ -6229,7 +6357,7 @@ export default function DraftClass() {
             flex-shrink: 0;
           }
           .dc-leader-tabs--modal .dc-leader-tab {
-            font-size: 0.62rem;
+            font-size: 0.6875rem;
             padding: 6px 10px;
           }
           .dc-leaders-modal__scroll {
@@ -6262,9 +6390,9 @@ export default function DraftClass() {
             border: 1px solid rgba(118, 200, 245, 0.16);
             background: rgba(255,255,255,0.03);
             color: var(--lm-muted, var(--dc-muted));
-            border-radius: 999px;
+            border-radius: var(--radius-ops, 2px);
             padding: 5px 12px;
-            font-size: 0.58rem;
+            font-size: 0.6875rem;
             font-weight: 800;
             letter-spacing: 0.08em;
             text-transform: uppercase;
@@ -6286,7 +6414,7 @@ export default function DraftClass() {
           }
           .dc-lm-sort-bar__label {
             color: var(--lm-muted, var(--dc-muted));
-            font-size: 0.58rem;
+            font-size: 0.6875rem;
             font-weight: 800;
             letter-spacing: 0.12em;
             text-transform: uppercase;
@@ -6302,9 +6430,9 @@ export default function DraftClass() {
             border: 1px solid rgba(118, 200, 245, 0.16);
             background: rgba(255,255,255,0.03);
             color: #d8eeff;
-            border-radius: 999px;
-            padding: 4px 10px;
-            font-size: 0.58rem;
+            border-radius: var(--radius-ops, 2px);
+            padding: 4px 9px;
+            font-size: 0.6875rem;
             font-weight: 700;
             letter-spacing: 0.06em;
             cursor: pointer;
@@ -6327,7 +6455,7 @@ export default function DraftClass() {
           }
           .dc-lm-section {
             border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 18px;
+            border-radius: 6px;
             background:
               linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.012)),
               var(--lm-panel, var(--dc-panel));
@@ -6355,7 +6483,7 @@ export default function DraftClass() {
             align-items: center;
             min-height: 88px;
             padding: 10px 12px;
-            border-radius: 14px;
+            border-radius: 10px;
             border: 1px solid rgba(118, 200, 245, 0.14);
             background: rgba(8, 21, 34, 0.72);
           }
@@ -6399,7 +6527,7 @@ export default function DraftClass() {
           .dc-lm-row__name:hover { color: var(--lm-cyan, var(--dc-cyan)); }
           .dc-lm-row__meta {
             color: var(--lm-muted, var(--dc-muted));
-            font-size: 0.62rem;
+            font-size: 0.6875rem;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -6421,7 +6549,7 @@ export default function DraftClass() {
           }
           .dc-lm-row__cluster-label {
             color: rgba(139, 160, 175, 0.85);
-            font-size: 0.5rem;
+            font-size: 0.6875rem;
             font-weight: 800;
             letter-spacing: 0.12em;
             text-transform: uppercase;
@@ -6435,7 +6563,7 @@ export default function DraftClass() {
             display: inline-flex;
             align-items: baseline;
             gap: 5px;
-            border-radius: 999px;
+            border-radius: var(--radius-ops, 2px);
             border: 1px solid rgba(118, 200, 245, 0.12);
             background: rgba(255,255,255,0.03);
             padding: 4px 8px;
@@ -6443,7 +6571,7 @@ export default function DraftClass() {
           }
           .dc-lm-pill__label {
             color: var(--lm-muted, var(--dc-muted));
-            font-size: 0.5rem;
+            font-size: 0.6875rem;
             font-weight: 800;
             letter-spacing: 0.08em;
             text-transform: uppercase;
@@ -6520,7 +6648,7 @@ export default function DraftClass() {
           .dc-lm-row__stock span,
           .dc-lm-row__stock-btn span {
             color: var(--lm-muted, var(--dc-muted));
-            font-size: 0.5rem;
+            font-size: 0.6875rem;
             font-weight: 800;
             letter-spacing: 0.08em;
             text-transform: uppercase;
@@ -6546,16 +6674,28 @@ export default function DraftClass() {
           .dc-lm-sort-label {
             margin: 6px 0 0;
             color: var(--lm-cyan, var(--dc-cyan));
-            font-size: 0.68rem;
+            font-size: 0.6875rem;
             font-weight: 700;
             letter-spacing: 0.08em;
             text-transform: uppercase;
           }
-          .dc-empty-note { color: var(--dc-muted); font-size: 0.66rem; margin: 0; }
+          .dc-empty-note { color: var(--dc-muted); font-size: 0.6875rem; margin: 0; }
 
           .dc-intel-feed { padding: 6px 10px; }
-          .dc-intel-feed h3 { margin: 0; font-size: 0.58rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dc-muted); }
-          .dc-intel-feed ul { margin: 3px 0 0; padding: 0; list-style: none; display: flex; gap: 12px; white-space: nowrap; overflow: auto; font-family: var(--dc-font-mono); font-size: 0.66rem; }
+          /* Standby wire collapses to a single labelled line. */
+          .dc-intel-feed.is-idle {
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+            padding: 5px 10px;
+            background: rgba(6, 21, 34, 0.6);
+            box-shadow: none;
+          }
+          .dc-intel-feed.is-idle ul { margin: 0; }
+          .dc-intel-feed.is-idle li { color: var(--dc-muted); }
+          .dc-intel-feed.is-idle li::before { color: var(--dc-muted); }
+          .dc-intel-feed h3 { margin: 0; font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dc-muted); }
+          .dc-intel-feed ul { margin: 3px 0 0; padding: 0; list-style: none; display: flex; gap: 12px; white-space: nowrap; overflow: auto; font-family: var(--dc-font-mono); font-size: 0.6875rem; }
           .dc-intel-feed li::before { content: "• "; color: var(--dc-cyan); }
 
           .dc-shared-headshot.player-headshot.size-sm { --size: 40px; }
@@ -6569,24 +6709,22 @@ export default function DraftClass() {
             background: var(--dc-panel-soft);
             padding: 8px;
           }
-          .dc-info-grid, .dc-big-stat-grid, .dc-grade-grid { font-size: 0.66rem; }
-          .dc-character-row, .dc-fit-row { font-size: 0.67rem; }
+          .dc-info-grid, .dc-big-stat-grid, .dc-grade-grid { font-size: 0.6875rem; }
+          .dc-character-row, .dc-fit-row { font-size: 0.6875rem; }
 
           @media (max-width: 1600px) {
             .dc-command-grid { grid-template-columns: 84px minmax(0, 1fr) 320px; }
+            /* Same eight-column ladder as the base board: the previous
+               four-column override wrapped both the header and every row onto
+               a second line, so ranks and grades no longer aligned. */
             .dc-prospect-board__columns,
             .dc-prospect-row {
-              grid-template-columns: 64px 88px minmax(170px, 1.4fr) minmax(320px, 1.8fr);
-              gap: 12px;
+              grid-template-columns: 40px minmax(150px, 1.5fr) 38px minmax(62px, 0.8fr) 64px 60px 48px 56px;
+              gap: 9px;
               padding-left: 12px;
               padding-right: 12px;
             }
-            .dc-prospect-row__metrics,
-            .dc-prospect-board__columns .dc-prospect-board__metrics-head {
-              grid-template-columns: minmax(120px, 1fr) 64px 64px 80px;
-              gap: 10px;
-            }
-            .dc-prospect-row { min-height: 96px; }
+            .dc-prospect-row { min-height: 76px; }
             .dc-prospect-row__rank span { font-size: 1.45rem; }
             .dc-prospect-identity__avatar-wrap { width: 84px; height: 84px; }
             .dc-prospect-identity .dc-board-headshot.player-headshot { --size: 66px; }
@@ -6595,7 +6733,7 @@ export default function DraftClass() {
             .dc-stat-strip { grid-template-columns: repeat(2, minmax(0,1fr)); }
           }
           @media (max-width: 1200px) {
-            .dc-root.dc-screen { grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
+            .dc-root.dc-screen { grid-template-rows: auto auto minmax(0, 1fr) auto; }
             .dc-command-grid { grid-template-columns: 1fr; }
             .dc-board-nav-rail { grid-column: 1 / -1; width: 100%; }
             .dc-board-nav { height: auto; }
@@ -6641,11 +6779,39 @@ export default function DraftClass() {
           .dc-profile-modal {
             position: fixed;
             inset: 0;
-            z-index: 1200;
+            z-index: var(--z-modal, 1200);
             display: grid;
             place-items: center;
             padding: clamp(8px, 1.2vh, 16px);
             pointer-events: none;
+          }
+
+          .dc-profile-modal--prospect .dc-signal-panel {
+            border-color: var(--ops-grid-2);
+            background:
+              linear-gradient(180deg, rgba(6, 21, 34, 0.98), rgba(4, 13, 22, 0.98));
+          }
+
+          .dc-profile-modal--prospect .dc-signal-banner {
+            background: linear-gradient(90deg, rgba(19, 216, 231, 0.08), transparent);
+          }
+
+          .dc-profile-modal--prospect .dc-signal-banner span {
+            color: var(--ops-cyan);
+          }
+
+          .dc-profile-modal--uncertain .dc-signal-panel {
+            border-style: dashed;
+            border-color: rgba(128, 150, 168, 0.45);
+          }
+
+          .dc-profile-modal--uncertain .dc-profile-meter__track,
+          .dc-profile-modal--uncertain .dc-skill-dna__fill {
+            opacity: 0.55;
+          }
+
+          .dc-profile-modal--uncertain .dc-profile-attr-mini.is-locked {
+            filter: blur(0.4px);
           }
           .dc-profile-modal__backdrop {
             position: absolute;
@@ -6664,7 +6830,7 @@ export default function DraftClass() {
             max-height: 94vh;
             max-height: 94dvh;
             border: 1px solid rgba(118, 200, 245, 0.42);
-            border-radius: 14px;
+            border-radius: 10px;
             background:
               radial-gradient(ellipse 85% 70% at 12% -5%, rgba(56, 190, 255, 0.42), transparent 55%),
               radial-gradient(ellipse 70% 55% at 95% 105%, rgba(30, 140, 255, 0.32), transparent 52%),
@@ -6693,7 +6859,7 @@ export default function DraftClass() {
             display: block;
             margin-top: 1px;
             font-style: normal;
-            font-size: 0.5rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             color: var(--dc-cyan);
@@ -6751,7 +6917,7 @@ export default function DraftClass() {
             background: linear-gradient(90deg, rgba(244,198,110,0.08), rgba(43,228,255,0.05), transparent);
           }
           .dc-signal-banner span {
-            font-size: 0.58rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.16em;
             text-transform: uppercase;
             color: var(--dc-gold);
@@ -6780,7 +6946,7 @@ export default function DraftClass() {
             padding: 2px 6px;
             border: 1px solid rgba(255,255,255,0.7);
             color: #dff4ff;
-            font-size: 0.62rem;
+            font-size: 0.6875rem;
             font-weight: 800;
             letter-spacing: 0.06em;
             background: rgba(20,40,60,0.9);
@@ -6823,7 +6989,7 @@ export default function DraftClass() {
           }
           .dc-signal-portrait__stock span {
             font-family: var(--dc-font-mono);
-            font-size: 0.62rem;
+            font-size: 0.6875rem;
             color: var(--dc-cyan);
           }
           .dc-signal-portrait__stock.is-fall span { color: #ff8f9c; }
@@ -6879,7 +7045,7 @@ export default function DraftClass() {
           .dc-signal-bio .dc-signal-flag { width: 28px; height: 18px; }
           .dc-signal-bio span {
             display: block;
-            font-size: 0.5rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.1em;
             text-transform: uppercase;
             color: var(--dc-muted);
@@ -6906,7 +7072,7 @@ export default function DraftClass() {
             line-height: 1;
           }
           .dc-signal-board-card span {
-            font-size: 0.58rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.1em;
             text-transform: uppercase;
             color: #d7e8f6;
@@ -6914,7 +7080,7 @@ export default function DraftClass() {
           .dc-signal-board-card em {
             font-style: normal;
             font-family: var(--dc-font-mono);
-            font-size: 0.68rem;
+            font-size: 0.6875rem;
             color: var(--dc-cyan);
           }
           .dc-signal-club-card {
@@ -6930,7 +7096,7 @@ export default function DraftClass() {
           .dc-signal-club-card strong,
           .dc-signal-club-card span { display: block; }
           .dc-signal-club-card strong { color: #e8f5ff; font-size: 0.78rem; }
-          .dc-signal-club-card span { color: var(--dc-muted); font-size: 0.64rem; }
+          .dc-signal-club-card span { color: var(--dc-muted); font-size: 0.6875rem; }
           .dc-signal-assign {
             margin-top: auto;
             padding-top: 8px;
@@ -6988,7 +7154,7 @@ export default function DraftClass() {
           .dc-skill-dna__node { fill: #f4c66e; stroke: #fff; stroke-width: 0.8; }
           .dc-skill-dna__label {
             fill: #9db8cc;
-            font-size: 8px;
+            font-size: 11px;
             letter-spacing: 0.06em;
             text-transform: uppercase;
           }
@@ -7028,7 +7194,7 @@ export default function DraftClass() {
             letter-spacing: -0.03em;
           }
           .dc-skill-dna__core span {
-            font-size: 0.48rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.16em;
             color: var(--dc-cyan);
             margin-top: 5px;
@@ -7051,7 +7217,7 @@ export default function DraftClass() {
           }
           .dc-skill-dna__ranges span {
             display: block;
-            font-size: 0.48rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             color: var(--dc-muted);
@@ -7077,7 +7243,7 @@ export default function DraftClass() {
             margin-bottom: 3px;
           }
           .dc-proj-engine__bar-head span {
-            font-size: 0.58rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             color: var(--dc-muted);
@@ -7128,7 +7294,7 @@ export default function DraftClass() {
             align-items: baseline;
           }
           .dc-proj-engine__meta span {
-            font-size: 0.56rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             color: var(--dc-muted);
@@ -7190,7 +7356,7 @@ export default function DraftClass() {
             align-items: center;
           }
           .dc-lens-row__copy span {
-            font-size: 0.54rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             color: var(--dc-muted);
@@ -7235,7 +7401,7 @@ export default function DraftClass() {
           }
           .dc-lens-note {
             margin: 0;
-            font-size: 0.62rem;
+            font-size: 0.6875rem;
             line-height: 1.3;
             color: #8fa9bd;
           }
@@ -7263,7 +7429,7 @@ export default function DraftClass() {
             align-items: baseline;
           }
           .dc-scout-trail__progress {
-            font-size: 0.58rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.06em;
             text-transform: uppercase;
             color: var(--dc-cyan);
@@ -7293,7 +7459,7 @@ export default function DraftClass() {
             box-shadow: 0 0 0 3px rgba(43,228,255,0.25), 0 0 14px rgba(43,228,255,0.55);
           }
           .dc-scout-trail__node span {
-            font-size: 0.5rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.04em;
             text-transform: uppercase;
             color: var(--dc-muted);
@@ -7304,7 +7470,7 @@ export default function DraftClass() {
           }
           .dc-scout-trail__node strong {
             font-family: var(--dc-font-mono);
-            font-size: 0.62rem;
+            font-size: 0.6875rem;
             color: #d8eeff;
           }
           .dc-scout-trail__bar {
@@ -7319,7 +7485,7 @@ export default function DraftClass() {
             background: linear-gradient(90deg, rgba(43,228,255,0.4), rgba(244,198,110,0.9));
           }
           .dc-scout-trail__conf {
-            font-size: 0.58rem;
+            font-size: 0.6875rem;
             color: var(--dc-muted);
           }
           .dc-scout-trail--empty p {
@@ -7335,7 +7501,7 @@ export default function DraftClass() {
           .dc-signal-actionbar .dc-btn {
             width: 100%;
             justify-content: center;
-            font-size: 0.68rem;
+            font-size: 0.6875rem;
             padding: 9px 8px;
             letter-spacing: 0.04em;
             text-transform: uppercase;
@@ -7396,7 +7562,7 @@ export default function DraftClass() {
           .dc-signal-identity__vitals {
             margin: 0;
             text-align: center;
-            font-size: 0.68rem;
+            font-size: 0.6875rem;
             line-height: 1.35;
             color: #9db8cc;
           }
@@ -7418,7 +7584,7 @@ export default function DraftClass() {
           .dc-signal-identity__org strong,
           .dc-signal-identity__org span {
             display: block;
-            font-size: 0.68rem;
+            font-size: 0.6875rem;
             line-height: 1.25;
           }
           .dc-signal-identity__org strong { color: #d8eeff; }
@@ -7438,7 +7604,7 @@ export default function DraftClass() {
           }
           .dc-signal-identity__facts dt {
             margin: 0;
-            font-size: 0.55rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             color: var(--dc-muted);
@@ -7494,7 +7660,7 @@ export default function DraftClass() {
             line-height: 1.1;
           }
           .dc-signal-estimate small {
-            font-size: 0.62rem;
+            font-size: 0.6875rem;
             color: var(--dc-muted);
             letter-spacing: 0.04em;
             text-transform: uppercase;
@@ -7535,7 +7701,7 @@ export default function DraftClass() {
           .dc-signal-origin-hook,
           .dc-signal-translation {
             margin: 0;
-            font-size: 0.68rem;
+            font-size: 0.6875rem;
             line-height: 1.3;
             color: #8fa9bd;
             display: -webkit-box;
@@ -7607,7 +7773,7 @@ export default function DraftClass() {
           }
           .dc-signal-chart__delta {
             font-family: var(--dc-font-mono);
-            font-size: 0.68rem;
+            font-size: 0.6875rem;
             color: var(--dc-cyan);
           }
           .dc-signal-chart__svg {
@@ -7620,7 +7786,7 @@ export default function DraftClass() {
           .dc-signal-chart__axis {
             display: flex;
             justify-content: space-between;
-            font-size: 0.58rem;
+            font-size: 0.6875rem;
             color: var(--dc-muted);
             letter-spacing: 0.04em;
             text-transform: uppercase;
@@ -7642,7 +7808,7 @@ export default function DraftClass() {
             gap: 8px;
           }
           .dc-signal-sample {
-            font-size: 0.58rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             color: #f4b467;
@@ -7660,7 +7826,7 @@ export default function DraftClass() {
             gap: 2px;
           }
           .dc-signal-metric span {
-            font-size: 0.52rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             color: var(--dc-muted);
@@ -7693,7 +7859,7 @@ export default function DraftClass() {
           }
           .dc-profile-zone-head {
             margin: 0;
-            font-size: 0.62rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.14em;
             text-transform: uppercase;
             color: var(--dc-cyan);
@@ -7752,7 +7918,7 @@ export default function DraftClass() {
           }
           .dc-profile-fact:last-child { border-bottom: 0; }
           .dc-profile-fact__label {
-            font-size: 0.62rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             color: var(--dc-muted);
@@ -7769,7 +7935,7 @@ export default function DraftClass() {
           .dc-profile-fact__body small {
             display: block;
             margin-top: 2px;
-            font-size: 0.68rem;
+            font-size: 0.6875rem;
             color: var(--dc-cyan);
           }
           .dc-profile-fact__body--inline {
@@ -7780,45 +7946,49 @@ export default function DraftClass() {
           }
           .dc-risk-reason {
             font-style: normal;
-            font-size: 0.68rem;
+            font-size: 0.6875rem;
             color: var(--dc-muted);
             line-height: 1.25;
           }
+          /* Projection band reads as a board stencil. */
           .dc-proj-tier {
             display: inline-block;
-            padding: 2px 10px;
-            border-radius: 999px;
+            padding: 2px 8px;
+            border-radius: var(--radius-ops, 2px);
             font-size: 0.78rem;
             font-weight: 800;
-            letter-spacing: 0.02em;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
             border: 1px solid transparent;
-            text-shadow: 0 0 10px currentColor;
+            text-shadow: none;
           }
           .dc-proj-tier--0 { color: #9db1c4; border-color: rgba(157,177,196,0.4); background: rgba(157,177,196,0.1); text-shadow: none; }
           .dc-proj-tier--1 { color: #7fe0c0; border-color: rgba(127,224,192,0.45); background: rgba(127,224,192,0.12); }
           .dc-proj-tier--2 { color: #59e6a6; border-color: rgba(89,230,166,0.5); background: rgba(89,230,166,0.14); }
           .dc-proj-tier--3 { color: #35c8ff; border-color: rgba(53,200,255,0.55); background: rgba(53,200,255,0.16); }
-          .dc-proj-tier--4 { color: #b892ff; border-color: rgba(184,146,255,0.6); background: rgba(184,146,255,0.18); }
-          .dc-proj-tier--5 { color: #ffd24a; border-color: rgba(255,210,74,0.7); background: rgba(255,210,74,0.2); box-shadow: 0 0 16px rgba(255,210,74,0.25); }
+          .dc-proj-tier--4 { color: #7fd8ff; border-color: rgba(127,216,255,0.6); background: rgba(127,216,255,0.16); }
+          .dc-proj-tier--5 { color: #ffd24a; border-color: rgba(255,210,74,0.7); background: rgba(255,210,74,0.2); box-shadow: none; }
           .dc-risk-tag {
             display: inline-block;
-            padding: 2px 9px;
-            border-radius: 999px;
+            padding: 2px 8px;
+            border-radius: var(--radius-ops, 2px);
             font-size: 0.76rem;
             font-weight: 800;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
             border: 1px solid transparent;
           }
           .dc-risk-tag--0 { color: #ff7d8b; border-color: rgba(255,125,139,0.55); background: rgba(255,125,139,0.14); }
           .dc-risk-tag--1 { color: #c8d8e6; border-color: rgba(200,216,230,0.4); background: rgba(200,216,230,0.08); }
           .dc-risk-tag--2 { color: #59e6a6; border-color: rgba(89,230,166,0.5); background: rgba(89,230,166,0.14); }
-          .dc-risk-tag--3 { color: #ffd24a; border-color: rgba(255,210,74,0.7); background: rgba(255,210,74,0.2); box-shadow: 0 0 14px rgba(255,210,74,0.22); }
+          .dc-risk-tag--3 { color: #ffd24a; border-color: rgba(255,210,74,0.7); background: rgba(255,210,74,0.2); box-shadow: none; }
           .dc-profile-chip {
             display: inline-flex;
             align-items: center;
             border: 1px solid rgba(118, 200, 245, 0.22);
             border-radius: 6px;
             padding: 3px 8px;
-            font-size: 0.64rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.04em;
             text-transform: uppercase;
             color: #c8e4f8;
@@ -7833,7 +8003,7 @@ export default function DraftClass() {
           .dc-profile-chip--warn { color: #ffb574; border-color: rgba(255,181,116,0.35); }
           .dc-profile-tags__label {
             display: block;
-            font-size: 0.56rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.1em;
             color: var(--dc-muted);
             margin-bottom: 4px;
@@ -7857,7 +8027,7 @@ export default function DraftClass() {
             gap: 2px;
           }
           .dc-profile-attr-mini span {
-            font-size: 0.52rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             color: var(--dc-muted);
@@ -7881,7 +8051,7 @@ export default function DraftClass() {
             margin-bottom: 4px;
           }
           .dc-profile-meter__head span {
-            font-size: 0.58rem;
+            font-size: 0.6875rem;
             letter-spacing: 0.08em;
             color: var(--dc-muted);
             text-transform: uppercase;
@@ -7918,7 +8088,7 @@ export default function DraftClass() {
           }
           .dc-profile-meter__note {
             margin: 4px 0 0;
-            font-size: 0.62rem;
+            font-size: 0.6875rem;
             line-height: 1.3;
             color: #9db8cc;
             display: -webkit-box;

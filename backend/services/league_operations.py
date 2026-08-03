@@ -295,6 +295,175 @@ def _player_display_name(player: Any) -> str:
     return combined or "Unknown"
 
 
+# Nations whose diaspora / national pride creates outsized NHL market interest
+# ("Yao Ming effect") when a player from that country joins a club.
+_GLOBAL_DRAW_NATIONS = frozenset(
+    {
+        "china",
+        "chinese",
+        "chn",
+        "japan",
+        "japanese",
+        "jpn",
+        "south korea",
+        "korea",
+        "republic of korea",
+        "korean",
+        "kor",
+        "india",
+        "indian",
+        "ind",
+        "nigeria",
+        "nigerian",
+        "nga",
+        "kenya",
+        "kenyan",
+        "ken",
+        "philippines",
+        "filipino",
+        "phl",
+        "mexico",
+        "mexican",
+        "mex",
+        "brazil",
+        "brazilian",
+        "bra",
+        "argentina",
+        "argentinian",
+        "arg",
+        "south africa",
+        "zaf",
+        "rsa",
+        "ghana",
+        "gha",
+        "jamaica",
+        "jam",
+        "vietnam",
+        "vnm",
+        "indonesia",
+        "idn",
+        "pakistan",
+        "pak",
+        "egypt",
+        "egy",
+        "morocco",
+        "mar",
+        "colombia",
+        "col",
+        "peru",
+        "per",
+        "chile",
+        "chl",
+        "thailand",
+        "tha",
+        "taiwan",
+        "twn",
+        "hong kong",
+        "hkg",
+    }
+)
+
+
+def _player_birth_country(player: Any) -> str:
+    ident = getattr(player, "identity", None)
+    for src in (
+        getattr(ident, "birth_country", None) if ident is not None else None,
+        getattr(ident, "nationality", None) if ident is not None else None,
+        getattr(player, "nationality", None),
+        getattr(player, "birth_country", None),
+        getattr(player, "birthCountry", None),
+        getattr(player, "country", None),
+    ):
+        if src:
+            return str(src).strip()
+    return ""
+
+
+def _is_global_draw_nation(country: str) -> bool:
+    raw = str(country or "").strip().lower()
+    if not raw:
+        return False
+    if raw in _GLOBAL_DRAW_NATIONS:
+        return True
+    # Match compound labels ("China / Hong Kong", "South Korea")
+    return any(token in raw for token in ("china", "japan", "korea", "nigeria", "india", "philippines", "mexico", "brazil"))
+
+
+def calculate_global_draw_revenue_boost(team: Any) -> Dict[str, Any]:
+    """Yao Ming effect — rare-nation pride markets explode jersey / TV / gate demand.
+
+    Even a mid-tier NHL regular from China, Japan, Korea, Nigeria, etc. moves the
+    needle; stars create franchise-altering revenue spikes.
+    """
+    draws: List[Dict[str, Any]] = []
+    for p in list(getattr(team, "roster", None) or []):
+        if getattr(p, "retired", False):
+            continue
+        country = _player_birth_country(p)
+        if not _is_global_draw_nation(country):
+            continue
+        ovr = _team_player_ovr(p)
+        if ovr < 68.0:
+            continue
+        # Base: growing hockey markets pay up once a countryman reaches the NHL.
+        raw = max(0.0, (ovr - 66.0) * 1.65)
+        if ovr >= 88:
+            raw *= 1.55
+        elif ovr >= 82:
+            raw *= 1.28
+        elif ovr >= 76:
+            raw *= 1.12
+        draws.append(
+            {
+                "name": _player_display_name(p),
+                "country": country,
+                "ovr": round(ovr, 1),
+                "raw": raw,
+            }
+        )
+
+    if not draws:
+        return {
+            "global_draw_revenue_boost": 0.0,
+            "global_draw_players": [],
+            "global_draw_tags": [],
+            "global_draw_channels": {},
+        }
+
+    draws.sort(key=lambda d: d["raw"], reverse=True)
+    decay = (1.0, 0.55, 0.32, 0.2)
+    total_raw = 0.0
+    for i, row in enumerate(draws):
+        total_raw += row["raw"] * (decay[i] if i < len(decay) else decay[-1])
+
+    # Channel mix leans jersey + international TV — classic Yao profile.
+    jersey = total_raw * 0.38
+    national_tv = total_raw * 0.28
+    sponsors = total_raw * 0.18
+    tickets = total_raw * 0.10
+    marketability = total_raw * 0.06
+    total = round(jersey + national_tv + sponsors + tickets + marketability, 1)
+
+    tags = ["Global Draw"]
+    if draws[0]["ovr"] >= 88 or total >= 28.0:
+        tags.append("Yao Effect")
+
+    return {
+        "global_draw_revenue_boost": total,
+        "global_draw_players": [
+            {"name": d["name"], "country": d["country"], "ovr": d["ovr"]} for d in draws[:4]
+        ],
+        "global_draw_tags": tags[:2],
+        "global_draw_channels": {
+            "jersey_sales": round(jersey, 1),
+            "national_games": round(national_tv, 1),
+            "sponsorships": round(sponsors, 1),
+            "ticket_demand": round(tickets, 1),
+            "marketability": round(marketability, 1),
+        },
+    }
+
+
 def _team_star_metrics(team: Any) -> Dict[str, Any]:
     roster = list(getattr(team, "roster", None) or [])
     elite_95: List[float] = []
@@ -447,10 +616,23 @@ def _team_win_pct(session: FranchiseSession, team_id: str) -> float:
     if session.standings:
         rec = session.standings.records.get(team_id)
     if rec is not None:
-        gp = max(1, int(getattr(rec, "gp", 0) or 0))
+        gp = int(getattr(rec, "gp", 0) or 0)
+        # Neutral sample when the season hasn't started — using max(1, gp) made
+        # 0-0 clubs read as 0% and 3-0 clubs as 100%, which inflated camp revenue.
+        if gp <= 0:
+            return 0.5
         w = int(getattr(rec, "wins", 0) or getattr(rec, "w", 0) or 0)
         return _clamp(w / gp, 0.0, 1.0)
     return 0.5
+
+
+def _season_ticket_summer_revenue_m(tier_key: str) -> float:
+    """Camp / summer baseline from season tickets — ~$80–110M before the gate opens."""
+    return {
+        "large": 108.0,
+        "medium": 94.0,
+        "small": 82.0,
+    }.get(tier_key, 94.0)
 
 
 def _team_fan_sentiment(session: FranchiseSession, team_id: str) -> float:
@@ -517,11 +699,65 @@ def calculate_team_revenue(
     stars = _team_star_metrics(team)
     arena = _team_arena_quality(team)
 
+    phase = str(getattr(session, "phase", "") or "").lower()
+    global_draw = calculate_global_draw_revenue_boost(team)
+    global_draw_m = _safe_float(global_draw.get("global_draw_revenue_boost", 0), 0.0)
+
+    # Camp / summer: season-ticket book, not the full in-season gate.
+    if phase in ("preseason", "offseason"):
+        summer = _season_ticket_summer_revenue_m(tier_key)
+        fan_adj = 0.92 + (fan_sent / 100.0) * 0.14
+        revenue = summer * fan_adj
+        revenue += stars.get("star_power", 0) * 1.5
+        # International interest still lifts summer merch / deposits.
+        revenue += global_draw_m * 0.62
+        if is_user and fan_sent < 40:
+            revenue *= 0.94
+        expense_ratio = _MARKET_EXPENSE_RATIO[tier_key]
+        payroll_m = _safe_float(getattr(team, "payroll_m", 0) or 0)
+        if payroll_m <= 0:
+            try:
+                from services.franchise_sim import _team_nhl_payroll_m  # noqa: WPS433
+
+                payroll_m = _team_nhl_payroll_m(team)
+            except Exception:
+                payroll_m = summer * 0.55
+        expenses = revenue * expense_ratio + payroll_m * 0.06
+        profit = revenue - expenses
+        summer_tags = ["Season Tickets", "Summer Books"]
+        for tag in list(global_draw.get("global_draw_tags") or []):
+            if tag not in summer_tags:
+                summer_tags.insert(0, tag)
+        return {
+            "team_id": team_id,
+            "team_name": _display_team(team) if team is not None else team_id,
+            "abbr": _franchise_team_abbrev(team) if team is not None else "",
+            "market_tier": tier_label,
+            "market_tier_key": tier_key,
+            "revenue": round(revenue, 2),
+            "revenue_m": round(revenue, 2),
+            "expenses": round(expenses, 2),
+            "profit": round(profit, 2),
+            "win_pct": round(win_pct, 3),
+            "fan_sentiment": round(fan_sent, 1),
+            "trade_heat": round(trade_heat, 1),
+            "arena_quality": round(arena, 3),
+            "attendance_rate": round(
+                _clamp(0.70 + (fan_sent / 100.0) * 0.18 + min(0.08, global_draw_m * 0.002), 0.55, 0.98),
+                3,
+            ),
+            "reason_tags": summer_tags[:2],
+            "superstar_tags": [],
+            "global_draw_revenue_boost": round(global_draw_m * 0.62, 1),
+            "global_draw_players": list(global_draw.get("global_draw_players") or []),
+            "is_user": bool(is_user),
+            "revenue_profile": "summer_season_tickets",
+        }
+
     perf_mult = 0.82 + win_pct * 0.38
     fan_mult = 0.70 + (fan_sent / 100.0) * 0.45
     arena_mult = 0.92 + arena * 0.14
 
-    phase = str(getattr(session, "phase", "") or "").lower()
     in_playoffs = phase in ("playoffs", "postseason", "post_cup")
     star_boost = calculate_superstar_revenue_boost(
         stars,
@@ -534,7 +770,17 @@ def calculate_team_revenue(
 
     revenue = base * perf_mult * fan_mult * arena_mult
     revenue += superstar_m
+    revenue += global_draw_m
     revenue += _playoff_revenue_bonus(session, team_id)
+
+    conduct_rev_mult = 1.0
+    try:
+        from app.sim_engine.franchise.conduct_incidents import get_team_revenue_modifier  # noqa: WPS433
+
+        conduct_rev_mult = float(get_team_revenue_modifier(session, team_id) or 1.0)
+        revenue *= conduct_rev_mult
+    except Exception:
+        conduct_rev_mult = 1.0
 
     if is_user and trade_heat >= 55:
         revenue *= 1.0 - _clamp((trade_heat - 50) / 120.0, 0.0, 0.22)
@@ -556,10 +802,18 @@ def calculate_team_revenue(
 
     expenses = revenue * expense_ratio + payroll_m * 0.08
     profit = revenue - expenses
-    attendance_rate = _clamp(0.55 + win_pct * 0.25 + (fan_sent / 100.0) * 0.22 + stars["star_power"] * 0.03, 0.35, 0.99)
+    attendance_rate = _clamp(
+        0.55
+        + win_pct * 0.25
+        + (fan_sent / 100.0) * 0.22
+        + stars["star_power"] * 0.03
+        + min(0.10, global_draw_m * 0.0025),
+        0.35,
+        0.99,
+    )
 
     superstar_tags = list(star_boost.get("superstar_tags") or [])
-    reason_tags: List[str] = list(superstar_tags)
+    reason_tags: List[str] = list(global_draw.get("global_draw_tags") or []) + list(superstar_tags)
     if tier_key == "large":
         reason_tags.append("Big Market")
     if win_pct >= 0.58:
@@ -576,6 +830,8 @@ def calculate_team_revenue(
         reason_tags.append("Merch Spike")
     if arena < 0.45:
         reason_tags.append("Arena Drag")
+    if conduct_rev_mult < 0.97:
+        reason_tags.append("Conduct Fallout")
 
     # Max 2 chips — superstar tags first, then strongest other signals
     deduped: List[str] = []
@@ -612,6 +868,9 @@ def calculate_team_revenue(
         "top_player_name": stars["top_player_name"],
         "superstar_revenue_boost": superstar_m,
         "superstar_tags": superstar_tags,
+        "global_draw_revenue_boost": round(global_draw_m, 1),
+        "global_draw_players": list(global_draw.get("global_draw_players") or []),
+        "global_draw_tags": list(global_draw.get("global_draw_tags") or []),
         "playoff_revenue": round(_playoff_revenue_bonus(session, team_id), 1),
         "relocation_risk": round(relocation_risk, 3),
         "relocation_risk_label": _relocation_label(relocation_risk),
@@ -620,6 +879,7 @@ def calculate_team_revenue(
         "trade_heat": round(trade_heat, 1),
         "revenue_yoy_delta": yoy["revenue_yoy_delta"],
         "revenue_yoy_direction": yoy["revenue_yoy_direction"],
+        "conduct_revenue_modifier": round(conduct_rev_mult, 3),
     }
     row["market_pressure"] = _market_pressure_reason(row, team)
     return row
@@ -868,7 +1128,57 @@ def build_franchise_pulse(session: FranchiseSession, ops: Dict[str, Any]) -> Dic
     }
 
 
+def _league_ops_cache_key(session: FranchiseSession) -> tuple:
+    return (
+        int(getattr(session, "_stats_revision", 0) or 0),
+        int(getattr(session, "season_calendar_year", 0) or 0),
+        int(getattr(session, "calendar_cursor", 0) or 0),
+        str(getattr(session, "phase", "") or ""),
+        str(session.user_team_id or ""),
+    )
+
+
+def invalidate_league_ops_cache(session: FranchiseSession) -> None:
+    session._cached_league_operations = None
+    session._cached_league_operations_key = None
+
+
+def get_cached_league_operations_payload(session: FranchiseSession) -> Dict[str, Any]:
+    """Reuse league-ops until stats/day/phase identity changes — identical math, less waste."""
+    key = _league_ops_cache_key(session)
+    cached = getattr(session, "_cached_league_operations", None)
+    cached_key = getattr(session, "_cached_league_operations_key", None)
+    if isinstance(cached, dict) and cached and cached_key == key:
+        return cached
+    payload = build_league_operations_payload(session)
+    session._cached_league_operations = payload
+    session._cached_league_operations_key = key
+    return payload
+
+
+def slim_league_operations_for_state(ops: Dict[str, Any]) -> Dict[str, Any]:
+    """Lean /state only needs pulse scalars + user row — full 32-team table is on /league-operations."""
+    if not isinstance(ops, dict):
+        return {}
+    out = {k: v for k, v in ops.items() if k != "teams"}
+    # Keep a tiny user-only teams stub so older UI that indexes teams[0] still works.
+    user = ops.get("user_team")
+    if isinstance(user, dict):
+        out["teams"] = [user]
+    else:
+        out["teams"] = []
+    out["_slim"] = True
+    return out
+
+
 def build_league_operations_payload(session: FranchiseSession) -> Dict[str, Any]:
+    from services.perf_profiler import span
+
+    with span("league_ops.build"):
+        return _build_league_operations_payload_impl(session)
+
+
+def _build_league_operations_payload_impl(session: FranchiseSession) -> Dict[str, Any]:
     uid = str(session.user_team_id or "")
     sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
     season_label = f"{sy}–{sy + 1}"

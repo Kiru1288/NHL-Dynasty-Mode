@@ -1,19 +1,19 @@
 @import "../styles/motion-control.css";
 
   .office-hub {
-    --office-bg: #101218;
-    --office-panel: rgba(14, 16, 22, 0.9);
-    --office-panel-strong: rgba(10, 12, 18, 0.94);
-    --office-line: rgba(255, 255, 255, 0.08);
+    --office-bg: var(--office-charcoal, #101218);
+    --office-panel: var(--office-desk, rgba(14, 16, 22, 0.9));
+    --office-panel-strong: var(--office-desk-strong, rgba(10, 12, 18, 0.94));
+    --office-line: var(--office-line, rgba(255, 255, 255, 0.08));
     --office-line-strong: rgba(201, 168, 106, 0.32);
-    --office-text: #ece8e0;
-    --office-muted: rgba(220, 216, 208, 0.58);
+    --office-text: var(--office-text, #ece8e0);
+    --office-muted: var(--office-text-secondary, rgba(220, 216, 208, 0.58));
     --office-faint: rgba(220, 216, 208, 0.32);
-    --office-gold: #c9a86a;
+    --office-gold: var(--office-brass, #c9a86a);
     --office-blue: #6a9ab8;
     --office-red: #a84a44;
     --office-green: #6a9a82;
-    --office-font: var(--font-motion-control);
+    --office-font: var(--font-office-display, var(--font-motion-control));
   
     position: relative;
     width: 100%;
@@ -80,13 +80,29 @@
     max-width: min(380px, calc(50vw - 30px));
     padding: 12px 16px;
     border: 1px solid var(--office-line);
-    border-radius: 4px;
+    border-radius: var(--radius-hud, 4px);
     background:
       linear-gradient(180deg, rgba(8, 10, 14, 0.94), rgba(4, 6, 10, 0.88));
-    box-shadow:
-      0 18px 42px rgba(0, 0, 0, 0.48),
-      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    box-shadow: var(--depth-hud, 0 18px 42px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.04));
     backdrop-filter: blur(18px);
+    pointer-events: auto;
+  }
+
+  .office-hud-card--left {
+    left: 22px;
+    box-shadow:
+      var(--depth-hud, 0 18px 42px rgba(0, 0, 0, 0.48)),
+      inset 3px 0 0 rgba(201, 168, 106, 0.42),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .office-hud-card--right {
+    right: 22px;
+    text-align: right;
+    box-shadow:
+      var(--depth-hud, 0 18px 42px rgba(0, 0, 0, 0.48)),
+      inset -3px 0 0 rgba(201, 168, 106, 0.28),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
   }
 
   .office-hud-card::before {
@@ -119,15 +135,7 @@
   .office-hud-card--right .office-hud-card__copy {
     text-align: right;
   }
-  
-  .office-hud-card--left {
-    left: 22px;
-  }
-  
-  .office-hud-card--right {
-    right: 22px;
-    text-align: right;
-  }
+
   
   .office-hud-card span,
   .office-panel-header span,
@@ -137,9 +145,9 @@
   .office-fallback span {
     display: block;
     color: var(--office-gold);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 900;
-    letter-spacing: 0.22em;
+    letter-spacing: 0.18em;
     text-transform: uppercase;
   }
   
@@ -190,10 +198,10 @@
   .office-control-bar__utility {
     min-height: 32px !important;
     padding: 0 10px !important;
-    font-size: 10px !important;
+    font-size: 11px !important;
     letter-spacing: 0.1em !important;
     opacity: 0.72;
-    border-radius: 4px !important;
+    border-radius: var(--radius-hud, 4px) !important;
   }
 
   .office-control-bar__utility:hover {
@@ -201,16 +209,20 @@
   }
 
   .office-control-bar__primary {
-    min-height: 42px !important;
+    min-height: 44px !important;
     padding: 0 28px !important;
-    border-radius: 4px !important;
-    border-color: rgba(201, 168, 106, 0.45) !important;
+    border-radius: var(--radius-hud, 4px) !important;
+    border-color: rgba(201, 168, 106, 0.55) !important;
     background:
-      linear-gradient(135deg, rgba(201, 168, 106, 0.18), rgba(201, 168, 106, 0.06)),
+      linear-gradient(135deg, rgba(201, 168, 106, 0.22), rgba(201, 168, 106, 0.08)),
       rgba(8, 11, 16, 0.94) !important;
     color: #f0e6d0 !important;
     font-size: 12px !important;
     letter-spacing: 0.14em !important;
+    box-shadow:
+      0 0 0 1px rgba(201, 168, 106, 0.12),
+      0 8px 24px rgba(0, 0, 0, 0.38),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
 
   .office-control-bar__primary:hover {
@@ -270,9 +282,9 @@
     flex-wrap: wrap;
     justify-content: center;
     color: var(--office-faint);
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 700;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
   }
   
@@ -308,14 +320,15 @@
     font-weight: 700;
   }
   
+  /* Desk object notices are paper labels, not pills. */
   .office-object-label em {
     display: inline-flex;
     margin-top: 7px;
-    padding: 4px 7px;
-    border-radius: 999px;
+    padding: 3px 7px;
+    border-radius: 2px;
     background: rgba(227, 76, 69, 0.17);
     color: #ffd6d3;
-    font-size: 10px;
+    font-size: 11px;
     font-style: normal;
     font-weight: 950;
     letter-spacing: 0.08em;
@@ -420,7 +433,7 @@
   .office-panel-next {
     padding: 10px;
     border: 1px solid var(--office-line);
-    border-radius: 16px;
+    border-radius: var(--radius-hud, 4px);
     background: rgba(0, 0, 0, 0.22);
   }
   
@@ -446,35 +459,46 @@
   .office-panel-actions button {
     min-height: 46px;
     padding: 10px;
-    border-radius: 14px;
+    border-radius: var(--radius-control, 6px);
   }
   
   .office-quick-menu {
     position: absolute;
     inset: 0;
     z-index: 10;
-    display: grid;
-    place-items: center;
-    padding: clamp(12px, 2vw, 22px);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding: 0 clamp(12px, 2vw, 22px) 92px;
     background:
-      radial-gradient(circle at 50% 0%, rgba(201, 168, 106, 0.08), transparent 42%),
-      rgba(0, 0, 0, 0.78);
-    backdrop-filter: blur(12px);
+      linear-gradient(180deg, transparent 42%, rgba(0, 0, 0, 0.38) 72%, rgba(0, 0, 0, 0.62) 100%),
+      radial-gradient(circle at 50% 88%, rgba(201, 168, 106, 0.06), transparent 38%);
+    backdrop-filter: blur(4px);
+    pointer-events: none;
   }
 
   .office-quick-menu-card {
-    width: min(980px, 100%);
-    max-height: min(86vh, 820px);
+    pointer-events: auto;
+    width: min(680px, 100%);
+    max-height: min(58vh, 520px);
     overflow: auto;
-    padding: clamp(16px, 2.2vw, 22px);
-    border: 1px solid rgba(201, 168, 106, 0.22);
-    border-radius: 12px;
+    padding: 0;
+    border: 1px solid rgba(201, 168, 106, 0.28);
+    border-radius: var(--radius-hud, 4px);
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 28%),
-      linear-gradient(135deg, rgba(12, 14, 20, 0.98), rgba(6, 7, 10, 0.98));
+      linear-gradient(180deg, rgba(6, 8, 12, 0.97), rgba(4, 5, 8, 0.98));
     box-shadow:
-      0 32px 88px rgba(0, 0, 0, 0.72),
-      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      0 24px 60px rgba(0, 0, 0, 0.62),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04),
+      inset 0 -1px 0 rgba(201, 168, 106, 0.12);
+  }
+
+  .office-quick-menu-card::before {
+    content: "";
+    display: block;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--office-gold), transparent);
+    opacity: 0.5;
   }
 
   .office-quick-menu-head {
@@ -482,37 +506,39 @@
     justify-content: space-between;
     gap: 16px;
     align-items: flex-start;
-    padding-bottom: 14px;
+    padding: 12px 14px 10px;
     border-bottom: 1px solid var(--office-line);
+    background: rgba(0, 0, 0, 0.24);
   }
 
   .office-quick-menu-kicker {
     display: block;
     color: var(--office-gold);
     font-size: 11px;
-    letter-spacing: 0.18em;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
     font-weight: 800;
+    font-family: var(--font-mono-data, "IBM Plex Mono", monospace);
   }
 
   .office-quick-menu-head h3 {
-    margin: 6px 0 0;
+    margin: 4px 0 0;
     color: var(--office-text);
-    font-size: clamp(18px, 2.4vw, 24px);
+    font-size: clamp(15px, 1.8vw, 18px);
     line-height: 1.15;
     font-weight: 800;
-    letter-spacing: 0.02em;
-    text-transform: none;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
 
   .office-quick-menu-close {
-    min-width: 40px;
-    min-height: 40px;
-    border-radius: 10px;
+    min-width: 36px;
+    min-height: 36px;
+    border-radius: var(--radius-hud, 4px);
     border: 1px solid var(--office-line);
     background: rgba(255, 255, 255, 0.03);
     color: var(--office-text);
-    font-size: 22px;
+    font-size: 20px;
     line-height: 1;
     cursor: pointer;
   }
@@ -523,34 +549,58 @@
   }
 
   .office-quick-menu-sim {
-    margin-top: 14px;
+    margin: 0;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--office-line);
+    background: rgba(201, 168, 106, 0.04);
   }
 
   .office-quick-menu-sim-btn {
     width: 100%;
     display: grid;
-    gap: 4px;
+    grid-template-columns: auto 1fr;
+    gap: 10px 12px;
+    align-items: center;
     text-align: left;
-    padding: 14px 16px;
-    border-radius: 10px;
-    border: 1px solid rgba(201, 168, 106, 0.42);
+    padding: 10px 12px;
+    border-radius: var(--radius-hud, 4px);
+    border: 1px solid rgba(201, 168, 106, 0.45);
     background:
-      linear-gradient(90deg, rgba(201, 168, 106, 0.16), rgba(201, 168, 106, 0.04)),
+      linear-gradient(90deg, rgba(201, 168, 106, 0.14), rgba(201, 168, 106, 0.03)),
       rgba(255, 255, 255, 0.02);
     color: var(--office-text);
     cursor: pointer;
   }
 
+  .office-quick-menu-sim-btn::before {
+    content: "ADV";
+    font-family: var(--font-mono-data, "IBM Plex Mono", monospace);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: var(--office-gold);
+    padding: 4px 6px;
+    border: 1px solid rgba(201, 168, 106, 0.35);
+    border-radius: var(--radius-ops, 2px);
+    background: rgba(0, 0, 0, 0.28);
+  }
+
   .office-quick-menu-sim-btn strong {
-    font-size: 15px;
-    letter-spacing: 0.04em;
+    font-size: 13px;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
+    grid-column: 2;
   }
 
   .office-quick-menu-sim-btn small {
     color: var(--office-muted);
-    font-size: 12px;
+    font-size: 11px;
     line-height: 1.35;
+    grid-column: 2;
+    font-family: var(--font-ops-ui, Inter, sans-serif);
+    font-weight: 500;
+    letter-spacing: normal;
+    text-transform: none;
   }
 
   .office-quick-menu-sim-btn:disabled {
@@ -559,67 +609,99 @@
   }
 
   .office-quick-menu-section {
-    margin-top: 18px;
+    margin: 0;
+    padding: 0 14px 10px;
   }
 
   .office-quick-menu-section-head {
-    margin-bottom: 10px;
+    margin: 0;
+    padding: 8px 0 6px;
+    border-bottom: 1px dashed rgba(201, 168, 106, 0.18);
   }
 
   .office-quick-menu-section-head span {
     color: var(--office-muted);
     font-size: 11px;
-    letter-spacing: 0.16em;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
     font-weight: 800;
+    font-family: var(--font-mono-data, "IBM Plex Mono", monospace);
   }
 
   .office-quick-menu-grid,
   .office-fallback-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    counter-reset: office-cmd;
+    border: 1px solid var(--office-line);
+    border-radius: var(--radius-hud, 4px);
+    background: rgba(0, 0, 0, 0.22);
+    overflow: hidden;
   }
 
   .office-quick-menu-item,
   .office-quick-menu-grid button,
   .office-fallback-grid button {
+    position: relative;
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    column-gap: 10px;
+    row-gap: 2px;
+    align-items: start;
     min-height: 0;
-    padding: 12px 13px;
-    border-radius: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.025);
+    padding: 9px 12px 9px 10px;
+    border-radius: 0;
+    border: none;
+    border-bottom: 1px solid var(--office-line);
+    background: transparent;
     text-align: left;
     color: var(--office-text);
     cursor: pointer;
     transition:
-      border-color 0.16s ease,
-      background 0.16s ease,
-      transform 0.16s ease;
+      border-color var(--motion-micro, 110ms) ease,
+      background var(--motion-micro, 110ms) ease;
+  }
+
+  .office-quick-menu-item::before,
+  .office-quick-menu-grid button::before,
+  .office-fallback-grid button::before {
+    content: counter(office-cmd, decimal-leading-zero);
+    counter-increment: office-cmd;
+    grid-row: 1 / span 2;
+    align-self: center;
+    font-family: var(--font-mono-data, "IBM Plex Mono", monospace);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: rgba(201, 168, 106, 0.62);
+  }
+
+  .office-quick-menu-grid > *:last-child,
+  .office-fallback-grid > *:last-child {
+    border-bottom: none;
   }
 
   .office-quick-menu-item:hover,
   .office-quick-menu-grid button:hover,
   .office-fallback-grid button:hover {
-    border-color: rgba(201, 168, 106, 0.38);
+    border-color: transparent;
     background: rgba(201, 168, 106, 0.07);
-    transform: translateY(-1px);
+    transform: none;
+    box-shadow: inset 3px 0 0 rgba(201, 168, 106, 0.55);
   }
 
   .office-quick-menu-item.is-highlight,
   .office-fallback-grid button.is-highlight {
-    border-color: rgba(201, 168, 106, 0.48);
-    background:
-      linear-gradient(180deg, rgba(201, 168, 106, 0.12), rgba(201, 168, 106, 0.03)),
-      rgba(255, 255, 255, 0.02);
+    background: rgba(201, 168, 106, 0.08);
+    box-shadow: inset 3px 0 0 rgba(201, 168, 106, 0.72);
   }
 
   .office-quick-menu-item.is-placeholder,
   .office-fallback-grid button.is-placeholder {
-    border-style: dashed;
-    border-color: rgba(255, 255, 255, 0.14);
-    background: rgba(255, 255, 255, 0.015);
-    opacity: 0.88;
+    border-bottom-style: dashed;
+    opacity: 0.72;
   }
 
   .office-quick-menu-item.is-disabled {
@@ -632,9 +714,10 @@
   .office-quick-menu-grid button span,
   .office-fallback-grid button span {
     display: block;
+    grid-column: 2;
     color: var(--office-gold);
-    font-size: 9px;
-    letter-spacing: 0.14em;
+    font-size: 11px;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
     font-weight: 800;
   }
@@ -643,26 +726,35 @@
   .office-quick-menu-grid button strong,
   .office-fallback-grid button strong {
     display: block;
-    margin-top: 6px;
-    font-size: 14px;
+    grid-column: 2;
+    margin-top: 0;
+    font-size: 13px;
     line-height: 1.15;
     font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
 
   .office-quick-menu-item small,
   .office-fallback-grid button small {
     display: block;
-    margin-top: 6px;
+    grid-column: 2;
+    margin-top: 0;
     color: var(--office-muted);
     font-size: 11px;
     line-height: 1.35;
+    font-family: var(--font-ops-ui, Inter, sans-serif);
+    font-weight: 500;
+    letter-spacing: normal;
+    text-transform: none;
   }
 
   .office-quick-menu-item-note {
     display: block;
-    margin-top: 6px;
+    grid-column: 2;
+    margin-top: 2px;
     color: rgba(201, 168, 106, 0.75);
-    font-size: 10px;
+    font-size: 11px;
     font-style: normal;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -746,7 +838,7 @@
   }
 
   .team-logo-badge--framed {
-    border-radius: 16px;
+    border-radius: 6px;
     border: 2px solid rgba(201, 168, 106, 0.55);
     background:
       linear-gradient(145deg, rgba(28, 32, 42, 0.95), rgba(10, 12, 18, 0.98));
@@ -850,17 +942,20 @@
     .office-control-bar__primary {
       width: 100%;
     }
-  
-    .office-quick-menu-grid,
-    .office-fallback-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+
+    .office-quick-menu {
+      padding-bottom: 108px;
+    }
+
+    .office-quick-menu-card {
+      max-height: min(52vh, 460px);
     }
   }
 
   @media (max-width: 640px) {
     .office-hud-card {
       padding: 11px 12px;
-      border-radius: 16px;
+      border-radius: var(--radius-hud, 4px);
     }
   
     .office-hud-card strong {
@@ -885,12 +980,10 @@
     }
   
     .office-panel-stats,
-    .office-panel-actions,
-    .office-quick-menu-grid,
-    .office-fallback-grid {
+    .office-panel-actions {
       grid-template-columns: 1fr;
     }
-  
+
     .office-control-bar {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -955,9 +1048,9 @@
   .office-urgent-desk > span {
     display: block;
     color: var(--office-gold);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 900;
-    letter-spacing: 0.16em;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
   }
 
@@ -973,7 +1066,7 @@
     width: 100%;
     padding: 8px 10px;
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 12px;
+    border-radius: var(--radius-hud, 4px);
     background: rgba(255, 255, 255, 0.03);
     color: var(--office-text);
     text-align: left;
@@ -1020,7 +1113,7 @@
     margin: 12px 0;
     padding: 10px 12px;
     border: 1px solid var(--office-line);
-    border-radius: 14px;
+    border-radius: var(--radius-hud, 4px);
     background: rgba(0, 0, 0, 0.2);
   }
 
@@ -1028,9 +1121,9 @@
   .office-panel-urgent span {
     display: block;
     color: var(--office-gold);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 900;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
   }
 
@@ -1065,7 +1158,7 @@
     width: 100%;
     min-height: 36px;
     padding: 8px 10px;
-    border-radius: 10px;
+    border-radius: var(--radius-hud, 4px);
     border: 1px solid rgba(255, 255, 255, 0.12);
     background: rgba(255, 255, 255, 0.04);
     color: var(--office-text);
@@ -1085,7 +1178,7 @@
   .office-fallback-briefing {
     padding: 16px 18px;
     border: 1px solid var(--office-line);
-    border-radius: 18px;
+    border-radius: var(--radius-control, 6px);
     background: rgba(8, 11, 16, 0.72);
   }
 
@@ -1152,5 +1245,35 @@
       bottom: 108px;
       max-height: 28vh;
       overflow: auto;
+    }
+
+    .office-quick-menu {
+      padding-bottom: 108px;
+    }
+
+    .office-quick-menu-card {
+      max-height: min(52vh, 460px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .office-control-bar button,
+    .office-panel-actions button,
+    .office-quick-menu-grid button,
+    .office-fallback-grid button,
+    .office-quick-menu-item {
+      transition: none !important;
+    }
+
+    .office-control-bar button:hover,
+    .office-panel-actions button:hover,
+    .office-quick-menu-grid button:hover,
+    .office-fallback-grid button:hover,
+    .office-quick-menu-item:hover {
+      transform: none !important;
+    }
+
+    .office-hud--panel-open .office-hud-card--right {
+      transition: none !important;
     }
   }

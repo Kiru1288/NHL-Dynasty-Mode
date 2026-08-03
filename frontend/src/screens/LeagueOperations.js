@@ -25,15 +25,15 @@ const CALM_MOODS = new Set(["calm", "quiet", "stable"]);
 
 const LO_STYLES = `
 .lo-screen {
-  --lo-panel: rgba(8, 22, 34, 0.92);
-  --lo-line: rgba(156, 218, 236, 0.12);
-  --lo-text: #e8f4f8;
-  --lo-muted: #8aa0b3;
-  --lo-cyan: #13d8e7;
-  --lo-gold: #e9a83c;
-  --lo-green: #52df94;
-  --lo-red: #ff606d;
-  --lo-yellow: #e9c84a;
+  --lo-panel: var(--ops-panel, rgba(9, 25, 38, 0.94));
+  --lo-line: var(--ops-grid, rgba(156, 218, 236, 0.14));
+  --lo-text: var(--ops-text, #e9f7fb);
+  --lo-muted: var(--ops-text-secondary, #8096a8);
+  --lo-cyan: var(--ops-cyan, #13d8e7);
+  --lo-gold: var(--ops-gold, #e9a83c);
+  --lo-green: var(--ops-success, #52df94);
+  --lo-red: var(--ops-injury, #ff606d);
+  --lo-yellow: var(--ops-gold, #e9a83c);
   --lo-orange: #ff8c3c;
   flex: 1;
   height: 100%;
@@ -45,8 +45,8 @@ const LO_STYLES = `
   background:
     radial-gradient(ellipse at 14% 0%, rgba(19, 216, 231, 0.06), transparent 42%),
     radial-gradient(ellipse at 86% 4%, rgba(233, 168, 60, 0.05), transparent 36%),
-    linear-gradient(180deg, #071420 0%, #020a11 100%);
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    linear-gradient(180deg, var(--ops-black, #061522) 0%, var(--ops-navy-deep, #020a11) 100%);
+  font-family: var(--font-ops-ui, Inter, ui-sans-serif, system-ui, sans-serif);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 8px;
@@ -88,10 +88,11 @@ const LO_STYLES = `
 
 .lo-header-left h1 {
   margin: 0;
-  font-size: 1.2rem;
+  font-size: var(--type-ops-heading-size, 0.95rem);
   font-weight: 900;
-  letter-spacing: -0.03em;
-  color: #fff;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lo-text);
   white-space: nowrap;
 }
 
@@ -107,6 +108,13 @@ const LO_STYLES = `
 
 .lo-header-meta .season { color: var(--lo-text); font-weight: 800; }
 .lo-header-meta .status { color: var(--lo-cyan); font-weight: 800; }
+.lo-header-meta .lo-header-note {
+  color: var(--lo-muted);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.6875rem;
+}
 
 .lo-header-right {
   display: flex;
@@ -120,9 +128,10 @@ const LO_STYLES = `
   align-items: center;
   gap: 10px;
   padding: 4px 10px;
-  border: 1px solid var(--lo-line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
+  border-top: 1px solid var(--lo-line);
+  border-bottom: 1px solid var(--lo-line);
+  border-radius: 0;
+  background: rgba(6, 21, 34, 0.55);
   max-height: 40px;
 }
 
@@ -133,7 +142,7 @@ const LO_STYLES = `
   height: 22px;
   display: grid;
   place-items: center;
-  font-size: 0.62rem;
+  font-size: 0.6875rem;
   font-weight: 900;
   color: var(--lo-gold);
   background: rgba(233, 168, 60, 0.12);
@@ -243,7 +252,7 @@ const LO_STYLES = `
   min-height: 0;
   overflow: hidden;
   display: grid;
-  grid-template-rows: minmax(0, 1.7fr) auto auto minmax(140px, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto auto auto;
   gap: 10px;
 }
 
@@ -394,43 +403,48 @@ const LO_STYLES = `
 
 .lo-priority {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 6px;
+  grid-template-rows: auto auto;
+  gap: 0;
   min-height: 0;
-  height: 100%;
 }
 .lo-priority-title {
-  margin: 0;
-  font-size: 0.86rem;
+  margin: 0 0 2px;
+  padding-bottom: 3px;
+  font-size: 0.78rem;
   font-weight: 800;
-  color: var(--lo-gold);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--lo-muted);
+  border-bottom: 1px solid var(--lo-line);
 }
+/* League docket: one filing line per decision, not three tall cards. */
 .lo-priority-list {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: 1fr;
+  gap: 0;
   min-height: 0;
-  height: 100%;
-  align-items: stretch;
+  align-content: start;
 }
 .lo-priority-card {
   display: grid;
-  grid-template-rows: auto auto 1fr;
-  gap: 4px;
-  padding: 12px 14px;
-  border: 1px solid var(--lo-line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
+  grid-template-columns: minmax(120px, 176px) minmax(88px, 116px) minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 12px;
+  padding: 7px 10px 7px 9px;
+  border-top: 0;
+  border-bottom: 1px solid var(--lo-line);
+  border-left: 2px solid var(--lo-gold);
+  border-radius: 0;
+  background: transparent;
   text-align: left;
   color: inherit;
   cursor: pointer;
   min-width: 0;
-  height: 100%;
   align-content: start;
 }
 .lo-priority-card:hover,
 .lo-priority-card:focus-visible {
-  border-color: var(--lo-cyan);
+  border-left-color: var(--lo-cyan);
   outline: none;
   background: rgba(19, 216, 231, 0.06);
 }
@@ -444,19 +458,29 @@ const LO_STYLES = `
 }
 .lo-priority-meta {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   font-size: 0.72rem;
   font-weight: 700;
   color: var(--lo-muted);
 }
-.lo-priority-meta .state { color: var(--lo-gold); font-weight: 800; }
 .lo-priority-card p {
   margin: 0;
   font-size: 0.72rem;
   font-weight: 700;
   color: var(--lo-muted);
   line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lo-priority-card .state {
+  justify-self: end;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lo-gold);
 }
 
 .lo-state-stable { color: var(--lo-muted) !important; }
@@ -490,11 +514,29 @@ const LO_STYLES = `
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+/* Department signature: the filing registry. Section titles are league
+   document headings, opened by a registry mark rather than an icon. */
 .lo-section-title {
+  position: relative;
   margin: 0 0 6px;
+  padding-left: 16px;
   font-size: 0.84rem;
   font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--lo-muted);
+}
+
+.lo-section-title::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.18em;
+  bottom: 0.18em;
+  width: 6px;
+  border: 1px solid var(--lo-gold, #e9a83c);
+  border-right: 0;
+  opacity: 0.8;
 }
 
 .lo-timeline-scroll {
@@ -573,15 +615,16 @@ const LO_STYLES = `
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 4px 10px;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-control, 6px);
   cursor: pointer;
   text-align: left;
-  border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.02);
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid var(--lo-line);
+  background: transparent;
   color: inherit;
   width: 100%;
 }
-.lo-issue:hover { background: rgba(255, 255, 255, 0.04); border-color: var(--lo-line); }
+.lo-issue:hover { background: rgba(19, 216, 231, 0.05); border-bottom-color: var(--lo-cyan); }
 .lo-issue:focus-visible {
   outline: none;
   border-color: var(--lo-cyan);
@@ -620,9 +663,17 @@ const LO_STYLES = `
   gap: 10px;
   align-content: start;
   padding: 12px 14px;
-  border: 1px solid var(--lo-line);
-  border-radius: 10px;
-  background: rgba(8, 22, 34, 0.55);
+  border-top: 1px solid var(--lo-line);
+  border-bottom: 1px solid var(--lo-line);
+  border-radius: 0;
+  background: rgba(6, 21, 34, 0.55);
+}
+.lo-inspector-mark {
+  font-size: 0.6875rem;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--lo-muted);
 }
 .lo-inspector-empty {
   color: var(--lo-muted);
@@ -667,10 +718,13 @@ const LO_STYLES = `
   color: var(--lo-muted);
 }
 .lo-support-top b { color: var(--lo-text); font-weight: 800; }
+/* Support is filed against a ruled register, matching league documents. */
 .lo-support-track {
   height: 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  border-radius: 1px;
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.12) 0 1px, transparent 1px 25%),
+    rgba(255, 255, 255, 0.06);
   overflow: hidden;
 }
 .lo-support-track > i {
@@ -818,7 +872,7 @@ const LO_STYLES = `
   height: 22px;
   display: grid;
   place-items: center;
-  font-size: 0.62rem;
+  font-size: 0.6875rem;
   font-weight: 900;
   color: var(--lo-muted);
   flex-shrink: 0;
@@ -1445,8 +1499,10 @@ function CapForecastChart({ series }) {
   const points = asArray(series);
   if (!points.length) return <div className="lo-empty">No forecast</div>;
 
-  const padL = 40;
-  const padR = 16;
+  const padL = 44;
+  // Reserve room for the final season's value label so it is not cut off at
+  // the right edge of the forecast frame.
+  const padR = 44;
   const padT = 22;
   const padB = 30;
   const w = 720;
@@ -1481,15 +1537,16 @@ function CapForecastChart({ series }) {
         <path className="lo-chart-line" d={line} />
         {points.map((p, i) => {
           const axis = chartAxisLabel(points, i);
+          const anchor = i === 0 ? "start" : i === points.length - 1 ? "end" : "middle";
           return (
             <g key={p.year}>
               <circle className="lo-chart-dot" cx={xAt(i)} cy={yAt(p.cap)} r={axis ? 4 : 2.6} />
               {axis ? (
                 <>
-                  <text className="lo-chart-label" x={xAt(i)} y={h - 8} textAnchor="middle">
+                  <text className="lo-chart-label" x={xAt(i)} y={h - 8} textAnchor={anchor}>
                     {axis}
                   </text>
-                  <text className="lo-chart-value" x={xAt(i)} y={yAt(p.cap) - 10} textAnchor="middle">
+                  <text className="lo-chart-value" x={xAt(i)} y={yAt(p.cap) - 10} textAnchor={anchor}>
                     {fmtCap(p.cap)}
                   </text>
                 </>
@@ -1649,6 +1706,7 @@ function IssueInspector({ issue }) {
 
   return (
     <div className="lo-inspector">
+      <span className="lo-inspector-mark">Policy Brief · Display Only</span>
       <span className="lo-inspector-kicker">{row.source || "Issue"} · {row.action_state}</span>
       <h4>{row.name}</h4>
       <div className="lo-inspector-rows">
@@ -1750,6 +1808,11 @@ function OverviewWorkspace({ data, onOpenIssue }) {
           {topIssues.length ? (
             topIssues.map((issue) => {
               const id = issue.id || issue.name;
+              const consequence = issueConsequence(issue);
+              const prefix = `${issue.name}: `;
+              const detail = consequence.startsWith(prefix)
+                ? consequence.slice(prefix.length)
+                : consequence;
               return (
                 <button
                   key={id}
@@ -1760,9 +1823,9 @@ function OverviewWorkspace({ data, onOpenIssue }) {
                   <strong>{issue.name}</strong>
                   <div className="lo-priority-meta">
                     <span>{issueDeadline(issue)}</span>
-                    <span className={`state ${stateClass(issue.action_state)}`}>{issue.action_state}</span>
                   </div>
-                  <p>{issueConsequence(issue)}</p>
+                  <p>{detail}</p>
+                  <span className={`state ${stateClass(issue.action_state)}`}>{issue.action_state}</span>
                 </button>
               );
             })
@@ -2174,6 +2237,8 @@ export default function LeagueOperations() {
             <span className="season">{data.season || "—"}</span>
             <span aria-hidden="true">·</span>
             <span className="status">{leagueStatus}</span>
+            <span aria-hidden="true">·</span>
+            <span className="lo-header-note">Intelligence Display</span>
           </div>
         </div>
         <div className="lo-header-right">

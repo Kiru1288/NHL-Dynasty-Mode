@@ -13,6 +13,57 @@ def _safe_str(x: Any, default: str = "") -> str:
     return str(x) if x is not None else default
 
 
+def upcoming_draft_year(season_calendar_year: int) -> int:
+    """NHL Entry Draft year for a franchise season labeled by calendar year.
+
+    Example: 2025-26 season (season_calendar_year=2025) → June 2026 draft.
+    """
+    return int(season_calendar_year) + 1
+
+
+def tradeable_draft_year(season_calendar_year: int, *, draft_completed: bool = False) -> int:
+    """Earliest draft year still available to trade.
+
+    Once the Entry Draft for a year finishes, that year's picks are consumed and the
+    trade market moves to the following draft class.
+    """
+    dy = upcoming_draft_year(int(season_calendar_year))
+    return dy + 1 if draft_completed else dy
+
+
+def draft_year_from_context(
+    context: Optional[Dict[str, Any]] = None,
+    *,
+    league: Any = None,
+) -> int:
+    """Resolve the upcoming Entry Draft year from trade context / league."""
+    ctx = context or {}
+    if ctx.get("tradeable_draft_year") is not None:
+        try:
+            return int(ctx["tradeable_draft_year"])
+        except (TypeError, ValueError):
+            pass
+    raw = ctx.get("draft_year")
+    if raw is not None:
+        try:
+            dy = int(raw)
+            if ctx.get("draft_completed"):
+                return dy + 1
+            return dy
+        except (TypeError, ValueError):
+            pass
+    sy = ctx.get("season_year")
+    if sy is None and league is not None:
+        sy = getattr(league, "current_season", None) or getattr(league, "season_year", None)
+    if sy is None:
+        sy = 2025
+    completed = bool(ctx.get("draft_completed") or getattr(league, "draft_completed", False))
+    # Franchise contexts mark calendar seasons explicitly; otherwise treat as legacy draft-year anchor.
+    if ctx.get("season_is_calendar") or ctx.get("use_upcoming_draft_year"):
+        return tradeable_draft_year(int(sy), draft_completed=completed)
+    return int(sy) + (1 if completed else 0)
+
+
 def _get_registry(league: Any) -> Dict[str, Dict[str, Any]]:
     reg = getattr(league, "draft_pick_registry", None)
     if not isinstance(reg, dict):
@@ -47,6 +98,164 @@ def _team_ids_from_league(league: Any) -> List[str]:
     return out
 
 
+def prune_expired_unresolved_picks(league: Any, *, before_year: int) -> int:
+    """Mark unresolved picks with year < before_year as resolved (past drafts)."""
+    if league is None:
+        return 0
+    before = int(before_year)
+    reg = _get_registry(league)
+    n = 0
+    for _pid, row in reg.items():
+        if not isinstance(row, dict) or bool(row.get("resolved")):
+            continue
+        try:
+            y = int(row.get("year") or 0)
+        except (TypeError, ValueError):
+            continue
+        if y < before:
+            row["resolved"] = True
+            row["resolved_reason"] = "past_draft"
+            n += 1
+    if n:
+        setattr(league, "draft_pick_registry", reg)
+        reconcile_pick_registry_consistency(league)
+    return n
+
+
+def retire_draft_year_picks(
+    league: Any,
+    *,
+    draft_year: int,
+    reason: str = "draft_completed",
+) -> int:
+    """Mark every unresolved pick for draft_year as resolved and drop from owned lists.
+
+    Call after the Entry Draft finishes (or for any leftover slots) so Trade Hub and
+    trade rules can no longer surface that year's capital.
+    """
+    if league is None:
+        return 0
+    dy = int(draft_year)
+    reg = _get_registry(league)
+    n = 0
+    for _pid, row in reg.items():
+        if not isinstance(row, dict) or bool(row.get("resolved")):
+            continue
+        try:
+            y = int(row.get("year") or 0)
+        except (TypeError, ValueError):
+            continue
+        if y != dy:
+            continue
+        row["resolved"] = True
+        row["resolved_reason"] = str(reason or "draft_completed")
+        n += 1
+    if n:
+        setattr(league, "draft_pick_registry", reg)
+    reconcile_pick_registry_consistency(league)
+    # Ensure the next draft class exists for trading immediately after the draft.
+    ensure_draft_pick_registry(league, start_year=dy + 1, years_ahead=4)
+    return n
+
+
+def migrate_calendar_year_picks_to_draft_year(
+    league: Any,
+    *,
+    season_calendar_year: int,
+    draft_year: Optional[int] = None,
+) -> int:
+    """Copy ownership from phantom calendar-year picks onto upcoming draft-year slots.
+
+    Older trade paths minted/traded picks keyed by season_calendar_year, but Entry Draft
+    consumes season_calendar_year + 1. Without migration, traded picks never appear on the board.
+    """
+    if league is None:
+        return 0
+    sy = int(season_calendar_year)
+    dy = int(draft_year) if draft_year is not None else upcoming_draft_year(sy)
+    if dy != sy + 1:
+        return 0
+
+    reg = _get_registry(league)
+    migrated = 0
+    for pid, row in list(reg.items()):
+        if not isinstance(row, dict) or bool(row.get("resolved")):
+            continue
+        try:
+            y = int(row.get("year") or 0)
+            rnd = int(row.get("round") or 0)
+        except (TypeError, ValueError):
+            continue
+        if y != sy or rnd < 1:
+            continue
+        orig = _safe_str(row.get("original_team_id"))
+        owner = _safe_str(row.get("current_owner_team_id")) or orig
+        if not orig:
+            row["resolved"] = True
+            row["resolved_reason"] = "invalid_calendar_pick"
+            continue
+        new_id = canonical_pick_id(dy, rnd, orig)
+        target = reg.get(new_id)
+        if not isinstance(target, dict):
+            reg[new_id] = {
+                "pick_id": new_id,
+                "year": dy,
+                "round": rnd,
+                "original_team_id": orig,
+                "current_owner_team_id": owner,
+                "protection": row.get("protection"),
+                "conditions": row.get("conditions"),
+                "resolved": False,
+                "migrated_from": _safe_str(pid),
+            }
+            migrated += 1
+        else:
+            target_owner = _safe_str(target.get("current_owner_team_id")) or orig
+            # Move traded ownership onto the draft-year pick when it is still with the original club.
+            if owner != orig and target_owner == orig:
+                target["current_owner_team_id"] = owner
+                if row.get("protection") and not target.get("protection"):
+                    target["protection"] = row.get("protection")
+                if row.get("conditions") and not target.get("conditions"):
+                    target["conditions"] = row.get("conditions")
+                target["migrated_from"] = _safe_str(pid)
+                migrated += 1
+        row["resolved"] = True
+        row["resolved_reason"] = "migrated_to_draft_year"
+        row["migrated_to"] = new_id
+
+    if migrated or any(
+        isinstance(r, dict) and r.get("resolved_reason") == "migrated_to_draft_year"
+        for r in reg.values()
+    ):
+        setattr(league, "draft_pick_registry", reg)
+        reconcile_pick_registry_consistency(league)
+    return migrated
+
+
+def ensure_franchise_pick_registry(
+    league: Any,
+    *,
+    season_calendar_year: int,
+    years_ahead: int = 4,
+    rounds: int = 7,
+    draft_completed: bool = False,
+) -> Dict[str, Dict[str, Any]]:
+    """Mint picks from the upcoming draft year, migrate mis-year ownership, prune past drafts."""
+    sy = int(season_calendar_year)
+    dy = upcoming_draft_year(sy)
+    migrate_calendar_year_picks_to_draft_year(league, season_calendar_year=sy, draft_year=dy)
+    if draft_completed:
+        retire_draft_year_picks(league, draft_year=dy, reason="draft_completed")
+        start = dy + 1
+    else:
+        start = dy
+    reg = ensure_draft_pick_registry(league, start_year=start, years_ahead=years_ahead, rounds=rounds)
+    prune_expired_unresolved_picks(league, before_year=start)
+    reconcile_pick_registry_consistency(league)
+    return reg
+
+
 def ensure_draft_pick_registry(
     league: Any,
     *,
@@ -64,7 +273,13 @@ def ensure_draft_pick_registry(
         return reg
 
     if start_year is None:
-        start_year = int(getattr(league, "current_season", 0) or getattr(league, "season_year", 0) or 2025)
+        # Prefer an explicit draft year on the league; else assume calendar season → upcoming draft.
+        explicit = getattr(league, "draft_year", None)
+        if explicit is not None:
+            start_year = int(explicit)
+        else:
+            cal = int(getattr(league, "current_season", 0) or getattr(league, "season_year", 0) or 2025)
+            start_year = upcoming_draft_year(cal) if getattr(league, "season_is_calendar", True) else cal
     start_year = int(start_year)
 
     for tid in team_ids:
@@ -130,7 +345,12 @@ def validate_pick_ownership(league: Any, pick_id: str, source_team_id: str) -> b
     return _safe_str(row.get("current_owner_team_id")) == _safe_str(source_team_id)
 
 
-def get_team_owned_picks(league: Any, team_id: str) -> List[Dict[str, Any]]:
+def get_team_owned_picks(
+    league: Any,
+    team_id: str,
+    *,
+    min_year: Optional[int] = None,
+) -> List[Dict[str, Any]]:
     ensure_draft_pick_registry(league)
     reconcile_pick_registry_consistency(league)
     reg = _get_registry(league)
@@ -138,10 +358,18 @@ def get_team_owned_picks(league: Any, team_id: str) -> List[Dict[str, Any]]:
     team = _find_team(league, tid)
     owned_ids = list(_get_team_pick_ids(team)) if team is not None else []
     out: List[Dict[str, Any]] = []
+    floor = int(min_year) if min_year is not None else None
     for pid in owned_ids:
         row = reg.get(pid)
-        if isinstance(row, dict) and not row.get("resolved"):
-            out.append(dict(row))
+        if not isinstance(row, dict) or row.get("resolved"):
+            continue
+        if floor is not None:
+            try:
+                if int(row.get("year") or 0) < floor:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        out.append(dict(row))
     out.sort(key=lambda r: (int(r.get("year", 0)), int(r.get("round", 0)), str(r.get("pick_id", ""))))
     return out
 
@@ -301,12 +529,17 @@ def audit_pick_registry_integrity(
     if start_year is not None:
         base = int(start_year)
         horizon = {base + off for off in range(max(0, int(years_ahead)))}
+        # Count resolved + unresolved rows. Mid-draft selections mark picks resolved;
+        # uniqueness still requires exactly one row per (year, round, original team).
         slot_counts: Dict[tuple[int, int, str], int] = {}
         for pid, row in reg.items():
-            if not isinstance(row, dict) or bool(row.get("resolved")):
+            if not isinstance(row, dict):
                 continue
-            y = int(row.get("year", 0))
-            r = int(row.get("round", 0))
+            try:
+                y = int(row.get("year", 0))
+                r = int(row.get("round", 0))
+            except (TypeError, ValueError):
+                continue
             orig = _safe_str(row.get("original_team_id"))
             if y in horizon and 1 <= r <= int(rounds) and orig:
                 key = (y, r, orig)
@@ -411,8 +644,9 @@ def serialize_team_picks(
     team_id: str,
     *,
     value_hint_fn: Optional[Any] = None,
+    min_year: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    rows = get_team_owned_picks(league, team_id)
+    rows = get_team_owned_picks(league, team_id, min_year=min_year)
     out: List[Dict[str, Any]] = []
     for row in rows:
         item = {
@@ -428,6 +662,7 @@ def serialize_team_picks(
             "label": _pick_display(row),
             "protection": row.get("protection"),
             "conditions": row.get("conditions"),
+            "resolved": False,
         }
         if value_hint_fn is not None:
             try:

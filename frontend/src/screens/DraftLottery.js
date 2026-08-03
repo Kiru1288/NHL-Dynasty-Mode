@@ -301,6 +301,9 @@ function mapBackendLotteryToBoard(payload, standingsBoard) {
   const byId = new Map((standingsBoard || []).map((t) => [String(t.id), t]));
   return final.map((row, index) => {
     const tid = String(row.team_id || row.id || "");
+    const viaId = row.via_team_id || row.original_owner_team_id || null;
+    const viaName = row.via_team_name || row.original_owner_team_name || null;
+    const isTraded = Boolean(row.is_traded) || Boolean(viaId && String(viaId) !== tid);
     const base = byId.get(tid) || {
       id: tid,
       name: row.team_name || tid,
@@ -326,13 +329,21 @@ function mapBackendLotteryToBoard(payload, standingsBoard) {
       wonPick: wonPick || null,
       movement: row.movement ?? 0,
       lotterySeed: payload.lottery_seed,
+      isTraded,
+      viaTeamId: isTraded ? viaId : null,
+      viaTeamName: isTraded ? viaName : null,
+      viaAbbr: isTraded
+        ? String(viaName || viaId || "")
+            .replace(/^the\s+/i, "")
+            .slice(0, 3)
+            .toUpperCase()
+        : null,
+      lotteryTeamId: row.lottery_team_id || row.original_owner_team_id || tid,
     };
   });
 }
 
 function simulateLottery(board) {
-  // Local simulation is disabled — backend lottery is the authority.
-  // Kept as a no-op fallback that returns the projected order unchanged.
   if (!board.length) return [];
   return board.map((team, index) => ({
     ...team,
@@ -426,8 +437,8 @@ export default function DraftLottery({
 
   const displayedBoard = simResults || backendLottery || lotteryBoard;
   const hasOfficialResult = Boolean(backendLottery?.length || simResults?.length);
+  const showingResults = Boolean(simResults?.length);
 
-  // When the backend lottery exists, surface it automatically (no local rerolls).
   useEffect(() => {
     if (backendLottery?.length) {
       setSimResults(backendLottery);
@@ -462,7 +473,6 @@ export default function DraftLottery({
   }
 
   function handleSimLottery() {
-    // Prefer authoritative backend result; never locally re-roll a completed lottery.
     if (backendLottery?.length) {
       setSimResults(backendLottery);
       return;
@@ -475,17 +485,25 @@ export default function DraftLottery({
   }
 
   return (
-    <main className="draft-lottery-page">
+    <main className="draft-lottery-page register-ops" data-register="ops">
       <DraftLotteryStyles />
 
-      <section className="draft-lottery-topbar">
+      <header className="draft-lottery-topbar">
         <button type="button" className="draft-lottery-back" onClick={handleBack}>
-          Back
+          <span aria-hidden="true" className="draft-lottery-back__mark">←</span>
+          <span>Back</span>
         </button>
 
         <div className="draft-lottery-title-block">
-          <span>Draft Lottery</span>
-          <h1>Lottery Odds</h1>
+          <span className="type-phase-label">
+            LEAGUE OPS · DRAFT LOTTERY
+          </span>
+          <h1>{showingResults ? "Official Order" : "Lottery Odds Board"}</h1>
+          <p className="draft-lottery-sub">
+            {showingResults
+              ? "Post-draw pick order — not the live lottery broadcast."
+              : "Pre-draw weighted odds from current standings."}
+          </p>
         </div>
 
         <div className="draft-lottery-actions">
@@ -504,37 +522,41 @@ export default function DraftLottery({
             {backendLottery?.length ? "Show Official Results" : "Show Projection"}
           </button>
         </div>
-      </section>
+      </header>
 
       {loading ? (
-        <section className="draft-lottery-empty">
-          <h2>Loading standings...</h2>
+        <section className="ops-state ops-state--loading">
+          <span className="ops-state__kicker">Standings sync</span>
+          <h2 className="ops-state__title">Loading lottery board</h2>
+          <p className="ops-state__body">Pulling eligible teams from franchise standings.</p>
         </section>
       ) : !lotteryBoard.length ? (
-        <section className="draft-lottery-empty">
-          <h2>No lottery teams found</h2>
-          <p>
-            This screen could not find standings from props, local storage, or the backend.
+        <section className="ops-state">
+          <span className="ops-state__kicker">No data</span>
+          <h2 className="ops-state__title">Lottery board unavailable</h2>
+          <p className="ops-state__body">
+            Standings were not found from props, local storage, or the backend. Advance the season or load franchise state.
           </p>
         </section>
       ) : (
-        <section className="draft-lottery-board">
+        <section className="draft-lottery-board" aria-label="Draft lottery odds">
           <div className="draft-lottery-table-head">
-            <div>Pick</div>
+            <div>Slot</div>
             <div>Team</div>
             <div>Record</div>
             <div>PTS</div>
             <div>PTS%</div>
-            <div>Odds</div>
-            {hasOfficialResult ? <div>Result</div> : null}
+            <div>Win %</div>
+            {showingResults ? <div>Result</div> : null}
           </div>
 
           <div className="draft-lottery-rows">
             {displayedBoard.map((team) => {
               const isUserTeam =
                 (selectedTeamId &&
-                  String(team.id).toLowerCase() ===
-                    String(selectedTeamId).toLowerCase()) ||
+                  (String(team.id).toLowerCase() === String(selectedTeamId).toLowerCase() ||
+                    String(team.lotteryTeamId || "").toLowerCase() ===
+                      String(selectedTeamId).toLowerCase())) ||
                 (userTeamName &&
                   String(team.name).toLowerCase() ===
                     String(userTeamName).toLowerCase());
@@ -551,12 +573,17 @@ export default function DraftLottery({
                     .join(" ")}
                 >
                   <div className="draft-lottery-pick-cell">
-                    #{simResults ? team.finalPick : team.projectedPick}
+                    <span className="draft-lottery-slot">
+                      {showingResults ? team.finalPick : team.projectedPick}
+                    </span>
+                    {!showingResults ? (
+                      <span className="draft-lottery-odds">{team.odds}%</span>
+                    ) : null}
                   </div>
 
                   <div className="draft-lottery-team-cell">
                     {team.logo ? (
-                      <img src={team.logo} alt={team.name} />
+                      <img src={team.logo} alt="" />
                     ) : (
                       <div className="draft-lottery-logo-fallback">
                         {team.abbreviation}
@@ -565,30 +592,46 @@ export default function DraftLottery({
 
                     <div>
                       <strong>{team.name}</strong>
-                      <span>{team.abbreviation}</span>
+                      <span>
+                        {team.isTraded && team.viaAbbr
+                          ? `via ${team.viaAbbr}`
+                          : team.abbreviation}
+                      </span>
                     </div>
                   </div>
 
-                  <div className="draft-lottery-record">
+                  <div className="draft-lottery-record type-financial">
                     {team.wins}-{team.losses}-{team.otLosses}
                   </div>
 
-                  <div>{team.points}</div>
+                  <div className="type-financial">{team.points}</div>
 
-                  <div>{(team.pointsPercentage * 100).toFixed(1)}%</div>
+                  <div className="type-financial">{(team.pointsPercentage * 100).toFixed(1)}</div>
 
-                  <div>
-                    <strong className="draft-lottery-odds">{team.odds}%</strong>
+                  <div className="draft-lottery-odds-cell type-financial">
+                    {!showingResults ? (
+                      <strong>{team.odds}%</strong>
+                    ) : (
+                      <span className="draft-lottery-odds-muted">{team.odds}%</span>
+                    )}
+                    <span
+                      className="draft-lottery-odds-ruler"
+                      aria-hidden="true"
+                      style={{
+                        "--odds-share": `${Math.max(
+                          0,
+                          Math.min(100, (Number(team.odds) || 0) * 4)
+                        )}%`,
+                      }}
+                    />
                   </div>
 
-                  {simResults ? (
+                  {showingResults ? (
                     <div>
                       {team.wonPick ? (
-                        <span className="draft-lottery-winner">
-                          Won #{team.wonPick}
-                        </span>
+                        <span className="mark-seal mark-status--success">Won #{team.wonPick}</span>
                       ) : (
-                        <span className="draft-lottery-hold">Projected</span>
+                        <span className="mark-status mark-status--info">Held</span>
                       )}
                     </div>
                   ) : null}
@@ -608,13 +651,13 @@ function DraftLotteryStyles() {
       .draft-lottery-page {
         min-height: 100vh;
         width: 100%;
-        padding: 22px;
-        color: #eaf2ff;
-        font-family: var(--font-motion-control, "Rajdhani", "Barlow Condensed", Arial, sans-serif);
+        padding: var(--space-4) var(--space-5);
+        color: var(--ops-text);
+        font-family: var(--font-ops-ui);
         background:
-          radial-gradient(circle at top left, rgba(59, 130, 246, 0.2), transparent 34%),
-          radial-gradient(circle at bottom right, rgba(16, 185, 129, 0.1), transparent 28%),
-          linear-gradient(135deg, #07111f 0%, #0d1727 44%, #111827 100%);
+          radial-gradient(circle at 14% 0%, rgba(19, 216, 231, 0.1), transparent 28%),
+          radial-gradient(circle at 88% 8%, rgba(233, 168, 60, 0.06), transparent 22%),
+          linear-gradient(180deg, var(--ops-navy) 0%, var(--ops-navy-deep) 100%);
       }
 
       .draft-lottery-page *,
@@ -624,272 +667,267 @@ function DraftLotteryStyles() {
       }
 
       .draft-lottery-topbar {
-        position: sticky;
-        top: 0;
-        z-index: 10;
         display: grid;
-        grid-template-columns: 120px 1fr auto;
+        grid-template-columns: auto minmax(0, 1fr) auto;
         align-items: center;
-        gap: 16px;
-        margin-bottom: 16px;
-        padding: 14px;
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        border-radius: 22px;
-        background: rgba(15, 23, 42, 0.84);
-        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
-        backdrop-filter: blur(18px);
+        gap: var(--space-4);
+        margin-bottom: var(--space-4);
+        padding: var(--space-3) var(--space-4);
+        border: 1px solid var(--ops-grid);
+        border-radius: var(--radius-card);
+        background: var(--ops-panel);
+        box-shadow: var(--depth-overlay);
       }
 
       .draft-lottery-title-block {
-        text-align: center;
+        min-width: 0;
       }
 
-      .draft-lottery-title-block span {
-        display: block;
-        margin-bottom: 2px;
-        color: #93c5fd;
-        font-size: 0.75rem;
-        font-weight: 900;
-        letter-spacing: 0.16em;
-        text-transform: uppercase;
+      .draft-lottery-title-block .type-phase-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 4px;
+        color: var(--ops-cyan);
       }
 
       .draft-lottery-title-block h1 {
         margin: 0;
-        color: #ffffff;
-        font-size: clamp(1.7rem, 4vw, 3rem);
-        line-height: 0.95;
-        letter-spacing: -0.04em;
+        font-family: var(--font-broadcast-display);
+        font-size: clamp(1.25rem, 2.4vw, 1.75rem);
+        line-height: 1.05;
+        letter-spacing: 0.04em;
         text-transform: uppercase;
+        color: var(--ops-text);
+      }
+
+      .draft-lottery-sub {
+        margin: 6px 0 0;
+        font-size: var(--type-compact-size);
+        color: var(--ops-text-secondary);
+        line-height: 1.4;
       }
 
       .draft-lottery-actions {
         display: flex;
         justify-content: flex-end;
-        gap: 10px;
+        gap: var(--space-2);
+        flex-wrap: wrap;
       }
 
       .draft-lottery-back,
       .draft-lottery-primary,
       .draft-lottery-secondary {
-        min-height: 44px;
-        padding: 0 18px;
-        border: 0;
-        border-radius: 15px;
-        font-weight: 950;
-        letter-spacing: 0.04em;
+        min-height: 38px;
+        padding: 0 var(--space-4);
+        border-radius: var(--radius-control);
+        font-size: var(--type-control-label-size);
+        font-weight: 800;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
         cursor: pointer;
-        transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+        transition: background var(--motion-micro), border-color var(--motion-micro);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
       }
 
       .draft-lottery-back {
-        color: #cbd5e1;
-        background: rgba(148, 163, 184, 0.12);
-        border: 1px solid rgba(148, 163, 184, 0.18);
+        color: var(--ops-text);
+        background: rgba(12, 31, 47, 0.72);
+        border: 1px solid var(--ops-grid);
       }
 
       .draft-lottery-primary {
-        color: #04111f;
-        background: linear-gradient(135deg, #bfdbfe, #60a5fa);
-        box-shadow: 0 12px 24px rgba(96, 165, 250, 0.2);
+        color: var(--ops-navy);
+        background: var(--ops-cyan);
+        border: 1px solid var(--ops-cyan);
       }
 
       .draft-lottery-secondary {
-        color: #dbeafe;
-        background: rgba(59, 130, 246, 0.18);
-        border: 1px solid rgba(96, 165, 250, 0.28);
+        color: var(--ops-text);
+        background: rgba(12, 31, 47, 0.72);
+        border: 1px solid var(--ops-grid-2);
       }
 
       .draft-lottery-back:hover,
-      .draft-lottery-primary:hover,
       .draft-lottery-secondary:hover {
-        transform: translateY(-2px);
+        border-color: var(--ops-grid-strong);
+        background: var(--ops-cyan-soft);
+      }
+
+      .draft-lottery-primary:hover {
+        background: var(--ops-ice);
       }
 
       .draft-lottery-primary:disabled {
         cursor: not-allowed;
-        opacity: 0.5;
-        transform: none;
+        opacity: 0.45;
       }
 
       .draft-lottery-board {
-        min-height: calc(100vh - 120px);
-        padding: 14px;
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        border-radius: 24px;
-        background: rgba(15, 23, 42, 0.72);
-        box-shadow: 0 22px 60px rgba(0, 0, 0, 0.25);
-        backdrop-filter: blur(18px);
+        border: 1px solid var(--ops-grid);
+        border-radius: var(--radius-card);
+        background: var(--ops-panel);
+        overflow: hidden;
       }
 
       .draft-lottery-table-head {
         display: grid;
-        grid-template-columns: 90px minmax(260px, 1fr) 130px 90px 100px 110px 120px;
-        gap: 10px;
-        padding: 0 14px 10px;
-        color: #94a3b8;
-        font-size: 0.75rem;
-        font-weight: 950;
+        grid-template-columns: 88px minmax(220px, 1.4fr) 100px 64px 72px 72px 96px;
+        gap: var(--space-2);
+        padding: var(--space-2) var(--space-4);
+        border-bottom: 1px solid var(--ops-grid);
+        background: rgba(6, 21, 34, 0.55);
+        color: var(--ops-text-secondary);
+        font-size: var(--type-phase-label-size);
+        font-weight: 900;
         letter-spacing: 0.12em;
         text-transform: uppercase;
       }
 
       .draft-lottery-table-head:not(:has(div:nth-child(7))) {
-        grid-template-columns: 90px minmax(260px, 1fr) 130px 90px 100px 110px;
+        grid-template-columns: 88px minmax(220px, 1.4fr) 100px 64px 72px 72px;
       }
 
       .draft-lottery-rows {
         display: flex;
         flex-direction: column;
-        gap: 10px;
       }
 
       .draft-lottery-row {
         display: grid;
-        grid-template-columns: 90px minmax(260px, 1fr) 130px 90px 100px 110px 120px;
+        grid-template-columns: 88px minmax(220px, 1.4fr) 100px 64px 72px 72px 96px;
         align-items: center;
-        gap: 10px;
-        min-height: 68px;
-        padding: 10px 14px;
-        border: 1px solid rgba(148, 163, 184, 0.14);
-        border-radius: 18px;
-        color: #dbeafe;
-        background:
-          linear-gradient(135deg, rgba(2, 6, 23, 0.6), rgba(15, 23, 42, 0.74));
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        gap: var(--space-2);
+        min-height: 52px;
+        padding: var(--space-2) var(--space-4);
+        border-bottom: 1px solid rgba(156, 218, 236, 0.08);
+        color: var(--ops-text);
+        background: transparent;
       }
 
-      .draft-lottery-row:not(:has(.draft-lottery-winner)):not(:has(.draft-lottery-hold)) {
-        grid-template-columns: 90px minmax(260px, 1fr) 130px 90px 100px 110px;
+      .draft-lottery-row:not(:has(.mark-seal)):not(:has(.mark-status)) {
+        grid-template-columns: 88px minmax(220px, 1.4fr) 100px 64px 72px 72px;
+      }
+
+      .draft-lottery-row:last-child {
+        border-bottom: 0;
       }
 
       .draft-lottery-row.is-user-team {
-        border-color: rgba(96, 165, 250, 0.56);
-        background:
-          linear-gradient(135deg, rgba(37, 99, 235, 0.26), rgba(15, 23, 42, 0.78));
+        background: var(--ops-cyan-soft);
       }
 
       .draft-lottery-row.is-winner {
-        border-color: rgba(34, 197, 94, 0.48);
-        background:
-          linear-gradient(135deg, rgba(22, 163, 74, 0.22), rgba(15, 23, 42, 0.78));
+        background: var(--ops-success-soft);
       }
 
       .draft-lottery-pick-cell {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 58px;
-        height: 40px;
-        border-radius: 999px;
-        color: #ffffff;
-        background: rgba(96, 165, 250, 0.18);
-        border: 1px solid rgba(96, 165, 250, 0.32);
-        font-size: 1.05rem;
-        font-weight: 950;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .draft-lottery-slot {
+        font-family: var(--font-broadcast-display);
+        font-size: var(--type-score-size);
+        font-weight: 400;
+        color: var(--ops-gold);
+        line-height: 1;
+      }
+
+      .draft-lottery-odds {
+        font-size: var(--type-table-meta-size);
+        font-weight: 800;
+        color: var(--ops-cyan);
+        letter-spacing: 0.04em;
+      }
+
+      .draft-lottery-odds-muted {
+        font-size: var(--type-table-meta-size);
+        color: var(--ops-text-secondary);
+      }
+
+      /* Department signature: the odds ruler. Each club's real lottery weight
+         is measured against a shared scale instead of a casino graphic. */
+      .draft-lottery-odds-ruler {
+        display: block;
+        position: relative;
+        height: 4px;
+        margin-top: 4px;
+        background: rgba(255, 255, 255, 0.06);
+        background-image: repeating-linear-gradient(
+          90deg,
+          rgba(255, 255, 255, 0.16) 0 1px,
+          transparent 1px 25%
+        );
+      }
+
+      .draft-lottery-odds-ruler::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: var(--odds-share, 0%);
+        background: var(--ops-cyan);
+        opacity: 0.7;
       }
 
       .draft-lottery-team-cell {
         display: flex;
         align-items: center;
-        gap: 14px;
+        gap: var(--space-3);
         min-width: 0;
       }
 
       .draft-lottery-team-cell img,
       .draft-lottery-logo-fallback {
-        width: 42px;
-        height: 42px;
-        flex: 0 0 42px;
-        border-radius: 50%;
+        width: 32px;
+        height: 32px;
+        flex: 0 0 32px;
+        border-radius: var(--radius-ops);
         object-fit: contain;
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--ops-grid);
       }
 
       .draft-lottery-logo-fallback {
         display: flex;
         align-items: center;
         justify-content: center;
-        color: #bfdbfe;
-        font-size: 0.72rem;
-        font-weight: 950;
+        font-size: 0.6875rem;
+        font-weight: 900;
+        color: var(--ops-cyan);
       }
 
       .draft-lottery-team-cell strong {
         display: block;
         overflow: hidden;
-        color: #ffffff;
-        font-size: 1.04rem;
-        font-weight: 900;
+        font-size: var(--type-compact-size);
+        font-weight: 700;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
 
       .draft-lottery-team-cell span {
         display: block;
-        margin-top: 2px;
-        color: #94a3b8;
-        font-size: 0.8rem;
-        font-weight: 900;
+        margin-top: 1px;
+        color: var(--ops-text-secondary);
+        font-size: var(--type-table-meta-size);
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
       }
 
       .draft-lottery-record {
-        color: #f8fafc;
-        font-weight: 800;
+        font-weight: 700;
       }
 
-      .draft-lottery-odds {
-        color: #bfdbfe;
-        font-size: 1rem;
-        font-weight: 950;
-      }
-
-      .draft-lottery-winner,
-      .draft-lottery-hold {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        min-width: 94px;
-        min-height: 34px;
-        padding: 0 12px;
-        border-radius: 999px;
-        font-size: 0.78rem;
-        font-weight: 950;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-      }
-
-      .draft-lottery-winner {
-        color: #dcfce7;
-        background: rgba(34, 197, 94, 0.18);
-        border: 1px solid rgba(34, 197, 94, 0.34);
-      }
-
-      .draft-lottery-hold {
-        color: #cbd5e1;
-        background: rgba(148, 163, 184, 0.1);
-        border: 1px solid rgba(148, 163, 184, 0.16);
-      }
-
-      .draft-lottery-empty {
-        margin-top: 18px;
-        padding: 28px;
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        border-radius: 24px;
-        background: rgba(15, 23, 42, 0.72);
-        box-shadow: 0 22px 60px rgba(0, 0, 0, 0.25);
-      }
-
-      .draft-lottery-empty h2 {
-        margin: 0;
-        color: #ffffff;
-      }
-
-      .draft-lottery-empty p {
-        margin: 8px 0 0;
-        color: #aebed4;
+      .draft-lottery-odds-cell strong {
+        color: var(--ops-cyan);
+        font-size: var(--type-compact-size);
       }
 
       @media (max-width: 1050px) {
@@ -897,17 +935,8 @@ function DraftLotteryStyles() {
           grid-template-columns: 1fr;
         }
 
-        .draft-lottery-title-block {
-          text-align: left;
-        }
-
         .draft-lottery-actions {
-          justify-content: stretch;
-        }
-
-        .draft-lottery-actions button,
-        .draft-lottery-back {
-          flex: 1;
+          justify-content: flex-start;
         }
 
         .draft-lottery-board {
@@ -917,23 +946,14 @@ function DraftLotteryStyles() {
         .draft-lottery-table-head,
         .draft-lottery-row,
         .draft-lottery-table-head:not(:has(div:nth-child(7))),
-        .draft-lottery-row:not(:has(.draft-lottery-winner)):not(:has(.draft-lottery-hold)) {
-          min-width: 820px;
+        .draft-lottery-row:not(:has(.mark-seal)):not(:has(.mark-status)) {
+          min-width: 780px;
         }
       }
 
       @media (max-width: 640px) {
         .draft-lottery-page {
-          padding: 14px;
-        }
-
-        .draft-lottery-topbar {
-          padding: 12px;
-          border-radius: 18px;
-        }
-
-        .draft-lottery-actions {
-          flex-direction: column;
+          padding: var(--space-3);
         }
       }
     `}</style>

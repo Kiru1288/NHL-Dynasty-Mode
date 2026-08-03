@@ -11,6 +11,7 @@ import {
 } from "../services/franchiseService";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { ensurePlayerHeadshotFields, nationalityCode } from "../utils/playerHeadshots";
+import { nearestFlagApiSize } from "../utils/countryFlags";
 import PlayerHeadshot from "../components/PlayerHeadshot";
 import PS1PlayerPortrait from "../components/portraits/PS1PlayerPortrait";
 import { getTeamPortraitColors } from "../components/portraits/ps1PortraitUtils";
@@ -148,10 +149,10 @@ function assetValueLabel(item) {
 function valueTierFromScore(score) {
   const raw = Number(score);
   if (!Number.isFinite(raw)) return "UNKNOWN";
-  if (raw >= 90) return "FRANCHISE";
-  if (raw >= 75) return "ELITE";
-  if (raw >= 55) return "TOP ASSET";
-  if (raw >= 35) return "USEFUL";
+  if (raw >= 120) return "FRANCHISE";
+  if (raw >= 90) return "ELITE";
+  if (raw >= 60) return "TOP ASSET";
+  if (raw >= 38) return "USEFUL";
   if (raw >= 18) return "DEPTH";
   return "LOW";
 }
@@ -163,46 +164,36 @@ function roundTradeValue(raw) {
 }
 
 /**
- * Stingy bar fill — ordinary NHLers look short; only true stars near-fill.
- * 15→5% · 30→12% · 45→22% · 60→36% · 75→55% · 90→82% · 98→94%
+ * Relative bar fill against the peak TV currently shown in the list / package.
+ * Uncapped scores: a 40 looks short next to a 140 franchise piece.
  */
-function tradeValueBarPct(tv) {
+function tradeValueBarPct(tv, peak = null) {
   const v = Math.max(0, Number(tv) || 0);
-  if (v <= 0) return 2;
-  let pct;
-  if (v < 30) pct = (v / 30) * 12;
-  else if (v < 50) pct = 12 + ((v - 30) / 20) * 14;
-  else if (v < 70) pct = 26 + ((v - 50) / 20) * 22;
-  else if (v < 85) pct = 48 + ((v - 70) / 15) * 22;
-  else pct = 70 + ((Math.min(v, 100) - 85) / 15) * 26;
-  return clamp(Math.round(pct), 2, 96);
+  const p = Math.max(Number(peak) || 0, v, 1);
+  if (v <= 0) return 3;
+  return clamp(Math.round((v / p) * 100), 3, 100);
 }
 
-function assetValuePct(item) {
+function assetValuePct(item, peak = null) {
   const raw = Number(item?.tradeValue ?? item?.value_hint);
   if (!Number.isFinite(raw)) return 6;
-  return tradeValueBarPct(raw);
+  return tradeValueBarPct(raw, peak);
 }
 
-/** Mirrors SimEngine `_talent_base` — aggressive depth vs star spread. */
+/** Mirrors SimEngine `_talent_base` — uncapped depth vs star spread. */
 function talentValueAnchor(ovr) {
   const o = Number(ovr) || 0;
   if (o <= 0) return 3;
   let anchor;
-  if (o < 70) anchor = 3 + Math.max(0, o - 60) * 1.0;
-  else if (o < 76) anchor = 10 + (o - 70) * 2.0;
-  else if (o < 81) anchor = 20 + (o - 75) * 4.0;
-  else if (o < 85) anchor = 40 + (o - 80) * 5.0;
-  else if (o < 88) anchor = 60 + (o - 84) * 6.5;
-  else if (o < 91) anchor = 80 + (o - 87) * 5.5;
-  else anchor = 96 + Math.min(3, (o - 91) * 1.0);
-  if (o >= 90) anchor += 4 + (o - 90) * 1.5;
-  else if (o >= 87) anchor += 5 + (o - 87) * 1.5;
-  else if (o >= 84) anchor += 3.5;
-  else if (o < 73) anchor -= (73 - o) * 1.6;
-  else if (o < 77) anchor -= (77 - o) * 0.9;
-  else if (o < 80) anchor -= (80 - o) * 0.4;
-  return clamp(Math.round(anchor * 10) / 10, 2, 99);
+  if (o < 70) anchor = 5 + Math.max(0, o - 60) * 1.0;
+  else if (o < 76) anchor = 12 + (o - 70) * 2.0;
+  else if (o < 81) anchor = 22 + (o - 75) * 4.0;
+  else if (o < 85) anchor = 45 + (o - 80) * 6.25;
+  else if (o < 88) anchor = 72 + (o - 84) * 8.0;
+  else if (o < 91) anchor = 100 + (o - 87) * 10.0;
+  else if (o < 94) anchor = 130 + (o - 90) * 10.0;
+  else anchor = 160 + (o - 93) * 12.0;
+  return Math.max(3, Math.round(anchor * 10) / 10);
 }
 
 /** Pool sort/bar — prefer backend TV; fall back to steep OVR anchor. */
@@ -245,7 +236,7 @@ function resolveFlagIso2(player) {
 function tradeFlagUrl(player, size = 64) {
   const iso2 = resolveFlagIso2(player);
   if (!iso2) return null;
-  return `https://flagsapi.com/${iso2}/flat/${size}.png`;
+  return `https://flagsapi.com/${iso2}/flat/${nearestFlagApiSize(size)}.png`;
 }
 
 function qualitativeBreakdownTags(breakdown) {
@@ -325,7 +316,7 @@ function TradeValueChip({ item, compact = false, className = "" }) {
   );
 }
 
-const TRADE_VALUE_FORMULA_VERSION = 3;
+const TRADE_VALUE_FORMULA_VERSION = 4;
 
 function resolveBackendTradeValue(row, tradeAssets, teamId) {
   const pid = String(row?.player_id || row?.id || "");
@@ -750,12 +741,18 @@ function normalizePlayerFromRow(row, teamId, franchiseState, isUserTeam = false,
     Boolean(tradeMeta.requiresNtcWaive || row?.requires_ntc_waive) ||
     ((protection === "NTC" || protection === "M-NTC") && !ntcWaived && tradeMeta.tradeable === false);
   const clauseBlocked = Boolean(clauseBlockReason(protection, tradeMeta)) && !ntcWaived;
+  const conductRestricted = Boolean(
+    row?.conduct_trade_restricted ||
+      row?.conductTradeRestricted ||
+      tradeMeta?.conductTradeRestricted
+  );
   const blockReason =
     ntcWaived
       ? ""
       : tradeMeta.tradeBlockReason ||
         clauseBlockReason(protection, tradeMeta) ||
-        (protection === "NMC" ? "No-movement clause" : "");
+        (protection === "NMC" ? "No-movement clause" : "") ||
+        (conductRestricted ? "Restricted trade market after conduct matter" : "");
   const season = seasonStatsFromRow(row, franchiseState);
 
   const base = {
@@ -769,6 +766,7 @@ function normalizePlayerFromRow(row, teamId, franchiseState, isUserTeam = false,
     tradeValueSource: tradeMeta.source,
     tradeable: (tradeMeta.tradeable !== false && !clauseBlocked) || ntcWaived,
     tradeBlockReason: blockReason,
+    conductTradeRestricted: conductRestricted,
     clauseLabel: tradeMeta.clauseLabel || protection,
     approvedTradeTeams: tradeMeta.approvedTradeTeams,
     requiresNtcWaive,
@@ -918,14 +916,35 @@ function normalizePickFromBackend(pick, ownerTeamId) {
   };
 }
 
-function getOwnedPicks(teamId, tradeAssets, rosterOrgs) {
+function getOwnedPicks(teamId, tradeAssets, rosterOrgs, franchiseState) {
   const tid = String(teamId);
   const fromApi = safeArray(tradeAssets?.teams?.[tid]?.picks);
-  if (fromApi.length) return fromApi.map((p) => normalizePickFromBackend(p, tid));
   const org = safeArray(rosterOrgs).find((o) => String(o.team_id) === tid);
   const fromOrg = safeArray(org?.trade_picks);
-  if (fromOrg.length) return fromOrg.map((p) => normalizePickFromBackend(p, tid));
-  return [];
+  const raw = fromApi.length ? fromApi : fromOrg;
+  const minYear = resolveTradeableDraftYear(franchiseState, tradeAssets);
+  return raw
+    .map((p) => normalizePickFromBackend(p, tid))
+    .filter((p) => {
+      if (p?.resolved === true) return false;
+      const y = Number(p?.year ?? p?.draftYear ?? p?.draft_year);
+      if (!Number.isFinite(y)) return false;
+      return minYear == null || y >= minYear;
+    });
+}
+
+function resolveTradeableDraftYear(franchiseState, tradeAssets) {
+  const explicit =
+    tradeAssets?.tradeable_draft_year ??
+    tradeAssets?.tradeableDraftYear ??
+    franchiseState?.tradeable_draft_year ??
+    franchiseState?.tradeableDraftYear;
+  if (explicit != null && Number.isFinite(Number(explicit))) return Number(explicit);
+  const draftDone = Boolean(
+    franchiseState?.draft_completed ?? franchiseState?.draftCompleted ?? tradeAssets?.draft_completed,
+  );
+  const draftYear = resolveDraftYear(franchiseState);
+  return draftDone ? draftYear + 1 : draftYear;
 }
 
 function getTeamCapSummary(teamId, franchiseState, tradeAssets, rosterPlayers) {
@@ -935,20 +954,16 @@ function getTeamCapSummary(teamId, franchiseState, tradeAssets, rosterPlayers) {
   const isUser = tid === userId;
   const teamState = franchiseState?.team || {};
 
+  // Prefer live trade-assets API snap over stale franchiseState mirrors —
+  // offseason pending July-1 exclusions and post-sign syncs land here first.
   let capHit = normalizeMoneyMillions(
-    isUser
-      ? teamState.cap_hit ?? teamState.capHit ?? apiCap.total_cap_hit ?? apiCap.totalCapHit
-      : apiCap.total_cap_hit ?? apiCap.totalCapHit ?? teamState.cap_hit,
+    apiCap.total_cap_hit ?? apiCap.totalCapHit ?? (isUser ? teamState.cap_hit ?? teamState.capHit : null),
   );
   let capLimit = normalizeMoneyMillions(
-    isUser
-      ? teamState.salary_cap ?? teamState.cap_limit ?? apiCap.upper_limit ?? apiCap.upperLimit
-      : apiCap.upper_limit ?? apiCap.upperLimit,
+    apiCap.upper_limit ?? apiCap.upperLimit ?? (isUser ? teamState.salary_cap ?? teamState.cap_limit : null),
   );
   let capSpace = normalizeMoneyMillions(
-    isUser
-      ? teamState.cap_space ?? teamState.capSpace ?? apiCap.usable_cap_space ?? apiCap.usableCapSpace
-      : apiCap.usable_cap_space ?? apiCap.usableCapSpace,
+    apiCap.usable_cap_space ?? apiCap.usableCapSpace ?? (isUser ? teamState.cap_space ?? teamState.capSpace : null),
   );
 
   const rosterSum = safeArray(rosterPlayers).reduce((s, p) => s + (Number(p.capHit) || 0), 0);
@@ -1440,6 +1455,65 @@ function potentialGradeFromPlayer(row, ovr, age) {
   return "D";
 }
 
+function rowHasNhlSpc(row, apiBlock = {}) {
+  if (apiBlock && apiBlock.tradeable === true) return true;
+  if (apiBlock && String(apiBlock.trade_block_reason || "").toLowerCase().includes("spc required")) {
+    return false;
+  }
+  if (apiBlock && apiBlock.assignment_level && apiBlock.assignment_level !== "nhl" && apiBlock.trade_value != null) {
+    return apiBlock.tradeable !== false;
+  }
+  const c = row?.contract || {};
+  if (c.is_nhl_spc === false || c.nhl_spc === false || c.standard_player_contract === false) return false;
+  if (c.is_nhl_spc === true || c.nhl_spc === true || c.standard_player_contract === true) return true;
+  const ctype = String(c.type || c.contract_type || c.contractType || "").toUpperCase().replace(/[\s-]+/g, "_");
+  if (["AHL", "ECHL", "AHL_ECHL", "PTO", "ATO", "TRYOUT", "AHL_ONLY", "ECHL_ONLY", "MINORS"].includes(ctype)) {
+    return false;
+  }
+  const aav = Number(c.capHit ?? c.aav ?? c.aav_m ?? c.cap_hit_m ?? 0);
+  const years = Number(c.term ?? c.years_remaining ?? c.years ?? 0);
+  const signed = Boolean(c.isSigned || c.signed || String(row?.signed_status || "").toLowerCase() === "signed");
+  if (years > 0 && (aav > 0 || signed || ctype === "ELC" || ctype === "STANDARD" || ctype === "SPC" || ctype === "")) {
+    // Empty type with remaining term usually means NHL SPC in this save model.
+    if (ctype === "" && aav <= 0 && !signed) return false;
+    return years > 0 && (aav > 0 || signed || ["ELC", "STANDARD", "SPC", "NHL", "RFA_BRIDGE"].includes(ctype) || ctype === "");
+  }
+  return false;
+}
+
+function buildAffiliatePlayersForTeam(org, teamId, franchiseState, isUser, tradeAssets) {
+  const seen = new Set();
+  const out = [];
+  const add = (row, source, index) => {
+    const pid = String(row?.player_id || row?.id || "");
+    if (pid && seen.has(pid)) return;
+    if (pid) seen.add(pid);
+    const base = normalizePlayerFromRow(row, teamId, franchiseState, isUser, index, tradeAssets);
+    const apiBlock = tradeAssets?.teams?.[String(teamId)]?.players?.[pid] || {};
+    const hasSpc = rowHasNhlSpc(row, apiBlock);
+    const tradeable =
+      hasSpc &&
+      apiBlock.tradeable !== false &&
+      base.tradeable !== false;
+    out.push({
+      ...base,
+      type: "player",
+      tradeable,
+      tradeBlockReason: tradeable
+        ? undefined
+        : apiBlock.trade_block_reason ||
+          base.tradeBlockReason ||
+          "Affiliate-only contract — NHL SPC required",
+      league: String(row?.league || source.toUpperCase()),
+      orgLevel: source,
+      assignment_level: apiBlock.assignment_level || source,
+    });
+  };
+  safeArray(org?.ahl).forEach((row, i) => add(row, "ahl", i + 100));
+  safeArray(org?.echl).forEach((row, i) => add(row, "echl", i + 200));
+  return out.sort(compareAssetsByTradeValue);
+}
+
 function buildProspectsForTeam(org, teamId, franchiseState, isUser, tradeAssets) {
   const seen = new Set();
   const out = [];
@@ -1451,15 +1525,39 @@ function buildProspectsForTeam(org, teamId, franchiseState, isUser, tradeAssets)
     if (pid) seen.add(pid);
     const isNhl = source === "nhl";
     const base = normalizePlayerFromRow(row, teamId, franchiseState, isUser, index, tradeAssets);
+    const apiBlock = tradeAssets?.teams?.[String(teamId)]?.players?.[pid] || {};
+    const hasNhlSpc = rowHasNhlSpc(row, apiBlock);
+    // Unsigned draft rights are their own tradeable asset class.
+    const isDraftRights = source === "prospect" || apiBlock.is_draft_rights === true;
+    // Youth tab: true prospects. Tradeable NHL-SPC affiliates still appear under MINORS.
+    let tradeable;
+    if (isNhl) {
+      tradeable = base.tradeable !== false;
+    } else if (isDraftRights) {
+      tradeable = apiBlock.tradeable !== false && base.tradeable !== false;
+    } else {
+      tradeable = hasNhlSpc && apiBlock.tradeable !== false && base.tradeable !== false;
+    }
     out.push({
       ...base,
-      type: isNhl ? "player" : "prospect",
-      tradeable: isNhl,
-      league: isNhl ? "NHL" : String(row?.league || "AHL"),
+      type: isNhl || (tradeable && !isDraftRights) ? "player" : "prospect",
+      tradeable,
+      tradeBlockReason: tradeable
+        ? undefined
+        : apiBlock.trade_block_reason ||
+          (source !== "nhl" ? "Affiliate-only contract — NHL SPC required" : base.tradeBlockReason),
+      league: isNhl
+        ? "NHL"
+        : String(row?.league || row?.development_path || source.toUpperCase()),
+      orgLevel: source,
+      assignment_level: apiBlock.assignment_level || source,
+      isDraftRights,
     });
   };
   safeArray(org.nhl).forEach((row, i) => add(row, "nhl", i));
   safeArray(org.ahl).forEach((row, i) => add(row, "ahl", i + 100));
+  safeArray(org.echl).forEach((row, i) => add(row, "echl", i + 200));
+  safeArray(org.prospects).forEach((row, i) => add(row, "prospect", i + 300));
   return out.sort(compareAssetsByTradeValue);
 }
 
@@ -1472,6 +1570,7 @@ function buildTeamsMeta(franchiseState, tradeAssets, tradeMarket = null) {
   const draftYear = resolveDraftYear(franchiseState);
   const tradeContext = { tradeAssets, tradeMarket, deadlinePhase: tradeMarket?.deadline_phase };
   const players = {};
+  const affiliates = {};
   const picks = {};
   const prospects = {};
 
@@ -1479,10 +1578,14 @@ function buildTeamsMeta(franchiseState, tradeAssets, tradeMarket = null) {
     const tid = String(org.team_id);
     const isUser = tid === userTeamId;
     players[tid] = safeArray(org.nhl)
-      .map((row, index) => normalizePlayerFromRow(row, tid, franchiseState, isUser, index, tradeAssets))
+      .map((row, index) => {
+        const p = normalizePlayerFromRow(row, tid, franchiseState, isUser, index, tradeAssets);
+        return { ...p, type: "player", orgLevel: "nhl", assignment_level: "nhl", league: "NHL" };
+      })
       .sort(compareAssetsByTradeValue);
+    affiliates[tid] = buildAffiliatePlayersForTeam(org, tid, franchiseState, isUser, tradeAssets);
     prospects[tid] = buildProspectsForTeam(org, tid, franchiseState, isUser, tradeAssets);
-    picks[tid] = getOwnedPicks(tid, tradeAssets, rb.organizations);
+    picks[tid] = getOwnedPicks(tid, tradeAssets, rb.organizations, franchiseState);
   });
 
   const teams = rb.organizations.map((org) => {
@@ -1497,6 +1600,8 @@ function buildTeamsMeta(franchiseState, tradeAssets, tradeMarket = null) {
     const direction = getTeamDirection(tid, tradeAssets, franchiseState, standings);
     const needsSummary = ta.needs_summary || {};
     const depth = ta.depth || {};
+    const rosterCapacity = ta.roster_capacity || {};
+    const contractSlots = ta.contract_slots || {};
     const playoffOdds = resolvePlayoffOdds(ta, stRow, franchiseState);
     const statusLabel = resolveStatusLabel(ta, direction, stRow, franchiseState);
     const healthAdjustedRating =
@@ -1534,7 +1639,12 @@ function buildTeamsMeta(franchiseState, tradeAssets, tradeMarket = null) {
       needs: ta.needs || {},
       needsSummary,
       depth,
-      rosterCount: safeArray(org.nhl).length,
+      rosterCapacity,
+      contractSlots,
+      rosterCount:
+        rosterCapacity.nhl_count != null && Number.isFinite(Number(rosterCapacity.nhl_count))
+          ? Number(rosterCapacity.nhl_count)
+          : safeArray(org.nhl).length,
       prospectCount: safeArray(prospects[tid]).length,
       ratings,
       healthAdjustedRating,
@@ -1577,6 +1687,7 @@ function buildTeamsMeta(franchiseState, tradeAssets, tradeMarket = null) {
   return {
     teams,
     players,
+    affiliates,
     picks,
     prospects,
     userTeamId,
@@ -1759,13 +1870,17 @@ function findAssetInPackage(asset, leftAssets, rightAssets) {
 
 function assetMiniTags(item) {
   const tags = [];
+  if (item.locker_room_cancer || item.brady_tkachuk_chaos || String(item.name || "").toUpperCase().includes("CANCER")) {
+    tags.push("CANCER");
+  }
   if (item.tradeable === false) tags.push("Blocked");
   else if (item.protection && item.protection !== "None") tags.push(item.protection);
   const ct = String(item.contractType || "").toLowerCase();
   if (ct.includes("entry")) tags.push("ELC");
   if (item.is_injured) tags.push("Injured");
-  if (item.tradeValue != null && item.tradeValue >= 75) tags.push("High Value");
-  return tags.slice(0, 2);
+  if (item.tradeValue != null && item.tradeValue < 0) tags.push("Toxic");
+  else if (item.tradeValue != null && item.tradeValue >= 75) tags.push("High Value");
+  return tags.slice(0, 3);
 }
 
 function emptySlots(n = SLOTS) {
@@ -2519,10 +2634,12 @@ function DraftPickYearSection({
   side,
   teamId,
   teamLookup,
+  teamLookupByAbbr,
   usedIds,
   onDragStart,
   onQuickAdd,
   onAssetClick,
+  peakValue = null,
 }) {
   return (
     <>
@@ -2539,23 +2656,25 @@ function DraftPickYearSection({
           side={side}
           teamId={teamId}
           teamLookup={teamLookup}
+          teamLookupByAbbr={teamLookupByAbbr}
           usedIds={usedIds}
           onDragStart={onDragStart}
           onQuickAdd={onQuickAdd}
           onAssetClick={onAssetClick}
+          peakValue={peakValue}
         />
       ))}
     </>
   );
 }
 
-function PlayerValueFocus({ item }) {
+function PlayerValueFocus({ item, peakValue = null }) {
   const tvRaw =
     item?.type === "pick"
       ? poolPickValueScore(item)
       : poolPlayerValueScore(item);
   const tv = Number.isFinite(Number(tvRaw)) && Number(tvRaw) > 0 ? Number(tvRaw) : null;
-  const pct = tradeValueBarPct(tv || 0);
+  const pct = tradeValueBarPct(tv || 0, peakValue);
 
   const tier = valueTierFromScore(tv || 0).toLowerCase().replace(/\s+/g, "-");
   const isPick = item?.type === "pick";
@@ -2583,11 +2702,14 @@ function AssetPoolRow({
   onDragStart,
   onQuickAdd,
   onAssetClick,
+  peakValue = null,
 }) {
   const key = `${item.type}-${item.id}`;
   const used = usedIds.has(key);
-  const isAhlProspect = item.type === "prospect";
+  const isAhlProspect = item.type === "prospect" && item.tradeable === false;
   const blocked = item.tradeable === false;
+  const affiliateLevel = String(item.orgLevel || item.assignment_level || "").toLowerCase();
+  const isAffiliate = affiliateLevel === "ahl" || affiliateLevel === "echl";
   const ntcLocked = blocked && (item.requiresNtcWaive || String(item.protection || item.clauseLabel || "").toUpperCase().includes("NTC")) && !item.ntcWaived;
   const draggable = !used && !blocked;
   const originalTeamId = String(item?.original_team_id || "");
@@ -2611,7 +2733,11 @@ function AssetPoolRow({
     item.ntcWaived
       ? "NTC waived — slightly reduced trade value"
       : item.tradeBlockReason ||
-        (isAhlProspect ? "AHL prospect — NHL roster required" : blocked ? "Not tradeable" : "");
+        (isAhlProspect || (isAffiliate && blocked)
+          ? "Affiliate without NHL SPC"
+          : blocked
+            ? "Not tradeable"
+            : "");
 
   const handleClick = (e) => {
     if (e.detail > 1) return;
@@ -2632,9 +2758,17 @@ function AssetPoolRow({
     <span className="trade-pool-status-pill locked" title={blockTitle || "Ask to waive NTC"}>
       NTC
     </span>
+  ) : item.conductTradeRestricted ? (
+    <span className="trade-pool-status-pill locked" title={blockTitle || "Restricted trade market after conduct matter"}>
+      CONDUCT
+    </span>
   ) : blocked || isAhlProspect ? (
     <span className="trade-pool-status-pill locked" title={blockTitle}>
       LOCKED
+    </span>
+  ) : isAffiliate ? (
+    <span className="trade-pool-status-pill" title="NHL SPC — tradeable from affiliate">
+      {affiliateLevel.toUpperCase()}
     </span>
   ) : null;
 
@@ -2651,12 +2785,6 @@ function AssetPoolRow({
         ]
           .filter(Boolean)
           .join(" · ")
-      : "";
-
-  const pickTv = Number(item?.tradeValue ?? item?.value_hint);
-  const pickTvLabel =
-    item.type === "pick" && Number.isFinite(pickTv) && pickTv > 0
-      ? `TV ${pickTv.toFixed(1)}`
       : "";
 
   return (
@@ -2682,7 +2810,6 @@ function AssetPoolRow({
             <div className="trade-player-list-name-row">
               <strong>
                 {item.year} {roundLabel(item.round)}
-                {pickTvLabel ? ` · ${pickTvLabel}` : ""}
               </strong>
             </div>
             <div className="trade-pick-origin-line">
@@ -2694,7 +2821,7 @@ function AssetPoolRow({
             </div>
 
             <div className="trade-player-list-mid trade-pick-list-mid">
-              <PlayerValueFocus item={item} />
+              <PlayerValueFocus item={item} peakValue={peakValue} />
             </div>
           </div>
 
@@ -2725,7 +2852,7 @@ function AssetPoolRow({
                 <span className="trade-player-detail-cap">{formatPlayerCapLabel(item)}</span>
               </div>
 
-              <PlayerValueFocus item={item} />
+              <PlayerValueFocus item={item} peakValue={peakValue} />
             </div>
             {seasonLine ? <div className="trade-pool-season-line">{seasonLine}</div> : null}
           </div>
@@ -2755,8 +2882,9 @@ function AssetPool({
   onQuickAdd,
   onAssetClick,
 }) {
-  const [tab, setTab] = useState("NHL");
+  const [tab, setTab] = useState("ROSTER");
   const players = safeArray(meta?.players?.[teamId]);
+  const affiliates = safeArray(meta?.affiliates?.[teamId]);
   const picks = safeArray(meta?.picks?.[teamId]);
   const prospects = safeArray(meta?.prospects?.[teamId]);
   const teamLookup = useMemo(
@@ -2773,26 +2901,65 @@ function AssetPool({
     [meta?.teams],
   );
 
-  const rows = useMemo(() => {
-    if (tab === "PICKS") return [];
-    if (tab === "YOUTH") {
-      return sortPoolByValue(prospects.map((p) => ({ ...p, type: p.type || "prospect" })));
+  const rosterRows = useMemo(() => {
+    const byId = new Map();
+    const levelRank = (level) => {
+      const org = String(level || "").toLowerCase();
+      if (org === "nhl") return 3;
+      if (org === "ahl" || org === "echl") return 2;
+      return 1;
+    };
+    const push = (p, fallbackType, levelHint) => {
+      const id = String(p?.id || p?.player_id || "");
+      if (!id) return;
+      const orgLevel = String(p?.orgLevel || p?.assignment_level || levelHint || "nhl").toLowerCase();
+      const existing = byId.get(id);
+      const rank = levelRank(orgLevel);
+      const existingRank = existing ? levelRank(existing.orgLevel) : 0;
+      if (existing && existingRank >= rank) return;
+      byId.set(id, {
+        ...p,
+        type: p.type || fallbackType,
+        orgLevel: p.orgLevel || p.assignment_level || levelHint || "nhl",
+      });
+    };
+    players.forEach((p) => push(p, "player", "nhl"));
+    affiliates.forEach((p) =>
+      push(p, p.type || "player", String(p.orgLevel || p.assignment_level || "ahl").toLowerCase()),
+    );
+    prospects.forEach((p) => push(p, p.type || "prospect", "youth"));
+    return sortPoolByValue(Array.from(byId.values()));
+  }, [players, affiliates, prospects]);
+
+  const rosterPeak = useMemo(() => {
+    let peak = 1;
+    for (const row of rosterRows) {
+      const score = poolPlayerValueScore(row);
+      if (score > peak) peak = score;
     }
-    return sortPoolByValue(players.map((p) => ({ ...p, type: "player" })));
-  }, [tab, players, prospects]);
+    return peak;
+  }, [rosterRows]);
 
   const pickYearGroups = useMemo(() => {
     if (tab !== "PICKS") return [];
     return groupPicksByDraftYear(picks.map((p) => ({ ...p, type: "pick" })));
   }, [tab, picks]);
 
+  const picksPeak = useMemo(() => {
+    let peak = 1;
+    for (const p of picks) {
+      const score = poolPickValueScore(p);
+      if (score > peak) peak = score;
+    }
+    return peak;
+  }, [picks]);
+
   return (
     <div className="trade-asset-pool">
-      <div className="trade-pool-tabs">
+      <div className="trade-pool-tabs trade-pool-tabs-flat">
         {[
-          ["NHL", players.length],
+          ["ROSTER", rosterRows.length],
           ["PICKS", picks.length],
-          ["YOUTH", prospects.length],
         ].map(([label, count]) => (
           <button
             key={label}
@@ -2821,15 +2988,16 @@ function AssetPool({
                 onDragStart={onDragStart}
                 onQuickAdd={onQuickAdd}
                 onAssetClick={onAssetClick}
+                peakValue={picksPeak}
               />
             ))
           ) : (
             <div className="trade-pool-empty">No picks loaded</div>
           )
-        ) : rows.length ? (
-          rows.map((item) => (
+        ) : rosterRows.length ? (
+          rosterRows.map((item) => (
             <AssetPoolRow
-              key={`${item.type}-${item.id}`}
+              key={`${item.type}-${item.id}-${item.orgLevel || "nhl"}`}
               item={item}
               side={side}
               teamId={teamId}
@@ -2839,10 +3007,11 @@ function AssetPool({
               onDragStart={onDragStart}
               onQuickAdd={onQuickAdd}
               onAssetClick={onAssetClick}
+              peakValue={rosterPeak}
             />
           ))
         ) : (
-          <div className="trade-pool-empty">No {tab.toLowerCase()} loaded</div>
+          <div className="trade-pool-empty">No roster assets loaded</div>
         )}
       </div>
     </div>
@@ -3143,9 +3312,11 @@ function tradeValueComparisonLabel(userGive, partnerGive, partnerAbbr) {
   const left = Number(userGive) || 0;
   const right = Number(partnerGive) || 0;
 
+  // The panel header already states the deal state; the spine labels what the
+  // two bars measure so the same words are not printed twice.
   if (left <= 0 && right <= 0) {
     return {
-      headline: "BUILD DEAL",
+      headline: "TRADE VALUE",
       leftLabel: "—",
       rightLabel: "—",
       leftTone: "neutral",
@@ -3155,7 +3326,7 @@ function tradeValueComparisonLabel(userGive, partnerGive, partnerAbbr) {
 
   if (left <= 0 || right <= 0) {
     return {
-      headline: "ADD BOTH SIDES",
+      headline: "TRADE VALUE",
       leftLabel: left > 0 ? left.toFixed(1) : "—",
       rightLabel: right > 0 ? right.toFixed(1) : "—",
       leftTone: "neutral",
@@ -4635,6 +4806,8 @@ function buildReviewPlayerLookup({ meta, userTeamId, partnerTeamId, userOutgoing
   safeArray(partnerOutgoing).forEach((a) => { if (a?.type === "player") add(a); });
   safeArray(meta?.players?.[userTeamId]).forEach(add);
   safeArray(meta?.players?.[partnerTeamId]).forEach(add);
+  safeArray(meta?.affiliates?.[userTeamId]).forEach(add);
+  safeArray(meta?.affiliates?.[partnerTeamId]).forEach(add);
   safeArray(meta?.prospects?.[userTeamId]).forEach(add);
   safeArray(meta?.prospects?.[partnerTeamId]).forEach(add);
   return lookup;
@@ -5802,6 +5975,65 @@ function TeamIdentityCard({ team, onClick }) {
   );
 }
 
+function formatRosterCapacityLine(team) {
+  const rc = team?.rosterCapacity || {};
+  const count = rc.nhl_count ?? team?.rosterCount;
+  const max = rc.nhl_max ?? 23;
+  if (count == null || !Number.isFinite(Number(count))) return null;
+  return `${Math.round(Number(count))}/${Math.round(Number(max))} NHL`;
+}
+
+function formatRosterCompositionLine(team) {
+  const rc = team?.rosterCapacity || {};
+  if (rc.composition) return String(rc.composition);
+  const f = rc.forwards;
+  const d = rc.defense;
+  const g = rc.goalies;
+  if (f == null && d == null && g == null) return null;
+  return `${f ?? "—"}F · ${d ?? "—"}D · ${g ?? "—"}G`;
+}
+
+function formatContractSlotsLine(team) {
+  const slots = team?.contractSlots || {};
+  const used = slots.used ?? slots.nhl_spcs_used;
+  const limit = slots.limit ?? 50;
+  if (used == null || !Number.isFinite(Number(used))) return null;
+  return `${Math.round(Number(used))}/${Math.round(Number(limit))} SPC`;
+}
+
+function RosterCapacityStrip({ team, compact = false }) {
+  if (!team) return null;
+  const nhl = formatRosterCapacityLine(team);
+  const composition = formatRosterCompositionLine(team);
+  const slots = formatContractSlotsLine(team);
+  if (!nhl && !composition && !slots) return null;
+  const rc = team.rosterCapacity || {};
+  const slotsObj = team.contractSlots || {};
+  const nhlTone =
+    Number(rc.nhl_count) > Number(rc.nhl_max ?? 23)
+      ? "bad"
+      : Number(rc.nhl_count) < Number(rc.nhl_min ?? 20)
+        ? "warn"
+        : "ok";
+  const slotTone =
+    Number(slotsObj.used) > Number(slotsObj.limit ?? 50)
+      ? "bad"
+      : Number(slotsObj.available) <= 2
+        ? "warn"
+        : "ok";
+
+  return (
+    <div className={`trade-roster-capacity${compact ? " is-compact" : ""}`} aria-label="Roster capacity">
+      {!compact ? <span className="trade-roster-capacity__title">Roster Capacity</span> : null}
+      <div className="trade-roster-capacity__row">
+        {nhl ? <span className={`trade-roster-capacity__pill tone-${nhlTone}`}>{nhl}</span> : null}
+        {composition ? <span className="trade-roster-capacity__pill">{composition}</span> : null}
+        {slots ? <span className={`trade-roster-capacity__pill tone-${slotTone}`}>{slots}</span> : null}
+      </div>
+    </div>
+  );
+}
+
 function IntelListRow({ label, value, tone }) {
   const display =
     value == null || value === "" || (typeof value === "number" && !Number.isFinite(value))
@@ -5837,6 +6069,9 @@ function TeamIntelDashboard({
       : null;
   const status = sidebarStatusLabel(team);
   const topNeed = safeArray(team.needsSummary?.needs_short || team.needsSummary?.needs)[0] || null;
+  const nhlLine = formatRosterCapacityLine(team);
+  const slotsLine = formatContractSlotsLine(team);
+  const composition = formatRosterCompositionLine(team);
 
   // Keep the desk readable — deep intel lives in Details / View Players.
   const rows = [
@@ -5849,6 +6084,15 @@ function TeamIntelDashboard({
         : cap,
       tone: capTone,
     },
+    nhlLine ? { label: "NHL", value: nhlLine, tone: Number(team.rosterCapacity?.nhl_count) > 23 ? "bad" : "ok" } : null,
+    composition ? { label: "DEPTH", value: composition } : null,
+    slotsLine
+      ? {
+          label: "SLOTS",
+          value: slotsLine,
+          tone: Number(team.contractSlots?.used) > Number(team.contractSlots?.limit ?? 50) ? "bad" : "ok",
+        }
+      : null,
     { label: "STATUS", value: status },
     playoff ? { label: "PLAYOFF", value: playoff } : null,
     topNeed ? { label: "NEED", value: String(topNeed).toUpperCase() } : null,
@@ -5874,6 +6118,8 @@ function TeamIntelDashboard({
           ) : null}
         </div>
       </button>
+
+      <RosterCapacityStrip team={team} />
 
       <div className="trade-intel-list trade-intel-list-lean">
         {rows.map((row) => (
@@ -5924,13 +6170,14 @@ function TeamPlayersDrawer({
           <TradeLogo team={team} size={72} />
           <div className="trade-players-header-main">
             <strong>{team.name}</strong>
-            <span>{team.abbr} · Roster Assets</span>
+            <span>{team.abbr} · Roster Assets · Click a line to add it to the package</span>
             <div className="trade-players-intel-strip">
               <span className="trade-players-intel-pill"><span>REC</span> {team.record || "—"}</span>
               <span className="trade-players-intel-pill"><span>SPACE</span> {cap}</span>
               <span className="trade-players-intel-pill"><span>PO</span> {po}</span>
               <span className="trade-players-intel-pill"><span>STATUS</span> {status}</span>
             </div>
+            <RosterCapacityStrip team={team} compact />
           </div>
           <button type="button" className="trade-drawer-close" onClick={onClose}>×</button>
         </div>
@@ -6167,11 +6414,16 @@ function buildTradeDecisionToast({
   const fanHeatLabel = fan?.heatLabel || evaluation?.fan_reaction?.fan_heat_label || "";
   const userBd = evaluation?.asset_breakdown?.user || {};
   const userNet = Number(userBd.net) || 0;
-  const reasonsText = safeArray(evaluation?.rejection_reasons)
-    .join(" ")
-    .toLowerCase();
+  const fairnessGap = Number(evaluation?.fairness_gap);
+  const blockDetail = evaluation?.trade_review?.block_detail || evaluation?.block_detail || {};
+  const detailMessage = String(blockDetail.message || "").trim();
+  const detailUnblock = String(blockDetail.unblock_hint || "").trim();
+  const rejectionList = safeArray(evaluation?.rejection_reasons)
+    .map((r) => String(r || "").trim())
+    .filter(Boolean);
+  const reasonsText = rejectionList.join(" ").toLowerCase();
   const rawError = String(errorMessage || "").toLowerCase();
-  const allReasons = `${reasonsText} ${rawError}`;
+  const allReasons = `${reasonsText} ${rawError} ${detailMessage.toLowerCase()}`;
 
   if (accepted) {
     const partner = partnerAbbr || "partner";
@@ -6239,9 +6491,12 @@ function buildTradeDecisionToast({
     return {
       type: "rejected",
       severity: "blocked",
-      title: "REJECTED",
+      title: "BLOCKED",
       badge: "CAP BLOCK",
-      message: "Clear space.",
+      message: detailMessage || "Clear space.",
+      unblockHint: detailUnblock,
+      reasons: rejectionList,
+      modal: true,
     };
   }
 
@@ -6255,9 +6510,25 @@ function buildTradeDecisionToast({
     return {
       type: "rejected",
       severity: "blocked",
-      title: "REJECTED",
+      title: "BLOCKED",
       badge: "CLAUSE BLOCK",
-      message: "Player declined.",
+      message: detailMessage || "Player declined.",
+      unblockHint: detailUnblock,
+      reasons: rejectionList,
+      modal: true,
+    };
+  }
+
+  if (allReasons.includes("roster") || allReasons.includes("slot")) {
+    return {
+      type: "rejected",
+      severity: "blocked",
+      title: "BLOCKED",
+      badge: "ROSTER BLOCK",
+      message: detailMessage || "Roster or contract slots do not fit.",
+      unblockHint: detailUnblock || "Move a player out or free an SPC slot.",
+      reasons: rejectionList,
+      modal: true,
     };
   }
 
@@ -6267,7 +6538,11 @@ function buildTradeDecisionToast({
       severity: "close",
       title: "REJECTED",
       badge: "CLOSE",
-      message: "Add sweetener.",
+      message: detailMessage || "Add sweetener.",
+      unblockHint: detailUnblock || "Add a pick or swap for a lesser ask.",
+      reasons: rejectionList,
+      valueGap: Number.isFinite(fairnessGap) ? fairnessGap : null,
+      modal: true,
     };
   }
 
@@ -6276,7 +6551,11 @@ function buildTradeDecisionToast({
     severity: "lowball",
     title: "REJECTED",
     badge: "LOWBALL",
-    message: "Not enough.",
+    message: detailMessage || "Not enough.",
+    unblockHint: detailUnblock || "Improve the package value.",
+    reasons: rejectionList,
+    valueGap: Number.isFinite(fairnessGap) ? fairnessGap : null,
+    modal: true,
   };
 }
 
@@ -6765,24 +7044,102 @@ export default function TradeHub() {
     )));
   }, []);
 
+  const partnerAfterCap = projectedTeamCapSpace(partnerTeam, partnerOutgoing, userOutgoing);
+  const userAfterCap = projectedTeamCapSpace(userTeam, userOutgoing, partnerOutgoing);
+  const partnerRosterAfter = (() => {
+    const base = Number(partnerTeam?.rosterCount ?? partnerTeam?.rosterCapacity?.nhl_count);
+    if (!Number.isFinite(base)) return null;
+    const out = partnerOutgoing.filter((a) => a && a.type === "player").length;
+    const inn = userOutgoing.filter((a) => a && a.type === "player").length;
+    return base - out + inn;
+  })();
+  const userRosterAfter = (() => {
+    const base = Number(userTeam?.rosterCount ?? userTeam?.rosterCapacity?.nhl_count);
+    if (!Number.isFinite(base)) return null;
+    const out = userOutgoing.filter((a) => a && a.type === "player").length;
+    const inn = partnerOutgoing.filter((a) => a && a.type === "player").length;
+    return base - out + inn;
+  })();
+  const partnerSlotsAfter = (() => {
+    const used = Number(partnerTeam?.contractSlots?.used);
+    const limit = Number(partnerTeam?.contractSlots?.limit ?? 50);
+    if (!Number.isFinite(used)) return null;
+    const out = partnerOutgoing.filter((a) => a && (a.type === "player" || a.type === "prospect")).length;
+    const inn = userOutgoing.filter((a) => a && (a.type === "player" || a.type === "prospect")).length;
+    return { used: used - out + inn, limit };
+  })();
+  const userSlotsAfter = (() => {
+    const used = Number(userTeam?.contractSlots?.used);
+    const limit = Number(userTeam?.contractSlots?.limit ?? 50);
+    if (!Number.isFinite(used)) return null;
+    const out = userOutgoing.filter((a) => a && (a.type === "player" || a.type === "prospect")).length;
+    const inn = partnerOutgoing.filter((a) => a && (a.type === "player" || a.type === "prospect")).length;
+    return { used: used - out + inn, limit };
+  })();
+
+  const hardIllegalReason = (() => {
+    const pickOnly =
+      safeArray(userOutgoing).every((a) => a?.type === "pick") &&
+      safeArray(partnerOutgoing).every((a) => a?.type === "pick") &&
+      safeArray(userOutgoing).length > 0 &&
+      safeArray(partnerOutgoing).length > 0;
+    if (protectedConflict.length > 0) {
+      return `${partnerTeam?.abbr || "Partner"} will not trade ${playerLastName(protectedConflict[0])}.`;
+    }
+    if (!pickOnly && Number.isFinite(partnerAfterCap) && partnerAfterCap < -0.05) {
+      return `${partnerTeam?.abbr || "Partner"} would be −${formatMoneyShort(Math.abs(partnerAfterCap))} under the cap.`;
+    }
+    if (!pickOnly && Number.isFinite(userAfterCap) && userAfterCap < -0.05) {
+      return `You would be −${formatMoneyShort(Math.abs(userAfterCap))} under the cap.`;
+    }
+    if (!pickOnly && Number.isFinite(partnerRosterAfter) && partnerRosterAfter > 23) {
+      return `${partnerTeam?.abbr || "Partner"} would exceed the 23-man roster (${partnerRosterAfter}/23).`;
+    }
+    if (!pickOnly && Number.isFinite(userRosterAfter) && userRosterAfter > 23) {
+      return `You would exceed the 23-man roster (${userRosterAfter}/23).`;
+    }
+    if (!pickOnly && partnerSlotsAfter && partnerSlotsAfter.used > partnerSlotsAfter.limit) {
+      return `${partnerTeam?.abbr || "Partner"} would exceed 50 SPCs (${partnerSlotsAfter.used}/50).`;
+    }
+    if (!pickOnly && userSlotsAfter && userSlotsAfter.used > userSlotsAfter.limit) {
+      return `You would exceed 50 SPCs (${userSlotsAfter.used}/50).`;
+    }
+    if (evaluation?.can_execute === false && hasProposed) {
+      const detail = evaluation?.trade_review?.block_detail || evaluation?.block_detail;
+      const detailCode = String(detail?.code || detail?.primaryKey || "").toUpperCase();
+      const detailMsg = String(detail?.message || "");
+      // Never hard-lock Propose on a stale ACCEPTED / "works" summary from a prior eval.
+      const looksAccepted =
+        detailCode === "ACCEPTED" ||
+        /\bworks\.?$/i.test(detailMsg) ||
+        /deal can execute/i.test(detailMsg);
+      if (detailMsg && !looksAccepted && ["CAP", "CLAUSE", "ROSTER", "PICK", "RULES", "PROTECTED"].includes(detailCode)) {
+        return detailMsg;
+      }
+      const first = safeArray(evaluation?.rejection_reasons)[0];
+      if (first && !/\bworks\.?$/i.test(String(first))) return String(first);
+    }
+    return "";
+  })();
+
   const proposeDisabled =
     !bothSidesHaveAssets ||
     !partnerId ||
     !assetsPayload ||
     submitting ||
-    protectedConflict.length > 0;
+    Boolean(hardIllegalReason);
 
   const proposeSoftBlocked =
     !proposeDisabled &&
-    (softProtectedConflict.length > 0 ||
-      (() => {
-        const partnerAfter = projectedTeamCapSpace(partnerTeam, partnerOutgoing, userOutgoing);
-        const userAfter = projectedTeamCapSpace(userTeam, userOutgoing, partnerOutgoing);
-        return (
-          (Number.isFinite(partnerAfter) && partnerAfter < -0.05) ||
-          (Number.isFinite(userAfter) && userAfter < -0.05)
-        );
-      })());
+    softProtectedConflict.length > 0;
+
+  const proposeHoverReason =
+    hardIllegalReason ||
+    (!bothSidesHaveAssets
+      ? "Add assets to both packages before proposing."
+      : softProtectedConflict.length
+        ? `${playerLastName(softProtectedConflict[0])} is core — partner may reject.`
+        : "");
 
   const deskBlockDetail = useMemo(
     () =>
@@ -6853,7 +7210,7 @@ export default function TradeHub() {
   };
 
   const handlePropose = useCallback(async () => {
-    if (!assetsPayload || !bothSidesHaveAssets || !partnerId || submitting) return;
+    if (!assetsPayload || !bothSidesHaveAssets || !partnerId || submitting || hardIllegalReason) return;
     setHasProposed(true);
     setSubmitting(true);
     setSubmitStatus("idle");
@@ -6945,11 +7302,14 @@ export default function TradeHub() {
         console.warn("Trade submit failed:", cleanMsg);
 
         const rejectedEvaluation = {
-          ...(ev || {}),
           accepted: false,
           can_execute: false,
           rejection_reasons: [classified.label],
           technical_detail: cleanMsg,
+          // Do not spread prior ACCEPTED trade_review — that left "… works." while locking Propose.
+          trade_review: {
+            block_detail: { code: "REJECTED", message: classified.label },
+          },
         };
 
         const rejectedToast = buildTradeDecisionToast({
@@ -7001,6 +7361,7 @@ export default function TradeHub() {
     bothSidesHaveAssets,
     partnerId,
     submitting,
+    hardIllegalReason,
     setFranchiseState,
     userOutgoing,
     partnerOutgoing,
@@ -7190,17 +7551,29 @@ export default function TradeHub() {
                   {proposeOutcomeBadge}
                 </span>
               ) : null}
-              <button
-                type="button"
-                className={`trade-hub-propose-btn ${submitStatus === "accepted" ? "accepted" : ""} ${submitStatus === "rejected" && hasProposed ? "rejected" : ""} ${proposeSoftBlocked ? "soft-blocked" : ""}`}
-                disabled={proposeDisabled}
-                onClick={handlePropose}
+              <div
+                className={`trade-hub-propose-tip-wrap${proposeDisabled && proposeHoverReason ? " is-blocked" : ""}`}
+                title={proposeDisabled && proposeHoverReason ? proposeHoverReason : undefined}
               >
-                {proposeLabel}
-              </button>
+                <button
+                  type="button"
+                  className={`trade-hub-propose-btn ${submitStatus === "accepted" ? "accepted" : ""} ${submitStatus === "rejected" && hasProposed ? "rejected" : ""} ${proposeSoftBlocked ? "soft-blocked" : ""} ${proposeDisabled && hardIllegalReason ? "hard-blocked" : ""}`}
+                  disabled={proposeDisabled}
+                  onClick={handlePropose}
+                  aria-disabled={proposeDisabled}
+                >
+                  {proposeLabel}
+                </button>
+                {proposeDisabled && proposeHoverReason ? (
+                  <div className="trade-hub-propose-tooltip" role="tooltip">
+                    <strong>Propose locked</strong>
+                    <span>{proposeHoverReason}</span>
+                  </div>
+                ) : null}
+              </div>
             </div>
 
-            {shortReason && submitStatus !== "accepted" && (
+            {shortReason && submitStatus !== "accepted" && !(decisionToast?.modal) && (
               <div className={`trade-hub-block-reason trade-hub-warning-reason tone-${deskBlockDetail?.tone || "warn"}`}>
                 <strong>{deskBlockDetail?.code === "CAP" || deskBlockDetail?.badge === "BLOCKED" ? "Why blocked" : deskBlockDetail?.badge === "REJECTED" || deskBlockDetail?.badge === "OVERPAY" ? "Why rejected" : "Note"}</strong>
                 <span>{shortReason}</span>
@@ -7448,7 +7821,22 @@ export default function TradeHub() {
                 <span>{decisionToast.badge || "DONE"}</span>
               </div>
               <strong>{decisionToast.title || "TRADE COMPLETE"}</strong>
-              <p>{decisionToast.message}</p>
+              <p className="trade-decision-why">{decisionToast.message}</p>
+              {decisionToast.unblockHint ? (
+                <p className="trade-decision-unblock">
+                  <em>What would unblock:</em> {decisionToast.unblockHint}
+                </p>
+              ) : null}
+              {decisionToast.valueGap != null && Number.isFinite(Number(decisionToast.valueGap)) ? (
+                <p className="trade-decision-gap">Value gap · {Number(decisionToast.valueGap).toFixed(1)}</p>
+              ) : null}
+              {safeArray(decisionToast.reasons).length > 1 ? (
+                <ul className="trade-decision-reasons">
+                  {decisionToast.reasons.slice(0, 4).map((r, i) => (
+                    <li key={`${r}-${i}`}>{r}</li>
+                  ))}
+                </ul>
+              ) : null}
               {(decisionToast.sentLine || decisionToast.gotLine) && (
                 <div className="trade-success-swap">
                   {decisionToast.sentLine ? (
@@ -7498,30 +7886,30 @@ export default function TradeHub() {
 
 const TRADE_HUB_CSS = `
 .nhlcal-root.trade-hub-root {
-  --bg: #04101a;
-  --bg-2: #061522;
-  --panel: rgba(9, 25, 38, 0.94);
-  --panel-2: rgba(12, 35, 52, 0.94);
-  --panel-3: rgba(15, 46, 66, 0.78);
-  --line: rgba(156, 218, 236, 0.14);
-  --line-2: rgba(115, 229, 241, 0.25);
-  --line-strong: rgba(73, 231, 240, 0.5);
-  --text: #e9f7fb;
-  --muted: #8096a8;
-  --muted-2: #607789;
-  --cyan: #13d8e7;
-  --cyan-soft: rgba(19, 216, 231, 0.13);
-  --gold: #e9a83c;
-  --gold-soft: rgba(233, 168, 60, 0.14);
-  --green: #52df94;
-  --green-soft: rgba(82, 223, 148, 0.13);
-  --red: #ff606d;
-  --red-soft: rgba(255, 96, 109, 0.13);
-  --blue: #8ab4ff;
-  --blue-soft: rgba(138, 180, 255, 0.13);
-  --purple: #c992ff;
-  --purple-soft: rgba(201, 146, 255, 0.14);
-  --shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  --bg: var(--ops-navy, #04101a);
+  --bg-2: var(--ops-navy-deep, #061522);
+  --panel: var(--ops-panel, rgba(9, 25, 38, 0.94));
+  --panel-2: var(--ops-panel-2, rgba(12, 35, 52, 0.94));
+  --panel-3: var(--ops-panel-3, rgba(15, 46, 66, 0.78));
+  --line: var(--ops-grid, rgba(156, 218, 236, 0.14));
+  --line-2: var(--ops-grid-2, rgba(115, 229, 241, 0.25));
+  --line-strong: var(--ops-grid-strong, rgba(73, 231, 240, 0.5));
+  --text: var(--ops-text, #e9f7fb);
+  --muted: var(--ops-text-secondary, #8096a8);
+  --muted-2: var(--ops-text-disabled, #607789);
+  --cyan: var(--ops-cyan, #13d8e7);
+  --cyan-soft: var(--ops-cyan-soft, rgba(19, 216, 231, 0.13));
+  --gold: var(--ops-gold, #e9a83c);
+  --gold-soft: var(--ops-gold-soft, rgba(233, 168, 60, 0.14));
+  --green: var(--ops-success, #52df94);
+  --green-soft: var(--ops-success-soft, rgba(82, 223, 148, 0.13));
+  --red: var(--ops-injury, #ff606d);
+  --red-soft: var(--ops-injury-soft, rgba(255, 96, 109, 0.13));
+  --blue: var(--ops-info, #8ab4ff);
+  --blue-soft: var(--ops-info-soft, rgba(138, 180, 255, 0.13));
+  --purple: var(--ops-info, #8ab4ff);
+  --purple-soft: rgba(138, 180, 255, 0.14);
+  --shadow: var(--depth-overlay, 0 24px 70px rgba(0, 0, 0, 0.42));
 
   min-height: 100vh;
   height: 100vh;
@@ -7531,10 +7919,10 @@ const TRADE_HUB_CSS = `
   flex-direction: column;
   color: var(--text);
   background:
-    radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.12), transparent 30%),
-    radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.08), transparent 26%),
+    radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.08), transparent 30%),
+    radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.05), transparent 26%),
     linear-gradient(180deg, #06131f 0%, #020a11 100%);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-ops-ui, Inter, ui-sans-serif, system-ui, sans-serif);
 }
 .nhlcal-root.trade-hub-root *,
 .nhlcal-root.trade-hub-root *::before,
@@ -7589,39 +7977,37 @@ const TRADE_HUB_CSS = `
   gap: 12px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--line);
-  background:
-    linear-gradient(180deg, rgba(9, 27, 40, 0.94), rgba(5, 17, 27, 0.94)),
-    radial-gradient(circle at 66% 20%, rgba(19, 216, 231, 0.07), transparent 35%);
-  box-shadow: var(--shadow);
+  background: var(--panel);
+  box-shadow: none;
 }
 .trade-hub-back-btn {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--line-2);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
   color: var(--text);
   padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-control, 6px);
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--type-dept-label-size, 0.72rem);
   font-weight: 900;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+  transition: background var(--motion-micro, 110ms ease), border-color var(--motion-micro, 110ms ease);
 }
 .trade-hub-back-btn:hover {
-  transform: translateY(-1px);
+  transform: none;
   border-color: var(--line-strong);
   background: var(--cyan-soft);
 }
-.trade-hub-top-center { text-align: center; }
 .trade-hub-screen-title {
   margin: 0;
-  font-size: clamp(22px, 2.2vw, 32px);
-  font-weight: 1000;
+  font-size: clamp(18px, 2vw, 26px);
+  font-weight: 900;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text);
-  text-shadow: 0 0 28px rgba(19, 216, 231, 0.18);
+  text-shadow: none;
 }
+.trade-hub-top-center { text-align: center; }
 .trade-hub-top-right {
   display: flex;
   flex-direction: column;
@@ -7632,18 +8018,18 @@ const TRADE_HUB_CSS = `
 .trade-hub-partner-select {
   width: 100%;
   max-width: 220px;
-  background: rgba(12, 35, 52, 0.72);
+  background: var(--panel-2);
   border: 1px solid var(--line);
   color: var(--text);
   padding: 7px 10px;
   font-size: 11px;
   font-weight: 800;
-  border-radius: 10px;
+  border-radius: var(--radius-control, 6px);
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 .trade-hub-date-text {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--muted-2);
   letter-spacing: 0.04em;
@@ -7670,21 +8056,20 @@ const TRADE_HUB_CSS = `
   overflow: hidden;
 }
 .trade-team-panel {
-  background:
-    linear-gradient(180deg, rgba(9, 27, 40, 0.94), rgba(5, 17, 27, 0.94)),
-    radial-gradient(circle at 66% 20%, rgba(19, 216, 231, 0.07), transparent 35%);
+  background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 16px;
+  border-radius: var(--radius-hud, 4px);
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-height: 0;
-  box-shadow: var(--shadow);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: var(--depth-registered, inset 0 1px 0 rgba(255, 255, 255, 0.04));
+  transition: border-color var(--motion-micro, 110ms ease);
 }
 .trade-team-panel:hover {
   border-color: var(--line-2);
+  box-shadow: none;
 }
 .trade-team-panel-identity {
   display: flex;
@@ -7711,16 +8096,18 @@ const TRADE_HUB_CSS = `
   flex-wrap: wrap;
   gap: 5px;
 }
+/* Club standing marks read as league filings, not pills. */
 .trade-status-badge,
 .trade-conf-badge,
 .trade-div-badge {
-  font-size: 9px;
-  padding: 5px 9px;
-  border-radius: 999px;
-  letter-spacing: 0.1em;
+  font-size: 10px;
+  padding: 3px 7px;
+  border-radius: var(--radius-ops, 2px);
+  letter-spacing: 0.12em;
   font-weight: 900;
   text-transform: uppercase;
   border: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
 }
 .trade-status-badge {
   background: var(--green-soft);
@@ -7728,7 +8115,7 @@ const TRADE_HUB_CSS = `
   color: var(--green);
 }
 .trade-conf-badge { background: var(--cyan-soft); color: var(--cyan); border-color: rgba(19, 216, 231, 0.35); }
-.trade-div-badge { background: var(--purple-soft); color: var(--purple); border-color: rgba(201, 146, 255, 0.35); }
+.trade-div-badge { background: rgba(255, 255, 255, 0.05); color: var(--muted); border-color: var(--line); }
 .trade-team-rank-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -7737,13 +8124,13 @@ const TRADE_HUB_CSS = `
 .trade-team-rank-grid div {
   background: var(--panel-3);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-ops, 2px);
   padding: 8px 10px;
   text-align: center;
 }
 .trade-team-rank-grid span {
   display: block;
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 0.12em;
   color: var(--muted);
   text-transform: uppercase;
@@ -7764,7 +8151,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-rating-label {
   display: block;
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 0.14em;
   color: var(--muted);
   text-transform: uppercase;
@@ -7780,11 +8167,11 @@ const TRADE_HUB_CSS = `
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .trade-team-cap-strip span {
   display: block;
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 0.12em;
   color: var(--muted);
   text-transform: uppercase;
@@ -7799,7 +8186,7 @@ const TRADE_HUB_CSS = `
   text-align: center;
   padding: 8px;
   background: var(--purple-soft);
-  border: 1px solid rgba(201, 146, 255, 0.25);
+  border: 1px solid rgba(138, 180, 255, 0.25);
   border-radius: 12px;
   font-weight: 800;
   letter-spacing: 0.06em;
@@ -7811,6 +8198,9 @@ const TRADE_HUB_CSS = `
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
   margin-bottom: 8px;
+}
+.trade-pool-tabs-flat {
+  grid-template-columns: repeat(2, 1fr);
 }
 .trade-pool-list {
   flex: 1;
@@ -7849,6 +8239,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-pick-year-divider {
   display: flex;
+  flex: 0 0 auto;
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
@@ -7861,19 +8252,19 @@ const TRADE_HUB_CSS = `
 }
 .trade-pick-year-divider-title {
   color: rgba(148, 178, 194, 0.95);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 .trade-pick-year-divider-count {
   color: rgba(128, 150, 168, 0.85);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.1em;
 }
 .trade-players-full-body .trade-pool-pick {
-  grid-template-columns: 76px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr) auto;
 }
 .trade-players-full-body .trade-pick-list-mid {
   width: 100%;
@@ -7882,35 +8273,30 @@ const TRADE_HUB_CSS = `
   flex: 1 1 auto;
   width: 100%;
 }
+/* Round mark rides the same 34px identity column as a headshot; anything larger
+   overflows the scan line and gets clipped by the row. */
 .trade-players-full-body .trade-pool-pick-icon {
-  width: 64px;
-  height: 64px;
-  min-width: 64px;
-  border-radius: 14px;
-  border: 1px solid rgba(233, 168, 60, 0.38);
-  background:
-    linear-gradient(180deg, rgba(233, 168, 60, 0.2), rgba(7, 20, 32, 0.94));
-  box-shadow:
-    0 8px 18px rgba(0, 0, 0, 0.32),
-    inset 0 1px 0 rgba(255, 214, 102, 0.12),
-    0 0 14px rgba(233, 168, 60, 0.14);
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  border-radius: var(--radius-ops, 2px);
+  border: 1px solid rgba(233, 168, 60, 0.34);
+  background: rgba(233, 168, 60, 0.12);
+  box-shadow: none;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 0;
 }
 .trade-players-full-body .trade-pool-pick-icon .trade-pick-icon-round {
-  font-size: 18px;
+  font-size: 13px;
   font-weight: 1000;
   color: #ffd166;
   line-height: 1;
 }
 .trade-players-full-body .trade-pool-pick-icon .trade-pick-icon-year {
-  font-size: 10px;
-  font-weight: 900;
-  color: rgba(255, 214, 102, 0.82);
-  letter-spacing: 0.08em;
+  display: none;
 }
 .trade-players-full-body .trade-pool-pick .trade-player-value-fill,
 .trade-players-full-body .trade-pool-pick .is-pick-value .trade-player-value-fill,
@@ -7957,13 +8343,13 @@ const TRADE_HUB_CSS = `
 }
 .trade-pick-value-label {
   color: rgba(128, 150, 168, 0.9);
-  font-size: 7px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.1em;
 }
 .trade-pick-value-track {
   height: 4px;
-  border-radius: 999px;
+  border-radius: 1px;
   background: rgba(255, 255, 255, 0.08);
   overflow: hidden;
 }
@@ -7990,7 +8376,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-pick-range {
   color: rgba(128, 150, 168, 0.95);
-  font-size: 7px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.08em;
 }
@@ -8025,7 +8411,7 @@ const TRADE_HUB_CSS = `
   align-items: flex-start;
   justify-content: center;
   gap: 8px;
-  font-size: 10px;
+  font-size: 11px;
   margin-bottom: 8px;
   text-transform: uppercase;
 }
@@ -8046,7 +8432,7 @@ const TRADE_HUB_CSS = `
   justify-content: center;
   align-items: center;
   gap: 6px;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -8071,32 +8457,156 @@ const TRADE_HUB_CSS = `
 }
 .trade-package-cap-delta.good {
   color: var(--green);
-  text-shadow: 0 0 12px rgba(82, 223, 148, 0.2);
+  text-shadow: none;
 }
 .trade-package-cap-delta.bad {
   color: #ff9a6a;
-  text-shadow: 0 0 12px rgba(255, 154, 106, 0.18);
+  text-shadow: none;
 }
+.trade-analysis-panel {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-hud, 4px);
+  background: var(--panel);
+  box-shadow: none;
+  transition: border-color var(--motion-micro, 110ms ease);
+}
+.trade-analysis-panel.is-evaluating {
+  border-color: var(--line-strong);
+  animation: none;
+}
+/* Department signature: the negotiation spine. The two clubs are joined by
+   one continuous ledger rule with the exchange marker at its centre. */
 .trade-package-divider {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
-  align-self: center;
+  font-size: 15px;
+  align-self: stretch;
   padding-top: 0;
+}
+.trade-package-divider::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 50%;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    var(--line-2) 10%,
+    var(--line-2) 90%,
+    transparent
+  );
+}
+.trade-package-divider > span {
+  position: relative;
+  z-index: 1;
+  padding: 4px 2px;
+  background: var(--bg, #04101a);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-ops, 2px);
+  line-height: 1;
 }
 .trade-slot {
   position: relative;
-  min-height: 72px;
-  margin-bottom: 6px;
-  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+  min-height: 52px;
+  margin-bottom: 4px;
+  transition: border-color var(--motion-micro, 110ms ease), background var(--motion-micro, 110ms ease);
 }
-.trade-slot.drop-active { animation: trade-slot-pulse 0.9s ease infinite; }
+.trade-slot.empty {
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: var(--radius-ops, 2px);
+}
+.trade-slot.filled {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ops, 2px);
+}
+.trade-slot.drop-active {
+  border-color: var(--line-strong);
+  box-shadow: inset 0 0 0 1px var(--cyan-soft);
+  animation: none;
+}
+.trade-slot-placeholder {
+  height: 100%;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted-2);
+}
+.trade-package-col {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-hud, 4px);
+  padding: 8px;
+  box-shadow: none;
+  min-height: 0;
+  overflow-y: auto;
+}
+.trade-asset-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 8px 6px 16px;
+  min-height: 52px;
+  cursor: grab;
+  border-radius: var(--radius-ops, 2px);
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.16);
+  box-shadow: none;
+}
+.trade-asset-card-player {
+  grid-template-columns: auto auto 1fr auto;
+  gap: 8px;
+  padding: 6px 8px 6px 16px;
+  min-height: 54px;
+  background: rgba(0, 0, 0, 0.2);
+  border-color: var(--line-2);
+  box-shadow: none;
+}
+.trade-asset-ovr-focus {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  padding: 4px 6px;
+  border-radius: var(--radius-ops, 2px);
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.22);
+  box-shadow: none;
+}
+.trade-asset-ovr-number {
+  color: var(--gold);
+  font-size: clamp(22px, 2.4vw, 28px);
+  font-weight: 900;
+  line-height: 0.95;
+  letter-spacing: -0.02em;
+  text-shadow: none;
+}
+.trade-pool-empty {
+  color: var(--muted-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ops, 2px);
+  background: rgba(0, 0, 0, 0.14);
+}
 .trade-slot-index {
   position: absolute;
   top: 6px;
   left: 8px;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 900;
   z-index: 2;
 }
@@ -8108,7 +8618,7 @@ const TRADE_HUB_CSS = `
   align-items: center;
   justify-content: center;
   gap: 2px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -8118,81 +8628,105 @@ const TRADE_HUB_CSS = `
   grid-template-columns: auto 1fr auto;
   gap: 8px;
   align-items: center;
-  padding: 8px 8px 8px 20px;
-  min-height: 68px;
+  padding: 6px 8px 6px 14px;
+  min-height: 48px;
   cursor: grab;
-  border-radius: 12px;
+  border-radius: var(--radius-hud, 4px);
   border: 1px solid rgba(0, 216, 223, 0.12);
-  background:
-    linear-gradient(180deg, rgba(8, 20, 30, 0.92), rgba(4, 12, 20, 0.95)),
-    repeating-linear-gradient(90deg, rgba(255,255,255,0.01) 0px, rgba(255,255,255,0.01) 1px, transparent 1px, transparent 5px);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  background: linear-gradient(180deg, rgba(8, 20, 30, 0.92), rgba(4, 12, 20, 0.95));
+  box-shadow: none;
 }
+/* A seated asset is a contract line on the package form: fixed tracks for
+   portrait, overall, identity and money so nothing can overlap. */
 .trade-asset-card-player {
-  grid-template-columns: auto auto 1fr auto;
-  gap: 10px;
-  padding: 10px 10px 10px 20px;
-  min-height: 76px;
-  background:
-    linear-gradient(180deg, rgba(10, 24, 36, 0.96), rgba(4, 12, 20, 0.98)),
-    radial-gradient(circle at 18% 0%, rgba(19, 216, 231, 0.08), transparent 42%),
-    repeating-linear-gradient(90deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 6px);
+  grid-template-columns: 30px 34px minmax(0, 1fr);
+  grid-template-areas:
+    "photo ovr body"
+    "money money money";
+  column-gap: 9px;
+  row-gap: 3px;
+  padding: 5px 6px 5px 12px;
+  min-height: 48px;
+  background: linear-gradient(180deg, rgba(10, 24, 36, 0.96), rgba(4, 12, 20, 0.98));
   border-color: rgba(0, 216, 223, 0.18);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 8px 22px rgba(0, 0, 0, 0.28);
+  box-shadow: none;
 }
 .trade-asset-ovr-focus {
+  grid-area: ovr;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  min-width: 52px;
-  padding: 6px 8px;
-  border-radius: 14px;
-  border: 1px solid rgba(233, 168, 60, 0.42);
-  background:
-    radial-gradient(circle at 50% 0%, rgba(233, 168, 60, 0.18), transparent 58%),
-    linear-gradient(180deg, rgba(12, 35, 52, 0.92), rgba(5, 17, 27, 0.96));
-  box-shadow: 0 0 22px rgba(233, 168, 60, 0.14);
+  min-width: 34px;
+  padding: 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
+.trade-asset-card-player > .trade-asset-headshot { grid-area: photo; }
+.trade-asset-card-player > .trade-asset-card-body { grid-area: body; }
+.trade-asset-card-player > .trade-asset-card-right { grid-area: money; }
+/* Identity on its own line, then the qualifiers, then the money row: the
+   package column is ~250px wide, so tracks must wrap in a fixed order. */
+.trade-asset-card-player .trade-asset-card-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 6px;
+  row-gap: 1px;
+}
+.trade-asset-card-player .trade-asset-card-name-row {
+  flex: 1 1 100%;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.trade-asset-card-player .trade-asset-card-name-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trade-asset-card-player .trade-asset-card-meta-tiny {
+  margin-top: 0;
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.trade-asset-card-player .trade-asset-pot-big { margin-top: 0; }
 .trade-asset-ovr-label {
-  color: rgba(233, 168, 60, 0.82);
-  font-size: 8px;
+  color: rgba(233, 168, 60, 0.72);
+  font-size: 11px;
   font-weight: 1000;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.14em;
   line-height: 1;
 }
 .trade-asset-ovr-number {
   color: #ffe08a;
-  font-size: clamp(30px, 3.2vw, 40px);
+  font-size: 19px;
   font-weight: 1000;
-  line-height: 0.95;
-  letter-spacing: -0.02em;
-  text-shadow:
-    0 0 18px rgba(233, 168, 60, 0.34),
-    0 0 32px rgba(19, 216, 231, 0.12);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  text-shadow: none;
+  font-variant-numeric: tabular-nums;
 }
 .trade-asset-pot-big {
-  display: inline-flex;
-  align-items: center;
-  margin-top: 6px;
-  padding: 5px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(201, 146, 255, 0.48);
-  background:
-    radial-gradient(circle at 50% 0%, rgba(201, 146, 255, 0.2), transparent 60%),
-    rgba(88, 44, 130, 0.22);
-  color: #e4c4ff;
-  font-size: 12px;
-  font-weight: 1000;
+  display: inline-block;
+  margin-top: 2px;
+  padding: 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(160, 190, 235, 0.9);
+  font-size: 11px;
+  font-weight: 900;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  box-shadow: 0 0 18px rgba(201, 146, 255, 0.16);
+  box-shadow: none;
 }
 .trade-asset-card-meta-tiny {
   margin-top: 4px;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -8200,32 +8734,34 @@ const TRADE_HUB_CSS = `
 }
 .trade-asset-clause-mini {
   padding: 1px 5px;
-  border-radius: 999px;
+  border-radius: var(--radius-ops, 2px);
   border: 1px solid rgba(255, 96, 109, 0.28);
   color: #ff9aa3;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 900;
 }
 .trade-asset-card-right {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  justify-content: center;
-  gap: 5px;
-  min-width: 72px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
 }
+/* Money reads as a right-aligned ledger figure, not a boxed badge. */
 .trade-asset-aav-badge {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-width: 64px;
-  padding: 6px 8px;
-  border-radius: 10px;
-  border: 1px solid rgba(19, 216, 231, 0.32);
-  background:
-    linear-gradient(180deg, rgba(12, 35, 52, 0.9), rgba(5, 17, 27, 0.94));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 0;
+  padding: 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 .trade-asset-aav-value {
   color: #dff8ff;
@@ -8233,20 +8769,21 @@ const TRADE_HUB_CSS = `
   font-weight: 1000;
   line-height: 1.1;
   letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
 }
 .trade-asset-aav-label {
-  margin-top: 2px;
-  color: rgba(128, 150, 168, 0.95);
-  font-size: 8px;
+  margin-top: 0;
+  color: rgba(128, 150, 168, 0.8);
+  font-size: 11px;
   font-weight: 900;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
 }
 .trade-asset-cap-impact {
   display: inline-flex;
   align-items: center;
   padding: 3px 7px;
-  border-radius: 999px;
-  font-size: 9px;
+  border-radius: var(--radius-ops, 2px);
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -8265,11 +8802,11 @@ const TRADE_HUB_CSS = `
 .trade-asset-pick-tier {
   align-self: center;
   padding: 4px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-ops, 2px);
   border: 1px solid rgba(0, 216, 223, 0.28);
   background: rgba(0, 216, 223, 0.08);
   color: var(--cyan);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -8286,12 +8823,14 @@ const TRADE_HUB_CSS = `
   position: static;
   width: 20px;
   height: 20px;
-  margin-top: 2px;
+  margin-top: 0;
+  flex-shrink: 0;
 }
 .trade-asset-headshot.player-headshot {
-  border-radius: 10px;
+  --size: 30px;
+  border-radius: var(--radius-ops, 2px);
   border: 1px solid rgba(0, 216, 223, 0.2);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  box-shadow: none;
 }
 .trade-asset-card:active { cursor: grabbing; }
 .trade-asset-card-body { min-width: 0; text-align: left; }
@@ -8302,7 +8841,7 @@ const TRADE_HUB_CSS = `
   gap: 6px;
   align-items: center;
   margin-top: 4px;
-  font-size: 9px;
+  font-size: 11px;
 }
 .trade-asset-card-side {
   text-align: right;
@@ -8317,10 +8856,11 @@ const TRADE_HUB_CSS = `
   line-height: 1;
 }
 .trade-asset-pot {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   padding: 2px 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-ops, 2px);
+  font-variant-numeric: tabular-nums;
 }
 .trade-asset-card-remove {
   position: absolute;
@@ -8339,7 +8879,7 @@ const TRADE_HUB_CSS = `
   width: 22px;
   height: 18px;
   border-radius: 6px;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 900;
 }
 .trade-pick-icon {
@@ -8356,7 +8896,7 @@ const TRADE_HUB_CSS = `
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 .trade-pick-icon-round { font-size: 15px; font-weight: 900; color: var(--cyan); }
-.trade-pick-icon-year { font-size: 10px; font-weight: 800; color: var(--muted); letter-spacing: 0.06em; }
+.trade-pick-icon-year { font-size: 11px; font-weight: 800; color: var(--muted); letter-spacing: 0.06em; }
 .trade-analysis-panel {
   padding: 10px 12px;
   transition: box-shadow 0.25s ease;
@@ -8369,25 +8909,29 @@ const TRADE_HUB_CSS = `
   gap: 10px;
   margin-bottom: 12px;
 }
-.trade-analysis-title { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; }
+.trade-analysis-title { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; }
 .trade-analysis-verdict { font-size: 12px; font-weight: 900; letter-spacing: 0.1em; text-transform: uppercase; }
 .trade-scale-row { margin-bottom: 12px; }
 .trade-dual-value-bars { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
 .trade-dual-value-row { display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: center; }
 .trade-dual-value-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .trade-dual-value-label span {
-  font-size: 9px; letter-spacing: 0.12em; color: var(--muted); text-transform: uppercase; font-weight: 800;
+  font-size: 11px; letter-spacing: 0.12em; color: var(--muted); text-transform: uppercase; font-weight: 800;
 }
 .trade-dual-value-label strong { font-size: 18px; color: var(--text); line-height: 1; }
+/* Ledger ruler: quarter ticks read as a measured scale, not a progress pill. */
 .trade-dual-value-track {
-  height: 10px; border-radius: 999px; background: rgba(255,255,255,0.06);
+  height: 10px; border-radius: 1px;
+  background:
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.11) 0 1px, transparent 1px 25%),
+    rgba(255,255,255,0.06);
   border: 1px solid var(--line); overflow: hidden;
 }
 .trade-dual-value-fill {
-  height: 100%; border-radius: 999px; transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+  height: 100%; border-radius: 0; transition: opacity 0.2s ease, background-color 0.2s ease;
 }
-.trade-dual-value-fill.user { background: linear-gradient(90deg, rgba(19, 216, 231, 0.75), rgba(138, 180, 255, 0.45)); }
-.trade-dual-value-fill.partner { background: linear-gradient(90deg, rgba(214, 179, 106, 0.75), rgba(255, 196, 120, 0.45)); }
+.trade-dual-value-fill.user { background: rgba(19, 216, 231, 0.68); }
+.trade-dual-value-fill.partner { background: rgba(214, 179, 106, 0.7); }
 .trade-dual-fill-good.user { background: linear-gradient(90deg, var(--green), #2fbf73); }
 .trade-dual-fill-good.partner { background: linear-gradient(90deg, #3ecf8e, var(--green)); }
 .trade-dual-fill-warn.user, .trade-dual-fill-warn.partner { background: linear-gradient(90deg, var(--gold), #d99023); }
@@ -8447,7 +8991,7 @@ const TRADE_HUB_CSS = `
   border-radius: 3px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(255, 255, 255, 0.06);
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.06em;
   color: var(--muted);
@@ -8455,7 +8999,7 @@ const TRADE_HUB_CSS = `
 .trade-flag-fallback.is-lg {
   min-width: 34px;
   height: 24px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .trade-value-chip {
   display: flex;
@@ -8469,18 +9013,18 @@ const TRADE_HUB_CSS = `
   gap: 3px;
 }
 .trade-value-chip-label {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--gold);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
-.trade-value-chip.compact .trade-value-chip-label { font-size: 8px; }
+.trade-value-chip.compact .trade-value-chip-label { font-size: 11px; }
 .trade-value-chip-track {
   width: 100%;
   height: 5px;
-  border-radius: 999px;
+  border-radius: 1px;
   background: rgba(255, 255, 255, 0.08);
   overflow: hidden;
   border: 1px solid rgba(0, 216, 223, 0.12);
@@ -8491,9 +9035,9 @@ const TRADE_HUB_CSS = `
 }
 .trade-value-chip-fill {
   height: 100%;
-  border-radius: 999px;
+  border-radius: 0;
   background: linear-gradient(90deg, rgba(0, 216, 223, 0.55), rgba(245, 215, 110, 0.85));
-  box-shadow: 0 0 10px rgba(0, 216, 223, 0.25);
+  box-shadow: none;
 }
 .trade-value-chip.tier-franchise .trade-value-chip-label { color: #ffd700; }
 .trade-value-chip.tier-franchise .trade-value-chip-fill { background: linear-gradient(90deg, #c9a227, #ffd700); }
@@ -8524,29 +9068,29 @@ const TRADE_HUB_CSS = `
   text-shadow: 0 0 10px rgba(245, 215, 110, 0.25);
 }
 .trade-asset-cap-mini {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   color: var(--cyan);
   letter-spacing: 0.04em;
 }
 .trade-asset-hand {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   color: var(--muted);
 }
 .trade-pool-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; grid-column: 1 / -1; }
-.trade-pool-chip { font-size: 9px; padding: 2px 6px; border-radius: 999px; background: rgba(255,255,255,0.06); color: var(--muted); }
+.trade-pool-chip { font-size: 11px; padding: 2px 6px; border-radius: var(--radius-ops, 2px); background: rgba(255,255,255,0.06); color: var(--muted); }
 .trade-hub-breakdown-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
-.trade-hub-cap-flow { display: flex; gap: 8px; font-size: 10px; color: var(--muted); margin-top: 4px; flex-wrap: wrap; }
+.trade-hub-cap-flow { display: flex; gap: 8px; font-size: 11px; color: var(--muted); margin-top: 4px; flex-wrap: wrap; }
 .trade-team-rank-grid-compact { grid-template-columns: repeat(4, 1fr); }
 .trade-cap-mgmt-grid-compact { grid-template-columns: repeat(2, 1fr); }
 .trade-fan-hint { font-size: 11px; margin-top: 6px; }
 .trade-war-meter.low strong { color: #ff8f98; }
 .trade-war-meter-bar div.low { background: linear-gradient(90deg, var(--red), #ff6b7a); }
 .trade-war-meter.high strong { color: var(--green); }
-.trade-scale-label { display: block; font-size: 9px; letter-spacing: 0.14em; margin-bottom: 6px; }
+.trade-scale-label { display: block; font-size: 11px; letter-spacing: 0.14em; margin-bottom: 6px; }
 .trade-scale-track { height: 10px; }
-.trade-scale-fill-animated { transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
+.trade-scale-fill-animated { transition: opacity 0.2s ease, background-color 0.2s ease; }
 .trade-metric-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -8557,7 +9101,7 @@ const TRADE_HUB_CSS = `
   padding: 10px 6px;
   transition: border-color 0.25s ease, color 0.25s ease;
 }
-.trade-metric-card span { display: block; font-size: 8px; letter-spacing: 0.1em; margin-bottom: 4px; }
+.trade-metric-card span { display: block; font-size: 11px; letter-spacing: 0.1em; margin-bottom: 4px; }
 .trade-metric-card strong { font-size: 14px; }
 .trade-reaction-grid {
   display: grid;
@@ -8566,7 +9110,7 @@ const TRADE_HUB_CSS = `
   margin-top: 12px;
 }
 .trade-reaction-card { padding: 10px 12px; }
-.trade-reaction-card span { display: block; font-size: 8px; letter-spacing: 0.14em; margin-bottom: 4px; }
+.trade-reaction-card span { display: block; font-size: 11px; letter-spacing: 0.14em; margin-bottom: 4px; }
 .trade-reaction-card p { margin: 0; font-size: 11px; line-height: 1.45; }
 .trade-centre-cap-row {
   display: grid;
@@ -8591,7 +9135,7 @@ const TRADE_HUB_CSS = `
   justify-content: space-between;
   gap: 8px;
   padding: 8px 10px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .trade-cap-flex {
   display: grid;
@@ -8599,14 +9143,14 @@ const TRADE_HUB_CSS = `
   gap: 8px;
   align-items: center;
   margin-top: 10px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .trade-cap-flex-bar {
   height: 8px;
-  border-radius: 999px;
+  border-radius: 1px;
   overflow: hidden;
 }
-.trade-cap-flex-fill { height: 100%; transition: width 0.4s ease; }
+.trade-cap-flex-fill { height: 100%; transition: opacity 0.2s ease, background-color 0.2s ease; }
 .trade-war-room {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -8615,7 +9159,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-war-room-col { min-width: 0; }
 .trade-war-line {
-  font-size: 10px;
+  font-size: 11px;
   padding: 5px 0;
   border-top: 1px solid var(--line);
   line-height: 1.4;
@@ -8625,15 +9169,15 @@ const TRADE_HUB_CSS = `
   grid-template-columns: auto 1fr auto;
   gap: 8px;
   align-items: center;
-  font-size: 10px;
+  font-size: 11px;
   margin-bottom: 8px;
 }
 .trade-war-meter-bar {
   height: 8px;
-  border-radius: 999px;
+  border-radius: 1px;
   overflow: hidden;
 }
-.trade-war-meter-bar div { height: 100%; transition: width 0.35s ease; }
+.trade-war-meter-bar div { height: 100%; transition: opacity 0.2s ease, background-color 0.2s ease; }
 .trade-hub-toast-float {
   position: fixed;
   bottom: 56px;
@@ -8655,7 +9199,7 @@ const TRADE_HUB_CSS = `
   width: min(560px, calc(100vw - 32px));
   min-height: 112px;
   padding: 18px 22px 20px;
-  border-radius: 22px;
+  border-radius: 8px;
   overflow: hidden;
   text-align: center;
   border: 1px solid rgba(0, 216, 223, 0.28);
@@ -8685,7 +9229,7 @@ const TRADE_HUB_CSS = `
   position: relative;
   width: min(520px, calc(100vw - 32px));
   padding: 28px 26px 22px;
-  border-radius: 22px;
+  border-radius: 8px;
   overflow: hidden;
   text-align: center;
   border: 1px solid rgba(82, 223, 148, 0.45);
@@ -8717,6 +9261,102 @@ const TRADE_HUB_CSS = `
   font-weight: 700;
   line-height: 1.4;
 }
+.trade-success-modal .trade-decision-why {
+  margin-top: 14px;
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #e9f7fb;
+}
+.trade-success-modal .trade-decision-unblock {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 4px;
+  border: 1px solid rgba(233, 168, 60, 0.35);
+  background: rgba(233, 168, 60, 0.1);
+  color: #f4d28a;
+  font-size: 0.88rem;
+  text-align: left;
+  max-width: 420px;
+}
+.trade-success-modal .trade-decision-unblock em {
+  display: block;
+  margin-bottom: 4px;
+  font-style: normal;
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(244, 210, 138, 0.8);
+}
+.trade-success-modal .trade-decision-gap {
+  margin-top: 8px;
+  color: rgba(156, 218, 236, 0.9);
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.trade-success-modal .trade-decision-reasons {
+  margin: 12px auto 0;
+  padding: 0 0 0 1.1rem;
+  max-width: 420px;
+  text-align: left;
+  color: rgba(200, 220, 230, 0.88);
+  font-size: 0.82rem;
+}
+.trade-success-modal.trade-decision-rejected {
+  border-color: rgba(255, 96, 109, 0.5);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 96, 109, 0.2), transparent 55%),
+    linear-gradient(180deg, rgba(9, 27, 40, 0.99), rgba(4, 13, 22, 0.99));
+  box-shadow:
+    0 32px 80px rgba(0, 0, 0, 0.62),
+    0 0 48px rgba(255, 96, 109, 0.16);
+}
+.trade-hub-propose-tip-wrap {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+.trade-hub-propose-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  transform: translateX(-50%);
+  z-index: 30;
+  width: min(360px, 90vw);
+  padding: 10px 12px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 96, 109, 0.4);
+  background: rgba(8, 18, 28, 0.98);
+  color: #f0d0d4;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  text-align: left;
+}
+.trade-hub-propose-tooltip strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #ff8f98;
+}
+.trade-hub-propose-tooltip span {
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: rgba(233, 247, 251, 0.92);
+}
+.trade-hub-propose-tip-wrap.is-blocked:hover .trade-hub-propose-tooltip,
+.trade-hub-propose-tip-wrap.is-blocked:focus-within .trade-hub-propose-tooltip {
+  opacity: 1;
+}
+.trade-hub-propose-btn.hard-blocked:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  filter: grayscale(0.35);
+}
 .trade-success-swap {
   position: relative;
   z-index: 1;
@@ -8725,17 +9365,23 @@ const TRADE_HUB_CSS = `
   margin-top: 18px;
   text-align: left;
 }
+/* Transaction consequence: outgoing and incoming read as two ledger entries
+   with opposing rails, so the direction of the swap is unmistakable. */
 .trade-success-swap > div {
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(156, 218, 236, 0.16);
+  padding: 8px 12px;
+  border-radius: 0;
+  border: 0;
+  border-left: 3px solid var(--ops-gold, #e9a83c);
   background: rgba(0, 0, 0, 0.22);
+}
+.trade-success-swap > div:last-child {
+  border-left-color: var(--ops-cyan, #13d8e7);
 }
 .trade-success-swap span {
   display: block;
   margin-bottom: 4px;
   color: rgba(150, 176, 196, 0.92);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -8752,7 +9398,7 @@ const TRADE_HUB_CSS = `
   margin-top: 18px;
   min-width: 160px;
   padding: 12px 18px;
-  border-radius: 12px;
+  border-radius: var(--radius-hud, 4px);
   border: 1px solid rgba(82, 223, 148, 0.45);
   background: rgba(82, 223, 148, 0.16);
   color: #dfffee;
@@ -8770,7 +9416,7 @@ const TRADE_HUB_CSS = `
   justify-content: center;
   align-items: center;
   gap: 8px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -8807,12 +9453,13 @@ const TRADE_HUB_CSS = `
   align-items: center;
   justify-content: center;
   min-width: 96px;
-  padding: 6px 12px;
-  border-radius: 999px;
+  padding: 5px 12px;
+  /* Verdict kicker registers as a filed decision stamp. */
+  border-radius: var(--radius-ops, 2px);
   border: 1px solid rgba(0, 216, 223, 0.3);
   background: rgba(255, 255, 255, 0.055);
   color: var(--cyan);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -8921,7 +9568,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-pool-tabs button {
   padding: 8px 4px;
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.1em;
   font-weight: 900;
   text-transform: uppercase;
@@ -8962,23 +9609,21 @@ const TRADE_HUB_CSS = `
 }
 .trade-pool-player { border-left: 3px solid var(--green); }
 .trade-pool-pick { border-left: 3px solid var(--cyan); }
-.trade-pool-prospect { border-left: 3px solid var(--purple); }
+.trade-pool-prospect { border-left: 3px solid var(--gold); }
 .trade-pool-row-main span { color: var(--muted); }
 .trade-pool-cap { color: var(--text); }
 .trade-pool-empty {
-  color: var(--muted);
-  border: 1px dashed var(--line);
-  border-radius: 12px;
-  background: var(--panel-3);
+  color: var(--muted-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ops, 2px);
+  background: rgba(0, 0, 0, 0.14);
 }
 .trade-package-col {
-  background:
-    linear-gradient(180deg, rgba(9, 27, 40, 0.94), rgba(5, 17, 27, 0.94)),
-    radial-gradient(circle at 66% 20%, rgba(19, 216, 231, 0.07), transparent 35%);
+  background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 10px;
-  box-shadow: var(--shadow);
+  border-radius: var(--radius-hud, 4px);
+  padding: 8px;
+  box-shadow: none;
   min-height: 0;
   overflow-y: auto;
 }
@@ -8987,33 +9632,70 @@ const TRADE_HUB_CSS = `
   font-weight: 900;
   letter-spacing: 0.18em;
 }
+/* The package is a five-line agreement form: open lines divide the remaining
+   height instead of leaving a dead well under the last slot. */
+.trade-package-col {
+  display: flex;
+  flex-direction: column;
+}
+.trade-package-col .trade-package-header { flex: 0 0 auto; }
+.trade-package-col .trade-slot.empty {
+  flex: 1 1 0;
+  min-height: 30px;
+}
+.trade-package-col .trade-slot.filled { flex: 0 0 auto; }
 .trade-package-divider { color: var(--muted-2); }
 .trade-slot.empty {
-  border: 2px dashed var(--line-2);
-  background: var(--panel-3);
-  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: var(--radius-ops, 2px);
 }
-.trade-slot.filled { border: 1px solid var(--line); border-radius: 12px; }
+.trade-slot.filled { border: 1px solid var(--line); border-radius: var(--radius-ops, 2px); }
 .trade-slot.drop-active {
-  border-color: var(--line-strong);
-  box-shadow: 0 0 20px rgba(19, 216, 231, 0.18);
-}
-@keyframes trade-slot-pulse {
-  0%, 100% { box-shadow: 0 0 0 rgba(19, 216, 231, 0.08); }
-  50% { box-shadow: 0 0 18px rgba(19, 216, 231, 0.24); }
+  border-color: var(--cyan);
+  box-shadow: inset 0 0 0 1px var(--cyan-soft);
 }
 .trade-slot-index { color: var(--muted-2); }
 .trade-slot-placeholder {
   color: var(--muted);
   letter-spacing: 0.14em;
 }
-.trade-slot-placeholder small { color: var(--muted-2); }
+.trade-slot-placeholder small {
+  color: var(--muted-2);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+/* Only the next open line prompts for an asset; the remaining empty lines stay
+   quiet rules so the package column does not repeat the same call to action. */
+.trade-slot.empty {
+  min-height: 34px;
+  margin-bottom: 3px;
+}
+.trade-slot.empty ~ .trade-slot.empty .trade-slot-placeholder {
+  min-height: 26px;
+}
+.trade-slot.empty ~ .trade-slot.empty .trade-slot-placeholder span,
+.trade-slot.empty ~ .trade-slot.empty .trade-slot-placeholder small {
+  display: none;
+}
+.trade-slot.empty ~ .trade-slot.empty .trade-slot-placeholder::after {
+  content: "";
+  width: 46%;
+  border-top: 1px solid rgba(140, 170, 190, 0.16);
+}
 .trade-asset-card {
-  background:
-    linear-gradient(180deg, rgba(18, 42, 61, 0.55), rgba(6, 20, 31, 0.5)),
-    radial-gradient(circle at 0% 0%, rgba(19, 216, 231, 0.06), transparent 40%);
-  border-radius: 12px;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  background: linear-gradient(180deg, rgba(18, 42, 61, 0.55), rgba(6, 20, 31, 0.5));
+  border-radius: var(--radius-hud, 4px);
+  transition: box-shadow var(--motion-micro, 110ms ease), border-color var(--motion-micro, 110ms ease);
+  animation: trade-asset-seat var(--motion-workspace, 180ms) var(--ease-out, cubic-bezier(0.2, 0.7, 0.3, 1)) both;
+}
+/* Asset takes its seat in the package: brief settle from the board side. */
+@keyframes trade-asset-seat {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .trade-asset-card { animation: none; }
 }
 .trade-asset-card-player { border-left: 3px solid var(--green); }
 .trade-asset-card-pick { border-left: 3px solid var(--cyan); }
@@ -9025,11 +9707,11 @@ const TRADE_HUB_CSS = `
 .trade-asset-card-meta { color: var(--muted); }
 .trade-ret-badge {
   padding: 2px 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-ops, 2px);
   border: 1px solid rgba(233, 168, 60, 0.35);
   background: rgba(233, 168, 60, 0.1);
   color: var(--gold);
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.08em;
 }
@@ -9061,7 +9743,7 @@ const TRADE_HUB_CSS = `
     linear-gradient(180deg, rgba(9, 27, 40, 0.94), rgba(5, 17, 27, 0.94)),
     radial-gradient(circle at 66% 20%, rgba(19, 216, 231, 0.07), transparent 35%);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 6px;
   box-shadow: var(--shadow);
 }
 @keyframes trade-eval-pulse {
@@ -9075,9 +9757,11 @@ const TRADE_HUB_CSS = `
 .trade-analysis-verdict-neutral { color: var(--muted); }
 .trade-scale-label { color: var(--muted); text-transform: uppercase; font-weight: 800; }
 .trade-hub-value-track {
-  background: rgba(255, 255, 255, 0.06);
+  background:
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.1) 0 1px, transparent 1px 25%),
+    rgba(255, 255, 255, 0.06);
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 1px;
 }
 .trade-hub-value-center { background: var(--line-strong); }
 .trade-hub-value-fill-neutral { background: linear-gradient(90deg, rgba(19, 216, 231, 0.55), rgba(138, 180, 255, 0.35)); }
@@ -9100,7 +9784,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-reaction-card span { color: var(--muted); text-transform: uppercase; font-weight: 800; }
 .trade-reaction-card p { color: rgba(233, 247, 251, 0.82); }
-.trade-reaction-card.gm { border-left: 3px solid var(--purple); }
+.trade-reaction-card.gm { border-left: 3px solid var(--gold); }
 .trade-reaction-card.owner { border-left: 3px solid var(--gold); }
 .trade-cap-mgmt-panel,
 .trade-hub-report-panel,
@@ -9113,7 +9797,7 @@ const TRADE_HUB_CSS = `
     linear-gradient(180deg, rgba(9, 27, 40, 0.94), rgba(5, 17, 27, 0.94)),
     radial-gradient(circle at 66% 20%, rgba(19, 216, 231, 0.07), transparent 35%);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 6px;
   box-shadow: var(--shadow);
 }
 .trade-hub-panel-title {
@@ -9127,7 +9811,7 @@ const TRADE_HUB_CSS = `
   border: 1px solid var(--line);
   border-radius: 10px;
 }
-.trade-cap-mgmt-row span { color: var(--muted); text-transform: uppercase; font-weight: 800; font-size: 9px; }
+.trade-cap-mgmt-row span { color: var(--muted); text-transform: uppercase; font-weight: 800; font-size: 11px; }
 .trade-cap-mgmt-row.good strong { color: var(--green); }
 .trade-cap-mgmt-row.bad strong { color: var(--red); }
 .trade-cap-flex-bar {
@@ -9166,11 +9850,11 @@ const TRADE_HUB_CSS = `
   font-weight: 1000;
   font-size: 28px;
 }
-.trade-ret-badge { font-size: 9px; color: var(--gold); margin-top: 2px; font-weight: 800; }
+.trade-ret-badge { font-size: 11px; color: var(--gold); margin-top: 2px; font-weight: 800; }
 .trade-ret-btn,
 .trade-hub-ret-btn {
   margin-top: 4px;
-  font-size: 8px;
+  font-size: 11px;
   padding: 4px 8px;
   background: var(--panel-3);
   border: 1px solid var(--line-2);
@@ -9205,10 +9889,10 @@ const TRADE_HUB_CSS = `
 }
 .trade-hub-value-fill {
   height: 100%;
-  transition: width 0.35s ease, background 0.25s ease;
+  transition: background-color 0.25s ease, opacity 0.2s ease;
 }
 .trade-pool-clause {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.08em;
   padding: 2px 5px;
@@ -9220,9 +9904,9 @@ const TRADE_HUB_CSS = `
 .trade-pool-clause-nmc { border-color: rgba(255, 90, 90, 0.5); color: #ffb4b4; background: rgba(255, 60, 60, 0.12); }
 .trade-pool-clause-ntc { border-color: rgba(233, 168, 60, 0.55); }
 .trade-pool-clause-mntc { border-color: rgba(140, 180, 255, 0.45); color: #b8d4ff; }
-.trade-war-meta { opacity: 0.55; font-size: 10px; }
+.trade-war-meta { opacity: 0.55; font-size: 11px; }
 .trade-hub-cap-sub.warn { color: var(--gold); }
-.trade-hub-cap-sub.muted { opacity: 0.72; font-size: 10px; }
+.trade-hub-cap-sub.muted { opacity: 0.72; font-size: 11px; }
 .trade-cap-mgmt-row.warn strong { color: var(--gold); }
 .trade-hub-propose-btn {
   display: block;
@@ -9235,15 +9919,13 @@ const TRADE_HUB_CSS = `
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: #07111a;
-  border: 1px solid rgba(255, 222, 142, 0.65);
-  border-radius: 18px;
-  background:
-    radial-gradient(circle at 20% 0%, rgba(255,255,255,0.55), transparent 28%),
-    linear-gradient(180deg, #ffd166, #e9a83c 52%, #b97818);
-  box-shadow:
-    0 20px 48px rgba(233, 168, 60, 0.28),
-    0 0 32px rgba(233, 168, 60, 0.14),
-    inset 0 1px 0 rgba(255,255,255,0.55);
+  border: 0;
+  /* Deadline gold, flat, rink-cut: the committing action of the negotiation
+     floor, not a glowing web CTA. */
+  border-radius: 0;
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+  background: #e9a83c;
+  box-shadow: none;
   cursor: pointer;
   transition:
     transform 0.18s ease,
@@ -9252,40 +9934,27 @@ const TRADE_HUB_CSS = `
     opacity 0.18s ease;
 }
 .trade-hub-propose-btn:hover:not(:disabled) {
-  transform: translateY(-2px);
-  filter: brightness(1.06);
-  box-shadow:
-    0 24px 58px rgba(233, 168, 60, 0.34),
-    0 0 42px rgba(233, 168, 60, 0.22),
-    inset 0 1px 0 rgba(255,255,255,0.6);
+  background: #f4c66e;
+  box-shadow: none;
 }
 .trade-hub-propose-btn:active:not(:disabled) {
-  transform: translateY(0);
+  transform: translateY(1px);
 }
 .trade-hub-propose-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
+/* Outcome states are document stamps: flat semantic fills, no bloom. */
 .trade-hub-propose-btn.ready,
 .trade-hub-propose-btn.accepted {
-  background:
-    radial-gradient(circle at 20% 0%, rgba(255,255,255,0.45), transparent 28%),
-    linear-gradient(180deg, #7ae7ad, #52df94 55%, #25975d);
-  border-color: rgba(122, 231, 173, 0.7);
+  background: #52df94;
   color: #03130c;
-  box-shadow:
-    0 20px 50px rgba(82, 223, 148, 0.24),
-    0 0 36px rgba(82, 223, 148, 0.15);
+  box-shadow: none;
 }
 .trade-hub-propose-btn.rejected {
-  background:
-    radial-gradient(circle at 20% 0%, rgba(255,255,255,0.35), transparent 28%),
-    linear-gradient(180deg, #ff9aa3, #ff606d 55%, #bc2634);
-  border-color: rgba(255, 96, 109, 0.65);
+  background: #ff606d;
   color: #fff;
-  box-shadow:
-    0 20px 50px rgba(255, 96, 109, 0.24),
-    0 0 36px rgba(255, 96, 109, 0.12);
+  box-shadow: none;
 }
 .trade-hub-feedback {
   display: flex;
@@ -9297,10 +9966,11 @@ const TRADE_HUB_CSS = `
   margin-left: auto;
   margin-right: auto;
 }
+/* Asset annotations are ledger tags: squared, bordered, tightly set. */
 .trade-hub-tag {
-  font-size: 10px;
-  padding: 6px 10px;
-  border-radius: 999px;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: var(--radius-ops, 2px);
   background: var(--panel-3);
   border: 1px solid var(--line);
   line-height: 1.3;
@@ -9309,25 +9979,25 @@ const TRADE_HUB_CSS = `
 }
 .trade-hub-tag-cap { border-color: rgba(255, 96, 109, 0.45); color: var(--red); background: var(--red-soft); }
 .trade-hub-tag-clause { border-color: rgba(233, 168, 60, 0.45); color: var(--gold); background: var(--gold-soft); }
-.trade-hub-tag-value { border-color: rgba(201, 146, 255, 0.45); color: var(--purple); background: var(--purple-soft); }
+.trade-hub-tag-value { border-color: rgba(233, 168, 60, 0.45); color: var(--gold); background: var(--gold-soft); }
 .trade-hub-tag-pick { border-color: rgba(19, 216, 231, 0.45); color: var(--cyan); background: var(--cyan-soft); }
 .trade-hub-tag-more {
-  font-size: 10px;
+  font-size: 11px;
   background: transparent;
   border: 1px dashed var(--line-2);
   color: var(--muted);
   cursor: pointer;
-  padding: 6px 10px;
-  border-radius: 999px;
+  padding: 4px 8px;
+  border-radius: var(--radius-ops, 2px);
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   transition: transform 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 .trade-hub-tag-more:hover {
-  transform: translateY(-1px);
   border-color: var(--line-strong);
   color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
 }
 .trade-hub-ret-overlay {
   position: fixed;
@@ -9344,13 +10014,13 @@ const TRADE_HUB_CSS = `
     linear-gradient(180deg, rgba(9, 27, 40, 0.98), rgba(5, 17, 27, 0.98)),
     radial-gradient(circle at 66% 20%, rgba(19, 216, 231, 0.07), transparent 35%);
   border: 1px solid var(--line-2);
-  border-radius: 16px;
+  border-radius: 6px;
   padding: 16px;
   min-width: 200px;
   box-shadow: var(--shadow);
 }
 .trade-hub-ret-title {
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.15em;
   margin-bottom: 12px;
   color: var(--cyan);
@@ -9406,7 +10076,7 @@ const TRADE_HUB_CSS = `
     linear-gradient(180deg, rgba(9, 27, 40, 0.94), rgba(5, 17, 27, 0.94)),
     radial-gradient(circle at 66% 20%, rgba(19, 216, 231, 0.07), transparent 35%);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 6px;
   box-shadow: var(--shadow);
   text-align: center;
 }
@@ -9443,20 +10113,23 @@ const TRADE_HUB_CSS = `
   margin-left: auto;
   margin-right: auto;
 }
+/* Desk note reads as a ruled strip inside the deal panel; as a floating pill
+   it was clipped by the bottom of the negotiation column. */
 .trade-hub-warning-reason {
-  width: fit-content;
-  max-width: min(420px, 90%);
-  margin: 8px auto 0;
-  padding: 8px 14px;
-  border-radius: 999px;
-  border: 1px solid rgba(233, 168, 60, 0.38);
+  width: auto;
+  max-width: none;
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border-radius: 0;
+  border: 0;
+  border-left: 3px solid rgba(233, 168, 60, 0.6);
+  text-align: left;
   background: rgba(233, 168, 60, 0.1);
   color: var(--gold);
   font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  text-align: center;
   opacity: 0.92;
 }
 .trade-technical-details {
@@ -9469,7 +10142,7 @@ const TRADE_HUB_CSS = `
 .trade-technical-details summary {
   cursor: pointer;
   color: var(--gold);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -9483,7 +10156,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-analysis-rink {
   padding: 8px 10px 7px;
-  border-radius: 14px;
+  border-radius: 10px;
   border: 1px solid rgba(0, 216, 223, 0.18);
   background:
     radial-gradient(circle at 50% 50%, rgba(0, 216, 223, 0.08), transparent 48%),
@@ -9503,9 +10176,9 @@ const TRADE_HUB_CSS = `
   border: 1px solid rgba(0, 216, 223, 0.22);
   background: rgba(255, 255, 255, 0.045);
   color: rgba(230, 246, 252, 0.88);
-  border-radius: 999px;
-  padding: 7px 12px;
-  font-size: 10px;
+  border-radius: var(--radius-hud, 4px);
+  padding: 6px 12px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -9529,7 +10202,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-clear-value-head span {
   color: rgba(128, 150, 168, 0.95);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -9538,23 +10211,25 @@ const TRADE_HUB_CSS = `
   text-align: right;
 }
 .trade-clear-value-head strong {
-  padding: 5px 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(0, 216, 223, 0.28);
-  background: rgba(255, 255, 255, 0.055);
+  padding: 3px 10px;
+  border-radius: var(--radius-ops, 2px);
+  border: 0;
+  border-bottom: 2px solid rgba(0, 216, 223, 0.45);
+  background: transparent;
   color: #e9f7fb;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.11em;
   text-transform: uppercase;
   white-space: nowrap;
-  box-shadow: 0 0 20px rgba(19, 216, 231, 0.08);
+  box-shadow: none;
 }
 .trade-clear-value-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: stretch;
-  gap: 8px;
+  gap: 14px;
+  margin: 4px 0 2px;
 }
 .trade-analysis-headline {
   color: rgba(220, 236, 244, 0.92);
@@ -9566,9 +10241,9 @@ const TRADE_HUB_CSS = `
 .trade-pool-status-pill {
   flex-shrink: 0;
   align-self: center;
-  padding: 4px 8px;
-  border-radius: 999px;
-  font-size: 9px;
+  padding: 3px 7px;
+  border-radius: var(--radius-ops, 2px);
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -9588,13 +10263,14 @@ const TRADE_HUB_CSS = `
   border: 1px solid rgba(128, 150, 168, 0.22);
   background: rgba(255, 255, 255, 0.04);
 }
+/* Comparison spine: two facing measures on a flat scale, not two glass cards. */
 .trade-clear-side {
   min-width: 0;
-  padding: 7px 9px;
-  border-radius: 12px;
-  border: 1px solid rgba(0, 216, 223, 0.16);
-  background:
-    linear-gradient(180deg, rgba(12, 35, 52, 0.78), rgba(5, 17, 27, 0.86));
+  padding: 6px 8px;
+  border-radius: var(--radius-ops, 2px);
+  border: 0;
+  border-top: 1px solid rgba(0, 216, 223, 0.16);
+  background: rgba(255, 255, 255, 0.02);
 }
 .trade-clear-side-label {
   display: flex;
@@ -9605,45 +10281,43 @@ const TRADE_HUB_CSS = `
 }
 .trade-clear-side-label span {
   color: rgba(128, 150, 168, 0.95);
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 .trade-clear-side-label strong {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: rgba(220, 236, 244, 0.9);
 }
 .trade-clear-track {
-  height: 12px;
-  border-radius: 999px;
+  height: 14px;
+  border-radius: 2px;
   overflow: hidden;
-  border: 1px solid rgba(0, 216, 223, 0.18);
-  background: rgba(255, 255, 255, 0.045);
-  box-shadow: inset 0 1px 6px rgba(0, 0, 0, 0.42);
+  border: 1px solid rgba(156, 218, 236, 0.18);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .trade-clear-fill {
   height: 100%;
-  min-width: 8px;
-  border-radius: 999px;
-  transition: width 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+  min-width: 4px;
+  border-radius: 0;
+  transition: background-color var(--motion-workspace, 180ms) cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 .trade-clear-fill-left {
-  background: linear-gradient(90deg, #13d8e7, #8ab4ff);
-  box-shadow: 0 0 22px rgba(19, 216, 231, 0.28);
+  background: var(--ops-cyan, #13d8e7);
+  box-shadow: none;
 }
 .trade-clear-fill-right {
-  background: linear-gradient(90deg, #e9a83c, #ffd166);
-  box-shadow: 0 0 22px rgba(233, 168, 60, 0.28);
+  background: var(--ops-gold, #e9a83c);
+  box-shadow: none;
 }
 .trade-clear-side.higher {
-  border-color: rgba(82, 223, 148, 0.5);
-  box-shadow:
-    0 0 24px rgba(82, 223, 148, 0.14),
-    inset 0 0 18px rgba(82, 223, 148, 0.04);
+  border-top-color: rgba(82, 223, 148, 0.55);
+  box-shadow: none;
 }
 .trade-clear-side.higher .trade-clear-side-label strong {
   color: var(--green);
@@ -9677,21 +10351,21 @@ const TRADE_HUB_CSS = `
 }
 .trade-fan-vitriol-head span {
   color: rgba(128, 150, 168, 0.95);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.16em;
   text-transform: uppercase;
 }
 .trade-fan-vitriol-head strong {
   color: rgba(233, 247, 251, 0.92);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 .trade-fan-vitriol-track {
   height: 6px;
-  border-radius: 999px;
+  border-radius: 1px;
   overflow: hidden;
   border: 1px solid rgba(255, 96, 109, 0.18);
   background: rgba(255, 255, 255, 0.045);
@@ -9699,10 +10373,10 @@ const TRADE_HUB_CSS = `
 }
 .trade-fan-vitriol-fill {
   height: 100%;
-  border-radius: 999px;
+  border-radius: 0;
   background: linear-gradient(90deg, #e9a83c, #ff606d);
   box-shadow: 0 0 18px rgba(255, 96, 109, 0.22);
-  transition: width 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: background-color 180ms ease, opacity 180ms ease;
 }
 .trade-fan-vitriol-low .trade-fan-vitriol-fill {
   background: linear-gradient(90deg, #52df94, #e9a83c);
@@ -9721,7 +10395,7 @@ const TRADE_HUB_CSS = `
   margin-top: 6px;
 }
 .trade-fan-reason-chip {
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   padding: 2px 6px;
@@ -9739,7 +10413,7 @@ const TRADE_HUB_CSS = `
   gap: 2px;
 }
 .trade-fan-toast-extra span {
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.14em;
   color: var(--muted);
 }
@@ -9748,7 +10422,7 @@ const TRADE_HUB_CSS = `
   color: #ff8f98;
 }
 .trade-fan-toast-extra small {
-  font-size: 10px;
+  font-size: 11px;
   color: rgba(255, 220, 224, 0.85);
 }
 .trade-hub-insight-grid {
@@ -9790,7 +10464,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-hub-report-label {
   display: block;
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 0.12em;
   color: var(--muted);
   margin-bottom: 4px;
@@ -9805,7 +10479,7 @@ const TRADE_HUB_CSS = `
 .trade-hub-report-value.pos { color: var(--green); }
 .trade-hub-report-value.neg { color: var(--red); }
 .trade-hub-counter-chip {
-  font-size: 10px;
+  font-size: 11px;
   color: rgba(233, 247, 251, 0.78);
   padding: 6px 0;
   border-top: 1px solid var(--line);
@@ -9813,7 +10487,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-hub-immersion-line {
   margin-top: 8px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--purple);
   letter-spacing: 0.04em;
 }
@@ -9829,7 +10503,7 @@ const TRADE_HUB_CSS = `
   animation: trade-cap-pulse 1.5s ease infinite;
 }
 .trade-hub-cap-card-label {
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 0.15em;
   color: var(--muted);
   text-transform: uppercase;
@@ -9842,28 +10516,28 @@ const TRADE_HUB_CSS = `
   color: var(--text);
 }
 .trade-hub-cap-sub {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
 }
 .trade-hub-cap-sub .pos { color: var(--green); }
 .trade-hub-cap-sub .neg { color: var(--red); }
 .trade-hub-chip {
-  font-size: 9px;
-  padding: 4px 8px;
-  border-radius: 999px;
+  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: var(--radius-ops, 2px);
   background: var(--panel-3);
   border: 1px solid var(--line);
   letter-spacing: 0.06em;
   font-weight: 800;
   text-transform: uppercase;
 }
-.trade-hub-chip-need { border-color: rgba(201, 146, 255, 0.4); color: var(--purple); background: var(--purple-soft); }
+.trade-hub-chip-need { border-color: var(--line-strong); color: var(--text); background: rgba(255, 255, 255, 0.05); }
 .trade-hub-chip-window { border-color: rgba(19, 216, 231, 0.4); color: var(--cyan); background: var(--cyan-soft); }
 .trade-hub-chip-market-hot { border-color: rgba(255, 96, 109, 0.45); color: var(--red); background: var(--red-soft); }
 .trade-hub-chip-market-warm { border-color: rgba(233, 168, 60, 0.45); color: var(--gold); background: var(--gold-soft); }
 .trade-hub-chip-market-cool { border-color: rgba(138, 180, 255, 0.4); color: var(--blue); background: var(--blue-soft); }
 .trade-hub-needs-line {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
   margin-top: 4px;
   line-height: 1.4;
@@ -9882,7 +10556,7 @@ const TRADE_HUB_CSS = `
 .trade-hub-breakdown-row.in span:last-child { color: var(--green); font-weight: 800; }
 .trade-hub-breakdown-row.out span:last-child { color: var(--red); font-weight: 800; }
 .trade-hub-recent-line {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
   padding: 4px 0;
   border-top: 1px solid var(--line);
@@ -9895,7 +10569,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-hub-counteroffers { margin-top: 10px; }
 .trade-hub-counter-title {
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.15em;
   color: var(--muted);
   margin-bottom: 6px;
@@ -9937,7 +10611,11 @@ const TRADE_HUB_CSS = `
   }
   .trade-package-divider {
     padding: 4px 0;
+    align-self: center;
     transform: rotate(90deg);
+  }
+  .trade-package-divider::before {
+    display: none;
   }
   .trade-centre-cap-row { grid-template-columns: 1fr; }
   .trade-reaction-grid { grid-template-columns: 1fr; }
@@ -9980,7 +10658,7 @@ const TRADE_HUB_CSS = `
 .trade-hub-centre-foot .trade-hub-block-reason {
   margin-top: 2px;
   padding: 8px 12px;
-  font-size: 10px;
+  font-size: 11px;
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -9989,13 +10667,13 @@ const TRADE_HUB_CSS = `
 .trade-hub-centre-foot .trade-hub-block-reason strong {
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  font-size: 9px;
+  font-size: 11px;
   color: rgba(210, 228, 240, 0.78);
 }
 .trade-hub-centre-foot .trade-hub-block-reason em {
   font-style: normal;
   color: rgba(160, 190, 210, 0.88);
-  font-size: 9px;
+  font-size: 11px;
 }
 .trade-hub-centre-foot .trade-hub-block-reason.tone-bad {
   border-color: rgba(255, 120, 100, 0.35);
@@ -10005,7 +10683,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-clear-value-meta {
   text-align: center;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -10019,7 +10697,7 @@ const TRADE_HUB_CSS = `
   border-radius: 10px;
   border: 1px solid rgba(255, 120, 100, 0.28);
   background: rgba(40, 12, 12, 0.35);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.35;
 }
 .trade-block-detail.tone-warn {
@@ -10029,7 +10707,7 @@ const TRADE_HUB_CSS = `
 .trade-block-detail strong {
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  font-size: 9px;
+  font-size: 11px;
 }
 .trade-block-detail em {
   font-style: normal;
@@ -10037,7 +10715,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-pool-season-line {
   margin-top: 3px;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
   color: rgba(140, 168, 188, 0.92);
@@ -10052,7 +10730,7 @@ const TRADE_HUB_CSS = `
 .trade-intel-hero-cap {
   display: block;
   margin-top: 4px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -10082,7 +10760,7 @@ const TRADE_HUB_CSS = `
   padding: 10px 12px 12px;
   background: linear-gradient(165deg, rgba(12, 28, 48, 0.95) 0%, rgba(8, 18, 32, 0.98) 100%);
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 10px;
   cursor: pointer;
   color: inherit;
   text-align: left;
@@ -10165,7 +10843,7 @@ const TRADE_HUB_CSS = `
   color: var(--text);
 }
 .trade-team-ovr-label {
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.14em;
   color: var(--muted-2);
@@ -10228,7 +10906,7 @@ const TRADE_HUB_CSS = `
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
   margin-top: 4px;
   font-weight: 700;
@@ -10236,7 +10914,7 @@ const TRADE_HUB_CSS = `
 .trade-team-compact-meta .ok { color: var(--green); }
 .trade-team-compact-meta .bad { color: var(--red); }
 .trade-team-interest-compact {
-  font-size: 10px;
+  font-size: 11px;
   text-align: center;
   color: var(--purple);
   font-weight: 800;
@@ -10250,7 +10928,7 @@ const TRADE_HUB_CSS = `
   gap: 3px;
 }
 .trade-pool-mini-tag {
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 800;
   padding: 2px 5px;
   border-radius: 4px;
@@ -10280,7 +10958,7 @@ const TRADE_HUB_CSS = `
   text-align: left;
   cursor: pointer;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 10px;
   background: var(--panel);
   padding: 12px;
   color: inherit;
@@ -10292,7 +10970,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-analysis-clickable:disabled { cursor: default; opacity: 0.7; }
 .trade-analysis-hint {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted-2);
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -10310,10 +10988,10 @@ const TRADE_HUB_CSS = `
 .trade-outcome-bad { background: var(--red-soft); color: var(--red); }
 .trade-outcome-neutral { background: var(--panel-3); color: var(--muted); }
 .trade-fan-badge {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
-  padding: 4px 8px;
-  border-radius: 999px;
+  padding: 3px 7px;
+  border-radius: var(--radius-ops, 2px);
   border: 1px solid var(--line);
 }
 .trade-fan-badge-high { color: var(--green); border-color: rgba(82,223,148,0.35); }
@@ -10354,7 +11032,7 @@ const TRADE_HUB_CSS = `
   width: min(340px, 92vw);
   background: var(--panel-2);
   border: 1px solid var(--line-2);
-  border-radius: 14px;
+  border-radius: 10px;
   padding: 14px;
   box-shadow: var(--shadow);
 }
@@ -10376,7 +11054,7 @@ const TRADE_HUB_CSS = `
   background: var(--panel-3);
   border-radius: 8px;
   padding: 6px 8px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .trade-ctx-stats strong { display: block; font-size: 13px; margin-top: 2px; }
 .trade-ctx-pick-meter {
@@ -10409,7 +11087,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-ctx-risk-tag {
   display: inline-block;
-  font-size: 9px;
+  font-size: 11px;
   margin: 0 4px 4px 0;
   padding: 3px 6px;
   border-radius: 6px;
@@ -10428,7 +11106,7 @@ const TRADE_HUB_CSS = `
   border: 1px solid var(--line);
   background: var(--panel-3);
   color: var(--text);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.08em;
   cursor: pointer;
@@ -10440,7 +11118,7 @@ const TRADE_HUB_CSS = `
   max-height: 88vh;
   background: var(--panel-2);
   border: 1px solid var(--line-2);
-  border-radius: 16px;
+  border-radius: 6px;
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow);
@@ -10452,7 +11130,7 @@ const TRADE_HUB_CSS = `
   height: calc(100vh - 24px);
   max-width: none;
   max-height: none;
-  border-radius: 14px;
+  border-radius: 10px;
   padding: 0;
   overflow: hidden;
 }
@@ -10629,7 +11307,7 @@ const TRADE_HUB_CSS = `
   background: rgba(19, 216, 231, 0.08);
 }
 .trade-review-anchor-ovr span {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.12em;
   color: var(--muted);
@@ -10650,7 +11328,7 @@ const TRADE_HUB_CSS = `
   margin-top: 2px;
 }
 .trade-review-anchor-value-label {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -10739,7 +11417,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-review-next-step-label {
   display: block;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -10767,7 +11445,7 @@ const TRADE_HUB_CSS = `
   align-items: center;
 }
 .trade-review-dual-cap-team {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.08em;
   color: var(--muted);
@@ -10831,7 +11509,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-review-want-tag,
 .trade-review-lock-tag {
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.08em;
   padding: 4px 6px;
@@ -10858,7 +11536,7 @@ const TRADE_HUB_CSS = `
 .trade-review-pos-badge.sm {
   min-width: 20px;
   height: 18px;
-  font-size: 9px;
+  font-size: 11px;
   margin-right: 4px;
 }
 .trade-review-tile-main {
@@ -10946,7 +11624,7 @@ const TRADE_HUB_CSS = `
   text-align: center;
 }
 .trade-review-cap-flow .cap-step em {
-  font-size: 8px;
+  font-size: 11px;
   font-style: normal;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -10985,7 +11663,7 @@ const TRADE_HUB_CSS = `
 .trade-review-fan-subject {
   display: block;
   margin-top: 4px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 1.25;
   color: var(--muted);
@@ -11068,7 +11746,7 @@ const TRADE_HUB_CSS = `
   height: 20px;
   padding: 0 5px;
   border-radius: 5px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.04em;
   flex-shrink: 0;
@@ -11106,7 +11784,7 @@ const TRADE_HUB_CSS = `
   font-size: 14px;
 }
 .trade-review-pick-icon-sm .trade-pick-icon-year {
-  font-size: 9px;
+  font-size: 11px;
 }
 .trade-review-pick-body {
   display: flex;
@@ -11115,7 +11793,7 @@ const TRADE_HUB_CSS = `
   min-width: 0;
 }
 .trade-review-pick-meta {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--muted);
   line-height: 1.2;
@@ -11131,13 +11809,13 @@ const TRADE_HUB_CSS = `
   flex-shrink: 0;
 }
 .trade-review-pick-origin span {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.06em;
   color: var(--muted);
 }
 .trade-review-pick-own-fallback {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   color: var(--muted);
 }
@@ -11192,7 +11870,7 @@ const TRADE_HUB_CSS = `
   box-sizing: border-box;
 }
 .trade-review-tile-kicker {
-  font-size: 10px;
+  font-size: 11px;
 }
 .trade-review-board {
   position: relative;
@@ -11215,7 +11893,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-review-guidance-label {
   display: block;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -11255,7 +11933,7 @@ const TRADE_HUB_CSS = `
   box-sizing: border-box;
 }
 .trade-review-tile-kicker {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.13em;
   text-transform: uppercase;
@@ -11274,7 +11952,7 @@ const TRADE_HUB_CSS = `
   line-height: 1.25;
 }
 .trade-review-expand-btn {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -11292,7 +11970,7 @@ const TRADE_HUB_CSS = `
   min-height: 34px;
 }
 .trade-review-lock-icon {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.06em;
   padding: 3px 6px;
@@ -11319,7 +11997,7 @@ const TRADE_HUB_CSS = `
   min-height: 52px;
 }
 .trade-review-btn-block-reason {
-  font-size: 10px;
+  font-size: 11px;
   font-style: normal;
   font-weight: 700;
   line-height: 1.25;
@@ -11353,7 +12031,7 @@ const TRADE_HUB_CSS = `
   min-height: 0;
 }
 .trade-review-verdict-type {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -11401,7 +12079,7 @@ const TRADE_HUB_CSS = `
   color: var(--cyan);
 }
 .trade-review-fix-btn span {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
   line-height: 1.2;
 }
@@ -11421,7 +12099,7 @@ const TRADE_HUB_CSS = `
   position: relative;
   height: 6px;
   margin-top: 6px;
-  border-radius: 999px;
+  border-radius: 1px;
   background: linear-gradient(90deg, var(--red-soft), rgba(255,255,255,0.1) 45%, rgba(255,255,255,0.1) 55%, rgba(82,223,148,0.25));
   overflow: visible;
 }
@@ -11451,7 +12129,7 @@ const TRADE_HUB_CSS = `
   justify-content: center;
   gap: 6px;
   margin-top: 4px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
   font-weight: 700;
 }
@@ -11462,7 +12140,7 @@ const TRADE_HUB_CSS = `
 .trade-review-fan-hint {
   display: block;
   margin-top: 3px;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
   line-height: 1.2;
   overflow: hidden;
@@ -11500,14 +12178,14 @@ const TRADE_HUB_CSS = `
 }
 .trade-review-context-toggle h3 {
   margin: 0;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text);
 }
 .trade-review-context-toggle span {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   color: var(--muted);
 }
@@ -11540,7 +12218,7 @@ const TRADE_HUB_CSS = `
   background: rgba(255, 96, 109, 0.08);
 }
 .trade-review-context-cat {
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -11556,7 +12234,7 @@ const TRADE_HUB_CSS = `
   white-space: nowrap;
 }
 .trade-review-context-note {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -11569,7 +12247,7 @@ const TRADE_HUB_CSS = `
   color: var(--cyan);
 }
 .trade-review-lock-icon {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.06em;
   padding: 3px 6px;
@@ -11588,7 +12266,7 @@ const TRADE_HUB_CSS = `
   min-width: 0;
 }
 .trade-review-mini-warn {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   color: var(--red);
   letter-spacing: 0.04em;
@@ -11639,7 +12317,7 @@ const TRADE_HUB_CSS = `
   color: var(--green);
 }
 .trade-review-btn.propose em {
-  font-size: 9px;
+  font-size: 11px;
   font-style: normal;
   color: var(--red);
   font-weight: 700;
@@ -11656,13 +12334,13 @@ const TRADE_HUB_CSS = `
   background: rgba(255, 180, 70, 0.14);
   border: 1px solid rgba(255, 180, 70, 0.4);
   color: #ffc978;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.04em;
 }
 .trade-slot.protected-conflict {
   outline: 1px solid rgba(255, 180, 70, 0.4);
-  border-radius: 10px;
+  border-radius: var(--radius-ops, 2px);
 }
 .trade-slot.protected-conflict:has(.trade-asset-protected-warn) {
   outline-color: rgba(255, 180, 70, 0.45);
@@ -11705,7 +12383,7 @@ const TRADE_HUB_CSS = `
   border: 1px solid rgba(19, 216, 231, 0.45);
   background: linear-gradient(180deg, rgba(19, 216, 231, 0.18), rgba(19, 216, 231, 0.06));
   color: var(--cyan);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -11732,7 +12410,7 @@ const TRADE_HUB_CSS = `
   min-height: 0;
 }
 .trade-review-strip-label {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -11797,7 +12475,7 @@ const TRADE_HUB_CSS = `
   justify-content: center;
 }
 .trade-review-result-kicker {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -11825,12 +12503,12 @@ const TRADE_HUB_CSS = `
   gap: 4px;
 }
 .trade-review-blocker-pills span {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   padding: 3px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-ops, 2px);
   border: 1px solid var(--line);
   color: var(--muted-2);
   background: rgba(0, 0, 0, 0.2);
@@ -11859,12 +12537,13 @@ const TRADE_HUB_CSS = `
   font-size: 14px;
 }
 .trade-review-deal-gap-chip {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  padding: 3px 8px;
-  border-radius: 999px;
+  padding: 3px 7px;
+  border-radius: var(--radius-ops, 2px);
+  font-variant-numeric: tabular-nums;
   border: 1px solid var(--line);
 }
 .trade-review-deal-gap-chip.pos { color: var(--green); border-color: rgba(82, 223, 148, 0.4); }
@@ -11877,9 +12556,9 @@ const TRADE_HUB_CSS = `
   align-items: stretch;
 }
 .trade-review-deal-bar {
-  border-radius: 999px;
+  border-radius: 1px;
   min-width: 4px;
-  transition: width 0.25s ease;
+  transition: opacity 0.2s ease;
 }
 .trade-review-deal-bar.give { background: linear-gradient(90deg, var(--red), #ff8f9d); }
 .trade-review-deal-bar.get { background: linear-gradient(90deg, var(--green), #7dffc0); }
@@ -11904,7 +12583,7 @@ const TRADE_HUB_CSS = `
   min-height: 0;
 }
 .trade-review-metric-label {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -11939,14 +12618,14 @@ const TRADE_HUB_CSS = `
   grid-template-columns: auto 1fr auto;
   gap: 6px;
   align-items: center;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted-2);
   text-transform: uppercase;
   font-weight: 800;
 }
 .trade-review-fan-track {
   height: 8px;
-  border-radius: 999px;
+  border-radius: 1px;
   background: rgba(255, 255, 255, 0.08);
   overflow: hidden;
   border: 1px solid var(--line);
@@ -11976,7 +12655,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-review-panel h3 {
   margin: 0;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -12000,7 +12679,7 @@ const TRADE_HUB_CSS = `
   border-top: none;
 }
 .trade-review-player-rank {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   color: var(--gold);
   min-width: 18px;
@@ -12020,7 +12699,7 @@ const TRADE_HUB_CSS = `
   white-space: nowrap;
 }
 .trade-review-player-row-text span {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
   line-height: 1.2;
 }
@@ -12033,12 +12712,12 @@ const TRADE_HUB_CSS = `
 .trade-review-tag {
   display: inline-block;
   margin-top: 2px;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   padding: 3px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-ops, 2px);
   border: 1px solid var(--line);
   color: var(--muted);
 }
@@ -12053,7 +12732,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-review-fix h3 {
   margin: 0;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -12091,7 +12770,7 @@ const TRADE_HUB_CSS = `
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid var(--line);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -12141,18 +12820,20 @@ const TRADE_HUB_CSS = `
   top: 18px;
   right: 22px;
   z-index: 5;
-  width: 44px;
-  height: 44px;
-  border-radius: 999px;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-ops, 2px);
   border: 1px solid rgba(255,255,255,0.18);
   background: rgba(255,255,255,0.06);
-  color: var(--text);
-  font-size: 26px;
+  color: var(--muted);
+  font-size: 20px;
   line-height: 1;
   cursor: pointer;
 }
 .trade-review-x:hover {
-  background: rgba(255,255,255,0.12);
+  background: rgba(19, 216, 231, 0.1);
+  border-color: var(--ops-cyan, #13d8e7);
+  color: var(--text);
 }
 .trade-review-board {
   position: relative;
@@ -12197,7 +12878,7 @@ const TRADE_HUB_CSS = `
   background: var(--panel-3);
 }
 .trade-review-board-verdict span {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.12em;
   color: var(--muted);
@@ -12253,7 +12934,7 @@ const TRADE_HUB_CSS = `
   height: 100%;
 }
 .trade-review-insight .trade-hub-panel-title {
-  font-size: 10px;
+  font-size: 11px;
   margin: 0;
   line-height: 1.1;
 }
@@ -12273,7 +12954,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-review-insight-meter {
   height: 7px;
-  border-radius: 999px;
+  border-radius: 1px;
   background: rgba(255,255,255,0.08);
   overflow: hidden;
   margin: 0;
@@ -12282,7 +12963,7 @@ const TRADE_HUB_CSS = `
   height: 100%;
   border-radius: inherit;
   background: var(--cyan);
-  transition: width 0.25s ease;
+  transition: opacity 0.2s ease;
 }
 .trade-review-insight.good .trade-review-insight-meter-fill { background: var(--green); }
 .trade-review-insight.warn .trade-review-insight-meter-fill { background: var(--gold); }
@@ -12343,7 +13024,7 @@ const TRADE_HUB_CSS = `
 .trade-review-readout,
 .trade-review-text-card {
   min-height: 96px;
-  border-radius: 16px;
+  border-radius: 6px;
   padding: 12px 14px;
   border: 1px solid rgba(255,255,255,0.1);
   background: rgba(255,255,255,0.035);
@@ -12358,7 +13039,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-review-readout-head span,
 .trade-review-text-head span {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.13em;
   color: var(--muted);
@@ -12378,7 +13059,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-review-readout-meter {
   height: 6px;
-  border-radius: 999px;
+  border-radius: 1px;
   margin-top: 10px;
   background: rgba(255,255,255,0.08);
   overflow: hidden;
@@ -12387,7 +13068,7 @@ const TRADE_HUB_CSS = `
   height: 100%;
   border-radius: inherit;
   background: var(--cyan);
-  transition: width 0.25s ease;
+  transition: opacity 0.2s ease;
 }
 .trade-review-readout.good {
   border-top-color: rgba(82,223,148,0.55);
@@ -12414,7 +13095,7 @@ const TRADE_HUB_CSS = `
   background: var(--blue, #5a9fff);
 }
 .trade-review-readout.gm {
-  border-top-color: rgba(201,146,255,0.55);
+  border-top-color: rgba(138, 180, 255, 0.55);
 }
 .trade-review-readout.gm .trade-review-readout-meter-fill {
   background: var(--purple, #c992ff);
@@ -12428,7 +13109,7 @@ const TRADE_HUB_CSS = `
 .trade-review-chip-row span {
   padding: 4px 8px;
   border-radius: 6px;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.06em;
   border: 1px solid rgba(255,255,255,0.12);
@@ -12451,7 +13132,7 @@ const TRADE_HUB_CSS = `
 .trade-review-info-card,
 .trade-review-cap-card {
   min-height: 96px;
-  border-radius: 18px;
+  border-radius: 6px;
   padding: 12px;
   border: 1px solid rgba(255,255,255,0.12);
   background: rgba(255,255,255,0.04);
@@ -12469,7 +13150,7 @@ const TRADE_HUB_CSS = `
 .trade-review-info-head span,
 .trade-review-cap-head span,
 .trade-review-cap-delta span {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.12em;
   color: var(--muted);
@@ -12491,7 +13172,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-review-meter-track {
   height: 9px;
-  border-radius: 999px;
+  border-radius: 1px;
   margin-top: 12px;
   background: rgba(255,255,255,0.09);
   overflow: hidden;
@@ -12501,7 +13182,7 @@ const TRADE_HUB_CSS = `
   border-radius: inherit;
   background: var(--cyan);
   box-shadow: 0 0 14px rgba(19,216,231,0.32);
-  transition: width 0.25s ease;
+  transition: opacity 0.2s ease;
 }
 .trade-review-meter-card.good .trade-review-meter-fill {
   background: var(--green);
@@ -12517,7 +13198,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-review-meter-card.gm .trade-review-meter-fill {
   background: var(--purple, #c992ff);
-  box-shadow: 0 0 14px rgba(201,146,255,0.28);
+  box-shadow: 0 0 14px rgba(138, 180, 255, 0.28);
 }
 .trade-review-meter-card.balance .trade-review-meter-fill {
   background: var(--blue, #5a9fff);
@@ -12530,9 +13211,9 @@ const TRADE_HUB_CSS = `
   margin-top: 10px;
 }
 .trade-review-info-chips span {
-  padding: 5px 8px;
-  border-radius: 999px;
-  font-size: 9px;
+  padding: 4px 8px;
+  border-radius: var(--radius-ops, 2px);
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.08em;
   border: 1px solid rgba(255,255,255,0.14);
@@ -12590,7 +13271,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-review-package-side > span {
   text-align: center;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.12em;
   color: var(--cyan);
@@ -12642,7 +13323,7 @@ const TRADE_HUB_CSS = `
 .trade-review-context-cat-inline {
   display: inline-block;
   margin-right: 6px;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -12742,7 +13423,7 @@ const TRADE_HUB_CSS = `
   justify-content: center;
 }
 .trade-review-verdict-chip {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.12em;
   padding: 4px 8px;
@@ -12759,7 +13440,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-review-icon-tile {
   min-height: 84px;
-  border-radius: 18px;
+  border-radius: 6px;
   border: 1px solid rgba(255,255,255,0.12);
   background: rgba(255,255,255,0.04);
   display: grid;
@@ -12774,7 +13455,7 @@ const TRADE_HUB_CSS = `
 .trade-review-icon-tile > span {
   display: block;
   margin-top: 4px;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.13em;
   color: var(--muted);
@@ -12793,7 +13474,7 @@ const TRADE_HUB_CSS = `
   margin-top: 2px;
 }
 .trade-review-fan-chip {
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.1em;
   padding: 2px 5px;
@@ -12835,8 +13516,8 @@ const TRADE_HUB_CSS = `
 .trade-review-icon-tile.risk.bad > strong { color: var(--red); }
 .trade-review-icon-tile.risk.good > strong { color: var(--green); }
 .trade-review-icon-tile.gm {
-  border-color: rgba(201,146,255,0.42);
-  background: rgba(201,146,255,0.1);
+  border-color: rgba(138, 180, 255, 0.42);
+  background: rgba(138, 180, 255, 0.1);
 }
 .trade-review-icon-tile.gm > strong { color: #e8c8ff; }
 .trade-review-icon-tile.league {
@@ -12861,7 +13542,7 @@ const TRADE_HUB_CSS = `
 }
 .trade-review-facts span {
   display: block;
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted);
@@ -12937,7 +13618,7 @@ const TRADE_HUB_CSS = `
   justify-content: center;
   min-height: min(46vh, 500px);
   padding: clamp(12px, 2vh, 24px);
-  border-radius: 20px;
+  border-radius: 8px;
   border: 1px solid rgba(0, 216, 223, 0.2);
   background:
     linear-gradient(180deg, rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.15)),
@@ -12963,7 +13644,7 @@ const TRADE_HUB_CSS = `
 .trade-asset-hero-pick .trade-pick-icon {
   width: min(42vw, 320px);
   height: min(48vh, 380px);
-  border-radius: 20px;
+  border-radius: 8px;
   border: 2px solid rgba(0, 216, 223, 0.3);
   background: linear-gradient(180deg, rgba(0, 216, 223, 0.12), rgba(0, 0, 0, 0.35));
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
@@ -12981,7 +13662,7 @@ const TRADE_HUB_CSS = `
   width: var(--size);
   height: var(--size);
   max-width: 100%;
-  border-radius: 20px;
+  border-radius: 8px;
   border: 2px solid rgba(0, 216, 223, 0.32);
   box-shadow:
     0 24px 64px rgba(0, 0, 0, 0.5),
@@ -13021,7 +13702,7 @@ const TRADE_HUB_CSS = `
 .trade-asset-hero-tile {
   min-width: 0;
   padding: clamp(18px, 2.5vh, 28px) clamp(16px, 2vw, 24px);
-  border-radius: 16px;
+  border-radius: 6px;
   border: 1px solid rgba(0, 216, 223, 0.22);
   background: rgba(0, 0, 0, 0.32);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
@@ -13109,7 +13790,7 @@ const TRADE_HUB_CSS = `
   border-radius: 8px;
   background: transparent;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.08em;
   cursor: pointer;
@@ -13147,7 +13828,7 @@ const TRADE_HUB_CSS = `
   gap: 8px;
   margin-bottom: 12px;
 }
-.trade-drawer-kv span { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+.trade-drawer-kv span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
 .trade-drawer-kv strong { display: block; font-size: 14px; margin-top: 2px; }
 .trade-drawer-line { font-size: 12px; color: var(--muted); margin: 6px 0; }
 .trade-drawer-line.ok { color: var(--green); }
@@ -13167,7 +13848,7 @@ const TRADE_HUB_CSS = `
   padding: 8px;
   text-align: center;
 }
-.trade-review-grid span { display: block; font-size: 8px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
+.trade-review-grid span { display: block; font-size: 11px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
 .trade-review-grid strong { font-size: 16px; }
 .trade-review-grid .pos { color: var(--green); }
 .trade-review-grid .neg { color: var(--red); }
@@ -13178,7 +13859,7 @@ const TRADE_HUB_CSS = `
   flex-wrap: wrap;
 }
 .trade-review-legal span {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   padding: 5px 10px;
   border-radius: 8px;
@@ -13197,15 +13878,15 @@ const TRADE_HUB_CSS = `
 .trade-fan-meter-track {
   height: 8px;
   background: var(--panel-3);
-  border-radius: 999px;
+  border-radius: 1px;
   overflow: hidden;
 }
 .trade-fan-meter-track div {
   height: 100%;
   background: linear-gradient(90deg, var(--red), var(--gold), var(--green));
-  border-radius: 999px;
+  border-radius: 0;
 }
-.trade-fan-meter-label { font-size: 10px; color: var(--muted); margin-top: 4px; display: block; }
+.trade-fan-meter-label { font-size: 11px; color: var(--muted); margin-top: 4px; display: block; }
 
 /* Team Intel — full-height list panels */
 .trade-team-intel-panel {
@@ -13218,29 +13899,13 @@ const TRADE_HUB_CSS = `
   margin: 0;
   border: none;
   border-radius: 0;
-  background:
-    linear-gradient(180deg, rgba(5, 14, 24, 0.96), rgba(2, 8, 16, 0.98)),
-    repeating-linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.012) 0px,
-      rgba(255, 255, 255, 0.012) 1px,
-      transparent 1px,
-      transparent 5px
-    );
+  background: linear-gradient(180deg, rgba(5, 14, 24, 0.96), rgba(2, 8, 16, 0.98));
   box-shadow: inset 0 1px 0 rgba(0, 216, 223, 0.06);
   overflow: hidden;
   transition: box-shadow 0.2s ease, background 0.2s ease;
 }
 .trade-team-intel-panel.is-active {
-  background:
-    linear-gradient(180deg, rgba(6, 20, 32, 0.98), rgba(3, 12, 22, 0.99)),
-    repeating-linear-gradient(
-      90deg,
-      rgba(0, 216, 223, 0.03) 0px,
-      rgba(0, 216, 223, 0.03) 1px,
-      transparent 1px,
-      transparent 5px
-    );
+  background: linear-gradient(180deg, rgba(6, 20, 32, 0.98), rgba(3, 12, 22, 0.99));
   box-shadow:
     inset 0 0 32px rgba(0, 216, 223, 0.07),
     inset 0 1px 0 rgba(0, 216, 223, 0.18);
@@ -13257,6 +13922,58 @@ const TRADE_HUB_CSS = `
   height: 100%;
   min-height: 0;
   flex: 1;
+}
+.trade-roster-capacity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid rgba(156, 218, 236, 0.16);
+  border-radius: 6px;
+  background: rgba(8, 22, 34, 0.72);
+}
+.trade-roster-capacity.is-compact {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+}
+.trade-roster-capacity__title {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(156, 218, 236, 0.72);
+}
+.trade-roster-capacity__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.trade-roster-capacity__pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(156, 218, 236, 0.18);
+  background: rgba(12, 31, 47, 0.85);
+  color: var(--ops-text, #e9f7fb);
+  font-family: var(--font-mono-data, ui-monospace, monospace);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.trade-roster-capacity__pill.tone-ok {
+  color: #52df94;
+  border-color: rgba(82, 223, 148, 0.28);
+}
+.trade-roster-capacity__pill.tone-warn {
+  color: #e9a83c;
+  border-color: rgba(233, 168, 60, 0.32);
+}
+.trade-roster-capacity__pill.tone-bad {
+  color: #ff606d;
+  border-color: rgba(255, 96, 109, 0.34);
 }
 .trade-intel-hero {
   display: flex;
@@ -13316,8 +14033,10 @@ const TRADE_HUB_CSS = `
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Register rows and the asset actions stay together under the crest instead of
+   being pushed to opposite ends of a tall rail with a void between them. */
 .trade-intel-list {
-  flex: 1;
+  flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
   display: flex;
@@ -13384,13 +14103,14 @@ const TRADE_HUB_CSS = `
   display: flex;
   flex-direction: column;
   gap: 0;
-  flex-shrink: 0;
+  flex: 0 0 auto;
   border-top: 1px solid rgba(0, 216, 223, 0.16);
+  border-bottom: 1px solid rgba(0, 216, 223, 0.12);
   background: rgba(0, 0, 0, 0.15);
 }
 .trade-intel-view-players {
   width: 100%;
-  padding: 16px 14px;
+  padding: 13px 14px;
   border: none;
   border-bottom: 1px solid rgba(0, 216, 223, 0.1);
   background: linear-gradient(180deg, rgba(0, 216, 223, 0.14), rgba(0, 216, 223, 0.06));
@@ -13437,7 +14157,7 @@ const TRADE_HUB_CSS = `
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-radius: 22px;
+  border-radius: 8px;
   border: 1px solid rgba(0, 216, 223, 0.35);
   background:
     radial-gradient(circle at 15% 0%, rgba(0, 216, 223, 0.14), transparent 34%),
@@ -13449,8 +14169,8 @@ const TRADE_HUB_CSS = `
 }
 .trade-players-full-head {
   flex-shrink: 0;
-  min-height: 92px;
-  padding: 18px 22px;
+  min-height: 0;
+  padding: 12px 16px;
   border-bottom: 1px solid rgba(0, 216, 223, 0.18);
   background:
     linear-gradient(180deg, rgba(11, 35, 52, 0.9), rgba(5, 17, 27, 0.72));
@@ -13487,12 +14207,13 @@ const TRADE_HUB_CSS = `
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 9px;
-  border-radius: 999px;
-  border: 1px solid rgba(0, 216, 223, 0.18);
-  background: rgba(255, 255, 255, 0.045);
+  padding: 3px 8px;
+  border-radius: var(--radius-ops, 2px);
+  border: 0;
+  border-left: 2px solid rgba(0, 216, 223, 0.4);
+  background: rgba(255, 255, 255, 0.035);
   color: #d8eef5;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -13502,9 +14223,9 @@ const TRADE_HUB_CSS = `
 }
 .trade-players-full-head .trade-drawer-close {
   margin-left: auto;
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-hud, 4px);
   font-size: 20px;
   border: 1px solid rgba(0, 216, 223, 0.22);
   background: rgba(255, 255, 255, 0.045);
@@ -13519,7 +14240,7 @@ const TRADE_HUB_CSS = `
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  padding: 18px;
+  padding: 10px 14px 12px;
 }
 .trade-players-full-body .trade-asset-pool {
   height: 100%;
@@ -13529,14 +14250,39 @@ const TRADE_HUB_CSS = `
   border-top: none;
   padding-top: 0;
 }
+/* Pool categories are a single broadcast segment bar; four pills on two rows
+   read as navigation instead of a filter on the ledger below. */
 .trade-players-full-body .trade-pool-tabs {
   flex-shrink: 0;
-  margin-bottom: 14px;
+  margin-bottom: 0;
+  display: flex;
+  gap: 0;
+  border-bottom: 0;
 }
 .trade-players-full-body .trade-pool-tabs button {
-  min-height: 42px;
+  min-height: 30px;
+  flex: 0 0 auto;
+  padding: 6px 16px;
   font-size: 11px;
+  border-radius: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  box-shadow: none;
 }
+.trade-players-full-body .trade-pool-tabs button:hover {
+  transform: none;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.03);
+}
+.trade-players-full-body .trade-pool-tabs button.active {
+  background: transparent;
+  border-bottom-color: var(--ops-cyan, #13d8e7);
+  box-shadow: none;
+  color: var(--cyan);
+}
+/* Asset pool is a scouting ledger, not a card collection: dense hairline rows
+   so a 23-man roster is legible in one view instead of four cards. */
 .trade-players-full-body .trade-pool-list {
   flex: 1;
   min-height: 0;
@@ -13544,42 +14290,44 @@ const TRADE_HUB_CSS = `
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 2px 10px 10px 2px;
+  gap: 0;
+  padding: 0 6px 6px 0;
+  border-top: 1px solid rgba(0, 216, 223, 0.16);
 }
 .trade-players-full-body .trade-pool-row {
-  min-height: 112px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  grid-template-columns: 76px minmax(0, 1fr) 88px;
-  gap: 14px;
+  min-height: 38px;
+  /* Ledger scrolls; rows must never be compressed by the column flex parent or
+     their value bars and badges get clipped. */
+  flex: 0 0 auto;
+  padding: 5px 10px 5px 9px;
+  border-radius: 0;
+  /* Trailing track carries the status mark (IN DEAL / NTC / LOCKED); it was
+     landing in an implicit column and being clipped by the row. */
+  grid-template-columns: 34px minmax(0, 1fr) 46px auto;
+  gap: 10px;
   align-items: center;
-  overflow: visible;
+  overflow: hidden;
   position: relative;
   z-index: 0;
-  background:
-    linear-gradient(90deg, rgba(10, 29, 44, 0.96), rgba(7, 20, 32, 0.92)),
-    radial-gradient(circle at 0% 50%, rgba(0, 216, 223, 0.12), transparent 36%);
-  border: 1px solid rgba(0, 216, 223, 0.18);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 10px 22px rgba(0, 0, 0, 0.16);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  border-left: 3px solid transparent;
+  box-shadow: none;
+}
+.trade-players-full-body .trade-pool-list > .trade-pool-row:nth-child(even) {
+  background: rgba(255, 255, 255, 0.014);
 }
 .trade-players-full-body .trade-pool-row:hover:not(.used):not(.view-only) {
   z-index: 1;
-  border-color: rgba(0, 216, 223, 0.42);
-  box-shadow:
-    0 12px 28px rgba(0, 0, 0, 0.22),
-    inset 0 0 20px rgba(0, 216, 223, 0.03);
+  background: rgba(19, 216, 231, 0.07);
+  border-left-color: rgba(19, 216, 231, 0.55);
+  box-shadow: none;
 }
 .trade-players-full-body .trade-pool-row.is-focused {
-  border-color: rgba(0, 216, 223, 0.62);
-  background:
-    linear-gradient(90deg, rgba(0, 216, 223, 0.14), rgba(7, 20, 32, 0.94)),
-    radial-gradient(circle at 0% 50%, rgba(0, 216, 223, 0.18), transparent 40%);
-  box-shadow:
-    0 16px 36px rgba(0, 0, 0, 0.28),
-    inset 0 0 28px rgba(0, 216, 223, 0.06);
+  background: var(--ops-table-sel, rgba(19, 216, 231, 0.1));
+  border-left-color: var(--ops-cyan, #13d8e7);
+  box-shadow: none;
 }
 .trade-player-list-photo {
   width: 72px;
@@ -13588,12 +14336,13 @@ const TRADE_HUB_CSS = `
   justify-content: center;
 }
 .trade-players-full-body .trade-player-clean-headshot.player-headshot {
-  --size: 64px;
-  border-radius: 14px;
-  border: 1px solid rgba(0, 216, 223, 0.22);
-  box-shadow:
-    0 8px 18px rgba(0, 0, 0, 0.32),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --size: 28px;
+  border-radius: var(--radius-ops, 2px);
+  border: 1px solid rgba(0, 216, 223, 0.18);
+  box-shadow: none;
+}
+.trade-players-full-body .trade-player-list-photo {
+  width: 34px;
 }
 .trade-players-full-body .trade-player-clean-headshot .ph-flag,
 .trade-players-full-body .trade-player-clean-headshot .ph-number,
@@ -13625,28 +14374,50 @@ const TRADE_HUB_CSS = `
 }
 .trade-pick-origin-fallback {
   color: rgba(160, 190, 208, 0.95);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
+/* One scan line per asset: identity, ledger columns, value mark, season note. */
 .trade-players-full-body .trade-player-list-main {
-  gap: 8px;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
   align-self: center;
   width: 100%;
+}
+.trade-players-full-body .trade-player-list-name-row {
+  flex: 0 1 200px;
+  min-width: 110px;
+}
+.trade-players-full-body .trade-player-list-name-row strong {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.03em;
 }
 .trade-players-full-body .trade-player-list-mid {
   display: flex;
   align-items: center;
-  gap: 14px;
-  width: 100%;
+  gap: 12px;
+  flex: 1 1 auto;
   min-width: 0;
 }
 .trade-players-full-body .trade-player-list-details {
   display: flex;
   flex-wrap: nowrap;
   flex-shrink: 0;
-  gap: 10px;
+  gap: 8px;
+}
+.trade-players-full-body .trade-pool-season-line {
+  flex: 0 0 auto;
+  max-width: 172px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: rgba(150, 178, 194, 0.8);
+  font-variant-numeric: tabular-nums;
 }
 .trade-player-list-name-row {
   display: flex;
@@ -13685,33 +14456,31 @@ const TRADE_HUB_CSS = `
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     0 0 12px rgba(0, 216, 223, 0.08);
 }
+/* Position / age / cap read as ledger columns rather than three glowing pills. */
 .trade-players-full-body .trade-player-list-details span {
-  min-width: 84px;
-  padding: 12px 18px;
-  border-radius: 12px;
-  font-size: 17px;
-  font-weight: 1000;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 800;
   letter-spacing: 0.06em;
-  border-width: 1px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    0 0 18px rgba(0, 216, 223, 0.12);
+  text-align: left;
+  font-variant-numeric: tabular-nums;
 }
 .trade-players-full-body .trade-player-detail-pos {
-  color: #f2fbff;
-  border-color: rgba(0, 216, 223, 0.45);
-  background: rgba(0, 216, 223, 0.16);
+  width: 30px;
+  color: rgba(232, 248, 252, 0.95);
 }
 .trade-players-full-body .trade-player-detail-age {
-  color: #e8f4ff;
-  border-color: rgba(138, 180, 255, 0.42);
-  background: rgba(138, 180, 255, 0.12);
+  width: 34px;
+  color: rgba(170, 198, 214, 0.9);
 }
 .trade-players-full-body .trade-player-detail-cap {
-  color: #d4faf8;
-  border-color: rgba(94, 240, 245, 0.48);
-  background: rgba(0, 216, 223, 0.18);
-  min-width: 96px;
+  width: 62px;
+  color: rgba(210, 235, 245, 0.95);
 }
 .trade-player-value-focus {
   width: 100%;
@@ -13722,7 +14491,7 @@ const TRADE_HUB_CSS = `
 .trade-players-full-body .trade-player-value-focus {
   display: flex !important;
   flex: 1 1 auto;
-  min-width: 0;
+  min-width: 180px;
   flex-direction: column;
   justify-content: center;
   gap: 4px;
@@ -13744,50 +14513,46 @@ const TRADE_HUB_CSS = `
 }
 .trade-players-full-body .trade-player-value-head span {
   color: rgba(148, 178, 194, 0.95);
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 1000;
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
+/* Trade value is a dominant relative instrument on the row. */
 .trade-players-full-body .trade-player-value-track {
   width: 100%;
   height: 10px;
-  border-radius: 999px;
+  border-radius: 2px;
   overflow: hidden;
-  border: 1px solid rgba(100, 130, 150, 0.28);
-  background: rgba(0, 12, 20, 0.78);
-  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(156, 218, 236, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .trade-players-full-body .trade-player-value-fill {
   height: 100%;
   min-width: 0;
   max-width: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #4a6070, #6a8498);
+  border-radius: 0;
+  background: #6a8498;
   box-shadow: none;
-  transition: width 0.28s ease;
+  transition: opacity var(--motion-workspace, 180ms) ease;
 }
 .trade-players-full-body .trade-player-value-focus.value-franchise .trade-player-value-fill {
-  background: linear-gradient(90deg, #d4922a, #ffd166);
-  box-shadow: 0 0 12px rgba(233, 168, 60, 0.35);
+  background: var(--ops-gold, #e9a83c);
 }
 .trade-players-full-body .trade-player-value-focus.value-elite .trade-player-value-fill {
-  background: linear-gradient(90deg, #e8892f, #ffc978);
-  box-shadow: 0 0 10px rgba(255, 159, 67, 0.28);
+  background: #ffc978;
 }
 .trade-players-full-body .trade-player-value-focus.value-top-asset .trade-player-value-fill {
-  background: linear-gradient(90deg, #2a6fb8, #54a0ff);
-  box-shadow: none;
+  background: var(--ops-info, #8ab4ff);
 }
 .trade-players-full-body .trade-player-value-focus.value-useful .trade-player-value-fill {
-  background: linear-gradient(90deg, #2d6b48, #4aaa72);
-  box-shadow: none;
+  background: var(--ops-success, #4aaa72);
 }
 .trade-players-full-body .trade-player-value-focus.value-depth .trade-player-value-fill,
 .trade-players-full-body .trade-player-value-focus.value-low .trade-player-value-fill,
 .trade-players-full-body .trade-player-value-focus.value-unknown .trade-player-value-fill {
-  background: linear-gradient(90deg, #3a4554, #5a6878);
-  box-shadow: none;
+  background: #4d5a68;
   opacity: 0.85;
 }
 .trade-player-value-head {
@@ -13806,7 +14571,7 @@ const TRADE_HUB_CSS = `
 .trade-player-value-track {
   width: 100%;
   height: 10px;
-  border-radius: 999px;
+  border-radius: 1px;
   overflow: hidden;
   border: 1px solid rgba(100, 130, 150, 0.3);
   background: rgba(0, 12, 20, 0.78);
@@ -13816,14 +14581,25 @@ const TRADE_HUB_CSS = `
   height: 100%;
   min-width: 0;
   max-width: 100%;
-  border-radius: 999px;
+  border-radius: 0;
   background: linear-gradient(90deg, #4a6070, #6a8498);
   box-shadow: none;
 }
 .trade-players-full-body .trade-pool-row.trade-pool-row-has-add {
-  grid-template-columns: 76px minmax(0, 1fr) 88px 92px;
+  grid-template-columns: 34px minmax(0, 1fr) 46px 70px auto;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
+}
+.trade-players-full-body .trade-pool-status-pill {
+  padding: 2px 7px;
+  border-radius: var(--radius-ops, 2px);
+  font-size: 11px;
+  white-space: nowrap;
+}
+/* Assets already seated in the package stay listed but read as spent. */
+.trade-players-full-body .trade-pool-row.used {
+  opacity: 0.62;
+  border-left-color: rgba(0, 216, 223, 0.45);
 }
 .trade-players-full-body .trade-pool-player .trade-player-ovr-tower,
 .trade-players-full-body .trade-pool-player .trade-pool-row-actions {
@@ -13838,37 +14614,26 @@ const TRADE_HUB_CSS = `
   min-width: 0;
 }
 .trade-pool-add-btn {
-  min-width: 78px;
-  padding: 10px 8px;
-  border-radius: 10px;
-  border: 1px solid rgba(0, 216, 223, 0.42);
-  background:
-    linear-gradient(180deg, rgba(0, 216, 223, 0.22), rgba(0, 216, 223, 0.08)),
-    rgba(4, 16, 26, 0.92);
+  min-width: 62px;
+  padding: 5px 8px;
+  border-radius: var(--radius-ops, 2px);
+  border: 1px solid rgba(0, 216, 223, 0.4);
+  background: rgba(0, 216, 223, 0.12);
   color: #e8f8fc;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 1000;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   cursor: pointer;
   transition:
-    transform 0.16s ease,
-    border-color 0.16s ease,
-    box-shadow 0.16s ease,
-    background 0.16s ease;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 0 16px rgba(0, 216, 223, 0.08);
+    border-color var(--motion-micro, 110ms ease),
+    background var(--motion-micro, 110ms ease);
+  box-shadow: none;
 }
 .trade-pool-add-btn:hover:not(.in-package):not(.locked) {
-  transform: translateY(-1px);
-  border-color: rgba(0, 216, 223, 0.72);
-  background:
-    linear-gradient(180deg, rgba(0, 216, 223, 0.32), rgba(0, 216, 223, 0.12)),
-    rgba(4, 16, 26, 0.96);
-  box-shadow:
-    0 8px 22px rgba(0, 216, 223, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  border-color: var(--ops-cyan, #13d8e7);
+  background: rgba(0, 216, 223, 0.24);
+  box-shadow: none;
 }
 .trade-pool-add-btn.in-package,
 .trade-pool-add-btn.locked {
@@ -13888,50 +14653,53 @@ const TRADE_HUB_CSS = `
   background: rgba(82, 223, 148, 0.08);
 }
 .trade-players-full-body .trade-pool-pick.trade-pool-row-has-add {
-  grid-template-columns: 76px minmax(0, 1fr) auto;
+  grid-template-columns: 34px minmax(0, 1fr) auto 70px;
 }
+/* Overall is the ledger's right-hand numeral column, not a badge tower. */
 .trade-player-ovr-tower {
-  height: 68px;
-  width: 68px;
-  min-width: 68px;
-  max-width: 68px;
-  border-radius: 8px;
-  border: 1px solid rgba(0, 216, 223, 0.32);
-  background: rgba(0, 216, 223, 0.1);
+  height: auto;
+  width: 46px;
+  min-width: 46px;
+  max-width: 46px;
+  border-radius: 0;
+  border: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.07);
+  background: transparent;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 4px;
+  padding-left: 8px;
   flex-shrink: 0;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 0 12px rgba(0, 216, 223, 0.08);
+  box-shadow: none;
 }
 .trade-player-ovr-tower span {
-  color: rgba(135, 165, 180, 0.95);
-  font-size: 9px;
-  font-weight: 1000;
-  letter-spacing: 0.16em;
+  color: rgba(135, 165, 180, 0.72);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
   line-height: 1;
 }
 .trade-player-ovr-tower strong {
   color: #e8f8fc;
-  font-size: 28px;
+  font-size: 15px;
   font-weight: 1000;
   line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
+.trade-player-ovr-tower small { display: none; }
 @media (max-height: 860px) {
   .trade-slot {
-    min-height: 64px;
-    margin-bottom: 5px;
+    min-height: 48px;
+    margin-bottom: 4px;
   }
   .trade-slot-placeholder,
   .trade-asset-card {
-    min-height: 60px;
+    min-height: 46px;
   }
   .trade-asset-card-player {
-    min-height: 68px;
+    min-height: 46px;
   }
   .trade-package-col {
     padding: 8px;
@@ -14004,7 +14772,7 @@ const TRADE_HUB_CSS = `
   .trade-drawer-players.trade-players-fullscreen {
     width: calc(100vw - 18px);
     height: calc(100vh - 18px);
-    border-radius: 16px;
+    border-radius: 6px;
   }
   .trade-players-full-head {
     min-height: auto;
@@ -14037,7 +14805,7 @@ const TRADE_HUB_CSS = `
   .trade-pool-add-btn {
     min-width: 68px;
     padding: 8px 6px;
-    font-size: 9px;
+    font-size: 11px;
   }
   .trade-players-full-body .trade-player-clean-headshot.player-headshot {
     --size: 54px;

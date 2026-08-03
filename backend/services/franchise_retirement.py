@@ -135,18 +135,42 @@ def _career_stats(player: Any, session: FranchiseSession) -> Dict[str, Any]:
     career = getattr(player, "career_stats", None) or getattr(player, "stats", None) or {}
     if not isinstance(career, dict):
         career = {}
-    gp = int(career.get("gp", career.get("games", ss.get("gp", 0))) or 0)
-    g = int(career.get("g", career.get("goals", ss.get("g", 0))) or 0)
-    a = int(career.get("a", career.get("assists", ss.get("a", 0))) or 0)
-    pts = int(career.get("pts", career.get("points", g + a)) or (g + a))
+
+    def _as_int(val: Any, default: int = 0) -> int:
+        if isinstance(val, bool):
+            return int(val)
+        if isinstance(val, (int, float)):
+            return int(val)
+        if isinstance(val, str):
+            try:
+                return int(float(val.strip()))
+            except Exception:
+                return default
+        return default
+
+    seasons_raw = getattr(player, "seasons_played", None)
+    if seasons_raw is None:
+        seasons_raw = career.get("seasons_played", career.get("seasons_count", None))
+    # career["seasons"] is often a list of season rows — never pass that to int().
+    if isinstance(seasons_raw, list):
+        seasons_played = max(1, len(seasons_raw))
+    else:
+        seasons_played = _as_int(seasons_raw, 0)
+        if seasons_played <= 0:
+            seasons_played = max(1, _player_age(player) - 18)
+
+    gp = _as_int(career.get("gp", career.get("games", ss.get("gp", 0))), 0)
+    g = _as_int(career.get("g", career.get("goals", ss.get("g", 0))), 0)
+    a = _as_int(career.get("a", career.get("assists", ss.get("a", 0))), 0)
+    pts = _as_int(career.get("pts", career.get("points", g + a)), g + a)
     return {
         "games_played": gp,
         "goals": g,
         "assists": a,
         "points": pts,
-        "goalie_wins": int(career.get("w", ss.get("w", 0)) or 0),
-        "shutouts": int(career.get("so", ss.get("so", 0)) or 0),
-        "seasons_played": int(getattr(player, "seasons_played", career.get("seasons", 0)) or max(1, _player_age(player) - 18)),
+        "goalie_wins": _as_int(career.get("w", ss.get("w", 0)), 0),
+        "shutouts": _as_int(career.get("so", ss.get("so", 0)), 0),
+        "seasons_played": seasons_played,
     }
 
 

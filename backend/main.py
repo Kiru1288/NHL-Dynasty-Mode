@@ -32,6 +32,7 @@ from services.franchise_sim import (
     get_franchise_chemistry_report,
     get_franchise_game_detail,
     list_teams_summary,
+    reopen_franchise_offseason_stage,
     snapshot_draft_rank_prev,
 )
 from services.trade_service import (
@@ -77,15 +78,48 @@ app.add_middleware(
 
 @app.middleware("http")
 async def _stamp_backend_identity(request, call_next):
-    """Let the frontend detect backend restarts/code updates on every response."""
+    """Let the frontend detect backend restarts/code updates on every response.
+
+    Also records per-route latency via perf_profiler (NHL_PERF=0 to disable).
+    """
+    import time
+
+    t0 = time.perf_counter()
     response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
     try:
         response.headers["X-API-Instance-Id"] = str(api_instance_id())
         fp = _api_code_fingerprint()
         response.headers["X-API-Code-Revision"] = str(fp.get("revision") or "")
+        response.headers["X-Response-Time-Ms"] = f"{elapsed_ms:.1f}"
+    except Exception:
+        pass
+    try:
+        from services.perf_profiler import record as perf_record
+
+        path = request.url.path
+        perf_record(
+            f"http.{request.method} {path}",
+            elapsed_ms,
+            meta={"status": getattr(response, "status_code", None)},
+        )
     except Exception:
         pass
     return response
+
+
+@app.get("/api/perf/snapshot")
+def get_perf_snapshot(top_n: int = 40) -> dict[str, Any]:
+    from services.perf_profiler import snapshot
+
+    return snapshot(top_n=max(1, min(200, int(top_n or 40))))
+
+
+@app.post("/api/perf/reset")
+def post_perf_reset() -> dict[str, Any]:
+    from services.perf_profiler import reset
+
+    return reset()
 
 
 class FranchiseStartBody(BaseModel):
@@ -111,6 +145,10 @@ class FranchiseStartBody(BaseModel):
     injuries_enabled: bool = Field(
         default=True,
         description="When false, the sim will not generate new injuries for this franchise.",
+    )
+    player_universe: str = Field(
+        default="generated",
+        description='Player universe mode: "generated" (default) or "real_nhl".',
     )
 
 
@@ -180,7 +218,9 @@ def _api_code_fingerprint() -> dict[str, Any]:
 
     cached = getattr(_api_code_fingerprint, "_cache", None)
     now = time.monotonic()
-    if isinstance(cached, dict) and (now - float(cached.get("at", 0))) < 0.75:
+    # Health + every response stamp this; 5s is plenty for stale-code detection
+    # without re-statting dozens of .py files on every click.
+    if isinstance(cached, dict) and (now - float(cached.get("at", 0))) < 5.0:
         return cached["value"]
 
     sim_path = Path(franchise_sim.__file__).resolve()
@@ -279,6 +319,7 @@ def post_franchise_start(body: FranchiseStartBody) -> Any:
             games_per_team=body.games_per_team,
             season_start_year=body.season_start_year,
             injuries_enabled=bool(body.injuries_enabled),
+            player_universe=str(getattr(body, "player_universe", None) or "generated"),
         )
     except ValueError as e:
         log.warning("POST /api/franchise/start validation: %s", e)
@@ -352,26 +393,43 @@ def get_franchise_state_heavy(
     include_nhl_calendar_full: bool = False,
     x_franchise_session: Optional[str] = Header(default=None),
 ) -> dict[str, Any]:
+    """Build only the requested heavy domains — do not compute unused board/roster work."""
     s = _session_or_404(x_franchise_session)
-    full = franchise_sim.build_state_payload_safe(s, include_heavy=True)
-    out: dict[str, Any] = {"session_id": str(getattr(s, "session_id", "") or "")}
+    sim = s.sim
+    out: dict[str, Any] = {
+        "session_id": str(getattr(s, "session_id", "") or ""),
+        "stats_revision": int(getattr(s, "_stats_revision", 0) or 0),
+        "prospect_revision": int(getattr(s, "_prospect_revision", 0) or 0),
+    }
     if include_roster_browser:
-        out["roster_browser"] = full.get("roster_browser") or {}
+        out["roster_browser"] = franchise_sim.get_cached_roster_browser(
+            s, sim, str(getattr(s, "user_team_id", "") or "")
+        )
+    draft_board = None
+    if include_draft_class_rankings or include_draft_class_hud:
+        draft_board = franchise_sim.get_cached_draft_class_rankings(s, sim)
     if include_draft_class_rankings:
-        out["draft_class_rankings"] = full.get("draft_class_rankings") or {}
+        out["draft_class_rankings"] = draft_board or {}
     if include_draft_class_hud:
-        out["draft_class_hud"] = full.get("draft_class_hud") or {}
+        user_team = getattr(s, "team_by_id", {}).get(str(getattr(s, "user_team_id", "") or ""))
+        out["draft_class_hud"] = franchise_sim.get_cached_draft_class_hud(
+            s,
+            user_team,
+            {},
+            [],
+            (draft_board or {}).get("entries"),
+        )
     if include_nhl_calendar_full:
-        out["nhl_calendar_full"] = full.get("nhl_calendar_full") or []
+        out["nhl_calendar_full"] = franchise_sim._nhl_calendar_full_with_slates(s)
     return out
 
 
 @app.get("/api/franchise/league-operations")
 def get_franchise_league_operations(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
     s = _session_or_404(x_franchise_session)
-    from services.league_operations import build_league_operations_payload
+    from services.league_operations import get_cached_league_operations_payload
 
-    return {"league_operations": build_league_operations_payload(s)}
+    return {"league_operations": get_cached_league_operations_payload(s)}
 
 
 @app.get("/api/franchise/contract-office")
@@ -391,10 +449,37 @@ def get_franchise_free_agent_detail(player_id: str, x_franchise_session: Optiona
 def _contract_action_route(action: str, body: dict[str, Any], session_header: Optional[str]) -> dict[str, Any]:
     from services.contract_economy import build_contract_office, handle_contract_action
 
+    payload = body or {}
     s = _session_or_404(session_header)
-    result = handle_contract_action(s, action, body or {})
-    if result.get("ok"):
+    result = handle_contract_action(s, action, payload)
+    status = str(result.get("status") or "")
+    evaluate_only = bool(payload.get("evaluate_only")) or status == "evaluated"
+    read_only = evaluate_only or action in ("preview-elc-offer", "evaluate-elc")
+
+    # Previews must not persist or rebuild negotiation/office side-effects.
+    if read_only:
+        office = build_contract_office(s)
+        result["office"] = office
+        return result
+
+    save_session(s)
+    try:
+        from services.franchise_offseason import _prepare_resign_payload
+        resign = _prepare_resign_payload(s, force=True)
+        result["re_sign"] = resign.get("re_sign") or resign.get("contracts")
+        result["contracts"] = result["re_sign"]
         save_session(s)
+    except Exception:
+        pass
+    if action in ("sign-elc", "prospect-rights", "submit-elc-offer"):
+        try:
+            from services.franchise_offseason import _run_prospect_rights_stage
+
+            rights = _run_prospect_rights_stage(s, force=True)
+            result["prospect_rights"] = rights.get("prospect_rights")
+            save_session(s)
+        except Exception:
+            pass
     office = build_contract_office(s)
     result["office"] = office
     return result
@@ -440,9 +525,47 @@ def post_contract_bury(body: dict[str, Any] = Body(...), x_franchise_session: Op
     return _contract_action_route("bury", body, x_franchise_session)
 
 
+@app.get("/api/franchise/roster/moves")
+def get_roster_moves(player_id: str, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.roster_moves import available_roster_moves
+
+    s = _session_or_404(x_franchise_session)
+    return available_roster_moves(s, player_id)
+
+
+@app.post("/api/franchise/roster/move")
+def post_roster_move(body: dict[str, Any] = Body(...), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.roster_moves import execute_roster_move
+    from services.franchise_sim import build_state_payload
+
+    s = _session_or_404(x_franchise_session)
+    result = execute_roster_move(s, body or {})
+    if result.get("ok"):
+        save_session(s)
+        try:
+            result["state"] = build_state_payload(s)
+        except Exception:
+            pass
+    return result
+
+
 @app.post("/api/franchise/contracts/offer-sheet")
 def post_contract_offer_sheet(body: dict[str, Any] = Body(...), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
     return _contract_action_route("offer-sheet", body, x_franchise_session)
+
+
+@app.post("/api/franchise/contracts/match-offer-sheet")
+def post_contract_match_offer_sheet(
+    body: dict[str, Any] = Body(...), x_franchise_session: Optional[str] = Header(default=None)
+) -> dict[str, Any]:
+    return _contract_action_route("match-offer-sheet", body, x_franchise_session)
+
+
+@app.post("/api/franchise/contracts/decline-offer-sheet")
+def post_contract_decline_offer_sheet(
+    body: dict[str, Any] = Body(...), x_franchise_session: Optional[str] = Header(default=None)
+) -> dict[str, Any]:
+    return _contract_action_route("decline-offer-sheet", body, x_franchise_session)
 
 
 @app.post("/api/franchise/contracts/arbitration-file")
@@ -460,9 +583,30 @@ def post_contract_sign_elc(body: dict[str, Any] = Body(...), x_franchise_session
     return _contract_action_route("sign-elc", body, x_franchise_session)
 
 
+@app.post("/api/franchise/contracts/prospect-rights")
+def post_contract_prospect_rights(
+    body: dict[str, Any] = Body(...), x_franchise_session: Optional[str] = Header(default=None)
+) -> dict[str, Any]:
+    return _contract_action_route("prospect-rights", body, x_franchise_session)
+
+
 @app.post("/api/franchise/contracts/evaluate-elc")
 def post_contract_evaluate_elc(body: dict[str, Any] = Body(...), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
     return _contract_action_route("evaluate-elc", body, x_franchise_session)
+
+
+@app.post("/api/franchise/contracts/preview-elc-offer")
+def post_contract_preview_elc_offer(
+    body: dict[str, Any] = Body(...), x_franchise_session: Optional[str] = Header(default=None)
+) -> dict[str, Any]:
+    return _contract_action_route("preview-elc-offer", body, x_franchise_session)
+
+
+@app.post("/api/franchise/contracts/submit-elc-offer")
+def post_contract_submit_elc_offer(
+    body: dict[str, Any] = Body(...), x_franchise_session: Optional[str] = Header(default=None)
+) -> dict[str, Any]:
+    return _contract_action_route("submit-elc-offer", body, x_franchise_session)
 
 
 @app.get("/api/franchise/lines")
@@ -662,6 +806,92 @@ def post_franchise_offseason_continue(
         pass
     # step may include awards/retirements blobs with non-JSON leftovers.
     return json_safe({"step": step, "state": state})
+
+
+@app.post("/api/franchise/offseason/reopen-stage")
+def post_franchise_offseason_reopen_stage(
+    body: dict[str, Any] = Body(default=None),
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """Step back to Free Agency (or Re-Sign) from a blocked Roster Check."""
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    stage = str(b.get("stage") or b.get("offseason_stage") or "free_agency").strip()
+    try:
+        step = reopen_franchise_offseason_stage(s, stage)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    state = franchise_sim.build_state_payload_safe(s, include_heavy=False)
+    try:
+        save_session(s)
+    except Exception:
+        pass
+    return json_safe({"step": step, "state": state})
+
+
+@app.get("/api/franchise/free-agency/desk")
+def get_franchise_free_agency_desk(
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """Free Agency Wire payload for Hub / standalone screen (any season phase)."""
+    from services.json_safe import json_safe
+    from services.franchise_offseason import build_free_agency_desk
+
+    s = _session_or_404(x_franchise_session)
+    try:
+        desk = build_free_agency_desk(s)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    state = franchise_sim.build_state_payload_safe(s, include_heavy=False)
+    try:
+        save_session(s)
+    except Exception:
+        pass
+    return json_safe({**desk, "state": state})
+
+
+@app.post("/api/franchise/free-agency/advance-day")
+def post_franchise_fa_advance_day(
+    body: dict[str, Any] = Body(default_factory=dict),
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.franchise_offseason import advance_free_agency_day
+
+    s = _session_or_404(x_franchise_session)
+    days = int((body or {}).get("days") or (body or {}).get("count") or 1)
+    try:
+        result = advance_free_agency_day(s, days=days)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    save_session(s)
+    state = franchise_sim.build_state_payload_safe(s, include_heavy=False)
+    return json_safe({**result, "state": state})
+
+
+@app.post("/api/franchise/contracts/advance-day")
+def post_franchise_contracts_advance_day(
+    body: dict[str, Any] = Body(default_factory=dict),
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """Sim one (or more) days in the exclusive own-FA negotiating window."""
+    from services.json_safe import json_safe
+    from services.franchise_offseason import advance_contract_negotiation_day
+
+    s = _session_or_404(x_franchise_session)
+    days = int((body or {}).get("days") or (body or {}).get("count") or 1)
+    try:
+        result = advance_contract_negotiation_day(s, days=days)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    save_session(s)
+    state = franchise_sim.build_state_payload_safe(s, include_heavy=False)
+    return json_safe({**result, "state": state})
 
 
 @app.post("/api/franchise/next-season/generate")
@@ -909,6 +1139,26 @@ def post_entry_draft_complete(
     s = _session_or_404(x_franchise_session)
     try:
         result = complete_entry_draft(s)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    save_session(s)
+    return {**result, "state": franchise_sim.build_state_payload(s, include_heavy=False)}
+
+
+class DraftDayTradeAcceptBody(BaseModel):
+    offer: dict[str, Any] = Field(default_factory=dict)
+
+
+@app.post("/api/franchise/entry-draft/accept-trade")
+def post_entry_draft_accept_trade(
+    body: DraftDayTradeAcceptBody,
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    from services.franchise_entry_draft import accept_draft_day_trade_offer
+
+    s = _session_or_404(x_franchise_session)
+    try:
+        result = accept_draft_day_trade_offer(s, dict(body.offer or {}))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     save_session(s)

@@ -178,7 +178,19 @@ def develop_unsigned_prospect(
     else:
         ready01 = normalize_rating(readiness)
     new_ready01 = min(0.92, ready01 + max(0.0, (ovr_after - ovr_before)) * 0.7 + (0.004 if lq > 0.75 else 0.0))
-    setattr(player, "nhl_readiness", float(display_rating(new_ready01)))
+    # Canonical 0–100 readiness + ETA recompute (not a soft OVR-scaled display).
+    try:
+        from app.sim_engine.progression.development import (
+            calculate_nhl_readiness_score,
+            update_player_nhl_eta,
+        )
+
+        calculate_nhl_readiness_score(player)
+        update_player_nhl_eta(player)
+        readiness_out = float(getattr(player, "nhl_readiness", display_rating(new_ready01)) or 0)
+    except Exception:
+        setattr(player, "nhl_readiness", float(display_rating(new_ready01)))
+        readiness_out = float(display_rating(new_ready01))
     setattr(player, "last_development_year", int(season_year))
     setattr(player, "last_development_delta", round(delta_display, 3))
     if request_league_transfer:
@@ -213,7 +225,8 @@ def develop_unsigned_prospect(
         "delta": round(delta_display, 3),
         "overall": float(display_rating(ovr_after)),
         "previous_overall": float(display_rating(ovr_before)),
-        "nhl_readiness": float(display_rating(new_ready01)),
+        "nhl_readiness": float(readiness_out),
+        "nhl_eta": int(getattr(player, "nhl_eta", 4) or 4),
         "league_id": league_id,
         "path": path,
         "attribute_deltas": attr_out,

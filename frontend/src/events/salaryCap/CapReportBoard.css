@@ -1,70 +1,42 @@
+/* Cap Report — league financial wire broadcast */
+
 .cap-report-page {
-  --cap-bg: #04101a;
-  --cap-bg-2: #061522;
-  --cap-panel: rgba(9, 25, 38, 0.94);
-  --cap-panel-2: rgba(12, 35, 52, 0.94);
-  --cap-panel-3: rgba(15, 46, 66, 0.78);
-
-  --cap-line: rgba(156, 218, 236, 0.14);
-  --cap-line-2: rgba(115, 229, 241, 0.25);
-  --cap-line-strong: rgba(73, 231, 240, 0.5);
-
-  --cap-text: #e9f7fb;
-  --cap-muted: #8096a8;
-  --cap-muted-2: #607789;
-
-  --cap-cyan: #13d8e7;
-  --cap-cyan-soft: rgba(19, 216, 231, 0.13);
-
-  --cap-gold: #e9a83c;
-  --cap-gold-soft: rgba(233, 168, 60, 0.14);
-
-  --cap-green: #52df94;
-  --cap-green-soft: rgba(82, 223, 148, 0.13);
-
-  --cap-red: #ff606d;
-  --cap-red-soft: rgba(255, 96, 109, 0.13);
-
-  --cap-blue: #8ab4ff;
-  --cap-blue-soft: rgba(138, 180, 255, 0.13);
+  --cap-bg: var(--ops-navy);
+  --cap-bg-2: var(--ops-black);
+  --cap-panel: var(--ops-panel);
+  --cap-panel-2: var(--ops-panel-2);
+  --cap-panel-3: var(--ops-panel-3);
+  --cap-line: var(--ops-grid);
+  --cap-line-2: var(--ops-grid-2);
+  --cap-line-strong: var(--ops-grid-strong);
+  --cap-text: var(--ops-text);
+  --cap-muted: var(--ops-text-secondary);
+  --cap-muted-2: var(--ops-text-disabled);
+  --cap-cyan: var(--ops-cyan);
+  --cap-cyan-soft: var(--ops-cyan-soft);
+  --cap-gold: var(--ops-gold);
+  --cap-gold-soft: var(--ops-gold-soft);
+  --cap-green: var(--ops-success);
+  --cap-green-soft: var(--ops-success-soft);
+  --cap-red: var(--ops-injury);
+  --cap-red-soft: var(--ops-injury-soft);
+  --cap-blue: var(--ops-info);
+  --cap-blue-soft: var(--ops-info-soft);
 
   width: 100%;
   min-width: 0;
-  min-height: 100vh;
-  height: 100vh;
-
+  min-height: 100dvh;
+  height: 100dvh;
   display: grid;
-  grid-template-rows: 72px minmax(0, 1fr) 86px;
-
+  grid-template-rows: 68px minmax(0, 1fr) 76px;
   overflow: hidden;
-
   color: var(--cap-text);
   background:
-    radial-gradient(
-      circle at 18% 0%,
-      rgba(19, 216, 231, 0.1),
-      transparent 31%
-    ),
-    radial-gradient(
-      circle at 92% 12%,
-      rgba(233, 168, 60, 0.055),
-      transparent 26%
-    ),
-    linear-gradient(
-      145deg,
-      var(--cap-bg) 0%,
-      #03101a 54%,
-      #020b12 100%
-    );
-
-  font-family:
-    Inter,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+    radial-gradient(circle at 18% 0%, rgba(19, 216, 231, 0.08), transparent 31%),
+    radial-gradient(circle at 92% 12%, rgba(233, 168, 60, 0.04), transparent 26%),
+    linear-gradient(145deg, var(--cap-bg) 0%, var(--ops-navy-deep) 100%);
+  font-family: var(--font-ops-ui);
+  font-variant-numeric: tabular-nums;
 }
 
 .cap-report-page,
@@ -78,63 +50,62 @@
 
 .cap-report-topbar {
   position: relative;
-  z-index: 2;
-
+  z-index: var(--z-sticky);
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
-
   min-width: 0;
-  padding: 0 30px;
-
+  padding: 0 24px;
   border-bottom: 1px solid var(--cap-line);
-  background: rgba(2, 12, 20, 0.9);
-  backdrop-filter: blur(14px);
+  background: rgba(2, 12, 20, 0.94);
 }
 
 .cap-report-back-button {
   justify-self: start;
-
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 9px;
-
-  min-height: 38px;
-  padding: 0 15px;
-
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 14px;
   border: 1px solid var(--cap-line-2);
-  border-radius: 5px;
-
+  border-radius: var(--radius-hud);
   color: var(--cap-text);
   background: rgba(12, 35, 52, 0.66);
-
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-
   cursor: pointer;
-
-  transition:
-    border-color 150ms ease,
-    background 150ms ease,
-    transform 150ms ease;
+  transition: border-color var(--motion-micro), background var(--motion-micro);
 }
 
 .cap-report-back-button:hover {
   border-color: var(--cap-line-strong);
-  background: rgba(19, 216, 231, 0.11);
-  transform: translateY(-1px);
+  background: var(--cap-cyan-soft);
 }
 
 .cap-report-back-button span {
   color: var(--cap-cyan);
-  font-size: 16px;
+  font-size: 15px;
 }
 
+/* Distinct title: wire kicker + broadcast display */
 .cap-report-title {
   text-align: center;
+  position: relative;
+  padding-bottom: 4px;
+}
+
+.cap-report-title::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 48px;
+  height: 2px;
+  transform: translateX(-50%);
+  background: var(--cap-gold);
 }
 
 .cap-report-title span,
@@ -144,26 +115,22 @@
 .cap-report-metrics-header > div > span,
 .cap-report-next-stage span {
   display: block;
-
   margin-bottom: 3px;
-
   color: var(--cap-cyan);
-
-  font-size: 9px;
+  font-size: var(--type-phase-label-size);
   font-weight: 900;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
 }
 
 .cap-report-title h1 {
   margin: 0;
-
+  font-family: var(--font-broadcast-display);
   color: var(--cap-text);
-
-  font-size: 22px;
-  font-weight: 950;
+  font-size: 20px;
+  font-weight: 900;
   line-height: 1;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
@@ -174,73 +141,52 @@
 
 .cap-report-season strong {
   color: var(--cap-text);
-
+  font-family: var(--font-mono-data);
   font-size: 12px;
-  font-weight: 850;
-  letter-spacing: 0.05em;
+  font-weight: 800;
+  letter-spacing: 0.04em;
 }
 
 .cap-report-content {
   min-height: 0;
-  width: min(1280px, calc(100% - 56px));
-
+  width: min(1280px, calc(100% - 48px));
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
-  gap: 16px;
-
+  gap: 12px;
   margin: 0 auto;
-  padding: 20px 0;
+  padding: 16px 0;
+  overflow: auto;
 }
 
 .cap-report-primary-panel {
   min-height: 0;
-
   display: grid;
   grid-template-columns: minmax(0, 1.18fr) minmax(380px, 0.82fr);
-
   overflow: hidden;
-
   border: 1px solid var(--cap-line-2);
-  border-radius: 10px;
-
-  background:
-    linear-gradient(
-      120deg,
-      rgba(19, 216, 231, 0.04),
-      transparent 38%
-    ),
-    var(--cap-panel);
-
-  box-shadow:
-    0 24px 70px rgba(0, 0, 0, 0.28);
+  border-radius: var(--radius-card);
+  background: var(--cap-panel);
+  box-shadow: var(--depth-registered);
 }
 
 .cap-report-league-summary {
   position: relative;
-
   min-width: 0;
   display: flex;
   flex-direction: column;
   justify-content: center;
-
-  padding: clamp(30px, 4vw, 58px);
-
+  padding: clamp(24px, 4vw, 48px);
   border-right: 1px solid var(--cap-line);
 }
 
 .cap-report-league-summary::before {
   content: "";
-
   position: absolute;
   top: 0;
   left: 0;
   bottom: 0;
-
   width: 3px;
-
   background: var(--cap-cyan);
-  box-shadow:
-    0 0 24px rgba(19, 216, 231, 0.28);
 }
 
 .cap-report-section-heading,
@@ -249,39 +195,34 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 20px;
+  gap: 16px;
 }
 
 .cap-report-section-heading h2,
 .cap-report-club-header h2,
 .cap-report-metrics-header h2 {
   margin: 0;
-
   color: var(--cap-text);
-
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 900;
   line-height: 1.15;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .cap-report-movement-badge,
 .cap-report-status {
   flex: 0 0 auto;
-
   display: inline-flex;
   align-items: center;
   justify-content: center;
-
-  min-height: 28px;
-  padding: 0 10px;
-
+  min-height: 26px;
+  padding: 0 8px;
   border: 1px solid var(--cap-line-2);
-  border-radius: 4px;
-
+  border-radius: var(--radius-ops);
   color: var(--cap-cyan);
   background: var(--cap-cyan-soft);
-
-  font-size: 9px;
+  font-size: var(--type-phase-label-size);
   font-weight: 900;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -315,31 +256,29 @@
 .cap-report-cap-display {
   display: flex;
   align-items: flex-start;
-  gap: 17px;
-
-  margin-top: 28px;
+  gap: 14px;
+  margin-top: 22px;
 }
 
 .cap-report-cap-display > strong {
-  color: #f4fbfd;
-
-  font-size: clamp(64px, 7vw, 108px);
-  font-weight: 950;
+  color: var(--cap-text);
+  font-family: var(--font-mono-data);
+  font-size: clamp(56px, 7vw, 96px);
+  font-weight: 900;
   line-height: 0.88;
   letter-spacing: -0.06em;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .cap-report-change-badge {
-  margin-top: 7px;
-  padding: 7px 9px;
-
+  margin-top: 6px;
+  padding: 6px 8px;
   border: 1px solid var(--cap-line-2);
-  border-radius: 4px;
-
+  border-radius: var(--radius-ops);
   color: var(--cap-cyan);
   background: var(--cap-cyan-soft);
-
+  font-family: var(--font-mono-data);
   font-size: 11px;
   font-weight: 900;
   white-space: nowrap;
@@ -366,27 +305,24 @@
 
 .cap-report-reason {
   max-width: 670px;
-  margin: 25px 0 0;
-
-  color: #b6c9d4;
-
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 1.55;
+  margin: 18px 0 0;
+  color: var(--cap-muted);
+  font-size: var(--type-compact-size);
+  font-weight: 600;
+  line-height: 1.5;
 }
 
 .cap-report-change-strip {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-
   margin-top: auto;
-  padding-top: 30px;
+  padding-top: 22px;
+  border-top: 1px solid var(--cap-line);
 }
 
 .cap-report-change-strip > div {
   min-width: 0;
-  padding: 0 20px;
-
+  padding: 0 16px;
   border-left: 1px solid var(--cap-line);
 }
 
@@ -397,24 +333,20 @@
 
 .cap-report-change-strip span {
   display: block;
-
-  margin-bottom: 6px;
-
+  margin-bottom: 5px;
   color: var(--cap-muted);
-
-  font-size: 9px;
+  font-size: var(--type-phase-label-size);
   font-weight: 850;
-  letter-spacing: 0.13em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .cap-report-change-strip strong {
   display: block;
-
   overflow: hidden;
   color: var(--cap-text);
-
-  font-size: 17px;
+  font-family: var(--font-mono-data);
+  font-size: 16px;
   font-weight: 900;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -422,47 +354,35 @@
 
 .cap-report-club-summary {
   min-width: 0;
-
   display: flex;
   flex-direction: column;
-
-  padding: clamp(28px, 3.2vw, 46px);
-
-  background:
-    radial-gradient(
-      circle at 100% 100%,
-      rgba(19, 216, 231, 0.08),
-      transparent 42%
-    ),
-    rgba(5, 20, 31, 0.52);
+  padding: clamp(24px, 3.2vw, 40px);
+  background: rgba(5, 20, 31, 0.45);
 }
 
 .cap-report-space-block {
-  margin-top: clamp(35px, 5vh, 62px);
+  margin-top: clamp(28px, 5vh, 48px);
 }
 
 .cap-report-space-block > span {
   display: block;
-
-  margin-bottom: 8px;
-
+  margin-bottom: 6px;
   color: var(--cap-muted);
-
-  font-size: 10px;
+  font-size: var(--type-phase-label-size);
   font-weight: 900;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .cap-report-space-block > strong {
   display: block;
-
-  color: #fff0ad;
-
-  font-size: clamp(48px, 5vw, 76px);
-  font-weight: 950;
+  color: var(--cap-gold);
+  font-family: var(--font-mono-data);
+  font-size: clamp(42px, 5vw, 68px);
+  font-weight: 900;
   line-height: 0.95;
-  letter-spacing: -0.045em;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
 }
 
 .cap-report-space-block > strong.is-negative {
@@ -470,16 +390,14 @@
 }
 
 .cap-report-space-block p {
-  margin: 11px 0 0;
-
+  margin: 8px 0 0;
   color: var(--cap-muted);
-
   font-size: 12px;
   font-weight: 650;
 }
 
 .cap-report-utilization {
-  margin-top: clamp(30px, 5vh, 54px);
+  margin-top: clamp(24px, 5vh, 40px);
 }
 
 .cap-report-utilization-header,
@@ -487,87 +405,63 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
+  gap: 16px;
 }
 
 .cap-report-utilization-header {
-  margin-bottom: 9px;
+  margin-bottom: 7px;
 }
 
 .cap-report-utilization-header span {
   color: var(--cap-muted);
-
-  font-size: 9px;
+  font-size: var(--type-phase-label-size);
   font-weight: 900;
-  letter-spacing: 0.13em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .cap-report-utilization-header strong {
   color: var(--cap-text);
-
+  font-family: var(--font-mono-data);
   font-size: 13px;
   font-weight: 900;
 }
 
 .cap-report-utilization-track {
-  height: 8px;
-
+  height: 6px;
   overflow: hidden;
-
   border: 1px solid var(--cap-line);
-  border-radius: 2px;
-
-  background:
-    repeating-linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.025) 0,
-      rgba(255, 255, 255, 0.025) 15px,
-      transparent 15px,
-      transparent 19px
-    ),
-    rgba(1, 8, 13, 0.72);
+  border-radius: var(--radius-ops);
+  background: rgba(1, 8, 13, 0.72);
 }
 
 .cap-report-utilization-track span {
   display: block;
   height: 100%;
-
-  background:
-    linear-gradient(
-      90deg,
-      var(--cap-cyan),
-      #53e6c2 72%,
-      var(--cap-gold)
-    );
-
-  box-shadow:
-    0 0 20px rgba(19, 216, 231, 0.2);
-
-  transition: width 280ms ease;
+  background: linear-gradient(90deg, var(--cap-cyan), var(--cap-gold));
+  transition: opacity 180ms ease;
 }
 
 .cap-report-utilization-labels {
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 .cap-report-utilization-labels span {
   color: var(--cap-muted-2);
-
-  font-size: 9px;
+  font-size: var(--type-phase-label-size);
   font-weight: 750;
 }
 
 .cap-report-club-footer {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-
   margin-top: auto;
-  padding-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--cap-line);
 }
 
 .cap-report-club-footer > div {
-  padding-left: 18px;
+  padding-left: 16px;
   border-left: 1px solid var(--cap-line);
 }
 
@@ -578,51 +472,42 @@
 
 .cap-report-club-footer span {
   display: block;
-
-  margin-bottom: 5px;
-
+  margin-bottom: 4px;
   color: var(--cap-muted);
-
-  font-size: 9px;
+  font-size: var(--type-phase-label-size);
   font-weight: 850;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
 .cap-report-club-footer strong {
   color: var(--cap-text);
-
-  font-size: 18px;
+  font-family: var(--font-mono-data);
+  font-size: 17px;
   font-weight: 900;
 }
 
+/* Metrics — flat strip, not card grid */
 .cap-report-metrics-panel {
   border: 1px solid var(--cap-line);
-  border-radius: 10px;
-
+  border-radius: var(--radius-card);
   background: var(--cap-panel);
-
-  box-shadow:
-    0 18px 50px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--depth-registered);
 }
 
 .cap-report-metrics-header {
   align-items: center;
-
-  padding: 16px 20px;
-
+  padding: 12px 16px;
   border-bottom: 1px solid var(--cap-line);
 }
 
 .cap-report-metrics-header h2 {
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .cap-report-metrics-header p {
   margin: 0;
-
   color: var(--cap-muted);
-
   font-size: 11px;
   font-weight: 650;
 }
@@ -634,11 +519,10 @@
 
 .cap-report-metric {
   min-width: 0;
-  min-height: 98px;
-
-  padding: 18px 20px;
-
+  min-height: 84px;
+  padding: 14px 16px;
   border-left: 1px solid var(--cap-line);
+  background: rgba(6, 18, 29, 0.45);
 }
 
 .cap-report-metric:first-child {
@@ -647,44 +531,33 @@
 
 .cap-report-metric > span {
   display: block;
-
-  margin-bottom: 8px;
-
+  margin-bottom: 6px;
   color: var(--cap-muted);
-
-  font-size: 9px;
+  font-size: var(--type-phase-label-size);
   font-weight: 850;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
 .cap-report-metric > strong {
   display: block;
-
   overflow: hidden;
-
   color: var(--cap-text);
-
-  font-size: 22px;
+  font-family: var(--font-mono-data);
+  font-size: 20px;
   font-weight: 900;
   line-height: 1.05;
-
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .cap-report-metric > small {
   display: block;
-
   overflow: hidden;
-
-  margin-top: 7px;
-
+  margin-top: 5px;
   color: var(--cap-muted-2);
-
-  font-size: 9px;
+  font-size: var(--type-phase-label-size);
   font-weight: 650;
-
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -701,20 +574,16 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-
   min-width: 0;
-  padding: 0 max(28px, calc((100vw - 1280px) / 2));
-
+  padding: 0 max(24px, calc((100vw - 1280px) / 2));
   border-top: 1px solid var(--cap-line);
-
-  background: rgba(2, 12, 20, 0.94);
-  backdrop-filter: blur(14px);
+  background: rgba(2, 12, 20, 0.96);
+  z-index: var(--z-sticky);
 }
 
 .cap-report-next-stage strong {
   color: var(--cap-text);
-
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 850;
 }
 
@@ -722,64 +591,40 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 26px;
-
-  min-width: 220px;
-  min-height: 44px;
-  padding: 0 20px;
-
-  border: 1px solid #f1b943;
-  border-radius: 5px;
-
+  gap: 20px;
+  min-width: 200px;
+  min-height: 40px;
+  padding: 0 18px;
+  border: 1px solid var(--cap-gold);
+  border-radius: var(--radius-hud);
   color: #111820;
-  background:
-    linear-gradient(
-      180deg,
-      #f8c858,
-      #e5a527
-    );
-
-  box-shadow:
-    0 10px 26px rgba(233, 168, 60, 0.16);
-
+  background: linear-gradient(180deg, #f8c858, #e5a527);
+  box-shadow: var(--depth-registered);
   font-size: 11px;
   font-weight: 950;
-  letter-spacing: 0.11em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-
   cursor: pointer;
-
-  transition:
-    filter 150ms ease,
-    transform 150ms ease,
-    box-shadow 150ms ease;
+  transition: filter var(--motion-micro);
 }
 
 .cap-report-continue-button:hover {
-  filter: brightness(1.06);
-  transform: translateY(-1px);
-
-  box-shadow:
-    0 13px 32px rgba(233, 168, 60, 0.24);
-}
-
-.cap-report-continue-button:active {
-  transform: translateY(0);
+  filter: brightness(1.05);
 }
 
 .cap-report-continue-button span {
-  font-size: 16px;
+  font-size: 15px;
 }
 
 @media (max-width: 1050px) {
   .cap-report-page {
     height: auto;
-    min-height: 100vh;
+    min-height: 100dvh;
     overflow: auto;
   }
 
   .cap-report-content {
-    width: min(920px, calc(100% - 36px));
+    width: min(920px, calc(100% - 32px));
   }
 
   .cap-report-primary-panel {
@@ -787,13 +632,13 @@
   }
 
   .cap-report-league-summary {
-    min-height: 420px;
+    min-height: 360px;
     border-right: 0;
     border-bottom: 1px solid var(--cap-line);
   }
 
   .cap-report-club-summary {
-    min-height: 380px;
+    min-height: 320px;
   }
 
   .cap-report-metrics-grid {
@@ -817,11 +662,11 @@
 
 @media (max-width: 700px) {
   .cap-report-page {
-    grid-template-rows: 64px auto 82px;
+    grid-template-rows: 60px auto 72px;
   }
 
   .cap-report-topbar {
-    padding: 0 14px;
+    padding: 0 12px;
   }
 
   .cap-report-title span {
@@ -829,103 +674,20 @@
   }
 
   .cap-report-title h1 {
-    font-size: 17px;
+    font-size: 16px;
   }
 
   .cap-report-season span {
     display: none;
   }
 
-  .cap-report-season strong {
-    font-size: 10px;
-  }
-
-  .cap-report-back-button {
-    min-height: 34px;
-    padding: 0 11px;
-    font-size: 10px;
-  }
-
   .cap-report-content {
-    width: calc(100% - 24px);
-    padding: 12px 0;
-  }
-
-  .cap-report-league-summary,
-  .cap-report-club-summary {
-    padding: 25px 22px;
-  }
-
-  .cap-report-league-summary {
-    min-height: 390px;
-  }
-
-  .cap-report-club-summary {
-    min-height: 360px;
-  }
-
-  .cap-report-section-heading,
-  .cap-report-club-header,
-  .cap-report-metrics-header {
-    gap: 12px;
-  }
-
-  .cap-report-section-heading h2,
-  .cap-report-club-header h2 {
-    font-size: 17px;
-  }
-
-  .cap-report-cap-display {
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .cap-report-cap-display > strong {
-    font-size: clamp(56px, 17vw, 78px);
-  }
-
-  .cap-report-change-badge {
-    margin-top: 0;
-  }
-
-  .cap-report-change-strip {
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
-
-  .cap-report-change-strip > div {
-    padding: 0;
-    border-left: 0;
-  }
-
-  .cap-report-space-block > strong {
-    font-size: 55px;
-  }
-
-  .cap-report-metrics-header p {
-    display: none;
+    width: calc(100% - 20px);
+    padding: 10px 0;
   }
 
   .cap-report-metrics-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .cap-report-metric {
-    border-top: 1px solid var(--cap-line);
-  }
-
-  .cap-report-metric:nth-child(1),
-  .cap-report-metric:nth-child(2) {
-    border-top: 0;
-  }
-
-  .cap-report-metric:nth-child(3),
-  .cap-report-metric:nth-child(5) {
-    border-left: 0;
-  }
-
-  .cap-report-actions {
-    padding: 0 14px;
   }
 
   .cap-report-next-stage {
@@ -940,55 +702,17 @@
 
 @media (max-height: 780px) and (min-width: 1051px) {
   .cap-report-page {
-    grid-template-rows: 64px minmax(0, 1fr) 72px;
+    grid-template-rows: 60px minmax(0, 1fr) 68px;
   }
 
   .cap-report-content {
-    gap: 12px;
-    padding: 12px 0;
-  }
-
-  .cap-report-league-summary,
-  .cap-report-club-summary {
-    padding-top: 27px;
-    padding-bottom: 27px;
-  }
-
-  .cap-report-cap-display {
-    margin-top: 20px;
-  }
-
-  .cap-report-cap-display > strong {
-    font-size: clamp(58px, 6.1vw, 88px);
-  }
-
-  .cap-report-reason {
-    margin-top: 17px;
-  }
-
-  .cap-report-change-strip {
-    padding-top: 20px;
-  }
-
-  .cap-report-space-block {
-    margin-top: 28px;
-  }
-
-  .cap-report-space-block > strong {
-    font-size: clamp(45px, 4.4vw, 66px);
-  }
-
-  .cap-report-utilization {
-    margin-top: 28px;
-  }
-
-  .cap-report-club-footer {
-    padding-top: 20px;
+    gap: 10px;
+    padding: 10px 0;
   }
 
   .cap-report-metric {
-    min-height: 84px;
-    padding-top: 14px;
-    padding-bottom: 14px;
+    min-height: 72px;
+    padding-top: 12px;
+    padding-bottom: 12px;
   }
 }

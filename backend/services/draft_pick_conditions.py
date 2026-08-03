@@ -43,8 +43,13 @@ def resolve_pick_protections(league: Any, *, draft_year: int, lottery_order: Opt
         if not triggered:
             row["protection_status"] = "cleared"
             continue
-        # Protect: revert ownership to original; convert outbound compensatory when configured.
-        row["current_owner_team_id"] = original
+        # Protect: revert ownership to original via registry transfer when possible.
+        try:
+            from app.sim_engine.trades.trade_pick_registry import transfer_pick
+
+            transfer_pick(league, str(pick_id), original)
+        except Exception:
+            row["current_owner_team_id"] = original
         row["protection_status"] = "triggered"
         conversion = row.get("protection_converts_to") or {}
         events.append({
@@ -63,6 +68,12 @@ def resolve_pick_protections(league: Any, *, draft_year: int, lottery_order: Opt
                 round_num=int(conversion["round"]),
                 source_pick_id=pick_id,
             )
+    try:
+        from app.sim_engine.trades.trade_pick_registry import reconcile_pick_registry_consistency
+
+        reconcile_pick_registry_consistency(league)
+    except Exception:
+        pass
     return events
 
 
@@ -83,17 +94,44 @@ def resolve_pick_conditions(league: Any, *, draft_year: int) -> List[Dict[str, A
             met = bool(cond.get("met"))
             if cond.get("type") == "round_upgrade" and met:
                 new_round = int(cond.get("upgrade_to_round") or row.get("round") or 1)
-                row["round"] = new_round
+                old_round = int(row.get("round") or 1)
+                if new_round != old_round:
+                    _rekey_pick_row(
+                        league,
+                        old_pick_id=str(pick_id),
+                        row=row,
+                        new_year=int(row.get("year") or draft_year),
+                        new_round=new_round,
+                    )
+                else:
+                    row["round"] = new_round
                 row["condition_status"] = "upgraded"
                 events.append({"pick_id": pick_id, "event": "condition_upgraded", "round": new_round})
             elif cond.get("type") == "defer" and met:
+                old_year = int(row.get("year") or draft_year)
+                new_year = int(cond.get("defer_to_year") or (old_year + 1))
                 row["deferred"] = True
-                row["year"] = int(cond.get("defer_to_year") or (int(row.get("year") or draft_year) + 1))
+                if new_year != old_year:
+                    _rekey_pick_row(
+                        league,
+                        old_pick_id=str(pick_id),
+                        row=row,
+                        new_year=new_year,
+                        new_round=int(row.get("round") or 1),
+                    )
+                else:
+                    row["year"] = new_year
                 row["condition_status"] = "deferred"
-                events.append({"pick_id": pick_id, "event": "condition_deferred", "year": row["year"]})
+                events.append({"pick_id": pick_id, "event": "condition_deferred", "year": new_year})
             elif not met and int(row.get("year") or 0) == int(draft_year):
                 row["condition_status"] = "unmet"
                 events.append({"pick_id": pick_id, "event": "condition_unmet"})
+    try:
+        from app.sim_engine.trades.trade_pick_registry import reconcile_pick_registry_consistency
+
+        reconcile_pick_registry_consistency(league)
+    except Exception:
+        pass
     return events
 
 
@@ -108,6 +146,53 @@ def roll_deferred_picks_forward(league: Any, *, draft_year: int) -> List[Dict[st
             row["condition_status"] = "active"
             events.append({"pick_id": pick_id, "event": "deferred_activated", "year": draft_year})
     return events
+
+
+def _rekey_pick_row(
+    league: Any,
+    *,
+    old_pick_id: str,
+    row: Dict[str, Any],
+    new_year: int,
+    new_round: int,
+) -> str:
+    """Move a registry row to a canonical pick_id when year/round changes."""
+    from app.sim_engine.trades.trade_asset import canonical_pick_id
+
+    orig = str(row.get("original_team_id") or "")
+    owner = str(row.get("current_owner_team_id") or orig)
+    new_id = canonical_pick_id(int(new_year), int(new_round), orig)
+    reg = _reg(league)
+    if new_id == old_pick_id:
+        row["year"] = int(new_year)
+        row["round"] = int(new_round)
+        return new_id
+
+    payload = dict(row)
+    payload["pick_id"] = new_id
+    payload["year"] = int(new_year)
+    payload["round"] = int(new_round)
+    payload["current_owner_team_id"] = owner
+    payload["rekeyed_from"] = old_pick_id
+
+    existing = reg.get(new_id)
+    if isinstance(existing, dict) and not existing.get("resolved"):
+        # Prefer keeping explicit ownership from the deferred/upgraded pick.
+        existing["current_owner_team_id"] = owner
+        existing["deferred"] = payload.get("deferred", existing.get("deferred"))
+        existing["conditions"] = payload.get("conditions", existing.get("conditions"))
+        existing["protection"] = payload.get("protection", existing.get("protection"))
+        existing["rekeyed_from"] = old_pick_id
+    else:
+        reg[new_id] = payload
+
+    # Retire the old key so draft order / ownership cannot double-consume it.
+    old = reg.get(old_pick_id)
+    if isinstance(old, dict):
+        old["resolved"] = True
+        old["resolved_reason"] = "rekeyed"
+        old["migrated_to"] = new_id
+    return new_id
 
 
 def _spawn_compensatory_pick(
@@ -139,6 +224,9 @@ def _spawn_compensatory_pick(
             }
         else:
             reg[pick_id]["current_owner_team_id"] = str(to_team_id)
+        from app.sim_engine.trades.trade_pick_registry import reconcile_pick_registry_consistency
+
+        reconcile_pick_registry_consistency(league)
     except Exception:
         pass
 

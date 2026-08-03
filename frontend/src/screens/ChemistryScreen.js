@@ -14,16 +14,29 @@ function scoreClass(score) {
   return "chemistry-score-broken";
 }
 
+function toneFor(score) {
+  const s = Number(score) || 0;
+  if (s >= 75) return "high";
+  if (s >= 45) return "mid";
+  return "low";
+}
+
+/* Coaching-board strength notation rather than a progress bar: five notches
+   carry the reading, the numeral carries the precision, the tone carries the
+   verdict. */
 function Meter({ label, value }) {
   const safe = Math.max(0, Math.min(100, Number(value) || 0));
+  const filled = Math.ceil(safe / 20);
   return (
-    <div className="chemistry-meter">
+    <div className="chemistry-meter" data-tone={toneFor(safe)}>
       <div className="chemistry-meter-row">
         <span>{label}</span>
         <strong>{safe}</strong>
       </div>
-      <div className="chemistry-meter-track">
-        <div className="chemistry-meter-fill" style={{ width: `${safe}%` }} />
+      <div className="chemistry-notation" role="img" aria-label={`${label} ${safe} of 100`}>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <i key={i} className={i < filled ? "is-on" : ""} />
+        ))}
       </div>
     </div>
   );
@@ -36,15 +49,26 @@ function GroupCard({ title, rows = [] }) {
       <h3 className="chemistry-section-title">{title}</h3>
       <div className="chemistry-grid">
         {rows.map((row, idx) => (
-          <article className="chemistry-line-card" key={`${title}-${idx}`}>
+          <article className="chemistry-line-card" data-tone={toneFor(row.chemistry)} key={`${title}-${idx}`}>
             <header className="chemistry-line-top">
               <span>{row.slot || "Unit"}</span>
-              <span className={`chemistry-score-badge ${scoreClass(row.chemistry)}`}>
+              <span className={`chemistry-score-mark ${scoreClass(row.chemistry)}`}>
                 {row.chemistry} · {row.label}
               </span>
             </header>
+            {/* Unit read as a link chain: who is bonded to whom, in order. */}
             <div className="chemistry-line-players">
-              {(row.players || []).map((p) => `${p.name} (${p.position})`).join(" · ") || "No players"}
+              {(row.players || []).length
+                ? (row.players || []).map((p, i) => (
+                    <React.Fragment key={`${p.name}-${i}`}>
+                      {i > 0 ? <span className="chemistry-link-mark" aria-hidden="true" /> : null}
+                      <span className="chemistry-node">
+                        <strong>{p.name}</strong>
+                        <em>{p.position}</em>
+                      </span>
+                    </React.Fragment>
+                  ))
+                : "No players"}
             </div>
             <p>{row.identity || (row.source === "session.lines" ? "From your saved lines." : "Projected from current roster order.")}</p>
             <p className="chemistry-risk">{row.risk || ""}</p>
@@ -61,10 +85,10 @@ function GroupCard({ title, rows = [] }) {
             ) : null}
             <div className="chemistry-chip-row">
               {(row.factors || []).slice(0, 3).map((f, i) => (
-                <span className="chemistry-factor-chip" key={`${f}-${i}`}>{f}</span>
+                <span className="chemistry-factor-mark" key={`${f}-${i}`}>{f}</span>
               ))}
               {(row.concerns || []).slice(0, 2).map((c, i) => (
-                <span className="chemistry-concern-chip" key={`${c}-${i}`}>{c}</span>
+                <span className="chemistry-concern-mark" key={`${c}-${i}`}>{c}</span>
               ))}
             </div>
           </article>
@@ -135,10 +159,16 @@ export default function ChemistryScreen() {
 
       {!loading && !error ? (
         <>
+          <div className="chemistry-legend" aria-label="Chemistry tier guide">
+            <span className="is-high">High · 75+ elite fit</span>
+            <span className="is-mid">Medium · 45–74 workable</span>
+            <span className="is-low">Low · below 45 friction</span>
+          </div>
+
           <section className="chemistry-room-card">
             <div className="chemistry-room-header">
               <h3>Room Pulse</h3>
-              <span className={`chemistry-score-badge ${scoreClass(room.overall)}`}>
+              <span className={`chemistry-score-mark ${scoreClass(room.overall)}`}>
                 {room?.overall ?? 50} · {room?.label || "Neutral"}
               </span>
             </div>
@@ -164,7 +194,7 @@ export default function ChemistryScreen() {
                 <article className="chemistry-line-card" key={g.player_id || g.name}>
                   <header className="chemistry-line-top">
                     <span>{g.name}</span>
-                    <span className={`chemistry-score-badge ${scoreClass(g.chemistry)}`}>
+                    <span className={`chemistry-score-mark ${scoreClass(g.chemistry)}`}>
                       {g.chemistry} · {g.label}
                     </span>
                   </header>
@@ -181,7 +211,7 @@ export default function ChemistryScreen() {
                 <article className="chemistry-line-card" key={`${c.player_a_id}-${c.player_b_id}-${i}`}>
                   <header className="chemistry-line-top">
                     <span>{c.player_a_name} + {c.player_b_name}</span>
-                    <span className={`chemistry-score-badge ${scoreClass(c.chemistry)}`}>{c.chemistry}</span>
+                    <span className={`chemistry-score-mark ${scoreClass(c.chemistry)}`}>{c.chemistry}</span>
                   </header>
                   <p>{c.label}</p>
                 </article>
@@ -193,7 +223,7 @@ export default function ChemistryScreen() {
             <h3 className="chemistry-section-title">Room Concerns</h3>
             <div className="chemistry-chip-row">
               {(concerns.length ? concerns : ["Projected from current roster order."]).map((c, i) => (
-                <span className="chemistry-concern-chip" key={`${c}-${i}`}>{c}</span>
+                <span className="chemistry-concern-mark" key={`${c}-${i}`}>{c}</span>
               ))}
             </div>
           </section>

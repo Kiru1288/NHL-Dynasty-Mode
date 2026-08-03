@@ -272,7 +272,7 @@ AWARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         category="playoff",
         display_metric="Champion",
         watch_enabled=False,
-        ceremony_enabled=True,
+        ceremony_enabled=False,
         supports_shared_winners=True,
     ),
     "art_ross": _defn(
@@ -386,6 +386,7 @@ AWARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         category="ballot",
         display_metric="Ballot points",
         watch_type="official_projected_ballot",
+        ceremony_enabled=False,
         eligibility="lady_byng",
         score="lady_byng",
         tiebreakers=["ballot_points", "first_place_votes", "canonical_score"],
@@ -397,6 +398,7 @@ AWARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         category="ballot",
         display_metric="Ballot points",
         watch_type="official_projected_ballot",
+        ceremony_enabled=False,
         eligibility="ted_lindsay",
         score="ted_lindsay",
         required_fields=["gp"],
@@ -410,6 +412,7 @@ AWARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         display_metric="Selection",
         watch_enabled=False,
         watch_type="watch_only",
+        ceremony_enabled=False,
         eligibility="masterton",
         score="masterton",
         required_fields=["injury_games_missed", "games_returned"],
@@ -422,6 +425,7 @@ AWARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         display_metric="Selection",
         watch_enabled=False,
         watch_type="watch_only",
+        ceremony_enabled=False,
         eligibility="messier",
         score="messier",
         required_fields=["is_captain", "leadership_score"],
@@ -434,6 +438,7 @@ AWARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         display_metric="Ballot points",
         watch_enabled=False,
         watch_type="watch_only",
+        ceremony_enabled=False,
         eligibility="jack_adams",
         score="jack_adams",
         required_fields=["coach_id", "expected_points", "actual_points"],
@@ -446,6 +451,7 @@ AWARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         display_metric="Selection",
         supports_shared_winners=True,
         watch_enabled=False,
+        ceremony_enabled=False,
     ),
     "all_star_2": _defn(
         "all_star_2",
@@ -455,6 +461,7 @@ AWARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         display_metric="Selection",
         supports_shared_winners=True,
         watch_enabled=False,
+        ceremony_enabled=False,
     ),
 }
 
@@ -2182,23 +2189,18 @@ def build_awards_payload(
             if aid and AWARD_REGISTRY.get(aid, {}).get("ceremony_enabled", True):
                 reveal.append(aid)
 
-    # Stable reveal order
+    # Stable reveal order — lean Awards Night (core hardware only).
     order = [
         "calder",
-        "lady_byng",
         "selke",
         "jennings",
         "vezina",
         "norris",
         "rocket",
         "art_ross",
-        "ted_lindsay",
         "hart",
         "conn_smythe",
         "presidents",
-        "conference_champions",
-        "all_star_1",
-        "all_star_2",
         "stanley",
     ]
     reveal_order = [a for a in order if a in reveal] + [a for a in reveal if a not in order]

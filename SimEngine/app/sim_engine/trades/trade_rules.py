@@ -18,6 +18,7 @@ from app.sim_engine.trades.trade_asset import (
     PlayerTradeAsset,
     TradePackage,
     find_player_on_ahl_roster,
+    find_player_in_organization,
     find_player_on_team_roster,
     player_display_name,
     resolve_pick_id,
@@ -28,6 +29,8 @@ from app.sim_engine.trades.trade_pick_registry import get_pick_by_id, validate_p
 ROSTER_MIN = 20
 ROSTER_MAX = 23
 TRADE_ACQUISITION_COOLDOWN_DAYS = 7
+# Hard ban: cannot return a player to acquired_from_team_id during the same season.
+TRADE_REVERSE_RETURN_SEASON_BLOCK = True
 
 
 def _player_is_goalie(player: Any) -> bool:
@@ -76,11 +79,24 @@ def _player_recently_acquired(player: Any, context: Optional[Dict[str, Any]]) ->
     if not bool(getattr(player, "acquired_via_trade", False)):
         return False
     ctx = context or {}
+    cur_season = ctx.get("season_year")
+    acq_season = getattr(player, "acquired_via_trade_season", None)
+    # Stamps from a prior season are stale once the calendar rolls — do not block.
+    if cur_season is not None and acq_season is not None:
+        try:
+            if int(acq_season) != int(cur_season):
+                return False
+        except (TypeError, ValueError):
+            pass
     cursor = int(ctx.get("calendar_cursor", 0) or 0)
     last_day = getattr(player, "last_acquired_day", None)
     if last_day is not None:
         try:
-            return (cursor - int(last_day)) < TRADE_ACQUISITION_COOLDOWN_DAYS
+            elapsed = cursor - int(last_day)
+            # Negative elapsed means the stamp is from a prior calendar (cursor reset).
+            if elapsed < 0:
+                return False
+            return elapsed < TRADE_ACQUISITION_COOLDOWN_DAYS
         except (TypeError, ValueError):
             pass
     last_date = str(getattr(player, "last_acquired_date", "") or "").strip()
@@ -88,6 +104,26 @@ def _player_recently_acquired(player: Any, context: Optional[Dict[str, Any]]) ->
     if last_date and cur_date and last_date == cur_date:
         return True
     return False
+
+
+def _player_returning_to_prior_club(player: Any, acquiring_team_id: str, context: Optional[Dict[str, Any]] = None) -> bool:
+    """True when this trade would bounce a player back to acquired_from_team_id this season."""
+    if not TRADE_REVERSE_RETURN_SEASON_BLOCK:
+        return False
+    prior = str(getattr(player, "acquired_from_team_id", "") or "").strip()
+    dest = str(acquiring_team_id or "").strip()
+    if not prior or not dest or prior != dest:
+        return False
+    ctx = context or {}
+    cur_season = ctx.get("season_year")
+    acq_season = getattr(player, "acquired_via_trade_season", None)
+    if acq_season is None or cur_season is None:
+        # Conservative: block when prior club is known and season stamp missing.
+        return True
+    try:
+        return int(acq_season) == int(cur_season)
+    except (TypeError, ValueError):
+        return True
 
 
 def _clause_summary(player: Any) -> Dict[str, Any]:
@@ -399,7 +435,7 @@ def _players_for_team_side(
     for asset in package.outgoing_by_team.get(team_id, []):
         if not isinstance(asset, PlayerTradeAsset):
             continue
-        p, _ = find_player_on_team_roster(team, asset.player_id)
+        p, _loc, _i = find_player_in_organization(team, asset.player_id)
         if p is not None:
             outgoing_objs.append(p)
             out_assets.append(asset)
@@ -410,7 +446,7 @@ def _players_for_team_side(
         src = team_by_id.get(asset.source_team_id)
         if src is None:
             continue
-        p, _ = find_player_on_team_roster(src, asset.player_id)
+        p, _loc, _i = find_player_in_organization(src, asset.player_id)
         if p is not None:
             incoming_objs.append(p)
             if asset.retained_pct > 0:
@@ -436,6 +472,12 @@ def validate_trade_rules(
 
     ctx = context or {}
     season_year = int(ctx.get("season_year", 2025) or 2025)
+    try:
+        from app.sim_engine.trades.trade_pick_registry import draft_year_from_context
+
+        draft_year = int(draft_year_from_context(ctx, league=league))
+    except Exception:
+        draft_year = int(ctx.get("draft_year") or season_year)
     season_label = _season_label(ctx)
     sim = ctx.get("sim")
     seen_players: Set[str] = set()
@@ -460,16 +502,31 @@ def validate_trade_rules(
             if src is None:
                 blocking.append(f"Source team not found for player {asset.player_id}")
                 continue
-            player, _ = find_player_on_team_roster(src, asset.player_id)
+            from app.sim_engine.trades.trade_asset import (
+                player_holds_nhl_spc,
+                player_is_tradeable_draft_rights,
+            )
+
+            player, loc, _i = find_player_in_organization(src, asset.player_id)
             if player is None:
-                ahl_player, _ = find_player_on_ahl_roster(src, asset.player_id)
-                if ahl_player is not None:
-                    pname = player_display_name(ahl_player)
-                    blocking.append(
-                        f"{pname} is assigned to AHL and cannot be traded — player must be on the NHL roster"
-                    )
-                else:
-                    blocking.append(f"Player {asset.player_id} not found on source roster {asset.source_team_id}")
+                blocking.append(f"Player {asset.player_id} not found on source roster {asset.source_team_id}")
+                continue
+            if bool(getattr(player, "_conduct_trade_restricted", False)):
+                warnings.append(
+                    f"{player_display_name(player)} is under a restricted trade market after a conduct matter."
+                )
+                clause_impact.setdefault(asset.source_team_id, []).append(
+                    f"{player_display_name(player)}: conduct-restricted market"
+                )
+            if (
+                loc in ("ahl", "echl", "prospect")
+                and not player_holds_nhl_spc(player)
+                and not (loc == "prospect" and player_is_tradeable_draft_rights(player))
+            ):
+                pname = player_display_name(player)
+                blocking.append(
+                    f"{pname} is on the {loc.upper()} list without an NHL SPC and cannot be traded"
+                )
                 continue
 
             pname = player_display_name(player)
@@ -511,6 +568,11 @@ def validate_trade_rules(
             if _player_recently_acquired(player, ctx):
                 blocking.append(f"{pname}: Recently acquired players cannot be traded yet.")
 
+            if _player_returning_to_prior_club(player, asset.acquiring_team_id, ctx):
+                blocking.append(
+                    f"{pname}: Cannot be traded back to {asset.acquiring_team_id} during the same season."
+                )
+
             if asset.retained_pct > 0:
                 retaining = team_by_id.get(asset.source_team_id)
                 slots_used = _retained_slots_used(retaining, season_label) if retaining else 0
@@ -547,9 +609,10 @@ def validate_trade_rules(
                 continue
             if pick_round < 1 or pick_round > 7:
                 blocking.append(f"Pick round out of range for {pid}: {pick_round}")
-            if pick_year < season_year or pick_year > season_year + 7:
+            if pick_year < draft_year or pick_year > draft_year + 7:
                 blocking.append(
-                    f"Pick year out of allowed range for {pid}: {pick_year} (season {season_year})"
+                    f"Pick year out of allowed range for {pid}: {pick_year} "
+                    f"(tradeable draft {draft_year}, season {season_year})"
                 )
             if not validate_pick_ownership(league, pid, asset.source_team_id):
                 blocking.append(
@@ -574,7 +637,7 @@ def validate_trade_rules(
         retained_added = 0.0
         for a in out_assets:
             if a.retained_pct > 0:
-                p, _ = find_player_on_team_roster(team, a.player_id)
+                p, _loc, _i = find_player_in_organization(team, a.player_id)
                 if p is not None:
                     retained_added += player_cap_hit_millions(p) * (a.retained_pct / 100.0)
 

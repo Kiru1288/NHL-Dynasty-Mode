@@ -245,6 +245,20 @@ def apply_draft_rights(
     setattr(player, "draft_round", int(pick_meta.get("round") or 1))
     setattr(player, "draft_pick_number", int(pick_meta.get("pick_in_round") or 1))
     setattr(player, "draft_overall_pick", overall)
+    pick_id = str(pick_meta.get("pick_id") or "").strip()
+    if pick_id:
+        setattr(player, "draft_pick_id", pick_id)
+    orig_pick_team = str(
+        pick_meta.get("original_owner_team_id")
+        or pick_meta.get("original_team_id")
+        or nhl_team_id
+    )
+    setattr(player, "draft_pick_original_team_id", orig_pick_team)
+    setattr(
+        player,
+        "draft_pick_was_traded",
+        bool(pick_meta.get("is_traded")) or (orig_pick_team != str(nhl_team_id)),
+    )
 
     setattr(player, "current_team_id", aff["current_team_id"])
     setattr(player, "current_league_id", aff["current_league_id"])
@@ -276,6 +290,7 @@ def available_rights_actions(player: Any) -> List[Dict[str, Any]]:
     path = str(getattr(player, "development_path", "") or getattr(player, "post_draft_league", "") or "").upper()
     rights_type = str(getattr(player, "rights_type", "") or "").lower()
     age = _safe_player_age(player)
+    env = development_environment_assessment(player)
     actions: List[Dict[str, Any]] = []
     if signed == "signed" or status == "signed":
         return [{"id": "already_signed", "label": "Already signed", "enabled": False}]
@@ -299,13 +314,14 @@ def available_rights_actions(player: Any) -> List[Dict[str, Any]]:
         actions.append({"id": "keep_europe", "label": "Keep in Europe", "enabled": True})
     else:
         actions.append({"id": "return_junior", "label": "Return to junior", "enabled": True})
-    # AHL only when age/path supports a pro assignment (CHL return rules otherwise).
-    ahl_ok = age >= 20 or "EUROPE" in path or rights_type.startswith("european")
+    # AHL is a professional roster — an unsigned prospect cannot be assigned there
+    # until an ELC is in place. Surface the option (so the UI can show it, disabled)
+    # but never let it fire until the player is actually signed.
     actions.append({
         "id": "assign_ahl",
         "label": "Assign to AHL",
-        "enabled": ahl_ok,
-        "blocked_reason": None if ahl_ok else "Not AHL-eligible under junior return rules",
+        "enabled": False,
+        "blocked_reason": "Sign an ELC first — AHL assignment requires a contract",
     })
     actions.append({"id": "invite_camp", "label": "Invite to training camp", "enabled": True})
     actions.append({"id": "delay", "label": "Delay decision", "enabled": True})
@@ -317,7 +333,431 @@ def available_rights_actions(player: Any) -> List[Dict[str, Any]]:
             "enabled": True,
             "warning": "Relinquishes organizational claim at deadline",
         })
+    for action in actions:
+        tradeoffs = _rights_action_tradeoffs(player, action, env)
+        action["pros"] = tradeoffs["pros"]
+        action["cons"] = tradeoffs["cons"]
+        if tradeoffs.get("summary"):
+            action["summary"] = tradeoffs["summary"]
     return actions
+
+
+def _rights_action_tradeoffs(player: Any, action: Dict[str, Any], env: Dict[str, Any]) -> Dict[str, Any]:
+    """Pros/cons from existing rights, environment, and eligibility signals only."""
+    aid = str(action.get("id") or "")
+    path = str(getattr(player, "development_path", "") or getattr(player, "post_draft_league", "") or "")
+    eta = getattr(player, "nhl_eta", None)
+    grade = str(env.get("grade") or "")
+    env_reasons = list(env.get("reasons") or [])
+    slide = bool(getattr(player, "elc_slide_eligible", False))
+    slide_years = getattr(player, "elc_slide_years_remaining", None)
+    expiry = getattr(player, "rights_expiry_year", None)
+    pros: List[str] = []
+    cons: List[str] = []
+    summary = None
+
+    if aid == "sign_elc":
+        pros.append("Locks exclusive NHL rights into an ELC")
+        if action.get("can_slide") or slide:
+            pros.append(
+                f"ELC can slide{f' - {slide_years}y left' if slide_years is not None else ''}"
+            )
+        if grade in ("ideal", "good"):
+            pros.append(f"Development environment graded {grade}")
+        if env_reasons:
+            pros.extend(env_reasons[:2])
+        cons.append("Uses one of 50 organization contract slots")
+        if grade in ("poor", "risky"):
+            cons.append(f"Environment graded {grade} — development risk")
+        if eta is not None and int(eta) >= 4:
+            cons.append(f"Long runway (ETA {eta}y) before NHL impact")
+        summary = "Turn the prospect pro on an entry-level deal"
+    elif aid in ("keep_unsigned", "delay"):
+        pros.append("Preserves a contract slot for other signings")
+        if path:
+            pros.append(f"Continues current path ({path})")
+        if expiry is not None:
+            cons.append(f"Rights still tick toward {expiry}")
+        cons.append("No roster control until signed")
+        summary = "Leave unsigned and revisit later"
+    elif aid == "keep_college":
+        pros.append("NCAA development continues without burning an ELC year")
+        pros.append("Preserves a contract slot")
+        if expiry is not None:
+            cons.append(f"College rights still expire {expiry}")
+        cons.append("No immediate pro assignment control")
+        summary = "Keep the prospect in school"
+    elif aid == "keep_europe":
+        pros.append("Keeps European development path intact")
+        pros.append("Preserves a contract slot")
+        if grade in ("poor", "risky"):
+            cons.append(f"Environment graded {grade}")
+        if expiry is not None:
+            cons.append(f"European exclusive window tracked through {expiry}")
+        summary = "Leave the prospect overseas"
+    elif aid == "return_junior":
+        pros.append("Age-appropriate junior minutes when eligible")
+        pros.append("Preserves a contract slot")
+        age = _safe_player_age(player)
+        if age >= 21:
+            cons.append("Older junior return can stall growth")
+        if env_reasons:
+            cons.extend([r for r in env_reasons if "outgrown" in str(r).lower()][:1])
+        summary = "Send the prospect back to junior"
+    elif aid == "assign_ahl":
+        if action.get("enabled"):
+            pros.append("Pro introduction against men")
+            if grade in ("ideal", "good"):
+                pros.append(f"Environment supports AHL path ({grade})")
+            cons.append("Requires AHL eligibility under junior-return rules")
+            if eta is not None and int(eta) >= 3:
+                cons.append("Still a multi-year NHL project")
+        else:
+            cons.append(action.get("blocked_reason") or "Not currently AHL-eligible")
+        summary = "Assign to the AHL affiliate"
+    elif aid == "invite_camp":
+        pros.append("Evaluation look without a permanent roster burn")
+        pros.append("Can still keep junior/college/Europe path afterward")
+        cons.append("Does not replace a signed ELC for long-term control")
+        summary = "Invite to training camp for a look"
+    elif aid == "allow_expire":
+        pros.append("Frees organizational attention and slot pressure")
+        cons.append(action.get("warning") or "Relinquishes organizational claim at deadline")
+        cons.append("Cannot reclaim exclusive rights after expiry")
+        summary = "Let rights lapse"
+    else:
+        if action.get("blocked_reason"):
+            cons.append(action["blocked_reason"])
+        if action.get("warning"):
+            cons.append(action["warning"])
+
+    return {
+        "pros": pros[:4],
+        "cons": cons[:4],
+        "summary": summary,
+    }
+
+
+def rights_card_payload(player: Any, *, team: Any = None, season_year: Optional[int] = None) -> Dict[str, Any]:
+    expiry = getattr(player, "rights_expiry_year", None)
+    path = str(getattr(player, "development_path", "") or getattr(player, "post_draft_league", "") or "")
+    status = str(getattr(player, "rights_status", "") or "")
+    signed = str(getattr(player, "signed_status", "unsigned") or "unsigned")
+    env = development_environment_assessment(player)
+    actions = available_rights_actions(player)
+    recommended = next((a for a in actions if a.get("enabled") and a.get("id") != "allow_expire"), None)
+
+    # Attach live ELC acceptance signals onto the Sign to ELC action when possible.
+    elc_eval = None
+    if team is not None and season_year is not None:
+        try:
+            from services.draft_signing_engine import evaluate_elc_signing_decision
+
+            elc_eval = evaluate_elc_signing_decision(player, team, season_year=int(season_year))
+            for action in actions:
+                if action.get("id") != "sign_elc":
+                    continue
+                reasons = list(elc_eval.get("reasons") or [])
+                if elc_eval.get("accepted"):
+                    action.setdefault("pros", [])
+                    action["pros"] = list(dict.fromkeys((action.get("pros") or []) + reasons[:3]))[:5]
+                    action["acceptance_outlook"] = "Likely to accept"
+                else:
+                    action.setdefault("cons", [])
+                    action["cons"] = list(dict.fromkeys((action.get("cons") or []) + reasons[:3]))[:5]
+                    action["acceptance_outlook"] = "May decline"
+                if elc_eval.get("reason"):
+                    action["evaluation_reason"] = elc_eval.get("reason")
+                break
+        except Exception:
+            elc_eval = None
+
+    decision_status = str(getattr(player, "rights_decision_status", None) or (
+        "signed" if signed == "signed" else "pending"
+    ))
+
+    ovr = _safe_player_ovr(player)
+    out = {
+        "rights_through": expiry,
+        "rights_status": status,
+        "rights_type": getattr(player, "rights_type", None),
+        "rights_signing_deadline": getattr(player, "rights_signing_deadline", None),
+        "returning_to": path,
+        "expected_role": getattr(player, "expected_role", None) or "Org prospect",
+        "elc_decision": "Signed" if signed == "signed" else "Unsigned",
+        "eta": getattr(player, "nhl_eta", None),
+        "organizational_status": getattr(player, "organizational_status", None),
+        "current_league_id": getattr(player, "current_league_id", None),
+        "current_team_id": getattr(player, "current_team_id", None),
+        "nhl_rights_team_id": getattr(player, "nhl_rights_team_id", None)
+        or getattr(player, "rights_team_id", None),
+        "elc_slide_eligible": bool(getattr(player, "elc_slide_eligible", False)),
+        "elc_slide_years_remaining": getattr(player, "elc_slide_years_remaining", None),
+        "nhl_games_played_this_season": getattr(player, "nhl_games_played_this_season", 0),
+        "contract_burned": bool(getattr(player, "contract_burned", False)),
+        "entry_level_contract_eligible": bool(getattr(player, "entry_level_contract_eligible", True)),
+        "available_actions": actions,
+        "development_environment": env,
+        "recommended_action": (recommended or {}).get("id"),
+        "recommended_label": (recommended or {}).get("label"),
+        "path_visual": _path_visual(path),
+        "elc_evaluation": elc_eval,
+        "decision_status": decision_status,
+        "overall": int(ovr) if ovr else None,
+        "nhl_readiness": getattr(player, "nhl_readiness", None),
+        "nhl_eta_label": getattr(player, "nhl_eta_label", None),
+        "draft_year": getattr(player, "draft_year", None),
+        "draft_overall_pick": getattr(player, "draft_overall_pick", None)
+        or getattr(player, "overall_pick", None),
+        "draft_pick_id": getattr(player, "draft_pick_id", None),
+        "draft_pick_original_team_id": getattr(player, "draft_pick_original_team_id", None),
+        "draft_pick_was_traded": bool(getattr(player, "draft_pick_was_traded", False)),
+    }
+    # Structured ELC negotiation payload (authoritative — do not invent in UI)
+    if season_year is not None:
+        try:
+            from services.elc_offer_engine import legal_elc_terms, list_offer_templates
+
+            legal = legal_elc_terms(player, int(season_year))
+            templates = list_offer_templates(player, int(season_year))
+            out["legal_elc_terms"] = legal
+            out["offer_templates"] = [
+                {
+                    "template_id": t["template_id"],
+                    "label": t["label"],
+                    "summary": t["summary"],
+                    "term_years": t["term_years"],
+                    "aav_display": t["aav_display"],
+                    "signing_bonus_display": t["signing_bonus_display"],
+                    "schedule_a_display": t["schedule_a_display"],
+                    "schedule_b_display": t["schedule_b_display"],
+                    "slide_eligible": t["slide_eligible"],
+                }
+                for t in templates
+            ]
+            if team is not None and templates:
+                from services.elc_offer_engine import evaluate_offer_acceptance, build_offer_from_template
+
+                rec = build_offer_from_template(
+                    player, season_year=int(season_year), template_id="standard_elc"
+                )
+                acc = evaluate_offer_acceptance(player, team, rec, season_year=int(season_year))
+                out["elc_acceptance_summary"] = {
+                    "acceptance_pct": acc.get("acceptance_pct"),
+                    "outlook_label": acc.get("outlook_label"),
+                    "decision": acc.get("decision"),
+                    "main_positive": acc.get("main_positive"),
+                    "main_concern": acc.get("main_concern"),
+                    "agent_wants": acc.get("agent_wants"),
+                }
+        except Exception:
+            pass
+    return out
+
+
+def _detach_from_development_leagues(league: Any, player: Any) -> None:
+    for block in getattr(league, "development_leagues", None) or []:
+        if not isinstance(block, dict):
+            continue
+        for tm in block.get("teams") or []:
+            if not isinstance(tm, dict):
+                continue
+            players = tm.get("players")
+            if isinstance(players, list) and player in players:
+                try:
+                    players.remove(player)
+                except ValueError:
+                    pass
+
+
+def move_prospect_to_ahl(league: Any, player: Any, team: Any) -> bool:
+    """Physically place a prospect on the club's AHL roster.
+
+    Setting development_path alone leaves the player on his junior club and
+    invisible to every roster/trade surface, which all read the roster lists.
+    """
+    if team is None:
+        return False
+    ahl = list(getattr(team, "ahl_roster", None) or [])
+    pid = str(getattr(player, "id", "") or "")
+    if not any(str(getattr(p, "id", "") or "") == pid for p in ahl):
+        ahl.append(player)
+        team.ahl_roster = ahl
+    _detach_from_development_leagues(league, player)
+    for attr, val in (
+        ("roster_location", "ahl"),
+        ("in_minors", True),
+        ("current_league_id", "AHL"),
+        ("team_id", str(getattr(team, "team_id", None) or getattr(team, "id", "") or "")),
+    ):
+        try:
+            setattr(player, attr, val)
+        except Exception:
+            pass
+    try:
+        from services.draft_player_registry import register_player
+
+        register_player(league, player)
+    except Exception:
+        pass
+    return True
+
+
+def remove_prospect_from_ahl(team: Any, player: Any) -> None:
+    """Undo an AHL assignment when the club reroutes the prospect elsewhere."""
+    if team is None:
+        return
+    ahl = list(getattr(team, "ahl_roster", None) or [])
+    pid = str(getattr(player, "id", "") or "")
+    kept = [p for p in ahl if str(getattr(p, "id", "") or "") != pid]
+    if len(kept) != len(ahl):
+        team.ahl_roster = kept
+        try:
+            setattr(player, "roster_location", None)
+            setattr(player, "in_minors", False)
+        except Exception:
+            pass
+
+
+def apply_prospect_rights_decision(
+    session: Any,
+    player: Any,
+    team: Any,
+    action_id: str,
+    *,
+    season_year: int,
+) -> Dict[str, Any]:
+    """Persist a Prospect Rights stage decision onto the live player/org."""
+    aid = str(action_id or "").strip()
+    legal = {str(a.get("id")): a for a in available_rights_actions(player)}
+    action = legal.get(aid)
+    if not action:
+        return {"ok": False, "reason": f"Action not available: {aid}"}
+    if action.get("enabled") is False:
+        return {
+            "ok": False,
+            "reason": action.get("blocked_reason") or "Action disabled",
+            "action": action,
+        }
+
+    league = getattr(getattr(session, "sim", None), "league", None)
+
+    if aid == "sign_elc":
+        from services.draft_signing_engine import attempt_sign_elc_with_decision
+
+        result = attempt_sign_elc_with_decision(
+            session,
+            player,
+            team,
+            season_year=int(season_year),
+            promote_to_nhl=False,
+        )
+        if result.get("ok"):
+            try:
+                setattr(player, "rights_decision_status", "signed_elc")
+                setattr(player, "rights_decision_action", aid)
+            except Exception:
+                pass
+        return result
+
+    # Non-signing path decisions — mutate existing development / rights fields only.
+    if aid == "keep_college":
+        setattr(player, "development_path", "NCAA")
+        setattr(player, "post_draft_league", "NCAA")
+        remove_prospect_from_ahl(team, player)
+    elif aid == "keep_europe":
+        setattr(player, "development_path", "EUROPE")
+        setattr(player, "post_draft_league", "EUROPE")
+        remove_prospect_from_ahl(team, player)
+    elif aid == "return_junior":
+        # Keep junior family path when already junior; otherwise mark JUNIOR.
+        cur = str(getattr(player, "development_path", "") or "")
+        if "JUNIOR" not in cur.upper() and "CHL" not in cur.upper() and "USHL" not in cur.upper():
+            setattr(player, "development_path", "JUNIOR")
+            setattr(player, "post_draft_league", "JUNIOR")
+        remove_prospect_from_ahl(team, player)
+    elif aid == "assign_ahl":
+        # Belt-and-suspenders: available_rights_actions() already disables this for
+        # unsigned prospects, but never physically move an unsigned player onto a
+        # professional AHL roster even if this handler is reached some other way.
+        signed_now = str(getattr(player, "signed_status", "unsigned") or "unsigned").lower() == "signed"
+        if not signed_now:
+            return {
+                "ok": False,
+                "reason": "Sign an ELC first — AHL assignment requires a contract",
+            }
+        setattr(player, "development_path", "AHL")
+        setattr(player, "post_draft_league", "AHL")
+        move_prospect_to_ahl(league, player, team)
+    elif aid == "invite_camp":
+        try:
+            setattr(player, "training_camp_invite", True)
+        except Exception:
+            pass
+    elif aid == "allow_expire":
+        setattr(player, "rights_status", "rights_relinquished")
+        setattr(player, "organizational_status", "rights_relinquished")
+        try:
+            setattr(player, "nhl_rights_team_id", None)
+            setattr(player, "rights_team_id", None)
+            setattr(player, "rights_is_exclusive", False)
+        except Exception:
+            pass
+        # Drop from reserve / pool when relinquishing claim.
+        try:
+            from services.contract_economy import remove_from_reserve_list, _player_id
+
+            remove_from_reserve_list(team, _player_id(player))
+            pool = list(getattr(team, "prospect_pool", None) or [])
+            if player in pool:
+                pool.remove(player)
+                team.prospect_pool = pool
+        except Exception:
+            pass
+        remove_prospect_from_ahl(team, player)
+    elif aid in ("keep_unsigned", "delay"):
+        pass  # explicit no-op path decision
+    else:
+        return {"ok": False, "reason": f"Unhandled rights action: {aid}"}
+
+    try:
+        setattr(player, "rights_decision_status", aid)
+        setattr(player, "rights_decision_action", aid)
+        setattr(player, "rights_decision_season", int(season_year))
+    except Exception:
+        pass
+
+    # Mirror decision onto reserve list row when present.
+    try:
+        from services.contract_economy import _player_id
+
+        pid = _player_id(player)
+        reserve = list(getattr(team, "reserve_list", None) or [])
+        changed = False
+        for entry in reserve:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("player_id") or "") != pid:
+                continue
+            entry["decision_status"] = aid
+            entry["rights_decision_action"] = aid
+            if aid in ("keep_college", "keep_europe", "return_junior", "assign_ahl"):
+                entry["current_league_id"] = getattr(player, "development_path", None)
+            changed = True
+        if changed:
+            team.reserve_list = reserve
+    except Exception:
+        pass
+
+    _ = league  # reserved for future league-wide sync
+    return {
+        "ok": True,
+        "action_id": aid,
+        "player_id": str(getattr(player, "id", "") or ""),
+        "decision_status": aid,
+        "development_path": getattr(player, "development_path", None),
+        "rights_status": getattr(player, "rights_status", None),
+    }
 
 
 def _safe_player_ovr(player: Any) -> float:
@@ -383,41 +823,6 @@ def development_environment_assessment(player: Any) -> Dict[str, Any]:
     else:
         reasons.append("Standard developmental placement")
     return {"grade": grade, "reasons": reasons[:3], "path": path or None}
-
-
-def rights_card_payload(player: Any) -> Dict[str, Any]:
-    expiry = getattr(player, "rights_expiry_year", None)
-    path = str(getattr(player, "development_path", "") or getattr(player, "post_draft_league", "") or "")
-    status = str(getattr(player, "rights_status", "") or "")
-    signed = str(getattr(player, "signed_status", "unsigned") or "unsigned")
-    env = development_environment_assessment(player)
-    actions = available_rights_actions(player)
-    recommended = next((a for a in actions if a.get("enabled") and a.get("id") != "allow_expire"), None)
-    return {
-        "rights_through": expiry,
-        "rights_status": status,
-        "rights_type": getattr(player, "rights_type", None),
-        "rights_signing_deadline": getattr(player, "rights_signing_deadline", None),
-        "returning_to": path,
-        "expected_role": getattr(player, "expected_role", None) or "Org prospect",
-        "elc_decision": "Signed" if signed == "signed" else "Unsigned",
-        "eta": getattr(player, "nhl_eta", None),
-        "organizational_status": getattr(player, "organizational_status", None),
-        "current_league_id": getattr(player, "current_league_id", None),
-        "current_team_id": getattr(player, "current_team_id", None),
-        "nhl_rights_team_id": getattr(player, "nhl_rights_team_id", None)
-        or getattr(player, "rights_team_id", None),
-        "elc_slide_eligible": bool(getattr(player, "elc_slide_eligible", False)),
-        "elc_slide_years_remaining": getattr(player, "elc_slide_years_remaining", None),
-        "nhl_games_played_this_season": getattr(player, "nhl_games_played_this_season", 0),
-        "contract_burned": bool(getattr(player, "contract_burned", False)),
-        "entry_level_contract_eligible": bool(getattr(player, "entry_level_contract_eligible", True)),
-        "available_actions": actions,
-        "development_environment": env,
-        "recommended_action": (recommended or {}).get("id"),
-        "recommended_label": (recommended or {}).get("label"),
-        "path_visual": _path_visual(path),
-    }
 
 
 def _path_visual(path: str) -> List[str]:

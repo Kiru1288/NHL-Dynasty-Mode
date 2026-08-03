@@ -405,7 +405,19 @@ def _draft_entries(session: FranchiseSession) -> List[Dict[str, Any]]:
 
 
 def get_scouting_prospects(session: FranchiseSession) -> Dict[str, Any]:
-    ensure_prospect_stats_current_for_scouting(session)
+    # Prefer warm draft-board cache. Avoid a second full junior-stats sync when the
+    # calendar line is already current — that sync was dominating Draft Class opens.
+    iso = ""
+    try:
+        cal = getattr(session, "nhl_calendar", None) or []
+        cur = int(getattr(session, "calendar_cursor", 0) or 0)
+        if 0 <= cur < len(cal):
+            iso = str(cal[cur].get("iso") or cal[cur].get("date") or "")
+    except Exception:
+        iso = ""
+    last_iso = str(getattr(session, "_prospect_stats_synced_iso", "") or "")
+    if not (iso and last_iso and iso == last_iso):
+        ensure_prospect_stats_current_for_scouting(session)
     cached = getattr(session, "_cached_scouting_prospects_payload", None)
     if isinstance(cached, dict) and cached:
         return cached

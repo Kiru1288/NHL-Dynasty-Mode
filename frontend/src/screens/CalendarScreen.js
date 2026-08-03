@@ -88,6 +88,57 @@ const NAV_ALIAS_TO_SCREEN = {
 const EMPTY_ARRAY = Object.freeze([]);
 const EMPTY_OBJECT = Object.freeze({});
 
+function hasBackendScheduleData(rootState) {
+  if (!rootState || typeof rootState !== "object") return false;
+
+  const sources = [
+    rootState.schedule_upcoming,
+    rootState.nhl_calendar_full,
+    rootState.calendar_strip,
+    rootState.schedule,
+    rootState.league_schedule,
+    rootState.leagueSchedule,
+    rootState.games,
+    rootState.calendar,
+  ];
+
+  return sources.some((src) => {
+    if (Array.isArray(src) && src.length > 0) return true;
+    if (src && typeof src === "object" && !Array.isArray(src) && Object.keys(src).length > 0) {
+      return true;
+    }
+    return false;
+  });
+}
+
+function filterVisibleQuickStats(stats, gp = 0) {
+  return stats.filter((stat) => {
+    if (stat.key === "home" || stat.key === "road") {
+      const rec = String(stat.value || "");
+      if (rec === "0-0-0" || rec === "—") return false;
+    }
+    if (stat.key === "goals_for" || stat.key === "goals_against") {
+      if (gp <= 0 && (stat.value === 0 || stat.value === "0" || stat.value === "—")) return false;
+    }
+    if (stat.key === "power_play" || stat.key === "penalty_kill") {
+      if (stat.value === "—" || stat.value == null || stat.value === "") return false;
+    }
+    return true;
+  });
+}
+
+function formatSeasonPhaseLabel(rootState) {
+  const phase = String(
+    rootState?.season_phase ||
+      rootState?.phase ||
+      rootState?.nhl_today?.phase ||
+      rootState?.calendar_phase ||
+      ""
+  ).trim();
+  if (!phase) return "";
+  return phase.replace(/_/g, " ").toUpperCase();
+}
+
 const PRIORITY_ORDER = {
   CRITICAL: 0,
   HIGH: 1,
@@ -604,15 +655,15 @@ function getSpecialEventDefaultTitle(type) {
 function getSpecialEventIcon(type) {
   const key = normalizeKey(type);
 
-  if (key.includes("trade_deadline")) return "⏳";
+  if (key.includes("trade_deadline")) return "◷";
   if (key.includes("trade")) return "⇄";
-  if (key.includes("draft_lottery")) return "🎲";
+  if (key.includes("draft_lottery")) return "⊙";
   if (key.includes("draft")) return "◈";
   if (key.includes("all_star") || key.includes("allstar")) return "★";
   if (key.includes("winter")) return "❄";
-  if (key.includes("heritage") || key.includes("stadium")) return "🏟";
-  if (key.includes("wjc") || key.includes("world")) return "🌍";
-  if (key.includes("playoff") || key.includes("stanley")) return "🏆";
+  if (key.includes("heritage") || key.includes("stadium")) return "▤";
+  if (key.includes("wjc") || key.includes("world")) return "⊕";
+  if (key.includes("playoff") || key.includes("stanley")) return "❖";
   if (key.includes("free_agency")) return "$";
   if (key.includes("injury")) return "✚";
   if (key.includes("rivalry")) return "⚔";
@@ -720,7 +771,9 @@ function isWorldJuniorsWindowActive(franchiseState) {
     wjc?.status || wjc?.tournament_status || wjc?.phase || wjc?.wjc_phase || ""
   );
 
-  return status === "active" || status === "live" || status === "complete";
+  // "complete" must not count as the live window — after year rollover a stale
+  // finished tournament was reopening the WJC desk on every calendar sim.
+  return status === "active" || status === "live";
 }
 
 function findPendingWjcPopup(franchiseState) {
@@ -1197,7 +1250,11 @@ function InjuryReportFullModal({ injuries, userTeamId, activeTeam, onClose }) {
               </tbody>
             </table>
           ) : (
-            <p className="nhlcal-small-empty">No active injuries reported.</p>
+            <p className="nhlcal-small-empty">
+              <b>MED · ROOM CLEAR</b>
+              No active injury has been filed anywhere in the league on this
+              date.
+            </p>
           )}
         </div>
       </div>
@@ -1586,6 +1643,18 @@ function CalendarScreen(props = {}) {
   const quickTeamStats = useMemo(() => {
     return buildQuickTeamStats(activeTeam, standings, games, currentDate, statsCentral, allTeams);
   }, [activeTeam, standings, games, currentDate, statsCentral, allTeams]);
+
+  const visibleQuickStats = useMemo(() => {
+    const row = findStandingForTeam(standings, activeTeam);
+    const gp = firstNumber(row?.gp, 0);
+    return filterVisibleQuickStats(quickTeamStats, gp);
+  }, [quickTeamStats, standings, activeTeam]);
+
+  const scheduleDataMissing = useMemo(() => {
+    return !games.length && !hasBackendScheduleData(rootState);
+  }, [games.length, rootState]);
+
+  const seasonPhaseLabel = useMemo(() => formatSeasonPhaseLabel(rootState), [rootState]);
 
   useEffect(() => {
     if (process.env.NODE_ENV === "production") return;
@@ -2063,14 +2132,14 @@ function CalendarScreen(props = {}) {
 
           <SideNavButton
             active={false}
-            icon="📰"
+            icon="≡"
             label="Storylines"
             onClick={() => handleNavigate(SCREEN_KEYS.storylines_report)}
           />
 
           <SideNavButton
             active={false}
-            icon="🩺"
+            icon="✚"
             label="Injury Report"
             onClick={openInjuryReport}
           />
@@ -2107,11 +2176,17 @@ function CalendarScreen(props = {}) {
           </section>
 
           <section className="nhlcal-month-control" aria-label="Calendar month controls">
+            {seasonPhaseLabel ? (
+              <p className="nhlcal-season-phase">{seasonPhaseLabel}</p>
+            ) : null}
             <div className="nhlcal-month-row">
               <button type="button" onClick={goPreviousMonth} aria-label="Previous month">
                 ‹
               </button>
-              <h2>{monthTitle}</h2>
+              <div className="nhlcal-month-title-block">
+                <span className="nhlcal-month-year">{viewDate.getFullYear()}</span>
+                <h2>{MONTH_NAMES[viewDate.getMonth()]}</h2>
+              </div>
               <button type="button" onClick={goNextMonth} aria-label="Next month">
                 ›
               </button>
@@ -2130,7 +2205,7 @@ function CalendarScreen(props = {}) {
                   onClick={openWorldJuniorsMenu}
                   title="Open U-20 World Juniors tournament hub"
                 >
-                  <span>🌍</span>
+                  <span aria-hidden="true">U20</span>
                   World Juniors
                 </button>
               ) : null}
@@ -2192,14 +2267,15 @@ function CalendarScreen(props = {}) {
           </section>
         </header>
 
-        {!games.length ? (
-          <div className="nhlcal-schedule-alert">
+        {scheduleDataMissing ? (
+          <div className="nhlcal-schedule-alert" role="status">
             Schedule data is missing or not loaded from the backend yet.
           </div>
         ) : null}
 
-        <section className="nhlcal-stat-strip">
-          {quickTeamStats.map((stat) => (
+        {visibleQuickStats.length ? (
+        <section className="nhlcal-stat-strip" aria-label="Team season snapshot">
+          {visibleQuickStats.map((stat) => (
             <StatPill
               key={stat.key}
               icon={stat.icon}
@@ -2212,6 +2288,7 @@ function CalendarScreen(props = {}) {
             />
           ))}
         </section>
+        ) : null}
 
         <section className="nhlcal-content-grid">
           <section className="nhlcal-calendar-panel">
@@ -2630,7 +2707,18 @@ function CalendarScreen(props = {}) {
   );
 }
 
+// Franchise Command Network department codes. Purely presentational: the
+// rail keeps its text label, the code just gives each department a callsign.
+const DEPARTMENT_CODES = {
+  Office: "OFF",
+  Calendar: "SKD",
+  Storylines: "WIRE",
+  "Injury Report": "MED",
+  Inbox: "MSG",
+};
+
 function SideNavButton({ active, icon, label, badge, onClick, title }) {
+  const code = DEPARTMENT_CODES[label];
   return (
     <button
       type="button"
@@ -2639,6 +2727,11 @@ function SideNavButton({ active, icon, label, badge, onClick, title }) {
       title={title || label}
       aria-label={title || label}
     >
+      {code ? (
+        <span className="nhlcal-side-code" aria-hidden="true">
+          {code}
+        </span>
+      ) : null}
       <span className="nhlcal-side-icon">{icon}</span>
       <span className="nhlcal-side-label">{label}</span>
       {badge ? <em aria-label={`${badge} unread`}>{badge}</em> : null}
@@ -2855,29 +2948,34 @@ function GamePreviewCard({
 
   const eventCount = selectedDayEvents?.length || 0;
   const gameCount = selectedDayGamesRaw?.length || selectedDayGames?.length || 0;
+  const showDayCounts = gameCount > 0 || selectedDayTeamGameCount > 0 || eventCount > 0;
   const venue = preview?.venue || game?.venue || game?.arena || getArenaName(home);
   const hasAnalysis = Array.isArray(preview?.analysis) && preview.analysis.length > 0;
   const completedPreview = game ? isCompletedGame(game) : false;
 
   return (
-    <section className="nhlcal-card nhlcal-preview-card nhlcal-scroll-surface">
+    <section className="nhlcal-broadcast-strip nhlcal-preview-card nhlcal-scroll-surface">
       <header className="nhlcal-card-header">
         <div>
           <p>{selectedDateHeader}</p>
           <h3>{game ? previewTitle : hasEvents ? "Calendar Events" : "Calendar Day"}</h3>
         </div>
 
-        <span className="nhlcal-header-pill">
-          {gameCount} game{gameCount === 1 ? "" : "s"} · {selectedDayTeamGameCount} team · {eventCount} event
-          {eventCount === 1 ? "" : "s"}
-        </span>
+        {showDayCounts ? (
+          <span className="nhlcal-header-pill">
+            {gameCount} game{gameCount === 1 ? "" : "s"} · {selectedDayTeamGameCount} team · {eventCount} event
+            {eventCount === 1 ? "" : "s"}
+          </span>
+        ) : null}
       </header>
 
+      {showDayCounts ? (
       <div className="nhlcal-selected-summary-strip">
-        <span>{gameCount} league games</span>
-        <span>{selectedDayTeamGameCount} team games</span>
-        <span>{eventCount} events</span>
+        {gameCount > 0 ? <span>{gameCount} league games</span> : null}
+        {selectedDayTeamGameCount > 0 ? <span>{selectedDayTeamGameCount} team games</span> : null}
+        {eventCount > 0 ? <span>{eventCount} events</span> : null}
       </div>
+      ) : null}
 
       <div className={`nhlcal-tab-row ${hasAnalysis ? "nhlcal-tab-row-three" : "nhlcal-tab-row-two"}`}>
         <button
@@ -3011,7 +3109,9 @@ function GamePreviewCard({
         </>
       ) : (
         <div className="nhlcal-empty-preview">
-          <div className="nhlcal-empty-orb">{hasEvents ? selectedDayEvents[0]?.icon || "◆" : "◌"}</div>
+          <div className="nhlcal-empty-orb">
+            {hasEvents ? "SKD · EVENTS FILED" : "SKD · NO FIXTURE"}
+          </div>
           <h4>{hasEvents ? "Special Events Scheduled" : "No Featured Team Game"}</h4>
           <p>
             {hasEvents
@@ -3116,7 +3216,10 @@ function SelectedDayEventsPanel({
             <span>Special Events</span>
             <strong>0</strong>
           </header>
-          <p className="nhlcal-small-empty">No league events are attached to this date.</p>
+          <p className="nhlcal-small-empty">
+            <b>SKD · NO ENTRIES</b>
+            No league event is attached to this date.
+          </p>
         </section>
       )}
 
@@ -3181,7 +3284,7 @@ function SelectedDayEventsPanel({
 
 function StandingsCard({ activeTeam, allTeams = [], rows, groupLabel = "League Standings", extended = false, onOpenFull }) {
   return (
-    <section className={`nhlcal-card nhlcal-standings-card ${extended ? "nhlcal-standings-card--extended" : ""}`}>
+    <section className={`nhlcal-broadcast-strip nhlcal-standings-card ${extended ? "nhlcal-standings-card--extended" : ""}`}>
       <header className="nhlcal-card-header compact nhlcal-standings-header">
         <div>
           <p>{groupLabel}</p>
@@ -3252,7 +3355,7 @@ function StandingsCard({ activeTeam, allTeams = [], rows, groupLabel = "League S
 
 function UpcomingStretchCard({ games, activeTeam, allTeams }) {
   return (
-    <section className="nhlcal-card nhlcal-stretch-card">
+    <section className="nhlcal-broadcast-strip nhlcal-stretch-card">
       <header className="nhlcal-mini-header">
         <h3>Upcoming Stretch</h3>
         <span>Next {games.length || 0}</span>
@@ -3276,7 +3379,10 @@ function UpcomingStretchCard({ games, activeTeam, allTeams }) {
             );
           })
         ) : (
-          <p className="nhlcal-small-empty">No upcoming team games found.</p>
+          <p className="nhlcal-small-empty">
+            <b>SKD · CLEAR</b>
+            No upcoming team game is on the club schedule.
+          </p>
         )}
       </div>
 
@@ -3309,7 +3415,10 @@ function LeagueStateCard({ rows }) {
             </div>
           ))
         ) : (
-          <p className="nhlcal-small-empty">No league games loaded for today.</p>
+          <p className="nhlcal-small-empty">
+            <b>SKD · NO SCORES</b>
+            No league game is loaded for today.
+          </p>
         )}
       </div>
 
@@ -3332,7 +3441,7 @@ function StorylinesReportCard({ rows, storylineChoices, onChoose, busyChoiceId =
   }, [storylineChoices]);
 
   return (
-    <section className="nhlcal-card nhlcal-stretch-card">
+    <section className="nhlcal-broadcast-strip nhlcal-stretch-card">
       <header className="nhlcal-mini-header">
         <h3>Storylines</h3>
         <span>Latest</span>
@@ -3382,7 +3491,10 @@ function StorylinesReportCard({ rows, storylineChoices, onChoose, busyChoiceId =
             );
           })
         ) : (
-          <p className="nhlcal-small-empty">No storyline events yet.</p>
+          <p className="nhlcal-small-empty">
+            <b>WIRE · QUIET</b>
+            No storyline has been filed for this date.
+          </p>
         )}
       </div>
     </section>
@@ -3416,7 +3528,10 @@ function InjuryReportCard({ rows, team, onOpenFull }) {
             </div>
           ))
         ) : (
-          <p className="nhlcal-small-empty">No active injuries reported for your club.</p>
+          <p className="nhlcal-small-empty">
+            <b>MED · CLUB CLEAR</b>
+            No active injury is on file for your club.
+          </p>
         )}
       </div>
 
@@ -6689,12 +6804,12 @@ function CalendarStyles() {
         --red-soft: rgba(255, 96, 109, 0.13);
         --blue: #8ab4ff;
         --blue-soft: rgba(138, 180, 255, 0.13);
-        --purple: #c992ff;
-        --purple-soft: rgba(201, 146, 255, 0.14);
+        --purple: var(--ops-info, #8ab4ff);
+        --purple-soft: rgba(138, 180, 255, 0.14);
         --shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
 
-        min-height: 100vh;
-        height: 100vh;
+        min-height: 100dvh;
+        height: 100dvh;
         width: 100%;
         background:
           radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.12), transparent 30%),
@@ -6788,50 +6903,66 @@ function CalendarStyles() {
         background: rgba(255, 255, 255, 0.035);
       }
 
+      /* Franchise command rail: the active department is registered on a hard
+         broadcast rail and notched out of the rail plate. No glow. */
       .nhlcal-side-button.is-active {
         color: var(--cyan);
-        background:
-          linear-gradient(90deg, rgba(19, 216, 231, 0.17), rgba(19, 216, 231, 0.03)),
-          radial-gradient(circle at 100% 50%, rgba(19, 216, 231, 0.24), transparent 52%);
+        background: linear-gradient(90deg, rgba(19, 216, 231, 0.16), rgba(19, 216, 231, 0.02));
+        clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
       }
 
       .nhlcal-side-button.is-active::before {
         content: "";
         position: absolute;
         left: 0;
-        top: 12px;
-        bottom: 12px;
+        top: 0;
+        bottom: 0;
         width: 3px;
-        border-radius: 999px;
+        border-radius: 0;
         background: var(--cyan);
-        box-shadow: 0 0 22px rgba(19, 216, 231, 0.8);
+        box-shadow: none;
       }
 
       .nhlcal-side-icon {
-        font-size: 22px;
+        font-size: 20px;
         line-height: 1;
       }
 
+      /* Department callsign sits above the symbol like a control-room label. */
+      .nhlcal-side-code {
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: 0.12em;
+        color: var(--muted-2);
+      }
+
+      .nhlcal-side-button.is-active .nhlcal-side-code {
+        color: var(--cyan);
+      }
+
       .nhlcal-side-label {
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 800;
         letter-spacing: 0.02em;
       }
 
+      /* Pending count is a numbered plate, not a notification bubble. */
       .nhlcal-side-button em {
         position: absolute;
-        right: 16px;
+        right: 12px;
         top: 12px;
         min-width: 18px;
-        height: 18px;
-        border-radius: 999px;
+        height: 16px;
+        padding: 0 3px;
+        border-radius: var(--radius-ops, 2px);
         background: var(--cyan);
         color: #021016;
-        font-size: 10px;
+        font-size: 11px;
         display: grid;
         place-items: center;
         font-style: normal;
         font-weight: 900;
+        font-variant-numeric: tabular-nums;
       }
 
       .nhlcal-settings-button {
@@ -6852,13 +6983,13 @@ function CalendarStyles() {
       }
 
       .nhlcal-settings-button small {
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 800;
       }
 
       .nhlcal-main {
         min-width: 0;
-        height: 100vh;
+        height: 100dvh;
         overflow: hidden;
         display: flex;
         flex-direction: column;
@@ -6949,13 +7080,30 @@ function CalendarStyles() {
         min-width: 0;
       }
 
-      .nhlcal-month-control p {
-        margin: 0 0 7px;
+      .nhlcal-month-control p,
+      .nhlcal-season-phase {
+        margin: 0 0 4px;
         color: var(--cyan);
         text-transform: uppercase;
-        letter-spacing: 0.36em;
-        font-size: 12px;
+        letter-spacing: 0.14em;
+        font-size: var(--type-phase-label-size, 0.68rem);
         font-weight: 900;
+      }
+
+      .nhlcal-month-title-block {
+        display: grid;
+        justify-items: center;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .nhlcal-month-year {
+        color: var(--muted);
+        font-size: 0.6875rem;
+        font-weight: 900;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        line-height: 1;
       }
 
       .nhlcal-month-row {
@@ -6968,21 +7116,23 @@ function CalendarStyles() {
 
       .nhlcal-month-row h2 {
         margin: 0;
-        font-size: clamp(18px, 1.8vw, 26px);
-        line-height: 1;
+        font-size: clamp(22px, 2.2vw, 32px);
+        line-height: 0.95;
         text-transform: uppercase;
-        letter-spacing: 0.06em;
+        letter-spacing: 0.08em;
         white-space: nowrap;
+        font-family: var(--font-broadcast-display, inherit);
       }
 
       .nhlcal-month-row h2::first-letter {
         color: var(--cyan);
       }
 
+      /* Month stepping uses squared broadcast keys, not circular bubbles. */
       .nhlcal-month-row button {
-        width: 34px;
-        height: 34px;
-        border-radius: 999px;
+        width: 32px;
+        height: 32px;
+        border-radius: var(--radius-hud, 4px);
         border: 1px solid var(--line);
         background: rgba(12, 31, 47, 0.72);
         color: var(--text);
@@ -7019,15 +7169,26 @@ function CalendarStyles() {
         flex-wrap: wrap;
       }
 
-      .nhlcal-today-chip {
+      /* Broadcast control: returns the schedule to the live date. */
+      /* Scoped to the month row so the arrow-button font-size does not win on
+         specificity and blow the label past the chip. */
+      .nhlcal-month-row button.nhlcal-today-chip {
         height: 32px;
-        min-width: 60px;
+        width: auto;
+        min-width: fit-content;
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        white-space: nowrap;
+        overflow: visible;
         border: 1px solid rgba(233, 168, 60, 0.35);
-        border-radius: 8px;
+        border-radius: var(--radius-ops, 2px);
         background: rgba(233, 168, 60, 0.08);
         color: #ffd88d;
-        padding: 0 10px;
-        font-size: 10px;
+        /* Extra trailing room absorbs the letter-spacing on the final glyph. */
+        padding: 0 14px 0 12px;
+        font-size: 11px;
         font-weight: 900;
         letter-spacing: 0.05em;
         text-transform: uppercase;
@@ -7035,7 +7196,7 @@ function CalendarStyles() {
         align-self: center;
       }
 
-      .nhlcal-today-chip:hover {
+      .nhlcal-month-row button.nhlcal-today-chip:hover {
         border-color: rgba(233, 168, 60, 0.55);
         background: rgba(233, 168, 60, 0.14);
       }
@@ -7080,7 +7241,7 @@ function CalendarStyles() {
       .nhlcal-menu-toggle {
         width: 46px;
         height: 46px;
-        border-radius: 14px;
+        border-radius: 10px;
         border: 1px solid var(--line);
         background: rgba(12, 31, 47, 0.72);
         display: grid;
@@ -7100,7 +7261,7 @@ function CalendarStyles() {
 
       .nhlcal-quick-link {
         border: 1px solid var(--line);
-        border-radius: 999px;
+        border-radius: 4px;
         background: rgba(12, 31, 47, 0.72);
         color: var(--text);
         padding: 9px 14px;
@@ -7135,7 +7296,7 @@ function CalendarStyles() {
 
       .nhlcal-online-chip span {
         color: #56dc75;
-        font-size: 10px;
+        font-size: 11px;
         text-transform: uppercase;
         font-weight: 900;
         letter-spacing: 0.1em;
@@ -7181,28 +7342,38 @@ function CalendarStyles() {
       }
 
       .nhlcal-wjc-hub-button {
-        min-height: 44px;
+        min-height: 40px;
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        border-radius: 14px;
+        border-radius: var(--radius-ops, 2px);
         border: 1px solid rgba(0, 216, 223, 0.28);
-        background:
-          linear-gradient(180deg, rgba(0, 216, 223, 0.14), rgba(255, 255, 255, 0.03)),
-          rgba(7, 22, 35, 0.88);
+        background: rgba(7, 22, 35, 0.88);
         color: #dffcff;
         cursor: pointer;
-        padding: 0 14px;
+        padding: 0 12px;
         font-size: 0.72rem;
         font-weight: 900;
         letter-spacing: 0.06em;
         text-transform: uppercase;
-        transition: 150ms ease;
+        transition:
+          border-color 150ms ease,
+          background 150ms ease;
+      }
+
+      /* Tournament code plate replaces the decorative globe symbol. */
+      .nhlcal-wjc-hub-button > span {
+        padding: 1px 4px;
+        border: 1px solid rgba(0, 216, 223, 0.38);
+        border-radius: var(--radius-ops, 2px);
+        font-size: 0.6875rem;
+        letter-spacing: 0.08em;
+        color: #7fe6ef;
       }
 
       .nhlcal-wjc-hub-button:hover {
         border-color: rgba(232, 165, 54, 0.38);
-        transform: translateY(-1px);
+        background: rgba(19, 216, 231, 0.08);
       }
 
       .nhlcal-wjc-hub-button.is-modal {
@@ -7222,46 +7393,66 @@ function CalendarStyles() {
         z-index: 12050;
         background: #08090c;
         overflow: hidden;
+        display: flex;
+        flex-direction: column;
       }
 
       .nhlcal-wjc-menu-host .wjc-event-shell,
-      .nhlcal-wjc-menu-host .wjc-stage-root {
+      .nhlcal-wjc-menu-host .wjc-stage-root,
+      .nhlcal-wjc-menu-host .wjc-page-root {
         width: 100%;
         height: 100%;
-        min-height: 100vh;
-        min-height: 100dvh;
+        min-height: 0;
+        max-height: 100%;
+        flex: 1 1 auto;
       }
 
+      .nhlcal-wjc-menu-host .wjc-event-shell {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      /* Broadcast action: advancing league time. Rink-cut, flat deadline gold,
+         and a 1px press instead of a lift. */
       .nhlcal-advance-button {
-        height: 44px;
+        height: 40px;
         min-width: 132px;
         border: 0;
-        border-radius: 7px;
-        background:
-          linear-gradient(180deg, #f4bd52, #d99023),
-          radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.5), transparent 30%);
+        border-radius: 0;
+        clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
+        background: #e9a83c;
         color: #1b1002;
         text-transform: uppercase;
-        letter-spacing: 0.1em;
+        letter-spacing: 0.12em;
         font-size: 11px;
         font-weight: 1000;
         cursor: pointer;
-        box-shadow:
-          0 14px 36px rgba(217, 144, 35, 0.28),
-          inset 0 1px 0 rgba(255, 255, 255, 0.35);
+        box-shadow: none;
         transition:
-          transform 0.2s ease,
-          filter 0.2s ease;
+          background 0.15s ease,
+          transform 0.11s ease;
+      }
+
+      .nhlcal-advance-button:hover:not(:disabled) {
+        background: #f4c66e;
+      }
+
+      .nhlcal-advance-button:active:not(:disabled) {
+        transform: translateY(1px);
       }
 
       .nhlcal-advance-button-secondary {
         min-width: 92px;
-        background:
-          linear-gradient(180deg, rgba(19, 216, 231, 0.22), rgba(19, 216, 231, 0.08)),
-          rgba(7, 22, 35, 0.92);
+        background: rgba(7, 22, 35, 0.92);
         color: #dffcff;
         border: 1px solid rgba(19, 216, 231, 0.32);
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        box-shadow: none;
+      }
+
+      .nhlcal-advance-button-secondary:hover:not(:disabled) {
+        background: rgba(19, 216, 231, 0.12);
       }
 
       .nhlcal-advance-button-secondary:hover:not(:disabled) {
@@ -7283,7 +7474,7 @@ function CalendarStyles() {
         margin: 0 0 18px;
         border: 1px solid var(--line2);
         background: rgba(8, 23, 35, 0.92);
-        border-radius: 16px;
+        border-radius: 6px;
         padding: 16px 18px;
         display: flex;
         align-items: flex-start;
@@ -7364,26 +7555,28 @@ function CalendarStyles() {
       .nhlcal-stat-strip {
         flex: 0 0 auto;
         margin-top: 6px;
-        display: grid;
-        grid-template-columns: repeat(7, minmax(0, 1fr));
+        display: flex;
+        flex-wrap: wrap;
         gap: 0;
-        border: 1px solid var(--line);
-        background: rgba(8, 23, 35, 0.86);
-        border-radius: 8px;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        background: rgba(6, 21, 34, 0.72);
+        border-radius: var(--radius-control, 6px);
         overflow: hidden;
-        box-shadow: var(--shadow);
+        box-shadow: none;
       }
 
       .nhlcal-stat-pill {
-        min-height: 48px;
-        padding: 6px 8px;
+        flex: 1 1 0;
+        min-width: 88px;
+        min-height: 44px;
+        padding: 6px 10px;
         display: flex;
         align-items: center;
         gap: 8px;
         border-right: 1px solid rgba(156, 218, 236, 0.08);
-        background:
-          linear-gradient(180deg, rgba(18, 42, 61, 0.45), rgba(6, 20, 31, 0.34)),
-          radial-gradient(circle at 100% 0%, rgba(19, 216, 231, 0.05), transparent 52%);
+        background: transparent;
+        border-radius: 0;
       }
 
       .nhlcal-stat-pill:last-child {
@@ -7410,7 +7603,7 @@ function CalendarStyles() {
 
       .nhlcal-stat-pill span {
         color: var(--muted);
-        font-size: 9px;
+        font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.1em;
         font-weight: 1000;
@@ -7464,7 +7657,7 @@ function CalendarStyles() {
       .nhlcal-stat-pill small {
         margin-top: 4px;
         color: var(--muted);
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 800;
         text-transform: uppercase;
         letter-spacing: 0.04em;
@@ -7514,12 +7707,10 @@ function CalendarStyles() {
         display: flex;
         flex-direction: column;
         border: 1px solid var(--line);
-        border-radius: 12px;
-        background:
-          linear-gradient(180deg, rgba(9, 27, 40, 0.94), rgba(5, 17, 27, 0.94)),
-          radial-gradient(circle at 66% 20%, rgba(19, 216, 231, 0.07), transparent 35%);
+        border-radius: var(--radius-card, 8px);
+        background: rgba(6, 21, 34, 0.82);
         overflow: hidden;
-        box-shadow: var(--shadow);
+        box-shadow: var(--depth-registered, inset 0 1px 0 rgba(255, 255, 255, 0.04));
       }
 
       .nhlcal-calendar-toolbar {
@@ -7542,7 +7733,7 @@ function CalendarStyles() {
         background: rgba(14, 35, 50, 0.9);
         color: rgba(233, 247, 251, 0.82);
         padding: 0 10px;
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 900;
         text-transform: uppercase;
         letter-spacing: 0.06em;
@@ -7618,20 +7809,47 @@ function CalendarStyles() {
         padding: 7px;
       }
 
+      /* Selection is a hard broadcast frame, not a glow. */
       .nhlcal-day-cell.is-selected {
-        box-shadow:
-          inset 0 0 0 2px rgba(19, 216, 231, 0.95),
-          0 0 24px rgba(19, 216, 231, 0.28);
+        box-shadow: inset 0 0 0 2px rgba(19, 216, 231, 0.95);
         z-index: 5;
+      }
+
+      .nhlcal-day-cell.is-today:not(.is-selected) {
+        background:
+          linear-gradient(180deg, rgba(233, 168, 60, 0.1), rgba(7, 22, 34, 0.82));
+      }
+
+      /* Department signature: the timeline notch. Today is registered on the
+         schedule rail the way a broadcast marks the live position. */
+      .nhlcal-day-cell.is-today:not(.is-selected)::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        height: 3px;
+        background: var(--gold);
+        pointer-events: none;
+        z-index: 3;
       }
 
       .nhlcal-day-cell.is-today:not(.is-selected)::after {
         content: "";
         position: absolute;
-        inset: 5px;
-        border: 1px dashed rgba(233, 168, 60, 0.42);
-        border-radius: 8px;
+        left: 50%;
+        top: 3px;
+        transform: translateX(-50%);
+        width: 12px;
+        height: 6px;
+        background: var(--gold);
+        clip-path: polygon(0 0, 100% 0, 50% 100%);
         pointer-events: none;
+        z-index: 3;
+      }
+
+      .nhlcal-day-cell.is-today .nhlcal-day-number {
+        color: var(--gold);
       }
 
       .nhlcal-empty-day-line {
@@ -7708,21 +7926,21 @@ function CalendarStyles() {
         gap: 5px;
       }
 
+      /* Event counts are deadline-gold count plates. */
       .nhlcal-event-corner-badge {
-        min-width: 22px;
-        height: 22px;
+        min-width: 20px;
+        height: 18px;
         padding: 0 5px;
         display: inline-grid;
         place-items: center;
-        border-radius: 999px;
-        background:
-          radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.2), transparent 36%),
-          linear-gradient(180deg, rgba(233, 168, 60, 0.95), rgba(154, 87, 28, 0.95));
+        border-radius: var(--radius-ops, 2px);
+        background: rgba(233, 168, 60, 0.95);
         border: 1px solid rgba(255, 214, 135, 0.45);
         color: #1b1002;
         font-size: 11px;
         font-weight: 1000;
-        box-shadow: 0 0 16px rgba(233, 168, 60, 0.26);
+        font-variant-numeric: tabular-nums;
+        box-shadow: none;
       }
 .nhlcal-event-corner-badge img {
   width: 18px;
@@ -7793,7 +8011,7 @@ function CalendarStyles() {
 
       .nhlcal-empty-day-line {
         color: rgba(128, 150, 168, 0.42);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 900;
         text-transform: uppercase;
         letter-spacing: 0.08em;
@@ -7854,7 +8072,7 @@ function CalendarStyles() {
       .nhlcal-special-event-copy strong {
         min-width: 0;
         color: rgba(255, 239, 211, 0.96);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 900;
         letter-spacing: 0.01em;
         text-transform: none;
@@ -7870,7 +8088,7 @@ function CalendarStyles() {
       .nhlcal-special-event-copy span {
         min-width: 0;
         color: rgba(232, 203, 160, 0.72);
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 700;
         overflow: hidden;
         display: -webkit-box;
@@ -7923,16 +8141,16 @@ function CalendarStyles() {
       }
 
       .nhlcal-special-event-tile.tone-draft {
-        border-color: rgba(201, 146, 255, 0.35);
+        border-color: rgba(138, 180, 255, 0.35);
         background:
-          radial-gradient(circle at 0% 0%, rgba(201, 146, 255, 0.18), transparent 56%),
+          radial-gradient(circle at 0% 0%, rgba(138, 180, 255, 0.18), transparent 56%),
           linear-gradient(180deg, rgba(42, 28, 66, 0.78), rgba(18, 20, 28, 0.74));
       }
 
       .nhlcal-special-event-tile.tone-draft .nhlcal-special-event-icon {
         color: #ead7ff;
-        background: rgba(201, 146, 255, 0.14);
-        border-color: rgba(201, 146, 255, 0.28);
+        background: rgba(138, 180, 255, 0.14);
+        border-color: rgba(138, 180, 255, 0.28);
       }
 
       .nhlcal-special-event-tile.tone-playoff {
@@ -7973,7 +8191,7 @@ function CalendarStyles() {
         color: rgba(255, 220, 160, 0.86);
         display: grid;
         place-items: center;
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         text-transform: uppercase;
         letter-spacing: 0.08em;
@@ -8065,7 +8283,7 @@ function CalendarStyles() {
         width: 4px;
         height: 100%;
         min-height: 42px;
-        border-radius: 999px;
+        border-radius: 0;
         box-shadow: 0 0 8px rgba(19, 216, 231, 0.45);
       }
 
@@ -8104,10 +8322,10 @@ function CalendarStyles() {
         min-width: 26px;
         height: 18px;
         padding: 0 5px;
-        border-radius: 999px;
+        border-radius: var(--radius-ops, 2px);
         display: inline-grid;
         place-items: center;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 1000;
         text-transform: uppercase;
         letter-spacing: 0.08em;
@@ -8134,7 +8352,7 @@ function CalendarStyles() {
         gap: 5px;
         min-width: 0;
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 850;
       }
 
@@ -8189,7 +8407,7 @@ function CalendarStyles() {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 1000;
         letter-spacing: 0.06em;
         text-transform: uppercase;
@@ -8228,7 +8446,7 @@ function CalendarStyles() {
 
       .nhlcal-game-expand-header span {
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 800;
       }
 
@@ -8250,13 +8468,13 @@ function CalendarStyles() {
 
       .nhlcal-game-expand-row > div span {
         color: rgba(233, 247, 251, 0.92);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 900;
       }
 
       .nhlcal-game-expand-row > div small {
         color: var(--muted);
-        font-size: 9px;
+        font-size: 11px;
         grid-column: 2;
       }
 
@@ -8286,7 +8504,7 @@ function CalendarStyles() {
 
       .nhlcal-more-games {
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 900;
         text-transform: uppercase;
         letter-spacing: 0.08em;
@@ -8466,17 +8684,29 @@ function CalendarStyles() {
         scrollbar-gutter: stable;
       }
 
-      .nhlcal-selected-summary-strip {
-        display: none;
+      .nhlcal-stretch-row {
+        display: grid;
+        grid-template-columns: 52px 28px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 10px;
+        border-bottom: 1px solid rgba(156, 218, 236, 0.1);
+        font-size: 0.8125rem;
+      }
+
+      .nhlcal-stretch-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
       }
 
       .nhlcal-selected-summary-strip span {
         padding: 4px 8px;
-        border-radius: 999px;
+        border-radius: var(--radius-pill, 999px);
         border: 1px solid rgba(156, 218, 236, 0.12);
         background: rgba(255, 255, 255, 0.03);
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 800;
         letter-spacing: 0.06em;
         text-transform: uppercase;
@@ -8510,13 +8740,26 @@ function CalendarStyles() {
         box-shadow: inset 0 -2px 0 var(--cyan);
       }
 
+      .nhlcal-broadcast-strip,
       .nhlcal-card {
         border: 1px solid var(--line);
-        border-radius: 12px;
-        background:
-          linear-gradient(180deg, rgba(10, 30, 45, 0.94), rgba(5, 18, 29, 0.94)),
-          radial-gradient(circle at 90% 0%, rgba(19, 216, 231, 0.07), transparent 38%);
-        box-shadow: var(--shadow);
+        border-radius: var(--radius-card, 8px);
+        background: rgba(6, 21, 34, 0.78);
+        box-shadow: none;
+      }
+
+      .nhlcal-broadcast-strip {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+
+      .nhlcal-selected-summary-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 0 12px 8px;
+        border-bottom: 1px solid rgba(156, 218, 236, 0.1);
       }
 
       .nhlcal-card-header {
@@ -8570,11 +8813,12 @@ function CalendarStyles() {
 
       .nhlcal-header-pill {
         border: 1px solid var(--line);
-        border-radius: 999px;
+        border-radius: var(--radius-ops, 2px);
         background: rgba(255, 255, 255, 0.035);
         color: var(--muted);
-        padding: 6px 10px;
-        font-size: 10px;
+        padding: 4px 8px;
+        letter-spacing: 0.08em;
+        font-size: 11px;
         font-weight: 1000;
         text-transform: uppercase;
         white-space: nowrap;
@@ -8594,7 +8838,7 @@ function CalendarStyles() {
       }
 
       .nhlcal-preview-card .nhlcal-header-pill {
-        font-size: 9px;
+        font-size: 11px;
       }
 
       .nhlcal-matchup-stage {
@@ -8635,7 +8879,7 @@ function CalendarStyles() {
       .nhlcal-versus strong {
         width: 44px;
         height: 44px;
-        border-radius: 999px;
+        border-radius: var(--radius-ops, 2px);
         display: grid;
         place-items: center;
         background: rgba(255, 255, 255, 0.08);
@@ -8743,39 +8987,40 @@ function CalendarStyles() {
         margin-bottom: 14px;
       }
 
+      /* Schedule standby, not a decorative orb: department code over a hard
+         rule, then the operational explanation. */
       .nhlcal-empty-preview {
-        min-height: 250px;
+        min-height: 0;
         display: grid;
-        place-items: center;
+        justify-items: center;
+        align-content: start;
         text-align: center;
-        padding: 24px;
+        padding: 16px 20px 18px;
       }
 
       .nhlcal-empty-orb {
-        width: 74px;
-        height: 74px;
-        border-radius: 999px;
-        display: grid;
-        place-items: center;
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.035);
-        color: var(--cyan);
-        font-size: 36px;
+        padding: 0 0 7px;
+        border-bottom: 2px solid var(--ops-cyan, #13d8e7);
+        color: var(--ops-cyan, #13d8e7);
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
       }
 
       .nhlcal-empty-preview h4 {
-        margin: 12px 0 0;
-        font-size: 16px;
+        margin: 10px 0 0;
+        font-size: 14px;
         text-transform: uppercase;
         letter-spacing: 0.08em;
       }
 
       .nhlcal-empty-preview p {
-        margin: 8px 0 0;
+        margin: 6px 0 0;
         max-width: 300px;
         color: var(--muted);
-        font-size: 13px;
-        line-height: 1.5;
+        font-size: 12px;
+        line-height: 1.45;
       }
 
       .nhlcal-empty-subnote {
@@ -8860,11 +9105,11 @@ function CalendarStyles() {
 
       .nhlcal-selected-section-head button {
         border: 1px solid var(--line);
-        border-radius: 999px;
+        border-radius: var(--radius-ops, 2px);
         background: rgba(19, 216, 231, 0.07);
         color: var(--cyan);
         padding: 5px 9px;
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         text-transform: uppercase;
         cursor: pointer;
@@ -8927,7 +9172,7 @@ function CalendarStyles() {
       .nhlcal-selected-event-row small {
         margin-top: 3px;
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 800;
         line-height: 1.3;
       }
@@ -8954,7 +9199,7 @@ function CalendarStyles() {
       .nhlcal-selected-injury-list span {
         margin-top: 3px;
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 800;
       }
 
@@ -8990,14 +9235,14 @@ function CalendarStyles() {
 
       .nhlcal-selected-slate-list article strong {
         color: inherit;
-        font-size: 10px;
+        font-size: 11px;
         text-align: right;
       }
 
       .nhlcal-selected-more {
         margin: 4px 0 0;
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 900;
         text-align: center;
       }
@@ -9035,12 +9280,13 @@ function CalendarStyles() {
       }
 
       .nhlcal-standings-count {
-        padding: 4px 8px;
-        border-radius: 999px;
+        padding: 3px 7px;
+        border-radius: var(--radius-ops, 2px);
+        font-variant-numeric: tabular-nums;
         border: 1px solid rgba(156, 218, 236, 0.14);
         background: rgba(255, 255, 255, 0.03);
         color: var(--muted);
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 800;
         letter-spacing: 0.06em;
         text-transform: uppercase;
@@ -9053,7 +9299,7 @@ function CalendarStyles() {
         background: rgba(19, 216, 231, 0.08);
         color: var(--cyan);
         padding: 6px 10px;
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         letter-spacing: 0.06em;
         text-transform: uppercase;
@@ -9090,7 +9336,7 @@ function CalendarStyles() {
         border-radius: 8px;
         background: rgba(255, 255, 255, 0.04);
         color: rgba(233, 247, 251, 0.88);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         letter-spacing: 0.08em;
         text-transform: uppercase;
@@ -9116,7 +9362,7 @@ function CalendarStyles() {
         height: 26px;
         color: rgba(233, 247, 251, 0.64);
         text-transform: uppercase;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 1000;
         letter-spacing: 0.06em;
         border-bottom: 1px solid rgba(156, 218, 236, 0.12);
@@ -9125,7 +9371,7 @@ function CalendarStyles() {
       .nhlcal-standings-row {
         min-height: 34px;
         color: rgba(233, 247, 251, 0.8);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 800;
         border-bottom: 1px solid rgba(156, 218, 236, 0.07);
       }
@@ -9201,7 +9447,7 @@ function CalendarStyles() {
 
       .nhlcal-mini-header span {
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         text-transform: uppercase;
       }
@@ -9245,7 +9491,7 @@ function CalendarStyles() {
         border-radius: 5px;
         background: rgba(255, 255, 255, 0.045);
         color: var(--muted);
-        font-size: 9px;
+        font-size: 11px;
         font-style: normal;
         text-align: center;
         text-transform: uppercase;
@@ -9277,7 +9523,7 @@ function CalendarStyles() {
 
       .nhlcal-league-row strong {
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         text-align: right;
       }
 
@@ -9306,7 +9552,7 @@ function CalendarStyles() {
 
       .nhlcal-storyline-topline span {
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 900;
       }
 
@@ -9321,12 +9567,14 @@ function CalendarStyles() {
       }
 
       .nhlcal-storyline-topline em {
-        border-radius: 999px;
-        padding: 3px 6px;
+        border-radius: var(--radius-ops, 2px);
+        padding: 2px 6px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
         background: rgba(255, 255, 255, 0.04);
         color: var(--muted);
         font-style: normal;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 1000;
       }
 
@@ -9343,7 +9591,7 @@ function CalendarStyles() {
       .nhlcal-subtext {
         margin-top: 5px;
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         line-height: 1.35;
         font-weight: 800;
       }
@@ -9357,12 +9605,12 @@ function CalendarStyles() {
 
       .nhlcal-storyline-choice-button {
         border: 1px solid var(--line);
-        border-radius: 999px;
+        border-radius: var(--radius-hud, 4px);
         background: rgba(19, 216, 231, 0.07);
         color: var(--cyan);
         min-height: 26px;
         padding: 0 9px;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 1000;
         text-transform: uppercase;
         cursor: pointer;
@@ -9403,29 +9651,44 @@ function CalendarStyles() {
 
       .nhlcal-injury-mini-row em {
         color: rgba(255, 198, 205, 0.9);
-        font-size: 10px;
+        font-size: 11px;
         font-style: normal;
         font-weight: 900;
       }
 
       .nhlcal-injury-mini-row strong {
         color: var(--red);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
       }
 
       .nhlcal-injury-mini-row small {
         grid-column: 1 / -1;
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 800;
       }
 
+      /* Standby notice, not a sentence floating in a void: a hairline registry
+         line carrying the department state. */
       .nhlcal-small-empty {
-        margin: 18px 0 0;
+        margin: 14px 0 0;
+        padding: 10px 12px;
+        border-left: 2px solid var(--line-strong);
+        background: rgba(255, 255, 255, 0.02);
         color: var(--muted);
         font-size: 12px;
         line-height: 1.4;
+      }
+
+      .nhlcal-small-empty b {
+        display: block;
+        margin-bottom: 3px;
+        color: var(--ops-cyan, #13d8e7);
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
       }
 
       .nhlcal-mini-button {
@@ -9438,7 +9701,7 @@ function CalendarStyles() {
         color: rgba(233, 247, 251, 0.78);
         text-transform: uppercase;
         letter-spacing: 0.1em;
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         cursor: pointer;
       }
@@ -9491,11 +9754,12 @@ function CalendarStyles() {
 
       .nhlcal-section-title > span {
         border: 1px solid var(--line);
-        border-radius: 999px;
-        padding: 6px 10px;
+        border-radius: var(--radius-ops, 2px);
+        padding: 4px 8px;
+        letter-spacing: 0.08em;
         background: rgba(255, 255, 255, 0.035);
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         text-transform: uppercase;
         white-space: nowrap;
@@ -9528,7 +9792,7 @@ function CalendarStyles() {
 
       .nhlcal-diagnostic-tile span {
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         text-transform: uppercase;
         letter-spacing: 0.08em;
@@ -9583,9 +9847,9 @@ function CalendarStyles() {
       }
 
       .nhlcal-insight-pill span {
-        width: 24px;
-        height: 24px;
-        border-radius: 999px;
+        width: 22px;
+        height: 22px;
+        border-radius: var(--radius-ops, 2px);
         display: grid;
         place-items: center;
         background: var(--gold-soft);
@@ -9620,7 +9884,7 @@ function CalendarStyles() {
 
       .nhlcal-snapshot-grid span {
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         text-transform: uppercase;
       }
@@ -9651,7 +9915,7 @@ function CalendarStyles() {
 
       .nhlcal-opponent-strip span {
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         text-align: center;
       }
@@ -9693,32 +9957,32 @@ function CalendarStyles() {
         width: 94px;
         height: 94px;
         font-size: 23px;
-        border-radius: 24px;
+        border-radius: 8px;
       }
 
       .nhlcal-team-badge.size-matchup {
         width: 86px;
         height: 86px;
         font-size: 20px;
-        border-radius: 22px;
+        border-radius: 8px;
       }
 
       .nhlcal-team-badge.size-small {
         width: 34px;
         height: 34px;
-        font-size: 10px;
+        font-size: 11px;
       }
 
       .nhlcal-team-badge.size-tiny {
         width: 24px;
         height: 24px;
-        font-size: 8px;
+        font-size: 11px;
       }
 
       .nhlcal-team-badge.size-mini {
         width: 18px;
         height: 18px;
-        font-size: 7px;
+        font-size: 11px;
       }
 
       .nhlcal-team-badge.size-tile-main {
@@ -9731,7 +9995,7 @@ function CalendarStyles() {
       .nhlcal-team-badge.size-tile-compact {
         width: 34px;
         height: 34px;
-        font-size: 10px;
+        font-size: 11px;
         border-radius: 10px;
       }
 
@@ -9758,7 +10022,7 @@ function CalendarStyles() {
       .nhlcal-team-logo.size-large {
         width: 76px;
         height: 76px;
-        border-radius: 18px;
+        border-radius: 6px;
         padding: 7px;
       }
 
@@ -9788,7 +10052,7 @@ function CalendarStyles() {
         border-radius: 8px;
         border: 1px dashed rgba(156, 218, 236, 0.18);
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 700;
         text-align: center;
       }
@@ -9873,7 +10137,7 @@ function CalendarStyles() {
         max-height: 88vh;
         overflow: auto;
         border: 1px solid var(--line-strong);
-        border-radius: 16px;
+        border-radius: 6px;
         background:
           radial-gradient(circle at 0% 0%, rgba(233, 168, 60, 0.13), transparent 38%),
           linear-gradient(180deg, rgba(7, 21, 34, 0.98), rgba(2, 9, 15, 0.98));
@@ -9906,7 +10170,7 @@ function CalendarStyles() {
       .nhlcal-event-modal-icon {
         width: 52px;
         height: 52px;
-        border-radius: 15px;
+        border-radius: 10px;
         display: grid;
         place-items: center;
         background: rgba(233, 168, 60, 0.13);
@@ -9977,7 +10241,7 @@ function CalendarStyles() {
 
       .nhlcal-event-modal-callout span {
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         letter-spacing: 0.1em;
         text-transform: uppercase;
@@ -10010,7 +10274,7 @@ function CalendarStyles() {
 
       .nhlcal-event-effect-grid span {
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         text-transform: uppercase;
       }
@@ -10028,10 +10292,13 @@ function CalendarStyles() {
         overflow: auto;
         z-index: 101;
         border: 1px solid var(--line-strong);
-        border-radius: 16px;
-        background:
-          radial-gradient(circle at 0% 0%, rgba(19, 216, 231, 0.12), transparent 38%),
-          linear-gradient(180deg, rgba(7, 21, 34, 0.98), rgba(2, 9, 15, 0.98));
+        border-top: 2px solid var(--ops-cyan, #13d8e7);
+        border-radius: 6px;
+        background: linear-gradient(
+          180deg,
+          rgba(7, 21, 34, 0.98),
+          rgba(2, 9, 15, 0.98)
+        );
         box-shadow: 0 28px 90px rgba(0, 0, 0, 0.55);
       }
 
@@ -10067,16 +10334,24 @@ function CalendarStyles() {
       }
 
       .nhlcal-injury-report-close {
-        width: 42px;
-        height: 42px;
-        border-radius: 999px;
+        width: 34px;
+        height: 34px;
+        border-radius: var(--radius-ops, 2px);
         border: 1px solid var(--line);
         background: rgba(255, 255, 255, 0.04);
-        color: var(--text);
-        font-size: 26px;
+        color: var(--muted);
+        font-size: 20px;
         line-height: 1;
         cursor: pointer;
         flex-shrink: 0;
+        transition: color 110ms ease, border-color 110ms ease,
+          background 110ms ease;
+      }
+
+      .nhlcal-injury-report-close:hover {
+        color: var(--text);
+        border-color: var(--ops-cyan, #13d8e7);
+        background: rgba(19, 216, 231, 0.1);
       }
 
       .nhlcal-injury-report-body {
@@ -10097,7 +10372,7 @@ function CalendarStyles() {
       }
 
       .nhlcal-injury-table th {
-        font-size: 10px;
+        font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.06em;
         color: var(--muted);
@@ -10147,15 +10422,23 @@ function CalendarStyles() {
 
       .nhlcal-drawer-header button,
       .nhlcal-modal header button {
-        width: 42px;
-        height: 42px;
-        border-radius: 999px;
+        width: 34px;
+        height: 34px;
+        border-radius: var(--radius-ops, 2px);
         border: 1px solid var(--line);
         background: rgba(255, 255, 255, 0.035);
-        color: var(--text);
-        font-size: 27px;
+        color: var(--muted);
+        font-size: 20px;
         line-height: 1;
         cursor: pointer;
+        transition: color 110ms ease, border-color 110ms ease,
+          background 110ms ease;
+      }
+
+      .nhlcal-modal header button:hover {
+        color: var(--text);
+        border-color: var(--ops-cyan);
+        background: rgba(19, 216, 231, 0.1);
       }
 
       .nhlcal-drawer-tabs {
@@ -10327,17 +10610,19 @@ function CalendarStyles() {
         padding: 8px 10px;
       }
 
+      /* Rank/number markers are equipment plates, not circular tokens. */
       .nhlcal-player-mini-row > span,
       .nhlcal-draft-mini-row > span {
-        width: 28px;
-        height: 28px;
-        border-radius: 999px;
+        width: 26px;
+        height: 20px;
+        border-radius: var(--radius-ops, 2px);
         display: grid;
         place-items: center;
         background: rgba(19, 216, 231, 0.1);
         color: var(--cyan);
         font-size: 11px;
         font-weight: 1000;
+        font-variant-numeric: tabular-nums;
       }
 
       .nhlcal-player-mini-row strong,
@@ -10406,7 +10691,7 @@ function CalendarStyles() {
 
       .nhlcal-office-metric span {
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         text-transform: uppercase;
         letter-spacing: 0.1em;
@@ -10422,17 +10707,20 @@ function CalendarStyles() {
       .nhlcal-modal {
         width: min(520px, 94vw);
         border: 1px solid var(--line-strong);
-        border-radius: 16px;
-        background:
-          radial-gradient(circle at 10% 0%, rgba(19, 216, 231, 0.14), transparent 35%),
-          linear-gradient(180deg, rgba(9, 27, 42, 0.98), rgba(3, 11, 18, 0.98));
+        border-top: 2px solid var(--ops-cyan, #13d8e7);
+        border-radius: 6px;
+        background: linear-gradient(
+          180deg,
+          rgba(9, 27, 42, 0.98),
+          rgba(3, 11, 18, 0.98)
+        );
         box-shadow: 0 30px 90px rgba(0, 0, 0, 0.58);
         overflow: hidden;
       }
 
       .nhlcal-modal header {
-        min-height: 86px;
-        padding: 21px;
+        min-height: 72px;
+        padding: 16px 18px;
         border-bottom: 1px solid var(--line);
         display: flex;
         align-items: flex-start;
@@ -10461,28 +10749,53 @@ function CalendarStyles() {
       }
 
       .nhlcal-settings-list {
-        padding: 18px 21px;
+        padding: 14px 21px 16px;
         display: grid;
-        gap: 10px;
+        gap: 0;
       }
 
+      /* Registry lines: hairline rows, lamp on the left, state on the right. */
       .nhlcal-settings-list button {
-        min-height: 54px;
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        background: rgba(255, 255, 255, 0.025);
+        min-height: 44px;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        border-radius: 0;
+        background: transparent;
         color: var(--text);
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 14px;
-        padding: 0 14px;
+        padding: 0 12px 0 22px;
         cursor: pointer;
+        position: relative;
+        transition: background 110ms ease, box-shadow 110ms ease;
+      }
+
+      .nhlcal-settings-list button::before {
+        content: "";
+        position: absolute;
+        left: 8px;
+        top: 50%;
+        width: 6px;
+        height: 6px;
+        margin-top: -3px;
+        border: 1px solid var(--line-strong);
+        background: transparent;
+      }
+
+      .nhlcal-settings-list button:hover {
+        background: rgba(255, 255, 255, 0.03);
       }
 
       .nhlcal-settings-list button.is-active {
-        border-color: var(--line-strong);
-        background: rgba(19, 216, 231, 0.08);
+        background: rgba(19, 216, 231, 0.06);
+        box-shadow: inset 2px 0 0 var(--ops-cyan, #13d8e7);
+      }
+
+      .nhlcal-settings-list button.is-active::before {
+        border-color: var(--ops-cyan, #13d8e7);
+        background: var(--ops-cyan, #13d8e7);
       }
 
       .nhlcal-settings-list span {
@@ -10508,14 +10821,15 @@ function CalendarStyles() {
       }
 
       .nhlcal-settings-summary article {
-        min-height: 64px;
+        min-height: 52px;
         border: 1px solid rgba(156, 218, 236, 0.1);
-        border-radius: 10px;
+        border-radius: var(--radius-ops, 2px);
         background: rgba(255, 255, 255, 0.025);
         display: grid;
         place-items: center;
         text-align: center;
-        padding: 10px;
+        padding: 8px 10px;
+        font-variant-numeric: tabular-nums;
       }
 
       .nhlcal-settings-summary span,
@@ -10525,7 +10839,7 @@ function CalendarStyles() {
 
       .nhlcal-settings-summary span {
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 1000;
         text-transform: uppercase;
       }
@@ -10536,7 +10850,9 @@ function CalendarStyles() {
         font-weight: 1000;
       }
 
-      @media (max-width: 1480px) {
+      /* 1280-1920 are primary desktop game resolutions and must keep the
+         two-column board layout; stacking only below that. */
+      @media (max-width: 1120px) {
         .nhlcal-topbar {
           grid-template-columns: 1fr;
           min-height: auto;
@@ -10738,6 +11054,146 @@ function CalendarStyles() {
 
         .nhlcal-injury-table {
           min-width: 720px;
+        }
+      }
+
+      /* ─── Vertical budget ───────────────────────────────────────────
+         The month grid owns the remaining height and is the only scroll
+         owner inside the panel. Without this the last two week rows fall
+         outside the clipped content grid and cannot be reached at all. */
+
+      .nhlcal-content-grid {
+        grid-auto-rows: minmax(0, 1fr);
+        align-items: stretch;
+      }
+
+      .nhlcal-content-grid > * {
+        min-height: 0;
+        max-height: 100%;
+      }
+
+      .nhlcal-calendar-panel {
+        max-height: 100%;
+      }
+
+      .nhlcal-month-grid {
+        grid-auto-rows: minmax(78px, auto);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+      }
+
+      /* Keep the action cluster on one line so the topbar cannot grow into
+         a four-row block and push the grid off screen. */
+      .nhlcal-action-cluster {
+        flex-wrap: nowrap;
+      }
+
+      .nhlcal-month-row button.nhlcal-today-chip {
+        min-width: fit-content;
+        white-space: nowrap;
+      }
+
+      .nhlcal-stat-strip {
+        min-height: 0;
+      }
+
+      /* Day contents stay inside their cell; only the hover card escapes. */
+      .nhlcal-day-content {
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      /* Events read as broadcast strips, not as glossy cards floating in a
+         flat grid: hard left rail, ladder radius, no bloom. */
+      .nhlcal-special-event-tile {
+        border-radius: var(--radius-ops, 2px);
+        border-width: 0 0 0 3px;
+        border-left-color: var(--ops-gold);
+        background: linear-gradient(90deg, rgba(233, 168, 60, 0.14), rgba(7, 22, 34, 0.55));
+        box-shadow: none;
+        min-height: 30px;
+        padding: 4px 6px;
+        gap: 6px;
+        grid-template-columns: 18px minmax(0, 1fr);
+      }
+
+      .nhlcal-special-event-tile.priority-critical {
+        border-left-color: var(--ops-signal-red);
+        background: linear-gradient(90deg, rgba(200, 16, 46, 0.2), rgba(7, 22, 34, 0.55));
+      }
+
+      .nhlcal-special-event-tile.priority-high {
+        border-left-color: var(--ops-cyan);
+        background: linear-gradient(90deg, rgba(19, 216, 231, 0.16), rgba(7, 22, 34, 0.55));
+      }
+
+      .nhlcal-special-event-copy strong {
+        -webkit-line-clamp: 1;
+        max-height: 1.3em;
+      }
+
+      /* The event subtitle repeats the title in current data — hide the echo. */
+      .nhlcal-special-event-copy span {
+        display: none;
+      }
+
+      /* "OFF DAY" repeats up to 30 times a month; keep it as quiet ledger
+         text so real events are what the eye lands on. */
+      .nhlcal-day-cell .nhlcal-day-empty,
+      .nhlcal-day-cell .nhlcal-off-day {
+        opacity: 0.42;
+      }
+
+      @media (max-height: 900px) {
+        .nhlcal-topbar {
+          min-height: 0;
+          gap: 8px;
+        }
+
+        .nhlcal-team-identity h1 {
+          font-size: 26px;
+          line-height: 1.05;
+        }
+
+        .nhlcal-stat-strip {
+          margin-top: 4px;
+        }
+
+        .nhlcal-stat-pill {
+          padding-block: 6px;
+        }
+
+        .nhlcal-day-cell {
+          min-height: 84px;
+          padding: 7px 8px;
+        }
+
+        .nhlcal-month-grid.is-dense .nhlcal-day-cell {
+          min-height: 74px;
+          padding: 5px 6px;
+        }
+
+        .nhlcal-week-header {
+          min-height: 32px;
+          padding: 5px 12px;
+        }
+
+        .nhlcal-calendar-toolbar {
+          padding: 5px 10px;
+        }
+
+        .nhlcal-calendar-footer {
+          min-height: 28px;
+        }
+      }
+
+      @media (max-height: 780px) {
+        .nhlcal-day-cell {
+          min-height: 76px;
+        }
+
+        .nhlcal-team-identity h1 {
+          font-size: 23px;
         }
       }
     `}</style>

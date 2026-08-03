@@ -1039,6 +1039,8 @@ STORYLINE_CAUSE_TYPES = frozenset(
         "MEDIA_PRESSURE_HIGH",
         "CONDUCT_RESOLVED",
         "PLAYER_INJURED",
+        "TRADE_DEMAND",
+        "PLAYER_TRADE_DEMAND",
     }
 )
 
@@ -1533,22 +1535,40 @@ def should_block_random_storyline_for_user(
     *,
     user_team_id: str,
 ) -> bool:
-    """Return True if a random engine storyline must not apply to the user team."""
+    """Return True if a random engine storyline must not apply to the user team.
+
+    Equal rules for legal/conduct: real legal_crime / legal_trouble rows are allowed
+    so GM decisions and the conduct state machine can fire for the user team.
+    Still block fake text markers and uncaused trade-rumour spam.
+    """
     tid = str(row.get("team_id") or "")
     if not user_team_id or tid != user_team_id:
         return False
     if str(row.get("cause_type") or row.get("cause_event_id") or ""):
         return False
-    if str(row.get("pool") or "") == "legal_crime" and not row.get("cause_event_id"):
-        return True
-    text = str(row.get("storyline_text") or row.get("storyline") or "").lower()
+    pool = str(row.get("pool") or "").lower()
     et = str(row.get("event_type") or "").lower()
-    if et in ("legal_trouble", "scandal", "locker_room_issue", "team_conflict"):
+    # Allow legal / conduct generation for the user team (equal rules).
+    if pool == "legal_crime" or et in ("legal_trouble",):
+        return False
+    text = str(row.get("storyline_text") or row.get("storyline") or "").lower()
+    # Caused trade demands / registered arcs are allowed through.
+    if str(row.get("cause_type") or "") in (
+        "TRADE_DEMAND",
+        "PLAYER_TRADE_DEMAND",
+        "LOW_CHARACTER_CONFLICT",
+        "LOSING_STREAK",
+        "PLAYER_LOW_PRODUCTION",
+    ):
+        return False
+    # Still block uncaused locker/scandal spam and fake markers.
+    if et in ("scandal", "locker_room_issue", "team_conflict"):
         return True
     for marker in _FAKE_STORYLINE_TEXT_MARKERS:
         if marker in text:
             return True
-    if any(k in text for k in ("trade rumor", "asks for trade", "requests trade", "shopped")):
+    # Block only uncaused rumor-style text; real TRADE_DEMAND rows carry cause_type.
+    if any(k in text for k in ("trade rumor", "shopped")) and not str(row.get("cause_type") or ""):
         return True
     return False
 
@@ -1604,7 +1624,8 @@ def validate_storyline_before_effects(session: Any, storyline: Dict[str, Any]) -
 def _emit_cause_storyline(session: Any, sl: Dict[str, Any]) -> None:
     from app.sim_engine.franchise.state import _record_storyline  # noqa: WPS433
     from app.sim_engine.franchise.storyline_conduct import (  # noqa: WPS433
-        apply_permanent_ovr_delta,
+        apply_storyline_ovr_nudge,
+        apply_temporary_ovr_modifier,
         build_impact_storyline_fields,
     )
 
@@ -1619,13 +1640,29 @@ def _emit_cause_storyline(session: Any, sl: Dict[str, Any]) -> None:
     conduct_fields: Dict[str, Any] = {}
     if pl is not None and int(sl.get("ovr_modifier") or 0) != 0:
         ctype = str(sl.get("cause_type") or "")
-        meta = apply_permanent_ovr_delta(
-            pl,
-            int(sl.get("ovr_modifier") or 0),
-            reason=str(sl.get("cause") or sl.get("user_visible_explanation") or "")[:120],
-            storyline_id=sid,
-            cause_type=ctype,
-        )
+        amt = int(sl.get("ovr_modifier") or 0)
+        reason = str(sl.get("cause") or sl.get("user_visible_explanation") or "")[:120]
+        if amt < 0:
+            meta = apply_temporary_ovr_modifier(
+                pl,
+                source=ctype or "CAUSE_STORYLINE",
+                amount=amt,
+                reason=reason,
+                duration_games=12,
+                storyline_id=sid,
+                cause_type=ctype,
+                cause_event_id=str(sl.get("cause_event_id") or ""),
+                modifier_type="storyline_readiness",
+            )
+        else:
+            meta = apply_storyline_ovr_nudge(
+                pl,
+                amount=amt,
+                storyline_id=sid,
+                cause_type=ctype,
+                cause_event_id=str(sl.get("cause_event_id") or ""),
+                reason=reason,
+            )
         conduct_fields = build_impact_storyline_fields(meta)
         sl.update(conduct_fields)
 

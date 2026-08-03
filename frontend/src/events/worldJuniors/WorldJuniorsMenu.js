@@ -1,34 +1,21 @@
-import React, {
-  Suspense,
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
+import React, { useCallback, useMemo, useState } from "react";
 import "./WorldJuniorsMenu.css";
 
-import worldJuniorsTheme from "./Hockey Canada TSN IIHF World & Junior Championships theme song - Mordakan.mp3";
 import {
-  buildWjcBroadcastLines,
   buildWjcDraftStockRows,
   buildWjcShowcaseCards,
   buildWjcStatLeaders,
 } from "./wjcBroadcastBuilder";
+
 import {
-  DeskControls,
   DraftStockSidebar,
   GameResultModal,
   GamesBrowser,
   NationFlagsBar,
   ProspectDetailModal,
-  ShowcaseOverlay,
   StatLeadersSidebar,
 } from "./WorldJuniorsBroadcastPanels";
-import { WJC_HOSTS } from "./wjcBroadcastScripts";
+
 import { wjcFlagUrl } from "../../utils/countryFlags";
 
 import bg1 from "./gettyimages-136461654-612x612.jpg";
@@ -38,134 +25,190 @@ import bg4 from "./gettyimages-84179721-612x612.jpg";
 import bg5 from "./gettyimages-2254829655-612x612.jpg";
 
 const WJC_HERO_BACKGROUNDS = [bg1, bg2, bg3, bg4, bg5];
-const HERO_BG_ROTATE_MS = 10000;
-const HERO_BG_FADE_MS = 2800;
 
-function BroadcastHeroBackdrop() {
-  const [activeIndex, setActiveIndex] = useState(0);
+/* -------------------------------------------------------------------------- */
+/* Payload resolver                                                           */
+/* -------------------------------------------------------------------------- */
 
-  useEffect(() => {
-    const timerId = window.setInterval(() => {
-      setActiveIndex((prev) => (prev + 1) % WJC_HERO_BACKGROUNDS.length);
-    }, HERO_BG_ROTATE_MS);
-    return () => window.clearInterval(timerId);
-  }, []);
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function isWjcPayload(value) {
+  if (!value || typeof value !== "object") return false;
 
   return (
-    <div className="wjc-hero-backdrop" aria-hidden="true">
-      {WJC_HERO_BACKGROUNDS.map((src, index) => (
-        <div
-          key={src}
-          className="wjc-hero-backdrop__slide"
-          style={{
-            backgroundImage: `url(${src})`,
-            opacity: index === activeIndex ? 0.32 : 0,
-            transition: `opacity ${HERO_BG_FADE_MS}ms ease-in-out`,
-          }}
-        />
-      ))}
-      <div className="wjc-hero-backdrop__scrim" />
-    </div>
+    value.kind === "wjc_tournament" ||
+    value.wjc_live === true ||
+    Boolean(value.wjc_phase)
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Payload resolver — primary backend data path                               */
-/* -------------------------------------------------------------------------- */
-
-function asArray(v) {
-  return Array.isArray(v) ? v : [];
-}
-
-function isWjcPayload(obj) {
-  if (!obj || typeof obj !== "object") return false;
-  return obj.kind === "wjc_tournament" || obj.wjc_live === true || Boolean(obj.wjc_phase);
-}
-
 function findActiveWjcPopup(franchiseState) {
-  const pops = [
+  const popups = [
     ...asArray(franchiseState?.pending_ui_popups),
     ...asArray(franchiseState?.pendingUiPopups),
   ];
-  return pops.find((pop) => pop && isWjcPayload(pop)) || null;
+
+  return popups.find((popup) => popup && isWjcPayload(popup)) || null;
 }
 
 function findArchivedWjc(franchiseState) {
-  const arch = asArray(franchiseState?.showcase_archive);
-  for (let i = arch.length - 1; i >= 0; i -= 1) {
-    if (isWjcPayload(arch[i])) return arch[i];
+  const archive = asArray(franchiseState?.showcase_archive);
+  const seasonYear = Number(
+    franchiseState?.season_year || franchiseState?.seasonYear || 0
+  );
+
+  for (let index = archive.length - 1; index >= 0; index -= 1) {
+    const entry = archive[index];
+    if (!isWjcPayload(entry)) continue;
+    if (!seasonYear) return entry;
+    const label = String(entry.season_label || "");
+    // Prefer this season's archive; skip prior-year WJC desks.
+    if (!label || label.startsWith(String(seasonYear))) return entry;
   }
+
   return null;
 }
 
-function normalizePlayoffs(raw) {
-  const po = raw && typeof raw === "object" ? raw : {};
+function normalizePlayoffs(rawPlayoffs) {
+  const playoffs =
+    rawPlayoffs && typeof rawPlayoffs === "object" ? rawPlayoffs : {};
+
   return {
-    quarterfinals: asArray(po.quarterfinals),
-    semifinals: asArray(po.semifinals),
-    bronze: po.bronze && typeof po.bronze === "object" ? po.bronze : null,
-    gold: po.gold && typeof po.gold === "object" ? po.gold : null,
+    quarterfinals: asArray(playoffs.quarterfinals),
+    semifinals: asArray(playoffs.semifinals),
+    bronze:
+      playoffs.bronze && typeof playoffs.bronze === "object"
+        ? playoffs.bronze
+        : null,
+    gold:
+      playoffs.gold && typeof playoffs.gold === "object"
+        ? playoffs.gold
+        : null,
   };
 }
 
 function normalizeWjcFields(raw) {
-  const src = raw && typeof raw === "object" ? raw : {};
-  const wjcDay = src.wjc_day ?? src.day ?? null;
-  const wjcDaysTotal = src.wjc_days_total ?? src.days_total ?? 11;
-  const wjcPhase = String(src.wjc_phase || src.phase || "").toLowerCase();
+  const source = raw && typeof raw === "object" ? raw : {};
+
+  const wjcDay = source.wjc_day ?? source.day ?? null;
+  const wjcDaysTotal = source.wjc_days_total ?? source.days_total ?? 11;
+  const rawPhase = String(source.wjc_phase || source.phase || "").toLowerCase();
+
   const medalsFinal = Boolean(
-    src.medals_final || wjcPhase === "complete" || (wjcDay != null && wjcDay >= wjcDaysTotal)
+    source.medals_final ||
+      rawPhase === "complete" ||
+      (wjcDay != null && Number(wjcDay) >= Number(wjcDaysTotal))
   );
 
   return {
-    wjc_phase: medalsFinal ? "complete" : wjcPhase || (wjcDay != null ? "live" : ""),
-    calendar_iso: String(src.calendar_iso || src.iso || ""),
+    wjc_phase: medalsFinal
+      ? "complete"
+      : rawPhase || (wjcDay != null ? "live" : ""),
+
+    calendar_iso: String(source.calendar_iso || source.iso || ""),
     wjc_day: wjcDay != null ? Number(wjcDay) : null,
     wjc_days_total: Number(wjcDaysTotal) || 11,
-    title: String(src.title || ""),
-    season_label: String(src.season_label || ""),
-    countries: asArray(src.countries),
-    round_robin_games: asArray(src.round_robin_games),
-    round_robin_total: Number(src.round_robin_total) || asArray(src.round_robin_games).length || 0,
-    standings: asArray(src.standings),
-    playoffs: normalizePlayoffs(src.playoffs),
+
+    title: String(source.title || ""),
+    season_label: String(source.season_label || ""),
+
+    countries: asArray(source.countries),
+
+    round_robin_games: asArray(source.round_robin_games),
+    round_robin_total:
+      Number(source.round_robin_total) ||
+      asArray(source.round_robin_games).length ||
+      0,
+
+    standings: asArray(source.standings),
+    playoffs: normalizePlayoffs(source.playoffs),
+
     medal_labels:
-      src.medal_labels && typeof src.medal_labels === "object" ? { ...src.medal_labels } : {},
+      source.medal_labels && typeof source.medal_labels === "object"
+        ? { ...source.medal_labels }
+        : {},
+
     medals_final: medalsFinal,
-    user_prospects: asArray(src.user_prospects),
-    tournament_prospects: asArray(src.tournament_prospects),
-    player_stats: asArray(src.player_stats),
-    all_games: asArray(src.all_games),
-    games_today: asArray(src.games_today),
-    all_games_total: Number(src.all_games_total) || asArray(src.all_games).length || 0,
-    rr_days_total: Number(src.rr_days_total) || 9,
+
+    user_prospects: asArray(source.user_prospects),
+    tournament_prospects: asArray(source.tournament_prospects),
+    player_stats: asArray(source.player_stats),
+
+    all_games: asArray(source.all_games),
+    games_today: asArray(source.games_today),
+
+    all_games_total:
+      Number(source.all_games_total) ||
+      asArray(source.all_games).length ||
+      0,
+
+    rr_days_total: Number(source.rr_days_total) || 9,
   };
 }
 
 function buildCalendarFallback(franchiseState) {
   const hud = franchiseState?.draft_class_hud?.events?.wjc || {};
   const anchors = asArray(franchiseState?.season_anchor_events);
+
   const wjcAnchor =
-    anchors.find((a) => String(a?.key || "").includes("wjc_start")) ||
-    anchors.find((a) => String(a?.type || a?.id || "").includes("wjc")) ||
+    anchors.find((anchor) =>
+      String(anchor?.key || "").toLowerCase().includes("wjc_start")
+    ) ||
+    anchors.find((anchor) =>
+      String(anchor?.type || anchor?.id || "")
+        .toLowerCase()
+        .includes("wjc")
+    ) ||
     null;
 
   const countdown = hud.display || hud.date || "";
   const daysUntil = hud.days_until ?? hud.daysUntil ?? null;
   const startDate = hud.date || wjcAnchor?.date || "";
+  const nations =
+    asArray(franchiseState?.wjc_nations).length > 0
+      ? asArray(franchiseState.wjc_nations)
+      : asArray(franchiseState?.wjc_tournament?.countries);
 
   return {
-    ...normalizeWjcFields({}),
+    ...normalizeWjcFields({ countries: nations }),
     countdown_display: String(countdown || ""),
     countdown_days: daysUntil,
     start_date: String(startDate || ""),
-    anchor_title: String(wjcAnchor?.title || wjcAnchor?.label || "World Juniors"),
+    anchor_title: String(
+      wjcAnchor?.title || wjcAnchor?.label || "World Juniors"
+    ),
   };
 }
 
-/** @returns {{ source: string, hasData: boolean, isPreTournament: boolean, raw: object }} */
+function wjcPayloadHasTournamentData(raw) {
+  if (!raw || typeof raw !== "object") return false;
+  const phase = String(raw.wjc_phase || raw.phase || "").toLowerCase();
+  if (phase === "live" || phase === "complete") return true;
+  if (raw.wjc_day != null || raw.medals_final) return true;
+  if (asArray(raw.all_games).length > 0) return true;
+  if (asArray(raw.player_stats).length > 0) return true;
+  if (asArray(raw.round_robin_games).length > 0) return true;
+  if (asArray(raw.standings).length > 0) return true;
+  if (asArray(raw.tournament_prospects).length > 0) return true;
+  return false;
+}
+
+function isPreTournamentPayload(raw) {
+  if (!raw || typeof raw !== "object") return true;
+  const phase = String(raw.wjc_phase || raw.phase || "").toLowerCase();
+  if (phase === "upcoming") return true;
+  if (phase === "live" || phase === "complete") return false;
+  if (raw.wjc_day != null || raw.medals_final) return false;
+  if (asArray(raw.all_games).length > 0 || asArray(raw.player_stats).length > 0) {
+    return false;
+  }
+  return true;
+}
+
 export function resolveWorldJuniorsPayload(franchiseState, eventData) {
-  const empty = {
+  const emptyPayload = {
     source: "none",
     hasData: false,
     isPreTournament: true,
@@ -177,36 +220,61 @@ export function resolveWorldJuniorsPayload(franchiseState, eventData) {
     anchor_title: "World Juniors",
   };
 
-  if (!franchiseState && !eventData) return empty;
+  if (!franchiseState && !eventData) {
+    return emptyPayload;
+  }
 
   let source = "calendar";
-  let raw = null;
+  let rawPayload = null;
 
   const activePopup = findActiveWjcPopup(franchiseState);
+  const stateTournament =
+    franchiseState?.wjc_tournament && isWjcPayload(franchiseState.wjc_tournament)
+      ? franchiseState.wjc_tournament
+      : null;
+
   if (activePopup) {
     source = "live";
-    raw = activePopup;
-  } else if (eventData && isWjcPayload(eventData)) {
+    rawPayload = activePopup;
+  } else if (eventData && isWjcPayload(eventData) && wjcPayloadHasTournamentData(eventData)) {
     source = "eventData";
-    raw = eventData;
+    rawPayload = eventData;
+  } else if (stateTournament && wjcPayloadHasTournamentData(stateTournament)) {
+    source = "state";
+    rawPayload = stateTournament;
   } else {
-    const archived = findArchivedWjc(franchiseState);
-    if (archived) {
+    const archivedPayload = findArchivedWjc(franchiseState);
+
+    if (archivedPayload) {
       source = "archive";
-      raw = archived;
+      rawPayload = archivedPayload;
+    } else if (stateTournament) {
+      source = "state";
+      rawPayload = stateTournament;
+    } else if (eventData && isWjcPayload(eventData)) {
+      source = "eventData";
+      rawPayload = eventData;
     }
   }
 
   const calendarMeta = buildCalendarFallback(franchiseState);
 
-  if (raw) {
-    const normalized = normalizeWjcFields(raw);
+  if (rawPayload) {
+    const normalized = normalizeWjcFields(rawPayload);
+    const countries =
+      asArray(normalized.countries).length > 0
+        ? normalized.countries
+        : calendarMeta.countries;
+    const hasData = wjcPayloadHasTournamentData({ ...normalized, countries });
+    const isPreTournament = isPreTournamentPayload(normalized);
+
     return {
       source,
-      hasData: true,
-      isPreTournament: false,
-      raw,
+      hasData,
+      isPreTournament,
+      raw: rawPayload,
       ...normalized,
+      countries,
       countdown_display: calendarMeta.countdown_display,
       countdown_days: calendarMeta.countdown_days,
       start_date: calendarMeta.start_date,
@@ -214,10 +282,11 @@ export function resolveWorldJuniorsPayload(franchiseState, eventData) {
     };
   }
 
-  const hasCountdown =
+  const hasCountdown = Boolean(
     calendarMeta.countdown_display ||
-    calendarMeta.countdown_days != null ||
-    calendarMeta.start_date;
+      calendarMeta.countdown_days != null ||
+      calendarMeta.start_date
+  );
 
   return {
     source: hasCountdown ? "calendar" : "none",
@@ -233,9 +302,13 @@ export function resolveWorldJuniorsPayload(franchiseState, eventData) {
 /* -------------------------------------------------------------------------- */
 
 function getYear(payload, franchiseState) {
-  const label = payload?.season_label || "";
-  const match = label.match(/(\d{4})/);
-  if (match) return match[1];
+  const seasonLabel = payload?.season_label || "";
+  const match = seasonLabel.match(/(\d{4})/);
+
+  if (match) {
+    return match[1];
+  }
+
   return (
     franchiseState?.season_year ||
     franchiseState?.seasonYear ||
@@ -254,69 +327,89 @@ function getUserTeamName(franchiseState) {
   );
 }
 
-function gameCode(g, side) {
-  return String(g?.[`${side}`] || g?.[`${side}_label`] || "?").slice(0, 3).toUpperCase();
+function gameCode(game, side) {
+  return String(
+    game?.[side] || game?.[`${side}_label`] || "?"
+  )
+    .slice(0, 3)
+    .toUpperCase();
 }
 
-function formatScoreLine(g) {
-  const home = gameCode(g, "home");
-  const away = gameCode(g, "away");
-  const hg = g?.home_goals;
-  const ag = g?.away_goals;
-  if (hg != null && ag != null) {
-    return `${home} ${hg} — ${away} ${ag}`;
+function formatScoreLine(game) {
+  const home = gameCode(game, "home");
+  const away = gameCode(game, "away");
+
+  const homeGoals = game?.home_goals;
+  const awayGoals = game?.away_goals;
+
+  if (homeGoals != null && awayGoals != null) {
+    return `${home} ${homeGoals} — ${away} ${awayGoals}`;
   }
+
   return `${home} vs ${away}`;
 }
 
-function formatTickerGame(g, prefix = "FINAL") {
-  const home = gameCode(g, "home");
-  const away = gameCode(g, "away");
-  const hg = g?.home_goals;
-  const ag = g?.away_goals;
-  if (hg != null && ag != null) {
-    return `${prefix}: ${home} ${hg}, ${away} ${ag}`;
+function formatTickerGame(game, prefix = "FINAL") {
+  const home = gameCode(game, "home");
+  const away = gameCode(game, "away");
+
+  const homeGoals = game?.home_goals;
+  const awayGoals = game?.away_goals;
+
+  if (homeGoals != null && awayGoals != null) {
+    return `${prefix}: ${home} ${homeGoals}, ${away} ${awayGoals}`;
   }
+
   return `${home} vs ${away}`;
 }
 
 function buildTickerItems(payload) {
-  if (!payload?.hasData) return [];
+  if (!payload?.hasData) {
+    return [];
+  }
 
   const items = [];
-  const day = payload.wjc_day;
-  const po = payload.playoffs || {};
-
-  asArray(payload.round_robin_games).forEach((g) => {
-    items.push(formatTickerGame(g, "FINAL"));
-  });
+  const playoffs = payload.playoffs || {};
 
   const allGames = asArray(payload.all_games);
-  if (allGames.length > asArray(payload.round_robin_games).length) {
-    items.length = 0;
-    allGames.forEach((g) => {
-      const tag = g.round ? String(g.round).toUpperCase().slice(0, 8) : "FINAL";
-      items.push(formatTickerGame(g, tag));
-    });
-  }
 
-  if (day >= 8) {
-    asArray(po.quarterfinals).forEach((g) => items.push(formatTickerGame(g, "QF FINAL")));
-  }
-  if (day >= 9) {
-    asArray(po.semifinals).forEach((g) => items.push(formatTickerGame(g, "SF FINAL")));
-  }
-  if (day >= 10 && po.bronze) {
-    items.push(formatTickerGame(po.bronze, "BRONZE"));
-  }
-  if (day >= 11 && po.gold) {
-    items.push(formatTickerGame(po.gold, "GOLD"));
+  if (allGames.length) {
+    allGames.forEach((game) => {
+      const prefix = game?.round
+        ? String(game.round).toUpperCase().slice(0, 12)
+        : "FINAL";
+
+      items.push(formatTickerGame(game, prefix));
+    });
+  } else {
+    asArray(payload.round_robin_games).forEach((game) => {
+      items.push(formatTickerGame(game, "FINAL"));
+    });
+
+    asArray(playoffs.quarterfinals).forEach((game) => {
+      items.push(formatTickerGame(game, "QF FINAL"));
+    });
+
+    asArray(playoffs.semifinals).forEach((game) => {
+      items.push(formatTickerGame(game, "SF FINAL"));
+    });
+
+    if (playoffs.bronze) {
+      items.push(formatTickerGame(playoffs.bronze, "BRONZE"));
+    }
+
+    if (playoffs.gold) {
+      items.push(formatTickerGame(playoffs.gold, "GOLD"));
+    }
   }
 
   if (payload.medals_final && payload.medal_labels) {
-    const ml = payload.medal_labels;
+    const medals = payload.medal_labels;
+
     items.push(
-      `MEDALS: GOLD ${ml.gold || "—"} · SILVER ${ml.silver || "—"} · BRONZE ${ml.bronze || "—"}`
+      `MEDALS: GOLD ${medals.gold || "—"} · SILVER ${
+        medals.silver || "—"
+      } · BRONZE ${medals.bronze || "—"}`
     );
   }
 
@@ -324,1170 +417,1166 @@ function buildTickerItems(payload) {
 }
 
 function getTournamentPhaseLabel(day, complete) {
-  if (complete || day >= 11) return "MEDAL ROUND";
-  if (day === 10) return "BRONZE GAME";
-  if (day === 9) return "SEMIFINALS";
-  if (day === 8) return "QUARTERFINALS";
-  if (day >= 1 && day <= 7) return "GROUP STAGE";
-  return "PRE-TOURNAMENT";
+  if (complete || Number(day) >= 11) return "Tournament Complete";
+  if (Number(day) === 10) return "Bronze Medal Day";
+  if (Number(day) === 9) return "Semifinals";
+  if (Number(day) === 8) return "Quarterfinals";
+  if (Number(day) >= 1) return "Group Stage";
+  return "Pre-Tournament";
+}
+
+function getTournamentProgressSteps(payload) {
+  const day = Number(payload?.wjc_day) || 0;
+  const complete = Boolean(payload?.medals_final);
+  const steps = [
+    { id: "group", label: "Group Stage", start: 1, end: 7 },
+    { id: "qf", label: "Quarterfinals", start: 8, end: 8 },
+    { id: "sf", label: "Semifinals", start: 9, end: 9 },
+    { id: "medal", label: "Medal Games", start: 10, end: 11 },
+  ];
+
+  return steps.map((step) => {
+    let state = "upcoming";
+    if (complete || day > step.end) state = "complete";
+    else if (day >= step.start && day <= step.end) state = "current";
+    else if (!payload?.hasData || day < 1) state = step.id === "group" ? "upcoming" : "upcoming";
+    return { ...step, state };
+  });
+}
+
+function formatProspectStatus(prospect) {
+  if (prospect?.made_wjc_team === false) return "Cut";
+  if (prospect?.injured || prospect?.injury) return "Injured";
+  if (prospect?.eliminated) return "Eliminated";
+  const raw = String(prospect?.roster || prospect?.role || prospect?.status || "").trim();
+  if (!raw) return "Active";
+  const lower = raw.toLowerCase();
+  if (lower.includes("cut")) return "Cut";
+  if (lower.includes("inj")) return "Injured";
+  if (lower.includes("elimin")) return "Eliminated";
+  if (lower.includes("dnp") || lower.includes("did not")) return "Did Not Play";
+  if (lower.includes("select")) return "Selected";
+  return raw.length <= 18 ? raw : "Active";
+}
+
+function goalDiff(row) {
+  const gf = Number(row?.gf);
+  const ga = Number(row?.ga);
+  if (!Number.isFinite(gf) || !Number.isFinite(ga)) return null;
+  return gf - ga;
+}
+
+function formatDiff(value) {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
+  const n = Number(value);
+  if (n > 0) return `+${n}`;
+  return String(n);
 }
 
 function getFeaturedStory(payload) {
   if (!payload?.hasData) {
     if (payload?.countdown_display) {
       return {
-        tag: "COUNTDOWN",
+        tag: "UPCOMING",
         headline: payload.anchor_title || "World Juniors",
         sub: payload.countdown_display,
       };
     }
-    return { tag: "STANDBY", headline: "WJC BROADCAST DESK", sub: "AWAITING TOURNAMENT DATA" };
-  }
 
-  const day = payload.wjc_day;
-  const complete = payload.medals_final;
-  const top = payload.standings?.[0];
-
-  if (complete && payload.medal_labels?.gold) {
     return {
-      tag: "DRAFT BOARD SHOCK",
-      headline: `${payload.medal_labels.gold} WINS GOLD`,
-      sub: "PERMANENT DRAFT STOCK SHIFT",
+      tag: "TOURNAMENT",
+      headline: "WORLD JUNIORS",
+      sub: "Tournament data is not available yet.",
     };
   }
 
-  if (top) {
+  if (payload.medals_final && payload.medal_labels?.gold) {
     return {
-      tag: day >= 8 ? "NATIONAL SPOTLIGHT" : "GROUP STAGE",
-      headline: `${top.code} LEADS STANDINGS`,
-      sub: `${top.pts} PTS · ${top.w}-${top.l} RECORD`,
+      tag: "CHAMPIONS",
+      headline: `${payload.medal_labels.gold} WINS GOLD`,
+      sub: "The tournament is complete.",
+    };
+  }
+
+  const firstStanding = payload.standings?.[0];
+
+  if (firstStanding) {
+    return {
+      tag:
+        Number(payload.wjc_day) >= 8
+          ? "MEDAL ROUND"
+          : "TOURNAMENT LEADER",
+
+      headline: `${firstStanding.label || firstStanding.code} LEADS`,
+
+      sub: `${firstStanding.pts ?? 0} PTS · ${
+        firstStanding.w ?? 0
+      }-${firstStanding.l ?? 0} RECORD`,
     };
   }
 
   return {
-    tag: "LIVE",
-    headline: payload.title || "WORLD JUNIORS LIVE",
-    sub: day ? `DAY ${day} OF ${payload.wjc_days_total}` : "TOURNAMENT IN PROGRESS",
+    tag: "WORLD JUNIORS",
+    headline: payload.title || "TOURNAMENT IN PROGRESS",
+    sub: payload.wjc_day
+      ? `Day ${payload.wjc_day} of ${payload.wjc_days_total}`
+      : "Tournament overview",
   };
 }
 
-function getTodayGames(payload) {
-  if (!payload?.hasData) return [];
-  const games = asArray(payload.round_robin_games);
-  const day = payload.wjc_day || 1;
-  const total = payload.round_robin_total || games.length || 1;
-  const nDays = payload.wjc_days_total || 11;
-
-  const through = Math.min(total, Math.max(1, Math.floor((day * total + nDays - 1) / nDays)));
-  const prevThrough =
-    day > 1
-      ? Math.min(total, Math.max(0, Math.floor(((day - 1) * total + nDays - 1) / nDays)))
-      : 0;
-
-  return games.slice(prevThrough, through);
-}
-
 function collectLoanDecisions(franchiseState) {
-  const decisions = [
-    ...asArray(franchiseState?.pending_decisions),
-    ...asArray(franchiseState?.pendingDecisions),
-  ];
-  return decisions.filter((d) => d && d.kind === "wjc_u20_loan");
+  const decisions = asArray(
+    franchiseState?.pending_decisions ??
+      franchiseState?.pendingDecisions
+  );
+
+  return decisions.filter(
+    (decision) => decision && decision.kind === "wjc_u20_loan"
+  );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Cinematic broadcast — flags, queue, speech, camera                           */
-/* -------------------------------------------------------------------------- */
+function collectTournamentGames(payload) {
+  if (asArray(payload?.all_games).length) {
+    return asArray(payload.all_games);
+  }
+
+  const games = [...asArray(payload?.round_robin_games)];
+  const playoffs = payload?.playoffs || {};
+
+  games.push(...asArray(playoffs.quarterfinals));
+  games.push(...asArray(playoffs.semifinals));
+
+  if (playoffs.bronze) {
+    games.push(playoffs.bronze);
+  }
+
+  if (playoffs.gold) {
+    games.push(playoffs.gold);
+  }
+
+  return games;
+}
 
 function countryLabelFor(code, payload) {
-  const c = asArray(payload?.countries).find((x) => String(x.code) === String(code));
-  return c?.label || code;
+  const country = asArray(payload?.countries).find(
+    (item) => String(item?.code) === String(code)
+  );
+
+  return country?.label || code || "Unknown";
 }
 
-function renderCountryFlag(code, payload, { size = 64, className = "" } = {}) {
+function safeNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Shared visual components                                                   */
+/* -------------------------------------------------------------------------- */
+
+function CountryFlag({
+  code,
+  payload,
+  size = 48,
+  className = "",
+}) {
   const label = countryLabelFor(code, payload);
   const flagUrl = wjcFlagUrl(code, size);
+
   return (
-    <div className={`wjc-country-flag ${className}`.trim()}>
+    <div
+      className={`wjc-page-flag ${className}`.trim()}
+      aria-label={`${label} flag`}
+    >
       {flagUrl ? (
         <img
           src={flagUrl}
-          alt={`${label} flag`}
+          alt=""
           loading="lazy"
           referrerPolicy="no-referrer"
-          onError={(e) => {
-            e.currentTarget.style.display = "none";
-            const fb = e.currentTarget.nextElementSibling;
-            if (fb) fb.style.display = "flex";
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+
+            const fallback =
+              event.currentTarget.nextElementSibling;
+
+            if (fallback) {
+              fallback.style.display = "flex";
+            }
           }}
         />
       ) : null}
-      <span className="wjc-country-flag__fallback" style={flagUrl ? { display: "none" } : undefined}>
+
+      <span
+        className="wjc-page-flag__fallback"
+        style={flagUrl ? { display: "none" } : undefined}
+      >
         {String(code || "?").slice(0, 3).toUpperCase()}
       </span>
     </div>
   );
 }
 
-const WJC_INTRO_TEMPLATES = [
-  "Welcome to the World Juniors. The future of hockey is on display.",
-  "Nine nations are here. Every scout has a seat.",
-  "This tournament has launched careers and destroyed draft stock.",
-  "The hockey world has arrived. Welcome to the World Juniors.",
-  "Eleven days can change an entire draft board.",
-  "For these prospects, every shift matters.",
-  "Welcome to the World Juniors.",
-  "Eleven days. Nine nations. Every scout is watching.",
-  "For some prospects, this tournament changes everything.",
-  "The World Juniors desk is live — medal-round pressure or group stage, the board moves tonight.",
-  "{nation_count} nations have arrived.",
-  "We are on day {wjc_day} of {wjc_days_total}.",
-  "{leader_label} currently leads the tournament.",
-  "Group stage hockey with global stakes — welcome to the World Juniors.",
-  "Scouts are packed in. Draft boards are open. Welcome to the World Juniors.",
-  "Every nation brought its best U20 talent. Welcome to the World Juniors.",
-  "From opening faceoff to gold medal day — this is the World Juniors.",
-  "The tournament is here. The draft board is watching.",
-];
+function WjcScoreTicker({ items }) {
+  const text = items.length
+    ? items.join("   ·   ")
+    : "World Juniors · Tournament Centre";
+  const shouldAnimate = items.length > 0;
 
-const HOST_TTS = {
-  host_1: { rate: 1.08, pitch: 1.12 },
-  host_2: { rate: 0.96, pitch: 1.0 },
-  host_3: { rate: 0.9, pitch: 0.92 },
-};
-
-function getHostCameraMode(hostId) {
-  if (hostId === "host_1") return "host-left";
-  if (hostId === "host_3") return "host-right";
-  if (hostId === "host_2") return "host-center";
-  return "wide";
-}
-
-function inferTopicFromLine(line) {
-  const id = String(line?.id || "").toLowerCase();
-  const tag = String(line?.meta?.tag || "").toLowerCase();
-  if (id.includes("stock") || tag.includes("stock") || id.includes("riser") || id.includes("faller")) {
-    return "DRAFT STOCK";
-  }
-  if (id.includes("standing") || tag.includes("standing") || id.includes("leader") || id.includes("surprise")) {
-    return "STANDINGS";
-  }
-  if (
-    id.includes("score") ||
-    id.includes("gold") ||
-    id.includes("qf") ||
-    id.includes("sf") ||
-    id.includes("bronze") ||
-    id.includes("upset") ||
-    id.includes("hot_open")
-  ) {
-    return "SCORES";
-  }
-  if (id.includes("user_prospect")) return "USER PROSPECT";
-  if (id.includes("medal") || id.includes("gold_medal")) return "MEDALS";
-  if (id.includes("open") || id.includes("pretournament")) return "OPENING";
-  return "GENERAL";
-}
-
-function getTransitionType(topic, graphicTakeover) {
-  if (graphicTakeover) return "graphic-takeover";
-  if (topic === "SCORES") return "hard-cut";
-  if (topic === "STANDINGS") return "broadcast-push";
-  if (topic === "OPENING") return "broadcast-push";
-  if (topic === "MEDALS") return "graphic-takeover";
-  return "broadcast-push";
-}
-
-function interpolateIntro(text, payload) {
-  const leader = payload?.standings?.[0];
-  return String(text || "")
-    .replace(/\{nation_count\}/g, String(asArray(payload?.countries).length || "—"))
-    .replace(/\{wjc_day\}/g, String(payload?.wjc_day ?? "—"))
-    .replace(/\{wjc_days_total\}/g, String(payload?.wjc_days_total ?? 11))
-    .replace(/\{leader_label\}/g, leader?.label || leader?.code || "—");
-}
-
-function buildOpeningIntroLine(payload) {
-  const tpl = WJC_INTRO_TEMPLATES[Math.floor(Math.random() * WJC_INTRO_TEMPLATES.length)];
-  return interpolateIntro(tpl, payload);
-}
-
-function getDailyIntroLabel(payload) {
-  const day = payload?.wjc_day;
-  const complete = payload?.medals_final || payload?.wjc_phase === "complete";
-  if (complete) return { title: "WORLD JUNIORS", sub: "TOURNAMENT COMPLETE" };
-  if (day >= 11) return { title: "WORLD JUNIORS", sub: "GOLD MEDAL DAY" };
-  if (day === 10) return { title: "WORLD JUNIORS", sub: "MEDAL PRESSURE" };
-  if (day === 9) return { title: "WORLD JUNIORS", sub: "SEMIFINALS" };
-  if (day === 8) return { title: "WORLD JUNIORS", sub: "QUARTERFINALS" };
-  if (day >= 1) return { title: "WORLD JUNIORS", sub: `DAY ${day}`, phase: "GROUP STAGE" };
-  return { title: "WORLD JUNIORS", sub: payload?.season_label || "U20 CHAMPIONSHIP" };
-}
-
-function shouldUseFullIntro(payload) {
-  const day = payload?.wjc_day;
-  return !day || day <= 1;
-}
-
-const WJC_SESSION_KEY = "wjc_broadcast_session";
-
-function wjcSessionKey(payload) {
-  return `${payload?.season_label || "wjc"}|day:${payload?.wjc_day ?? 0}`;
-}
-
-function loadWjcSession() {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.sessionStorage.getItem(WJC_SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveWjcSession(payload, phase) {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage.setItem(
-      WJC_SESSION_KEY,
-      JSON.stringify({
-        key: wjcSessionKey(payload),
-        wjc_day: payload?.wjc_day ?? 0,
-        phase,
-      })
-    );
-  } catch {
-    /* ignore quota errors */
-  }
-}
-
-function findPlayerInText(text, payload) {
-  const lower = String(text || "").toLowerCase();
   return (
-    asArray(payload?.player_stats).find((p) => p.name && lower.includes(String(p.name).toLowerCase())) ||
-    asArray(payload?.tournament_prospects).find((p) => p.name && lower.includes(String(p.name).toLowerCase())) ||
-    asArray(payload?.user_prospects).find((p) => p.name && lower.includes(String(p.name).toLowerCase())) ||
-    null
+    <div className="wjc-ticker" aria-label="World Juniors score ticker">
+      <div className="wjc-ticker__bug">WJC</div>
+      <div className="wjc-ticker__track-wrap">
+        <div
+          className={`wjc-ticker__track${shouldAnimate ? " is-animated" : ""}`}
+          aria-hidden="true"
+        >
+          <span>{text}</span>
+          {shouldAnimate ? <span>{text}</span> : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
-function findTeamInText(text, payload) {
-  const codes = [
-    ...asArray(payload?.countries).map((c) => c.code),
-    ...asArray(payload?.standings).map((s) => s.code),
-  ].filter(Boolean);
-  const upper = String(text || "").toUpperCase();
-  const matched = codes.find((code) => upper.includes(String(code).toUpperCase()));
-  if (!matched) return null;
-  return asArray(payload?.standings).find((s) => String(s.code) === String(matched)) || {
-    code: matched,
-    label: countryLabelFor(matched, payload),
-  };
-}
-
-function resolveCenterPopup(line, payload, draftStockRows) {
-  const topic = line?.topic || inferTopicFromLine(line);
-  const text = line?.text || "";
-
-  const playerFromText = findPlayerInText(text, payload);
-  if (playerFromText) {
-    const prospect = draftStockRows.find(
-      (r) => String(r.player_id) === String(playerFromText.player_id)
-    );
-    return { type: "player", data: { ...playerFromText, ...prospect } };
-  }
-
-  if (topic === "DRAFT STOCK" && line?.graphicData) {
-    const stat = asArray(payload?.player_stats).find(
-      (p) => String(p.player_id) === String(line.graphicData.player_id)
-    );
-    return { type: "player", data: { ...line.graphicData, ...stat } };
-  }
-
-  if (topic === "USER PROSPECT" && line?.graphicData) {
-    const stat = asArray(payload?.player_stats).find(
-      (p) => String(p.player_id) === String(line.graphicData.player_id)
-    );
-    return { type: "player", data: { ...line.graphicData, ...stat } };
-  }
-
-  if (topic === "SCORES") {
-    const game = asArray(line?.graphicData)[0];
-    if (game) return { type: "game", data: game };
-    const games = asArray(payload?.all_games).length
-      ? asArray(payload?.all_games)
-      : asArray(payload?.round_robin_games);
-    if (games.length) return { type: "game", data: games[games.length - 1] };
-  }
-
-  if (topic === "STANDINGS") {
-    const team = findTeamInText(text, payload) || payload?.standings?.[0];
-    if (team) return { type: "team", data: team };
-  }
-
-  if (topic === "MEDALS" && line?.graphicData) {
-    return { type: "medals", data: line.graphicData };
-  }
-
-  const teamFromText = findTeamInText(text, payload);
-  if (teamFromText) return { type: "team", data: teamFromText };
-
-  return null;
-}
-
-function enrichBroadcastLine(line, payload, draftStockRows) {
-  const topic = inferTopicFromLine(line);
-  const cameraMode = getHostCameraMode(line.speakerId);
-  let graphicType = null;
-  let graphicData = null;
-  let graphicTakeover = false;
-
-  if (topic === "STANDINGS") {
-    graphicType = "standings";
-    graphicData = asArray(payload?.standings).slice(0, 5);
-  } else if (topic === "SCORES") {
-    graphicType = "scores";
-    const games = asArray(payload?.all_games).length
-      ? asArray(payload?.all_games)
-      : asArray(payload?.round_robin_games);
-    graphicData = games.slice(-3);
-  } else if (topic === "DRAFT STOCK") {
-    graphicType = "stock";
-    const row = draftStockRows.find((r) => Math.abs(Number(r.stock_delta) || 0) >= 20) || draftStockRows[0];
-    graphicData = row;
-    if (row && Math.abs(Number(row.stock_delta) || 0) >= 20) {
-      graphicTakeover = true;
-    }
-  } else if (topic === "USER PROSPECT") {
-    graphicType = "user-prospect";
-    graphicData = asArray(payload?.user_prospects).find((p) => p.made_wjc_team) || payload?.user_prospects?.[0];
-  } else if (topic === "MEDALS") {
-    graphicType = "medals";
-    graphicData = payload?.medal_labels;
-  }
-
-  return {
-    ...line,
-    hostId: line.speakerId,
-    topic,
-    cameraMode,
-    graphicType,
-    graphicData,
-    graphicTakeover,
-    centerPopup: resolveCenterPopup(
-      { ...line, topic, graphicData, graphicType },
-      payload,
-      draftStockRows
-    ),
-    transition: getTransitionType(topic, graphicTakeover),
-  };
-}
-
-function buildBroadcastQueue(payload, draftStockRows) {
-  const queue = [];
-  const openingText = buildOpeningIntroLine(payload);
-  const openingItem = {
-    id: "opening-intro",
-    hostId: "host_2",
-    text: openingText,
-    topic: "OPENING",
-    cameraMode: "host-center",
-    graphicType: "tournament",
-    graphicData: null,
-    graphicTakeover: false,
-    transition: "broadcast-push",
-    centerPopup: payload?.standings?.[0]
-      ? { type: "team", data: payload.standings[0] }
-      : null,
-  };
-  queue.push(openingItem);
-
-  const lines = buildWjcBroadcastLines(payload).map((line) =>
-    enrichBroadcastLine(line, payload, draftStockRows)
-  );
-
-  lines.forEach((line) => {
-    if (line.graphicTakeover && line.graphicData) {
-      queue.push({
-        id: `${line.id}-takeover`,
-        hostId: line.hostId,
-        text: "",
-        topic: "DRAFT STOCK",
-        cameraMode: "graphic",
-        graphicType: "stock-takeover",
-        graphicData: line.graphicData,
-        graphicTakeover: true,
-        transition: "graphic-takeover",
-        silent: true,
-        holdMs: 2800,
-      });
-    }
-    queue.push(line);
-  });
-
-  if (payload?.medals_final && payload?.medal_labels?.gold) {
-    queue.push({
-      id: "medal-bronze",
-      hostId: "host_3",
-      text: `Bronze medal: ${payload.medal_labels.bronze || "—"}.`,
-      topic: "MEDALS",
-      cameraMode: "graphic",
-      graphicType: "medal-bronze",
-      graphicData: payload.medal_labels,
-      graphicTakeover: true,
-      transition: "graphic-takeover",
-      silent: false,
-    });
-    queue.push({
-      id: "medal-silver",
-      hostId: "host_3",
-      text: `Silver medal: ${payload.medal_labels.silver || "—"}.`,
-      topic: "MEDALS",
-      cameraMode: "graphic",
-      graphicType: "medal-silver",
-      graphicData: payload.medal_labels,
-      graphicTakeover: true,
-      transition: "graphic-takeover",
-      silent: false,
-    });
-    queue.push({
-      id: "medal-gold",
-      hostId: "host_1",
-      text: `${payload.medal_labels.gold || "—"} are World Junior champions.`,
-      topic: "MEDALS",
-      cameraMode: "graphic",
-      graphicType: "medal-gold",
-      graphicData: payload.medal_labels,
-      graphicTakeover: true,
-      transition: "graphic-takeover",
-      silent: false,
-    });
-    queue.push({
-      id: "closing-line",
-      hostId: "host_2",
-      text: "The tournament is over. The draft board will never look the same.",
-      topic: "OPENING",
-      cameraMode: "host-center",
-      graphicType: null,
-      graphicData: null,
-      graphicTakeover: false,
-      transition: "wide-reset",
-    });
-  }
-
-  return queue;
-}
-
-function pickVoiceForHost(voices, hostId) {
-  const english = voices.filter(
-    (v) => v.lang && v.lang.toLowerCase().startsWith("en") && !v.name.toLowerCase().includes("google")
-  );
-  const pool = english.length ? english : voices;
-  const idx = hostId === "host_1" ? 0 : hostId === "host_3" ? 2 : 1;
-  return pool[idx] || pool[0] || null;
-}
-
-const BroadcastCameraContext = createContext({
-  cameraMode: "wide",
-  activeHostId: null,
-  reducedMotion: false,
-});
-
-function useBroadcastCamera() {
-  return useContext(BroadcastCameraContext);
-}
-
-function speakBroadcastLine({ text, hostId, voiceOn, voices, onStart, onEnd }) {
-  if (!text) {
-    onEnd?.();
-    return () => {};
-  }
-
-  if (!voiceOn || typeof window === "undefined" || !window.speechSynthesis) {
-    onStart?.();
-    const t = window.setTimeout(() => onEnd?.(), Math.max(2200, text.length * 42));
-    return () => window.clearTimeout(t);
-  }
-
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  const tune = HOST_TTS[hostId] || HOST_TTS.host_2;
-  utterance.rate = tune.rate;
-  utterance.pitch = tune.pitch;
-  utterance.volume = 1;
-  const voice = pickVoiceForHost(voices, hostId);
-  if (voice) utterance.voice = voice;
-
-  utterance.onstart = () => onStart?.();
-  utterance.onend = () => onEnd?.();
-  utterance.onerror = () => onEnd?.();
-
-  window.speechSynthesis.speak(utterance);
-  return () => window.speechSynthesis.cancel();
-}
-
-function CinematicIntro({
-  phase,
-  payload,
-  countries,
-  fullIntro,
-  onSkip,
-  dailyLabel,
+function WjcPageToolbar({
+  activeSection,
+  onSectionChange,
+  onLeave,
+  onSimDay,
+  onOpenDraftBoard,
+  simBusy,
+  canSim,
+  simLabel,
 }) {
-  const montageIndex = useRef(0);
-  const [countryIdx, setCountryIdx] = useState(0);
-
-  useEffect(() => {
-    if (phase !== "intro-countries") return undefined;
-    montageIndex.current = 0;
-    setCountryIdx(0);
-    const list = asArray(countries);
-    if (!list.length) return undefined;
-    const timer = window.setInterval(() => {
-      montageIndex.current += 1;
-      if (montageIndex.current >= list.length) {
-        window.clearInterval(timer);
-        return;
-      }
-      setCountryIdx(montageIndex.current);
-    }, 280);
-    return () => window.clearInterval(timer);
-  }, [phase, countries]);
-
-  if (phase === "idle" || phase === "interactive" || phase === "broadcast" || phase === "opening") {
-    return null;
-  }
-
-  const currentCountry = asArray(countries)[countryIdx];
+  const sections = [
+    { id: "overview", label: "Overview" },
+    { id: "games", label: "Games" },
+    { id: "prospects", label: "Prospects" },
+    { id: "playoffs", label: "Bracket" },
+  ];
 
   return (
-    <div className={`wjc-cinematic-intro wjc-cinematic-intro--${phase}`} aria-hidden={phase === "stage-reveal"}>
-      <button type="button" className="wjc-skip-intro" onClick={onSkip} aria-label="Skip intro">
-        SKIP INTRO
-      </button>
-
-      {phase === "intro-title" && (
-        <div className="wjc-intro-beat wjc-intro-beat--title">
-          <div className="wjc-intro-red-line" />
-          <h1>WORLD JUNIORS</h1>
-          <p>{fullIntro ? payload?.season_label || dailyLabel.sub : dailyLabel.sub}</p>
-          {dailyLabel.phase ? <span className="wjc-intro-phase-tag">{dailyLabel.phase}</span> : null}
-        </div>
-      )}
-
-      {phase === "intro-countries" && fullIntro && currentCountry && (
-        <div className="wjc-intro-beat wjc-intro-beat--country" key={currentCountry.code}>
-          <span className="wjc-intro-country-abbr">{currentCountry.code}</span>
-          {renderCountryFlag(currentCountry.code, payload, { size: 128, className: "wjc-intro-country-flag" })}
-          <h2>{(currentCountry.label || currentCountry.code).toUpperCase()}</h2>
-        </div>
-      )}
-
-      {phase === "intro-tournament" && fullIntro && (
-        <div className="wjc-intro-beat wjc-intro-beat--collision">
-          <div className="wjc-intro-collision-flags">
-            {asArray(countries)
-              .slice(0, 6)
-              .map((c, i) => (
-                <div key={c.code} className="wjc-intro-collision-flag" style={{ "--i": i }}>
-                  {renderCountryFlag(c.code, payload, { size: 48 })}
-                </div>
-              ))}
-          </div>
-          <div className="wjc-intro-collision-title">
-            <h1>WORLD JUNIORS</h1>
-            <p>{payload?.wjc_days_total || 11} DAYS · ONE CHAMPION</p>
-          </div>
-          <div className="wjc-intro-flash" />
-        </div>
-      )}
-
-      {(phase === "stage-reveal" || (phase === "intro-title" && !fullIntro)) && (
-        <div className="wjc-intro-beat wjc-intro-beat--stage-reveal">
-          <div className="wjc-intro-stage-bug">
-            <span>WORLD JUNIORS</span>
-            <b>{payload?.wjc_phase === "complete" ? "FINAL" : payload?.hasData ? "LIVE" : "DESK"}</b>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function HostLowerThird({ hostId, topic, visible }) {
-  const host = WJC_HOSTS[hostId] || WJC_HOSTS.host_2;
-  return (
-    <div
-      className={`wjc-host-lower-third wjc-host-lower-third--${hostId}${visible ? " is-visible" : ""}`}
-      aria-hidden={!visible}
-    >
-      <div className="wjc-host-lower-third__rail" />
-      <div className="wjc-host-lower-third__body">
-        <strong>{host.name.toUpperCase()}</strong>
-        <span>{host.role.toUpperCase()}</span>
-      </div>
-      {topic ? <em className="wjc-host-lower-third__topic">{topic}</em> : null}
-    </div>
-  );
-}
-
-function TopicGraphicOverlay({ item, payload, side }) {
-  if (!item?.graphicType) return null;
-
-  const type = item.graphicType;
-  const data = item.graphicData;
-
-  if (type === "standings" && asArray(data).length) {
-    return (
-      <div className={`wjc-topic-graphic wjc-topic-graphic--standings wjc-topic-graphic--${side}`}>
-        <header>STANDINGS</header>
-        <ul>
-          {data.map((row, i) => (
-            <li key={row.code}>
-              <span>{i + 1}</span>
-              {renderCountryFlag(row.code, payload, { size: 32, className: "wjc-topic-graphic__flag" })}
-              <b>{row.code}</b>
-              <em>{row.pts} PTS</em>
-            </li>
-          ))}
-        </ul>
-      </div>
-    );
-  }
-
-  if (type === "scores" && asArray(data).length) {
-    return (
-      <div className={`wjc-topic-graphic wjc-topic-graphic--scores wjc-topic-graphic--${side}`}>
-        <header>SCORES</header>
-        <ul>
-          {data.map((g, i) => (
-            <li key={`${g.home}-${g.away}-${i}`}>
-              <span>FINAL</span>
-              <div className="wjc-score-card-line">
-                {renderCountryFlag(g.home, payload, { size: 24 })}
-                <b>{gameCode(g, "home")} {g.home_goals}</b>
-                <span>—</span>
-                <b>{g.away_goals} {gameCode(g, "away")}</b>
-                {renderCountryFlag(g.away, payload, { size: 24 })}
-              </div>
-            </li>
-          ))}
-        </ul>
-      </div>
-    );
-  }
-
-  if ((type === "stock" || type === "stock-takeover") && data) {
-    const delta = Number(data.stock_delta) || 0;
-    const positive = delta >= 0;
-    const major = Math.abs(delta) >= 20;
-    return (
-      <div
-        className={`wjc-topic-graphic wjc-topic-graphic--stock${major ? " is-takeover" : ""}${positive ? " is-up" : " is-down"}`}
+    <div className="wjc-page-toolbar">
+      <nav
+        className="wjc-page-tabs"
+        role="tablist"
+        aria-label="World Juniors sections"
       >
-        <header>{positive ? (major ? "STOCK EXPLOSION" : "STOCK WATCH") : major ? "STOCK CRASH" : "STOCK WATCH"}</header>
-        <strong>{data.name}</strong>
-        <div className="wjc-stock-graphic-nation">
-          {renderCountryFlag(data.wjc_country, payload, { size: 40 })}
-          <span>{data.wjc_country_label || data.wjc_country}</span>
-        </div>
-        <b className="wjc-stock-graphic-delta">
-          {positive ? "+" : ""}
-          {delta}
-        </b>
-        {major && !positive ? <em>FALLING FAST</em> : null}
-        {major && positive ? <em>DRAFT BOARD SHOCK</em> : null}
-      </div>
-    );
-  }
+        {sections.map((section) => {
+          const selected = activeSection === section.id;
+          return (
+            <button
+              key={section.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              className={selected ? "is-active" : ""}
+              onClick={() => onSectionChange(section.id)}
+            >
+              {section.label}
+            </button>
+          );
+        })}
+      </nav>
 
-  if (type === "user-prospect" && data) {
-    return (
-      <div className={`wjc-topic-graphic wjc-topic-graphic--prospect wjc-topic-graphic--${side}`}>
-        <header>YOUR PROSPECT</header>
-        <strong>{data.name}</strong>
-        <div className="wjc-stock-graphic-nation">
-          {renderCountryFlag(data.wjc_country, payload, { size: 40 })}
-          <span>{data.wjc_country_label || data.wjc_country}</span>
-        </div>
-        <p>
-          Age {data.age ?? "—"} · {data.roster || "U20"}
-        </p>
-      </div>
-    );
-  }
+      <div className="wjc-page-actions">
+        {typeof onOpenDraftBoard === "function" ? (
+          <button
+            type="button"
+            className="wjc-page-action wjc-page-action--secondary"
+            onClick={onOpenDraftBoard}
+          >
+            Draft Board
+          </button>
+        ) : null}
 
-  if (type?.startsWith("medal-") && data) {
-    const medalKey = type.replace("medal-", "");
-    const label = data[medalKey] || "—";
-    return (
-      <div className={`wjc-topic-graphic wjc-topic-graphic--medal wjc-topic-graphic--${medalKey} is-takeover`}>
-        <header>{medalKey.toUpperCase()}</header>
-        <div className="wjc-medal-graphic-badge">{medalKey.charAt(0).toUpperCase() + medalKey.slice(1)}</div>
-        <strong>{label}</strong>
-        {medalKey === "gold" ? <p>WORLD JUNIORS CHAMPIONS</p> : null}
-      </div>
-    );
-  }
+        {typeof onSimDay === "function" ? (
+          <button
+            type="button"
+            className="wjc-page-action wjc-page-action--primary"
+            onClick={onSimDay}
+            disabled={simBusy || !canSim}
+            aria-busy={simBusy ? "true" : undefined}
+            title={
+              canSim
+                ? "Advance one calendar day"
+                : "Tournament complete"
+            }
+          >
+            {simBusy ? "Simulating..." : simLabel}
+          </button>
+        ) : null}
 
-  return null;
-}
-
-function BroadcastControlBar({ onPause, onResume, onSkipLine, onSkipShow, isPaused, visible }) {
-  if (!visible) return null;
-  return (
-    <div className="wjc-broadcast-controls" role="group" aria-label="Broadcast controls">
-      {!isPaused ? (
-        <button type="button" onClick={onPause} aria-label="Pause broadcast">
-          PAUSE
+        <button
+          type="button"
+          className="wjc-page-action wjc-page-action--exit"
+          onClick={onLeave}
+        >
+          Back
         </button>
-      ) : (
-        <button type="button" onClick={onResume} aria-label="Resume broadcast">
-          RESUME
-        </button>
-      )}
-      <button type="button" onClick={onSkipLine} aria-label="Skip line">
-        SKIP LINE
-      </button>
-      <button type="button" onClick={onSkipShow} aria-label="Skip show">
-        SKIP SHOW
-      </button>
+      </div>
     </div>
   );
 }
 
-function EnterBroadcastOverlay({ onEnter, visible }) {
-  if (!visible) return null;
-  return (
-    <div className="wjc-enter-broadcast">
-      <h1>WORLD JUNIORS</h1>
-      <button type="button" onClick={onEnter} aria-label="Enter broadcast">
-        ENTER BROADCAST
-      </button>
-    </div>
-  );
-}
+function WjcSummaryHero({
+  payload,
+  franchiseState,
+  heroImage,
+  loanDecisionCount,
+  gamesCount,
+  compact = false,
+}) {
+  const story = getFeaturedStory(payload);
 
-function CinematicSubtitle({ text, hostId, visible }) {
-  if (!text || !visible) return null;
-  const host = WJC_HOSTS[hostId] || WJC_HOSTS.host_2;
-  const side =
-    hostId === "host_1" ? "left" : hostId === "host_3" ? "right" : "center";
+  const phase = getTournamentPhaseLabel(
+    payload.wjc_day,
+    payload.medals_final
+  );
+
+  const status = payload.isPreTournament
+    ? "Upcoming"
+    : payload.medals_final
+      ? "Final"
+      : "Active";
+
+  const dayValue =
+    payload.wjc_day != null
+      ? `${payload.wjc_day}/${payload.wjc_days_total}`
+      : payload.countdown_days != null
+        ? `T−${payload.countdown_days}`
+        : payload.countdown_display ||
+          payload.start_date ||
+          "—";
+
   return (
-    <div
-      className={`wjc-subtitle-bubble wjc-subtitle-bubble--${side} wjc-subtitle-bubble--${hostId}`}
-      aria-live="polite"
-      key={text.slice(0, 48)}
+    <section
+      className={`wjc-page-hero${compact ? " is-compact" : ""}`}
+      style={{
+        backgroundImage: `
+          linear-gradient(
+            90deg,
+            rgba(4, 16, 26, 0.96) 0%,
+            rgba(4, 16, 26, 0.82) 48%,
+            rgba(4, 16, 26, 0.35) 100%
+          ),
+          url(${heroImage})
+        `,
+      }}
     >
-      <div className="wjc-subtitle-bubble__tail" aria-hidden="true" />
-      <div className="wjc-subtitle-bubble__content">
-        <span className="wjc-subtitle-bubble__host">{host.name}</span>
-        <p>{text}</p>
-      </div>
-    </div>
-  );
-}
-
-function CenterStagePopup({ popup, payload, visible }) {
-  if (!visible || !popup?.type || !popup?.data) return null;
-
-  if (popup.type === "player") {
-    const p = popup.data;
-    return (
-      <div className="wjc-center-popup wjc-center-popup--player" key={`player-${p.player_id || p.name}`}>
-        <header>ON-AIR STAT LINE</header>
-        <strong>{p.name}</strong>
-        <div className="wjc-center-popup__nation">
-          {renderCountryFlag(p.wjc_country, payload, { size: 36 })}
-          <span>{p.wjc_country_label || p.wjc_country || "—"}</span>
+      <div className="wjc-page-hero__content">
+        <div className="wjc-page-hero__status">
+          <span>{status}</span>
+          <b>{phase}</b>
         </div>
-        <div className="wjc-center-popup__stats">
-          <div>
-            <em>G</em>
-            <b>{p.g ?? p.tournament_g ?? 0}</b>
-          </div>
-          <div>
-            <em>A</em>
-            <b>{p.a ?? 0}</b>
-          </div>
-          <div>
-            <em>PTS</em>
-            <b>{p.pts ?? p.tournament_pts ?? 0}</b>
-          </div>
-          <div>
-            <em>GP</em>
-            <b>{p.gp ?? p.tournament_gp ?? 0}</b>
-          </div>
-          <div>
-            <em>+/-</em>
-            <b>{p.plus_minus ?? 0}</b>
-          </div>
-        </div>
-        {p.stock_delta != null ? (
-          <div className={`wjc-center-popup__stock${Number(p.stock_delta) >= 0 ? " is-up" : " is-down"}`}>
-            STOCK {Number(p.stock_delta) >= 0 ? "+" : ""}
-            {p.stock_delta}
+
+        {!compact ? (
+          <p className="wjc-page-hero__tag">{story.tag}</p>
+        ) : null}
+
+        <h1>{story.headline}</h1>
+
+        {!compact ? (
+          <p className="wjc-page-hero__sub">{story.sub}</p>
+        ) : (
+          <p className="wjc-page-hero__sub is-compact-sub">
+            Day {dayValue}
+            <span aria-hidden="true"> · </span>
+            {gamesCount} games
+          </p>
+        )}
+
+        {!compact ? (
+          <div className="wjc-page-hero__facts">
+            <div>
+              <span>Season</span>
+              <strong>{getYear(payload, franchiseState)}</strong>
+            </div>
+            <div>
+              <span>Day</span>
+              <strong>{dayValue}</strong>
+            </div>
+            <div>
+              <span>Games</span>
+              <strong>{gamesCount}</strong>
+            </div>
+            <div>
+              <span>Your Club</span>
+              <strong title={getUserTeamName(franchiseState)}>
+                {getUserTeamName(franchiseState)}
+              </strong>
+            </div>
+            {loanDecisionCount > 0 ? (
+              <div className="is-alert">
+                <span>Loan Decisions</span>
+                <strong>{loanDecisionCount}</strong>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
-    );
-  }
-
-  if (popup.type === "team") {
-    const t = popup.data;
-    return (
-      <div className="wjc-center-popup wjc-center-popup--team" key={`team-${t.code}`}>
-        <header>TEAM REPORT</header>
-        <div className="wjc-center-popup__nation">
-          {renderCountryFlag(t.code, payload, { size: 48 })}
-          <strong>{t.label || t.code}</strong>
-        </div>
-        <div className="wjc-center-popup__stats wjc-center-popup__stats--team">
-          <div>
-            <em>RECORD</em>
-            <b>
-              {t.w ?? 0}-{t.l ?? 0}
-            </b>
-          </div>
-          <div>
-            <em>PTS</em>
-            <b>{t.pts ?? 0}</b>
-          </div>
-          <div>
-            <em>GF</em>
-            <b>{t.gf ?? 0}</b>
-          </div>
-          <div>
-            <em>GA</em>
-            <b>{t.ga ?? 0}</b>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (popup.type === "game") {
-    const g = popup.data;
-    return (
-      <div className="wjc-center-popup wjc-center-popup--game" key={`game-${g.home}-${g.away}`}>
-        <header>{g.round || "FINAL"}</header>
-        <div className="wjc-center-popup__scoreline">
-          <div>
-            {renderCountryFlag(g.home, payload, { size: 40 })}
-            <strong>{gameCode(g, "home")}</strong>
-            <b>{g.home_goals ?? "—"}</b>
-          </div>
-          <span className="wjc-center-popup__vs">—</span>
-          <div>
-            {renderCountryFlag(g.away, payload, { size: 40 })}
-            <strong>{gameCode(g, "away")}</strong>
-            <b>{g.away_goals ?? "—"}</b>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return null;
-}
-
-/* -------------------------------------------------------------------------- */
-/* 3D stage (compact broadcast desk)                                          */
-/* -------------------------------------------------------------------------- */
-
-const CAMERA_TARGETS = {
-  wide: { x: 0, y: 2.48, z: 5.15, lookX: 0, lookY: 2.05, lookZ: 0, sway: 0.1 },
-  "host-left": { x: -1.08, y: 2.62, z: 3.55, lookX: -1.72, lookY: 2.42, lookZ: 0.17, sway: 0.025 },
-  "host-center": { x: 0, y: 2.68, z: 3.35, lookX: 0, lookY: 2.52, lookZ: 0.02, sway: 0.02 },
-  "host-right": { x: 1.08, y: 2.62, z: 3.55, lookX: 1.72, lookY: 2.42, lookZ: 0.17, sway: 0.025 },
-  graphic: { x: 0, y: 2.55, z: 7.1, lookX: 0, lookY: 1.85, lookZ: 0, sway: 0.02 },
-  desk: { x: 0, y: 2.05, z: 5.8, lookX: 0, lookY: 1.55, lookZ: 0, sway: 0.08 },
-};
-
-function FloatingCamera() {
-  const { cameraMode, reducedMotion } = useBroadcastCamera();
-  const current = useRef({ x: 0, y: 2.35, z: 6.35, lookX: 0, lookY: 1.55, lookZ: 0 });
-
-  useFrame(({ clock, camera }) => {
-    const t = clock.getElapsedTime();
-    const target = CAMERA_TARGETS[cameraMode] || CAMERA_TARGETS.wide;
-    const lerp = reducedMotion ? 0.22 : 0.08;
-    current.current.x += (target.x - current.current.x) * lerp;
-    current.current.y += (target.y - current.current.y) * lerp;
-    current.current.z += (target.z - current.current.z) * lerp;
-    current.current.lookX += (target.lookX - current.current.lookX) * lerp;
-    current.current.lookY += (target.lookY - current.current.lookY) * lerp;
-    current.current.lookZ += (target.lookZ - current.current.lookZ) * lerp;
-
-    const sway = reducedMotion ? 0 : target.sway;
-    camera.position.x = current.current.x + Math.sin(t * 0.18) * sway;
-    camera.position.y = current.current.y + Math.sin(t * 0.22) * (sway * 0.35);
-    camera.position.z = current.current.z + Math.sin(t * 0.16) * (sway * 0.85);
-    camera.lookAt(current.current.lookX, current.current.lookY, current.current.lookZ);
-  });
-
-  return null;
-}
-
-function BroadcastLights() {
-  const redRef = useRef();
-  const blueRef = useRef();
-  const whiteRef = useRef();
-
-  useFrame(({ clock }) => {
-    const t = clock.getElapsedTime();
-
-    if (redRef.current) {
-      redRef.current.intensity = 5.3 + Math.sin(t * 1.35) * 0.75;
-    }
-
-    if (blueRef.current) {
-      blueRef.current.intensity = 4.9 + Math.sin(t * 1.18 + 1.2) * 0.65;
-    }
-
-    if (whiteRef.current) {
-      whiteRef.current.intensity = 2.8 + Math.sin(t * 0.8) * 0.28;
-    }
-  });
-
-  return (
-    <>
-      <ambientLight intensity={0.82} />
-
-      <spotLight
-        ref={redRef}
-        position={[4.7, 6.2, 4.2]}
-        angle={0.42}
-        penumbra={0.72}
-        intensity={5.6}
-        color="#d71920"
-        castShadow
-      />
-
-      <spotLight
-        ref={blueRef}
-        position={[-4.7, 6.2, 4.2]}
-        angle={0.42}
-        penumbra={0.72}
-        intensity={5.1}
-        color="#1d4ed8"
-        castShadow
-      />
-
-      <pointLight ref={whiteRef} position={[0, 4.4, 3.5]} intensity={2.9} color="#ffffff" />
-      <pointLight position={[0, 0.65, 2.7]} intensity={1.25} color="#f8fafc" />
-    </>
+    </section>
   );
 }
 
-function CylinderFigure({
-  x = 0,
-  z = 0,
-  scale = 1,
-  jacket = "#e5e7eb",
-  stripe = "#d71920",
-  skin = "#efc29c",
-  hair = "#111827",
-  delay = 0,
+/* -------------------------------------------------------------------------- */
+/* Overview                                                                   */
+/* -------------------------------------------------------------------------- */
+
+function WjcStandingsTable({ standings, payload }) {
+  const rows = asArray(standings);
+
+  return (
+    <section className="wjc-page-card wjc-page-standings">
+      <header className="wjc-page-card__header">
+        <div>
+          <span>Tournament Table</span>
+          <h2>Standings</h2>
+        </div>
+        <strong>{rows.length} teams</strong>
+      </header>
+
+      {!rows.length ? (
+        <div className="wjc-page-empty">
+          Standings will appear when tournament games begin.
+        </div>
+      ) : (
+        <div className="wjc-page-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Team</th>
+                <th>GP</th>
+                <th>W</th>
+                <th>L</th>
+                <th>GF</th>
+                <th>GA</th>
+                <th>Diff</th>
+                <th>Pts</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, index) => {
+                const diff = goalDiff(row);
+                return (
+                  <tr
+                    key={`${row.code || "team"}-${index}`}
+                    className={index === 0 ? "is-leader" : ""}
+                  >
+                    <td>{index + 1}</td>
+                    <td>
+                      <div className="wjc-page-team-cell">
+                        <CountryFlag
+                          code={row.code}
+                          payload={payload}
+                          size={32}
+                        />
+                        <div>
+                          <strong>{row.code || "—"}</strong>
+                          <span>
+                            {row.label ||
+                              countryLabelFor(row.code, payload)}
+                          </span>
+                        </div>
+                      </div>
+                    </td>
+                    <td>{row.gp ?? 0}</td>
+                    <td>{row.w ?? 0}</td>
+                    <td>{row.l ?? 0}</td>
+                    <td>{row.gf ?? 0}</td>
+                    <td>{row.ga ?? 0}</td>
+                    <td
+                      className={
+                        diff > 0
+                          ? "is-positive"
+                          : diff < 0
+                            ? "is-negative"
+                            : ""
+                      }
+                    >
+                      {formatDiff(diff)}
+                    </td>
+                    <td className="wjc-page-standings__points">
+                      {row.pts ?? 0}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function WjcMedalPanel({ payload }) {
+  if (!payload?.medals_final) {
+    return null;
+  }
+
+  const medals = payload.medal_labels || {};
+
+  const entries = [
+    { key: "gold", label: "GOLD", team: medals.gold },
+    { key: "silver", label: "SILVER", team: medals.silver },
+    { key: "bronze", label: "BRONZE", team: medals.bronze },
+  ];
+
+  return (
+    <section className="wjc-page-card wjc-page-medals">
+      <header className="wjc-page-card__header">
+        <div>
+          <span>FINAL RESULTS</span>
+          <h2>Medal Winners</h2>
+        </div>
+      </header>
+
+      <div className="wjc-page-medals__grid">
+        {entries.map((entry) => (
+          <div
+            key={entry.key}
+            className={`wjc-page-medal wjc-page-medal--${entry.key}`}
+          >
+            <span>{entry.label}</span>
+            <strong>{entry.team || "—"}</strong>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function getShowcaseName(card) {
+  return (
+    card?.name ||
+    card?.player_name ||
+    card?.prospect_name ||
+    card?.title ||
+    "Tournament Spotlight"
+  );
+}
+
+function getShowcaseText(card) {
+  return (
+    card?.summary ||
+    card?.description ||
+    card?.subtitle ||
+    card?.sub ||
+    card?.note ||
+    "A tournament performance worth monitoring."
+  );
+}
+
+function WjcShowcaseGrid({
+  cards,
+  payload,
+  onSelectProspect,
 }) {
-  const groupRef = useRef();
-  const leftArmRef = useRef();
-  const rightArmRef = useRef();
-
-  useFrame(({ clock }) => {
-    const t = clock.getElapsedTime() + delay;
-
-    if (groupRef.current) {
-      groupRef.current.position.y = Math.sin(t * 1.2) * 0.028;
-      groupRef.current.rotation.y = Math.sin(t * 0.42) * 0.045;
-    }
-
-    if (leftArmRef.current) {
-      leftArmRef.current.rotation.z = -0.34 + Math.sin(t * 1.05) * 0.035;
-    }
-
-    if (rightArmRef.current) {
-      rightArmRef.current.rotation.z = 0.34 + Math.sin(t * 1.1 + 0.4) * 0.035;
-    }
-  });
+  const visibleCards = asArray(cards).slice(0, 4);
 
   return (
-    <group ref={groupRef} position={[x, 0, z]} scale={[scale, scale, scale]}>
-      <mesh position={[-0.18, 0.39, 0]} castShadow>
-        <cylinderGeometry args={[0.088, 0.105, 0.78, 20]} />
-        <meshStandardMaterial color="#111827" roughness={0.78} />
-      </mesh>
+    <section className="wjc-page-card wjc-page-showcase">
+      <header className="wjc-page-card__header">
+        <div>
+          <span>SCOUTING DESK</span>
+          <h2>Tournament Spotlight</h2>
+        </div>
 
-      <mesh position={[0.18, 0.39, 0]} castShadow>
-        <cylinderGeometry args={[0.088, 0.105, 0.78, 20]} />
-        <meshStandardMaterial color="#111827" roughness={0.78} />
-      </mesh>
+        <strong>{visibleCards.length} STORIES</strong>
+      </header>
 
-      <mesh position={[-0.18, -0.03, 0.11]} castShadow>
-        <boxGeometry args={[0.28, 0.09, 0.36]} />
-        <meshStandardMaterial color="#030712" roughness={0.85} />
-      </mesh>
+      {!visibleCards.length ? (
+        <div className="wjc-page-empty">
+          Tournament spotlights will appear as players establish themselves.
+        </div>
+      ) : (
+        <div className="wjc-page-showcase__grid">
+          {visibleCards.map((card, index) => {
+            const country =
+              card?.wjc_country ||
+              card?.country ||
+              card?.nation ||
+              card?.code;
 
-      <mesh position={[0.18, -0.03, 0.11]} castShadow>
-        <boxGeometry args={[0.28, 0.09, 0.36]} />
-        <meshStandardMaterial color="#030712" roughness={0.85} />
-      </mesh>
+            const stockDelta =
+              card?.stock_delta ?? card?.delta ?? null;
 
-      <mesh position={[0, 1.12, 0]} castShadow>
-        <cylinderGeometry args={[0.4, 0.48, 1.1, 28]} />
-        <meshStandardMaterial color={jacket} roughness={0.7} metalness={0.03} />
-      </mesh>
+            return (
+              <button
+                key={`${card?.player_id || getShowcaseName(card)}-${index}`}
+                type="button"
+                className="wjc-page-showcase-card"
+                onClick={() => onSelectProspect(card)}
+              >
+                <div className="wjc-page-showcase-card__top">
+                  <CountryFlag
+                    code={country}
+                    payload={payload}
+                    size={40}
+                  />
 
-      <mesh position={[0, 1.16, 0.405]} castShadow>
-        <boxGeometry args={[0.15, 0.92, 0.032]} />
-        <meshStandardMaterial color={stripe} roughness={0.58} metalness={0.04} />
-      </mesh>
+                  <span>
+                    {card?.tag ||
+                      card?.category ||
+                      "TOURNAMENT WATCH"}
+                  </span>
+                </div>
 
-      <mesh position={[0, 1.55, 0.43]} castShadow>
-        <boxGeometry args={[0.44, 0.12, 0.035]} />
-        <meshStandardMaterial color="#020617" roughness={0.7} />
-      </mesh>
+                <strong>{getShowcaseName(card)}</strong>
+                <p>{getShowcaseText(card)}</p>
 
-      <mesh position={[0, 1.93, 0]} castShadow>
-        <sphereGeometry args={[0.315, 28, 20]} />
-        <meshStandardMaterial color={skin} roughness={0.72} />
-      </mesh>
-
-      <mesh position={[0, 2.14, 0]} castShadow>
-        <sphereGeometry args={[0.322, 28, 12, 0, Math.PI * 2, 0, Math.PI / 2]} />
-        <meshStandardMaterial color={hair} roughness={0.88} />
-      </mesh>
-
-      <mesh position={[-0.095, 1.98, 0.293]}>
-        <sphereGeometry args={[0.023, 10, 10]} />
-        <meshStandardMaterial color="#020617" />
-      </mesh>
-
-      <mesh position={[0.095, 1.98, 0.293]}>
-        <sphereGeometry args={[0.023, 10, 10]} />
-        <meshStandardMaterial color="#020617" />
-      </mesh>
-
-      <mesh position={[0, 1.885, 0.306]}>
-        <boxGeometry args={[0.115, 0.018, 0.012]} />
-        <meshStandardMaterial color="#7f1d1d" />
-      </mesh>
-
-      <mesh ref={leftArmRef} position={[-0.5, 1.16, 0]} rotation={[0, 0, -0.34]} castShadow>
-        <cylinderGeometry args={[0.07, 0.088, 0.9, 18]} />
-        <meshStandardMaterial color={jacket} roughness={0.7} />
-      </mesh>
-
-      <mesh ref={rightArmRef} position={[0.5, 1.16, 0]} rotation={[0, 0, 0.34]} castShadow>
-        <cylinderGeometry args={[0.07, 0.088, 0.9, 18]} />
-        <meshStandardMaterial color={jacket} roughness={0.7} />
-      </mesh>
-
-      <mesh position={[-0.69, 0.8, 0]} castShadow>
-        <sphereGeometry args={[0.085, 16, 12]} />
-        <meshStandardMaterial color={skin} roughness={0.72} />
-      </mesh>
-
-      <mesh position={[0.69, 0.8, 0]} castShadow>
-        <sphereGeometry args={[0.085, 16, 12]} />
-        <meshStandardMaterial color={skin} roughness={0.72} />
-      </mesh>
-    </group>
+                {stockDelta != null ? (
+                  <div
+                    className={`wjc-page-showcase-card__stock ${
+                      Number(stockDelta) >= 0
+                        ? "is-positive"
+                        : "is-negative"
+                    }`}
+                  >
+                    STOCK {Number(stockDelta) >= 0 ? "+" : ""}
+                    {stockDelta}
+                  </div>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 
-function BroadcastStage() {
-  const backLogoRef = useRef();
-
-  useFrame(({ clock }) => {
-    const t = clock.getElapsedTime();
-
-    if (backLogoRef.current) {
-      backLogoRef.current.material.opacity = 0.09 + Math.sin(t * 1.1) * 0.025;
-      backLogoRef.current.rotation.z = Math.sin(t * 0.15) * 0.015;
-    }
-  });
-
+function WjcProgressStrip({ payload }) {
+  const steps = getTournamentProgressSteps(payload);
   return (
-    <group>
-      <BroadcastLights />
-
-      <mesh position={[0, 2.25, -2.08]} receiveShadow>
-        <boxGeometry args={[10.3, 4.85, 0.18]} />
-        <meshStandardMaterial color="#05070d" roughness={0.88} />
-      </mesh>
-
-      <mesh position={[-2.95, 2.24, -1.965]}>
-        <boxGeometry args={[4.25, 4.35, 0.045]} />
-        <meshStandardMaterial color="#123b7a" transparent opacity={0.42} roughness={0.8} />
-      </mesh>
-
-      <mesh position={[2.95, 2.24, -1.96]}>
-        <boxGeometry args={[4.25, 4.35, 0.045]} />
-        <meshStandardMaterial color="#a00020" transparent opacity={0.38} roughness={0.8} />
-      </mesh>
-
-      <mesh ref={backLogoRef} position={[0, 2.55, -1.91]}>
-        <circleGeometry args={[1.1, 72]} />
-        <meshStandardMaterial color="#f8fafc" transparent opacity={0.11} />
-      </mesh>
-
-      <mesh position={[0, 0.02, -0.1]} receiveShadow>
-        <cylinderGeometry args={[4.45, 4.88, 0.28, 72]} />
-        <meshStandardMaterial color="#151924" roughness={0.55} metalness={0.12} />
-      </mesh>
-
-      <mesh position={[0, 0.19, -0.1]} receiveShadow>
-        <cylinderGeometry args={[4.18, 4.18, 0.045, 72]} />
-        <meshStandardMaterial color="#202938" roughness={0.48} metalness={0.12} />
-      </mesh>
-
-      <mesh position={[0, 0.215, 1.72]} receiveShadow>
-        <boxGeometry args={[7.15, 0.28, 0.36]} />
-        <meshStandardMaterial color="#06080f" roughness={0.5} metalness={0.12} />
-      </mesh>
-
-      <mesh position={[0, 0.37, 1.91]}>
-        <boxGeometry args={[6.4, 0.08, 0.05]} />
-        <meshStandardMaterial color="#d71920" roughness={0.32} metalness={0.25} />
-      </mesh>
-
-      <CylinderFigure x={-1.72} z={0.17} scale={1.08} jacket="#e5e7eb" stripe="#1d4ed8" delay={0.1} />
-      <CylinderFigure x={0} z={0.02} scale={1.24} jacket="#f8fafc" stripe="#d71920" hair="#0a0a0a" delay={0.6} />
-      <CylinderFigure x={1.72} z={0.17} scale={1.08} jacket="#d1d5db" stripe="#facc15" delay={1.1} />
-
-      <mesh position={[0, -0.23, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-        <planeGeometry args={[12.5, 8.5]} />
-        <meshStandardMaterial color="#03050b" roughness={0.92} />
-      </mesh>
-    </group>
+    <section className="wjc-page-card wjc-progress-strip" aria-label="Tournament progress">
+      <header className="wjc-page-card__header">
+        <div>
+          <span>Tournament Path</span>
+          <h2>Stage Progress</h2>
+        </div>
+      </header>
+      <ol className="wjc-progress-strip__list">
+        {steps.map((step) => (
+          <li key={step.id} className={`is-${step.state}`}>
+            <strong>{step.label}</strong>
+            <span>
+              {step.state === "complete"
+                ? "Complete"
+                : step.state === "current"
+                  ? "Current"
+                  : "Upcoming"}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Ticker                                                                     */
-/* -------------------------------------------------------------------------- */
-
-function WjcScoreTicker({ items }) {
-  const trackRef = useRef(null);
-  const text = items.length ? items.join("   ·   ") : "WORLD JUNIORS · AWAITING SCORE FEED";
+function WjcTodayGamesModule({ payload, onSelectGame }) {
+  const today = asArray(payload?.games_today);
+  const upcoming = asArray(payload?.all_games)
+    .filter((g) => g?.home_goals == null || g?.away_goals == null)
+    .slice(0, 4);
+  const games = today.length ? today : upcoming;
 
   return (
-    <div className="wjc-ticker" aria-label="WJC score ticker">
-      <div className="wjc-ticker__bug">WJC</div>
-      <div className="wjc-ticker__track-wrap">
-        <div ref={trackRef} className="wjc-ticker__track" aria-hidden="true">
-          <span>{text}</span>
-          <span>{text}</span>
+    <section className="wjc-page-card wjc-today-games">
+      <header className="wjc-page-card__header">
+        <div>
+          <span>{today.length ? "Today" : "Next"}</span>
+          <h2>{today.length ? "Today's Games" : "Upcoming Games"}</h2>
+        </div>
+        <strong>{games.length} listed</strong>
+      </header>
+      {!games.length ? (
+        <div className="wjc-page-empty">No games scheduled.</div>
+      ) : (
+        <div className="wjc-today-games__list">
+          {games.map((game, index) => {
+            const complete =
+              game.home_goals != null && game.away_goals != null;
+            return (
+              <button
+                key={`${game.home}-${game.away}-${game.game_day}-${index}`}
+                type="button"
+                className="wjc-today-games__row"
+                onClick={() => onSelectGame?.(game)}
+              >
+                <em>{game.round || "Game"}</em>
+                <strong>
+                  {String(game.away || "?").slice(0, 3).toUpperCase()}
+                  {" "}
+                  {complete ? game.away_goals : "—"}
+                  {" — "}
+                  {complete ? game.home_goals : "—"}
+                  {" "}
+                  {String(game.home || "?").slice(0, 3).toUpperCase()}
+                </strong>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function WjcOverviewSection({
+  payload,
+  showcaseCards,
+  onSelectProspect,
+  onSelectGame,
+  userProspectCount,
+  gamesCount,
+}) {
+  return (
+    <div className="wjc-page-section-stack">
+      <div className="wjc-overview-summary">
+        <div>
+          <span>Stage</span>
+          <strong>
+            {getTournamentPhaseLabel(payload.wjc_day, payload.medals_final)}
+          </strong>
+        </div>
+        <div>
+          <span>Day</span>
+          <strong>
+            {payload.wjc_day != null
+              ? `${payload.wjc_day}/${payload.wjc_days_total}`
+              : "—"}
+          </strong>
+        </div>
+        <div>
+          <span>Games</span>
+          <strong>{gamesCount}</strong>
+        </div>
+        <div>
+          <span>Your Prospects</span>
+          <strong>{userProspectCount}</strong>
         </div>
       </div>
+
+      <WjcProgressStrip payload={payload} />
+      <WjcMedalPanel payload={payload} />
+      <WjcStandingsTable
+        standings={payload.standings}
+        payload={payload}
+      />
+      <WjcTodayGamesModule
+        payload={payload}
+        onSelectGame={onSelectGame}
+      />
+      <WjcShowcaseGrid
+        cards={showcaseCards}
+        payload={payload}
+        onSelectProspect={onSelectProspect}
+      />
     </div>
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/* Prospect page                                                              */
+/* -------------------------------------------------------------------------- */
+
+function mergeUserProspectsWithStats(payload) {
+  const stats = asArray(payload?.player_stats);
+  const tournamentProspects = asArray(
+    payload?.tournament_prospects
+  );
+
+  return asArray(payload?.user_prospects).map((prospect) => {
+    const tournamentProfile = tournamentProspects.find(
+      (candidate) =>
+        String(candidate?.player_id) ===
+        String(prospect?.player_id)
+    );
+
+    const tournamentStats = stats.find(
+      (candidate) =>
+        String(candidate?.player_id) ===
+        String(prospect?.player_id)
+    );
+
+    return {
+      ...prospect,
+      ...(tournamentProfile || {}),
+      ...(tournamentStats || {}),
+    };
+  });
+}
+
+function WjcProspectsSection({
+  payload,
+  prospects,
+  onSelectProspect,
+  onOpenDraftBoard,
+}) {
+  const sorted = useMemo(() => {
+    const list = [...asArray(prospects)];
+    list.sort((a, b) => {
+      const aCut = a.made_wjc_team === false ? 1 : 0;
+      const bCut = b.made_wjc_team === false ? 1 : 0;
+      if (aCut !== bCut) return aCut - bCut;
+      const aPts = Number(a.pts ?? a.tournament_pts) || 0;
+      const bPts = Number(b.pts ?? b.tournament_pts) || 0;
+      if (bPts !== aPts) return bPts - aPts;
+      const aRank = Number(a.stock_after ?? a.stock_before) || 999;
+      const bRank = Number(b.stock_after ?? b.stock_before) || 999;
+      return aRank - bRank;
+    });
+    return list;
+  }, [prospects]);
+
+  const activeCount = sorted.filter(
+    (p) => formatProspectStatus(p) === "Active" || formatProspectStatus(p) === "Selected"
+  ).length;
+  const cutCount = sorted.filter((p) => formatProspectStatus(p) === "Cut").length;
+
+  return (
+    <section className="wjc-page-card wjc-page-prospects">
+      <header className="wjc-page-card__header">
+        <div>
+          <span>Organization Tracker</span>
+          <h2>Your WJC Prospects</h2>
+        </div>
+        <div className="wjc-page-prospects__actions">
+          <strong>
+            {sorted.length} selected
+            {cutCount ? ` · ${cutCount} cut` : ""}
+            {activeCount ? ` · ${activeCount} active` : ""}
+          </strong>
+          {typeof onOpenDraftBoard === "function" ? (
+            <button
+              type="button"
+              className="wjc-page-inline-action"
+              onClick={onOpenDraftBoard}
+            >
+              Open Draft Board
+            </button>
+          ) : null}
+        </div>
+      </header>
+
+      {!sorted.length ? (
+        <div className="wjc-page-empty wjc-page-empty--structured">
+          <strong>No organization prospects are participating.</strong>
+          <p>Review tournament draft risers in the side board, or open the draft class.</p>
+          {typeof onOpenDraftBoard === "function" ? (
+            <button
+              type="button"
+              className="wjc-page-inline-action"
+              onClick={onOpenDraftBoard}
+            >
+              Open Draft Board
+            </button>
+          ) : null}
+        </div>
+      ) : sorted.length === 1 ? (
+        <div className="wjc-prospect-spotlight">
+          {(() => {
+            const prospect = sorted[0];
+            const goals = prospect.g ?? prospect.tournament_g ?? 0;
+            const assists = prospect.a ?? prospect.tournament_a ?? 0;
+            const points =
+              prospect.pts ??
+              prospect.tournament_pts ??
+              safeNumber(goals) + safeNumber(assists);
+            const gamesPlayed = prospect.gp ?? prospect.tournament_gp ?? 0;
+            const stockDelta =
+              prospect.stock_delta ?? prospect.draft_stock_delta;
+            const status = formatProspectStatus(prospect);
+            return (
+              <button
+                type="button"
+                className="wjc-prospect-spotlight__card"
+                onClick={() => onSelectProspect(prospect)}
+              >
+                <div className="wjc-prospect-spotlight__top">
+                  <CountryFlag
+                    code={
+                      prospect.wjc_country ||
+                      prospect.country ||
+                      prospect.nation
+                    }
+                    payload={payload}
+                    size={48}
+                  />
+                  <div>
+                    <strong>{prospect.name || "Unknown Player"}</strong>
+                    <span>
+                      {prospect.position || "—"} · Age {prospect.age ?? "—"}
+                    </span>
+                    <em className="wjc-status-pill">{status}</em>
+                  </div>
+                </div>
+                <div className="wjc-prospect-spotlight__stats">
+                  <div><span>GP</span><strong>{gamesPlayed}</strong></div>
+                  <div><span>G</span><strong>{goals}</strong></div>
+                  <div><span>A</span><strong>{assists}</strong></div>
+                  <div><span>PTS</span><strong>{points}</strong></div>
+                  <div>
+                    <span>Stock</span>
+                    <strong>
+                      {stockDelta == null
+                        ? "—"
+                        : `${Number(stockDelta) >= 0 ? "+" : ""}${stockDelta}`}
+                    </strong>
+                  </div>
+                </div>
+              </button>
+            );
+          })()}
+        </div>
+      ) : (
+        <div className="wjc-page-prospect-list">
+          {sorted.map((prospect) => {
+            const goals = prospect.g ?? prospect.tournament_g ?? 0;
+            const assists = prospect.a ?? prospect.tournament_a ?? 0;
+            const points =
+              prospect.pts ??
+              prospect.tournament_pts ??
+              safeNumber(goals) + safeNumber(assists);
+            const gamesPlayed = prospect.gp ?? prospect.tournament_gp ?? 0;
+            const stockDelta =
+              prospect.stock_delta ?? prospect.draft_stock_delta;
+            const status = formatProspectStatus(prospect);
+
+            return (
+              <button
+                key={prospect.player_id || prospect.name}
+                type="button"
+                className="wjc-page-prospect-row"
+                onClick={() => onSelectProspect(prospect)}
+              >
+                <div className="wjc-page-prospect-row__identity">
+                  <CountryFlag
+                    code={
+                      prospect.wjc_country ||
+                      prospect.country ||
+                      prospect.nation
+                    }
+                    payload={payload}
+                    size={44}
+                  />
+                  <div>
+                    <strong>{prospect.name || "Unknown Player"}</strong>
+                    <span>
+                      {prospect.position || "—"} · Age {prospect.age ?? "—"}
+                      {prospect.stock_after != null || prospect.stock_before != null
+                        ? ` · #${prospect.stock_after ?? prospect.stock_before}`
+                        : ""}
+                    </span>
+                  </div>
+                </div>
+                <div className="wjc-page-prospect-row__status">
+                  <span>Status</span>
+                  <strong>{status}</strong>
+                </div>
+                <div className="wjc-page-prospect-row__stat">
+                  <span>GP</span>
+                  <strong>{gamesPlayed}</strong>
+                </div>
+                <div className="wjc-page-prospect-row__stat">
+                  <span>G</span>
+                  <strong>{goals}</strong>
+                </div>
+                <div className="wjc-page-prospect-row__stat">
+                  <span>A</span>
+                  <strong>{assists}</strong>
+                </div>
+                <div className="wjc-page-prospect-row__stat">
+                  <span>PTS</span>
+                  <strong>{points}</strong>
+                </div>
+                <div
+                  className={`wjc-page-prospect-row__stock ${
+                    stockDelta == null
+                      ? ""
+                      : Number(stockDelta) >= 0
+                        ? "is-positive"
+                        : "is-negative"
+                  }`}
+                >
+                  <span>Stock</span>
+                  <strong>
+                    {stockDelta == null
+                      ? "—"
+                      : `${Number(stockDelta) >= 0 ? "+" : ""}${stockDelta}`}
+                  </strong>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
 
 /* -------------------------------------------------------------------------- */
-/* Main screen                                                                */
+/* Playoff page                                                               */
+/* -------------------------------------------------------------------------- */
+
+function WjcPlayoffGame({
+  game,
+  payload,
+  label,
+  onSelectGame,
+}) {
+  if (!game) {
+    return (
+      <div className="wjc-page-playoff-game is-empty">
+        <span>{label}</span>
+        <strong>TBD</strong>
+      </div>
+    );
+  }
+
+  const homeGoals = game.home_goals;
+  const awayGoals = game.away_goals;
+
+  const complete =
+    homeGoals != null && awayGoals != null;
+  const homeWins = complete && Number(homeGoals) > Number(awayGoals);
+  const awayWins = complete && Number(awayGoals) > Number(homeGoals);
+
+  return (
+    <button
+      type="button"
+      className="wjc-page-playoff-game"
+      onClick={() => onSelectGame(game)}
+    >
+      <span className="wjc-page-playoff-game__label">
+        {label}
+      </span>
+
+      <div className={`wjc-page-playoff-game__team${homeWins ? " is-winner" : ""}`}>
+        <CountryFlag
+          code={game.home}
+          payload={payload}
+          size={30}
+        />
+
+        <strong>{gameCode(game, "home")}</strong>
+        <b>{complete ? homeGoals : "—"}</b>
+      </div>
+
+      <div className={`wjc-page-playoff-game__team${awayWins ? " is-winner" : ""}`}>
+        <CountryFlag
+          code={game.away}
+          payload={payload}
+          size={30}
+        />
+
+        <strong>{gameCode(game, "away")}</strong>
+        <b>{complete ? awayGoals : "—"}</b>
+      </div>
+    </button>
+  );
+}
+
+function WjcPlayoffsSection({
+  payload,
+  onSelectGame,
+}) {
+  const playoffs = payload.playoffs || {};
+  const phase = getTournamentPhaseLabel(
+    payload.wjc_day,
+    payload.medals_final
+  );
+  const seeded =
+    asArray(playoffs.quarterfinals).length > 0 ||
+    asArray(playoffs.semifinals).length > 0 ||
+    Boolean(playoffs.bronze) ||
+    Boolean(playoffs.gold);
+
+  return (
+    <section className="wjc-page-card wjc-page-playoffs">
+      <header className="wjc-page-card__header">
+        <div>
+          <span>Medal Round</span>
+          <h2>Bracket</h2>
+        </div>
+        <strong>{phase}</strong>
+      </header>
+
+      {!seeded ? (
+        <div className="wjc-bracket-banner">
+          Seeding pending while group play continues.
+        </div>
+      ) : null}
+
+      <div className="wjc-page-bracket">
+        <div className="wjc-page-bracket__round">
+          <h3>Quarterfinals</h3>
+          {asArray(playoffs.quarterfinals).length ? (
+            asArray(playoffs.quarterfinals).map((game, index) => (
+              <WjcPlayoffGame
+                key={`quarterfinal-${index}`}
+                game={game}
+                payload={payload}
+                label={`QF ${index + 1}`}
+                onSelectGame={onSelectGame}
+              />
+            ))
+          ) : (
+            <>
+              <WjcPlayoffGame label="QF 1" />
+              <WjcPlayoffGame label="QF 2" />
+              <WjcPlayoffGame label="QF 3" />
+              <WjcPlayoffGame label="QF 4" />
+            </>
+          )}
+        </div>
+
+        <div className="wjc-page-bracket__round">
+          <h3>Semifinals</h3>
+          {asArray(playoffs.semifinals).length ? (
+            asArray(playoffs.semifinals).map((game, index) => (
+              <WjcPlayoffGame
+                key={`semifinal-${index}`}
+                game={game}
+                payload={payload}
+                label={`SF ${index + 1}`}
+                onSelectGame={onSelectGame}
+              />
+            ))
+          ) : (
+            <>
+              <WjcPlayoffGame label="SF 1" />
+              <WjcPlayoffGame label="SF 2" />
+            </>
+          )}
+        </div>
+
+        <div className="wjc-page-bracket__round wjc-page-bracket__round--medals">
+          <h3>Medal Games</h3>
+          <WjcPlayoffGame
+            game={playoffs.bronze}
+            payload={payload}
+            label="Bronze"
+            onSelectGame={onSelectGame}
+          />
+          <WjcPlayoffGame
+            game={playoffs.gold}
+            payload={payload}
+            label="Gold"
+            onSelectGame={onSelectGame}
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Main page                                                                  */
 /* -------------------------------------------------------------------------- */
 
 export default function WorldJuniorsMenu({
@@ -1498,598 +1587,314 @@ export default function WorldJuniorsMenu({
   onSimNextTournamentDay,
   onOpenDraftBoard,
 }) {
-  const audioRef = useRef(null);
-  const queueIndexRef = useRef(0);
-  const introTimersRef = useRef([]);
-  const speechCleanupRef = useRef(null);
-  const queueRef = useRef([]);
+  const [activeSection, setActiveSection] =
+    useState("overview");
 
-  const [isMuted, setIsMuted] = useState(false);
-  const [voiceOn, setVoiceOn] = useState(true);
-  const [simBusy, setSimBusy] = useState(false);
-  const [selectedGame, setSelectedGame] = useState(null);
-  const [selectedProspect, setSelectedProspect] = useState(null);
-  const [showcaseCard, setShowcaseCard] = useState(null);
+  const [selectedGame, setSelectedGame] =
+    useState(null);
 
-  const [broadcastPhase, setBroadcastPhase] = useState("idle");
-  const [cameraMode, setCameraMode] = useState("wide");
-  const [activeHostId, setActiveHostId] = useState(null);
-  const [activeSpeechText, setActiveSpeechText] = useState("");
-  const [activeTopic, setActiveTopic] = useState(null);
-  const [showHostLowerThird, setShowHostLowerThird] = useState(false);
-  const [currentQueueItem, setCurrentQueueItem] = useState(null);
-  const [cameraTransition, setCameraTransition] = useState("broadcast-push");
-  const [speechVoices, setSpeechVoices] = useState([]);
-  const [speechPaused, setSpeechPaused] = useState(false);
-  const [needsUserStart, setNeedsUserStart] = useState(true);
-  const [graphicTakeover, setGraphicTakeover] = useState(false);
-  const [centerPopup, setCenterPopup] = useState(null);
-  const [showCenterPopup, setShowCenterPopup] = useState(false);
-  const sessionRestoredRef = useRef(false);
+  const [selectedProspect, setSelectedProspect] =
+    useState(null);
 
-  const reducedMotion = useMemo(() => {
-    if (typeof window === "undefined") return false;
-    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  }, []);
+  const [simBusy, setSimBusy] =
+    useState(false);
 
   const payload = useMemo(
-    () => resolveWorldJuniorsPayload(franchiseState, eventData),
+    () =>
+      resolveWorldJuniorsPayload(
+        franchiseState,
+        eventData
+      ),
     [franchiseState, eventData]
   );
 
   const draftStockRows = useMemo(
-    () => buildWjcDraftStockRows(payload, franchiseState),
+    () =>
+      buildWjcDraftStockRows(
+        payload,
+        franchiseState
+      ),
     [payload, franchiseState]
   );
 
-  const broadcastQueue = useMemo(
-    () => buildBroadcastQueue(payload, draftStockRows),
-    [payload, draftStockRows]
+  const statLeaders = useMemo(
+    () => buildWjcStatLeaders(payload),
+    [payload]
   );
 
-  const statLeaders = useMemo(() => buildWjcStatLeaders(payload), [payload]);
-  const showcaseCards = useMemo(() => buildWjcShowcaseCards(payload), [payload]);
-  const tickerItems = useMemo(() => buildTickerItems(payload), [payload]);
-  const dailyIntroLabel = useMemo(() => getDailyIntroLabel(payload), [payload]);
-  const fullIntro = useMemo(() => shouldUseFullIntro(payload), [payload]);
+  const showcaseCards = useMemo(
+    () => buildWjcShowcaseCards(payload),
+    [payload]
+  );
 
-  const tournamentGames = useMemo(() => {
-    if (asArray(payload.all_games).length) return asArray(payload.all_games);
-    const games = [...asArray(payload.round_robin_games)];
-    const po = payload.playoffs || {};
-    games.push(...asArray(po.quarterfinals));
-    games.push(...asArray(po.semifinals));
-    if (po.bronze) games.push(po.bronze);
-    if (po.gold) games.push(po.gold);
-    return games;
-  }, [payload]);
+  const tickerItems = useMemo(
+    () => buildTickerItems(payload),
+    [payload]
+  );
 
-  queueRef.current = broadcastQueue;
+  const tournamentGames = useMemo(
+    () => collectTournamentGames(payload),
+    [payload]
+  );
 
-  const clearIntroTimers = useCallback(() => {
-    introTimersRef.current.forEach((id) => window.clearTimeout(id));
-    introTimersRef.current = [];
-  }, []);
+  const userProspects = useMemo(
+    () => mergeUserProspectsWithStats(payload),
+    [payload]
+  );
 
-  const cancelSpeech = useCallback(() => {
-    if (speechCleanupRef.current) {
-      speechCleanupRef.current();
-      speechCleanupRef.current = null;
-    }
-    if (typeof window !== "undefined" && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
-  }, []);
+  const loanDecisions = useMemo(
+    () => collectLoanDecisions(franchiseState),
+    [franchiseState]
+  );
 
-  const finishBroadcast = useCallback(() => {
-    cancelSpeech();
-    clearIntroTimers();
-    setBroadcastPhase("interactive");
-    setCameraMode("wide");
-    setActiveHostId(null);
-    setActiveSpeechText("");
-    setActiveTopic(null);
-    setShowHostLowerThird(false);
-    setCurrentQueueItem(null);
-    setGraphicTakeover(false);
-    setCenterPopup(null);
-    setShowCenterPopup(false);
-    saveWjcSession(payload, "interactive");
-  }, [cancelSpeech, clearIntroTimers, payload]);
-
-  const resetBroadcastState = useCallback(() => {
-    cancelSpeech();
-    clearIntroTimers();
-    queueIndexRef.current = 0;
-    setBroadcastPhase("idle");
-    setCameraMode("wide");
-    setActiveHostId(null);
-    setActiveSpeechText("");
-    setActiveTopic(null);
-    setShowHostLowerThird(false);
-    setCurrentQueueItem(null);
-    setGraphicTakeover(false);
-    setSpeechPaused(false);
-    setShowcaseCard(null);
-    setCenterPopup(null);
-    setShowCenterPopup(false);
-  }, [cancelSpeech, clearIntroTimers]);
-
-  const applyQueueVisuals = useCallback((item) => {
-    if (!item) return;
-    setCurrentQueueItem(item);
-    setCameraTransition(item.transition || "broadcast-push");
-    setCameraMode(item.cameraMode || getHostCameraMode(item.hostId));
-    setActiveTopic(item.topic || null);
-    setGraphicTakeover(Boolean(item.graphicTakeover));
-    if (item.centerPopup) {
-      setCenterPopup(item.centerPopup);
-      setShowCenterPopup(true);
-    } else {
-      setShowCenterPopup(false);
-    }
-    if (item.hostId && !item.silent) {
-      setActiveHostId(item.hostId);
-    }
-  }, []);
-
-  const advanceQueueRef = useRef(null);
-
-  const advanceQueue = useCallback(() => {
-    const queue = queueRef.current;
-    if (!queue.length || queueIndexRef.current >= queue.length) {
-      finishBroadcast();
-      return;
-    }
-
-    const item = queue[queueIndexRef.current];
-    queueIndexRef.current += 1;
-    applyQueueVisuals(item);
-
-    if (item.silent) {
-      setActiveSpeechText("");
-      setShowHostLowerThird(false);
-      if (item.centerPopup) {
-        setCenterPopup(item.centerPopup);
-        setShowCenterPopup(true);
-      }
-      const hold = item.holdMs || 2400;
-      const timer = window.setTimeout(() => advanceQueueRef.current?.(), hold);
-      introTimersRef.current.push(timer);
-      return;
-    }
-
-    const cleanup = speakBroadcastLine({
-      text: item.text,
-      hostId: item.hostId,
-      voiceOn,
-      voices: speechVoices,
-      onStart: () => {
-        setActiveHostId(item.hostId);
-        setActiveSpeechText(item.text);
-        setShowHostLowerThird(true);
-        if (item.centerPopup) {
-          setCenterPopup(item.centerPopup);
-          setShowCenterPopup(true);
-        }
-      },
-      onEnd: () => {
-        setShowHostLowerThird(false);
-        setActiveSpeechText("");
-        setShowCenterPopup(false);
-        const resetTimer = window.setTimeout(() => {
-          if (queueIndexRef.current < queue.length) {
-            setActiveHostId(null);
-            setCameraMode("wide");
-          }
-          advanceQueueRef.current?.();
-        }, reducedMotion ? 200 : 550);
-        introTimersRef.current.push(resetTimer);
-      },
-    });
-    speechCleanupRef.current = cleanup;
-  }, [applyQueueVisuals, finishBroadcast, reducedMotion, speechVoices, voiceOn]);
-
-  advanceQueueRef.current = advanceQueue;
-
-  const startBroadcastQueue = useCallback(() => {
-    cancelSpeech();
-    clearIntroTimers();
-    queueIndexRef.current = 0;
-    setBroadcastPhase("broadcast");
-    advanceQueue();
-  }, [advanceQueue, cancelSpeech, clearIntroTimers]);
-
-  const runIntroSequence = useCallback(() => {
-    clearIntroTimers();
-    setBroadcastPhase("intro-title");
-
-    const schedule = (fn, ms) => {
-      const id = window.setTimeout(fn, ms);
-      introTimersRef.current.push(id);
-    };
-
-    if (fullIntro) {
-      schedule(() => setBroadcastPhase("intro-countries"), reducedMotion ? 1200 : 2200);
-      const montageMs = Math.max(1800, asArray(payload.countries).length * 280 + 400);
-      schedule(() => setBroadcastPhase("intro-tournament"), reducedMotion ? 1800 : 2200 + montageMs);
-      schedule(
-        () => setBroadcastPhase("stage-reveal"),
-        reducedMotion ? 2600 : 2200 + montageMs + (reducedMotion ? 1200 : 2000)
-      );
-      schedule(
-        () => {
-          setBroadcastPhase("opening");
-          startBroadcastQueue();
-        },
-        reducedMotion ? 3200 : 2200 + montageMs + 2000 + 1600
-      );
-    } else {
-      schedule(() => setBroadcastPhase("stage-reveal"), reducedMotion ? 900 : 1600);
-      schedule(
-        () => {
-          setBroadcastPhase("opening");
-          startBroadcastQueue();
-        },
-        reducedMotion ? 1500 : 2800
-      );
-    }
-  }, [clearIntroTimers, fullIntro, payload.countries, reducedMotion, startBroadcastQueue]);
-
-  const handleEnterBroadcast = useCallback(async () => {
-    resetBroadcastState();
-    setNeedsUserStart(false);
-    const audio = audioRef.current;
-    if (audio) {
-      try {
-        audio.loop = true;
-        audio.volume = 0.2;
-        audio.muted = isMuted;
-        await audio.play();
-      } catch (error) {
-        console.warn("World Juniors music could not start:", error);
-      }
-    }
-    runIntroSequence();
-  }, [isMuted, resetBroadcastState, runIntroSequence]);
-
-  const handleReplayBroadcast = useCallback(() => {
-    handleEnterBroadcast();
-  }, [handleEnterBroadcast]);
-
-  const handleSkipIntro = useCallback(() => {
-    clearIntroTimers();
-    setBroadcastPhase("opening");
-    startBroadcastQueue();
-  }, [clearIntroTimers, startBroadcastQueue]);
-
-  const handlePauseBroadcast = useCallback(() => {
-    if (typeof window !== "undefined" && window.speechSynthesis) {
-      window.speechSynthesis.pause();
-      setSpeechPaused(true);
-    }
-  }, []);
-
-  const handleResumeBroadcast = useCallback(() => {
-    if (typeof window !== "undefined" && window.speechSynthesis) {
-      window.speechSynthesis.resume();
-      setSpeechPaused(false);
-    }
-  }, []);
-
-  const handleSkipLine = useCallback(() => {
-    cancelSpeech();
-    setShowHostLowerThird(false);
-    setActiveSpeechText("");
-    setShowCenterPopup(false);
-    setActiveHostId(null);
-    setCameraMode("wide");
-    advanceQueue();
-  }, [advanceQueue, cancelSpeech]);
-
-  const handleSkipShow = useCallback(() => {
-    queueIndexRef.current = queueRef.current.length;
-    finishBroadcast();
-  }, [finishBroadcast]);
-
-  const prospectTournamentStat = useMemo(() => {
-    if (!selectedProspect) return null;
-    return asArray(payload.player_stats).find(
-      (p) => String(p.player_id) === String(selectedProspect.player_id)
+  const heroImage = useMemo(() => {
+    const index = Math.max(
+      0,
+      (safeNumber(payload.wjc_day, 1) - 1) %
+        WJC_HERO_BACKGROUNDS.length
     );
-  }, [selectedProspect, payload.player_stats]);
+
+    return WJC_HERO_BACKGROUNDS[index];
+  }, [payload.wjc_day]);
+
+  const prospectTournamentStats = useMemo(() => {
+    if (!selectedProspect) {
+      return null;
+    }
+
+    return asArray(payload.player_stats).find(
+      (player) =>
+        String(player?.player_id) ===
+        String(selectedProspect?.player_id)
+    );
+  }, [payload.player_stats, selectedProspect]);
+
+  const handleLeave = useCallback(() => {
+    if (typeof onClose === "function") {
+      onClose();
+      return;
+    }
+
+    if (typeof onBackToHub === "function") {
+      onBackToHub();
+    }
+  }, [onBackToHub, onClose]);
 
   const handleSelectProspect = useCallback(
     (row) => {
-      const full =
-        draftStockRows.find((r) => String(r.player_id) === String(row.player_id)) ||
+      if (!row) return;
+
+      const fullProfile =
+        draftStockRows.find(
+          (candidate) =>
+            String(candidate?.player_id) ===
+            String(row?.player_id)
+        ) ||
         asArray(payload.tournament_prospects).find(
-          (r) => String(r.player_id) === String(row.player_id)
+          (candidate) =>
+            String(candidate?.player_id) ===
+            String(row?.player_id)
+        ) ||
+        asArray(payload.user_prospects).find(
+          (candidate) =>
+            String(candidate?.player_id) ===
+            String(row?.player_id)
         ) ||
         row;
-      setSelectedProspect(full);
+
+      setSelectedProspect({
+        ...row,
+        ...fullProfile,
+      });
     },
-    [draftStockRows, payload.tournament_prospects]
+    [
+      draftStockRows,
+      payload.tournament_prospects,
+      payload.user_prospects,
+    ]
   );
 
-  const onAirLabel = payload.hasData
-    ? payload.wjc_phase === "complete"
-      ? "FINAL"
-      : "LIVE"
-    : "DESK";
-
-  const isIntroActive = ["intro-title", "intro-countries", "intro-tournament", "stage-reveal"].includes(
-    broadcastPhase
-  );
-  const isBroadcastActive = ["opening", "broadcast"].includes(broadcastPhase);
-  const showHubInteractive = broadcastPhase === "interactive" || broadcastPhase === "idle";
-
-  const topicGraphicSide =
-    activeHostId === "host_1" ? "right" : activeHostId === "host_3" ? "left" : "right";
-
-  useEffect(() => {
-    document.body.classList.add("wjc-stage-open");
-    return () => document.body.classList.remove("wjc-stage-open");
-  }, []);
-
-  useEffect(() => {
-    if (sessionRestoredRef.current) return;
-    const session = loadWjcSession();
-    const key = wjcSessionKey(payload);
-    sessionRestoredRef.current = true;
-
-    if (session?.key === key && session.phase === "interactive") {
-      setNeedsUserStart(false);
-      setBroadcastPhase("interactive");
+  const handleSimDay = useCallback(async () => {
+    if (
+      simBusy ||
+      typeof onSimNextTournamentDay !== "function"
+    ) {
       return;
     }
 
-    if (payload?.hasData && payload?.wjc_day > 1) {
-      setNeedsUserStart(false);
-      setBroadcastPhase("interactive");
-      saveWjcSession(payload, "interactive");
-    }
-  }, [payload]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.loop = true;
-    audio.volume = 0.2;
-    audio.muted = isMuted;
-  }, [isMuted]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.speechSynthesis) return undefined;
-    const loadVoices = () => setSpeechVoices(window.speechSynthesis.getVoices());
-    loadVoices();
-    window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
-    return () => {
-      window.speechSynthesis.removeEventListener("voiceschanged", loadVoices);
-      window.speechSynthesis.cancel();
-    };
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      cancelSpeech();
-      clearIntroTimers();
-    };
-  }, [cancelSpeech, clearIntroTimers]);
-
-  useEffect(() => {
-    if (!showcaseCards.length || !isBroadcastActive) return undefined;
-    const pick = () => showcaseCards[Math.floor(Math.random() * showcaseCards.length)];
-    setShowcaseCard(pick());
-    const timer = window.setInterval(() => setShowcaseCard(pick()), 3200);
-    return () => window.clearInterval(timer);
-  }, [isBroadcastActive, showcaseCards, currentQueueItem?.id]);
-
-  const handleLeave = useCallback(() => {
-    cancelSpeech();
-    clearIntroTimers();
-    if (typeof onClose === "function") onClose();
-    else if (typeof onBackToHub === "function") onBackToHub();
-  }, [onBackToHub, onClose, cancelSpeech, clearIntroTimers]);
-
-  const handleSimDay = useCallback(async () => {
-    if (simBusy || typeof onSimNextTournamentDay !== "function") return;
     setSimBusy(true);
-    cancelSpeech();
-    clearIntroTimers();
+
     try {
       await onSimNextTournamentDay();
-      queueIndexRef.current = 0;
-      setBroadcastPhase("interactive");
-      setNeedsUserStart(false);
-      setCameraMode("wide");
-      setActiveHostId(null);
-      setActiveSpeechText("");
-      setActiveTopic(null);
-      setShowHostLowerThird(false);
-      setCurrentQueueItem(null);
-      setGraphicTakeover(false);
-      setCenterPopup(null);
-      setShowCenterPopup(false);
-      sessionRestoredRef.current = false;
     } catch (error) {
-      console.warn("WJC sim day failed:", error);
+      console.warn(
+        "World Juniors simulation failed:",
+        error
+      );
     } finally {
       setSimBusy(false);
     }
-  }, [onSimNextTournamentDay, simBusy, cancelSpeech, clearIntroTimers]);
+  }, [onSimNextTournamentDay, simBusy]);
 
-  useEffect(() => {
-    if (!payload?.hasData) return;
-    const session = loadWjcSession();
-    const key = wjcSessionKey(payload);
-    if (session?.key !== key && broadcastPhase === "interactive") {
-      saveWjcSession(payload, "interactive");
-    }
-  }, [payload, broadcastPhase]);
+  const canSim =
+    typeof onSimNextTournamentDay === "function" &&
+    !payload.medals_final;
 
-  const cameraContextValue = useMemo(
-    () => ({ cameraMode, activeHostId, reducedMotion }),
-    [cameraMode, activeHostId, reducedMotion]
-  );
+  const simLabel =
+    payload.isPreTournament || !payload.hasData
+      ? "Sim Day"
+      : "Sim Next Day";
+
+  const heroCompact = activeSection !== "overview";
+  const completedGames = tournamentGames.filter(
+    (g) => g?.home_goals != null && g?.away_goals != null
+  ).length;
 
   return (
-    <BroadcastCameraContext.Provider value={cameraContextValue}>
-      <section
-        className={`wjc-stage-root wjc-stage-root--broadcast wjc-broadcast-phase--${broadcastPhase}${graphicTakeover ? " is-graphic-takeover" : ""}`}
-        aria-label="World Juniors broadcast hub"
-      >
-        <audio ref={audioRef} src={worldJuniorsTheme} preload="auto" />
-
-        <EnterBroadcastOverlay
-          visible={needsUserStart && broadcastPhase === "idle"}
-          onEnter={handleEnterBroadcast}
-        />
-
-        <CinematicIntro
-          phase={broadcastPhase}
-          payload={payload}
-          countries={payload.countries}
-          fullIntro={fullIntro}
-          onSkip={handleSkipIntro}
-          dailyLabel={dailyIntroLabel}
-        />
-
-        <header className={`wjc-broadcast-header wjc-broadcast-header--slim${isIntroActive ? " is-dimmed" : ""}`}>
-          <NationFlagsBar standings={payload.standings} countries={payload.countries} />
-          <DeskControls
-            audioRef={audioRef}
-            isMuted={isMuted}
-            setIsMuted={setIsMuted}
-            voiceOn={voiceOn}
-            setVoiceOn={setVoiceOn}
-            onLeave={handleLeave}
-            onSimDay={onSimNextTournamentDay ? handleSimDay : null}
-            simBusy={simBusy}
-            onOpenDraftBoard={onOpenDraftBoard}
-          />
-        </header>
-
-        <div className={`wjc-broadcast-main${isIntroActive ? " is-intro-active" : ""}`}>
-          <DraftStockSidebar rows={draftStockRows} onSelectPlayer={handleSelectProspect} />
-
-          <div className="wjc-broadcast-center" aria-label="Broadcast stage">
-            <BroadcastHeroBackdrop />
-
-            <div
-              className={`wjc-broadcast-camera viewport camera--${cameraMode} transition--${cameraTransition}${activeHostId ? ` is-speaking-${activeHostId}` : ""}`}
-            >
-              <div className={`wjc-broadcast-stage broadcast-stage camera--${cameraMode}`}>
-                <div className="wjc-broadcast-hero__stage">
-                  <div className="wjc-stage-screen-top" aria-hidden="true">
-                    <span>{onAirLabel}</span>
-                    <b>WORLD JUNIORS</b>
-                    <em>{WJC_HOSTS[activeHostId]?.name || "BROADCAST TEAM"}</em>
-                  </div>
-
-                  <div className="wjc-intro-stage-bug wjc-intro-stage-bug--persistent">
-                    <span>WORLD JUNIORS</span>
-                    <b>{onAirLabel}</b>
-                  </div>
-
-                  <Canvas
-                    className={`wjc-stage-canvas${activeHostId ? ` is-speaking-${activeHostId}` : ""}`}
-                    camera={{ position: [0, 2.35, 6.35], fov: 37 }}
-                    dpr={[1, 1.5]}
-                    shadows
-                  >
-                    <Suspense fallback={null}>
-                      <FloatingCamera />
-                      <BroadcastStage />
-                    </Suspense>
-                  </Canvas>
-
-                  {!graphicTakeover ? (
-                    <ShowcaseOverlay card={showcaseCard} onSelectPlayer={handleSelectProspect} />
-                  ) : null}
-
-                  <TopicGraphicOverlay item={currentQueueItem} payload={payload} side={topicGraphicSide} />
-
-                  <CenterStagePopup popup={centerPopup} payload={payload} visible={showCenterPopup} />
-
-                  <HostLowerThird hostId={activeHostId} topic={activeTopic} visible={showHostLowerThird} />
-
-                  <CinematicSubtitle
-                    text={activeSpeechText}
-                    hostId={activeHostId}
-                    visible={showHostLowerThird}
-                  />
-
-                  <div className="wjc-stage-host-labels" aria-hidden="true">
-                    <span
-                      className={`wjc-stage-host-labels__left${activeHostId === "host_1" ? " is-active" : activeHostId ? " is-inactive" : ""}`}
-                    >
-                      Marcus Cole
-                    </span>
-                    <span
-                      className={`wjc-stage-host-labels__center${activeHostId === "host_2" ? " is-active" : activeHostId ? " is-inactive" : ""}`}
-                    >
-                      Jordan Hayes
-                    </span>
-                    <span
-                      className={`wjc-stage-host-labels__right${activeHostId === "host_3" ? " is-active" : activeHostId ? " is-inactive" : ""}`}
-                    >
-                      Dr. Elena Park
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <BroadcastControlBar
-              visible={isBroadcastActive}
-              isPaused={speechPaused}
-              onPause={handlePauseBroadcast}
-              onResume={handleResumeBroadcast}
-              onSkipLine={handleSkipLine}
-              onSkipShow={handleSkipShow}
-            />
-
-            {showHubInteractive ? (
-              <button
-                type="button"
-                className="wjc-replay-broadcast"
-                onClick={handleReplayBroadcast}
-                aria-label="Replay broadcast"
-              >
-                REPLAY BROADCAST
-              </button>
-            ) : null}
+    <section
+      className={`wjc-page-root wjc-page-root--${activeSection}`}
+      data-register="ops"
+      aria-label="World Juniors tournament centre"
+    >
+      <header className="wjc-page-header">
+        <div className="wjc-page-brand">
+          <span className="wjc-page-brand__mark">WJC</span>
+          <div>
+            <p>IIHF · U20 Championship</p>
+            <h1>World Juniors</h1>
           </div>
-
-          <StatLeadersSidebar leaders={statLeaders} />
         </div>
-
-        <div className={`wjc-hub-row${showHubInteractive ? "" : " wjc-hub-dimmed"}`}>
-          <GamesBrowser
-            games={tournamentGames}
-            onSelectGame={setSelectedGame}
-            formatScoreLine={formatScoreLine}
+        <div className="wjc-page-header__flags">
+          <NationFlagsBar
+            standings={payload.standings}
+            countries={payload.countries}
           />
         </div>
+      </header>
 
-        <WjcScoreTicker items={tickerItems} />
+      <WjcPageToolbar
+        activeSection={activeSection}
+        onSectionChange={setActiveSection}
+        onLeave={handleLeave}
+        onSimDay={handleSimDay}
+        onOpenDraftBoard={onOpenDraftBoard}
+        simBusy={simBusy}
+        canSim={canSim}
+        simLabel={simLabel}
+      />
 
-        <GameResultModal
-          game={selectedGame}
-          onClose={() => setSelectedGame(null)}
-          formatScoreLine={formatScoreLine}
-          gameCode={gameCode}
-        />
-
-        <ProspectDetailModal
-          prospect={selectedProspect}
-          tournamentStats={prospectTournamentStat}
+      <main className="wjc-page-main">
+        <WjcSummaryHero
+          payload={payload}
           franchiseState={franchiseState}
-          onClose={() => setSelectedProspect(null)}
-          onOpenDraftBoard={onOpenDraftBoard}
+          heroImage={heroImage}
+          loanDecisionCount={loanDecisions.length}
+          gamesCount={tournamentGames.length}
+          compact={heroCompact}
         />
-      </section>
-    </BroadcastCameraContext.Provider>
+
+        {payload.isPreTournament ? (
+          <section className="wjc-page-countdown">
+            <div>
+              <span>Next Tournament</span>
+              <strong>
+                {payload.countdown_display ||
+                  payload.start_date ||
+                  "Schedule unavailable"}
+              </strong>
+            </div>
+            {payload.countdown_days != null ? (
+              <div>
+                <span>Days Until Start</span>
+                <strong>{payload.countdown_days}</strong>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
+        <div className="wjc-page-workspace">
+          <aside className="wjc-page-rail wjc-page-rail--left">
+            <DraftStockSidebar
+              rows={draftStockRows}
+              onSelectPlayer={handleSelectProspect}
+            />
+          </aside>
+
+          <section className="wjc-page-content" role="tabpanel">
+            {activeSection === "overview" ? (
+              <WjcOverviewSection
+                payload={payload}
+                showcaseCards={showcaseCards}
+                onSelectProspect={handleSelectProspect}
+                onSelectGame={setSelectedGame}
+                userProspectCount={userProspects.length}
+                gamesCount={tournamentGames.length}
+              />
+            ) : null}
+
+            {activeSection === "games" ? (
+              <section className="wjc-page-card wjc-page-games">
+                <header className="wjc-page-card__header">
+                  <div>
+                    <span>Tournament Schedule</span>
+                    <h2>Games and Results</h2>
+                  </div>
+                  <strong>
+                    {completedGames} completed
+                    <span aria-hidden="true"> · </span>
+                    {tournamentGames.length} total
+                    {payload.wjc_day != null
+                      ? ` · Day ${payload.wjc_day}`
+                      : ""}
+                  </strong>
+                </header>
+                <GamesBrowser
+                  games={tournamentGames}
+                  onSelectGame={setSelectedGame}
+                  formatScoreLine={formatScoreLine}
+                />
+              </section>
+            ) : null}
+
+            {activeSection === "prospects" ? (
+              <WjcProspectsSection
+                payload={payload}
+                prospects={userProspects}
+                onSelectProspect={handleSelectProspect}
+                onOpenDraftBoard={onOpenDraftBoard}
+              />
+            ) : null}
+
+            {activeSection === "playoffs" ? (
+              <WjcPlayoffsSection
+                payload={payload}
+                onSelectGame={setSelectedGame}
+              />
+            ) : null}
+          </section>
+
+          <aside className="wjc-page-rail wjc-page-rail--right">
+            <StatLeadersSidebar leaders={statLeaders} />
+          </aside>
+        </div>
+      </main>
+
+      <WjcScoreTicker items={tickerItems} />
+
+      <GameResultModal
+        game={selectedGame}
+        onClose={() => setSelectedGame(null)}
+        formatScoreLine={formatScoreLine}
+        gameCode={gameCode}
+      />
+
+      <ProspectDetailModal
+        prospect={selectedProspect}
+        tournamentStats={prospectTournamentStats}
+        franchiseState={franchiseState}
+        onClose={() => setSelectedProspect(null)}
+        onOpenDraftBoard={onOpenDraftBoard}
+      />
+    </section>
   );
 }

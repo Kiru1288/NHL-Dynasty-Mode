@@ -119,9 +119,35 @@ import React, {
     });
   }
 
+  /* Backend labels can arrive with UTF-8 punctuation that was decoded through a
+     legacy code page (season labels show up as "2025<mojibake>2026"). Escapes
+     are written as code units so this repair cannot itself be mangled. */
+  const MOJIBAKE_REPAIRS = [
+    [/\u0393\u00c7\u00d6/g, "\u2019"],
+    [/\u0393\u00c7\u00a3/g, "\u201c"],
+    [/\u0393\u00c7\u00a5/g, "\u201d"],
+    [/\u0393\u00c7\u00f4/g, "\u2013"],
+    [/\u0393\u00c7\u00f6/g, "\u2014"],
+    [/\u0393\u00c7\u00a2/g, "\u00b7"],
+    [/\u00e2\u20ac\u2122/g, "\u2019"],
+    [/\u00e2\u20ac\u009c/g, "\u201c"],
+    [/\u00e2\u20ac\u009d/g, "\u201d"],
+    [/\u00e2\u20ac\u201c/g, "\u2013"],
+    [/\u00e2\u20ac\u201d/g, "\u2014"],
+    [/\u0393\u00c7./g, "-"],
+  ];
+
+  function repairEncoding(text) {
+    let out = text;
+    for (const [pattern, replacement] of MOJIBAKE_REPAIRS) {
+      out = out.replace(pattern, replacement);
+    }
+    return out;
+  }
+
   function safeText(value, fallback = "—") {
     if (value === null || value === undefined || value === "") return fallback;
-    return String(value);
+    return repairEncoding(String(value));
   }
   
   function initialsFromTeam(teamName = "NHL") {
@@ -150,10 +176,17 @@ import React, {
     const n = Number(value);
     if (!Number.isFinite(n)) return String(value);
 
-    const abs = Math.abs(n);
-    if (abs >= 1000000) return `$${(n / 1000000).toFixed(2)}M`;
-    if (abs >= 1000) return `$${(n / 1000).toFixed(0)}K`;
-    return `$${n.toFixed(0)}`;
+    // Backend contract/cap fields are millions; legacy dollar amounts are large.
+    const millions = Math.abs(n) >= 500 ? n / 1000000 : n;
+    const abs = Math.abs(millions);
+    if (abs >= 10) return `$${millions.toFixed(1)}M`;
+    return `$${millions.toFixed(2)}M`;
+  }
+
+  function officeCapMillions(value) {
+    const n = officeSafeNumber(value, NaN);
+    if (!Number.isFinite(n)) return NaN;
+    return Math.abs(n) >= 500 ? n / 1000000 : n;
   }
 
   function titleCaseWords(value) {
@@ -434,13 +467,13 @@ import React, {
       team?.capSpace ??
       fs.cap_space ??
       officeSummary?.capSpaceRaw;
-    const capNum = officeSafeNumber(capRaw, NaN);
-    if (Number.isFinite(capNum) && capNum < 1500000) {
+    const capMillions = officeCapMillions(capRaw);
+    if (Number.isFinite(capMillions) && capMillions < 1.5) {
       push({
         id: "cap-tight",
         type: "contracts",
-        severity: capNum < 0 ? "critical" : "medium",
-        title: capNum < 0 ? "Cap space is underwater" : "Cap space is tight",
+        severity: capMillions < 0 ? "critical" : "medium",
+        title: capMillions < 0 ? "Cap space is underwater" : "Cap space is tight",
         detail: "Contract moves may require creativity before the next major decision.",
         target: OFFICE_NAV_TARGETS.SALARY_CAP,
       });
@@ -926,13 +959,12 @@ import React, {
     {
       id: "free-agency",
       label: "Free Agency",
-      eyebrow: "Cap Ledger",
+      eyebrow: "Market Wire",
       description: "UFA/RFA market, bids, and signings.",
       group: "frontOffice",
       target: "free-agency",
       type: "navigate",
-      screen: SCREENS.CAP_LEDGER,
-      tab: "freeAgency",
+      screen: SCREENS.FREE_AGENCY,
       enabled: true,
     },
     {
@@ -1078,7 +1110,9 @@ import React, {
     routes[OFFICE_NAV_TARGETS.WATCHLIST] = screenRoute(SCREENS.SCOUTING);
     routes[OFFICE_NAV_TARGETS.CONTRACTS] = screenRoute(SCREENS.CAP_LEDGER, { capTab: "contracts" });
     routes[OFFICE_NAV_TARGETS.EXTENSIONS] = screenRoute(SCREENS.CAP_LEDGER, { capTab: "contracts" });
-    routes[OFFICE_NAV_TARGETS.FREE_AGENCY] = screenRoute(SCREENS.CAP_LEDGER, { capTab: "freeAgency" });
+    // Hub Free Agency opens the Wire screen (same UI as offseason) — not Cap Ledger,
+    // and not an offseason stage reopen (works in regular season / playoffs).
+    routes[OFFICE_NAV_TARGETS.FREE_AGENCY] = screenRoute(SCREENS.FREE_AGENCY);
     routes[OFFICE_NAV_TARGETS.SALARY_CAP] = screenRoute(SCREENS.CAP_LEDGER, { capTab: "salaryCap" });
     routes[OFFICE_NAV_TARGETS.SKATER_STATS] = screenRoute(SCREENS.STATS, { statsTab: "players" });
     routes[OFFICE_NAV_TARGETS.GOALIE_STATS] = screenRoute(SCREENS.STATS, { statsTab: "goalies" });
@@ -1581,8 +1615,8 @@ import React, {
       }
       const capRaw =
         team?.cap_space ?? team?.capSpace ?? franchiseState?.cap_space;
-      const capNum = officeSafeNumber(capRaw, NaN);
-      if (Number.isFinite(capNum) && capNum < 2000000) {
+      const capMillions = officeCapMillions(capRaw);
+      if (Number.isFinite(capMillions) && capMillions < 2.0) {
         description = `Cap space is tight at ${formatMoney(capRaw)}. Every move needs a second look.`;
         pressureLine = PANEL_PRESSURE_COPY[panelId];
       }
@@ -4947,7 +4981,7 @@ import React, {
           </div>
 
           <button type="button" className="office-control-bar__primary" onClick={onQuickMenu}>
-            Command Menu
+            Open Command Terminal
           </button>
         </div>
 
@@ -5130,8 +5164,8 @@ import React, {
             >
               <div className="office-quick-menu-head">
                 <div>
-                  <span className="office-quick-menu-kicker">Franchise Command</span>
-                  <h3>Select an area of hockey operations</h3>
+                  <span className="office-quick-menu-kicker">Desk Terminal // CMD</span>
+                  <h3>Operations Directory</h3>
                 </div>
 
                 <button type="button" className="office-quick-menu-close" onClick={onClose} aria-label="Close">
@@ -5505,8 +5539,8 @@ import React, {
         team?.capSpace ??
         franchiseState?.cap_space ??
         summary.capSpaceRaw;
-      const n = officeSafeNumber(raw, NaN);
-      return Number.isFinite(n) && n < 2000000;
+      const millions = officeCapMillions(raw);
+      return Number.isFinite(millions) && millions < 2.0;
     }, [team, franchiseState, summary]);
 
     const webglSupported = useMemo(() => detectWebGLSupport(), []);
@@ -5637,7 +5671,8 @@ import React, {
     if (showFallback) {
       return (
         <section
-          className="office-hub office-hub--fallback"
+          className="office-hub office-hub--fallback register-office"
+          data-register="office"
           data-office-mode={officeMood.officeMode}
           data-season-phase={officeMood.seasonPhase}
           data-pressure={officeMood.pressureLevel}
@@ -5677,7 +5712,8 @@ import React, {
 
     return (
       <section
-        className={`office-hub ${effectiveLowPower ? "office-hub--low-power" : ""}`}
+        className={`office-hub register-office ${effectiveLowPower ? "office-hub--low-power" : ""}`}
+        data-register="office"
         data-hovered={hoveredId || "none"}
         data-office-mode={officeMood.officeMode}
         data-season-phase={officeMood.seasonPhase}

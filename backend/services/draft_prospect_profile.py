@@ -264,7 +264,7 @@ def _player_tags(row: Dict[str, Any]) -> List[str]:
             tags.append("Top-End Upside")
         elif pot >= 76:
             tags.append("Everyday NHLer")
-        if ovr >= 74 and gap < 12:
+        if ovr >= 74 and gap < 12 and _i(row.get("age"), 18) >= 18:
             tags.append("NHL-Ready")
         elif gap >= 16 and pot >= 80:
             tags.append("High Runway")
@@ -1449,7 +1449,7 @@ def _translation_note(row: Dict[str, Any]) -> Optional[str]:
 
 
 def _readiness_label_for_row(row: Dict[str, Any]) -> str:
-    """Age/league readiness without using hidden ceiling as a quality tell."""
+    """Current-ability readiness label — not ETA, not hidden ceiling quality."""
     age = _i(row.get("age"), 18)
     gp = _i(row.get("gp") or row.get("games_played"))
     if row.get("ceiling_hidden"):
@@ -1463,37 +1463,29 @@ def _readiness_label_for_row(row: Dict[str, Any]) -> str:
         if code.startswith("EU_"):
             return "Translation TBD"
         return "Development TBD"
-    rank = _i(row.get("rank"), 99)
-    pot = _f(row.get("potential_score") or row.get("expected_ceiling_estimate"))
-    ovr = _f(row.get("true_ovr") or row.get("current_ovr_estimate"))
-    # Prefer ETA (current-ability driven). Never call a raw 50-OVR kid NHL-ready
-    # just because they sit #1 on the board.
-    try:
-        from services.draft_ranking_logic import calculate_prospect_eta
-
-        eta = calculate_prospect_eta(row, final_rank=rank if rank < 90 else None) or {}
-        eta_label = str(eta.get("label") or "").upper()
-        eta_map = {
-            "NOW": "NHL ready",
-            "1Y": "1 year away",
-            "2Y": "2 years away",
-            "3Y": "3 years away",
-            "4Y+": "Long-term project",
-            "4Y": "Long-term project",
-        }
-        if eta_label in eta_map:
-            return eta_map[eta_label]
-    except Exception:
-        pass
-    if ovr >= 76:
+    ovr = _f(row.get("true_ovr") or row.get("current_ovr_estimate") or row.get("scouted_overall_estimate"))
+    pos = str(row.get("position") or "").upper()
+    is_goalie = pos == "G"
+    # Readiness is about playing NHL games now — OVR + age + position gates.
+    if age <= 16:
+        return "Long-term project"
+    if is_goalie:
+        if ovr >= 74 and age >= 22:
+            return "NHL ready"
+        if ovr >= 70 and age >= 20:
+            return "Close"
+        if ovr >= 64:
+            return "Developing"
+        return "Long-term project"
+    if ovr >= 76 and age >= 18:
         return "NHL ready"
-    if ovr >= 70 or (ovr >= 64 and pot >= 76):
-        return "1 year away"
-    if ovr >= 60:
-        return "2 years away"
-    if ovr >= 54:
-        return "3 years away"
-    return "Long-term project"
+    if ovr >= 72 and age >= 18:
+        return "Close"
+    if ovr >= 66:
+        return "Developing"
+    if ovr >= 58:
+        return "Long-term project"
+    return "At Risk"
 
 
 def _micro_summary(

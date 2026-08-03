@@ -1,17 +1,22 @@
+/* Retirements — league wire / career archive register */
+
 .retirement-page {
-  --panel: rgba(9, 25, 38, 0.94);
-  --line: rgba(156, 218, 236, 0.14);
-  --cyan: #13d8e7;
-  --gold: #e9a83c;
-  --text: #e9f7fb;
-  --muted: #8096a8;
+  --panel: var(--ops-panel);
+  --line: var(--ops-grid);
+  --cyan: var(--ops-cyan);
+  --gold: var(--ops-gold);
+  --text: var(--ops-text);
+  --muted: var(--ops-text-secondary);
+
   position: relative;
-  min-height: 100vh;
+  min-height: 100dvh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   color: var(--text);
-  background: linear-gradient(180deg, #06131f 0%, #020a11 100%);
-  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: linear-gradient(180deg, var(--ops-black) 0%, var(--ops-navy-deep) 100%);
+  font-family: var(--font-ops-ui);
+  overflow: hidden;
 }
 
 .retirement-page__bg {
@@ -19,28 +24,53 @@
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.1), transparent 30%),
-    radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.06), transparent 26%);
+    radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.06), transparent 30%),
+    radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.05), transparent 26%);
 }
 
 .retirement-header {
   position: relative;
-  z-index: 2;
+  z-index: var(--z-sticky);
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 1rem;
-  padding: 1rem 1.25rem;
+  padding: 0.85rem 1.25rem;
   border-bottom: 1px solid var(--line);
+  background: rgba(2, 12, 20, 0.92);
 }
 
+/* Distinct title: gold memorial rule + editorial kicker */
 .retirement-header h1 {
   margin: 0;
-  font-size: clamp(1.1rem, 2vw, 1.35rem);
+  padding-top: 6px;
+  font-family: var(--font-broadcast-display);
+  font-size: clamp(1rem, 2vw, 1.25rem);
   font-weight: 900;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   text-align: center;
+  position: relative;
+}
+
+.retirement-header h1::before {
+  content: "CAREER ARCHIVE";
+  display: block;
+  margin-bottom: 4px;
+  font-family: var(--font-ops-ui);
+  font-size: var(--type-phase-label-size);
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  color: var(--gold);
+}
+
+.retirement-header h1::after {
+  content: "";
+  display: block;
+  width: 64px;
+  height: 2px;
+  margin: 6px auto 0;
+  background: linear-gradient(90deg, transparent, var(--gold), transparent);
 }
 
 .retirement-back-btn {
@@ -48,23 +78,28 @@
   background: rgba(12, 31, 47, 0.72);
   border: 1px solid var(--line);
   color: var(--text);
-  padding: 0.45rem 0.9rem;
-  border-radius: 6px;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-hud);
   cursor: pointer;
-  font-weight: 700;
-  font-size: 0.85rem;
-  transition: border-color 0.2s ease;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition: border-color var(--motion-micro);
 }
 
 .retirement-back-btn:hover {
-  border-color: rgba(73, 231, 240, 0.45);
+  border-color: var(--ops-grid-strong);
+  background: var(--ops-cyan-soft);
 }
 
 .retirement-season {
   justify-self: end;
-  font-size: 0.85rem;
+  font-family: var(--font-mono-data);
+  font-size: 12px;
   color: var(--muted);
   font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
 .retirement-list {
@@ -73,22 +108,22 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 0.85rem 1.25rem 5.5rem;
+  padding: 0.75rem 1.25rem 5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
+  gap: 6px;
 }
 
 .retirement-row {
   display: grid;
   grid-template-columns: minmax(220px, 1.4fr) 72px minmax(280px, 2fr);
-  gap: 0.85rem 1rem;
+  gap: 0.75rem 1rem;
   align-items: center;
-  padding: 0.7rem 0.85rem;
+  padding: 0.65rem 0.8rem;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: linear-gradient(180deg, rgba(11, 31, 45, 0.82), rgba(7, 22, 34, 0.88));
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  border-radius: var(--radius-control);
+  background: rgba(7, 22, 34, 0.72);
+  box-shadow: var(--depth-registered);
 }
 
 .retirement-player-cell {
@@ -100,24 +135,24 @@
 
 .retirement-headshot {
   flex: 0 0 auto;
-  width: 52px;
-  height: 52px;
+  width: 48px;
+  height: 48px;
 }
 
 .retirement-headshot .player-headshot {
-  width: 52px;
-  height: 52px;
+  width: 48px;
+  height: 48px;
 }
 
 .retirement-player-meta {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.12rem;
+  gap: 0.1rem;
 }
 
 .retirement-player-name {
-  font-size: 1rem;
+  font-size: 0.95rem;
   font-weight: 800;
   line-height: 1.2;
   white-space: nowrap;
@@ -126,19 +161,21 @@
 }
 
 .retirement-player-team {
-  font-size: 0.78rem;
+  font-size: 11px;
   color: var(--cyan);
-  font-weight: 700;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .retirement-player-tags {
-  font-size: 0.72rem;
+  font-size: var(--type-phase-label-size);
   color: var(--muted);
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-weight: 800;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
@@ -147,39 +184,41 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-width: 72px;
-  padding: 0.45rem 0.35rem;
-  border: 1px solid rgba(233, 168, 60, 0.35);
-  border-radius: 8px;
-  background: rgba(233, 168, 60, 0.08);
+  min-width: 68px;
+  padding: 0.35rem 0.3rem;
+  border: 1px solid rgba(233, 168, 60, 0.32);
+  border-radius: var(--radius-hud);
+  background: var(--ops-gold-soft);
 }
 
 .retirement-ovr span {
-  font-size: 0.58rem;
-  letter-spacing: 0.12em;
+  font-size: var(--type-phase-label-size);
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--gold);
   font-weight: 900;
 }
 
 .retirement-ovr strong {
-  font-size: 1.35rem;
+  font-family: var(--font-mono-data);
+  font-size: 1.25rem;
   line-height: 1;
-  font-weight: 1000;
-  color: #f4d08a;
+  font-weight: 900;
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
 }
 
 .retirement-stats-wrap {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0.65rem;
+  gap: 0.55rem;
   min-width: 0;
 }
 
 .retirement-stat-group h3 {
-  margin: 0 0 0.35rem;
-  font-size: 0.62rem;
-  letter-spacing: 0.12em;
+  margin: 0 0 0.3rem;
+  font-size: var(--type-phase-label-size);
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted);
   font-weight: 900;
@@ -188,7 +227,7 @@
 .retirement-stat-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 0.25rem;
+  gap: 3px;
 }
 
 .retirement-stat-grid.is-goalie {
@@ -198,72 +237,89 @@
 .retirement-stat-cell {
   display: flex;
   flex-direction: column;
-  gap: 0.08rem;
-  padding: 0.28rem 0.2rem;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.18);
+  gap: 2px;
+  padding: 0.22rem 0.15rem;
+  border-radius: var(--radius-ops);
+  background: rgba(0, 0, 0, 0.2);
   border: 1px solid rgba(156, 218, 236, 0.08);
   text-align: center;
   min-width: 0;
 }
 
 .retirement-stat-cell span {
-  font-size: 0.56rem;
-  letter-spacing: 0.08em;
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
   font-weight: 800;
 }
 
 .retirement-stat-cell strong {
-  font-size: 0.78rem;
+  font-family: var(--font-mono-data);
+  font-size: 0.75rem;
   font-weight: 800;
   color: var(--text);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .retirement-empty-state {
   margin: auto;
-  padding: 3rem 1rem;
+  padding: 2rem 1rem;
   text-align: center;
   color: var(--muted);
-  font-size: 0.95rem;
+  font-size: var(--type-compact-size);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-control);
+  max-width: 360px;
+}
+
+.retirement-empty-state::before {
+  content: "NO RETIREMENTS";
+  display: block;
+  margin-bottom: 6px;
+  color: var(--cyan);
+  font-size: var(--type-phase-label-size);
+  font-weight: 900;
+  letter-spacing: 0.14em;
 }
 
 .retirement-actions {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 5;
+  position: relative;
+  z-index: var(--z-sticky);
+  flex: 0 0 auto;
   display: flex;
   justify-content: center;
-  padding: 0.85rem 1.25rem 1rem;
+  padding: 0.75rem 1.25rem 0.85rem;
   border-top: 1px solid var(--line);
-  background: linear-gradient(0deg, rgba(2, 10, 17, 0.98), rgba(6, 19, 31, 0.92));
+  background: rgba(2, 10, 17, 0.98);
 }
 
 .retirement-continue-btn {
   border: 0;
-  border-radius: 7px;
-  padding: 0.85rem 2rem;
-  min-width: 220px;
+  border-radius: var(--radius-hud);
+  padding: 0.75rem 1.75rem;
+  min-width: 200px;
   background: linear-gradient(180deg, #f4bd52, #d99023);
   color: #1b1002;
   cursor: pointer;
-  font-weight: 1000;
+  font-weight: 900;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  box-shadow: 0 14px 36px rgba(217, 144, 35, 0.28);
-  transition: transform 0.2s ease, filter 0.2s ease;
+  box-shadow: var(--depth-registered);
+  transition: filter var(--motion-micro);
 }
 
 .retirement-continue-btn:hover {
-  transform: translateY(-1px);
   filter: brightness(1.04);
 }
 
 @media (max-width: 980px) {
+  .retirement-page {
+    height: auto;
+    min-height: 100dvh;
+  }
+
   .retirement-row {
     grid-template-columns: 1fr 64px;
     grid-template-areas:
@@ -271,18 +327,9 @@
       "stats stats";
   }
 
-  .retirement-player-cell {
-    grid-area: player;
-  }
-
-  .retirement-ovr {
-    grid-area: ovr;
-  }
-
-  .retirement-stats-wrap {
-    grid-area: stats;
-    grid-template-columns: 1fr;
-  }
+  .retirement-player-cell { grid-area: player; }
+  .retirement-ovr { grid-area: ovr; }
+  .retirement-stats-wrap { grid-area: stats; grid-template-columns: 1fr; }
 }
 
 @media (max-width: 640px) {
@@ -293,23 +340,11 @@
       "title title";
   }
 
-  .retirement-back-btn {
-    grid-area: back;
-  }
+  .retirement-back-btn { grid-area: back; }
+  .retirement-header h1 { grid-area: title; margin-top: 0.25rem; }
+  .retirement-season { grid-area: season; }
 
-  .retirement-header h1 {
-    grid-area: title;
-    margin-top: 0.25rem;
-  }
-
-  .retirement-season {
-    grid-area: season;
-  }
-
-  .retirement-stat-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
+  .retirement-stat-grid,
   .retirement-stat-grid.is-goalie {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }

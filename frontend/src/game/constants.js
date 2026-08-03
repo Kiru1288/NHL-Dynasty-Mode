@@ -19,6 +19,7 @@ export const SCREENS = {
   POWER_PLAY: "power_play",
   PENALTY_KILL: "penalty_kill",
   CAP_LEDGER: "cap_ledger",
+  FREE_AGENCY: "free_agency",
   OFFICE: "office",
   GM_WORLD: "gm_world",
   LEAGUE_OPERATIONS: "league_operations",

@@ -282,6 +282,64 @@ def calculate_nhl_readiness_score(player: Any, context: Optional[Any] = None) ->
     return score
 
 
+def update_player_nhl_eta(player: Any) -> int:
+    """Recompute years-to-NHL-arrival from current readiness/ability.
+
+    Distinct from potential (ceiling) and from nhl_readiness (0–100 now-score).
+    Shortens when development accelerates; lengthens on stalls / young goalies.
+    Established NHL players are stamped as 0 with a status label.
+    """
+    readiness = _safe_float(getattr(player, "nhl_readiness", 0), 0.0)
+    if 0.0 < readiness <= 1.5:
+        readiness *= 100.0
+    age = _get_player_age(player)
+    ovr = _get_player_ovr_0_100(player)
+    gp = _get_games_played(player)
+    goalie = _is_goalie(player)
+    status = str(getattr(player, "status", "") or getattr(player, "prospect_status", "") or "").lower()
+
+    if status in ("nhl", "active") and gp >= 40:
+        years, label = 0, "NHL regular"
+    elif status in ("nhl", "active") and gp >= 10:
+        years, label = 0, "NHL depth"
+    elif readiness >= 78 and age >= 18 and ovr >= 74:
+        years, label = 0, "Now"
+    elif readiness >= 70 or (ovr >= 72 and age >= 19):
+        years, label = 1, "1Y"
+    elif readiness >= 58 or ovr >= 66:
+        years, label = 2, "2Y"
+    elif readiness >= 48 or ovr >= 60:
+        years, label = 3, "3Y"
+    else:
+        years, label = 4, "4Y+"
+
+    if goalie and years < 4 and label not in ("NHL regular", "NHL depth"):
+        years = min(4, int(years) + 1)
+        label = {0: "Now", 1: "1Y", 2: "2Y", 3: "3Y"}.get(years, "4Y+")
+
+    if age <= 17 and years < 2:
+        years, label = 2, "2Y"
+    if age <= 16:
+        years, label = max(years, 3), "3Y"
+
+    prev = getattr(player, "nhl_eta", None)
+    try:
+        prev_i = int(prev) if prev is not None else None
+    except (TypeError, ValueError):
+        prev_i = None
+    # One-step drift per season so ETA does not teleport after a single pulse.
+    if prev_i is not None and label not in ("NHL regular", "NHL depth"):
+        if years < prev_i:
+            years = max(years, prev_i - 1)
+        elif years > prev_i:
+            years = min(years, prev_i + 1)
+        label = {0: "Now", 1: "1Y", 2: "2Y", 3: "3Y"}.get(years, "4Y+")
+
+    _safe_setattr(player, "nhl_eta", int(years))
+    _safe_setattr(player, "nhl_eta_label", str(label))
+    return int(years)
+
+
 # ---------------------------------------------------------------------------
 # Development fit — environment / role match
 # ---------------------------------------------------------------------------
@@ -1041,8 +1099,10 @@ def prime_development_environment_for_rosters(teams: Optional[List[Any]], rng: A
     d75 = (t75 - float(tier_counts["75+"])) / max(1.0, t75)
     scarcity_index = 0.42 * d85 + 0.38 * d80 + 0.20 * d75
     scarcity_index = max(-0.35, min(0.35, scarcity_index))
-    league_growth_mult = max(0.90, min(1.12, 1.0 + 0.16 * scarcity_index))
-    league_var_mult = max(0.92, min(1.14, 1.0 + 0.11 * scarcity_index))
+    # Stronger overload damping — prevents decade-long mean-OVR inflation when
+    # the league already has too many 80+ skaters (soak OVR_DRIFT).
+    league_growth_mult = max(0.82, min(1.08, 1.0 + 0.24 * scarcity_index))
+    league_var_mult = max(0.88, min(1.10, 1.0 + 0.14 * scarcity_index))
 
     # Positional opportunity pressure (scarcity -> easier NHL runway).
     targets = {
@@ -1592,9 +1652,9 @@ def calculate_season_growth_budget(
 
     # Meaningful season jumps for runway kids (display OVR ≈ budget * 99).
     # Age 18–20 with 10+ OVR gap: approach toward +4–6 before phase/noise.
-    approach = min(0.085, gap_exp * 0.48 + 0.028)
+    approach = min(0.072, gap_exp * 0.42 + 0.024)
     if gap_exp <= 0.012:
-        approach = min(0.032, max(0.012, gap_max * 0.12 + 0.010))
+        approach = min(0.028, max(0.010, gap_max * 0.10 + 0.008))
 
     age = _get_player_age(player)
     morale = _get_player_morale(player)
@@ -1621,28 +1681,28 @@ def calculate_season_growth_budget(
     mod *= 1.0 + 0.18 * momentum
 
     if age < 20:
-        mod *= 1.55 if not _is_goalie(player) else 1.32
+        mod *= 1.38 if not _is_goalie(player) else 1.22
     elif age < 22:
-        mod *= 1.42 if not _is_goalie(player) else 1.30
+        mod *= 1.26 if not _is_goalie(player) else 1.18
     elif age < 24:
-        mod *= 1.28
-    elif age <= 26:
         mod *= 1.14
+    elif age <= 26:
+        mod *= 1.04
     elif age <= 28:
-        mod *= 0.96 if not _is_goalie(player) else 1.02
+        mod *= 0.88 if not _is_goalie(player) else 0.96
     elif age <= 31:
-        mod *= 0.72
+        mod *= 0.62
     else:
-        mod *= 0.42
+        mod *= 0.34
 
     if age <= 20 and gap_exp >= 0.10:
-        mod *= 1.28
+        mod *= 1.16
     elif age <= 23 and gap_exp >= 0.07:
-        mod *= 1.20
-    elif age <= 24 and gap_exp >= 0.06:
-        mod *= 1.14
-    elif age <= 26 and gap_exp >= 0.08:
         mod *= 1.10
+    elif age <= 24 and gap_exp >= 0.06:
+        mod *= 1.06
+    elif age <= 26 and gap_exp >= 0.08:
+        mod *= 1.04
 
     role = str(
         getattr(context, "role", None)
@@ -1718,8 +1778,8 @@ def calculate_season_growth_budget(
 
 
 # Separate mid-season vs season-end pools (design §11).
-_IN_SEASON_POOL_SHARE = 0.30
-_SEASON_END_POOL_SHARE = 0.70
+_IN_SEASON_POOL_SHARE = 0.32
+_SEASON_END_POOL_SHARE = 0.58
 
 
 _META_RATING_KEYS = frozenset(
@@ -2093,6 +2153,7 @@ def apply_player_development(player: Any, rng: Any) -> None:
     career_stage = determine_development_career_stage(player)
     _safe_setattr(player, "development_career_stage", career_stage)
     calculate_nhl_readiness_score(player)
+    update_player_nhl_eta(player)
     calculate_development_fit_score(player)
     calculate_age_decline_profile(player)
     apply_prime_refinement(player)
@@ -2299,6 +2360,9 @@ def apply_player_development(player: Any, rng: Any) -> None:
         report_type=report_type,
         reason=reason,
     )
+    # Refresh readiness/ETA from post-growth ability so timelines move with evidence.
+    calculate_nhl_readiness_score(player)
+    update_player_nhl_eta(player)
     mom = _update_career_momentum(player, net_growth=net_growth, dev_phase=dev_phase)
     setattr(player, "career_momentum", round(mom, 1))
 

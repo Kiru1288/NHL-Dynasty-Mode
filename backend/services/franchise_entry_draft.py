@@ -172,7 +172,11 @@ def _build_round1_slot_order(session: FranchiseSession) -> Tuple[List[str], str]
             list(session.draft_lottery_payload["picks"]),
             key=lambda p: int(p.get("pick", 99)),
         )
-        lot_ids = [str(p["team_id"]) for p in lot[:16]]
+        # Lottery earners own the *slot* identity; current owners are applied later.
+        lot_ids = [
+            str(p.get("lottery_team_id") or p.get("original_owner_team_id") or p["team_id"])
+            for p in lot[:16]
+        ]
     else:
         standings = sorted(
             _build_standings_rows(session),
@@ -247,6 +251,13 @@ def _mark_pick_resolved(session: FranchiseSession, slot: Dict[str, Any], prospec
     row["selected_prospect_id"] = str(prospect_id)
     row["resolved_at"] = _now_iso()
     row["selecting_team_id"] = str(slot.get("team_id") or row.get("current_owner_team_id") or "")
+    row["resolved_reason"] = "draft_selection"
+    try:
+        from app.sim_engine.trades.trade_pick_registry import reconcile_pick_registry_consistency
+
+        reconcile_pick_registry_consistency(league)
+    except Exception:
+        pass
 
 
 def _unmark_pick_resolved(session: FranchiseSession, slot: Dict[str, Any]) -> None:
@@ -263,6 +274,33 @@ def _unmark_pick_resolved(session: FranchiseSession, slot: Dict[str, Any]) -> No
     row["selected_prospect_id"] = None
     row["resolved_at"] = None
     row["selecting_team_id"] = None
+    row.pop("resolved_reason", None)
+    try:
+        from app.sim_engine.trades.trade_pick_registry import reconcile_pick_registry_consistency
+
+        reconcile_pick_registry_consistency(league)
+    except Exception:
+        pass
+
+
+def _retire_draft_year_after_completion(session: FranchiseSession) -> None:
+    """Remove the completed draft class from ownership / Trade Hub."""
+    state = getattr(session, "draft_state", None) or {}
+    draft_year = int(state.get("draft_year") or int(getattr(session, "season_calendar_year", 2025) or 2025) + 1)
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is None:
+        return
+    try:
+        from app.sim_engine.trades.trade_pick_registry import retire_draft_year_picks
+
+        retire_draft_year_picks(league, draft_year=draft_year, reason="draft_completed")
+    except Exception:
+        pass
+    try:
+        setattr(league, "draft_completed", True)
+        setattr(league, "draft_year", int(draft_year) + 1)
+    except Exception:
+        pass
 
 
 def build_full_draft_order(session: FranchiseSession) -> List[Dict[str, Any]]:
@@ -1104,6 +1142,25 @@ def _cpu_select_prospect(
         elif need_bias >= 0.62 and needs:
             phil_override["philosophy"] = "positional_need"
 
+    # After climbing via a draft-floor deal, honour the hidden true target if still up.
+    try:
+        intent = dict((getattr(session, "draft_state", None) or {}).get("cpu_draft_target_by_team") or {})
+        wanted = str(intent.get(str(owner)) or "").strip()
+        if wanted:
+            match = next((e for e in available if _prospect_entry_key(e) == wanted), None)
+            if match is not None:
+                intent.pop(str(owner), None)
+                st = getattr(session, "draft_state", None) or {}
+                st["cpu_draft_target_by_team"] = intent
+                session.draft_state = st
+                return match
+            intent.pop(str(owner), None)
+            st = getattr(session, "draft_state", None) or {}
+            st["cpu_draft_target_by_team"] = intent
+            session.draft_state = st
+    except Exception:
+        pass
+
     return cpu_select_from_board(
         team_board,
         overall_pick=overall,
@@ -1239,6 +1296,13 @@ def _assign_drafted_prospect(
     )
     eta = _nhl_eta_years(ent, overall)
     setattr(player, "nhl_eta", eta)
+    setattr(player, "nhl_eta_label", {0: "Now", 1: "1Y", 2: "2Y", 3: "3Y"}.get(eta, "4Y+"))
+    try:
+        from app.sim_engine.progression.development import calculate_nhl_readiness_score
+
+        calculate_nhl_readiness_score(player)
+    except Exception:
+        pass
 
     hist = getattr(session, "draft_stock_history", None) or {}
     pid = str(getattr(player, "id", "") or ent.get("key") or "")
@@ -1712,7 +1776,11 @@ def get_entry_draft_payload(
     current_team = str(current_slot.get("team_id") if current_slot else state.get("current_team_id") or "")
     user_id = str(session.user_team_id)
 
-    offers = generate_draft_day_trade_offers(session, state, max_offers=3)
+    offers = generate_draft_day_trade_offers(
+        session,
+        state,
+        max_offers=5 if current_team == user_id else 3,
+    )
 
     # Team board only needs a window of the public board — not every remaining name.
     team_board_pool = available[:80]
@@ -1837,7 +1905,10 @@ def get_entry_draft_payload(
         "current_team_name": _display_team(session, current_team) if current_team else "",
         "is_user_pick": current_team == user_id and not state.get("draft_completed"),
         "is_traded_pick": bool(current_slot.get("is_traded")) if current_slot else False,
+        "via_team_id": current_slot.get("via_team_id") if current_slot else None,
         "via_team_name": current_slot.get("via_team_name") if current_slot else None,
+        "original_owner_team_id": current_slot.get("original_owner_team_id") if current_slot else None,
+        "original_owner_team_name": current_slot.get("original_owner_team_name") if current_slot else None,
         "picks_until_user": state.get("picks_until_user"),
         "available_prospects": enriched_available,
         "public_draft_board": [_strip_private_fields(e) for e in (board.get("entries") or [])],
@@ -2155,6 +2226,8 @@ def _execute_pick_locked(
         pass
     session.draft_state = state
     session.draft_completed = done
+    if done:
+        _retire_draft_year_after_completion(session)
     invalidate_session_payload_caches(session, "draft_pick")
     out = {"ok": True, "pick_result": result}
     if not defer_payload:
@@ -2217,6 +2290,163 @@ def execute_cpu_draft_pick(session: FranchiseSession) -> Dict[str, Any]:
     return _execute_pick(session, _prospect_entry_key(chosen), team_id=owner, user_initiated=False)
 
 
+def build_known_pick_slots(session: FranchiseSession) -> Dict[str, int]:
+    """Map pick_id -> overall slot for picks still on the board during the draft.
+
+    Trade valuation falls back to round averages and standings estimates, which
+    is right for future picks but wrong once the board is set and every slot is
+    literally numbered.
+    """
+    state = getattr(session, "draft_state", None) or {}
+    if not state.get("draft_started") or state.get("draft_completed"):
+        return {}
+    current = int(state.get("overall_pick") or 1)
+    slots: Dict[str, int] = {}
+    for slot in list(state.get("draft_order") or []):
+        if not isinstance(slot, dict):
+            continue
+        pick_id = str(slot.get("pick_id") or "")
+        try:
+            overall = int(slot.get("overall_pick") or 0)
+        except (TypeError, ValueError):
+            continue
+        if pick_id and overall >= current:
+            slots[pick_id] = overall
+    return slots
+
+
+def _draft_swap_sweeteners(
+    league: Any,
+    climber: Any,
+    *,
+    ctx: Dict[str, Any],
+    gap: float,
+    exclude: set,
+) -> Optional[List[Dict[str, Any]]]:
+    """Picks the climbing club adds to pay for a better slot.
+
+    Returns [] when the slots are close enough to swap straight up, or None when
+    the club cannot cover the gap and the move should be abandoned.
+
+    Small chart gaps must never force a future 2nd — prefer late rounds that
+    actually match the value difference.
+    """
+    if gap <= 3.0:
+        return []
+    if climber is None:
+        return None
+    try:
+        from app.sim_engine.trades.trade_pick_registry import get_team_owned_picks
+        from app.sim_engine.trades.trade_value import evaluate_pick_asset_value
+    except Exception:
+        return None
+
+    tid = str(getattr(climber, "team_id", None) or getattr(climber, "id", "") or "")
+    # Cap sweetener round by gap so tiny slides never attach a 1st/2nd.
+    if gap < 6.0:
+        max_rnd = 5
+    elif gap < 10.0:
+        max_rnd = 4
+    elif gap < 16.0:
+        max_rnd = 3
+    else:
+        max_rnd = 2
+
+    candidates: List[Tuple[float, int, Dict[str, Any]]] = []
+    for row in get_team_owned_picks(league, tid) or []:
+        pid = str(row.get("pick_id") or "")
+        if not pid or pid in exclude or bool(row.get("resolved")):
+            continue
+        try:
+            rnd = int(row.get("round") or 7)
+        except (TypeError, ValueError):
+            rnd = 7
+        if rnd < 1:
+            rnd = 7
+        if rnd < max_rnd:
+            # Prefer later-or-equal rounds; never attach a better round than the cap.
+            continue
+        try:
+            val = float(evaluate_pick_asset_value(row, climber, climber, league, context=ctx).get("total") or 0.0)
+        except Exception:
+            continue
+        # Skip assets wildly above the gap (future 2nds for a 3-point slide).
+        if val > max(gap * 1.45, 4.0) and gap < 14.0:
+            continue
+        candidates.append((val, rnd, row))
+    if not candidates:
+        return None
+
+    # Cheapest adequate late-round first for modest gaps; largest-first only for big climbs.
+    if gap < 12.0:
+        candidates.sort(key=lambda x: (x[1], x[0]))  # later round, then smaller value
+    else:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+
+    chosen: List[Dict[str, Any]] = []
+    paid = 0.0
+    for val, _rnd, row in candidates:
+        if paid >= gap * 0.75 or len(chosen) >= 2:
+            break
+        if val <= 0.5 or paid + val > gap * 1.55:
+            continue
+        chosen.append(row)
+        paid += val
+    if paid < gap * 0.55:
+        return None
+    return chosen
+
+
+def _partner_willing_to_climb(
+    session: Any,
+    partner_id: str,
+    *,
+    overall: int,
+    partner_overall: int,
+    true_target: Optional[Dict[str, Any]],
+    rng: random.Random,
+) -> bool:
+    """Only aggressive / upside-hungry clubs pay to move up — not every team."""
+    if not true_target:
+        return False
+    profiles = dict(getattr(session, "cpu_franchise_profiles", None) or {})
+    ideo = dict((profiles.get(str(partner_id)) or {}).get("ideology") or {})
+    aggression = float(ideo.get("aggression", 0.5) or 0.5)
+    pick_protect = float(ideo.get("draft_pick_protection", 0.5) or 0.5)
+    try:
+        status = str(_team_status(session, partner_id) or "")
+    except Exception:
+        status = ""
+
+    # Contenders with high pick protection stay put unless aggression is high.
+    if pick_protect >= 0.68 and aggression < 0.58:
+        return False
+    if aggression < 0.42 and status in ("contender", "cup_contender", "window", "playoff"):
+        return False
+    # Must be a real board priority (top 3), not a random mid-board name.
+    try:
+        board_rank = int(
+            true_target.get("team_board_rank")
+            or true_target.get("board_rank")
+            or 99
+        )
+    except (TypeError, ValueError):
+        board_rank = 99
+    if board_rank > 3:
+        return False
+
+    slots = max(0, int(partner_overall) - int(overall))
+    # Tiny climbs need higher aggression; big climbs more common for rebuilders.
+    base = 0.22 + 0.28 * aggression + (0.12 if status in ("rebuilder", "rebuilding") else 0.0)
+    if slots <= 3:
+        base *= 0.55
+    elif slots <= 6:
+        base *= 0.78
+    if overall <= 15:
+        base += 0.08
+    return float(rng.random()) < min(0.62, max(0.12, base))
+
+
 def _maybe_cpu_draft_day_pick_swap(session: FranchiseSession) -> Optional[Dict[str, Any]]:
     """Bounded CPU-CPU pick swap before a selection; routes through validated trade + popup."""
     state = getattr(session, "draft_state", None) or {}
@@ -2249,8 +2479,8 @@ def _maybe_cpu_draft_day_pick_swap(session: FranchiseSession) -> Optional[Dict[s
     want_up = aggression >= 0.52 and pick_protect <= 0.62
     rng = getattr(getattr(session, "sim", None), "rng", None)
     roll = float(rng.random()) if rng is not None else 0.9
-    p = 0.08 + (0.1 if want_up else 0.0) + (0.04 if overall <= 20 else 0.0)
-    if roll > min(0.28, p):
+    p = 0.11 + (0.12 if want_up else 0.0) + (0.05 if overall <= 20 else 0.0)
+    if roll > min(0.34, p):
         return None
 
     # Partner: prefer adjacent slots first (smaller value gap), then look ahead/back.
@@ -2284,6 +2514,25 @@ def _maybe_cpu_draft_day_pick_swap(session: FranchiseSession) -> Optional[Dict[s
     if not pick_a or not pick_b:
         return None
 
+    moving_up = partner_idx < (overall - 1)
+    # Trade-ups require a real board priority who might not fall to the climber.
+    if moving_up:
+        try:
+            from services.franchise_sim import get_cached_draft_class_rankings
+
+            board = get_cached_draft_class_rankings(session, session.sim)
+            cache = _ensure_draft_cache(session, board)
+            available = _draft_live_eligible(session, state, board)
+            climber_board = build_team_draft_board(session, on_clock, available[:40], cache=cache)
+            top = climber_board[0] if climber_board else None
+            if top is None:
+                return None
+            pub_rank = int(top.get("rank") or top.get("public_rank") or 999)
+            if pub_rank > overall + 1:
+                return None
+        except Exception:
+            return None
+
     league = getattr(getattr(session, "sim", None), "league", None)
     if league is None:
         return None
@@ -2301,6 +2550,7 @@ def _maybe_cpu_draft_day_pick_swap(session: FranchiseSession) -> Optional[Dict[s
         from app.sim_engine.trades.trade_evaluator import evaluate_trade_package
         from app.sim_engine.trades.trade_executor import execute_validated_trade
         from app.sim_engine.trades.cpu_trade_proposer import build_league_trade_context
+        from app.sim_engine.trades.trade_value import slot_curve_value
         from services.draft_pick_ownership import sync_draft_clock_after_trade
         from services.franchise_sim import _enqueue_cpu_trade_popup
     except Exception:
@@ -2311,9 +2561,30 @@ def _maybe_cpu_draft_day_pick_swap(session: FranchiseSession) -> Optional[Dict[s
             league,
             calendar_cursor=int(getattr(session, "calendar_cursor", 0) or 0),
             regular_season_last_index=int(getattr(session, "nhl_regular_season_last_index", 192) or 192),
+            season_year=int(getattr(session, "season_calendar_year", 2025) or 2025),
         )
         ctx["cpu_ambient_trade"] = True
         ctx["draft_day_trade"] = True
+        ctx["known_pick_slots"] = build_known_pick_slots(session)
+
+        # Slots are numbered, so the better slot costs real capital. The club
+        # climbing has to add sweeteners instead of swapping straight up.
+        climber = on_clock if moving_up else partner_id
+        counterparty = partner_id if moving_up else on_clock
+        sweeteners = _draft_swap_sweeteners(
+            league,
+            team_by_id.get(climber),
+            ctx=ctx,
+            gap=abs(slot_curve_value(partner_idx + 1) - slot_curve_value(overall)),
+            exclude={pick_a, pick_b},
+        )
+        if sweeteners is None:
+            return None
+        for row in sweeteners:
+            package[counterparty].append(
+                {"type": "pick", "id": str(row.get("pick_id") or ""), "team": climber}
+            )
+
         evaluation = evaluate_trade_package(
             package,
             league=league,
@@ -2334,12 +2605,20 @@ def _maybe_cpu_draft_day_pick_swap(session: FranchiseSession) -> Optional[Dict[s
         return None
 
     sync_draft_clock_after_trade(session)
-    moving_up = partner_idx < (overall - 1)
+    partner_overall = partner_idx + 1
     reason_codes = ["DRAFT_TRADE_UP" if moving_up else "DRAFT_TRADE_DOWN", "PICK_VALUE_REALLOCATION"]
-    if moving_up:
-        reason_text = "Moved up to select a priority organizational target."
+    climb_from, climb_to = (overall, partner_overall) if moving_up else (partner_overall, overall)
+    if sweeteners:
+        cost = " and ".join(str(r.get("display") or r.get("pick_id") or "a pick") for r in sweeteners)
+        reason_text = (
+            f"Moved up from #{climb_from} to #{climb_to} to secure a priority target, paying {cost}."
+            if moving_up
+            else f"Slid back from #{climb_to} to #{climb_from} and collected {cost} for the drop."
+        )
     else:
-        reason_text = "Moved down while remaining inside the same prospect tier."
+        reason_text = (
+            f"Swapped into #{climb_to} from #{climb_from}; the board grades both slots the same."
+        )
     headline = (
         f"Draft floor: {on_clock} moves {'up' if moving_up else 'down'} with {partner_id}"
     )
@@ -2356,7 +2635,7 @@ def _maybe_cpu_draft_day_pick_swap(session: FranchiseSession) -> Optional[Dict[s
         "reason_text": reason_text,
         "draft_context": True,
         "outgoing": [f"Pick #{overall}"],
-        "incoming": [f"Pick #{partner_idx + 1}"],
+        "incoming": [f"Pick #{partner_overall}"],
     }
     cal_idx = int(getattr(session, "calendar_cursor", 0) or 0)
     iso = ""
@@ -2379,6 +2658,124 @@ def _maybe_cpu_draft_day_pick_swap(session: FranchiseSession) -> Optional[Dict[s
     state["draft_trade_log"] = log[-40:]
     session.draft_state = state
     return ev
+
+
+def accept_draft_day_trade_offer(session: FranchiseSession, offer: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute a live draft-floor pick swap from a generated offer when the user is on the clock."""
+    state = getattr(session, "draft_state", None) or {}
+    if not state.get("draft_started") or state.get("draft_completed"):
+        raise ValueError("Draft is not live")
+    user_id = str(getattr(session, "user_team_id", "") or "")
+    overall = int(state.get("overall_pick") or 1)
+    order = list(state.get("draft_order") or [])
+    if overall < 1 or overall > len(order):
+        raise ValueError("No pick on the clock")
+    on_slot = order[overall - 1]
+    on_clock = str(on_slot.get("team_id") or "")
+    if on_clock != user_id:
+        raise ValueError("You can only trade the pick while on the clock")
+
+    partner_id = str(offer.get("from_team_id") or "")
+    partner_overall = int(offer.get("partner_overall_pick") or 0)
+    pick_a = str(offer.get("on_clock_pick_id") or on_slot.get("pick_id") or "")
+    pick_b = str(offer.get("partner_pick_id") or "")
+    if not partner_id or partner_overall < 1 or partner_overall > len(order):
+        raise ValueError("Offer is missing partner pick details")
+    partner_slot = order[partner_overall - 1]
+    if str(partner_slot.get("team_id") or "") != partner_id:
+        raise ValueError("Offer is stale — partner no longer owns that pick")
+    if not pick_b:
+        pick_b = str(partner_slot.get("pick_id") or "")
+    if not pick_a or not pick_b:
+        raise ValueError("Cannot resolve pick ids for this offer")
+
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is None:
+        raise ValueError("League not ready")
+    try:
+        setattr(league, "_franchise_user_team_id", user_id)
+    except Exception:
+        pass
+
+    from app.sim_engine.trades.trade_evaluator import evaluate_trade_package
+    from app.sim_engine.trades.trade_executor import execute_validated_trade
+    from app.sim_engine.trades.cpu_trade_proposer import build_league_trade_context
+    from services.draft_pick_ownership import sync_draft_clock_after_trade
+
+    team_by_id = dict(getattr(session, "team_by_id", None) or {})
+    # User (on clock) receives partner's later pick + any chart-priced sweeteners.
+    # Partner climbs into the on-clock slot.
+    package = {
+        user_id: [{"type": "pick", "id": pick_b, "team": partner_id}],
+        partner_id: [{"type": "pick", "id": pick_a, "team": user_id}],
+    }
+    for sid in list(offer.get("sweetener_pick_ids") or []):
+        pid = str(sid or "").strip()
+        if pid and pid not in (pick_a, pick_b):
+            package[user_id].append({"type": "pick", "id": pid, "team": partner_id})
+    ctx = build_league_trade_context(
+        league,
+        calendar_cursor=int(getattr(session, "calendar_cursor", 0) or 0),
+        regular_season_last_index=int(getattr(session, "nhl_regular_season_last_index", 192) or 192),
+        season_year=int(getattr(session, "season_calendar_year", 2025) or 2025),
+    )
+    ctx["draft_day_trade"] = True
+    ctx["user_accepted_draft_floor_offer"] = True
+    ctx["known_pick_slots"] = build_known_pick_slots(session)
+    try:
+        dy = int((getattr(session, "draft_state", None) or {}).get("draft_year") or 0)
+        if dy > 0:
+            ctx["draft_year"] = dy
+            ctx["tradeable_draft_year"] = dy
+    except (TypeError, ValueError):
+        pass
+    evaluation = evaluate_trade_package(
+        package,
+        league=league,
+        team_by_id=team_by_id,
+        context=ctx,
+        user_team_id=user_id,
+    )
+    if not evaluation.get("can_execute"):
+        reasons = evaluation.get("blocking_reasons") or evaluation.get("rejection_reasons") or ["Trade failed validation"]
+        raise ValueError("; ".join(str(r) for r in reasons[:3]))
+    result = execute_validated_trade(
+        evaluation,
+        league=league,
+        team_by_id=team_by_id,
+        context=ctx,
+        user_team_id=user_id,
+    )
+    sync_draft_clock_after_trade(session)
+    state = getattr(session, "draft_state", None) or {}
+    state["trade_offers"] = []
+    state["draft_day_trade_offers"] = []
+    state["pick_trade_offers"] = []
+    true_target = str(offer.get("true_target_prospect_id") or offer.get("target_prospect_id") or "").strip()
+    if true_target and partner_id:
+        intent = dict(state.get("cpu_draft_target_by_team") or {})
+        intent[partner_id] = true_target
+        state["cpu_draft_target_by_team"] = intent
+    log = list(state.get("draft_trade_log") or [])
+    log.append(
+        {
+            "trade_id": result.get("trade_id"),
+            "overall_pick": overall,
+            "from_team_id": user_id,
+            "to_team_id": partner_id,
+            "reason_codes": ["USER_DRAFT_DAY_ACCEPT"],
+            "accepted_offer": True,
+            "true_target_prospect_id": true_target or None,
+            "sweetener_pick_ids": list(offer.get("sweetener_pick_ids") or []),
+        }
+    )
+    state["draft_trade_log"] = log[-40:]
+    session.draft_state = state
+    return {
+        "ok": True,
+        "trade": result,
+        "draft": get_entry_draft_payload(session),
+    }
 
 
 def _batch_cpu_picks(
@@ -2532,6 +2929,14 @@ def complete_entry_draft(session: FranchiseSession) -> Dict[str, Any]:
         state["draft_completed"] = True
         session.draft_state = state
     session.draft_completed = bool(state.get("draft_completed"))
+    if session.draft_completed:
+        _retire_draft_year_after_completion(session)
+        try:
+            from services.franchise_sim import invalidate_session_payload_caches
+
+            invalidate_session_payload_caches(session, "draft_pick")
+        except Exception:
+            pass
     recap = get_draft_recap(session)
     state["draft_recap"] = recap
     session.draft_state = state

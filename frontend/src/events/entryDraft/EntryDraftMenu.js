@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom";
 import { useGameUI } from "../../game/GameUIContext";
 import {
+  acceptEntryDraftTrade,
   completeEntryDraft,
   simEntryDraftRound,
   simEntryDraftToUserPick,
@@ -12,7 +13,7 @@ import {
 import { getTeamAbbreviation, getTeamLogoSrc } from "../../utils/teamLogos";
 import { flagApiUrl, resolveCountryCode } from "../../utils/countryFlags";
 import FanReactionFeed from "../../components/franchise/social/FanReactionFeed";
-import { buildDraftFanTweets } from "../awardsNight/awardHelpers";
+import { buildDraftFanTweets, buildDraftPickReactionTweet } from "../awardsNight/awardHelpers";
 import {
   buildCinematicCss,
   formatPick,
@@ -261,14 +262,85 @@ function formatCurrentOvr(p) {
 }
 
 function formatNhlReadiness(p) {
+  // NHL Readiness = ability to contribute NHL games NOW (0–100 score or label).
+  // Distinct from ETA (years until arrival).
+  const ready = p?.nhl_readiness ?? p?.dossier?.nhl_readiness ?? p?.dossier?.readiness;
+  if (ready != null && ready !== "") {
+    if (typeof ready === "object") {
+      if (ready.label) return String(ready.label);
+      if (ready.score != null && Number.isFinite(Number(ready.score))) {
+        const s = Number(ready.score);
+        if (s >= 78) return "NHL Ready";
+        if (s >= 68) return "Close";
+        if (s >= 55) return "Developing";
+        if (s >= 40) return "Long-term project";
+        return "At Risk";
+      }
+    }
+    const n = Number(ready);
+    if (Number.isFinite(n)) {
+      // 0–100 readiness score from backend development engine.
+      if (n > 1.5 && n <= 100) {
+        if (n >= 78) return "NHL Ready";
+        if (n >= 68) return "Close";
+        if (n >= 55) return "Developing";
+        if (n >= 40) return "Long-term project";
+        return "At Risk";
+      }
+      // Legacy: small integers mistakenly stored as years.
+      if (n <= 0) return "NHL Ready";
+      if (n <= 8) return `${Math.round(n)} Years Away`;
+    }
+    const s = String(ready);
+    if (/ready|close|develop|project|risk/i.test(s)) return s;
+  }
+  const label = p?.dossier?.readinessLabel || p?.readinessLabel;
+  if (label) return String(label);
+  return null;
+}
+
+function formatNhlArrivalEta(p) {
+  // Years until NHL arrival — not peak potential, not readiness score.
   const etaObj = p?.dossier?.eta;
   if (etaObj && typeof etaObj === "object") {
+    if (etaObj.years === 0 || String(etaObj.label || "").toLowerCase() === "now") return "NHL Ready / Now";
+    if (etaObj.years != null) return `${etaObj.years} Years Away`;
     if (etaObj.label) return String(etaObj.label);
-    if (etaObj.years === 0) return "NHL ready";
-    if (etaObj.years != null) return `${etaObj.years}y project`;
   }
-  const label = getNhlEta(p);
-  return label || null;
+  const years = Number(p?.nhl_eta_years ?? p?.nhl_eta ?? p?.rights_card?.eta);
+  if (Number.isFinite(years)) {
+    if (years <= 0) return "NHL Ready / Now";
+    return `${Math.round(years)} Years Away`;
+  }
+  if (p?.nhl_eta_label) return String(p.nhl_eta_label);
+  return null;
+}
+
+function formatNhlPotentialEta(p) {
+  // NHL ETA = how soon they reach their projected ceiling / potential.
+  const peak = p?.potential_eta ?? p?.dossier?.potential_eta ?? p?.dossier?.peak_eta;
+  if (peak != null && peak !== "") {
+    if (typeof peak === "object") {
+      if (peak.label) return String(peak.label);
+      if (peak.years != null) return `${peak.years}y to peak`;
+    }
+    return String(peak);
+  }
+  const etaObj = p?.dossier?.eta;
+  if (etaObj && typeof etaObj === "object" && etaObj.peak_years != null) {
+    return `${etaObj.peak_years}y to peak`;
+  }
+  // Fall back: readiness years + 2–4 as a soft peak window when only one ETA exists.
+  const readyYears = Number(
+    (typeof p?.dossier?.eta === "object" ? p.dossier.eta.years : null) ??
+      p?.nhl_eta_years ??
+      p?.nhl_eta
+  );
+  if (Number.isFinite(readyYears) && readyYears >= 0) {
+    const peakY = Math.max(readyYears + 2, Math.min(8, readyYears + 4));
+    return `${peakY}y to peak`;
+  }
+  return getNhlEta(p);
 }
 
 function isPhilosophyNeedLabel(label) {
@@ -556,7 +628,7 @@ function DraftLogPanel({
                     <strong>{p.prospect_name || getPlayerName(p)}</strong>
                     <span>
                       {p.position || getPlayerPosition(p)} · {abbr}
-                      {p.is_traded && p.via_team_name ? ` · via ${teamAbbrev(null, p.via_team_name)}` : ""}
+                      {p.is_traded && p.via_team_name ? ` · via ${teamAbbrev(p.via_team_id, p.via_team_name)}` : ""}
                       {p.public_rank_at_pick != null || p.final_rank != null
                         ? ` · Public #${p.public_rank_at_pick ?? p.final_rank}`
                         : ""}
@@ -574,8 +646,8 @@ function DraftLogPanel({
 }
 
 function OrderStrip({ upcoming, userTeamId }) {
-  // Show the next three picks only — no horizontal scrollbar, no clipped 4th card.
-  const next = safeArray(upcoming).slice(0, 3);
+  // Scrollable on-deck so the GM can see the next wave of picks, not just three.
+  const next = safeArray(upcoming).slice(0, 16);
   if (!next.length) return null;
 
   return (
@@ -595,8 +667,15 @@ function OrderStrip({ upcoming, userTeamId }) {
               <TeamLogo teamId={slot.team_id} teamName={slot.team_name} size="sm" />
               <div className={`${PREFIX}-order-meta`}>
                 <span className={`${PREFIX}-order-abbr`}>{abbr}</span>
-                {slot.is_traded && slot.via_team_name ? (
-                  <span className={`${PREFIX}-order-via`}>via {teamAbbrev(null, slot.via_team_name)}</span>
+                {slot.is_traded && (slot.via_team_name || slot.via_team_id) ? (
+                  <span className={`${PREFIX}-order-via`}>
+                    <TeamLogo
+                      teamId={slot.via_team_id || slot.original_owner_team_id}
+                      teamName={slot.via_team_name || slot.original_owner_team_name}
+                      size="xs"
+                    />
+                    via {teamAbbrev(slot.via_team_id, slot.via_team_name)}
+                  </span>
                 ) : null}
               </div>
             </div>
@@ -1229,21 +1308,16 @@ function ProspectStageCard({ prospect, boardContext, currentPickOverall, onFullR
   const team = d.team || prospect.team_name || prospect.team || null;
   const height = prospect.height || d.height || null;
   const weight = (prospect.weight || d.weight) ? `${prospect.weight || d.weight} lbs` : null;
-  const age = (prospect.age ?? d.age) != null ? `Age ${prospect.age ?? d.age}` : null;
+  const ageRaw = prospect.age ?? d.age;
+  const age = ageRaw != null ? `Age ${ageRaw}` : null;
   const pub = getRank(prospect);
   const conf = getConfidence(prospect);
-  const confLabel = formatConfidence(prospect);
   const summary = getScoutSummary(prospect) || d.micro_summary || null;
 
   const stats = d.stats || {};
-  const hasStats = stats && (stats.games != null || stats.points != null || stats.goals != null);
   const projection = d.projection || {};
   const comparison = d.player_comparison || {};
   const archetype = comparison.archetype || getDefiningTrait(prospect) || null;
-  const teamFit = d.team_fit || d.teamFit || {};
-  const fitScore = teamFit.score != null ? Math.round(Number(teamFit.score)) : getTeamFit(prospect);
-  const fitReason = safeArray(teamFit.fit_strengths)[0] || safeArray(teamFit.reasons)[0] || null;
-  const visibleAttrs = prospectAttrRows(prospect).slice(0, 7);
 
   // Evidence-based strengths / weaknesses (title + supporting fact). Fall back to
   // the plain string lists the backend also provides — never invented client-side.
@@ -1267,286 +1341,314 @@ function ProspectStageCard({ prospect, boardContext, currentPickOverall, onFullR
     : getScoutedPotentialLabel(prospect);
   const role = projection.label || null;
   const eta = d.eta || {};
-  const etaLabel = eta.label || formatNhlReadiness(prospect) || null;
+  const readinessLabel = formatNhlReadiness(prospect);
+  const arrivalLabel =
+    formatNhlArrivalEta(prospect) ||
+    (eta.years === 0 || String(eta.label || "").toLowerCase() === "now"
+      ? "NHL Ready / Now"
+      : eta.years != null
+        ? `${eta.years} Years Away`
+        : eta.label || null);
+  const potentialEtaLabel = formatNhlPotentialEta(prospect);
   const risk = (d.potential && d.potential.risk) || getRisk(prospect) || null;
   const projectionConf = num(projection.confidence) ?? conf;
-  const ceilingLikelihood = d.ceilingLikelihood || null;
-  const translation = d.translation || null;
-  const competition = d.competition || {};
   const devPath = prospect.rights_card?.development_path || getDevelopmentPath(prospect) || null;
-  const projectionNotes = safeArray(d.projectionNotes).slice(0, 2);
-  const ppg = stats.ppg != null
-    ? stats.ppg
-    : (stats.games ? Number((stats.points / stats.games).toFixed(2)) : null);
 
-  // Range-track geometry on the OVR scale — positions derive only from real numbers.
-  const SCALE_MIN = 40;
-  const SCALE_MAX = 99;
-  const toPct = (v) => Math.max(0, Math.min(100, ((v - SCALE_MIN) / (SCALE_MAX - SCALE_MIN)) * 100));
-  const curMid = curLow != null && curHigh != null ? (curLow + curHigh) / 2 : null;
-  const peakMid = potLow != null && potHigh != null ? (potLow + potHigh) / 2 : null;
-  const hasTrack = curMid != null && peakMid != null && potLow != null && potHigh != null;
-  const lowConf = projectionConf != null && projectionConf < 50;
+  const curMid = curLow != null && curHigh != null ? (curLow + curHigh) / 2 : num(formatCurrentOvr(prospect));
+  const peakMid = potLow != null && potHigh != null ? (potLow + potHigh) / 2 : num(getScoutedPotentialLabel(prospect));
+  const growth =
+    curMid != null && peakMid != null ? Math.max(0, Math.round(peakMid - curMid)) : null;
+  const starCount =
+    peakMid != null
+      ? peakMid >= 92
+        ? 5
+        : peakMid >= 88
+          ? 4
+          : peakMid >= 84
+            ? 3
+            : peakMid >= 78
+              ? 2
+              : 1
+      : 3;
+  const gradeBanner =
+    peakMid != null
+      ? peakMid >= 92
+        ? "ELITE NHL PROSPECT"
+        : peakMid >= 88
+          ? "HIGH-END NHL PROSPECT"
+          : peakMid >= 82
+            ? "NHL PROSPECT"
+            : "DEVELOPMENTAL PROSPECT"
+      : "NHL PROSPECT";
+  const talentGrade =
+    peakMid != null
+      ? peakMid >= 92
+        ? "A+"
+        : peakMid >= 88
+          ? "A"
+          : peakMid >= 84
+            ? "A-"
+            : peakMid >= 80
+              ? "B+"
+              : "B"
+      : "—";
 
-  // Decision context uses the PUBLIC board vs the current pick — never the user board.
   let decision = null;
+  let reachSpots = null;
   if (pub != null && currentPickOverall != null) {
     const delta = currentPickOverall - pub;
+    reachSpots = delta;
     if (delta >= 8) decision = "Value";
     else if (delta <= -12) decision = "Reach";
     else decision = "Expected";
   }
 
-  // Large focal flag: flagsapi maxes at 64px, so use the higher-res flagcdn source.
   const flagIso = resolveCountryCode(natCode || nationality);
   const flagSrc = flagIso ? `https://flagcdn.com/w320/${flagIso.toLowerCase()}.png` : flagApiUrl(natCode || nationality, 64);
-  const stateLabel = boardContext?.label || "Best Available";
-  const tb = boardContext?.teamRank ?? getTeamRank(prospect);
+  const oneLiner = [
+    ageRaw != null ? `${ageRaw}-year-old` : null,
+    nationality || null,
+    pos || null,
+    shoots ? `${shoots} shot` : null,
+    height || weight || null,
+    league ? `Playing ${league}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const riskPct =
+    String(risk || "").toLowerCase().includes("high")
+      ? 78
+      : String(risk || "").toLowerCase().includes("med")
+        ? 48
+        : String(risk || "").toLowerCase().includes("low")
+          ? 22
+          : 40;
 
   return (
-    <div className={`${PREFIX}-pcard`}>
-      <div className={`${PREFIX}-pcard-grid`}>
-        {/* ZONE 1 — Identity */}
-        <aside className={`${PREFIX}-pz-identity`}>
-          <span className={`${PREFIX}-pcard-state`}>{stateLabel}</span>
-          <div className={`${PREFIX}-pz-flag`}>
-            {flagSrc ? (
-              <img src={flagSrc} alt={nationality ? `${nationality} flag` : "Country flag"} loading="lazy" />
-            ) : (
-              <span className={`${PREFIX}-pz-flag-empty`} aria-hidden="true" />
-            )}
-          </div>
-          <div className={`${PREFIX}-pcard-boardtags`}>
-            {pub != null ? <span className={`${PREFIX}-pcard-boardtag`}>Public Board #{pub}</span> : null}
-            {tb != null ? <span className={`${PREFIX}-pcard-boardtag is-team`}>Your Board #{tb}</span> : null}
-          </div>
+    <div className={`${PREFIX}-pcard ${PREFIX}-pcard--hero`}>
+      <header className={`${PREFIX}-pcard-banner`}>
+        <span className={`${PREFIX}-pcard-stars`} aria-hidden="true">
+          {"★".repeat(starCount)}{"☆".repeat(Math.max(0, 5 - starCount))}
+        </span>
+        <strong>{gradeBanner}</strong>
+        {role ? <em>{role}</em> : null}
+      </header>
+
+      <div className={`${PREFIX}-pcard-hero-head`}>
+        {flagSrc ? (
+          <img className={`${PREFIX}-pcard-hero-flag`} src={flagSrc} alt="" loading="lazy" />
+        ) : null}
+        <div>
           <h2 className={`${PREFIX}-pcard-name`}>{name}</h2>
-          {(pos || shoots) ? (
-            <p className={`${PREFIX}-pcard-pos`}>{[pos, shoots].filter(Boolean).join(" · ")}</p>
-          ) : null}
-          {(nationality || height || weight || age) ? (
-            <p className={`${PREFIX}-pcard-vitals`}>
-              <span>{[nationality, height, weight, age].filter(Boolean).join(" · ")}</span>
-            </p>
-          ) : null}
-          {(team || league) ? (
-            <p className={`${PREFIX}-pcard-club`}>{[team, league].filter(Boolean).join(" · ")}</p>
-          ) : null}
-          {conf != null ? (
-            <div className={`${PREFIX}-pcard-conf`}>
-              <span>Scouting confidence{confLabel ? ` · ${confLabel}` : ""}</span>
-              <div className={`${PREFIX}-pcard-conf-track`}>
-                <i style={{ width: `${Math.max(0, Math.min(100, Math.round(conf)))}%` }} />
-              </div>
-            </div>
-          ) : null}
-        </aside>
+          <p className={`${PREFIX}-pcard-pos`}>
+            {[pos, age, league || team].filter(Boolean).join(" · ")}
+          </p>
+        </div>
+        {currentPickOverall != null ? (
+          <span className={`${PREFIX}-pcard-pickbadge`}>#{currentPickOverall} Overall</span>
+        ) : (
+          <span className={`${PREFIX}-pcard-pickbadge`}>EARLY PICK</span>
+        )}
+      </div>
 
-        {/* ZONE 2 — Scout evaluation + evidence */}
-        <div className={`${PREFIX}-pz-eval`}>
-          {summary ? (
-            <section className={`${PREFIX}-pcard-summary`}>
-              <h4>Scouting summary</h4>
-              <p>{summary}</p>
-            </section>
-          ) : null}
+      {oneLiner ? <p className={`${PREFIX}-pcard-oneliner`}>{oneLiner}</p> : null}
 
-          <div className={`${PREFIX}-pcard-sw`}>
-            <div className={`${PREFIX}-pcard-strengths`}>
-              <h4>Strengths</h4>
-              {strengthItems.length ? (
-                <ul>
-                  {strengthItems.map((s, i) => (
-                    <li key={`str-${i}`}>
-                      {s.title ? <strong>{s.title}</strong> : null}
-                      <span>{s.fact}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className={`${PREFIX}-pcard-none`}>No report</p>
-              )}
-            </div>
-            <div className={`${PREFIX}-pcard-weak`}>
-              <h4>Weaknesses</h4>
-              {weakItems.length ? (
-                <ul>
-                  {weakItems.map((s, i) => (
-                    <li key={`weak-${i}`}>
-                      {s.title ? <strong>{s.title}</strong> : null}
-                      <span>{s.fact}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className={`${PREFIX}-pcard-none`}>No report</p>
-              )}
-            </div>
+      <section className={`${PREFIX}-pcard-growth`} aria-label="Overall growth">
+        <div className={`${PREFIX}-pcard-growth-nums`}>
+          <div>
+            <span>Current OVR</span>
+            <strong className={`${PREFIX}-tabular`}>{curLabel || "—"}</strong>
           </div>
+          <div className={`${PREFIX}-pcard-growth-arrow`} aria-hidden="true">
+            <i />
+            {growth != null ? <em>+{growth} OVR Growth Potential</em> : null}
+          </div>
+          <div>
+            <span>Projected Ceiling</span>
+            <strong className={`${PREFIX}-tabular`}>{potLabel || "—"}</strong>
+          </div>
+        </div>
+        <div className={`${PREFIX}-pcard-grade-row`}>
+          <div>
+            <span>NHL Projection</span>
+            <strong>{"★".repeat(starCount)}{"☆".repeat(Math.max(0, 5 - starCount))}</strong>
+          </div>
+          <div>
+            <span>Talent Grade</span>
+            <strong>{talentGrade}</strong>
+          </div>
+          <div>
+            <span>NHL Ready</span>
+            <strong>{readinessLabel || "—"}</strong>
+          </div>
+          <div>
+            <span>Peak ETA</span>
+            <strong>{potentialEtaLabel || "—"}</strong>
+          </div>
+        </div>
+      </section>
 
-          {visibleAttrs.length ? (
-            <section className={`${PREFIX}-pcard-attrsec`}>
-              <h4>Attribute snapshot</h4>
-              <div className={`${PREFIX}-pcard-attrs`}>
-                {visibleAttrs.map(([label, value]) => (
-                  <AttrBar key={label} label={label} value={value} confidence={conf} />
-                ))}
+      {summary ? (
+        <section className={`${PREFIX}-pcard-why`}>
+          <h4>Why We Picked Him</h4>
+          <p>&ldquo;{summary}&rdquo;</p>
+        </section>
+      ) : null}
+
+      <div className={`${PREFIX}-pcard-sw`}>
+        <div className={`${PREFIX}-pcard-strengths`}>
+          <h4>Strengths</h4>
+          {strengthItems.length ? (
+            <ul>
+              {strengthItems.map((s, i) => (
+                <li key={`str-${i}`}>{s.title || s.fact}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className={`${PREFIX}-pcard-none`}>No report</p>
+          )}
+        </div>
+        <div className={`${PREFIX}-pcard-weak`}>
+          <h4>Risks</h4>
+          {weakItems.length ? (
+            <ul>
+              {weakItems.map((s, i) => (
+                <li key={`weak-${i}`}>{s.title || s.fact}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className={`${PREFIX}-pcard-none`}>No report</p>
+          )}
+          {risk ? (
+            <div className={`${PREFIX}-pcard-riskbar`}>
+              <span>Risk</span>
+              <div className={`${PREFIX}-pcard-conf-track`}>
+                <i style={{ width: `${riskPct}%` }} />
               </div>
-            </section>
-          ) : null}
-
-          {hasStats ? (
-            <section className={`${PREFIX}-pcard-prod`}>
-              <h4>Production context</h4>
-              <p className={`${PREFIX}-prod-raw ${PREFIX}-tabular`}>
-                {stats.games ?? "—"} GP · {stats.goals ?? "—"} G · {stats.assists ?? "—"} A · {stats.points ?? "—"} PTS
-              </p>
-              <p className={`${PREFIX}-prod-ctx`}>
-                {[
-                  ppg != null ? `${ppg} PPG` : null,
-                  league,
-                  competition.label ? `${competition.label}` : null,
-                  translation ? `Translation: ${translation}` : null,
-                ].filter(Boolean).join(" · ") || "No production context"}
-              </p>
-            </section>
+              <strong>{String(risk).toUpperCase()}</strong>
+            </div>
           ) : null}
         </div>
+      </div>
 
-        {/* ZONE 3 — NHL Projection hero */}
-        <aside className={`${PREFIX}-pz-proj${lowConf ? " is-lowconf" : ""}`}>
-          <h3 className={`${PREFIX}-proj-title`}>NHL Projection</h3>
+      <section className={`${PREFIX}-pcard-timeline`}>
+        <h4>Development Path</h4>
+        <p className={`${PREFIX}-pcard-timeline-line`}>
+          {[league || "Junior", "AHL", "NHL"].join("  →  ")}
+          {devPath ? <em> · {String(devPath).replace(/_/g, " ")}</em> : null}
+        </p>
+        <p className={`${PREFIX}-pcard-timeline-meta`}>
+          {[
+            readinessLabel ? `Readiness: ${readinessLabel}` : null,
+            arrivalLabel ? `NHL debut: ${arrivalLabel}` : null,
+            potentialEtaLabel ? `Ceiling: ${potentialEtaLabel}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ") || "Path updates as scouting deepens"}
+        </p>
+      </section>
 
-          <div className={`${PREFIX}-proj-peak`}>
-            <span>Projected Peak</span>
-            <strong className={`${PREFIX}-tabular`}>{potLabel || "Unscouted"}</strong>
-          </div>
-
-          {hasTrack ? (
-            <div className={`${PREFIX}-proj-track`} role="img"
-              aria-label={`Current ability ${curLabel}, projected peak ${potLabel}`}>
-              <div className={`${PREFIX}-proj-rail`}>
-                <span className={`${PREFIX}-proj-band`}
-                  style={{ left: `${toPct(potLow)}%`, width: `${Math.max(2, toPct(potHigh) - toPct(potLow))}%` }} />
-                <span className={`${PREFIX}-proj-fill`}
-                  style={{ left: `${toPct(curMid)}%`, width: `${Math.max(0, toPct(peakMid) - toPct(curMid))}%` }} />
-                <span className={`${PREFIX}-proj-mark is-current`} style={{ left: `${toPct(curMid)}%` }} />
-                <span className={`${PREFIX}-proj-mark is-peak`} style={{ left: `${toPct(peakMid)}%` }} />
-              </div>
-              <div className={`${PREFIX}-proj-scale`}>
-                <span>{SCALE_MIN}</span>
-                <span>{SCALE_MAX}</span>
-              </div>
-            </div>
+      <section className={`${PREFIX}-pcard-public`}>
+        <h4>Public Opinion</h4>
+        <div className={`${PREFIX}-pcard-public-grid`}>
+          {pub != null ? <div><span>Draft Rank</span><strong>#{pub}</strong></div> : null}
+          {currentPickOverall != null ? (
+            <div><span>Selected</span><strong>#{currentPickOverall}</strong></div>
           ) : null}
-
-          <div className={`${PREFIX}-proj-ovr`}>
+          {reachSpots != null ? (
             <div>
-              <span>Current Ability</span>
-              <strong className={`${PREFIX}-tabular`}>{curLabel || "Unscouted"}</strong>
-            </div>
-            <div className="is-peak">
-              <span>Projected Peak</span>
-              <strong className={`${PREFIX}-tabular`}>{potLabel || "Unscouted"}</strong>
-            </div>
-          </div>
-
-          {role ? (
-            <div className={`${PREFIX}-proj-role`}>
-              <span>Projected NHL Role</span>
-              <strong>{role}</strong>
-            </div>
-          ) : null}
-
-          <div className={`${PREFIX}-proj-meta`}>
-            {etaLabel ? <div><span>NHL ETA</span><strong>{etaLabel}</strong></div> : null}
-            {projectionConf != null ? (
-              <div><span>Confidence</span><strong>{Math.round(projectionConf)}%</strong></div>
-            ) : null}
-            {risk ? <div><span>Risk</span><strong>{risk}</strong></div> : null}
-            {ceilingLikelihood ? <div><span>Ceiling odds</span><strong>{ceilingLikelihood}</strong></div> : null}
-          </div>
-
-          {(fitScore != null || teamFit.label) ? (
-            <div className={`${PREFIX}-proj-fit`}>
-              <span>Team Fit</span>
+              <span>Reach</span>
               <strong>
-                {fitScore != null ? fitScore : ""}{teamFit.label ? `${fitScore != null ? " · " : ""}${teamFit.label}` : ""}
+                {reachSpots > 0 ? `▼ ${reachSpots} spots` : reachSpots < 0 ? `▲ ${Math.abs(reachSpots)} spots` : "On the board"}
               </strong>
-              {fitReason ? <em>{fitReason}</em> : null}
             </div>
           ) : null}
-
-          {projectionNotes.length ? (
-            <div className={`${PREFIX}-proj-notes`}>
-              {projectionNotes.map((n, i) => (
-                <p key={`pn-${i}`}>
-                  {n.title ? <strong>{n.title}: </strong> : null}
-                  {n.fact}
-                </p>
-              ))}
+          {projectionConf != null ? (
+            <div>
+              <span>Scout Confidence</span>
+              <div className={`${PREFIX}-pcard-conf-track`}>
+                <i style={{ width: `${Math.max(0, Math.min(100, Math.round(projectionConf)))}%` }} />
+              </div>
+              <strong>{Math.round(projectionConf)}%</strong>
             </div>
           ) : null}
-        </aside>
-      </div>
-
-      {/* Bottom row — supporting modules */}
-      <div className={`${PREFIX}-pcard-bottom`}>
-        {hasStats ? (
-          <section className={`${PREFIX}-pcard-mod`}>
-            <h4>Recent Season</h4>
-            <table className={`${PREFIX}-pcard-stat-table`}>
-              <thead>
-                <tr><th>Team</th><th>League</th><th>GP</th><th>G</th><th>A</th><th>PTS</th><th>PPG</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>{team || "—"}</td>
-                  <td>{league || "—"}</td>
-                  <td className={`${PREFIX}-tabular`}>{stats.games ?? "—"}</td>
-                  <td className={`${PREFIX}-tabular`}>{stats.goals ?? "—"}</td>
-                  <td className={`${PREFIX}-tabular`}>{stats.assists ?? "—"}</td>
-                  <td className={`${PREFIX}-tabular`}>{stats.points ?? "—"}</td>
-                  <td className={`${PREFIX}-tabular`}>{ppg ?? "—"}</td>
-                </tr>
-              </tbody>
-            </table>
-          </section>
+        </div>
+        {decision ? (
+          <p className={`${PREFIX}-pcard-decision-note`}>
+            {decision === "Reach"
+              ? "Your club believed he was worth taking despite the slide / board gap."
+              : decision === "Value"
+                ? "Falls into a value pocket versus the public board."
+                : "Aligns with consensus board ranking."}
+          </p>
         ) : null}
+      </section>
 
-        <section className={`${PREFIX}-pcard-mod`}>
-          <h4>Development Path</h4>
-          {devPath ? <p>{devPath}</p> : <p className={`${PREFIX}-pcard-none`}>No report</p>}
-        </section>
-
-        <section className={`${PREFIX}-pcard-mod`}>
-          <h4>Style Comparison</h4>
-          {archetype ? <p>{archetype}</p> : <p className={`${PREFIX}-pcard-none`}>Not available</p>}
-        </section>
-
-        <section className={`${PREFIX}-pcard-mod`}>
-          <h4>Draft Decision</h4>
-          <div className={`${PREFIX}-pcard-decision`}>
-            {currentPickOverall != null ? (
-              <div><span>Current pick</span><strong className={`${PREFIX}-tabular`}>#{currentPickOverall}</strong></div>
+      {(archetype || comparison.ceiling || comparison.floor || comparison.current) ? (
+        <section className={`${PREFIX}-pcard-comps`}>
+          <h4>Player Comparison</h4>
+          <div className={`${PREFIX}-pcard-comp-grid`}>
+            {(comparison.current || archetype) ? (
+              <div><span>Current</span><strong>{comparison.current || archetype}</strong></div>
             ) : null}
-            {pub != null ? (
-              <div><span>Public board</span><strong className={`${PREFIX}-tabular`}>#{pub}</strong></div>
-            ) : null}
-            {decision ? (
-              <div><span>Decision</span><strong className={`${PREFIX}-dec-${decision.toLowerCase()}`}>{decision}</strong></div>
-            ) : null}
+            {comparison.ceiling ? <div><span>Ceiling</span><strong>{comparison.ceiling}</strong></div> : null}
+            {comparison.floor ? <div><span>Floor</span><strong>{comparison.floor}</strong></div> : null}
           </div>
-          <button type="button" className={`${PREFIX}-text-btn`} onClick={() => onFullReport?.(prospect)}>
-            Full report
-          </button>
         </section>
-      </div>
+      ) : null}
+
+      <footer className={`${PREFIX}-pcard-foot`}>
+        <button type="button" className={`${PREFIX}-text-btn`} onClick={() => onFullReport?.(prospect)}>
+          Full report
+        </button>
+      </footer>
     </div>
   );
 }
 
-function PickDetailSheet({ pick, onClose }) {
+function DraftNightTweetCard({ tweet }) {
+  if (!tweet) return null;
+  const fan = tweet.fan || {};
+  const metrics = tweet.metrics || {};
+  const isHomage = Boolean(tweet.context?.isHomage || (tweet.context?.tags || []).includes?.("lupulHomage"));
+  const initials = String(fan.displayName || "RW")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0] || "")
+    .join("")
+    .toUpperCase() || "RW";
+
+  return (
+    <article className={`edraft-pdsheet-tweet${isHomage ? " is-homage" : ""}`}>
+      <div className="edraft-pdsheet-tweet-avatar" aria-hidden="true">
+        {fan.avatarSrc ? (
+          <img src={fan.avatarSrc} alt="" loading="lazy" />
+        ) : (
+          <span>{initials}</span>
+        )}
+      </div>
+      <div className="edraft-pdsheet-tweet-body">
+        <div className="edraft-pdsheet-tweet-meta">
+          <strong>{fan.displayName || "Rink Watcher"}</strong>
+          <span>{fan.handle || "@draftfloor"}</span>
+          <span>{tweet.createdAtLabel || "now"}</span>
+        </div>
+        <p>{tweet.text}</p>
+        <div className="edraft-pdsheet-tweet-foot">
+          {tweet.awardLabel ? <span>{tweet.awardLabel}</span> : null}
+          {tweet.context?.selectionLabel ? <span>{tweet.context.selectionLabel}</span> : null}
+          {isHomage ? <span className="is-homage-tag">Floor Homage</span> : null}
+          {metrics.likes != null ? <span>{metrics.likes} likes</span> : null}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function PickDetailSheet({ pick, reactionTweet, onClose }) {
   useEffect(() => {
     if (!pick) return undefined;
     const onKey = (e) => { if (e.key === "Escape") onClose?.(); };
@@ -1572,7 +1674,7 @@ function PickDetailSheet({ pick, onClose }) {
   const risk = pick.risk_score ?? getRisk(pick);
   const conf = formatConfidence(pick);
   const readiness = pick.nhl_readiness || formatNhlReadiness(pick);
-  const eta = getNhlEta(pick);
+  const eta = formatNhlPotentialEta(pick) || getNhlEta(pick);
   const role = pick.player_type || getDefiningTrait(pick);
   const potGrade = pick.potential_grade || null;
   const floor = num(pick.floor_grade);
@@ -1660,6 +1762,13 @@ function PickDetailSheet({ pick, onClose }) {
         </header>
 
         <div className="edraft-pdsheet-body">
+          {reactionTweet ? (
+            <section className="edraft-pdsheet-sec">
+              <h4>Draft Night Reaction</h4>
+              <DraftNightTweetCard tweet={reactionTweet} />
+            </section>
+          ) : null}
+
           {profileStats.length ? (
             <section className="edraft-pdsheet-sec">
               <h4>Player Profile</h4>
@@ -1797,7 +1906,7 @@ function ComparisonTable({ prospects }) {
   );
 }
 
-function UserPickModal({ open, prospects, compareIds, onCompare, onDraft, onClose, loading, currentPick, draft }) {
+function UserPickModal({ open, prospects, compareIds, onCompare, onDraft, onClose, loading, currentPick, draft, onTradeDown }) {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(null);
@@ -1889,6 +1998,18 @@ function UserPickModal({ open, prospects, compareIds, onCompare, onDraft, onClos
             </p>
           </div>
           <button type="button" className={`${PREFIX}-ghost-btn`} onClick={onClose} aria-label="Close">Close</button>
+          {typeof onTradeDown === "function" ? (
+            <button
+              type="button"
+              className={`${PREFIX}-ghost-btn`}
+              onClick={() => {
+                onClose?.();
+                onTradeDown();
+              }}
+            >
+              Trade Down
+            </button>
+          ) : null}
         </header>
 
         <div className={`${PREFIX}-modal-filters`}>
@@ -2185,8 +2306,16 @@ function UserPickModal({ open, prospects, compareIds, onCompare, onDraft, onClos
                           <strong>
                             {dossier.estimatedNhlArrival
                               || dossier.eta?.label
-                              || dossier.readinessLabel
+                              || formatNhlArrivalEta(detail)
                               || getNhlEta(detail)
+                              || "Unavailable"}
+                          </strong>
+                        </div>
+                        <div>
+                          <span className={`${PREFIX}-ability-label`}>Readiness</span>
+                          <strong>
+                            {formatNhlReadiness(detail)
+                              || dossier.readinessLabel
                               || "Unavailable"}
                           </strong>
                         </div>
@@ -2293,7 +2422,16 @@ function CpuReveal({ pick, onDone, fast = false }) {
       <p className={`${PREFIX}-cpu-label`}>With the {formatPick(pick.overall_pick)} pick</p>
       <TeamLogo teamId={pick.team_id} teamName={pick.team_name} size="lg" />
       <h2>{pick.team_name}</h2>
-      {pick.is_traded && pick.via_team_name ? <p className={`${PREFIX}-via-note`}>via {pick.via_team_name}</p> : null}
+      {pick.is_traded && (pick.via_team_name || pick.via_team_id) ? (
+        <p className={`${PREFIX}-via-note`}>
+          <TeamLogo
+            teamId={pick.via_team_id || pick.original_owner_team_id}
+            teamName={pick.via_team_name || pick.original_owner_team_name}
+            size="xs"
+          />
+          via {teamAbbrev(pick.via_team_id, pick.via_team_name)}
+        </p>
+      ) : null}
       <p className={`${PREFIX}-cpu-selects`}>selects</p>
       <h1>{pick.prospect_name}</h1>
       <div className={`${PREFIX}-cpu-meta`}>
@@ -2326,26 +2464,105 @@ function RoundRecapPanel({ recap, onContinue }) {
   );
 }
 
-function TradePanel({ draft, onClose }) {
+function TradePanel({ draft, onClose, onAccept, accepting = false }) {
   const offers = safeArray(draft?.trade_offers || draft?.draft_day_trade_offers || draft?.pick_trade_offers);
   return (
-    <div className={`${PREFIX}-trade-panel`}>
-      <header>
-        <h3>Trade Pick</h3>
-        <button type="button" className={`${PREFIX}-ghost-btn`} onClick={onClose}>Close</button>
-      </header>
-      {!offers.length ? (
-        <p className={`${PREFIX}-muted`}>No live offers.</p>
-      ) : (
-        offers.map((offer, i) => (
-          <article key={i} className={`${PREFIX}-trade-offer`}>
-            <strong>{offer.team_name || offer.from_team_name || "Team"}</strong>
-            <p>{offer.offer_text || offer.assets_in || offer.incoming_assets || "Pick package"}</p>
-            {offer.value || offer.value_grade ? <span>{offer.value || offer.value_grade}</span> : null}
-            {offer.risk ? <span>{offer.risk}</span> : null}
-          </article>
-        ))
-      )}
+    <div className={`${PREFIX}-modal-backdrop`} role="dialog" aria-modal="true" aria-label="Trade down">
+      <div className={`${PREFIX}-trade-panel`}>
+        <header>
+          <h3>Trade Down</h3>
+          <button
+            type="button"
+            className={`${PREFIX}-ghost-btn`}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onClose?.();
+            }}
+          >
+            Close
+          </button>
+        </header>
+        {!offers.length ? (
+          <p className={`${PREFIX}-muted`}>
+            No clubs are paying to climb right now. Only teams with a real board
+            priority still on the board will bid — keep the pick or make your selection.
+          </p>
+        ) : (
+          offers.map((offer, i) => {
+            const candidates = safeArray(offer.target_candidates);
+            const incoming = safeArray(
+              offer.incoming_assets?.length
+                ? offer.incoming_assets
+                : String(offer.assets_in || "")
+                    .split(/\s*[·+]\s*/)
+                    .map((s) => s.trim())
+                    .filter(Boolean)
+            );
+            const outgoing = safeArray(
+              offer.outgoing_assets?.length
+                ? offer.outgoing_assets
+                : [offer.on_clock_overall_pick ? `#${offer.on_clock_overall_pick} pick` : "On-clock pick"]
+            );
+            return (
+              <article key={i} className={`${PREFIX}-trade-offer`}>
+                <strong>{offer.team_name || offer.from_team_name || "Team"}</strong>
+                <div className={`${PREFIX}-trade-offer-block`}>
+                  <span className={`${PREFIX}-trade-offer-label`}>You send</span>
+                  <ul>
+                    {outgoing.map((asset, idx) => (
+                      <li key={`out-${idx}`}>{typeof asset === "string" ? asset : String(asset)}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div className={`${PREFIX}-trade-offer-block`}>
+                  <span className={`${PREFIX}-trade-offer-label`}>You receive</span>
+                  {incoming.length ? (
+                    <ul>
+                      {incoming.map((asset, idx) => (
+                        <li key={`in-${idx}`}>{typeof asset === "string" ? asset : String(asset)}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className={`${PREFIX}-muted`}>No package attached</p>
+                  )}
+                </div>
+                <div className={`${PREFIX}-trade-offer-block`}>
+                  <span className={`${PREFIX}-trade-offer-label`}>Rumored targets</span>
+                  {candidates.length ? (
+                    <ul>
+                      {candidates.map((c, idx) => (
+                        <li key={c.prospect_id || idx}>
+                          {c.name || "Prospect"}
+                          {c.position ? ` (${c.position})` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className={`${PREFIX}-muted`}>Unknown</p>
+                  )}
+                  <p className={`${PREFIX}-muted`}>Only one name is their true priority.</p>
+                </div>
+                <div className={`${PREFIX}-trade-offer-meta`}>
+                  {offer.partner_overall_pick ? <span>Move to #{offer.partner_overall_pick}</span> : null}
+                  {offer.slot_value_gap != null ? (
+                    <span>Chart gap {Number(offer.slot_value_gap).toFixed(1)}</span>
+                  ) : null}
+                  {offer.value || offer.value_grade ? <span>{offer.value || offer.value_grade}</span> : null}
+                </div>
+                <button
+                  type="button"
+                  className={`${PREFIX}-cta-btn`}
+                  disabled={accepting || !incoming.length}
+                  onClick={() => onAccept?.(offer)}
+                >
+                  {accepting ? "Accepting…" : "Accept & trade down"}
+                </button>
+              </article>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }
@@ -2678,7 +2895,15 @@ function RecapShow({ draft, completed, userPicks }) {
         </div>
       </div>
 
-      {profilePick ? <PickDetailSheet pick={profilePick} onClose={() => setProfilePick(null)} /> : null}
+      {profilePick ? (
+        <PickDetailSheet
+          pick={profilePick}
+          reactionTweet={buildDraftPickReactionTweet(profilePick, {
+            seed: `${draft?.draft_year || "draft"}-recap-pick`,
+          })}
+          onClose={() => setProfilePick(null)}
+        />
+      ) : null}
     </section>
   );
 }
@@ -2705,6 +2930,7 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
   const [compareIds, setCompareIds] = useState([]);
   const [error, setError] = useState("");
   const [tradePanelOpen, setTradePanelOpen] = useState(false);
+  const [tradeAccepting, setTradeAccepting] = useState(false);
   const [selectedCompletedPick, setSelectedCompletedPick] = useState(null);
   const [selectedAvailable, setSelectedAvailable] = useState(null);
   const [dossierOpen, setDossierOpen] = useState(false);
@@ -2715,6 +2941,9 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
 
   const simLock = useRef(false);
   const lastRoundRef = useRef(1);
+  // When the user closes Make Selection while still on the clock, remember that
+  // pick so the auto-open effect does not immediately reopen the modal.
+  const userModalDismissedPickRef = useRef(null);
   const loading = Boolean(loadingOp);
 
   useEffect(() => {
@@ -2789,6 +3018,26 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
     });
   }, [completed, franchiseState, draft?.draft_year, primaryNeed, needs]);
 
+  const selectedPickReaction = useMemo(() => {
+    if (!selectedCompletedPick) return null;
+    const overall = Number(selectedCompletedPick.overall_pick);
+    const fromFeed = draftSocialTweets.find(
+      (t) => Number(t?.context?.overallPick) === overall
+        || String(t?.context?.winnerLabel || "").toLowerCase()
+          === String(selectedCompletedPick.prospect_name || "").toLowerCase()
+    );
+    if (fromFeed) return fromFeed;
+    const season = franchiseState?.season_year || franchiseState?.seasonYear || draft?.draft_year || "draft";
+    return buildDraftPickReactionTweet(selectedCompletedPick, {
+      seed: `${season}-entry-draft`,
+      draftContext: {
+        franchiseSeed: String(franchiseState?.seed || franchiseState?.franchise_seed || season),
+        primaryNeed,
+        teamNeeds: needs,
+      },
+    });
+  }, [selectedCompletedPick, draftSocialTweets, franchiseState, draft?.draft_year, primaryNeed, needs]);
+
   const applyResponse = useCallback((res, { batch = false } = {}) => {
     if (res?.state) setFranchiseState(res.state);
     if (res?.draft) setDraft(res.draft);
@@ -2802,6 +3051,20 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
     if (res?.draft?.recap) setDraft((d) => ({ ...d, recap: res.draft.recap }));
     if (res?.recap) setDraft((d) => ({ ...d, recap: res.recap }));
   }, [setFranchiseState]);
+
+  const acceptTradeOffer = useCallback(async (offer) => {
+    setTradeAccepting(true);
+    setError("");
+    try {
+      const res = await acceptEntryDraftTrade(offer);
+      applyResponse(res);
+      setTradePanelOpen(false);
+    } catch (err) {
+      setError(err?.response?.data?.detail || err?.message || "Trade failed");
+    } finally {
+      setTradeAccepting(false);
+    }
+  }, [applyResponse]);
 
   const handleStart = useCallback(async () => {
     setLoadingOp("start");
@@ -2858,6 +3121,7 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
       if (simulated.length) {
         setCpuReveal(simulated[simulated.length - 1]);
       } else if (res?.draft?.is_user_pick) {
+        userModalDismissedPickRef.current = null;
         setUserModalOpen(true);
         simLock.current = false;
         setLoadingOp(null);
@@ -2927,6 +3191,7 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
       });
       applyResponse(res);
       setUserModalOpen(false);
+      userModalDismissedPickRef.current = null;
       setSelectedAvailable(null);
       simLock.current = false;
     } catch (e) {
@@ -2956,6 +3221,9 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
   useEffect(() => {
     if (stage !== "live" || draftDone || loading || cpuReveal || userModalOpen || roundRecapView) return;
     if (isUserPick) {
+      const pickKey = Number(currentPick?.overall_pick || draft.overall_pick || 0) || 0;
+      // Honor an explicit Close while still on this same pick.
+      if (pickKey && userModalDismissedPickRef.current === pickKey) return;
       if (simMode === "auto_user") {
         simCurrentPick();
         return;
@@ -2963,9 +3231,10 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
       setUserModalOpen(true);
       return;
     }
+    userModalDismissedPickRef.current = null;
     if (simMode === "manual") return;
     if (!simLock.current) simToUser(simMode === "fast");
-  }, [stage, draftDone, isUserPick, loading, cpuReveal, userModalOpen, roundRecapView, simToUser, simMode, simCurrentPick]);
+  }, [stage, draftDone, isUserPick, loading, cpuReveal, userModalOpen, roundRecapView, simToUser, simMode, simCurrentPick, currentPick?.overall_pick, draft.overall_pick]);
 
   useEffect(() => {
     const prev = lastRoundRef.current;
@@ -3006,12 +3275,18 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
           <span aria-hidden="true">←</span> Back to Hub
         </button>
         <div className={`${PREFIX}-topbar-main`}>
-          <h1 className={`${PREFIX}-page-title`}>NHL Entry Draft</h1>
-          {(seasonLabel(franchiseState) || draftYearLabel(draft)) ? (
-            <span className={`${PREFIX}-season`}>
-              {[seasonLabel(franchiseState), draftYearLabel(draft)].filter(Boolean).join(" ")}
-            </span>
-          ) : null}
+          <div className={`${PREFIX}-insignia`} aria-hidden="true">
+            NHL
+            <span>DRAFT</span>
+          </div>
+          <div>
+            <h1 className={`${PREFIX}-page-title`}>NHL Entry Draft</h1>
+            {(seasonLabel(franchiseState) || draftYearLabel(draft)) ? (
+              <span className={`${PREFIX}-season`}>
+                {[seasonLabel(franchiseState), draftYearLabel(draft)].filter(Boolean).join(" ")}
+              </span>
+            ) : null}
+          </div>
         </div>
         {(stage === "live" || stage === "recap") ? (
           <span className={`${PREFIX}-topbar-status ${PREFIX}-tabular`}>{statusLine}</span>
@@ -3022,6 +3297,12 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
 
       {stage === "intro" && (
         <main className={`${PREFIX}-intro`}>
+          <div className={`${PREFIX}-ceremony-mark`}>
+            <div className={`${PREFIX}-ceremony-seal`} aria-hidden="true">
+              {draftYearLabel(draft) || "NHL"}
+            </div>
+            <p className={`${PREFIX}-ceremony-kicker`}>Entry Draft Ceremony</p>
+          </div>
           <h1 className={`${PREFIX}-title`}>NHL Entry Draft</h1>
           {(draft.location || draft.class_strength) ? (
             <p className={`${PREFIX}-subtitle`}>
@@ -3124,8 +3405,15 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
                               Needs: {primaryNeed}{otherNeeds.length ? `, ${otherNeeds.join(", ")}` : ""}
                             </span>
                           ) : null}
-                          {draft.is_traded_pick && draft.via_team_name ? (
-                            <span>via {draft.via_team_name}</span>
+                          {draft.is_traded_pick && (draft.via_team_name || draft.via_team_id) ? (
+                            <span className={`${PREFIX}-pickhead-via`}>
+                              <TeamLogo
+                                teamId={draft.via_team_id || draft.original_owner_team_id}
+                                teamName={draft.via_team_name || draft.original_owner_team_name}
+                                size="xs"
+                              />
+                              via {teamAbbrev(draft.via_team_id, draft.via_team_name)}
+                            </span>
                           ) : null}
                           {userNextPick ? (
                             <span>Your next: #{userNextPick.overall_pick}{userNextPick.round ? ` · Rd ${userNextPick.round}` : ""}</span>
@@ -3185,7 +3473,10 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
                             type="button"
                             className={`${PREFIX}-cta-btn ${PREFIX}-dock-primary`}
                             disabled={loading || !stageProspect}
-                            onClick={() => setUserModalOpen(true)}
+                            onClick={() => {
+                              userModalDismissedPickRef.current = null;
+                              setUserModalOpen(true);
+                            }}
                           >
                             {stageProspect ? "Make Selection" : "Select a Prospect"}
                           </button>
@@ -3211,9 +3502,9 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
                         <button type="button" className={`${PREFIX}-ghost-btn`} disabled={loading || draftDone} onClick={simFullDraft}>
                           {loadingOp === "complete" ? LOADING_COPY.complete : "Complete Draft"}
                         </button>
-                        {isUserPick && tradeOffers.length ? (
+                        {isUserPick ? (
                           <button type="button" className={`${PREFIX}-ghost-btn`} onClick={() => setTradePanelOpen(true)}>
-                            Trade Pick ({tradeOffers.length})
+                            {tradeOffers.length ? `Trade Down (${tradeOffers.length})` : "Trade Down"}
                           </button>
                         ) : null}
                       </div>
@@ -3246,7 +3537,11 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
           </div>
 
           {selectedCompletedPick ? (
-            <PickDetailSheet pick={selectedCompletedPick} onClose={() => setSelectedCompletedPick(null)} />
+            <PickDetailSheet
+              pick={selectedCompletedPick}
+              reactionTweet={selectedPickReaction}
+              onClose={() => setSelectedCompletedPick(null)}
+            />
           ) : null}
 
           {dossierOpen && selectedAvailable ? (
@@ -3274,7 +3569,14 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
             />
           ) : null}
 
-          {tradePanelOpen ? <TradePanel draft={draft} onClose={() => setTradePanelOpen(false)} /> : null}
+          {tradePanelOpen ? (
+            <TradePanel
+              draft={draft}
+              onClose={() => setTradePanelOpen(false)}
+              onAccept={acceptTradeOffer}
+              accepting={tradeAccepting}
+            />
+          ) : null}
 
           <div className={`${PREFIX}-ticker-bar`}>
             <div className={`${PREFIX}-ticker-track`}>
@@ -3302,14 +3604,19 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
       )}
 
       <UserPickModal
-        open={userModalOpen && isUserPick && !draftDone}
+        open={userModalOpen && isUserPick && !draftDone && !tradePanelOpen}
         prospects={available}
         compareIds={compareIds}
         currentPick={currentPick}
         draft={draft}
         onCompare={onCompare}
         onDraft={handleUserDraft}
-        onClose={() => setUserModalOpen(false)}
+        onClose={() => {
+          const pickKey = Number(currentPick?.overall_pick || draft.overall_pick || 0) || 0;
+          if (pickKey) userModalDismissedPickRef.current = pickKey;
+          setUserModalOpen(false);
+        }}
+        onTradeDown={() => setTradePanelOpen(true)}
         loading={loading}
       />
     </section>

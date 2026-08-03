@@ -1,6 +1,8 @@
-import React, { useMemo, useState, useCallback, useEffect, useRef } from "react";
+import React, { useMemo, useState, useCallback, useEffect } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
+import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
+import PlayerHeadshot from "../components/PlayerHeadshot";
 
 /*
   StorylinesScreen — backend-driven news hub.
@@ -13,8 +15,6 @@ const SORT_OPTIONS = [
   { id: "priority", label: "Priority" },
   { id: "latest", label: "Latest" },
 ];
-
-const LEGAL_GROUP_THRESHOLD = 5;
 
 const CATEGORY_META = {
   performance: { icon: "◆", label: "Performance", accent: "#13d8e7" },
@@ -43,10 +43,9 @@ const FILTER_EMPTY = {
 };
 
 const FILTERS = [
-  { id: "all", label: "All" },
+  { id: "all", label: "Latest" },
   { id: "your_team", label: "Your Team" },
-  { id: "league", label: "League" },
-  { id: "rumors", label: "Rumors" },
+  { id: "rumors", label: "Rumours" },
   { id: "injuries", label: "Injuries" },
   { id: "draft", label: "Draft" },
   { id: "decisions", label: "Decisions" },
@@ -211,32 +210,6 @@ function sortStories(list, sortId) {
   return copy;
 }
 
-function groupFeedItems(stories, expandedGroups) {
-  const legal = stories.filter((s) => resolveCategoryKey(s) === "legal_trouble");
-  const rest = stories.filter((s) => resolveCategoryKey(s) !== "legal_trouble");
-  if (legal.length < LEGAL_GROUP_THRESHOLD) {
-    return stories.map((s) => ({ kind: "story", story: s }));
-  }
-  const groupKey = "legal_conduct";
-  const expanded = expandedGroups.has(groupKey);
-  const items = [];
-  if (!expanded) {
-    items.push({
-      kind: "group",
-      groupKey,
-      label: "Legal / Conduct Updates",
-      count: legal.length,
-      preview: legal[0],
-      stories: legal,
-    });
-    rest.forEach((s) => items.push({ kind: "story", story: s }));
-    return items;
-  }
-  legal.forEach((s) => items.push({ kind: "story", story: s }));
-  rest.forEach((s) => items.push({ kind: "story", story: s }));
-  return items;
-}
-
 function matchesSearch(story, q) {
   if (!q) return true;
   const needle = q.toLowerCase();
@@ -324,6 +297,22 @@ function normalizeStory(raw, idx, state) {
     followUp: str(raw?.follow_up || ""),
     arcStatus: str(raw?.arc_status || raw?.status || "active"),
     playerPosition: str(raw?.player_position || ""),
+    incidentId: str(raw?.incident_id || ""),
+    eligibleToPlay: raw?.eligible_to_play,
+    teamCanOverride: Boolean(raw?.team_can_override),
+    allegationNote: str(raw?.allegation_note || ""),
+    informationStatus: str(raw?.information_status || ""),
+    legalStatus: str(raw?.legal_status || ""),
+    leagueStatus: str(raw?.league_status || ""),
+    teamStatus: str(raw?.team_status || ""),
+    conductModel: str(raw?.conduct_model || ""),
+    dressBacklashRisk: Number(raw?.dress_backlash_risk) || 0,
+    incidentFamily: str(raw?.incident_family || ""),
+    fromTeamName: str(raw?.from_team_name || ""),
+    toTeamName: str(raw?.to_team_name || ""),
+    fromTeamAbbrev: str(raw?.from_team_abbrev || ""),
+    toTeamAbbrev: str(raw?.to_team_abbrev || ""),
+    relatedTeams: asArray(raw?.related_teams || raw?.teams),
     categoryKey: "",
   };
 }
@@ -419,118 +408,102 @@ function priorityClass(priority) {
   return "";
 }
 
-function LeagueWireTicker({ headlines }) {
-  if (!headlines.length) {
-    return (
-      <div className="sl-wire sl-wire--empty">
-        <span className="sl-wire-label">League Wire</span>
-        <span>No league wire updates yet.</span>
-      </div>
-    );
+function heatLabel(heat) {
+  const n = Number(heat);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n < 20) return "Quiet";
+  if (n < 45) return "Building";
+  if (n < 75) return "Hot";
+  return "Boiling";
+}
+
+function credibilityLabel(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n < 30) return "Speculation";
+  if (n < 50) return "Early chatter";
+  if (n < 75) return "Credible";
+  return "Strongly sourced";
+}
+
+function isRumourStory(story) {
+  return /trade|rumor|contract|market/i.test(`${story.type} ${story.category} ${story.headline}`);
+}
+
+function parseTradeTeams(story) {
+  const fromA = str(story.fromTeamAbbrev || "");
+  const toA = str(story.toTeamAbbrev || "");
+  if (fromA && toA) return [fromA, toA];
+  const related = asArray(story.relatedTeams);
+  if (related.length >= 2) {
+    const a = str(related[0]?.abbrev || related[0]?.team_abbrev || related[0] || "");
+    const b = str(related[1]?.abbrev || related[1]?.team_abbrev || related[1] || "");
+    if (a && b) return [a.slice(0, 4).toUpperCase(), b.slice(0, 4).toUpperCase()];
   }
-  const text = headlines.map((h) => h.headline).join("  ◆  ");
+  const m = String(story.headline || "").match(/\b([A-Z]{2,4})\b.*?\b([A-Z]{2,4})\b/);
+  if (m) return [m[1], m[2]];
+  const named = String(story.headline || "").match(/([A-Za-z .]+)\s+(?:acquires|trades|sends|gets)\s+.+?\s+(?:from|to)\s+([A-Za-z .]+)/i);
+  if (named) {
+    const left = named[1].trim().split(/\s+/).slice(-1)[0].slice(0, 3).toUpperCase();
+    const right = named[2].trim().split(/\s+/).slice(0, 1)[0].slice(0, 3).toUpperCase();
+    if (left && right && left !== right) return [left, right];
+  }
+  return [];
+}
+
+function LeagueWireTicker({ headlines }) {
+  if (!headlines.length) return null;
+  const wireText = headlines.map((h) => h.headline).join("  ◆  ");
   return (
-    <div className="sl-wire" title="League Wire — hover to pause">
-      <span className="sl-wire-label">League Wire</span>
-      <div className="sl-wire-track">
-        <span className="sl-wire-text">{text}</span>
-        <span className="sl-wire-text" aria-hidden>
-          {text}
+    <div className="sl-breaking" title="Breaking wire — hover to pause">
+      <span className="sl-breaking-label">BREAKING</span>
+      <div className="sl-breaking-track">
+        <span className="sl-breaking-text">{wireText}</span>
+        <span className="sl-breaking-text" aria-hidden>
+          {wireText}
         </span>
       </div>
     </div>
   );
 }
 
-function StoryGroupCard({ group, onExpand, onSelectStory }) {
+function TeamOrPlayerIdentity({ story }) {
+  if (!story?.playerName && !story?.teamName) return null;
+  const abbr = str(story.teamName || "TEAM").slice(0, 4).toUpperCase();
+  const logo =
+    resolveFranchiseTeamLogo(
+      { team_id: story.teamId, team_name: story.teamName, team_abbrev: abbr, abbrev: abbr },
+      story.teamName
+    ) || "";
   return (
-    <div className="sl-group-card">
-      <button type="button" className="sl-group-head" onClick={() => onExpand(group.groupKey)}>
-        <span className="sl-cat-icon" style={{ color: "#8ab4ff" }}>
-          §
-        </span>
-        <div>
-          <strong>{group.label}</strong>
-          <p>{group.count} stories — click to expand</p>
-        </div>
-        <em>{group.count}</em>
-      </button>
-      {group.preview ? (
-        <button type="button" className="sl-group-preview" onClick={() => onSelectStory(group.preview.id)}>
-          Latest: {group.preview.headline}
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function StoryCard({ story, selected, onSelect, todayIso }) {
-  const meta = categoryMeta(story);
-  const evLine = evidenceLine(story.evidence);
-  const fresh = story.freshness || storyFreshnessClass(story, todayIso);
-  const age = story.ageLabel || storyAgeLabel(story, todayIso);
-
-  return (
-    <button
-      type="button"
-      className={`sl-card ${fresh} ${selected ? "is-selected" : ""}`}
-      onClick={() => onSelect(story.id)}
-      style={{ "--cat-accent": meta.accent }}
-    >
-      <div className="sl-card-rail" aria-hidden />
-      <div className="sl-card-inner">
-        <div className="sl-card-top">
-          <span className="sl-cat-chip">
-            <span className="sl-cat-icon">{meta.icon}</span>
-            {meta.label}
-          </span>
-          <span className="sl-age">{age}</span>
-          <em className={priorityClass(story.priority)}>{story.priority}</em>
-          {selected ? <span className="sl-selected-chip">Selected</span> : null}
-        </div>
-        <h3 className="sl-card-headline">{story.headline}</h3>
-        {story.summary ? <p className="sl-card-summary">{story.summary.slice(0, 140)}{story.summary.length > 140 ? "…" : ""}</p> : null}
-        <div className="sl-card-chips">
-          {evLine ? <span className="sl-chip sl-chip--ev">{evLine}</span> : null}
-          {story.effectSummary ? <span className="sl-chip">{story.effectSummary}</span> : null}
-          {story.gamesRemaining > 0 ? (
-            <span className="sl-chip sl-chip--return">
-              OUT {story.gamesRemaining}G · {story.returnEstimate || "TBD"}
-            </span>
-          ) : null}
-          {story.overallDelta != null && Number(story.overallDelta) !== 0 ? (
-            <span className="sl-chip sl-chip--ovr">
-              OVR {story.overallBefore}→{story.overallAfter} ({Number(story.overallDelta) > 0 ? "+" : ""}
-              {story.overallDelta})
-            </span>
-          ) : null}
-        </div>
-        <div className="sl-card-foot">
-          <span>{story.playerName || story.teamName || "—"}</span>
-          <span className="sl-card-badges">
-            {story.requiresAction ? <span className="sl-decision-badge">Decision</span> : null}
-            {story.heat > 0 ? <span className="sl-heat-badge">Heat {story.heat}</span> : null}
-            <span className="sl-open-hint">Open →</span>
-          </span>
-        </div>
+    <div className="sl-identity-inline">
+      <div className="sl-identity-logo">
+        {story.playerName ? (
+          <PlayerHeadshot
+            player={{
+              name: story.playerName,
+              position: story.playerPosition,
+              overall: story.playerOverall,
+              team_abbrev: abbr,
+              team_name: story.teamName,
+              ...(asObject(story.raw) || {}),
+            }}
+            size="md"
+          />
+        ) : logo ? (
+          <img src={logo} alt="" />
+        ) : (
+          <span>{playerInitials(story.playerName || abbr)}</span>
+        )}
       </div>
-    </button>
-  );
-}
-
-function PlayerIdentityCard({ story }) {
-  if (!story.playerName && !story.teamName) return null;
-  return (
-    <div className="sl-identity-card">
-      {story.playerName ? (
-        <div className="sl-avatar">{playerInitials(story.playerName)}</div>
-      ) : (
-        <div className="sl-avatar sl-avatar--team">{str(story.teamName).slice(0, 3).toUpperCase()}</div>
-      )}
       <div>
         <strong>{story.playerName || story.teamName}</strong>
         <p>
-          {[story.playerPosition, story.teamName, story.playerOverall != null ? `${story.playerOverall} OVR` : ""]
+          {[
+            story.playerPosition,
+            story.teamName,
+            story.playerOverall != null && Number(story.playerOverall) > 0 ? `${story.playerOverall} OVR` : "",
+          ]
             .filter(Boolean)
             .join(" · ")}
         </p>
@@ -539,203 +512,49 @@ function PlayerIdentityCard({ story }) {
   );
 }
 
-function EffectPills({ effects }) {
-  const entries = Object.entries(effects || {});
-  if (!entries.length) return null;
+function ConductChannels({ story }) {
+  const has =
+    story.allegationNote ||
+    story.informationStatus ||
+    story.legalStatus ||
+    story.leagueStatus ||
+    story.teamStatus ||
+    story.eligibleToPlay != null;
+  if (!has) return null;
+  const eligible =
+    story.eligibleToPlay == null ? null : story.eligibleToPlay ? "Eligible to dress" : "Cannot dress";
   return (
-    <div className="sl-effect-pills">
-      {entries.map(([k, v]) => (
-        <span key={k} className={`sl-effect-pill ${effectPillClass(v)}`}>
-          {formatEffectLabel(k)} {Number(v) > 0 ? "+" : ""}
-          {v}
-        </span>
-      ))}
-    </div>
+    <section className="sl-article-section">
+      <h4>Conduct Desk</h4>
+      {story.allegationNote ? <p>{story.allegationNote}</p> : null}
+      <div className="sl-conduct-grid">
+        {story.informationStatus ? <span>Info: {formatEffectLabel(story.informationStatus)}</span> : null}
+        {story.legalStatus ? <span>Legal: {formatEffectLabel(story.legalStatus)}</span> : null}
+        {story.leagueStatus ? <span>League: {formatEffectLabel(story.leagueStatus)}</span> : null}
+        {story.teamStatus ? <span>Team: {formatEffectLabel(story.teamStatus)}</span> : null}
+        {eligible ? <span>{eligible}</span> : null}
+      </div>
+    </section>
   );
 }
 
-function DetailPanel({ story, choiceRow, onResolve, busyId, relatedStories }) {
-  if (!story) {
-    return (
-      <div className="sl-detail sl-detail--empty">
-        <div className="sl-empty-hero">
-          <p className="sl-empty-kicker">News Desk</p>
-          <h3>Select a story</h3>
-          <p>Pick a headline from the feed to read evidence, franchise effects, and GM options.</p>
-        </div>
-      </div>
-    );
-  }
-
-  const meta = categoryMeta(story);
-  const options = asArray(choiceRow?.action_options).length
-    ? choiceRow.action_options
-    : story.actionOptions;
-
+function TradeSwap({ story }) {
+  const pair = parseTradeTeams(story);
+  if (pair.length < 2) return null;
+  const [a, b] = pair;
+  const logoA = resolveFranchiseTeamLogo({ team_abbrev: a, abbrev: a }, a) || "";
+  const logoB = resolveFranchiseTeamLogo({ team_abbrev: b, abbrev: b }, b) || "";
   return (
-    <div className="sl-detail sl-detail--active" key={story.id}>
-      <div className="sl-feature-head" style={{ "--cat-accent": meta.accent }}>
-        <div className="sl-feature-badges">
-          <span className="sl-cat-chip">
-            <span className="sl-cat-icon">{meta.icon}</span>
-            {meta.label}
-          </span>
-          <span className={`sl-detail-badge ${priorityClass(story.priority)}`}>{story.priority}</span>
-          {story.heat > 0 ? <span className="sl-heat">Heat {story.heat}</span> : null}
-          <span className="sl-arc-badge">{arcStage(story)}</span>
-        </div>
-        <h2 className="sl-detail-headline">{story.headline}</h2>
-        <p className="sl-feature-sub">
-          {story.sourceLabel ? `${story.sourceLabel} · ` : ""}
-          {story.ageLabel || "—"} · {story.teamName || story.playerName || "League"}
-          {story.gamesRemaining > 0 ? ` · Return ${story.returnEstimate || `in ${story.gamesRemaining}G`}` : ""}
-        </p>
+    <div className="sl-trade-swap" aria-label="Trade parties">
+      <div className="sl-trade-side">
+        {logoA ? <img src={logoA} alt="" /> : <strong>{a}</strong>}
+        <span>{a}</span>
       </div>
-
-      {story.cause || story.userVisibleExplanation ? (
-        <section className="sl-section sl-section--highlight">
-          <h4>Trigger / Cause</h4>
-          <p>{story.userVisibleExplanation || story.cause}</p>
-          {story.causeType ? (
-            <p className="sl-muted-box" style={{ marginTop: 8 }}>
-              Cause type: {story.causeType.replace(/_/g, " ")}
-            </p>
-          ) : null}
-        </section>
-      ) : null}
-
-      {(story.culpritPlayerName || story.culpritPlayerId) ? (
-        <section className="sl-section">
-          <h4>Culprit</h4>
-          <p>{story.culpritPlayerName || story.culpritPlayerId}</p>
-        </section>
-      ) : null}
-
-      {story.summary ? <p className="sl-detail-lead">{story.summary}</p> : null}
-      {story.description && story.description !== story.summary ? (
-        <p className="sl-detail-desc">{story.description}</p>
-      ) : null}
-
-      <PlayerIdentityCard story={story} />
-
-      {(story.overallBefore != null || story.gamesRemaining > 0) && (
-        <section className="sl-section sl-section--highlight">
-          <h4>Availability Impact</h4>
-          <div className="sl-impact-row">
-            {story.gamesRemaining > 0 ? (
-              <span className="sl-impact-pill neg">
-                OUT {story.gamesRemaining} games · {story.returnEstimate || "TBD"}
-                {story.returnDate ? ` (${story.returnDate})` : ""}
-              </span>
-            ) : null}
-            {story.overallDelta != null && Number(story.overallDelta) !== 0 ? (
-              <span className="sl-impact-pill neg">
-                {story.baseOverall != null ? (
-                  <>
-                    Effective OVR {story.baseOverall} → {story.effectiveOverall ?? story.overallAfter} (
-                    {Number(story.overallDelta) > 0 ? "+" : ""}
-                    {story.overallDelta})
-                  </>
-                ) : (
-                  <>
-                    OVR {story.overallBefore} → {story.overallAfter} ({Number(story.overallDelta) > 0 ? "+" : ""}
-                    {story.overallDelta})
-                  </>
-                )}
-              </span>
-            ) : null}
-            {story.impactReason ? (
-              <span className="sl-impact-pill neg">{story.impactReason}</span>
-            ) : null}
-          </div>
-        </section>
-      )}
-
-      {story.recoveryConditions?.length ? (
-        <section className="sl-section">
-          <h4>Recovery</h4>
-          <ul className="sl-related-list">
-            {story.recoveryConditions.map((r) => (
-              <li key={r}>{r}</li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      <section className="sl-section">
-        <h4>Data Evidence</h4>
-        {Object.keys(story.evidence || {}).length ? (
-          <dl className="sl-evidence-grid">
-            {Object.entries(story.evidence).map(([k, v]) => (
-              <div key={k} className="sl-evidence-row">
-                <dt>{k.replace(/_/g, " ")}</dt>
-                <dd>{String(v)}</dd>
-              </div>
-            ))}
-          </dl>
-        ) : (
-          <p className="sl-muted-box">Backend evidence not provided for this story.</p>
-        )}
-      </section>
-
-      <section className="sl-section">
-        <h4>Franchise Effects</h4>
-        {story.effectSummary ? <p>{story.effectSummary}</p> : null}
-        <EffectPills effects={story.effects} />
-        {!story.effectSummary && !Object.keys(story.effects || {}).length ? (
-          <p className="sl-muted-box">No sim effects reported for this story.</p>
-        ) : null}
-      </section>
-
-      {options.length ? (
-        <section className="sl-section">
-          <h4>GM Response Options</h4>
-          <div className="sl-choice-grid">
-            {options.map((opt) => {
-              const busy = busyId === `${story.storylineId}:${opt.id}`;
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  className="nhlcal-storyline-choice-button"
-                  disabled={Boolean(busyId)}
-                  onClick={() => onResolve?.(choiceRow?.storyline_id || story.storylineId, opt.id)}
-                >
-                  <strong>{opt.label}</strong>
-                  {opt.effect_summary ? <span>{opt.effect_summary}</span> : null}
-                  {busy ? <em>Applying…</em> : null}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
-
-      <section className="sl-section">
-        <h4>What Happens Next</h4>
-        <p>{deriveFollowUp(story)}</p>
-      </section>
-
-      {relatedStories?.length ? (
-        <section className="sl-section">
-          <h4>Related Stories</h4>
-          <ul className="sl-related-list">
-            {relatedStories.slice(0, 4).map((r) => (
-              <li key={r.id}>{r.headline}</li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {story.repeatCount > 0 ? (
-        <section className="sl-section sl-section--muted">
-          <h4>Story Arc</h4>
-          <p>
-            Beat #{story.repeatCount + 1}
-            {story.escalatedFrom ? ` · escalated from ${story.escalatedFrom}` : ""} — stage: {arcStage(story)}
-          </p>
-        </section>
-      ) : null}
+      <em>⇄</em>
+      <div className="sl-trade-side">
+        {logoB ? <img src={logoB} alt="" /> : <strong>{b}</strong>}
+        <span>{b}</span>
+      </div>
     </div>
   );
 }
@@ -747,9 +566,6 @@ export default function StorylinesScreen() {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState(null);
   const [busyChoice, setBusyChoice] = useState("");
-  const [expandedGroups, setExpandedGroups] = useState(() => new Set());
-  const [heatPulse, setHeatPulse] = useState(false);
-  const prevHeatRef = useRef(0);
   const todayIso = calendarLabel(franchiseState);
 
   const stories = useMemo(() => collectStories(franchiseState), [franchiseState]);
@@ -769,11 +585,6 @@ export default function StorylinesScreen() {
     return sortStories(base, sortId);
   }, [stories, filter, choicesMap, search, sortId]);
 
-  const feedItems = useMemo(
-    () => groupFeedItems(filtered, expandedGroups),
-    [filtered, expandedGroups]
-  );
-
   const pendingDecisions = useMemo(() => {
     return stories.filter(
       (s) => s.requiresAction || choicesMap.has(s.storylineId) || choicesMap.has(s.id)
@@ -781,26 +592,14 @@ export default function StorylinesScreen() {
   }, [stories, choicesMap]);
 
   const topPending = pendingDecisions[0] || null;
-  const topStory = stories[0] || null;
-  const highestHeat = stories.reduce((m, s) => Math.max(m, s.heat || 0), 0);
   const yourTeamCount = stories.filter((s) => s.isUserTeam).length;
-  const topHeatLabel = topStory ? resolveCategoryKey(topStory).replace(/_/g, " ") : "—";
-
-  useEffect(() => {
-    if (highestHeat !== prevHeatRef.current && prevHeatRef.current > 0) {
-      setHeatPulse(true);
-      const t = window.setTimeout(() => setHeatPulse(false), 900);
-      return () => window.clearTimeout(t);
-    }
-    prevHeatRef.current = highestHeat;
-    return undefined;
-  }, [highestHeat]);
+  const orgPressure = asObject(franchiseState?.conduct_org_pressure);
+  const userOrg =
+    orgPressure[userTeamId(franchiseState)] ||
+    orgPressure[str(franchiseState?.user_team_id || "")] ||
+    null;
 
   const wireHeadlines = useMemo(() => stories.slice(0, 10), [stories]);
-
-  const narrativeLine = useMemo(() => {
-    return `${stories.length} active stories · ${pendingDecisions.length} GM decisions · top heat: ${topHeatLabel} · ${yourTeamCount} your-team stories`;
-  }, [stories.length, pendingDecisions.length, topHeatLabel, yourTeamCount]);
 
   const selected =
     filtered.find((s) => s.id === selectedId) ||
@@ -808,16 +607,31 @@ export default function StorylinesScreen() {
     filtered[0] ||
     null;
 
+  useEffect(() => {
+    if (!filtered.length) {
+      if (selectedId != null) setSelectedId(null);
+      return;
+    }
+    if (!filtered.some((s) => s.id === selectedId)) {
+      setSelectedId(filtered[0].id);
+    }
+  }, [filtered, selectedId]);
+
   const relatedStories = useMemo(() => {
     if (!selected) return [];
-    const key = selected.categoryKey || resolveCategoryKey(selected);
-    return stories.filter(
-      (s) =>
-        s.id !== selected.id &&
-        (s.categoryKey === key ||
-          s.teamId === selected.teamId ||
-          s.playerId === selected.playerId)
-    );
+    const scored = stories
+      .filter((s) => s.id !== selected.id)
+      .map((s) => {
+        let score = 0;
+        if (selected.playerId && s.playerId === selected.playerId) score += 100;
+        if (selected.teamId && s.teamId === selected.teamId) score += 60;
+        if (selected.storylineId && s.escalatedFrom === selected.storylineId) score += 40;
+        if (s.categoryKey === selected.categoryKey) score += 20;
+        return { s, score };
+      })
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score);
+    return scored.map((r) => r.s);
   }, [selected, stories]);
 
   const selectedChoice = selected
@@ -837,17 +651,23 @@ export default function StorylinesScreen() {
     [onResolveStorylineChoice]
   );
 
-  const toggleGroup = useCallback((key) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
-
   const hasBackend = Array.isArray(franchiseState?.storyline_events);
   const filterEmptyMsg = FILTER_EMPTY[filter];
+  const leadStory = selected || filtered[0] || stories[0] || null;
+  const statusLine = `${stories.length} active${yourTeamCount ? ` · ${yourTeamCount} involving your team` : ""}${
+    pendingDecisions.length ? ` · ${pendingDecisions.length} decisions` : ""
+  }`;
+
+  const latestStories = filtered.filter((s) => s.id !== leadStory?.id).slice(0, 12);
+  const yourTeamStories = filtered.filter((s) => s.isUserTeam && s.id !== leadStory?.id).slice(0, 6);
+  const aroundLeagueStories = filtered.filter((s) => !s.isUserTeam && s.id !== leadStory?.id).slice(0, 6);
+  const rumourStories = filtered
+    .filter((s) => s.id !== leadStory?.id && /trade|rumor|contract|market/i.test(`${s.type} ${s.category} ${s.headline}`))
+    .slice(0, 6);
+  const hotStories = filtered
+    .filter((s) => s.id !== leadStory?.id && Number(s.heat) > 0)
+    .sort((a, b) => Number(b.heat || 0) - Number(a.heat || 0))
+    .slice(0, 5);
 
   return (
     <div className="nhlcal-sl-root">
@@ -870,7 +690,9 @@ export default function StorylinesScreen() {
           --red-soft: rgba(255, 96, 109, 0.13);
           --shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
 
-          min-height: 100%;
+          /* The newsroom occupies the full workspace so a quiet wire does not
+             leave half the viewport as dead black space. */
+          min-height: 100vh;
           width: 100%;
           background:
             radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.12), transparent 30%),
@@ -880,1093 +702,185 @@ export default function StorylinesScreen() {
           display: flex;
           flex-direction: column;
           font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        }
-
-        .nhlcal-sl-root *,
-        .nhlcal-sl-root *::before,
-        .nhlcal-sl-root *::after {
-          box-sizing: border-box;
-        }
-
-        .nhlcal-sl-root button {
-          font-family: inherit;
+          overflow-x: hidden;
         }
 
         .nhlcal-sl-main {
-          flex: 1;
+          width: min(1400px, 100%);
+          margin: 0 auto;
+          padding: 12px 16px 30px;
+          /* The page column owns the full workspace height so the wire board
+             extends to the bottom rule instead of floating in dead space. */
+          flex: 1 1 auto;
+          min-height: 0;
           display: flex;
           flex-direction: column;
-          min-height: 0;
-          padding: 10px 14px 20px;
         }
 
         .nhlcal-sl-topbar {
-          flex: 0 0 auto;
-          display: grid;
-          grid-template-columns: minmax(180px, 1fr) auto auto;
-          align-items: center;
-          gap: 12px;
-          padding: 4px 0 10px;
-        }
-
-        .nhlcal-sl-kicker {
-          margin: 0 0 4px;
-          color: var(--cyan);
-          font-size: 11px;
-          font-weight: 1000;
-          letter-spacing: 0.13em;
-          text-transform: uppercase;
-        }
-
-        .nhlcal-sl-topbar h1 {
-          margin: 0;
-          font-size: clamp(20px, 2vw, 28px);
-          letter-spacing: 0.08em;
-          text-transform: uppercase;
-          text-shadow: 0 0 24px rgba(19, 216, 231, 0.12);
-        }
-
-        .nhlcal-sl-sub {
-          margin: 4px 0 0;
-          color: var(--muted);
-          font-size: 11px;
-          font-weight: 800;
-        }
-
-        .nhlcal-sl-stat-strip {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          border: 1px solid var(--line);
-          background: rgba(8, 23, 35, 0.86);
-          border-radius: 8px;
-          overflow: hidden;
-          box-shadow: var(--shadow);
-        }
-
-        .nhlcal-sl-stat-pill {
-          min-height: 48px;
-          padding: 8px 12px;
           display: flex;
-          flex-direction: column;
-          justify-content: center;
-          gap: 2px;
-          border-right: 1px solid rgba(156, 218, 236, 0.08);
-          background:
-            linear-gradient(180deg, rgba(18, 42, 61, 0.45), rgba(6, 20, 31, 0.34)),
-            radial-gradient(circle at 100% 0%, rgba(19, 216, 231, 0.05), transparent 52%);
-        }
-
-        .nhlcal-sl-stat-pill:last-child {
-          border-right: 0;
-        }
-
-        .nhlcal-sl-stat-pill span {
-          color: var(--muted);
-          font-size: 9px;
-          font-weight: 800;
-          letter-spacing: 0.08em;
-          text-transform: uppercase;
-        }
-
-        .nhlcal-sl-stat-pill strong {
-          color: var(--gold);
-          font-size: 18px;
-          font-weight: 1000;
-          line-height: 1;
-        }
-
-        .nhlcal-sl-nav {
-          display: flex;
-          gap: 8px;
+          justify-content: space-between;
+          align-items: flex-end;
           flex-wrap: wrap;
-          justify-content: flex-end;
+          gap: 12px;
+          border-bottom: 1px solid rgba(156, 218, 236, 0.14);
+          padding-bottom: 10px;
         }
 
+        .nhlcal-sl-kicker { margin: 0; color: var(--cyan); font-size: 11px; font-weight: 1000; letter-spacing: .12em; text-transform: uppercase; }
+        .nhlcal-sl-topbar h1 { margin: 2px 0; font-size: 28px; letter-spacing: .06em; text-transform: uppercase; }
+        .nhlcal-sl-sub { margin: 0; color: var(--muted); font-size: 11px; font-weight: 800; }
+        .sl-status-line { margin-top: 8px; color: var(--muted); font-size: 11px; font-weight: 800; }
+
+        .nhlcal-sl-nav { display: flex; gap: 8px; }
         .nhlcal-sl-nav button {
-          height: 34px;
-          border: 1px solid var(--line);
-          border-radius: 8px;
-          background: rgba(14, 35, 50, 0.9);
-          color: rgba(233, 247, 251, 0.82);
-          padding: 0 14px;
-          font-size: 10px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-          cursor: pointer;
-          transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+          height: 32px; border: 1px solid var(--line); border-radius: 8px; background: rgba(14, 35, 50, 0.9);
+          color: rgba(233,247,251,.9); padding: 0 12px; font-size: 11px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase;
         }
 
-        .nhlcal-sl-nav button:hover {
-          border-color: var(--line-strong);
-          color: var(--text);
-          background: rgba(19, 216, 231, 0.11);
-          transform: translateY(-1px);
-        }
+        .sl-breaking { margin-top: 12px; display: flex; align-items: stretch; gap: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: rgba(6, 21, 34, 0.72); overflow: hidden; min-height: 32px; }
+        .sl-breaking-label { flex: 0 0 auto; display: flex; align-items: center; padding: 0 12px; color: var(--ops-injury, #ff606d); background: rgba(255, 96, 109, 0.1); font-size: 0.6875rem; font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; border-right: 1px solid rgba(255, 96, 109, 0.22); }
+        .sl-breaking-track { min-width: 0; flex: 1; display: flex; overflow: hidden; align-items: center; }
+        .sl-breaking-text { white-space: nowrap; color: var(--ops-text, #e9f7fb); font-size: 0.8125rem; font-weight: 700; padding: 0 12px; animation: sl-wire-scroll 45s linear infinite; }
+        .sl-breaking:hover .sl-breaking-text { animation-play-state: paused; }
 
-        .nhlcal-sl-alert {
-          margin-top: 10px;
-          border: 1px solid rgba(255, 96, 109, 0.42);
-          background:
-            radial-gradient(circle at 0% 0%, rgba(255, 96, 109, 0.16), transparent 38%),
-            rgba(8, 23, 35, 0.94);
-          border-radius: 12px;
-          padding: 14px 16px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          flex-wrap: wrap;
-          box-shadow: 0 18px 50px rgba(0, 0, 0, 0.24);
+        .sl-frontoffice-alert {
+          margin-top: 10px; width: 100%; text-align: left;
+          border: 1px solid rgba(255, 96, 109, 0.55);
+          border-left: 4px solid var(--ops-injury, #ff606d);
+          background: linear-gradient(90deg, rgba(255, 96, 109, 0.14), rgba(6, 21, 34, 0.88));
+          color: var(--text); padding: 10px 12px; display: grid; gap: 4px;
+          border-radius: var(--radius-control, 6px);
+          box-shadow: inset 0 0 0 1px rgba(255, 96, 109, 0.08);
         }
+        .sl-frontoffice-alert span { color: #ff8d97; font-size: 0.6875rem; font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; }
+        .sl-frontoffice-alert strong { font-size: 0.95rem; line-height: 1.3; font-weight: 800; }
+        .sl-frontoffice-alert em { font-size: 0.72rem; color: #ffc9cf; font-style: normal; font-weight: 700; }
 
-        .nhlcal-sl-alert.is-clear {
-          border-color: rgba(82, 223, 148, 0.35);
-          background:
-            radial-gradient(circle at 0% 0%, rgba(82, 223, 148, 0.12), transparent 38%),
-            rgba(8, 23, 35, 0.94);
-        }
+        .sl-toolbar { margin-top: 12px; display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; }
+        .nhlcal-sl-filters { display: flex; gap: 10px; overflow-x: auto; }
+        .nhlcal-sl-filters button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 11px; font-weight: 900; text-transform: uppercase; padding: 6px 0; white-space: nowrap; }
+        .nhlcal-sl-filters button.is-active { color: var(--text); border-bottom-color: var(--cyan); }
+        .nhlcal-sl-filters button.has-urgent { color: #ff9ea7; }
+        .nhlcal-sl-filters .count { opacity: .65; margin-left: 4px; }
+        .sl-search { height: 32px; border: 1px solid var(--line); border-radius: 6px; background: rgba(8, 23, 35, 0.86); color: var(--text); padding: 0 10px; font-size: 12px; font-weight: 700; }
+        .sl-sort select { height: 32px; border: 1px solid var(--line); border-radius: 6px; background: rgba(14,35,50,.9); color: var(--text); font-size: 11px; font-weight: 800; padding: 0 10px; }
 
-        .nhlcal-sl-alert strong {
-          display: block;
-          text-transform: uppercase;
-          letter-spacing: 0.1em;
-          font-size: 12px;
-          margin-bottom: 4px;
-        }
+        .sl-lead { margin-top: 12px; border-top: 2px solid var(--cyan); border-bottom: 1px solid var(--line); padding: 12px 0 14px; background: transparent; border-radius: 0; }
+        .sl-lead-top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; color: var(--muted); font-size: 0.6875rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em; }
+        .sl-lead h2 { margin: 8px 0 10px; font-size: clamp(1.35rem, 2.8vw, 2rem); line-height: 1.08; font-weight: 800; letter-spacing: 0.02em; text-transform: none; font-family: var(--font-editorial, Inter, serif); }
+        .sl-lead-summary { margin: 0; font-size: var(--type-body-size, 0.875rem); color: rgba(233,247,251,.88); line-height: 1.45; }
+        .sl-lead-signals { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+        .sl-lead-signals span { font-size: 0.6875rem; font-weight: 900; color: var(--gold); background: var(--gold-soft); padding: 3px 8px; border-radius: var(--radius-ops, 2px); letter-spacing: 0.08em; text-transform: uppercase; }
 
-        .nhlcal-sl-alert p {
-          margin: 0;
-          color: var(--muted);
-          font-size: 11px;
-          font-weight: 800;
-          line-height: 1.4;
-        }
+        .sl-layout { margin-top: 14px; display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(280px, 1fr); gap: 16px; align-items: start; }
+        .sl-section-block { border-top: 1px solid rgba(156,218,236,.12); padding-top: 10px; margin-top: 10px; }
+        /* Wire slug: every section is a filed desk on the league wire. */
+        .sl-section-block h3 { position: relative; margin: 0 0 8px; padding-left: 16px; font-size: 12px; letter-spacing: .09em; text-transform: uppercase; color: var(--cyan); }
+        .sl-section-block h3::before { content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 10px; height: 2px; background: var(--cyan); }
+        .sl-row { width: 100%; text-align: left; border: 0; border-bottom: 1px solid rgba(156,218,236,.12); background: transparent; color: inherit; padding: 10px 0; display: grid; gap: 4px; }
+        .sl-row.is-active { border-left: 3px solid var(--cyan); padding-left: 10px; margin-left: -10px; }
+        .sl-row-meta { display: flex; gap: 10px; align-items: center; font-size: var(--type-wire-ts-size, 0.72rem); color: var(--muted); font-weight: 900; text-transform: uppercase; letter-spacing: 0.08em; font-family: var(--font-mono-data, monospace); }
+        .sl-row h4 { margin: 0; font-size: clamp(0.875rem, 1.1vw, 1rem); line-height: 1.35; font-weight: 700; }
+        .sl-row p { margin: 0; font-size: 0.8125rem; color: var(--muted); line-height: 1.35; }
+        .sl-row-foot { font-size: 0.72rem; color: #9ec0d3; font-weight: 700; }
+        /* Urgency reads as an editorial filing stamp, not coloured text alone. */
+        .sl-row-urgency { color: var(--gold); border: 1px solid rgba(233,168,60,.42); border-radius: 2px; padding: 0 4px; letter-spacing: .12em; }
 
-        .nhlcal-sl-alert-btn {
-          height: 34px;
-          border: 1px solid rgba(255, 255, 255, 0.16);
-          background: rgba(255, 255, 255, 0.08);
-          color: var(--text);
-          border-radius: 10px;
-          padding: 0 14px;
-          font-size: 10px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: 0.1em;
-          cursor: pointer;
-          white-space: nowrap;
-        }
+        .sl-side-section { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: rgba(6, 21, 34, 0.55); padding: 10px 0; margin-bottom: 12px; border-radius: 0; }
+        .sl-side-section h3 { margin: 0 0 8px; padding: 0 10px; font-size: 0.6875rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan); font-weight: 900; }
+        .sl-r-item { width: 100%; border: 0; border-bottom: 1px solid rgba(156,218,236,.12); background: transparent; text-align: left; color: inherit; padding: 8px 0; }
+        .sl-r-item:last-child { border-bottom: 0; }
+        .sl-r-item strong { display: block; font-size: 13px; line-height: 1.3; margin-bottom: 3px; }
+        .sl-r-item p { margin: 0; color: var(--muted); font-size: 11px; }
+        .sl-r-item em { display: block; margin-top: 3px; color: #d9b873; font-size: 11px; font-style: normal; font-weight: 800; }
 
-        .nhlcal-sl-alert-btn:hover {
-          border-color: var(--line-strong);
-          background: rgba(19, 216, 231, 0.11);
-        }
+        /* Selected story is a filed page: squared edge with a gold spine. */
+        .sl-article { margin-top: 14px; border: 1px solid var(--line); border-left: 2px solid var(--gold); border-radius: 2px; background: rgba(7,20,31,.86); padding: 14px; }
+        .sl-article-meta { display: flex; gap: 8px; font-size: 11px; font-weight: 900; text-transform: uppercase; color: var(--muted); }
+        .sl-article h2 { margin: 8px 0 8px; font-size: clamp(24px, 2.4vw, 34px); line-height: 1.12; }
+        .sl-article-standfirst { margin: 0 0 12px; color: rgba(233,247,251,.9); font-size: 14px; line-height: 1.5; }
+        .sl-article-section { margin-top: 12px; border-top: 1px solid rgba(156,218,236,.12); padding-top: 10px; }
+        .sl-article-section h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--cyan); }
+        .sl-article-section p { margin: 0; font-size: 13px; line-height: 1.45; color: rgba(233,247,251,.88); }
+        .sl-numbers { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
+        .sl-num { border: 1px solid rgba(156,218,236,.14); border-radius: 6px; padding: 8px; }
+        .sl-num strong { display: block; font-size: 19px; line-height: 1; }
+        .sl-num span { color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+        .sl-impact-list { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+        .sl-impact-list li { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 800; }
+        .sl-impact-list li.pos strong { color: var(--green); }
+        .sl-impact-list li.neg strong { color: var(--red); }
 
-        .sl-risk-label {
-          display: inline-block;
-          margin-top: 6px;
-          padding: 2px 8px;
-          border-radius: 999px;
-          background: var(--red-soft);
-          color: var(--red);
-          font-size: 8px;
-          font-weight: 1000;
-          text-transform: uppercase;
-        }
+        .sl-related-coverage { display: grid; gap: 8px; }
+        .sl-related-coverage button { border: 1px solid rgba(156,218,236,.16); border-radius: 6px; background: rgba(255,255,255,.02); color: inherit; text-align: left; padding: 8px; }
+        .sl-related-coverage span { display: block; font-size: 11px; font-weight: 900; text-transform: uppercase; color: var(--muted); }
+        .sl-related-coverage strong { display: block; font-size: 13px; line-height: 1.3; margin: 3px 0; }
+        .sl-related-coverage em { color: var(--muted); font-size: 11px; font-style: normal; }
 
-        .nhlcal-sl-filters {
-          margin-top: 12px;
-          display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
-        }
+        .sl-identity-inline { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+        .sl-identity-logo { width: 44px; height: 44px; border-radius: 8px; border: 1px solid rgba(156,218,236,.2); overflow: hidden; display: grid; place-items: center; background: rgba(255,255,255,.03); }
+        .sl-identity-logo img { width: 100%; height: 100%; object-fit: contain; }
+        .sl-identity-logo span { font-size: 13px; font-weight: 1000; color: var(--cyan); }
+        .sl-identity-inline strong { display: block; font-size: 15px; }
+        .sl-identity-inline p { margin: 2px 0 0; color: var(--muted); font-size: 11px; font-weight: 800; }
 
-        .nhlcal-sl-filters button {
-          height: 30px;
-          border: 1px solid var(--line);
-          border-radius: 8px;
-          background: rgba(14, 35, 50, 0.9);
-          color: rgba(233, 247, 251, 0.72);
-          padding: 0 12px;
-          font-size: 10px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-          cursor: pointer;
-        }
-
-        .nhlcal-sl-filters button.is-active,
-        .nhlcal-sl-filters button:hover {
-          border-color: var(--line-strong);
-          color: var(--text);
-          background: rgba(19, 216, 231, 0.11);
-        }
-
-        .nhlcal-sl-grid {
-          margin-top: 12px;
+        /* An empty wire still reads as a newsroom page: masthead rule, column
+           rules, and a stated reason for the silence. */
+        .sl-empty-page {
           display: grid;
-          grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.1fr);
-          gap: 12px;
-          flex: 1;
-          min-height: 0;
-        }
-
-        .nhlcal-sl-panel {
-          border: 1px solid var(--line);
-          border-radius: 12px;
-          background:
-            linear-gradient(180deg, rgba(10, 30, 45, 0.94), rgba(5, 18, 29, 0.94)),
-            radial-gradient(circle at 90% 0%, rgba(19, 216, 231, 0.07), transparent 38%);
-          box-shadow: var(--shadow);
-          display: flex;
-          flex-direction: column;
-          min-height: 420px;
-          max-height: calc(100vh - 280px);
-          overflow: hidden;
-        }
-
-        .nhlcal-sl-panel-head {
-          flex: 0 0 auto;
-          padding: 14px 16px 8px;
-          border-bottom: 1px solid rgba(156, 218, 236, 0.08);
-        }
-
-        .nhlcal-sl-panel-head p {
-          margin: 0;
-          color: var(--cyan);
-          font-size: 11px;
-          font-weight: 1000;
-          letter-spacing: 0.13em;
-          text-transform: uppercase;
-        }
-
-        .nhlcal-sl-panel-head h2 {
-          margin: 4px 0 0;
-          font-size: 14px;
-          text-transform: uppercase;
-          letter-spacing: 0.08em;
-        }
-
-        .nhlcal-sl-scroll {
-          flex: 1;
-          overflow: auto;
-          padding: 10px;
-          scrollbar-width: thin;
-          scrollbar-color: rgba(110, 173, 191, 0.35) rgba(4, 16, 26, 0.72);
-        }
-
-        .nhlcal-sl-scroll::-webkit-scrollbar {
-          width: 8px;
-        }
-
-        .nhlcal-sl-scroll::-webkit-scrollbar-track {
-          background: rgba(4, 16, 26, 0.72);
-          border-radius: 999px;
-        }
-
-        .nhlcal-sl-scroll::-webkit-scrollbar-thumb {
-          background: linear-gradient(180deg, rgba(19, 216, 231, 0.34), rgba(110, 173, 191, 0.28));
-          border-radius: 999px;
-          border: 2px solid rgba(4, 16, 26, 0.72);
-        }
-
-        .nhlcal-sl-feed-list {
-          display: grid;
-          gap: 9px;
-        }
-
-        .sl-card {
-          width: 100%;
+          align-content: start;
+          gap: 5px;
+          margin: 16px 0 0;
+          flex: 1 1 auto;
+          min-height: 44vh;
+          max-width: none;
           text-align: left;
-          padding: 0;
-          cursor: pointer;
-          color: inherit;
-          display: flex;
-          gap: 0;
-          overflow: hidden;
-          border: 1px solid rgba(156, 218, 236, 0.09);
-          border-radius: 10px;
-          background: rgba(255, 255, 255, 0.025);
-          transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+          border: 1px solid var(--line);
+          border-top: 2px solid var(--cyan);
+          border-radius: 0;
+          background:
+            repeating-linear-gradient(
+              90deg,
+              transparent 0 calc(33.333% - 1px),
+              rgba(156, 218, 236, 0.07) calc(33.333% - 1px) 33.333%
+            );
+          padding: 16px 20px;
+        }
+        .sl-empty-page .sl-wire-kicker { margin: 0 0 6px; font-size: 0.6875rem; font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan); }
+        .sl-empty-page h2 { margin: 0 0 6px; font-size: 0.95rem; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 800; }
+        .sl-empty-page p { margin: 0; color: var(--muted); font-size: 0.8125rem; line-height: 1.45; }
+
+        @keyframes sl-wire-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+        @media (max-width: 1000px) {
+          .sl-layout { grid-template-columns: 1fr; }
+          .sl-toolbar { grid-template-columns: 1fr; }
+          .sl-numbers { grid-template-columns: repeat(2, minmax(0,1fr)); }
         }
 
-        .sl-card:hover {
-          border-color: rgba(19, 216, 231, 0.35);
-          transform: translateY(-1px);
-        }
-
-        .sl-card.is-selected {
-          border-color: rgba(19, 216, 231, 0.55);
-          box-shadow:
-            inset 0 0 0 1px rgba(19, 216, 231, 0.35),
-            0 0 20px rgba(19, 216, 231, 0.15);
-        }
-
-        .sl-card-tone {
-          width: 4px;
-          flex-shrink: 0;
-        }
-
-        .tone-pos { background: var(--green); }
-        .tone-neg { background: var(--red); }
-        .tone-mix { background: var(--gold); }
-        .tone-neutral { background: var(--cyan); }
-
-        .sl-card-inner {
-          flex: 1;
-          min-width: 0;
-          padding: 9px 10px 9px 8px;
-        }
-
-        .nhlcal-storyline-topline {
-          display: grid;
-          grid-template-columns: 44px minmax(0, 1fr) auto;
-          gap: 8px;
-          align-items: center;
-        }
-
-        .nhlcal-storyline-topline span {
-          color: var(--muted);
-          font-size: 10px;
-          font-weight: 900;
-        }
-
-        .nhlcal-storyline-topline strong {
-          min-width: 0;
-          color: var(--text);
-          font-size: 11px;
-          font-weight: 1000;
-          line-height: 1.25;
-        }
-
-        .nhlcal-storyline-topline em {
-          border-radius: 999px;
-          padding: 3px 6px;
-          background: rgba(255, 255, 255, 0.04);
-          color: var(--muted);
-          font-size: 8px;
-          font-weight: 1000;
-          font-style: normal;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-        }
-
-        .nhlcal-subtext {
-          margin-top: 5px;
-          color: var(--muted);
-          font-size: 10px;
-          font-weight: 800;
-          line-height: 1.35;
-        }
-
-        .nhlcal-storyline-topline em.critical {
-          color: var(--red);
-          background: var(--red-soft);
-        }
-
-        .nhlcal-storyline-topline em.high {
-          color: var(--gold);
-          background: var(--gold-soft);
-        }
-
-        .sl-evidence-chip {
-          margin: 6px 0 0;
-          color: var(--cyan);
-          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-          font-size: 10px;
-          font-weight: 800;
-          line-height: 1.35;
-        }
-
-        .sl-effect-chip {
-          margin: 4px 0 0;
-          color: var(--muted);
-          font-size: 10px;
-          font-weight: 800;
-        }
-
-        .sl-card-foot {
-          margin-top: 8px;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 8px;
-          font-size: 10px;
-          font-weight: 800;
-          color: var(--muted);
-        }
-
-        .sl-card-badges {
-          display: flex;
-          gap: 6px;
-          flex-wrap: wrap;
-        }
-
-        .sl-decision-badge {
-          padding: 2px 7px;
-          border-radius: 999px;
-          background: var(--red-soft);
-          color: var(--red);
-          font-size: 8px;
-          font-weight: 1000;
-          text-transform: uppercase;
-        }
-
-        .sl-heat-badge {
-          padding: 2px 7px;
-          border-radius: 999px;
-          background: var(--gold-soft);
-          color: var(--gold);
-          font-size: 8px;
-          font-weight: 1000;
-        }
-
-        .sl-detail {
-          padding: 16px 18px;
-        }
-
-        .sl-detail--empty {
-          min-height: 200px;
-          display: grid;
-          place-items: center;
-          color: var(--muted);
-          font-size: 12px;
-          font-weight: 800;
-          text-align: center;
-          padding: 24px;
-        }
-
-        .sl-detail-meta {
-          display: flex;
-          gap: 8px;
-          align-items: center;
-          flex-wrap: wrap;
-          margin-bottom: 10px;
-        }
-
-        .sl-detail-badge {
-          padding: 3px 8px;
-          border-radius: 999px;
-          background: rgba(255, 255, 255, 0.04);
-          color: var(--muted);
-          font-size: 8px;
-          font-weight: 1000;
-          text-transform: uppercase;
-        }
-
-        .sl-detail-badge.critical {
-          color: var(--red);
-          background: var(--red-soft);
-        }
-
-        .sl-detail-badge.high {
-          color: var(--gold);
-          background: var(--gold-soft);
-        }
-
-        .sl-detail-headline {
-          margin: 0 0 10px;
-          font-size: clamp(18px, 2vw, 24px);
-          line-height: 1.2;
-          letter-spacing: 0.02em;
-        }
-
-        .sl-detail-lead {
-          margin: 0 0 8px;
-          color: rgba(233, 247, 251, 0.88);
-          font-size: 12px;
-          font-weight: 800;
-          line-height: 1.5;
-        }
-
-        .sl-detail-desc {
-          margin: 0 0 12px;
-          color: var(--muted);
-          font-size: 11px;
-          font-weight: 800;
-          line-height: 1.5;
-        }
-
-        .sl-section {
-          margin-top: 14px;
-          padding-top: 12px;
-          border-top: 1px solid rgba(156, 218, 236, 0.09);
-        }
-
-        .sl-section h4 {
-          margin: 0 0 8px;
-          color: var(--cyan);
-          font-size: 11px;
-          font-weight: 1000;
-          letter-spacing: 0.13em;
-          text-transform: uppercase;
-        }
-
-        .sl-section p {
-          margin: 0;
-          color: rgba(233, 247, 251, 0.86);
-          font-size: 12px;
-          font-weight: 800;
-          line-height: 1.45;
-        }
-
-        .sl-section--muted p {
-          color: var(--muted);
-          font-style: italic;
-        }
-
-        .sl-evidence-grid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 8px 14px;
-          margin: 0;
-        }
-
-        .sl-evidence-row dt {
-          margin: 0;
-          color: var(--muted);
-          font-size: 9px;
-          font-weight: 800;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-        }
-
-        .sl-evidence-row dd {
-          margin: 3px 0 0;
-          color: var(--text);
-          font-size: 15px;
-          font-weight: 1000;
-        }
-
-        .sl-effect-list {
-          margin: 8px 0 0;
-          padding-left: 18px;
-          color: var(--muted);
-          font-size: 11px;
-          font-weight: 800;
-        }
-
-        .sl-choice-grid {
-          display: grid;
-          gap: 8px;
-          margin-top: 8px;
-        }
-
+        .sl-conduct-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+        .sl-conduct-grid span { font-size: 11px; font-weight: 800; color: #c7dde8; border: 1px solid rgba(156,218,236,.16); border-radius: 4px; padding: 4px 7px; }
+        .sl-org-pressure { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+        .sl-org-pressure span { font-size: 11px; font-weight: 800; color: #ffc98a; border: 1px solid rgba(233,168,60,.22); border-radius: 4px; padding: 4px 7px; }
+        .sl-trade-swap { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 10px 0 12px; padding: 10px; border: 1px solid rgba(138, 180, 255, .25); border-radius: 8px; background: rgba(138, 180, 255, .06); }
+        .sl-trade-side { display: grid; justify-items: center; gap: 4px; min-width: 64px; }
+        .sl-trade-side img { width: 40px; height: 40px; object-fit: contain; }
+        .sl-trade-side span { font-size: 11px; font-weight: 900; letter-spacing: .06em; }
+        .sl-trade-swap em { font-style: normal; color: var(--ops-info, #8ab4ff); font-size: 18px; font-weight: 1000; }
+        .sl-choice-grid { display: grid; gap: 8px; margin-top: 8px; }
         .nhlcal-storyline-choice-button {
-          width: 100%;
-          min-height: 44px;
-          border: 1px solid var(--line);
-          border-radius: 10px;
-          background: rgba(19, 216, 231, 0.07);
-          color: var(--text);
-          padding: 10px 12px;
-          text-align: left;
-          cursor: pointer;
+          width: 100%; min-height: 44px; border: 1px solid var(--line); border-radius: 8px;
+          background: rgba(19, 216, 231, 0.07); color: var(--text); padding: 10px 12px; text-align: left; cursor: pointer;
         }
-
-        .nhlcal-storyline-choice-button:hover:not(:disabled) {
-          border-color: var(--line-strong);
-          background: rgba(19, 216, 231, 0.14);
-        }
-
-        .nhlcal-storyline-choice-button:disabled {
-          cursor: not-allowed;
-          opacity: 0.58;
-        }
-
-        .nhlcal-storyline-choice-button strong {
-          display: block;
-          color: var(--cyan);
-          font-size: 11px;
-          font-weight: 1000;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-          margin-bottom: 4px;
-        }
-
-        .nhlcal-storyline-choice-button span {
-          display: block;
-          color: var(--muted);
-          font-size: 10px;
-          font-weight: 800;
-        }
-
-        .nhlcal-sl-empty {
-          margin: 48px auto;
-          max-width: 520px;
-          padding: 24px;
-          text-align: center;
-          border: 1px solid var(--line);
-          border-radius: 12px;
-          background: rgba(8, 23, 35, 0.86);
-          box-shadow: var(--shadow);
-        }
-
-        .nhlcal-sl-empty h2 {
-          margin: 0 0 8px;
-          font-size: 18px;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-        }
-
-        .nhlcal-sl-empty p {
-          margin: 0;
-          color: var(--muted);
-          font-size: 12px;
-          font-weight: 800;
-          line-height: 1.5;
-        }
-
-        .sl-heat {
-          color: var(--gold);
-          font-size: 10px;
-          font-weight: 1000;
-          text-transform: uppercase;
-        }
-
-        .sl-wire {
-          margin-top: 8px;
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          border: 1px solid var(--line);
-          border-radius: 8px;
-          background: rgba(8, 23, 35, 0.72);
-          padding: 6px 10px;
-          overflow: hidden;
-        }
-
-        .sl-wire-label {
-          flex: 0 0 auto;
-          color: var(--cyan);
-          font-size: 9px;
-          font-weight: 1000;
-          letter-spacing: 0.1em;
-          text-transform: uppercase;
-        }
-
-        .sl-wire-track {
-          display: flex;
-          overflow: hidden;
-          min-width: 0;
-        }
-
-        .sl-wire:hover .sl-wire-text {
-          animation-play-state: paused;
-        }
-
-        .sl-wire-text {
-          white-space: nowrap;
-          padding-right: 48px;
-          color: var(--muted);
-          font-size: 10px;
-          font-weight: 800;
-          animation: sl-wire-scroll 42s linear infinite;
-        }
-
-        @keyframes sl-wire-scroll {
-          from { transform: translateX(0); }
-          to { transform: translateX(-50%); }
-        }
-
-        .sl-narrative {
-          margin-top: 8px;
-          color: var(--muted);
-          font-size: 10px;
-          font-weight: 800;
-        }
-
-        .nhlcal-sl-alert.is-urgent {
-          animation: sl-pulse-urgent 2.4s ease-in-out infinite;
-        }
-
-        @keyframes sl-pulse-urgent {
-          0%, 100% { box-shadow: 0 18px 50px rgba(0, 0, 0, 0.24); }
-          50% { box-shadow: 0 0 28px rgba(255, 96, 109, 0.28); }
-        }
-
-        .nhlcal-sl-stat-pill strong.pulse-once {
-          animation: sl-heat-pulse 0.9s ease;
-        }
-
-        @keyframes sl-heat-pulse {
-          0%, 100% { transform: scale(1); }
-          50% { transform: scale(1.12); color: var(--cyan); }
-        }
-
-        .sl-toolbar {
-          margin-top: 10px;
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-          align-items: center;
-        }
-
-        .sl-search {
-          flex: 1;
-          min-width: 180px;
-          height: 32px;
-          border: 1px solid var(--line);
-          border-radius: 8px;
-          background: rgba(8, 23, 35, 0.86);
-          color: var(--text);
-          padding: 0 12px;
-          font-size: 11px;
-          font-weight: 800;
-        }
-
-        .sl-sort select {
-          height: 32px;
-          border: 1px solid var(--line);
-          border-radius: 8px;
-          background: rgba(14, 35, 50, 0.9);
-          color: var(--text);
-          padding: 0 10px;
-          font-size: 10px;
-          font-weight: 900;
-          text-transform: uppercase;
-        }
-
-        .nhlcal-sl-filters button.has-urgent {
-          border-color: rgba(255, 96, 109, 0.45);
-        }
-
-        .nhlcal-sl-filters .count {
-          margin-left: 4px;
-          opacity: 0.72;
-        }
-
-        .sl-card {
-          --cat-accent: var(--cyan);
-          animation: sl-card-in 0.35s ease both;
-        }
-
-        @keyframes sl-card-in {
-          from { opacity: 0; transform: translateY(6px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-
-        .sl-card-rail {
-          width: 4px;
-          flex-shrink: 0;
-          background: var(--cat-accent);
-        }
-
-        .sl-card.is-selected {
-          border-color: rgba(19, 216, 231, 0.65);
-          box-shadow: inset 0 0 0 1px rgba(19, 216, 231, 0.35), 0 0 24px rgba(19, 216, 231, 0.18);
-          background: rgba(19, 216, 231, 0.06);
-        }
-
-        .sl-card.is-fresh { opacity: 1; }
-        .sl-card.is-stale { opacity: 0.72; }
-
-        .sl-card-top {
-          display: flex;
-          flex-wrap: wrap;
-          align-items: center;
-          gap: 6px;
-          margin-bottom: 6px;
-        }
-
-        .sl-cat-chip {
-          display: inline-flex;
-          align-items: center;
-          gap: 4px;
-          padding: 2px 7px;
-          border-radius: 999px;
-          background: rgba(255, 255, 255, 0.04);
-          color: var(--cat-accent, var(--cyan));
-          font-size: 8px;
-          font-weight: 1000;
-          text-transform: uppercase;
-        }
-
-        .sl-cat-icon { font-size: 10px; }
-
-        .sl-age {
-          color: var(--muted);
-          font-size: 9px;
-          font-weight: 800;
-        }
-
-        .sl-selected-chip {
-          padding: 2px 6px;
-          border-radius: 999px;
-          background: var(--cyan-soft);
-          color: var(--cyan);
-          font-size: 8px;
-          font-weight: 1000;
-          text-transform: uppercase;
-        }
-
-        .sl-card-headline {
-          margin: 0 0 6px;
-          font-size: 12px;
-          font-weight: 1000;
-          line-height: 1.3;
-          text-align: left;
-        }
-
-        .sl-card-summary {
-          margin: 0 0 6px;
-          color: var(--muted);
-          font-size: 10px;
-          font-weight: 800;
-          line-height: 1.35;
-          text-align: left;
-        }
-
-        .sl-card-chips {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 4px;
-          margin-bottom: 6px;
-        }
-
-        .sl-chip {
-          padding: 2px 6px;
-          border-radius: 6px;
-          background: rgba(255, 255, 255, 0.04);
-          color: var(--muted);
-          font-size: 8px;
-          font-weight: 800;
-        }
-
-        .sl-chip--ev { color: var(--cyan); }
-        .sl-chip--return { color: var(--gold); }
-        .sl-chip--ovr { color: var(--red); }
-
-        .sl-open-hint {
-          color: var(--cyan);
-          font-size: 8px;
-          font-weight: 1000;
-          opacity: 0;
-          transition: opacity 0.2s ease;
-        }
-
-        .sl-card:hover .sl-open-hint { opacity: 1; }
-
-        .sl-group-card {
-          border: 1px solid rgba(138, 180, 255, 0.2);
-          border-radius: 10px;
-          background: rgba(138, 180, 255, 0.06);
-          overflow: hidden;
-        }
-
-        .sl-group-head {
-          width: 100%;
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 10px 12px;
-          border: 0;
-          background: transparent;
-          color: inherit;
-          cursor: pointer;
-          text-align: left;
-        }
-
-        .sl-group-head strong {
-          display: block;
-          font-size: 11px;
-          text-transform: uppercase;
-        }
-
-        .sl-group-head p {
-          margin: 2px 0 0;
-          color: var(--muted);
-          font-size: 9px;
-          font-weight: 800;
-        }
-
-        .sl-group-head em {
-          margin-left: auto;
-          padding: 3px 8px;
-          border-radius: 999px;
-          background: rgba(138, 180, 255, 0.14);
-          color: #8ab4ff;
-          font-style: normal;
-          font-size: 10px;
-          font-weight: 1000;
-        }
-
-        .sl-group-preview {
-          width: 100%;
-          border: 0;
-          border-top: 1px solid rgba(156, 218, 236, 0.08);
-          background: rgba(0, 0, 0, 0.12);
-          color: var(--muted);
-          padding: 8px 12px;
-          font-size: 9px;
-          font-weight: 800;
-          text-align: left;
-          cursor: pointer;
-        }
-
-        .sl-feature-head {
-          margin: -4px -4px 12px;
-          padding: 14px;
-          border-radius: 10px;
-          border: 1px solid rgba(156, 218, 236, 0.12);
-          background:
-            linear-gradient(135deg, rgba(19, 216, 231, 0.08), transparent 55%),
-            rgba(255, 255, 255, 0.02);
-          border-left: 3px solid var(--cat-accent, var(--cyan));
-        }
-
-        .sl-feature-badges {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
-          margin-bottom: 8px;
-        }
-
-        .sl-feature-sub {
-          margin: 6px 0 0;
-          color: var(--muted);
-          font-size: 10px;
-          font-weight: 800;
-        }
-
-        .sl-identity-card {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 10px 12px;
-          border: 1px solid var(--line);
-          border-radius: 10px;
-          background: rgba(255, 255, 255, 0.03);
-          margin-bottom: 12px;
-        }
-
-        .sl-avatar {
-          width: 40px;
-          height: 40px;
-          border-radius: 10px;
-          display: grid;
-          place-items: center;
-          background: var(--cyan-soft);
-          color: var(--cyan);
-          font-size: 13px;
-          font-weight: 1000;
-        }
-
-        .sl-avatar--team { background: var(--gold-soft); color: var(--gold); }
-
-        .sl-identity-card strong {
-          display: block;
-          font-size: 13px;
-        }
-
-        .sl-identity-card p {
-          margin: 2px 0 0;
-          color: var(--muted);
-          font-size: 10px;
-          font-weight: 800;
-        }
-
-        .sl-muted-box {
-          margin: 0;
-          padding: 10px 12px;
-          border-radius: 8px;
-          border: 1px dashed rgba(156, 218, 236, 0.16);
-          color: var(--muted);
-          font-size: 11px;
-          font-style: italic;
-        }
-
-        .sl-effect-pills {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
-          margin-top: 8px;
-        }
-
-        .sl-effect-pill {
-          padding: 4px 8px;
-          border-radius: 999px;
-          font-size: 9px;
-          font-weight: 1000;
-          text-transform: uppercase;
-        }
-
-        .sl-effect-pill.pos { background: var(--green-soft); color: var(--green); }
-        .sl-effect-pill.neg { background: var(--red-soft); color: var(--red); }
-        .sl-effect-pill.neutral { background: rgba(255, 255, 255, 0.05); color: var(--muted); }
-
-        .sl-impact-row { display: flex; flex-wrap: wrap; gap: 8px; }
-        .sl-impact-pill {
-          padding: 6px 10px;
-          border-radius: 8px;
-          font-size: 10px;
-          font-weight: 900;
-        }
-        .sl-impact-pill.neg { background: var(--red-soft); color: var(--red); }
-
-        .sl-arc-badge {
-          padding: 2px 7px;
-          border-radius: 999px;
-          background: rgba(255, 255, 255, 0.05);
-          color: var(--muted);
-          font-size: 8px;
-          font-weight: 1000;
-          text-transform: uppercase;
-        }
-
-        .sl-related-list {
-          margin: 0;
-          padding-left: 16px;
-          color: var(--muted);
-          font-size: 11px;
-          font-weight: 800;
-        }
-
-        .sl-empty-hero h3 {
-          margin: 0 0 8px;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-        }
-
-        .sl-empty-kicker {
-          color: var(--cyan);
-          font-size: 10px;
-          font-weight: 1000;
-          letter-spacing: 0.12em;
-          text-transform: uppercase;
-        }
-
-        .sl-detail--active {
-          animation: sl-detail-in 0.28s ease;
-        }
-
-        @keyframes sl-detail-in {
-          from { opacity: 0.4; }
-          to { opacity: 1; }
-        }
-
-        @media (max-width: 900px) {
-          .nhlcal-sl-topbar {
-            grid-template-columns: 1fr;
-          }
-
-          .nhlcal-sl-grid {
-            grid-template-columns: 1fr;
-          }
-
-          .nhlcal-sl-panel {
-            max-height: none;
-          }
-
-          .nhlcal-sl-stat-strip {
-            grid-template-columns: 1fr;
-          }
-
-          .nhlcal-sl-stat-pill {
-            border-right: 0;
-            border-bottom: 1px solid rgba(156, 218, 236, 0.08);
-          }
+        .nhlcal-storyline-choice-button:hover:not(:disabled) { border-color: var(--line-strong); background: rgba(19, 216, 231, 0.14); }
+        .nhlcal-storyline-choice-button:disabled { opacity: .58; cursor: not-allowed; }
+        .nhlcal-storyline-choice-button strong { display: block; color: var(--cyan); font-size: 11px; font-weight: 1000; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+        .nhlcal-storyline-choice-button span { display: block; color: var(--muted); font-size: 11px; font-weight: 800; }
+        .sl-identity-inline .player-headshot { width: 44px; height: 44px; }
+
+        @media (prefers-reduced-motion: reduce) {
+          .sl-breaking-text { animation: none !important; }
+          .nhlcal-sl-root * { transition: none !important; animation: none !important; }
         }
       `}</style>
 
@@ -1978,26 +892,8 @@ export default function StorylinesScreen() {
             <p className="nhlcal-sl-sub">
               {teamLabel(franchiseState)} · {calendarLabel(franchiseState)}
             </p>
+            <p className="sl-status-line">{statusLine}</p>
           </div>
-
-          <section className="nhlcal-sl-stat-strip" aria-label="Newsroom status">
-            <div className="nhlcal-sl-stat-pill">
-              <span>Active Stories</span>
-              <strong>{stories.length}</strong>
-            </div>
-            <div className="nhlcal-sl-stat-pill">
-              <span>GM Decisions</span>
-              <strong>{pendingDecisions.length}</strong>
-            </div>
-            <div className="nhlcal-sl-stat-pill">
-              <span>Top Heat</span>
-              <strong className={heatPulse ? "pulse-once" : ""}>{highestHeat || topHeatLabel}</strong>
-            </div>
-            <div className="nhlcal-sl-stat-pill">
-              <span>Your Team</span>
-              <strong>{yourTeamCount}</strong>
-            </div>
-          </section>
 
           <nav className="nhlcal-sl-nav" aria-label="Navigation">
             <button type="button" onClick={() => setScreen?.(SCREENS.CALENDAR)}>
@@ -2010,43 +906,52 @@ export default function StorylinesScreen() {
         </header>
 
         <LeagueWireTicker headlines={wireHeadlines} />
-        <p className="sl-narrative">{narrativeLine}</p>
 
         {topPending ? (
-          <div className="nhlcal-sl-alert is-urgent">
-            <div>
-              <strong>GM Response Required · {pendingDecisions.length} pending</strong>
-              <p>{topPending.headline}</p>
-              <span className="sl-risk-label">High priority · decision needed</span>
-            </div>
-            <button type="button" className="nhlcal-sl-alert-btn" onClick={() => setSelectedId(topPending.id)}>
-              Review Decision
-            </button>
-          </div>
-        ) : (
-          <div className="nhlcal-sl-alert is-clear">
-            <div>
-              <strong>Front office clear — no GM decisions pending</strong>
-              <p>{topStory ? `Lead story: ${topStory.headline}` : "Advance the season to generate stories from real stats."}</p>
-            </div>
-          </div>
-        )}
+          <button type="button" className="sl-frontoffice-alert" onClick={() => setSelectedId(topPending.id)}>
+            <span>Front Office Alert</span>
+            <strong>{topPending.headline}</strong>
+            <em>Review decision →</em>
+          </button>
+        ) : null}
 
         {!hasBackend ? (
-          <div className="nhlcal-sl-empty">
-            <h2>Storyline backend data missing</h2>
-            <p>The franchise state did not include storyline_events. Check /api/franchise/state export.</p>
+          <div className="sl-empty-page">
+            <p className="sl-wire-kicker">League Wire · Idle</p>
+            <h2>No Coverage Yet</h2>
+            <p>Advance the calendar to populate the newsroom wire from backend storylines.</p>
           </div>
         ) : stories.length === 0 ? (
-          <div className="nhlcal-sl-empty">
-            <h2>No storylines yet</h2>
-            <p>
-              Advance the season and the backend will generate stories from real player stats, standings,
-              injuries, and league events.
-            </p>
+          <div className="sl-empty-page">
+            <p className="sl-wire-kicker">League Wire · Idle</p>
+            <h2>Wire Standing By</h2>
+            <p>No active storylines on file. Coverage will appear as the season generates league beats.</p>
           </div>
         ) : (
           <>
+            {leadStory ? (
+              <section className="sl-lead">
+                <div className="sl-lead-top">
+                  <span>{categoryMeta(leadStory).label}</span>
+                  <span>{leadStory.ageLabel || "—"}</span>
+                  <span>{leadStory.teamName || leadStory.playerName || "League"}</span>
+                </div>
+                <h2>{leadStory.headline}</h2>
+                {leadStory.summary ? <p className="sl-lead-summary">{leadStory.summary}</p> : null}
+                <div className="sl-lead-signals">
+                  {heatLabel(leadStory.heat) ? (
+                    <span title={`Heat ${leadStory.heat}`}>Heat: {heatLabel(leadStory.heat)}</span>
+                  ) : null}
+                  {credibilityLabel(leadStory.credibility) ? (
+                    <span title={`Credibility ${leadStory.credibility}`}>
+                      Source: {credibilityLabel(leadStory.credibility)}
+                    </span>
+                  ) : null}
+                  {leadStory.requiresAction ? <span>Decision Required</span> : null}
+                </div>
+              </section>
+            ) : null}
+
             <div className="nhlcal-sl-filters">
               {FILTERS.map((f) => {
                 const urgent = f.id === "decisions" && pendingDecisions.length > 0;
@@ -2083,60 +988,306 @@ export default function StorylinesScreen() {
               </label>
             </div>
 
-            <div className="nhlcal-sl-grid">
-              <div className="nhlcal-sl-panel">
-                <div className="nhlcal-sl-panel-head">
-                  <p>News Feed</p>
-                  <h2>{filtered.length} stories</h2>
-                </div>
-                <div className="nhlcal-sl-scroll">
-                  <div className="nhlcal-sl-feed-list">
-                    {filtered.length === 0 ? (
-                      <p className="sl-muted-box">{filterEmptyMsg || "No stories match this filter."}</p>
-                    ) : (
-                      feedItems.map((item, idx) =>
-                        item.kind === "group" ? (
-                          <StoryGroupCard
-                            key={item.groupKey}
-                            group={item}
-                            onExpand={toggleGroup}
-                            onSelectStory={setSelectedId}
-                          />
-                        ) : (
-                          <StoryCard
-                            key={item.story.id}
-                            story={item.story}
-                            selected={selected?.id === item.story.id}
-                            onSelect={setSelectedId}
-                            todayIso={todayIso}
-                          />
-                        )
-                      )
-                    )}
-                  </div>
-                </div>
+            {filtered.length === 0 ? (
+              <div className="sl-empty-page">
+                <p className="sl-wire-kicker">Section Empty</p>
+                <h2>{filterEmptyMsg ? "No Matches" : "No Stories"}</h2>
+                <p>{filterEmptyMsg || "Try another filter or search term."}</p>
               </div>
+            ) : (
+              <div className="sl-layout">
+                <div>
+                  <section className="sl-section-block">
+                    <h3>Latest Stories</h3>
+                    {latestStories.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className={`sl-row ${selected?.id === s.id ? "is-active" : ""}`}
+                        onClick={() => setSelectedId(s.id)}
+                      >
+                        <div className="sl-row-meta">
+                          <span style={{ color: categoryMeta(s).accent }}>{categoryMeta(s).label}</span>
+                          <span>{s.ageLabel || "—"}</span>
+                          {s.requiresAction ? <span className="sl-row-urgency">Decision</span> : null}
+                        </div>
+                        <h4>{s.headline}</h4>
+                        {s.summary ? <p>{s.summary.slice(0, 130)}{s.summary.length > 130 ? "…" : ""}</p> : null}
+                        <div className="sl-row-foot">{s.playerName || s.teamName || "League"}</div>
+                      </button>
+                    ))}
+                  </section>
 
-              <div className="nhlcal-sl-panel">
-                <div className="nhlcal-sl-panel-head">
-                  <p>Story Detail</p>
-                  <h2>{selected?.headline ? "Top Story" : "Pick a story"}</h2>
+                  {yourTeamStories.length ? (
+                    <section className="sl-section-block">
+                      <h3>Your Team</h3>
+                      {yourTeamStories.map((s) => (
+                        <button key={s.id} type="button" className="sl-row" onClick={() => setSelectedId(s.id)}>
+                          <div className="sl-row-meta">
+                            <span style={{ color: categoryMeta(s).accent }}>{categoryMeta(s).label}</span>
+                            <span>{s.ageLabel || "—"}</span>
+                          </div>
+                          <h4>{s.headline}</h4>
+                        </button>
+                      ))}
+                    </section>
+                  ) : null}
+
+                  {aroundLeagueStories.length ? (
+                    <section className="sl-section-block">
+                      <h3>Around the League</h3>
+                      {aroundLeagueStories.map((s) => (
+                        <button key={s.id} type="button" className="sl-row" onClick={() => setSelectedId(s.id)}>
+                          <div className="sl-row-meta">
+                            <span style={{ color: categoryMeta(s).accent }}>{categoryMeta(s).label}</span>
+                            <span>{s.ageLabel || "—"}</span>
+                          </div>
+                          <h4>{s.headline}</h4>
+                        </button>
+                      ))}
+                    </section>
+                  ) : null}
                 </div>
-                <div className="nhlcal-sl-scroll">
-                  <DetailPanel
-                    story={selected}
-                    choiceRow={selectedChoice}
-                    onResolve={handleResolve}
-                    busyId={busyChoice}
-                    relatedStories={relatedStories}
-                  />
-                </div>
+
+                <aside>
+                  {rumourStories.length ? (
+                    <section className="sl-side-section">
+                      <h3>Rumour Mill</h3>
+                      {rumourStories.map((s) => (
+                        <button key={s.id} type="button" className="sl-r-item" onClick={() => setSelectedId(s.id)}>
+                          <strong>{s.headline}</strong>
+                          <p>{s.playerName || s.teamName || "League"}</p>
+                          {heatLabel(s.heat) ? <em title={`Heat ${s.heat}`}>Heat: {heatLabel(s.heat)}</em> : null}
+                          {credibilityLabel(s.credibility) ? (
+                            <em title={`Credibility ${s.credibility}`}>Source: {credibilityLabel(s.credibility)}</em>
+                          ) : null}
+                        </button>
+                      ))}
+                    </section>
+                  ) : null}
+
+                  {hotStories.length ? (
+                    <section className="sl-side-section">
+                      <h3>Most Discussed</h3>
+                      {hotStories.map((s) => (
+                        <button key={s.id} type="button" className="sl-r-item" onClick={() => setSelectedId(s.id)}>
+                          <strong>{s.headline}</strong>
+                          <p>
+                            {s.playerName || s.teamName || "League"}
+                            {heatLabel(s.heat) ? ` · Heat: ${heatLabel(s.heat)}` : ""}
+                          </p>
+                        </button>
+                      ))}
+                    </section>
+                  ) : null}
+
+                  {userOrg ? (
+                    <section className="sl-side-section">
+                      <h3>Org Pressure</h3>
+                      <div className="sl-org-pressure">
+                        {userOrg.owner_confidence != null ? (
+                          <span>Owner {Math.round(Number(userOrg.owner_confidence) * 100)}</span>
+                        ) : null}
+                        {userOrg.fan_approval != null ? (
+                          <span>Fans {Math.round(Number(userOrg.fan_approval) * 100)}</span>
+                        ) : null}
+                        {userOrg.media_heat != null ? (
+                          <span>Media {Math.round(Number(userOrg.media_heat) * 100)}</span>
+                        ) : null}
+                        {userOrg.sponsor_confidence != null ? (
+                          <span>Sponsors {Math.round(Number(userOrg.sponsor_confidence) * 100)}</span>
+                        ) : null}
+                        {userOrg.revenue_modifier != null ? (
+                          <span>Rev {Number(userOrg.revenue_modifier).toFixed(2)}×</span>
+                        ) : null}
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {pendingDecisions.length ? (
+                    <section className="sl-side-section">
+                      <h3>GM Decisions</h3>
+                      {pendingDecisions.slice(0, 4).map((s) => (
+                        <button key={s.id} type="button" className="sl-r-item" onClick={() => setSelectedId(s.id)}>
+                          <strong>{s.headline}</strong>
+                          <p>{s.playerName || s.teamName || "League"}</p>
+                        </button>
+                      ))}
+                    </section>
+                  ) : null}
+                </aside>
               </div>
-            </div>
+            )}
+
+            {selected ? (
+              <article className="sl-article">
+                <div className="sl-article-meta">
+                  <span style={{ color: categoryMeta(selected).accent }}>{categoryMeta(selected).label}</span>
+                  <span>{selected.ageLabel || "—"}</span>
+                </div>
+                <h2>{selected.headline}</h2>
+                {selected.summary ? <p className="sl-article-standfirst">{selected.summary}</p> : null}
+                <TeamOrPlayerIdentity story={selected} />
+                {isRumourStory(selected) ? <TradeSwap story={selected} /> : null}
+                {selected.description && selected.description !== selected.summary ? (
+                  <p className="sl-article-standfirst">{selected.description}</p>
+                ) : null}
+                <ConductChannels story={selected} />
+
+                {(selected.userVisibleExplanation || selected.cause) ? (
+                  <section className="sl-article-section">
+                    <h4>How We Got Here</h4>
+                    <p>{selected.userVisibleExplanation || selected.cause}</p>
+                  </section>
+                ) : null}
+
+                {(selected.gamesRemaining > 0 || selected.impactReason || (selected.overallDelta != null && Number(selected.overallDelta) !== 0)) ? (
+                  <section className="sl-article-section">
+                    <h4>Lineup Impact</h4>
+                    {selected.gamesRemaining > 0 ? (
+                      <p>
+                        Out {selected.gamesRemaining} games
+                        {selected.returnEstimate ? ` · ${selected.returnEstimate}` : ""}
+                        {selected.returnDate ? ` (${selected.returnDate})` : ""}
+                      </p>
+                    ) : null}
+                    {selected.overallDelta != null && Number(selected.overallDelta) !== 0 ? (
+                      <p>
+                        Temporary readiness {selected.baseOverall ?? selected.overallBefore} → {selected.effectiveOverall ?? selected.overallAfter} ({Number(selected.overallDelta) > 0 ? "+" : ""}{selected.overallDelta})
+                      </p>
+                    ) : null}
+                    {selected.impactReason ? <p>{selected.impactReason}</p> : null}
+                  </section>
+                ) : null}
+                {selected.recoveryConditions?.length ? (
+                  <section className="sl-article-section">
+                    <h4>Road Back</h4>
+                    <ul className="sl-impact-list">
+                      {selected.recoveryConditions.map((r) => (
+                        <li key={r}><span>{r}</span><strong /></li>
+                      ))}
+                    </ul>
+                  </section>
+                ) : null}
+                {selected.culpritPlayerName ? (
+                  <section className="sl-article-section">
+                    <h4>How We Got Here</h4>
+                    <p>Central figure: {selected.culpritPlayerName}</p>
+                  </section>
+                ) : null}
+
+                {Object.keys(selected.evidence || {}).length ? (
+                  <section className="sl-article-section">
+                    <h4>By the Numbers</h4>
+                    <div className="sl-numbers">
+                      {Object.entries(selected.evidence)
+                        .slice(0, 4)
+                        .map(([k, v]) => (
+                          <div key={k} className="sl-num" title={`${formatEffectLabel(k)}: ${v}`}>
+                            <strong>{String(v)}</strong>
+                            <span>{formatEffectLabel(k)}</span>
+                          </div>
+                        ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {(selected.effectSummary || Object.keys(selected.effects || {}).length) ? (
+                  <section className="sl-article-section">
+                    <h4>Why It Matters</h4>
+                    {selected.effectSummary ? <p>{selected.effectSummary}</p> : null}
+                    {Object.keys(selected.effects || {}).length ? (
+                      <ul className="sl-impact-list">
+                        {Object.entries(selected.effects)
+                          .slice(0, 3)
+                          .map(([k, v]) => (
+                            <li key={k} className={effectPillClass(v)}>
+                              <span>{formatEffectLabel(k)}</span>
+                              <strong>
+                                {Number(v) > 0 ? "+" : ""}
+                                {String(v)}
+                              </strong>
+                            </li>
+                          ))}
+                      </ul>
+                    ) : null}
+                  </section>
+                ) : null}
+
+                <section className="sl-article-section">
+                  <h4>What Comes Next</h4>
+                  <p>{deriveFollowUp(selected)}</p>
+                </section>
+
+                {relatedStories.length ? (
+                  <section className="sl-article-section">
+                    <h4>Related Coverage</h4>
+                    <div className="sl-related-coverage">
+                      {relatedStories.slice(0, 3).map((r) => (
+                        <button key={r.id} type="button" onClick={() => setSelectedId(r.id)}>
+                          <span>{categoryMeta(r).label}</span>
+                          <strong>{r.headline}</strong>
+                          <em>{r.ageLabel || "—"}</em>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {asArray(selectedChoice?.action_options).length || asArray(selected.actionOptions).length ? (
+                  <section className="sl-article-section">
+                    <h4>Front Office Decision</h4>
+                    <div className="sl-choice-grid">
+                      {(asArray(selectedChoice?.action_options).length ? selectedChoice.action_options : selected.actionOptions).map((opt) => {
+                        const busy = busyChoice === `${selected.storylineId}:${opt.id}`;
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            className="nhlcal-storyline-choice-button"
+                            disabled={Boolean(busyChoice)}
+                            onClick={() => handleResolve(selectedChoice?.storyline_id || selected.storylineId, opt.id)}
+                          >
+                            <strong>{opt.label}</strong>
+                            {opt.effect_summary ? <span>{opt.effect_summary}</span> : null}
+                            {busy ? <em>Applying…</em> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ) : null}
+
+                {selected.repeatCount > 0 ? (
+                  <section className="sl-article-section">
+                    <h4>Developing Story</h4>
+                    <p>
+                      Beat #{selected.repeatCount + 1}
+                      {selected.escalatedFrom ? ` · escalated from ${selected.escalatedFrom}` : ""}
+                    </p>
+                  </section>
+                ) : null}
+              </article>
+            ) : null}
           </>
         )}
+        {process.env.NODE_ENV === "development" && !hasBackend ? (
+          <details className="sl-article-section" style={{ marginTop: 12 }}>
+            <summary>Storyline debug (dev)</summary>
+            <pre style={{ fontSize: 11, overflow: "auto", maxHeight: 240 }}>
+              {JSON.stringify(
+                {
+                  has_storyline_events: Array.isArray(franchiseState?.storyline_events),
+                  state_keys: Object.keys(franchiseState || {}),
+                },
+                null,
+                2
+              )}
+            </pre>
+          </details>
+        ) : null}
         {process.env.NODE_ENV === "development" && franchiseState?.storyline_debug ? (
-          <details className="sl-section" style={{ margin: "1rem", padding: "0.75rem", opacity: 0.85 }}>
+          <details className="sl-article-section" style={{ marginTop: 12 }}>
             <summary>Storyline debug (dev)</summary>
             <pre style={{ fontSize: 11, overflow: "auto", maxHeight: 240 }}>
               {JSON.stringify(franchiseState.storyline_debug, null, 2)}

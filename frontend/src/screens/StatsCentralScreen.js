@@ -769,11 +769,10 @@ function normalizeSkater(row, index, teamId) {
         ? xgfPctSum / xgfPctGp
         : undefined;
 
+  const gfSample = gfOn + gaOn;
   const gfPct =
-    gfOn > 0 && gaOn > 0
-      ? firstPresent(row?.gf_pct, row?.goals_for_pct) !== undefined
-        ? normalizePct(firstPresent(row?.gf_pct, row?.goals_for_pct))
-        : pct(gfOn, gfOn + gaOn)
+    gfSample > 0
+      ? pct(gfOn, gfSample)
       : undefined;
 
   const shootingPct =
@@ -965,7 +964,13 @@ function normalizeSkater(row, index, teamId) {
     faceoff_pct: faceoffPct,
     fo_pct: faceoffPct,
 
-    plus_minus: safeInt(firstPresent(row?.plus_minus, row?.pm, row?.["+/-"]), 0),
+    plus_minus: (() => {
+      const raw = firstPresent(row?.plus_minus, row?.pm, row?.["+/-"], row?.goal_differential_on_ice);
+      if (raw !== undefined && raw !== null && raw !== "") return safeInt(raw, 0);
+      const gf = Number(firstPresent(row?.gf_on, row?.on_ice_gf) ?? 0) || 0;
+      const ga = Number(firstPresent(row?.ga_on, row?.on_ice_ga) ?? 0) || 0;
+      return Math.round(gf - ga);
+    })(),
 
     toi_sec: toiSec,
     toi: toiMin,
@@ -1051,8 +1056,8 @@ function normalizeSkater(row, index, teamId) {
     is_rookie: Boolean(row?.rookie || row?.is_rookie),
 
     cap_hit: pickStat(row?.cap_hit, row?.cap_hit_millions, row?.salary, 0),
-    overall: 0,
-    ovr: 0,
+    overall: safeInt(firstPresent(row?.overall, row?.ovr, row?.effective_ovr), 0),
+    ovr: safeInt(firstPresent(row?.ovr, row?.overall, row?.effective_ovr), 0),
     potential: pickStat(row?.potential, 0),
   };
 }
@@ -1209,8 +1214,8 @@ function normalizeGoalie(row, index, teamId) {
     is_rookie: Boolean(row?.rookie || row?.is_rookie),
 
     cap_hit: pickStat(row?.cap_hit, row?.cap_hit_millions, row?.salary, 0),
-    overall: 0,
-    ovr: 0,
+    overall: safeInt(firstPresent(row?.overall, row?.ovr, row?.effective_ovr), 0),
+    ovr: safeInt(firstPresent(row?.ovr, row?.overall, row?.effective_ovr), 0),
     potential: pickStat(row?.potential, 0),
   };
 }
@@ -2204,17 +2209,22 @@ export function StatsCentralScreen() {
       <StatsCentralStyles />
       <StatsCentralRedesignStyles />
 
-      <main className="statscentral-shell">
-        <section className="sc-command-bar">
+      <main className="statscentral-shell register-ops">
+        <header className="sc-terminal-header">
           <button
             type="button"
             className="sc-back-link"
             onClick={handleBack}
           >
-            ← HUB
+            Hub
           </button>
 
-          <nav className="sc-menu" aria-label="Stats Central menu">
+          <div className="sc-terminal-title">
+            <span className="sc-terminal-kicker">League Intelligence</span>
+            <strong>Stats Central</strong>
+          </div>
+
+          <nav className="sc-mode-rail" aria-label="Stats Central modes">
             {TABS.map((item) => (
               <button
                 key={item.id}
@@ -2223,23 +2233,11 @@ export function StatsCentralScreen() {
                 onClick={() => setTab(item.id)}
                 title={item.label}
               >
-                <em>{item.label}</em>
+                {item.label}
               </button>
             ))}
           </nav>
-
-          <div className="sc-command-context">
-            <span>
-              {tab === "team_stats"
-                ? "League team performance"
-                : tab === "player_stats"
-                  ? scope === "team"
-                    ? "My Team player analysis"
-                    : "League player database"
-                  : "League leaders"}
-            </span>
-          </div>
-        </section>
+        </header>
 
         <section
           className={[
@@ -6037,7 +6035,7 @@ function PlayersTab({
       align: "right",
       render: (row) => (
         <SkaterStatCell
-          value={fmtMaybeOne(row.ixg)}
+          value={fmtMaybeNumber(row.ixg)}
           sub={rankSub(row, "ixg")}
         />
       ),
@@ -6054,7 +6052,7 @@ function PlayersTab({
             hasRealNumber(row.finishing)
               ? formatSigned(
                   row.finishing,
-                  1
+                  0
                 )
               : "—"
           }
@@ -7015,7 +7013,7 @@ function AdvancedTab({
       sortKey: "ixg",
       align: "right",
       render: (row) =>
-        fmtMaybeOne(row.ixg),
+        fmtMaybeNumber(row.ixg),
       onClick: () => changeSort("ixg"),
     },
     {
@@ -7023,7 +7021,7 @@ function AdvancedTab({
       sortKey: "xa",
       align: "right",
       render: (row) =>
-        fmtMaybeOne(row.xa),
+        fmtMaybeNumber(row.xa),
       onClick: () => changeSort("xa"),
     },
     {
@@ -7034,7 +7032,7 @@ function AdvancedTab({
         hasRealNumber(row.finishing)
           ? formatSigned(
               row.finishing,
-              1
+              0
             )
           : "—",
       onClick: () =>
@@ -10932,32 +10930,111 @@ function StatsCentralRedesignStyles() {
         height: 100%;
         min-height: 0;
         display: grid;
-        grid-template-rows: 58px minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
         overflow: hidden;
       }
 
-      .sc-command-bar {
-        min-height: 0;
-        height: 58px;
-        padding: 7px 10px;
+      .sc-terminal-header {
+        flex: 0 0 auto;
+        min-height: 52px;
+        padding: 8px 12px;
         display: grid;
-        grid-template-columns: 94px minmax(0, 1fr) minmax(180px, 270px);
-        gap: 8px;
-        align-items: stretch;
-        border-bottom: 1px solid rgba(97, 177, 212, 0.18);
-        background: rgba(5, 20, 32, 0.96);
+        grid-template-columns: auto minmax(140px, 200px) minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        border-bottom: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+        background: rgba(4, 16, 26, 0.96);
+      }
+
+      .sc-terminal-title {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .sc-terminal-kicker {
+        font-size: var(--type-phase-label-size, 0.68rem);
+        font-weight: 900;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--ops-cyan, #13d8e7);
+        line-height: 1;
+      }
+
+      .sc-terminal-title strong {
+        font-size: var(--type-ops-heading-size, 0.95rem);
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--ops-text, #e9f7fb);
+        line-height: 1.1;
+      }
+
+      .sc-mode-rail {
+        min-width: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0;
+        border: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+        border-radius: var(--radius-control, 6px);
+        overflow: hidden;
+      }
+
+      .sc-mode-rail button {
+        flex: 1 1 0;
+        min-width: 0;
+        height: 36px;
+        padding: 0 12px;
+        border: 0;
+        border-right: 1px solid rgba(156, 218, 236, 0.1);
+        background: rgba(6, 21, 34, 0.72);
+        color: var(--ops-text-secondary, #8096a8);
+        font-size: 0.6875rem;
+        font-weight: 900;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        text-align: center;
+        cursor: pointer;
+      }
+
+      .sc-mode-rail button:last-child {
+        border-right: 0;
+      }
+
+      .sc-mode-rail button.is-active {
+        background: var(--ops-cyan-soft, rgba(19, 216, 231, 0.13));
+        color: var(--ops-text, #e9f7fb);
+        box-shadow: inset 0 -2px 0 var(--ops-cyan, #13d8e7);
+      }
+
+      .sc-mode-rail button:hover:not(.is-active) {
+        background: rgba(19, 216, 231, 0.06);
+        color: var(--ops-text, #e9f7fb);
+      }
+
+      .sc-command-bar {
+        display: none;
       }
 
       .sc-back-link {
         min-width: 0;
-        height: 42px;
+        height: 36px;
         align-self: center;
-        border: 1px solid rgba(116, 174, 205, 0.22);
-        background: #091a29;
-        color: #d9edf7;
-        font-size: 12px;
+        border: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+        border-radius: var(--radius-control, 6px);
+        background: rgba(6, 21, 34, 0.72);
+        color: var(--ops-text, #e9f7fb);
+        font-size: 0.6875rem;
         font-weight: 900;
         letter-spacing: 0.12em;
+        text-transform: uppercase;
+        padding: 0 12px;
+        cursor: pointer;
+      }
+
+      .sc-back-link:hover {
+        border-color: var(--ops-grid-strong, rgba(73, 231, 240, 0.5));
+        background: var(--ops-cyan-soft, rgba(19, 216, 231, 0.13));
       }
 
       .sc-menu {
@@ -11001,7 +11078,7 @@ function StatsCentralRedesignStyles() {
         justify-content: flex-end;
         padding: 0 12px;
         color: #6f91a7;
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 800;
         letter-spacing: 0.09em;
         text-transform: uppercase;
@@ -11039,8 +11116,10 @@ function StatsCentralRedesignStyles() {
         gap: 10px;
         align-items: center;
         padding: 8px 10px;
-        border: 1px solid rgba(98, 166, 199, 0.2);
-        background: #081927;
+        border-top: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+        border-bottom: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+        background: rgba(6, 21, 34, 0.72);
+        border-radius: 0;
       }
 
       .sc-player-heading {
@@ -11058,10 +11137,11 @@ function StatsCentralRedesignStyles() {
       .sc-trend-panel > header > span,
       .sc-league-leaders-header > div > span,
       .sc-leader-category-header > div > span {
-        color: #f1b63d;
-        font-size: 9px;
-        font-weight: 1000;
-        letter-spacing: 0.16em;
+        color: var(--ops-cyan, #13d8e7);
+        font-size: var(--type-phase-label-size, 0.68rem);
+        font-weight: 900;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
       }
 
       .sc-player-heading > strong {
@@ -11073,10 +11153,10 @@ function StatsCentralRedesignStyles() {
 
       .sc-player-heading > em {
         margin-top: 4px;
-        color: #6f91a7;
-        font-size: 9px;
+        color: var(--ops-text-secondary, #8096a8);
+        font-size: var(--type-table-meta-size, 0.72rem);
         font-style: normal;
-        font-weight: 800;
+        font-weight: 700;
       }
 
       .sc-player-subnav {
@@ -11096,7 +11176,7 @@ function StatsCentralRedesignStyles() {
         border: 1px solid transparent;
         background: transparent;
         color: #7894a7;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 950;
         letter-spacing: 0.06em;
         white-space: nowrap;
@@ -11142,7 +11222,7 @@ function StatsCentralRedesignStyles() {
         border: 0;
         background: transparent;
         color: #7794a7;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 950;
         letter-spacing: 0.05em;
       }
@@ -11184,7 +11264,7 @@ function StatsCentralRedesignStyles() {
         outline: 0;
         background: transparent;
         color: #dcecf4;
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 800;
       }
 
@@ -11234,7 +11314,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-player-min-gp span {
         color: #6f8da0;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 900;
       }
 
@@ -11254,7 +11334,7 @@ function StatsCentralRedesignStyles() {
         border: 1px solid rgba(212, 164, 56, 0.26);
         background: rgba(212, 164, 56, 0.07);
         color: #d7a93d;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 950;
         letter-spacing: 0.06em;
       }
@@ -11321,7 +11401,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-overview-team-header-identity span {
         color: #7ea0b3;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 900;
         letter-spacing: 0.1em;
       }
@@ -11356,7 +11436,7 @@ function StatsCentralRedesignStyles() {
       .sc-overview-team-header-chips em {
         display: block;
         color: #7897a9;
-        font-size: 8px;
+        font-size: 11px;
         font-style: normal;
         font-weight: 900;
         letter-spacing: 0.08em;
@@ -11408,7 +11488,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-overview-leader-eyebrow {
         color: #718fa2;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 900;
         letter-spacing: 0.08em;
         text-transform: uppercase;
@@ -11448,7 +11528,7 @@ function StatsCentralRedesignStyles() {
       .sc-avatar.is-large {
         width: 78px;
         height: 78px;
-        border-radius: 14px;
+        border-radius: 10px;
       }
 
       .sc-overview-leader-portrait .sc-avatar-team-logo {
@@ -11477,7 +11557,7 @@ function StatsCentralRedesignStyles() {
       .sc-overview-leader-copy > em {
         overflow: hidden;
         color: #89a7b8;
-        font-size: 10px;
+        font-size: 11px;
         font-style: normal;
         font-weight: 800;
         text-overflow: ellipsis;
@@ -11503,7 +11583,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-overview-leader-metric i {
         color: #7ea0b3;
-        font-size: 9px;
+        font-size: 11px;
         font-style: normal;
         font-weight: 900;
         letter-spacing: 0.06em;
@@ -11513,7 +11593,7 @@ function StatsCentralRedesignStyles() {
         margin: 0;
         overflow: hidden;
         color: #6f90a3;
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 750;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -11554,7 +11634,7 @@ function StatsCentralRedesignStyles() {
       .sc-overview-module-header span {
         display: block;
         color: #748fa1;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 900;
         letter-spacing: 0.1em;
       }
@@ -11584,7 +11664,7 @@ function StatsCentralRedesignStyles() {
         border: 0;
         background: rgba(14, 36, 52, 0.95);
         color: #8eacbd;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 900;
         letter-spacing: 0.04em;
         text-transform: uppercase;
@@ -11616,7 +11696,7 @@ function StatsCentralRedesignStyles() {
         position: static;
         height: 24px;
         padding: 0 6px;
-        font-size: 8px;
+        font-size: 11px;
         background: rgba(10, 31, 48, 0.95);
       }
 
@@ -11627,7 +11707,7 @@ function StatsCentralRedesignStyles() {
       .sc-overview-scoring-table td {
         height: auto;
         padding: 3px 6px;
-        font-size: 10px;
+        font-size: 11px;
       }
 
       .sc-overview-scoring-table tbody tr:hover td {
@@ -11666,7 +11746,7 @@ function StatsCentralRedesignStyles() {
       .sc-overview-table-player em {
         overflow: hidden;
         color: #7f9cb0;
-        font-size: 9px;
+        font-size: 11px;
         font-style: normal;
         font-weight: 800;
         text-overflow: ellipsis;
@@ -11698,7 +11778,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-overview-metric-card > span {
         color: #738fa1;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 900;
         letter-spacing: 0.07em;
         text-transform: uppercase;
@@ -11721,14 +11801,14 @@ function StatsCentralRedesignStyles() {
 
       .sc-overview-metric-card > em {
         color: #87a4b5;
-        font-size: 9px;
+        font-size: 11px;
         font-style: normal;
         font-weight: 750;
       }
 
       .sc-overview-metric-card > b {
         color: #f0b63b;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 900;
       }
 
@@ -11786,7 +11866,7 @@ function StatsCentralRedesignStyles() {
       .sc-overview-contribution-list span,
       .sc-overview-read-list span {
         color: #738fa1;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 900;
         letter-spacing: 0.07em;
         text-transform: uppercase;
@@ -11801,7 +11881,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-overview-contribution-list em {
         color: #87a4b5;
-        font-size: 9px;
+        font-size: 11px;
         font-style: normal;
       }
 
@@ -11861,7 +11941,7 @@ function StatsCentralRedesignStyles() {
       .sc-player-insight-main strong {
         overflow: hidden;
         color: #eaf5fa;
-        font-size: 10px;
+        font-size: 11px;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
@@ -11869,7 +11949,7 @@ function StatsCentralRedesignStyles() {
       .sc-player-insight-main em {
         overflow: hidden;
         color: #7895a7;
-        font-size: 8px;
+        font-size: 11px;
         font-style: normal;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -11883,7 +11963,7 @@ function StatsCentralRedesignStyles() {
         border: 1px solid rgba(0, 207, 218, 0.2);
         background: rgba(0, 207, 218, 0.05);
         color: #58cbd2;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 900;
       }
 
@@ -11910,7 +11990,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-player-table-header > div:first-child > em {
         color: #6c8a9c;
-        font-size: 8px;
+        font-size: 11px;
         font-style: normal;
         font-weight: 800;
       }
@@ -11929,7 +12009,7 @@ function StatsCentralRedesignStyles() {
         border: 0;
         background: transparent;
         color: #7692a4;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 950;
       }
 
@@ -11975,7 +12055,7 @@ function StatsCentralRedesignStyles() {
         padding: 0 9px;
         border-bottom: 1px solid rgba(105, 172, 202, 0.12);
         color: #7695a7;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 950;
         letter-spacing: 0.12em;
       }
@@ -12016,7 +12096,7 @@ function StatsCentralRedesignStyles() {
         border-bottom: 1px solid rgba(0, 206, 218, 0.24);
         background: #06141f;
         color: #7e9caf;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 1000;
         letter-spacing: 0.09em;
         text-transform: uppercase;
@@ -12051,6 +12131,20 @@ function StatsCentralRedesignStyles() {
         background: rgba(0, 206, 218, 0.1);
         box-shadow: inset 0 1px 0 rgba(0, 206, 218, 0.16),
           inset 0 -1px 0 rgba(0, 206, 218, 0.16);
+      }
+
+      /* Department signature: the statistical index line. The leading column
+         carries a rank rail so any row can be located in the league index. */
+      .sc-table tbody tr .is-player-col {
+        box-shadow: inset 3px 0 0 rgba(126, 156, 175, 0.35);
+      }
+
+      .sc-table tbody tr.is-selected-row .is-player-col {
+        box-shadow: inset 3px 0 0 #07d8e1;
+      }
+
+      .sc-table tbody td {
+        font-variant-numeric: tabular-nums;
       }
 
       .sc-table .is-player-col {
@@ -12092,7 +12186,7 @@ function StatsCentralRedesignStyles() {
         border: 1px solid rgba(100, 165, 192, 0.18);
         background: transparent;
         color: #708fa1;
-        font-size: 7px;
+        font-size: 11px;
         font-weight: 950;
         text-transform: uppercase;
       }
@@ -12132,7 +12226,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-player-name-cell-simple .sc-player-team-logo.is-fallback {
         color: #fff;
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 900;
         letter-spacing: 0.04em;
       }
@@ -12210,7 +12304,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-player-name-cell-simple span:not(.sc-player-meta-inline):not(.sc-player-ovr-drop) {
         color: #8facbc;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 800;
         letter-spacing: 0.06em;
       }
@@ -12223,7 +12317,7 @@ function StatsCentralRedesignStyles() {
         overflow: hidden;
         display: block;
         color: #f1f8fb;
-        font-size: 10px;
+        font-size: 11px;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
@@ -12233,7 +12327,7 @@ function StatsCentralRedesignStyles() {
         display: block;
         margin-top: 2px;
         color: #607f92;
-        font-size: 7px;
+        font-size: 11px;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
@@ -12257,7 +12351,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-skater-stat span {
         color: #557486;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 800;
       }
 
@@ -12283,7 +12377,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-player-role-text {
         color: #9db6c3;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 800;
       }
 
@@ -12305,7 +12399,7 @@ function StatsCentralRedesignStyles() {
         border-top: 0;
         background: #071522;
         color: #648395;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 900;
       }
 
@@ -12321,7 +12415,7 @@ function StatsCentralRedesignStyles() {
         border: 1px solid rgba(103, 169, 198, 0.18);
         background: transparent;
         color: #8ba6b5;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 900;
       }
 
@@ -12356,7 +12450,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-goalie-summary-row span {
         color: #6c8a9d;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 900;
         text-transform: uppercase;
       }
@@ -12364,7 +12458,7 @@ function StatsCentralRedesignStyles() {
       .sc-goalie-summary-row strong {
         overflow: hidden;
         color: #eff8fc;
-        font-size: 10px;
+        font-size: 11px;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
@@ -12401,7 +12495,7 @@ function StatsCentralRedesignStyles() {
       .sc-analytics-insights > div > span {
         grid-row: 1;
         color: #f0b63d;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 950;
         letter-spacing: 0.12em;
       }
@@ -12449,7 +12543,7 @@ function StatsCentralRedesignStyles() {
       .sc-compact-player-list strong {
         overflow: hidden;
         color: #eaf5fa;
-        font-size: 9px;
+        font-size: 11px;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
@@ -12457,7 +12551,7 @@ function StatsCentralRedesignStyles() {
       .sc-compact-player-list em {
         overflow: hidden;
         color: #657f91;
-        font-size: 7px;
+        font-size: 11px;
         font-style: normal;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -12465,7 +12559,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-compact-player-list b {
         color: #f0b63d;
-        font-size: 9px;
+        font-size: 11px;
       }
 
       .sc-compact-player-list b.is-good {
@@ -12495,7 +12589,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-special-team-panel > header > em {
         color: #668596;
-        font-size: 8px;
+        font-size: 11px;
         font-style: normal;
       }
 
@@ -12558,7 +12652,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-compare-selector-row > label > span {
         color: #718fa2;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 900;
         text-transform: uppercase;
       }
@@ -12581,7 +12675,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-compare-pinned > span {
         color: #6f8ca0;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 900;
       }
 
@@ -12591,7 +12685,7 @@ function StatsCentralRedesignStyles() {
         border: 1px solid rgba(0, 203, 214, 0.2);
         background: transparent;
         color: #69cfd4;
-        font-size: 8px;
+        font-size: 11px;
       }
 
       .sc-compare-main-grid {
@@ -12630,7 +12724,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-compare-card-top span {
         color: #f0b63d;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 950;
       }
 
@@ -12644,7 +12738,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-compare-card-top em {
         color: #6d899b;
-        font-size: 8px;
+        font-size: 11px;
         font-style: normal;
       }
 
@@ -12660,7 +12754,7 @@ function StatsCentralRedesignStyles() {
         padding: 8px;
         border: 1px solid rgba(105, 172, 202, 0.13);
         color: #6e8b9e;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 900;
       }
 
@@ -12716,7 +12810,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-compare-metric-values span {
         color: #6c899b;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 950;
         letter-spacing: 0.04em;
         text-transform: uppercase;
@@ -12751,7 +12845,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-player-drawer {
         position: fixed;
-        z-index: 1200;
+        z-index: var(--z-modal, 1200);
         top: 68px;
         right: 10px;
         bottom: 10px;
@@ -12794,7 +12888,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-player-drawer-identity span {
         color: #f0b63d;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 950;
         text-transform: uppercase;
       }
@@ -12811,7 +12905,7 @@ function StatsCentralRedesignStyles() {
       .sc-player-drawer-identity p {
         margin: 0;
         color: #6f8c9e;
-        font-size: 9px;
+        font-size: 11px;
       }
 
       .sc-player-drawer-actions {
@@ -12825,7 +12919,7 @@ function StatsCentralRedesignStyles() {
         border: 1px solid rgba(0, 207, 218, 0.25);
         background: rgba(0, 207, 218, 0.06);
         color: #9bdde0;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 950;
       }
 
@@ -12851,7 +12945,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-player-drawer-metrics span {
         color: #698798;
-        font-size: 7px;
+        font-size: 11px;
         font-weight: 900;
         text-transform: uppercase;
       }
@@ -12874,7 +12968,7 @@ function StatsCentralRedesignStyles() {
         display: flex;
         justify-content: space-between;
         color: #6f8d9e;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 900;
         text-transform: uppercase;
       }
@@ -12888,7 +12982,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-player-drawer-percentiles > div > span {
         color: #91aab7;
-        font-size: 8px;
+        font-size: 11px;
         font-weight: 900;
       }
 
@@ -12906,7 +13000,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-player-drawer-percentiles > div > strong {
         color: #dfeef4;
-        font-size: 8px;
+        font-size: 11px;
         text-align: right;
       }
 
@@ -13000,14 +13094,14 @@ function StatsCentralRedesignStyles() {
       .sc-leader-podium article > strong {
         overflow: hidden;
         color: #eef8fb;
-        font-size: 10px;
+        font-size: 11px;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
 
       .sc-leader-podium article > em {
         color: #688698;
-        font-size: 7px;
+        font-size: 11px;
         font-style: normal;
       }
 
@@ -13020,7 +13114,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-leader-rank {
         color: #68889a;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 1000;
       }
 
@@ -13071,7 +13165,7 @@ function StatsCentralRedesignStyles() {
 
         .sc-player-subnav button {
           padding: 0 5px;
-          font-size: 8px;
+          font-size: 11px;
         }
 
         .sc-overview-main-grid {
@@ -13201,7 +13295,7 @@ function StatsCentralStyles() {
         --green: #48d88b;
         --red: #ff6464;
         --orange: #ff9f43;
-        --purple: #b18cff;
+        --purple: var(--ops-info, #8ab4ff);
 
         min-height: 100vh;
         width: 100%;
@@ -13267,7 +13361,7 @@ function StatsCentralStyles() {
       }
 
       .sc-title-card {
-        border-radius: 26px;
+        border-radius: 8px;
         padding: 14px;
         display: flex;
         align-items: center;
@@ -13279,7 +13373,7 @@ function StatsCentralStyles() {
         width: 66px;
         height: 66px;
         flex: 0 0 auto;
-        border-radius: 22px;
+        border-radius: 8px;
         border: 1px solid rgba(0, 216, 223, 0.28);
         background:
           radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.13), transparent 34%),
@@ -13316,7 +13410,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: -15px;
         color: var(--muted);
-        font-size: 0.54rem;
+        font-size: 0.6875rem;
         font-style: normal;
         text-transform: uppercase;
         letter-spacing: 0.12em;
@@ -13331,7 +13425,7 @@ function StatsCentralStyles() {
       .sc-section-head p {
         margin: 0 0 5px;
         color: var(--muted);
-        font-size: 0.64rem;
+        font-size: 0.6875rem;
         line-height: 1;
         text-transform: uppercase;
         letter-spacing: 0.2em;
@@ -13359,7 +13453,7 @@ function StatsCentralStyles() {
       }
 
       .sc-control-card {
-        border-radius: 26px;
+        border-radius: 8px;
         padding: 14px;
         min-width: 0;
         display: grid;
@@ -13377,7 +13471,7 @@ function StatsCentralStyles() {
 
       .sc-search-box span {
         color: var(--muted);
-        font-size: 0.6rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.16em;
         font-weight: 950;
@@ -13386,7 +13480,7 @@ function StatsCentralStyles() {
       .sc-search-box input {
         width: 100%;
         min-height: 44px;
-        border-radius: 16px;
+        border-radius: 6px;
         outline: none;
         border: 1px solid rgba(255, 255, 255, 0.1);
         background: rgba(255, 255, 255, 0.045);
@@ -13410,47 +13504,49 @@ function StatsCentralStyles() {
         box-shadow: 0 0 0 3px rgba(0, 216, 223, 0.08);
       }
 
+      /* Scope selector is a segmented register switch, not two floating pills. */
       .sc-scope-toggle {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 8px;
+        gap: 0;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: var(--radius-ops, 2px);
+        overflow: hidden;
       }
 
       .sc-scope-toggle button {
-        min-height: 36px;
-        border-radius: 999px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        background: rgba(255, 255, 255, 0.045);
+        min-height: 32px;
+        border-radius: 0;
+        border: 0;
+        border-right: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.02);
         color: var(--muted);
-        font-size: 0.66rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         text-transform: uppercase;
         letter-spacing: 0.09em;
         cursor: pointer;
         transition:
-          transform 150ms ease,
-          border-color 150ms ease,
           background 150ms ease,
           color 150ms ease;
       }
 
+      .sc-scope-toggle button:last-child {
+        border-right: 0;
+      }
+
       .sc-scope-toggle button:hover {
-        transform: translateY(-1px);
         color: var(--text);
-        border-color: rgba(0, 216, 223, 0.3);
-        background: rgba(0, 216, 223, 0.07);
+        background: rgba(255, 255, 255, 0.055);
       }
 
       .sc-scope-toggle button.is-active {
-        color: #ffffff;
-        border-color: rgba(232, 165, 54, 0.45);
-        background:
-          linear-gradient(180deg, rgba(232, 165, 54, 0.14), rgba(255, 255, 255, 0.035)),
-          rgba(232, 165, 54, 0.08);
+        color: #0b1114;
+        background: var(--ops-gold, #e8a536);
       }
 
       .sc-status-card {
-        border-radius: 26px;
+        border-radius: 8px;
         padding: 12px;
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -13466,7 +13562,7 @@ function StatsCentralStyles() {
       .sc-mini-status {
         min-width: 0;
         min-height: 42px;
-        border-radius: 17px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.075);
         background: rgba(255, 255, 255, 0.035);
         padding: 8px;
@@ -13485,13 +13581,13 @@ function StatsCentralStyles() {
         color: var(--cyan);
         background: rgba(0, 216, 223, 0.08);
         border: 1px solid rgba(0, 216, 223, 0.18);
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         font-weight: 1000;
       }
 
       .sc-mini-status span {
         color: var(--muted);
-        font-size: 0.56rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.13em;
         font-weight: 950;
@@ -13513,7 +13609,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 1px;
         color: var(--muted-2);
-        font-size: 0.55rem;
+        font-size: 0.6875rem;
         font-style: normal;
       }
 
@@ -13528,7 +13624,7 @@ function StatsCentralStyles() {
       .sc-menu button {
         min-width: 0;
         min-height: 48px;
-        border-radius: 17px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.085);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015)),
@@ -13570,7 +13666,7 @@ function StatsCentralStyles() {
       }
 
       .sc-menu-icon {
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         line-height: 1;
         color: var(--cyan);
         opacity: 0.92;
@@ -13581,7 +13677,7 @@ function StatsCentralStyles() {
 
       .sc-menu em {
         min-width: 0;
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         line-height: 1;
         font-style: normal;
         text-transform: uppercase;
@@ -13615,7 +13711,7 @@ function StatsCentralStyles() {
       .sc-section {
         min-height: 0;
         min-width: 0;
-        border-radius: 24px;
+        border-radius: 8px;
         padding: 14px;
         display: flex;
         flex-direction: column;
@@ -13697,7 +13793,7 @@ function StatsCentralStyles() {
       }
 
       .sc-franchise-snapshot {
-        border-radius: 24px;
+        border-radius: 8px;
         border: 1px solid rgba(255, 255, 255, 0.1);
         background:
           radial-gradient(circle at 12% 0%, rgba(0, 216, 223, 0.12), transparent 34%),
@@ -13716,7 +13812,7 @@ function StatsCentralStyles() {
       .sc-franchise-main p {
         margin: 0 0 5px;
         color: var(--muted);
-        font-size: 0.6rem;
+        font-size: 0.6875rem;
         line-height: 1;
         text-transform: uppercase;
         letter-spacing: 0.18em;
@@ -13741,7 +13837,7 @@ function StatsCentralStyles() {
 
       .sc-franchise-record {
         min-height: 94px;
-        border-radius: 22px;
+        border-radius: 8px;
         border: 1px solid rgba(232, 165, 54, 0.24);
         background: rgba(232, 165, 54, 0.08);
         display: flex;
@@ -13760,7 +13856,7 @@ function StatsCentralStyles() {
       .sc-franchise-record span {
         margin-top: 6px;
         color: #fff;
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.15em;
         font-weight: 950;
@@ -13769,7 +13865,7 @@ function StatsCentralStyles() {
       .sc-franchise-record em {
         margin-top: 5px;
         color: var(--muted);
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         font-style: normal;
       }
 
@@ -13787,7 +13883,7 @@ function StatsCentralStyles() {
       .sc-stat-card {
         min-width: 0;
         min-height: 102px;
-        border-radius: 21px;
+        border-radius: 8px;
         padding: 12px 13px;
         display: flex;
         flex-direction: column;
@@ -13798,7 +13894,7 @@ function StatsCentralStyles() {
 
       .sc-stat-card span {
         color: var(--muted);
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         line-height: 1;
         text-transform: uppercase;
         letter-spacing: 0.16em;
@@ -13819,7 +13915,7 @@ function StatsCentralStyles() {
 
       .sc-stat-card b {
         color: var(--cyan);
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         line-height: 1.15;
         font-weight: 950;
         letter-spacing: 0.04em;
@@ -13841,7 +13937,7 @@ function StatsCentralStyles() {
       .sc-stat-card i {
         margin-top: auto;
         color: var(--gold);
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         line-height: 1.15;
         font-style: normal;
         font-weight: 850;
@@ -13900,7 +13996,7 @@ function StatsCentralStyles() {
 
       .sc-crease-context-card {
         min-height: 76px;
-        border-radius: 18px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         padding: 11px;
@@ -13925,7 +14021,7 @@ function StatsCentralStyles() {
       .sc-crease-context-card em {
         margin-top: 5px;
         color: var(--muted);
-        font-size: 0.64rem;
+        font-size: 0.6875rem;
         font-style: normal;
       }
 
@@ -13940,7 +14036,7 @@ function StatsCentralStyles() {
 
       .sc-mini-side-section {
         padding: 12px;
-        border-radius: 22px;
+        border-radius: 8px;
       }
 
       .sc-mini-side-section .sc-section-head {
@@ -13951,17 +14047,19 @@ function StatsCentralStyles() {
         font-size: 0.9rem;
       }
 
+      /* Category and rank marks are index plates. */
       .sc-pill {
         display: inline-flex;
-        min-height: 28px;
+        min-height: 22px;
         align-items: center;
         justify-content: center;
-        border-radius: 999px;
-        padding: 0 10px;
+        border-radius: var(--radius-ops, 2px);
+        padding: 0 7px;
+        font-variant-numeric: tabular-nums;
         color: var(--cyan);
         background: rgba(0, 216, 223, 0.08);
         border: 1px solid rgba(0, 216, 223, 0.16);
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         letter-spacing: 0.08em;
         text-transform: uppercase;
@@ -14004,7 +14102,7 @@ function StatsCentralStyles() {
         grid-template-columns: 38px minmax(0, 1fr) auto;
         align-items: center;
         gap: 10px;
-        border-radius: 18px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         padding: 9px 10px;
@@ -14019,7 +14117,7 @@ function StatsCentralStyles() {
         width: 42px;
         height: 42px;
         flex: 0 0 auto;
-        border-radius: 16px;
+        border-radius: 6px;
         display: grid;
         place-items: center;
         font-size: 0.72rem;
@@ -14035,8 +14133,8 @@ function StatsCentralStyles() {
       .sc-avatar.is-small {
         width: 34px;
         height: 34px;
-        border-radius: 13px;
-        font-size: 0.62rem;
+        border-radius: 10px;
+        font-size: 0.6875rem;
       }
 
       .sc-avatar--logo {
@@ -14076,7 +14174,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 2px;
         color: var(--muted);
-        font-size: 0.66rem;
+        font-size: 0.6875rem;
         line-height: 1.15;
         white-space: nowrap;
         overflow: hidden;
@@ -14096,7 +14194,7 @@ function StatsCentralStyles() {
       .sc-mini-player b small {
         margin-top: 4px;
         color: var(--muted);
-        font-size: 0.52rem;
+        font-size: 0.6875rem;
         letter-spacing: 0.1em;
       }
 
@@ -14120,7 +14218,7 @@ function StatsCentralStyles() {
       .sc-calendar-list button {
         min-height: 46px;
         border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 16px;
+        border-radius: 6px;
         background: rgba(255, 255, 255, 0.035);
         color: var(--text);
         padding: 8px 10px;
@@ -14137,7 +14235,7 @@ function StatsCentralStyles() {
 
       .sc-calendar-list-compact button {
         min-height: 42px;
-        border-radius: 14px;
+        border-radius: 10px;
       }
 
       .sc-calendar-list button:hover {
@@ -14163,34 +14261,36 @@ function StatsCentralStyles() {
       }
 
       .sc-calendar-list-compact button span {
-        font-size: 0.66rem;
+        font-size: 0.6875rem;
       }
 
       .sc-calendar-list button small {
         color: var(--muted);
-        font-size: 0.56rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.1em;
       }
 
+      /* Game counts are count plates, matching the network standard. */
       .sc-calendar-list button em {
-        min-width: 26px;
-        min-height: 26px;
-        border-radius: 999px;
+        min-width: 24px;
+        min-height: 20px;
+        border-radius: var(--radius-ops, 2px);
         display: grid;
         place-items: center;
         background: rgba(0, 216, 223, 0.08);
         color: var(--cyan);
         border: 1px solid rgba(0, 216, 223, 0.13);
         font-style: normal;
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         font-weight: 950;
+        font-variant-numeric: tabular-nums;
       }
 
       .sc-calendar-list-compact button em {
         min-width: 22px;
         min-height: 22px;
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
       }
 
       .sc-score-list {
@@ -14210,7 +14310,7 @@ function StatsCentralStyles() {
       }
 
       .sc-score-card {
-        border-radius: 18px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         padding: 10px 11px;
@@ -14249,14 +14349,14 @@ function StatsCentralStyles() {
       .sc-score-line em {
         color: var(--muted);
         font-style: normal;
-        font-size: 0.66rem;
+        font-size: 0.6875rem;
       }
 
       .sc-score-meta,
       .sc-score-micro {
         margin-top: 6px;
         color: var(--muted);
-        font-size: 0.64rem;
+        font-size: 0.6875rem;
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
@@ -14267,7 +14367,7 @@ function StatsCentralStyles() {
       }
 
       .sc-empty {
-        border-radius: 18px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         color: var(--muted);
@@ -14281,7 +14381,7 @@ function StatsCentralStyles() {
         min-height: 0;
         min-width: 0;
         overflow: auto;
-        border-radius: 19px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.075);
         background: rgba(4, 14, 23, 0.42);
       }
@@ -14298,7 +14398,7 @@ function StatsCentralStyles() {
         z-index: 2;
         background: rgba(5, 18, 29, 0.98);
         color: var(--muted);
-        font-size: 0.6rem;
+        font-size: 0.6875rem;
         line-height: 1;
         letter-spacing: 0.14em;
         text-transform: uppercase;
@@ -14350,10 +14450,10 @@ function StatsCentralStyles() {
       .sc-team-chip {
         width: 34px;
         height: 34px;
-        border-radius: 13px;
+        border-radius: 10px;
         display: grid;
         place-items: center;
-        font-size: 0.56rem;
+        font-size: 0.6875rem;
         font-weight: 1000;
         color: #fff;
         background:
@@ -14366,7 +14466,7 @@ function StatsCentralStyles() {
         flex: 0 0 auto;
         display: grid;
         place-items: center;
-        border-radius: 13px;
+        border-radius: 10px;
         overflow: hidden;
       }
 
@@ -14378,7 +14478,7 @@ function StatsCentralStyles() {
       .sc-team-logo-mark.is-large {
         width: 74px;
         height: 74px;
-        border-radius: 24px;
+        border-radius: 8px;
       }
 
       .sc-team-logo-mark--logo {
@@ -14401,7 +14501,7 @@ function StatsCentralStyles() {
       }
 
       .sc-team-logo-mark--fallback {
-        font-size: 0.56rem;
+        font-size: 0.6875rem;
         font-weight: 1000;
         color: #fff;
         background:
@@ -14459,7 +14559,7 @@ function StatsCentralStyles() {
 
       .sc-tier-row {
         min-height: 54px;
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.075);
         background: rgba(255, 255, 255, 0.035);
         padding: 9px 10px;
@@ -14479,7 +14579,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 2px;
         color: var(--muted);
-        font-size: 0.66rem;
+        font-size: 0.6875rem;
       }
 
       .sc-tier-row b {
@@ -14515,7 +14615,7 @@ function StatsCentralStyles() {
       .sc-list-card,
       .sc-note-card,
       .sc-log-card {
-        border-radius: 17px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.075);
         background: rgba(255, 255, 255, 0.035);
         padding: 10px 11px;
@@ -14538,7 +14638,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 5px;
         color: var(--muted);
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         line-height: 1.35;
       }
 
@@ -14548,7 +14648,7 @@ function StatsCentralStyles() {
         margin-top: 7px;
         color: var(--gold);
         font-style: normal;
-        font-size: 0.66rem;
+        font-size: 0.6875rem;
         font-weight: 900;
       }
 
@@ -14589,7 +14689,7 @@ function StatsCentralStyles() {
 
       .sc-team-profile-card {
         height: 100%;
-        border-radius: 24px;
+        border-radius: 8px;
         padding: 15px;
         display: grid;
         grid-template-columns: 74px minmax(0, 1fr);
@@ -14623,12 +14723,12 @@ function StatsCentralStyles() {
       }
 
       .sc-team-profile-grid span {
-        border-radius: 15px;
+        border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.075);
         background: rgba(255, 255, 255, 0.035);
         padding: 9px 10px;
         color: var(--muted);
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.1em;
         font-weight: 950;
@@ -14663,7 +14763,7 @@ function StatsCentralStyles() {
 
       .sc-award-card {
         min-height: 124px;
-        border-radius: 22px;
+        border-radius: 8px;
         padding: 13px;
         display: flex;
         flex-direction: column;
@@ -14673,7 +14773,7 @@ function StatsCentralStyles() {
 
       .sc-award-card span {
         color: var(--gold);
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.14em;
         font-weight: 1000;
@@ -14687,7 +14787,7 @@ function StatsCentralStyles() {
 
       .sc-award-card em {
         color: var(--muted);
-        font-size: 0.66rem;
+        font-size: 0.6875rem;
         line-height: 1.3;
         font-style: normal;
       }
@@ -14702,7 +14802,7 @@ function StatsCentralStyles() {
       }
 
       .sc-award-subjective-tag {
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color: rgba(232, 220, 190, 0.72) !important;
@@ -14720,7 +14820,7 @@ function StatsCentralStyles() {
       }
 
       .sc-awards-modebar button {
-        border-radius: 20px;
+        border-radius: 8px;
         border: 1px solid rgba(255, 255, 255, 0.09);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015)),
@@ -14757,7 +14857,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 4px;
         color: var(--muted);
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
       }
 
       .sc-awards-bottom {
@@ -14777,7 +14877,7 @@ function StatsCentralStyles() {
 
       .sc-award-name-cell span {
         color: var(--muted);
-        font-size: 0.65rem;
+        font-size: 0.6875rem;
         line-height: 1.25;
         white-space: normal;
       }
@@ -14799,7 +14899,7 @@ function StatsCentralStyles() {
       }
 
       .sc-award-definition-card {
-        border-radius: 17px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.075);
         background: rgba(255, 255, 255, 0.035);
         padding: 11px 12px;
@@ -14818,7 +14918,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 6px;
         color: var(--muted);
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         line-height: 1.35;
       }
 
@@ -14847,7 +14947,7 @@ function StatsCentralStyles() {
         flex: 1;
         min-width: 0;
         min-height: 44px;
-        border-radius: 15px;
+        border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.085);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.042), rgba(255, 255, 255, 0.014)),
@@ -14891,7 +14991,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 4px;
         color: var(--muted);
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         line-height: 1.1;
         white-space: nowrap;
         overflow: hidden;
@@ -14908,7 +15008,7 @@ function StatsCentralStyles() {
 
       .sc-awards-summary-strip div {
         min-width: 0;
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.075);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.012)),
@@ -14920,7 +15020,7 @@ function StatsCentralStyles() {
       .sc-awards-summary-strip span {
         display: block;
         color: var(--muted);
-        font-size: 0.56rem;
+        font-size: 0.6875rem;
         line-height: 1;
         text-transform: uppercase;
         letter-spacing: 0.12em;
@@ -14997,7 +15097,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 3px;
         color: var(--muted);
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         line-height: 1.15;
         white-space: nowrap;
         overflow: hidden;
@@ -15023,7 +15123,7 @@ function StatsCentralStyles() {
         display: block;
         max-width: 340px;
         color: var(--muted);
-        font-size: 0.66rem;
+        font-size: 0.6875rem;
         line-height: 1.25;
         white-space: nowrap;
         overflow: hidden;
@@ -15042,7 +15142,7 @@ function StatsCentralStyles() {
 
       .sc-awards-leader-card {
         min-height: 66px;
-        border-radius: 17px;
+        border-radius: 6px;
         border: 1px solid rgba(232, 165, 54, 0.16);
         background:
           linear-gradient(180deg, rgba(232, 165, 54, 0.075), rgba(255, 255, 255, 0.014)),
@@ -15064,7 +15164,7 @@ function StatsCentralStyles() {
       .sc-awards-leader-card span {
         display: block;
         color: var(--gold);
-        font-size: 0.56rem;
+        font-size: 0.6875rem;
         line-height: 1;
         font-weight: 1000;
         letter-spacing: 0.1em;
@@ -15093,7 +15193,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 4px;
         color: var(--muted);
-        font-size: 0.61rem;
+        font-size: 0.6875rem;
         line-height: 1.18;
         font-style: normal;
         white-space: nowrap;
@@ -15122,7 +15222,7 @@ function StatsCentralStyles() {
       .sc-awards-rule-card {
         min-width: 0;
         min-height: 72px;
-        border-radius: 15px;
+        border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.075);
         background: rgba(255, 255, 255, 0.032);
         padding: 9px 10px;
@@ -15132,7 +15232,7 @@ function StatsCentralStyles() {
       .sc-awards-rule-card strong {
         display: block;
         color: #fff;
-        font-size: 0.67rem;
+        font-size: 0.6875rem;
         line-height: 1.1;
         font-weight: 1000;
         text-transform: uppercase;
@@ -15146,7 +15246,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 5px;
         color: var(--muted);
-        font-size: 0.59rem;
+        font-size: 0.6875rem;
         line-height: 1.28;
       }
 
@@ -15197,7 +15297,7 @@ function StatsCentralStyles() {
         width: 100%;
         min-width: 0;
         min-height: 42px;
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.1);
         background: rgba(7, 22, 35, 0.9);
         color: var(--text);
@@ -15215,7 +15315,7 @@ function StatsCentralStyles() {
       }
 
       .sc-compare-card {
-        border-radius: 23px;
+        border-radius: 8px;
         padding: 13px;
         min-width: 0;
       }
@@ -15239,7 +15339,7 @@ function StatsCentralStyles() {
 
       .sc-compare-card span {
         color: var(--muted);
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
       }
 
       .sc-compare-card-grid {
@@ -15249,12 +15349,12 @@ function StatsCentralStyles() {
       }
 
       .sc-compare-card-grid span {
-        border-radius: 14px;
+        border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.075);
         background: rgba(255, 255, 255, 0.035);
         padding: 8px 9px;
         color: var(--muted);
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.1em;
         font-weight: 950;
@@ -15269,7 +15369,7 @@ function StatsCentralStyles() {
       }
 
       .sc-compare-table {
-        border-radius: 19px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.075);
         background: rgba(4, 14, 23, 0.42);
         overflow: auto;
@@ -15301,7 +15401,7 @@ function StatsCentralStyles() {
       .sc-compare-row strong {
         text-align: center;
         color: var(--muted);
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.12em;
       }
@@ -15340,7 +15440,7 @@ function StatsCentralStyles() {
 
       .sc-formula-section {
         min-width: 0;
-        border-radius: 22px;
+        border-radius: 8px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         padding: 13px;
@@ -15363,7 +15463,7 @@ function StatsCentralStyles() {
 
       .sc-formula-section header span {
         color: var(--muted);
-        font-size: 0.6rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.11em;
         font-weight: 950;
@@ -15405,7 +15505,7 @@ function StatsCentralStyles() {
 
       .sc-formula-card {
         min-width: 0;
-        border-radius: 15px;
+        border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.07);
         background: rgba(4, 14, 23, 0.45);
         padding: 9px 10px;
@@ -15422,7 +15522,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 4px;
         color: var(--muted);
-        font-size: 0.64rem;
+        font-size: 0.6875rem;
         line-height: 1.28;
       }
 
@@ -15430,7 +15530,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 7px;
         color: var(--cyan);
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         line-height: 1.3;
         font-style: normal;
         font-weight: 850;
@@ -15447,7 +15547,7 @@ function StatsCentralStyles() {
 
       .sc-overview-fixed-hero {
         min-width: 0;
-        border-radius: 24px;
+        border-radius: 8px;
         border: 1px solid rgba(255, 255, 255, 0.1);
         background:
           radial-gradient(circle at 12% 0%, rgba(0, 216, 223, 0.14), transparent 34%),
@@ -15473,7 +15573,7 @@ function StatsCentralStyles() {
       .sc-overview-fixed-panel header p {
         margin: 0 0 5px;
         color: var(--muted);
-        font-size: 0.6rem;
+        font-size: 0.6875rem;
         line-height: 1;
         text-transform: uppercase;
         letter-spacing: 0.18em;
@@ -15504,7 +15604,7 @@ function StatsCentralStyles() {
 
       .sc-overview-fixed-points {
         min-height: 88px;
-        border-radius: 22px;
+        border-radius: 8px;
         border: 1px solid rgba(232, 165, 54, 0.26);
         background:
           linear-gradient(180deg, rgba(232, 165, 54, 0.14), rgba(255, 255, 255, 0.025)),
@@ -15525,7 +15625,7 @@ function StatsCentralStyles() {
       .sc-overview-fixed-points span {
         margin-top: 6px;
         color: #fff;
-        font-size: 0.6rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.16em;
         font-weight: 950;
@@ -15534,7 +15634,7 @@ function StatsCentralStyles() {
       .sc-overview-fixed-points em {
         margin-top: 5px;
         color: var(--muted);
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         font-style: normal;
       }
 
@@ -15556,7 +15656,7 @@ function StatsCentralStyles() {
       .sc-overview-fixed-card {
         min-width: 0;
         min-height: 92px;
-        border-radius: 20px;
+        border-radius: 8px;
         padding: 12px;
         border: 1px solid rgba(255, 255, 255, 0.09);
         background:
@@ -15574,7 +15674,7 @@ function StatsCentralStyles() {
 
       .sc-overview-fixed-card span {
         color: var(--muted);
-        font-size: 0.54rem;
+        font-size: 0.6875rem;
         line-height: 1;
         text-transform: uppercase;
         letter-spacing: 0.14em;
@@ -15596,7 +15696,7 @@ function StatsCentralStyles() {
 
       .sc-overview-fixed-card em {
         color: var(--muted-2);
-        font-size: 0.66rem;
+        font-size: 0.6875rem;
         line-height: 1.15;
         font-style: normal;
         white-space: nowrap;
@@ -15606,7 +15706,7 @@ function StatsCentralStyles() {
 
       .sc-overview-fixed-card b {
         color: var(--cyan);
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         line-height: 1.15;
         font-weight: 950;
         white-space: nowrap;
@@ -15654,7 +15754,7 @@ function StatsCentralStyles() {
       .sc-overview-fixed-panel {
         min-height: 0;
         min-width: 0;
-        border-radius: 22px;
+        border-radius: 8px;
         padding: 12px;
         border: 1px solid rgba(255, 255, 255, 0.1);
         background:
@@ -15702,7 +15802,7 @@ function StatsCentralStyles() {
 
       .sc-overview-fixed-mini-metric {
         min-height: 72px;
-        border-radius: 18px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         padding: 10px;
@@ -15715,7 +15815,7 @@ function StatsCentralStyles() {
       .sc-overview-fixed-mini-metric span,
       .sc-overview-fixed-special-grid span {
         color: var(--muted);
-        font-size: 0.57rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.12em;
         font-weight: 950;
@@ -15740,7 +15840,7 @@ function StatsCentralStyles() {
       .sc-overview-fixed-special-grid em {
         margin-top: 5px;
         color: var(--gold);
-        font-size: 0.59rem;
+        font-size: 0.6875rem;
         line-height: 1.15;
         font-style: normal;
         font-weight: 850;
@@ -15759,7 +15859,7 @@ function StatsCentralStyles() {
 
       .sc-overview-fixed-special-grid div {
         min-width: 0;
-        border-radius: 17px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         padding: 10px;
@@ -15784,7 +15884,7 @@ function StatsCentralStyles() {
       .sc-overview-fixed-calendar button {
         min-height: 38px;
         border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 14px;
+        border-radius: 10px;
         background: rgba(255, 255, 255, 0.035);
         color: var(--text);
         padding: 7px 9px;
@@ -15817,7 +15917,7 @@ function StatsCentralStyles() {
         align-items: flex-start;
         gap: 2px;
         color: #fff;
-        font-size: 0.65rem;
+        font-size: 0.6875rem;
         font-weight: 900;
         white-space: nowrap;
         overflow: hidden;
@@ -15826,23 +15926,24 @@ function StatsCentralStyles() {
 
       .sc-overview-fixed-calendar button small {
         color: var(--muted);
-        font-size: 0.52rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.09em;
       }
 
       .sc-overview-fixed-calendar button em {
         min-width: 22px;
-        min-height: 22px;
-        border-radius: 999px;
+        min-height: 18px;
+        border-radius: var(--radius-ops, 2px);
         display: grid;
         place-items: center;
         background: rgba(0, 216, 223, 0.08);
         color: var(--cyan);
         border: 1px solid rgba(0, 216, 223, 0.13);
         font-style: normal;
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         font-weight: 950;
+        font-variant-numeric: tabular-nums;
       }
 
       .sc-overview-fixed-panel.is-scores .sc-score-list {
@@ -15915,7 +16016,7 @@ function StatsCentralStyles() {
       .sc-table th em {
         color: var(--gold);
         font-style: normal;
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
       }
 
       .sc-table th.is-sortable {
@@ -15969,7 +16070,7 @@ function StatsCentralStyles() {
 
       .sc-skater-stat span {
         color: var(--muted-2);
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         line-height: 1;
         font-weight: 850;
         letter-spacing: 0.03em;
@@ -16000,17 +16101,17 @@ function StatsCentralStyles() {
       }
 
       .sc-skater-role-chip {
-        min-height: 26px;
+        min-height: 22px;
         max-width: 190px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        border-radius: 999px;
-        padding: 0 10px;
+        border-radius: var(--radius-ops, 2px);
+        padding: 0 7px;
         color: var(--cyan);
         border: 1px solid rgba(0, 216, 223, 0.18);
         background: rgba(0, 216, 223, 0.075);
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         letter-spacing: 0.075em;
         text-transform: uppercase;
@@ -16054,7 +16155,7 @@ function StatsCentralStyles() {
 
       .sc-skater-insight-grid .sc-section {
         padding: 12px;
-        border-radius: 22px;
+        border-radius: 8px;
       }
 
       .sc-skater-insight-grid .sc-section-head {
@@ -16076,7 +16177,7 @@ function StatsCentralStyles() {
       .sc-skater-quick-card {
         min-width: 0;
         min-height: 62px;
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.075);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.038), rgba(255, 255, 255, 0.012)),
@@ -16088,7 +16189,7 @@ function StatsCentralStyles() {
       .sc-skater-quick-card span {
         display: block;
         color: var(--muted);
-        font-size: 0.56rem;
+        font-size: 0.6875rem;
         line-height: 1;
         text-transform: uppercase;
         letter-spacing: 0.11em;
@@ -16111,7 +16212,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 5px;
         color: var(--muted-2);
-        font-size: 0.61rem;
+        font-size: 0.6875rem;
         line-height: 1.15;
         font-style: normal;
         white-space: nowrap;
@@ -16158,7 +16259,7 @@ function StatsCentralStyles() {
 
       .sc-skaters-page-v2 > .sc-section {
         padding: 11px 12px;
-        border-radius: 22px;
+        border-radius: 8px;
       }
 
       .sc-skaters-page-v2 .sc-section-head {
@@ -16175,33 +16276,39 @@ function StatsCentralStyles() {
         flex-wrap: nowrap;
       }
 
+      /* Column presets read as a control-room switch bank. */
       .sc-column-preset-toggle {
-        min-height: 28px;
+        min-height: 26px;
         display: inline-grid;
         grid-template-columns: repeat(5, auto);
-        gap: 4px;
-        padding: 3px;
-        border-radius: 999px;
+        gap: 0;
+        padding: 0;
+        border-radius: var(--radius-ops, 2px);
         border: 1px solid rgba(255, 255, 255, 0.085);
-        background: rgba(255, 255, 255, 0.035);
+        background: rgba(255, 255, 255, 0.02);
+        overflow: hidden;
       }
 
       .sc-column-preset-toggle button {
-        min-height: 22px;
+        min-height: 24px;
         border: 0;
-        border-radius: 999px;
-        padding: 0 8px;
+        border-right: 1px solid rgba(255, 255, 255, 0.085);
+        border-radius: 0;
+        padding: 0 9px;
         background: transparent;
         color: var(--muted);
-        font-size: 0.54rem;
+        font-size: 0.6875rem;
         font-weight: 1000;
         letter-spacing: 0.08em;
         text-transform: uppercase;
         cursor: pointer;
         transition:
           color 150ms ease,
-          background 150ms ease,
-          transform 150ms ease;
+          background 150ms ease;
+      }
+
+      .sc-column-preset-toggle button:last-child {
+        border-right: 0;
       }
 
       .sc-column-preset-toggle button:hover {
@@ -16210,10 +16317,8 @@ function StatsCentralStyles() {
       }
 
       .sc-column-preset-toggle button.is-active {
-        color: #fff;
-        background:
-          linear-gradient(180deg, rgba(0, 216, 223, 0.18), rgba(255, 255, 255, 0.03)),
-          rgba(0, 216, 223, 0.08);
+        color: #041318;
+        background: var(--ops-cyan, #13d8e7);
       }
 
       .sc-skaters-table-v2 {
@@ -16239,7 +16344,7 @@ function StatsCentralStyles() {
 
       .sc-skaters-table-v2 th {
         padding: 8px 10px;
-        font-size: 0.56rem;
+        font-size: 0.6875rem;
       }
 
       .sc-skaters-table-v2 td {
@@ -16284,7 +16389,7 @@ function StatsCentralStyles() {
       }
 
       .sc-skaters-table-v2 .sc-name-cell span:not(.sc-player-meta-inline):not(.sc-player-ovr-drop) {
-        font-size: 0.59rem;
+        font-size: 0.6875rem;
         color: var(--muted-2);
       }
 
@@ -16311,7 +16416,7 @@ function StatsCentralStyles() {
       .sc-table th em {
         color: var(--gold);
         font-style: normal;
-        font-size: 0.55rem;
+        font-size: 0.6875rem;
       }
 
       .sc-table th.is-sortable {
@@ -16343,7 +16448,7 @@ function StatsCentralStyles() {
       .sc-skater-stat span {
         max-width: 78px;
         color: var(--muted-2);
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         line-height: 1.05;
         font-weight: 850;
         letter-spacing: 0.02em;
@@ -16392,7 +16497,7 @@ function StatsCentralStyles() {
         color: var(--cyan);
         border: 1px solid rgba(0, 216, 223, 0.18);
         background: rgba(0, 216, 223, 0.075);
-        font-size: 0.54rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         letter-spacing: 0.065em;
         text-transform: uppercase;
@@ -16443,7 +16548,7 @@ function StatsCentralStyles() {
       .sc-skater-summary-chip {
         min-width: 0;
         height: 104px;
-        border-radius: 17px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.075);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.042), rgba(255, 255, 255, 0.012)),
@@ -16458,7 +16563,7 @@ function StatsCentralStyles() {
       .sc-skater-summary-chip span {
         display: block;
         color: var(--muted);
-        font-size: 0.52rem;
+        font-size: 0.6875rem;
         line-height: 1;
         text-transform: uppercase;
         letter-spacing: 0.1em;
@@ -16481,7 +16586,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 7px;
         color: var(--muted-2);
-        font-size: 0.56rem;
+        font-size: 0.6875rem;
         line-height: 1.12;
         font-style: normal;
         white-space: nowrap;
@@ -16555,7 +16660,7 @@ function StatsCentralStyles() {
         .sc-title-card,
         .sc-control-card,
         .sc-status-card {
-          border-radius: 22px;
+          border-radius: 8px;
         }
 
         .sc-title-copy h1 {
@@ -16572,7 +16677,7 @@ function StatsCentralStyles() {
 
         .sc-menu button {
           min-height: 40px;
-          border-radius: 14px;
+          border-radius: 10px;
         }
 
         .sc-skaters-page-v2 {
@@ -16591,7 +16696,7 @@ function StatsCentralStyles() {
 
         .sc-skater-summary-chip em {
           margin-top: 5px;
-          font-size: 0.51rem;
+          font-size: 0.6875rem;
         }
       }
 
@@ -16824,7 +16929,7 @@ function StatsCentralStyles() {
       .sc-table th {
         background: rgba(4, 16, 26, 0.98);
         border-bottom-color: rgba(19, 216, 231, 0.22);
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
       }
 
       .sc-table td {
@@ -17097,11 +17202,11 @@ function StatsCentralStyles() {
         }
 
         .sc-menu-icon {
-          font-size: 0.64rem;
+          font-size: 0.6875rem;
         }
 
         .sc-menu em {
-          font-size: 0.54rem;
+          font-size: 0.6875rem;
         }
 
         .sc-franchise-snapshot {
@@ -17219,7 +17324,9 @@ function StatsCentralStyles() {
         height: 100%;
         min-height: 0;
         display: grid;
-        grid-template-rows: auto minmax(0, 1fr) 154px;
+        /* The franchise line sizes to its content now that it is a register
+           strip; the standings table keeps the reclaimed height. */
+        grid-template-rows: auto minmax(0, 1fr) auto;
         gap: 10px;
         overflow: hidden;
       }
@@ -17253,7 +17360,7 @@ function StatsCentralStyles() {
 
       .sc-team-toolbar-title span {
         color: var(--gold);
-        font-size: 0.61rem;
+        font-size: 0.6875rem;
         line-height: 1;
         font-weight: 1000;
         letter-spacing: 0.15em;
@@ -17262,7 +17369,7 @@ function StatsCentralStyles() {
       .sc-team-toolbar-title strong {
         margin-top: 5px;
         color: var(--muted);
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         line-height: 1;
         font-weight: 850;
       }
@@ -17281,7 +17388,7 @@ function StatsCentralStyles() {
         background: transparent;
         color: var(--muted);
         cursor: pointer;
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         letter-spacing: 0.09em;
         text-transform: uppercase;
@@ -17328,7 +17435,7 @@ function StatsCentralStyles() {
         background: rgba(255, 255, 255, 0.025);
         color: var(--muted);
         cursor: pointer;
-        font-size: 0.65rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         letter-spacing: 0.08em;
         text-transform: uppercase;
@@ -17355,7 +17462,7 @@ function StatsCentralStyles() {
       .sc-team-toolbar-filters select {
         outline: none;
         padding: 0 10px;
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         font-weight: 800;
       }
 
@@ -17398,7 +17505,7 @@ function StatsCentralStyles() {
 
       .sc-team-reset {
         cursor: pointer;
-        font-size: 0.64rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         letter-spacing: 0.08em;
         text-transform: uppercase;
@@ -17436,7 +17543,7 @@ function StatsCentralStyles() {
         padding: 0 13px;
         background: #061722;
         color: #8facbc;
-        font-size: 0.63rem;
+        font-size: 0.6875rem;
         letter-spacing: 0.13em;
         border-bottom-color: rgba(156, 218, 236, 0.16);
       }
@@ -17597,7 +17704,7 @@ function StatsCentralStyles() {
         border: 1px solid rgba(156, 218, 236, 0.2);
         background: rgba(8, 24, 35, 0.94);
         color: #fff;
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         font-weight: 1000;
       }
 
@@ -17605,17 +17712,23 @@ function StatsCentralStyles() {
         min-width: 0;
       }
 
+      /* Secondary standings placement: quiet on all 32 rows so gold stays
+         reserved for the sorted column and the user's own club. */
       .sc-team-overall-rank {
         display: block;
         width: fit-content;
         margin-top: 3px;
-        color: #f0a23a;
-        font-size: 9px;
+        color: rgba(180, 205, 219, 0.66);
+        font-size: 11px;
         font-style: normal;
         font-weight: 800;
         line-height: 1;
         letter-spacing: 0.1em;
         white-space: nowrap;
+      }
+
+      .sc-team-stats-table tr.is-user-team .sc-team-overall-rank {
+        color: var(--ops-gold, #f0a23a);
       }
 
       .sc-team-name-line {
@@ -17639,7 +17752,7 @@ function StatsCentralStyles() {
         display: block;
         margin-top: 4px;
         color: #6e8b9b;
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         font-weight: 800;
         letter-spacing: 0.06em;
         text-transform: uppercase;
@@ -17648,7 +17761,7 @@ function StatsCentralStyles() {
       .sc-my-team-tag {
         flex: 0 0 auto;
         color: var(--cyan);
-        font-size: 0.49rem;
+        font-size: 0.6875rem;
         line-height: 1;
         font-style: normal;
         font-weight: 1000;
@@ -17672,7 +17785,7 @@ function StatsCentralStyles() {
       .sc-team-value em {
         min-width: 22px;
         color: var(--muted-2);
-        font-size: 0.5rem;
+        font-size: 0.6875rem;
         font-style: normal;
         font-weight: 950;
       }
@@ -17739,8 +17852,8 @@ function StatsCentralStyles() {
       }
 
       .sc-team-profile-logo .sc-team-logo-mark.is-large {
-        width: 84px;
-        height: 84px;
+        width: 44px;
+        height: 44px;
         border: 0;
         background: transparent;
       }
@@ -17751,17 +17864,17 @@ function StatsCentralStyles() {
 
       .sc-team-profile-copy > span {
         color: var(--cyan);
-        font-size: 0.55rem;
+        font-size: 0.6875rem;
         line-height: 1;
         font-weight: 1000;
         letter-spacing: 0.14em;
       }
 
       .sc-team-profile-copy h2 {
-        margin: 7px 0 0;
+        margin: 4px 0 0;
         overflow: hidden;
         color: #fff;
-        font-size: 1.15rem;
+        font-size: 1.05rem;
         line-height: 1.05;
         font-weight: 1000;
         letter-spacing: -0.025em;
@@ -17770,9 +17883,9 @@ function StatsCentralStyles() {
       }
 
       .sc-team-profile-copy p {
-        margin: 7px 0 0;
+        margin: 3px 0 0;
         color: var(--muted);
-        font-size: 0.65rem;
+        font-size: 0.6875rem;
         font-weight: 800;
       }
 
@@ -17806,7 +17919,7 @@ function StatsCentralStyles() {
       .sc-team-profile-headline span {
         margin-top: 7px;
         color: var(--muted);
-        font-size: 0.53rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         letter-spacing: 0.1em;
         text-transform: uppercase;
@@ -17831,14 +17944,13 @@ function StatsCentralStyles() {
 
       .sc-team-profile-metric span {
         color: var(--muted);
-        font-size: 0.53rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         letter-spacing: 0.09em;
         text-transform: uppercase;
       }
 
       .sc-team-profile-metric strong {
-        margin-top: 7px;
         color: #fff;
         font-size: 1rem;
         line-height: 1;
@@ -17847,16 +17959,44 @@ function StatsCentralStyles() {
       }
 
       .sc-team-profile-metric em {
-        margin-top: 6px;
         overflow: hidden;
         color: #6e8b9b;
-        font-size: 0.55rem;
+        font-size: 0.6875rem;
         line-height: 1;
         font-style: normal;
         font-weight: 800;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+
+      /* Franchise line, not a nine-tile dashboard: label, figure and league
+         placement sit on one register row so the table keeps the height. */
+      .sc-team-profile-metric {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas: "label value" "rank rank";
+        align-items: baseline;
+        gap: 3px 8px;
+        padding: 7px 12px;
+      }
+
+      .sc-team-profile-metric span { grid-area: label; }
+      .sc-team-profile-metric strong { grid-area: value; text-align: right; }
+      .sc-team-profile-metric em { grid-area: rank; }
+
+      .sc-team-profile-identity {
+        grid-template-columns: 52px minmax(0, 1fr);
+        gap: 12px;
+        padding: 8px 14px;
+      }
+
+      .sc-team-profile-logo {
+        width: 46px;
+        height: 46px;
+      }
+
+      .sc-team-profile-headline strong { font-size: 1rem; }
+      .sc-team-profile-headline span { margin-top: 4px; }
 
       .sc-team-state-message {
         height: 100%;
@@ -17899,7 +18039,7 @@ function StatsCentralStyles() {
         .sc-team-view-tabs button {
           min-width: 92px;
           padding: 0 10px;
-          font-size: 0.61rem;
+          font-size: 0.6875rem;
         }
 
         .sc-team-toolbar-filters {
@@ -17928,7 +18068,7 @@ function StatsCentralStyles() {
 
       @media (max-width: 1050px) {
         .sc-team-stats-workspace {
-          grid-template-rows: auto minmax(0, 1fr) 205px;
+          grid-template-rows: auto minmax(0, 1fr) auto;
         }
 
         .sc-team-toolbar-top {

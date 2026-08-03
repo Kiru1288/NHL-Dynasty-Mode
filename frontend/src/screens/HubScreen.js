@@ -77,6 +77,8 @@ function navigateFranchiseCommand(
     setCapLedgerTab,
     setStatsCentralTab,
     openCommandPlaceholder,
+    openFranchiseEvent,
+    onReopenOffseasonStage,
   }
 ) {
   const resolution = resolveCommandTarget(target);
@@ -103,6 +105,25 @@ function navigateFranchiseCommand(
   if (resolution.type === "hub") {
     syncHubIndexForScreen(ROUTE_SCREENS.HUB, setHubMenuIndex);
     setScreen(ROUTE_SCREENS.HUB);
+    return true;
+  }
+
+  if (resolution.type === "franchise_event") {
+    const stage = String(resolution.stage || "free_agency");
+    syncHubIndexForScreen(ROUTE_SCREENS.HUB, setHubMenuIndex);
+    setScreen(ROUTE_SCREENS.HUB);
+    const open = () => {
+      if (typeof openFranchiseEvent === "function") openFranchiseEvent();
+    };
+    // Only step the server stage back when Roster Check (or later) is blocking
+    // access to the Free Agency Wire.
+    if (typeof onReopenOffseasonStage === "function") {
+      Promise.resolve(onReopenOffseasonStage(stage))
+        .catch(() => null)
+        .finally(open);
+    } else {
+      open();
+    }
     return true;
   }
 
@@ -331,8 +352,12 @@ function countStorylines(franchiseState) {
 
   if (direct != null) return safeNumber(direct, 0);
 
-  const stories = franchiseState?.storylines || franchiseState?.league_storylines;
-  if (Array.isArray(stories)) return stories.length;
+  const events =
+    franchiseState?.storyline_events ||
+    franchiseState?.storylineEvents ||
+    franchiseState?.storylines ||
+    franchiseState?.league_storylines;
+  if (Array.isArray(events)) return events.length;
 
   return 0;
 }
@@ -379,6 +404,7 @@ export function HubScreen() {
     onAdvanceFranchise,
     advancing,
     openFranchiseEvent,
+    onReopenOffseasonStage,
     refreshFranchise,
   } = useGameUI();
 
@@ -414,7 +440,9 @@ export function HubScreen() {
   const canSimRegularSeason =
     !blockBulkSim &&
     !advancing &&
-    String(franchiseState?.phase || franchiseState?.season_phase || "") === "regular";
+    ["regular", "preseason"].includes(
+      String(franchiseState?.phase || franchiseState?.season_phase || "")
+    );
 
   const phaseCta = getFranchisePhaseCta(franchiseState);
 
@@ -489,12 +517,16 @@ export function HubScreen() {
         setCapLedgerTab,
         setStatsCentralTab,
         openCommandPlaceholder,
+        openFranchiseEvent,
+        onReopenOffseasonStage,
       });
     },
     [
       advancing,
       canAdvance,
       openCommandPlaceholder,
+      openFranchiseEvent,
+      onReopenOffseasonStage,
       setCapLedgerTab,
       setHubMenuIndex,
       setScreen,
@@ -581,6 +613,9 @@ export function HubScreen() {
         </div>
       ) : null}
 
+      {/* Desk console: an engraved instrument cluster rather than a row of
+          web pills. The clock advance is the primary control; bulk simulation
+          reads as one segmented dial so it cannot wrap onto a second row. */}
       <div
         style={{
           position: "absolute",
@@ -588,111 +623,150 @@ export function HubScreen() {
           bottom: 92,
           zIndex: 5,
           display: "flex",
-          gap: 8,
+          flexDirection: "column",
+          alignItems: "flex-end",
+          gap: 6,
           pointerEvents: "auto",
-          flexWrap: "wrap",
-          justifyContent: "flex-end",
           maxWidth: "min(96vw, 720px)",
         }}
       >
-        <button
-          type="button"
-          disabled={!canAdvance || advancing}
-          onClick={onAdvanceDay}
-          style={{
-            minHeight: 38,
-            padding: "0 14px",
-            borderRadius: 999,
-            border: "1px solid rgba(246,211,129,0.38)",
-            background: "rgba(8,11,16,0.82)",
-            color: "#fff7e7",
-            fontWeight: 900,
-            cursor: advancing ? "not-allowed" : "pointer",
-          }}
-        >
-          {advancing ? "ADVANCING..." : "ADVANCE DAY"}
-        </button>
-
-        {(franchiseState?.flags?.can_enter_playoffs || phaseCta) && phaseCta !== "Advance Day" ? (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <button
             type="button"
-            disabled={advancing}
-            onClick={handlePhaseCta}
+            disabled={!canAdvance || advancing}
+            onClick={onAdvanceDay}
             style={{
-              minHeight: 38,
-              padding: "0 14px",
-              borderRadius: 999,
-              border: "1px solid rgba(147,197,253,0.45)",
-              background: "rgba(8,11,16,0.82)",
-              color: "#dbeafe",
+              minHeight: 34,
+              padding: "0 16px",
+              borderRadius: 3,
+              border: "1px solid rgba(201,168,106,0.55)",
+              background: "rgba(201,168,106,0.14)",
+              color: "#f4e3bd",
               fontWeight: 900,
+              fontSize: 12,
+              letterSpacing: "0.1em",
               cursor: advancing ? "not-allowed" : "pointer",
             }}
           >
-            {(phaseCta || "ENTER PLAYOFFS").toUpperCase()}
+            {advancing ? "ADVANCING..." : "ADVANCE DAY"}
           </button>
-        ) : null}
 
-        <button
-          type="button"
-          onClick={() => setScreen(ROUTE_SCREENS.CHEMISTRY)}
-          style={{
-            minHeight: 38,
-            padding: "0 14px",
-            borderRadius: 999,
-            border: "1px solid rgba(122,219,164,0.45)",
-            background: "rgba(8,11,16,0.82)",
-            color: "#c8f5de",
-            fontWeight: 900,
-          }}
-        >
-          ROOM PULSE
-        </button>
+          {(franchiseState?.flags?.can_enter_playoffs || phaseCta) && phaseCta !== "Advance Day" ? (
+            <button
+              type="button"
+              disabled={advancing}
+              onClick={handlePhaseCta}
+              style={{
+                minHeight: 34,
+                padding: "0 14px",
+                borderRadius: 3,
+                border: "1px solid rgba(201,168,106,0.34)",
+                background: "rgba(10,12,16,0.86)",
+                color: "#e7d7b4",
+                fontWeight: 900,
+                fontSize: 12,
+                letterSpacing: "0.1em",
+                cursor: advancing ? "not-allowed" : "pointer",
+              }}
+            >
+              {(phaseCta || "ENTER PLAYOFFS").toUpperCase()}
+            </button>
+          ) : null}
 
-        <button
-          type="button"
-          disabled={!canSimRegularSeason}
-          onClick={() =>
-            onAdvanceFranchise?.({ mode: "season", count: 1, auto_resolve: true })
-          }
-          title="Simulate the rest of the regular season (testing)"
-          style={{
-            minHeight: 38,
-            padding: "0 14px",
-            borderRadius: 999,
-            border: "1px solid rgba(167,139,250,0.55)",
-            background: "rgba(8,11,16,0.82)",
-            color: "#ede9fe",
-            fontWeight: 900,
-            cursor: canSimRegularSeason ? "pointer" : "not-allowed",
-            opacity: canSimRegularSeason ? 1 : 0.45,
-          }}
-        >
-          {advancing ? "SIMMING..." : "SIM REG SEASON"}
-        </button>
-
-        {[7, 15, 30].map((days) => (
           <button
-            key={days}
             type="button"
-            disabled={blockBulkSim || advancing}
+            onClick={() => setScreen(ROUTE_SCREENS.CHEMISTRY)}
+            style={{
+              minHeight: 34,
+              padding: "0 14px",
+              borderRadius: 3,
+              border: "1px solid rgba(201,168,106,0.24)",
+              background: "rgba(10,12,16,0.86)",
+              color: "#cbbfa6",
+              fontWeight: 900,
+              fontSize: 12,
+              letterSpacing: "0.1em",
+            }}
+          >
+            ROOM PULSE
+          </button>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            alignItems: "stretch",
+            border: "1px solid rgba(201,168,106,0.24)",
+            borderRadius: 3,
+            background: "rgba(10,12,16,0.86)",
+            overflow: "hidden",
+          }}
+        >
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              padding: "0 10px",
+              color: "rgba(201,168,106,0.75)",
+              fontSize: 11,
+              fontWeight: 900,
+              letterSpacing: "0.16em",
+            }}
+          >
+            SIM
+          </span>
+
+          <button
+            type="button"
+            disabled={!canSimRegularSeason}
             onClick={() =>
-              onAdvanceFranchise?.({ mode: "days", count: days, auto_resolve: true })
+              onAdvanceFranchise?.({ mode: "season", count: 1, auto_resolve: true })
             }
+            title="Simulate the rest of the regular season (testing)"
             style={{
-              minHeight: 38,
-              padding: "0 14px",
-              borderRadius: 999,
-              border: "1px solid rgba(246,211,129,0.24)",
-              background: "rgba(8,11,16,0.82)",
-              color: "#fff7e7",
+              minHeight: 32,
+              padding: "0 12px",
+              border: 0,
+              borderLeft: "1px solid rgba(201,168,106,0.18)",
+              background: "transparent",
+              color: "#e7d7b4",
               fontWeight: 900,
-              cursor: advancing ? "not-allowed" : "pointer",
+              fontSize: 11,
+              letterSpacing: "0.08em",
+              cursor: canSimRegularSeason ? "pointer" : "not-allowed",
+              opacity: canSimRegularSeason ? 1 : 0.4,
             }}
           >
-            SIM {days} DAYS
+            {advancing ? "SIMMING..." : "REG SEASON"}
           </button>
-        ))}
+
+          {[7, 15, 30].map((days) => (
+            <button
+              key={days}
+              type="button"
+              disabled={blockBulkSim || advancing}
+              onClick={() =>
+                onAdvanceFranchise?.({ mode: "days", count: days, auto_resolve: true })
+              }
+              style={{
+                minHeight: 32,
+                padding: "0 12px",
+                border: 0,
+                borderLeft: "1px solid rgba(201,168,106,0.18)",
+                background: "transparent",
+                color: "#cbbfa6",
+                fontWeight: 900,
+                fontSize: 11,
+                letterSpacing: "0.08em",
+                fontVariantNumeric: "tabular-nums",
+                cursor: advancing ? "not-allowed" : "pointer",
+                opacity: blockBulkSim || advancing ? 0.4 : 1,
+              }}
+            >
+              {days}D
+            </button>
+          ))}
+        </div>
       </div>
 
       <GameFooter />

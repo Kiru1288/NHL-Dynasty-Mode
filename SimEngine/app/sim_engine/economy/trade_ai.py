@@ -16,9 +16,9 @@ from app.sim_engine.trades.cpu_trade_proposer import propose_and_execute_cpu_tra
 
 @dataclass
 class TradeAI:
+    fairness_tolerance: float = 10.0
     base_trades: int = 2
-    max_trades: int = 6
-    fairness_tolerance: float = 7.0
+    max_trades: int = 5
 
     def evaluate_trade_market(
         self,
@@ -53,6 +53,8 @@ class TradeAI:
                 regular_season_last_index or getattr(league, "regular_season_last_index", 192) or 192
             ),
             fairness_gap_max=float(self.fairness_tolerance),
+            season_year=int(getattr(league, "current_season", 0) or getattr(league, "season_year", 0) or 0) or None,
+            draft_year=int(getattr(league, "draft_year", 0) or 0) or None,
         )
 
 

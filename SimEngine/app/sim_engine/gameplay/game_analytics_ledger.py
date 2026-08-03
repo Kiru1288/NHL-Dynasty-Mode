@@ -141,20 +141,20 @@ def zero_assist_probability(chance_type: str, strength: str) -> float:
     ct = str(chance_type or "")
     st = str(strength or "EV").upper()
     if ct in ("SH_RUSH", "RUSH_MEDIUM"):
-        return 0.095 if st == "SH" else 0.085
+        return 0.070 if st == "SH" else 0.060
     if ct in ("REBOUND",):
-        return 0.045
+        return 0.035
     if ct in ("NET_FRONT",):
-        return 0.05
+        return 0.038
     if st == "PP":
-        return 0.035 if ct in ("PP_ONE_TIMER", "PP_SLOT") else 0.05
+        return 0.025 if ct in ("PP_ONE_TIMER", "PP_SLOT") else 0.038
     if ct in ("POINT_SHOT",):
-        return 0.055
+        return 0.040
     if ct in ("LOW_DANGER_PERIMETER",):
-        return 0.07
+        return 0.055
     if ct in ("SLOT", "HIGH_DANGER_SLOT", "ONE_TIMER"):
-        return 0.045
-    return 0.055
+        return 0.032
+    return 0.042
 
 
 def assist_count_probability(chance_type: str, strength: str) -> Tuple[float, float, float]:
@@ -232,11 +232,17 @@ def resolve_goal_probability(
     *,
     situational_adj: float = 1.0,
 ) -> float:
-    """Final goal probability after shooter finishing and goalie quality."""
-    prob = float(raw_xg) * max(0.55, min(1.55, float(finishing_adj)))
+    """Final goal probability after shooter finishing and goalie quality.
+
+    Scaled so full-event league SV% lands near .900–.907 (NHL-like) instead of
+    the historical ~.87 band that made user-team goalies look broken vs light sim.
+    """
+    # Tuned so full-event GPG stays near modern NHL (~3.0/team) without the old
+    # overscore band, while not systematically trailing the light counting path.
+    prob = float(raw_xg) * 0.86 * max(0.55, min(1.45, float(finishing_adj)))
     prob *= max(0.55, min(1.45, float(goalie_adj)))
     prob *= max(0.85, min(1.15, float(situational_adj)))
-    return max(0.012, min(0.88, prob))
+    return max(0.010, min(0.72, prob))
 
 
 def credit_shot_attempt_event(

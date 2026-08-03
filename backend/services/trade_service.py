@@ -17,8 +17,10 @@ from app.sim_engine.trades.trade_executor import execute_validated_trade  # noqa
 from app.sim_engine.trades.trade_history import get_trade_history  # noqa: E402
 from app.sim_engine.trades.trade_pick_registry import (  # noqa: E402
     audit_pick_registry_integrity,
-    ensure_draft_pick_registry,
+    ensure_franchise_pick_registry,
     serialize_team_picks,
+    tradeable_draft_year,
+    upcoming_draft_year,
 )
 from app.sim_engine.trades.trade_value import (  # noqa: E402
     TRADE_VALUE_FORMULA_VERSION,
@@ -30,7 +32,7 @@ from app.sim_engine.economy.team_needs import TeamNeeds  # noqa: E402
 
 # Kept in backend (uvicorn-watched) so formula bumps reload the API process.
 # Keep in sync with SimEngine TRADE_VALUE_FORMULA_VERSION.
-TRADE_ASSETS_CACHE_VERSION = int(TRADE_VALUE_FORMULA_VERSION)
+TRADE_ASSETS_CACHE_VERSION = int(TRADE_VALUE_FORMULA_VERSION) + 4  # bump: uncapped TV + capacity
 
 
 def _summarize_team_needs(needs: Dict[str, float], direction: str) -> Dict[str, Any]:
@@ -62,6 +64,13 @@ def _summarize_team_needs(needs: Dict[str, float], direction: str) -> Dict[str, 
 
 
 def _organizational_depth_summary(team: Any) -> Dict[str, Any]:
+    try:
+        from services.roster_compliance import summarize_team_roster_capacity
+
+        capacity = summarize_team_roster_capacity(team)
+    except Exception:
+        capacity = {}
+
     roster = list(getattr(team, "roster", None) or [])
     ahl = list(getattr(team, "ahl_roster", None) or [])
 
@@ -74,12 +83,17 @@ def _organizational_depth_summary(team: Any) -> Dict[str, Any]:
         return v * 99.0 if v <= 1.5 else v
 
     def _pos(p: Any) -> str:
-        ident = getattr(p, "identity", None)
-        pos = getattr(ident, "position", None) if ident else getattr(p, "position", "")
-        s = str(getattr(pos, "value", pos) or "").upper()
-        if s in ("LW", "RW", "W", "F"):
-            return "F"
-        return s
+        try:
+            from services.roster_compliance import position_bucket
+
+            return position_bucket(p)
+        except Exception:
+            ident = getattr(p, "identity", None)
+            pos = getattr(ident, "position", None) if ident else getattr(p, "position", "")
+            s = str(getattr(pos, "value", pos) or "").upper()
+            if s in ("LW", "RW", "W", "F"):
+                return "F"
+            return s
 
     fwds = sorted([p for p in roster if _pos(p) in ("C", "F")], key=_ovr, reverse=True)
     defs = sorted([p for p in roster if _pos(p) == "D"], key=_ovr, reverse=True)
@@ -87,17 +101,31 @@ def _organizational_depth_summary(team: Any) -> Dict[str, Any]:
     prospects = sorted(ahl, key=_ovr, reverse=True)[:6]
 
     return {
-        "nhl_count": len(roster),
-        "ahl_count": len(ahl),
+        "nhl_count": int(capacity.get("nhl_count") if capacity else len(roster)),
+        "ahl_count": int(capacity.get("ahl_count") if capacity else len(ahl)),
         "top_six_forwards": len(fwds[:6]),
         "top_four_defense": len(defs[:4]),
-        "goalies": len(gs),
+        "goalies": int(capacity.get("goalies") if capacity else len(gs)),
+        "forwards": int(capacity.get("forwards") or 0),
+        "defense": int(capacity.get("defense") or 0),
         "prospect_count": len(prospects),
         "pipeline_strength": round(
             sum(_ovr(p) for p in prospects[:3]) / max(1, min(3, len(prospects))),
             1,
         ) if prospects else 0.0,
     }
+
+
+def _team_roster_capacity_payload(team: Any) -> Dict[str, Any]:
+    from services.roster_compliance import summarize_team_roster_capacity
+
+    return summarize_team_roster_capacity(team)
+
+
+def _team_contract_slots_payload(team: Any, league: Any = None) -> Dict[str, Any]:
+    from services.roster_compliance import summarize_team_contract_slots
+
+    return summarize_team_contract_slots(team, league=league)
 
 
 def _trade_context(session: Any) -> Dict[str, Any]:
@@ -112,12 +140,33 @@ def _trade_context(session: Any) -> Dict[str, Any]:
     if 0 <= cursor < len(cal):
         calendar_iso = str(cal[cursor].get("iso") or "")
 
+    season_y = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    draft_y = upcoming_draft_year(season_y)
+    draft_done = bool(getattr(session, "draft_completed", False))
+    trade_y = tradeable_draft_year(season_y, draft_completed=draft_done)
+    try:
+        from services.franchise_entry_draft import build_known_pick_slots
+
+        known_slots = build_known_pick_slots(session)
+    except Exception:
+        known_slots = {}
+    draft_state = getattr(session, "draft_state", None) or {}
+    draft_day_live = bool(draft_state.get("draft_started")) and not bool(
+        draft_state.get("draft_completed") or draft_done
+    )
     return {
         "sim": sim,
         "league": league,
         "team_by_id": dict(session.team_by_id or {}),
         "user_team_id": str(session.user_team_id),
-        "season_year": int(getattr(session, "season_calendar_year", 2025) or 2025),
+        "season_year": season_y,
+        "draft_year": draft_y,
+        "tradeable_draft_year": trade_y,
+        "draft_completed": draft_done,
+        "draft_day_trade": draft_day_live,
+        "known_pick_slots": known_slots,
+        "season_is_calendar": True,
+        "use_upcoming_draft_year": True,
         "calendar_cursor": cursor,
         "calendar_iso": calendar_iso,
         "regular_season_last_index": max_d,
@@ -185,7 +234,20 @@ def _ensure_trade_infrastructure(session: Any) -> None:
     league = ctx["league"]
     if league is None:
         return
-    ensure_draft_pick_registry(league, start_year=ctx["season_year"], years_ahead=4)
+    try:
+        setattr(league, "season_year", int(ctx["season_year"]))
+        setattr(league, "current_season", int(ctx["season_year"]))
+        setattr(league, "draft_year", int(ctx.get("tradeable_draft_year") or ctx["draft_year"]))
+        setattr(league, "draft_completed", bool(ctx.get("draft_completed")))
+        setattr(league, "season_is_calendar", True)
+    except Exception:
+        pass
+    ensure_franchise_pick_registry(
+        league,
+        season_calendar_year=int(ctx["season_year"]),
+        years_ahead=4,
+        draft_completed=bool(ctx.get("draft_completed")),
+    )
 
 
 def evaluate_franchise_trade(
@@ -323,6 +385,18 @@ def execute_franchise_trade(
         user_team_id=ctx["user_team_id"],
     )
 
+    try:
+        from services.trade_demand_engine import clear_demands_on_trade
+
+        moved: List[str] = []
+        for side_assets in (assets_by_team or {}).values():
+            for a in side_assets or []:
+                if str((a or {}).get("type") or "") in ("player", "prospect"):
+                    moved.append(str((a or {}).get("id") or ""))
+        clear_demands_on_trade(session, moved)
+    except Exception:
+        pass
+
     if record_notifications_fn is not None:
         record_notifications_fn(session, exec_result, ctx)
 
@@ -348,7 +422,7 @@ def build_trade_assets_payload(session: Any) -> Dict[str, Any]:
     if os.environ.get("NHL_FRANCHISE_DEBUG", "0") == "1":
         audit = audit_pick_registry_integrity(
             league,
-            start_year=int(ctx["season_year"]),
+            start_year=int(ctx.get("tradeable_draft_year") or ctx["draft_year"]),
             years_ahead=4,
             rounds=7,
         )
@@ -359,7 +433,51 @@ def build_trade_assets_payload(session: Any) -> Dict[str, Any]:
     needs_model = TeamNeeds()
     teams_out: Dict[str, Any] = {}
 
+    def _repair_mislabeled_affiliate_spcs(tm: Any) -> None:
+        """Fix affiliates that received NHL money/two-way flags but kept AHL/ECHL type labels."""
+        for attr in ("ahl_roster", "echl_roster"):
+            for p in list(getattr(tm, attr, None) or []):
+                c = getattr(p, "contract", None)
+                if c is None:
+                    continue
+                if isinstance(c, dict):
+                    ctype = str(c.get("contract_type") or c.get("type") or "").upper()
+                    two_way = bool(c.get("two_way") or c.get("is_two_way"))
+                    src = str(c.get("source") or "")
+                    yrs = int(c.get("years_remaining") or c.get("years") or 0)
+                    aav = float(c.get("aav_m") or c.get("cap_hit_m") or 0)
+                    if ctype in ("AHL", "ECHL", "AHL_ECHL") and yrs > 0 and (two_way or src == "affiliate_nhl_spc" or aav >= 0.7):
+                        c["type"] = "STANDARD"
+                        c["contract_type"] = "STANDARD"
+                        c["is_nhl_spc"] = True
+                        c["nhl_spc"] = True
+                        c["standard_player_contract"] = True
+                        c["two_way"] = True
+                        p.contract = c
+                        p.signed_status = "signed"
+                else:
+                    ctype = str(getattr(c, "contract_type", None) or getattr(c, "type", "") or "").upper()
+                    two_way = bool(getattr(c, "two_way", False) or getattr(c, "is_two_way", False))
+                    src = str(getattr(c, "source", "") or "")
+                    try:
+                        yrs = int(getattr(c, "years_remaining", None) or getattr(c, "years", 0) or 0)
+                        aav = float(getattr(c, "aav_m", None) or getattr(c, "cap_hit_m", 0) or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if ctype in ("AHL", "ECHL", "AHL_ECHL") and yrs > 0 and (two_way or src == "affiliate_nhl_spc" or aav >= 0.7):
+                        try:
+                            c.type = "STANDARD"
+                            c.contract_type = "STANDARD"
+                            c.two_way = True
+                            c.is_nhl_spc = True
+                            c.nhl_spc = True
+                            c.standard_player_contract = True
+                            p.signed_status = "signed"
+                        except Exception:
+                            pass
+
     for tid, team in (ctx["team_by_id"] or {}).items():
+        _repair_mislabeled_affiliate_spcs(team)
         snap = calculate_team_cap_snapshot(
             team,
             league=league,
@@ -373,6 +491,7 @@ def build_trade_assets_payload(session: Any) -> Dict[str, Any]:
             league,
             tid,
             value_hint_fn=lambda row, _team=team: pick_value_hint(row, league, _team, context=ctx),
+            min_year=int(ctx.get("tradeable_draft_year") or ctx.get("draft_year") or ctx["season_year"]),
         )
         for item in picks:
             orig_tid = str(item.get("original_team_id") or tid)
@@ -425,6 +544,51 @@ def build_trade_assets_payload(session: Any) -> Dict[str, Any]:
                     session=session,
                     trade_context=ctx,
                 )
+            from app.sim_engine.trades.trade_asset import player_holds_nhl_spc
+
+            for attr in ("ahl_roster", "echl_roster"):
+                for p in getattr(team, attr, None) or []:
+                    if getattr(p, "retired", False):
+                        continue
+                    pid = str(getattr(p, "id", "") or "")
+                    if not pid or pid in player_values:
+                        continue
+                    # Include every affiliate so the UI can show SPC tradeables
+                    # and explain why pure AHL/ECHL deals are blocked.
+                    player_values[pid] = _serialize_player_trade_block(
+                        p,
+                        source_team=team,
+                        acquiring_team=acq_team or team,
+                        league=league,
+                        session=session,
+                        trade_context=ctx,
+                    )
+                    if not player_holds_nhl_spc(p):
+                        player_values[pid]["tradeable"] = False
+                        if not player_values[pid].get("trade_block_reason"):
+                            player_values[pid]["trade_block_reason"] = (
+                                "Affiliate-only contract — NHL SPC required to trade"
+                            )
+
+            # Unsigned drafted prospects are held as rights, not roster spots,
+            # but the rights themselves are tradeable and must be listed.
+            for p in getattr(team, "prospect_pool", None) or []:
+                if getattr(p, "retired", False):
+                    continue
+                pid = str(getattr(p, "id", "") or "")
+                if not pid or pid in player_values:
+                    continue
+                row = _serialize_player_trade_block(
+                    p,
+                    source_team=team,
+                    acquiring_team=acq_team or team,
+                    league=league,
+                    session=session,
+                    trade_context=ctx,
+                )
+                row["roster_level"] = "prospect"
+                row["is_draft_rights"] = True
+                player_values[pid] = row
         except Exception:
             player_values = {}
 
@@ -449,10 +613,19 @@ def build_trade_assets_payload(session: Any) -> Dict[str, Any]:
             "needs": needs,
             "needs_summary": needs_summary,
             "depth": _organizational_depth_summary(team),
+            "roster_capacity": _team_roster_capacity_payload(team),
+            "contract_slots": _team_contract_slots_payload(team, league),
             **outlook,
         }
 
-    return {"teams": teams_out, "formula_version": int(TRADE_ASSETS_CACHE_VERSION)}
+    return {
+        "teams": teams_out,
+        "formula_version": int(TRADE_ASSETS_CACHE_VERSION),
+        "season_year": int(ctx.get("season_year") or 0),
+        "draft_year": int(ctx.get("draft_year") or 0),
+        "tradeable_draft_year": int(ctx.get("tradeable_draft_year") or ctx.get("draft_year") or 0),
+        "draft_completed": bool(ctx.get("draft_completed")),
+    }
 
 
 def build_trade_market_payload(session: Any) -> Dict[str, Any]:

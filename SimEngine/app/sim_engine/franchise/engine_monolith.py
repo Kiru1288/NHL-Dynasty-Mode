@@ -6285,6 +6285,13 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
                 session.wjc_nhl_u20_loan[pid] = bool(cid == "loan")
                 effects["wjc_loan"] = 1 if cid == "loan" else 0
 
+        elif kind == "legal_storyline_decision":
+            from app.sim_engine.franchise.decisions import (  # noqa: WPS433
+                _apply_legal_conduct_decision_effect,
+            )
+
+            effects.update(_apply_legal_conduct_decision_effect(session, d, chosen))
+
         else:
             effects.update(_apply_generic_storyline_choice_effect(session, d, chosen))
 

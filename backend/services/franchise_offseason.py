@@ -49,6 +49,18 @@ STAGE_NEXT_EVENT: Dict[str, str] = {
     "next_season_reveal": "preseason_start",
 }
 
+# Schema version each stage handler stamps on its payload. `_offseason_stage_ready`
+# reads the same table: when a handler's shape changes, bump it here only. A handler
+# writing a version the readiness check does not accept makes the stage look
+# un-hydrated forever, so every state fetch re-runs its side effects.
+STAGE_PAYLOAD_VERSION: Dict[str, int] = {
+    "draft_review": 4,
+    "prospect_rights": 5,
+    "re_sign": 6,
+    "free_agency": 4,
+    "roster_cleanup": 4,
+}
+
 # Post-draft slice used by Hub timeline / resume labels (keeps pre-draft stages intact).
 POST_DRAFT_STAGES: Tuple[str, ...] = (
     "draft",
@@ -60,7 +72,27 @@ POST_DRAFT_STAGES: Tuple[str, ...] = (
     "next_season_reveal",
 )
 
-SIGNING_BONUS_REVENUE_FLOOR_M = 110.0
+# Signing bonuses unlock once club revenue clears this floor (stars / wins / global draw help).
+SIGNING_BONUS_REVENUE_FLOOR_M = 155.0
+OWN_FA_MORATORIUM_DAYS = 6
+INSTANT_ACCEPT_INTEREST = 88.0
+
+
+def signing_bonus_max_pct_for_revenue(revenue_m: float) -> float:
+    """Higher revenue → larger signing-bonus room (massive cash-upfront deals)."""
+    rev = float(revenue_m or 0)
+    if rev < SIGNING_BONUS_REVENUE_FLOOR_M:
+        return 0.0
+    if rev >= 230:
+        return 0.32
+    if rev >= 210:
+        return 0.26
+    if rev >= 190:
+        return 0.20
+    if rev >= 170:
+        return 0.14
+    return 0.08
+
 
 
 def _safe_attr_float(obj: Any, *keys: str, default: float = 0.0) -> float:
@@ -111,7 +143,16 @@ def invalidate_offseason_decision_payloads(session: FranchiseSession, *, reason:
     """Force rebuild of decision-sensitive stage payloads after Cap Ledger / rights actions."""
     session.prospect_rights_payload = {}
     session.resign_payload = {}
-    session.roster_cleanup_payload = {}
+    existing_cleanup = getattr(session, "roster_cleanup_payload", None)
+    # Soft-refresh Roster Check counts in place. Wiping to {} would re-run the
+    # full compliance pipeline (buyouts / cap casualties) on the next hydrate.
+    if isinstance(existing_cleanup, dict) and existing_cleanup.get("version"):
+        try:
+            _revalidate_roster_cleanup(session, existing_cleanup)
+        except Exception:
+            session.roster_cleanup_payload = {}
+    else:
+        session.roster_cleanup_payload = {}
     if reason:
         try:
             from services.franchise_sim import invalidate_session_payload_caches
@@ -121,14 +162,31 @@ def invalidate_offseason_decision_payloads(session: FranchiseSession, *, reason:
 
 
 def team_signing_bonus_eligibility(session: FranchiseSession, team_id: Optional[str] = None) -> Dict[str, Any]:
-    """Revenue-gated signing-bonus capacity from real team economics."""
+    """Signing bonuses require NHL revenue eligibility (stars / wins / global draw lift revenue)."""
     tid = str(team_id or session.user_team_id)
     team = session.team_by_id.get(tid)
     revenue_m = None
+    league_revenue_m = None
     try:
-        from services.league_operations import calculate_team_revenue
+        from services.league_operations import calculate_team_revenue, calculate_league_revenue
+
         row = calculate_team_revenue(session, team, tid, is_user=(tid == str(session.user_team_id)))
         revenue_m = float(row.get("revenue") or row.get("revenue_m") or 0) or None
+        try:
+            team_rows = []
+            for oid, ot in (session.team_by_id or {}).items():
+                try:
+                    team_rows.append(
+                        calculate_team_revenue(
+                            session, ot, str(oid), is_user=(str(oid) == str(session.user_team_id))
+                        )
+                    )
+                except Exception:
+                    continue
+            if team_rows:
+                league_revenue_m = float(calculate_league_revenue(team_rows) or 0) or None
+        except Exception:
+            league_revenue_m = None
     except Exception:
         revenue_m = None
         try:
@@ -139,27 +197,166 @@ def team_signing_bonus_eligibility(session: FranchiseSession, team_id: Optional[
         return {
             "eligible": False,
             "revenue_m": None,
+            "league_revenue_m": league_revenue_m,
             "floor_m": SIGNING_BONUS_REVENUE_FLOOR_M,
             "max_bonus_pct": 0.0,
             "reason": "revenue_unavailable",
+            "label": "Signing bonuses locked — revenue unavailable",
         }
     eligible = revenue_m >= SIGNING_BONUS_REVENUE_FLOOR_M
-    # Higher revenue → more bonus flexibility (capped); never invent when below floor.
-    if not eligible:
-        max_pct = 0.0
-    elif revenue_m >= 180:
-        max_pct = 0.20
-    elif revenue_m >= 140:
-        max_pct = 0.14
-    else:
-        max_pct = 0.08
+    max_pct = signing_bonus_max_pct_for_revenue(revenue_m) if eligible else 0.0
     return {
         "eligible": eligible,
         "revenue_m": round(revenue_m, 1),
+        "league_revenue_m": round(league_revenue_m, 1) if league_revenue_m is not None else None,
         "floor_m": SIGNING_BONUS_REVENUE_FLOOR_M,
         "max_bonus_pct": max_pct,
         "reason": None if eligible else "below_revenue_floor",
+        "label": (
+            None
+            if eligible
+            else f"Signing bonuses require NHL revenue ≥ ${SIGNING_BONUS_REVENUE_FLOOR_M:.0f}M (club at ${revenue_m:.1f}M)"
+        ),
     }
+
+
+def ensure_own_fa_window(session: FranchiseSession) -> Dict[str, Any]:
+    """Start the 6-day exclusive window to sign your own free agents."""
+    if not getattr(session, "own_fa_window_active", False) and not session.free_agency_open:
+        session.own_fa_window_active = True
+        session.own_fa_window_day = int(getattr(session, "own_fa_window_day", 0) or 0)
+        if not isinstance(getattr(session, "own_fa_window_signings", None), list):
+            session.own_fa_window_signings = []
+    day = int(getattr(session, "own_fa_window_day", 0) or 0)
+    remaining = max(0, OWN_FA_MORATORIUM_DAYS - day)
+    return {
+        "active": bool(getattr(session, "own_fa_window_active", False)) and not session.free_agency_open,
+        "day": day,
+        "days_total": OWN_FA_MORATORIUM_DAYS,
+        "days_remaining": remaining,
+        "complete": day >= OWN_FA_MORATORIUM_DAYS,
+        "recent_signings": list(getattr(session, "own_fa_window_signings", None) or [])[-8:],
+    }
+
+
+def own_fa_window_status(session: FranchiseSession) -> Dict[str, Any]:
+    day = int(getattr(session, "own_fa_window_day", 0) or 0)
+    active = bool(getattr(session, "own_fa_window_active", False)) and not bool(session.free_agency_open)
+    remaining = max(0, OWN_FA_MORATORIUM_DAYS - day)
+    return {
+        "active": active,
+        "day": day,
+        "days_total": OWN_FA_MORATORIUM_DAYS,
+        "days_remaining": remaining,
+        "complete": day >= OWN_FA_MORATORIUM_DAYS or bool(session.free_agency_open),
+        "recent_signings": list(getattr(session, "own_fa_window_signings", None) or [])[-8:],
+        "instant_accept_interest": INSTANT_ACCEPT_INTEREST,
+    }
+
+
+RESIGN_PHASE_TERMINAL = frozenset({"accepted", "released", "lapsed"})
+RESIGN_PHASE_STATUSES = frozenset({
+    "open", "pending", "countered", "accepted", "rejected", "released", "lapsed",
+})
+
+
+def ensure_resign_phase_outcomes(session: FranchiseSession) -> Dict[str, Any]:
+    outcomes = getattr(session, "resign_phase_outcomes", None)
+    if not isinstance(outcomes, dict):
+        session.resign_phase_outcomes = {}
+        outcomes = session.resign_phase_outcomes
+    return outcomes
+
+
+def upsert_resign_phase_outcome(
+    session: FranchiseSession,
+    *,
+    player_id: str,
+    phase_status: str,
+    snapshot_row: Optional[Dict[str, Any]] = None,
+    terms: Optional[Dict[str, Any]] = None,
+    last_offer: Optional[Dict[str, Any]] = None,
+    reason: Optional[str] = None,
+    name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Record/update a re-sign desk outcome for the duration of the re_sign phase."""
+    pid = str(player_id or "").strip()
+    if not pid or session is None:
+        return {}
+    status = str(phase_status or "open").strip().lower()
+    if status not in RESIGN_PHASE_STATUSES:
+        status = "open"
+    outcomes = ensure_resign_phase_outcomes(session)
+    existing = outcomes.get(pid) if isinstance(outcomes.get(pid), dict) else {}
+    # Terminal statuses stick unless an explicit later terminal overwrite (accepted/released/lapsed).
+    prior = str(existing.get("phase_status") or "")
+    if prior in RESIGN_PHASE_TERMINAL and status not in RESIGN_PHASE_TERMINAL:
+        return existing
+
+    row_snap = dict(snapshot_row) if isinstance(snapshot_row, dict) else dict(existing.get("snapshot_row") or {})
+    if name and not row_snap.get("name"):
+        row_snap["name"] = name
+    if not row_snap.get("player_id"):
+        row_snap["player_id"] = pid
+    row_snap["phase_status"] = status
+    if status == "accepted":
+        row_snap["can_negotiate"] = False
+        row_snap["available_actions"] = []
+        if terms:
+            if terms.get("aav_m") is not None:
+                row_snap["aav_m"] = terms.get("aav_m")
+                row_snap["cap_hit_m"] = terms.get("aav_m")
+                row_snap["current_cap_hit"] = terms.get("aav_m")
+            if terms.get("years") is not None:
+                row_snap["years_remaining"] = terms.get("years")
+                row_snap["years"] = terms.get("years")
+            if terms.get("expiry_year") is not None:
+                row_snap["expiry_year"] = terms.get("expiry_year")
+        row_snap["contract_status"] = "signed"
+        row_snap["negotiation_state"] = "accepted"
+    elif status == "released":
+        row_snap["can_negotiate"] = False
+        row_snap["can_qualify"] = False
+        row_snap["can_release_rights"] = False
+        row_snap["available_actions"] = []
+        row_snap["contract_status"] = "released"
+        row_snap["negotiation_state"] = "released"
+    elif status == "lapsed":
+        row_snap["negotiation_state"] = "lapsed"
+        row_snap["pending_offer"] = None
+    elif status == "rejected":
+        row_snap["negotiation_state"] = "rejected"
+        # Rejected offers remain retryable while the player is still eligible.
+        if row_snap.get("can_negotiate") is None:
+            row_snap["can_negotiate"] = True
+    elif status == "countered":
+        row_snap["negotiation_state"] = "countered"
+        row_snap["can_negotiate"] = True
+    elif status == "pending":
+        row_snap["negotiation_state"] = "pending"
+
+    entry = {
+        "player_id": pid,
+        "name": row_snap.get("name") or name or existing.get("name") or pid,
+        "phase_status": status,
+        "snapshot_row": row_snap,
+        "terms": dict(terms) if isinstance(terms, dict) else (existing.get("terms") or None),
+        "last_offer": dict(last_offer) if isinstance(last_offer, dict) else (existing.get("last_offer") or None),
+        "reason": reason if reason is not None else existing.get("reason"),
+        "updated_at": _now_iso(),
+        "window_day": int(getattr(session, "own_fa_window_day", 0) or 0),
+        "terminal": status in RESIGN_PHASE_TERMINAL,
+    }
+    outcomes[pid] = entry
+    return entry
+
+
+def clear_resign_phase_state(session: FranchiseSession) -> None:
+    """Archive/clear re-sign negotiation state when leaving the re_sign stage."""
+    session.resign_phase_outcomes = {}
+    session.resign_negotiations = {}
+    session.resign_payload = {}
+    session.own_fa_window_signings = list(getattr(session, "own_fa_window_signings", None) or [])
 
 
 def _sync_phase_fields(session: FranchiseSession) -> None:
@@ -741,21 +938,29 @@ def _offseason_stage_ready(session: FranchiseSession, stage: str) -> bool:
     if stage == "draft":
         state = getattr(session, "draft_state", None) or {}
         return bool(session.draft_payload) or bool(state.get("draft_started"))
+    def _versioned(payload: Any, key: str) -> bool:
+        return isinstance(payload, dict) and int(payload.get("version") or 0) >= STAGE_PAYLOAD_VERSION[key]
+
     if stage == "draft_review":
         p = getattr(session, "draft_review_payload", None)
-        return isinstance(p, dict) and p.get("version") == 4 and p.get("user_picks") is not None
+        return _versioned(p, "draft_review") and p.get("user_picks") is not None
     if stage == "prospect_rights":
-        p = getattr(session, "prospect_rights_payload", None)
-        return isinstance(p, dict) and p.get("version") == 2
+        return _versioned(getattr(session, "prospect_rights_payload", None), "prospect_rights")
     if stage == "re_sign":
-        p = session.resign_payload
-        return isinstance(p, dict) and p.get("version") == 2
+        return _versioned(session.resign_payload, "re_sign")
     if stage == "free_agency":
-        m = getattr(session, "free_agency_market_payload", None)
-        return isinstance(m, dict) and m.get("version") == 2
+        payload = getattr(session, "free_agency_market_payload", None)
+        if not _versioned(payload, "free_agency"):
+            return False
+        # Stale empty boards (version stamped, 0 agents) must rehydrate so
+        # overseas / July 1 pools are never locked out of the Wire.
+        fa_rows = payload.get("free_agents") if isinstance(payload, dict) else None
+        count = int(payload.get("available_count") or 0) if isinstance(payload, dict) else 0
+        if count <= 0 and not (isinstance(fa_rows, list) and len(fa_rows) > 0):
+            return False
+        return True
     if stage == "roster_cleanup":
-        p = session.roster_cleanup_payload
-        return isinstance(p, dict) and p.get("version") == 2
+        return _versioned(session.roster_cleanup_payload, "roster_cleanup")
     if stage == "next_season_reveal":
         return bool(session.next_season_payload)
     return False
@@ -847,8 +1052,9 @@ def continue_offseason(
         session.offseason_stage = current
 
     # Client still on Awards / post_cup, but server already processed Final Skate.
+    # Do not treat a missing from_stage as awards — that deadlocks automated continue.
     if (
-        client_stage in ("", "awards", "post_cup")
+        client_stage in ("awards", "post_cup")
         and current == "retirements"
         and bool(getattr(session, "retirements_processed", False))
         and isinstance(getattr(session, "retirements_payload", None), dict)
@@ -902,6 +1108,16 @@ def continue_offseason(
     if current == "draft" and not session.draft_completed:
         raise ValueError("Complete the Entry Draft before continuing offseason")
 
+    if current == "re_sign":
+        # Exclusive window is optional negotiating time — opening FA ends it.
+        resign = session.resign_payload if isinstance(session.resign_payload, dict) else {}
+        if resign.get("can_continue") is False and list(resign.get("blocking_decisions") or []):
+            raise ValueError(
+                list(resign.get("blocking_reasons") or ["Resolve required RFA decisions before Free Agency"])[0]
+            )
+        # Leaving the re-sign desk — archive outcomes so Free Agency starts clean.
+        clear_resign_phase_state(session)
+
     if idx + 1 < len(OFFSEASON_STAGES):
         next_stage = OFFSEASON_STAGES[idx + 1]
         _mark_stage_completed(session, current)
@@ -931,6 +1147,216 @@ def continue_offseason(
         "season_phase": "offseason",
         "offseason_stage": next_stage,
         "next_important_event": session.next_important_event,
+    }
+
+
+def build_free_agency_desk(session: FranchiseSession, *, open_market: bool = False) -> Dict[str, Any]:
+    """Build the Free Agency Wire payload for any season phase.
+
+    Does not change ``offseason_stage``. Used by the Hub / standalone Free Agency
+    screen so regular-season and playoff access share the offseason Wire UI.
+    """
+    from services.contract_economy import build_contract_office, sync_all_team_cap_fields
+    from services.fa_market_engine import (
+        annotate_fa_rows_with_decisions,
+        ensure_fa_market_book,
+    )
+
+    phase = str(getattr(session, "phase", "") or "").lower()
+    stage = str(getattr(session, "offseason_stage", "") or "")
+    should_open = (
+        bool(open_market)
+        or bool(getattr(session, "free_agency_open", False))
+        or (phase == "offseason" and stage == "free_agency")
+    )
+    if should_open and phase == "offseason":
+        # When already in the July FA window / Free Agency stage, keep the full
+        # open-market path so the Wire is never stuck on exclusive-only emptiness.
+        return _open_free_agency(session, force=bool(open_market) or stage == "free_agency")
+
+    try:
+        league = getattr(getattr(session, "sim", None), "league", None)
+        sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
+        if league is not None:
+            from app.sim_engine.league_hierarchy_bootstrap import ensure_overseas_fa_pool
+
+            rng = getattr(getattr(session, "sim", None), "rng", None)
+            if rng is not None:
+                ensure_overseas_fa_pool(league, rng, min_count=120)
+            sync_all_team_cap_fields(league, getattr(session, "sim", None), season_year=sy)
+    except Exception:
+        pass
+
+    ensure_fa_market_book(session)
+    office = build_contract_office(session)
+    fa_list = annotate_fa_rows_with_decisions(
+        session, list(office.get("free_agents") or office.get("freeAgents") or [])
+    )
+    session.free_agents_payload = fa_list
+    bonus = team_signing_bonus_eligibility(session)
+    cap = office.get("cap_snapshot") or {}
+    needs = (office.get("team") or {}).get("needs") or {}
+    summary = office.get("summary") or {}
+    top = sorted(fa_list, key=lambda r: -float(r.get("ovr") or r.get("overall") or 0))[:24]
+    cpu = getattr(session, "cpu_fa_signings", None) or {}
+    recent = list(cpu.get("signings") or [])[-12:]
+    book = getattr(session, "fa_market_book", None) or {}
+    book_log = list(book.get("log") or [])[-20:]
+    news = []
+    for s in recent[-8:]:
+        club = s.get("team_name") or s.get("team_abbrev") or "A club"
+        news.append({
+            "kind": "signing",
+            "text": (
+                f"{club} signs "
+                f"{s.get('name') or s.get('player_id') or 'a free agent'} · "
+                f"{s.get('aav_m')}M × {s.get('years')}y"
+            ),
+        })
+    for entry in book_log[-8:]:
+        if isinstance(entry, dict) and entry.get("text"):
+            news.append({"kind": entry.get("kind") or "market", "text": entry.get("text")})
+        elif isinstance(entry, str):
+            news.append({"kind": "market", "text": entry})
+
+    day = int(getattr(session, "fa_market_day", 0) or book.get("day") or 0)
+    awaiting_july1 = (
+        not bool(session.free_agency_open)
+        and phase == "offseason"
+        and stage in ("re_sign", "salary_cap", "draft", "draft_combine", "awards", "retirements")
+    )
+    market = {
+        "version": STAGE_PAYLOAD_VERSION["free_agency"],
+        "market_status": "awaiting_open" if awaiting_july1 else ("open" if session.free_agency_open else "in_season"),
+        "wave": int(getattr(session, "cpu_fa_wave", 0) or 0),
+        "fa_market_day": day,
+        "market_phase": "awaiting_open" if awaiting_july1 else ("in_season" if not session.free_agency_open else "open_market"),
+        "market_phase_label": (
+            "Open Free Agency from Re-Sign to populate the July 1 board"
+            if awaiting_july1
+            else (
+                "Opening Day"
+                if session.free_agency_open and day <= 1
+                else ("Open market" if session.free_agency_open else "Free Agency Board")
+            )
+        ),
+        "empty_reason": (
+            "July 1 free agents are still under exclusive negotiating / pending expiry. "
+            "Use Open Free Agency on the Re-Sign desk to open the market."
+            if awaiting_july1 and not fa_list
+            else None
+        ),
+        "available_count": len(fa_list),
+        "major_available": top,
+        "free_agents": fa_list,
+        "market_news": news[-16:],
+        "cap_space_m": float(cap.get("usable_cap_space_m") or cap.get("cap_space_m") or 0),
+        "cap_snapshot": cap,
+        "contract_slots": office.get("contract_slots") or {},
+        "needs": needs,
+        "pending_rfa_count": summary.get("rfaCount") or 0,
+        "signing_bonus": bonus,
+        "recent_league_signings": recent,
+        "cpu_signings_count": len(list(cpu.get("signings") or [])),
+        "stage_status": "ready",
+        "can_continue": True,
+        "standalone": True,
+        "available_actions": [
+            "advance_fa_day",
+            "open_cap_ledger_fa",
+            "back_to_hub",
+        ],
+    }
+    session.free_agency_market_payload = market
+    return {
+        "ok": True,
+        "free_agents": fa_list,
+        "free_agency_market": market,
+    }
+
+
+def reopen_offseason_stage(session: FranchiseSession, stage: str) -> Dict[str, Any]:
+    """Step back to an earlier offseason desk (Roster Check → Free Agency).
+
+    Used when Roster Check is blocked and the GM needs to sign free agents
+    without leaving the offseason timeline.
+    """
+    from services.franchise_sim import invalidate_session_payload_caches
+
+    _sync_phase_fields(session)
+    if str(session.phase) != "offseason":
+        raise ValueError(f"Cannot reopen offseason stage from phase {session.phase!r}")
+
+    target = str(stage or "").strip().lower()
+    current = str(getattr(session, "offseason_stage", "") or "")
+    if target not in OFFSEASON_STAGES:
+        raise ValueError(f"Unknown offseason stage {target!r}")
+
+    allowed = {
+        ("roster_cleanup", "free_agency"),
+        ("roster_cleanup", "re_sign"),
+        ("next_season_reveal", "roster_cleanup"),
+        ("next_season_reveal", "free_agency"),
+    }
+    # Also allow reopening free_agency while already there (idempotent refresh).
+    if (current, target) not in allowed and not (current == target == "free_agency"):
+        raise ValueError(f"Cannot reopen {target!r} from {current!r}")
+
+    completed = [
+        s
+        for s in list(getattr(session, "offseason_completed_stages", None) or [])
+        if s not in OFFSEASON_STAGES[OFFSEASON_STAGES.index(target) :]
+    ]
+    session.offseason_completed_stages = completed
+    session.offseason_stage = target
+    session.next_important_event = STAGE_NEXT_EVENT.get(target, target)
+    _mark_stage_entered(session, target)
+
+    if target == "free_agency":
+        session.free_agency_open = True
+        # Force rebuild so stale empty boards (version stamped, 0 agents) refill.
+        existing = getattr(session, "free_agency_market_payload", None)
+        empty = (
+            not isinstance(existing, dict)
+            or int(existing.get("available_count") or 0) <= 0
+            or not list(existing.get("free_agents") or [])
+        )
+        result = _open_free_agency(session, force=bool(empty))
+        market = result.get("free_agency_market") or getattr(session, "free_agency_market_payload", None) or {}
+        invalidate_session_payload_caches(session, "offseason_reopen_free_agency")
+        return {
+            "ok": True,
+            "status": "offseason",
+            "season_phase": "offseason",
+            "offseason_stage": "free_agency",
+            "next_important_event": session.next_important_event,
+            "free_agency_market": market,
+            "reopened_from": current,
+        }
+
+    if target == "re_sign":
+        result = _prepare_resign_payload(session, force=True)
+        invalidate_session_payload_caches(session, "offseason_reopen_re_sign")
+        return {
+            "ok": True,
+            "status": "offseason",
+            "season_phase": "offseason",
+            "offseason_stage": "re_sign",
+            "next_important_event": session.next_important_event,
+            "re_sign": result.get("re_sign") or result.get("contracts"),
+            "reopened_from": current,
+        }
+
+    result = _run_roster_cleanup(session, force=False)
+    invalidate_session_payload_caches(session, "offseason_reopen_roster_cleanup")
+    return {
+        "ok": True,
+        "status": "offseason",
+        "season_phase": "offseason",
+        "offseason_stage": target,
+        "next_important_event": session.next_important_event,
+        **result,
+        "reopened_from": current,
     }
 
 
@@ -965,31 +1391,67 @@ def _tick_league_contracts(session: FranchiseSession) -> Dict[str, Any]:
     sim = session.sim
     league = getattr(sim, "league", None)
     season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
+
+    # Evaluate ELC slides before year burn / expiry.
+    slide_result = {}
+    try:
+        from services.elc_offer_engine import process_elc_slides
+
+        slide_result = process_elc_slides(session, season_year)
+    except Exception:
+        slide_result = {}
+
     teams = list(getattr(league, "teams", None) or [])
     expired_ufas: List[Dict[str, Any]] = []
     expired_rfas: List[Dict[str, Any]] = []
 
+    # Affiliate SPCs count against the 50-contract limit, so their years must burn
+    # on the same tick as the NHL list or they never expire.
     for team in teams:
-        roster = list(getattr(team, "roster", None) or [])
-        kept = []
-        for p in roster:
-            if getattr(p, "retired", False):
+        for attr in ("roster", "ahl_roster", "echl_roster"):
+            roster = list(getattr(team, attr, None) or [])
+            if not roster:
                 continue
-            outcome = handle_player_contract_expiry(p, team, league, season_year)
-            if outcome != "kept":
-                c = getattr(p, "contract", None)
-                rights = str(getattr(c, "rights_status", getattr(p, "rights_status", "UFA")) or "UFA").upper()
-                row = _serialize_player_row(p, include_ratings=True, session=session, _team=team)
-                if outcome == "rfa_rights" or "RFA" in rights:
-                    expired_rfas.append(row)
-                else:
-                    expired_ufas.append(row)
+            kept = []
+            for p in roster:
+                if getattr(p, "retired", False):
+                    continue
+                outcome = handle_player_contract_expiry(
+                    p, team, league, season_year, defer_july1_ufa=True
+                )
+                if outcome != "kept":
+                    c = getattr(p, "contract", None)
+                    rights = str(getattr(c, "rights_status", getattr(p, "rights_status", "UFA")) or "UFA").upper()
+                    row = _serialize_player_row(p, include_ratings=True, session=session, _team=team)
+                    if outcome == "rfa_rights" or "RFA" in rights:
+                        expired_rfas.append(row)
+                    else:
+                        expired_ufas.append(row)
+                    continue
+                kept.append(p)
+            setattr(team, attr, kept)
+
+    # Refresh every club's cached cap mirrors (team.cap_space / total_cap_hit /
+    # cap_snapshot) now that rosters changed — not just the user's team — so
+    # any downstream read of those mirrored fields reflects freed-up space
+    # immediately instead of a stale pre-expiry snapshot.
+    try:
+        from services.contract_economy import sync_team_cap_fields
+
+        for team in teams:
+            try:
+                sync_team_cap_fields(team, league, sim, season_year=season_year)
+            except Exception:
                 continue
-            kept.append(p)
-        team.roster = kept
+    except Exception:
+        pass
 
     session.contracts_ticked = True
-    return {"expired_ufas": expired_ufas, "expired_rfas": expired_rfas}
+    return {
+        "expired_ufas": expired_ufas,
+        "expired_rfas": expired_rfas,
+        "elc_slides": slide_result,
+    }
 
 
 def _cap_status_label(cap_space_m: float) -> str:
@@ -2146,7 +2608,9 @@ def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None
     if gp <= 0:
         return
     try:
-        setattr(player, "games_played", max(int(getattr(player, "games_played", 0) or 0), gp))
+        # Season production stamp — replace, never accumulate across years.
+        setattr(player, "games_played", int(gp))
+        setattr(player, "gp", int(gp))
     except Exception:
         pass
     if _dev_is_goalie(player):
@@ -2588,7 +3052,23 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
     from datetime import datetime, timezone
 
     if session.draft_lottery_done and session.draft_lottery_payload:
-        return {"draft_lottery": session.draft_lottery_payload}
+        payload = dict(session.draft_lottery_payload)
+        if not payload.get("ownership_annotated"):
+            try:
+                from services.draft_pick_ownership import annotate_lottery_picks_with_ownership
+
+                picks = annotate_lottery_picks_with_ownership(
+                    session,
+                    list(payload.get("picks") or payload.get("final_order") or payload.get("order") or []),
+                )
+                payload["picks"] = picks
+                payload["final_order"] = picks
+                payload["order"] = picks
+                payload["ownership_annotated"] = True
+                session.draft_lottery_payload = payload
+            except Exception:
+                pass
+        return {"draft_lottery": payload}
 
     sim = session.sim
     standings_rows = _build_standings_rows(session)
@@ -2650,6 +3130,7 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
             })
 
     # Finalize protections against lottery outcome before draft order creation later.
+    # Use lottery *earners* (standings teams), not current pick owners.
     try:
         from services.draft_pick_conditions import resolve_pick_protections
 
@@ -2658,8 +3139,16 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
             resolve_pick_protections(
                 league,
                 draft_year=int(session.season_calendar_year) + 1,
-                lottery_order=[str(p["team_id"]) for p in picks],
+                lottery_order=[str(p.get("lottery_team_id") or p["team_id"]) for p in picks],
             )
+    except Exception:
+        pass
+
+    # Resolve traded ownership so lottery UI shows selecting team via original owner.
+    try:
+        from services.draft_pick_ownership import annotate_lottery_picks_with_ownership
+
+        picks = annotate_lottery_picks_with_ownership(session, picks)
     except Exception:
         pass
 
@@ -2670,8 +3159,15 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
         "final_order": picks,
         "picks": picks,
         "order": picks,
-        "movement": [{"team_id": p["team_id"], "movement": p.get("movement", 0)} for p in picks],
+        "movement": [
+            {
+                "team_id": p.get("lottery_team_id") or p["team_id"],
+                "movement": p.get("movement", 0),
+            }
+            for p in picks
+        ],
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "ownership_annotated": True,
     }
     session.draft_lottery_payload = payload
     session.draft_lottery_done = True
@@ -4277,7 +4773,7 @@ def _run_draft_review(session: FranchiseSession) -> Dict[str, Any]:
         recap = None
 
     payload = {
-        "version": 4,
+        "version": STAGE_PAYLOAD_VERSION["draft_review"],
         "draft_year": state.get("draft_year") or (int(session.season_calendar_year) + 1),
         "total_picks": len(enriched),
         "user_picks": enriched,
@@ -4310,7 +4806,12 @@ def _run_prospect_rights_stage(session: FranchiseSession, *, force: bool = False
     )
 
     existing = getattr(session, "prospect_rights_payload", None)
-    if not force and isinstance(existing, dict) and existing.get("version") == 2 and existing.get("prospects") is not None:
+    if (
+        not force
+        and isinstance(existing, dict)
+        and existing.get("version") == STAGE_PAYLOAD_VERSION["prospect_rights"]
+        and existing.get("prospects") is not None
+    ):
         return {"prospect_rights": existing}
 
     league = getattr(session.sim, "league", None)
@@ -4349,18 +4850,31 @@ def _run_prospect_rights_stage(session: FranchiseSession, *, force: bool = False
             player = get_player(league, pid) if league is not None else None
         except Exception:
             player = None
-        card = rights_card_payload(player) if player is not None else {
-            "rights_through": e.get("rights_expiry_year"),
-            "returning_to": e.get("current_league_id"),
-            "elc_decision": "Unsigned",
-            "available_actions": [{"id": "keep_unsigned", "label": "Keep unsigned", "enabled": True}],
-        }
+        card = (
+            rights_card_payload(player, team=team, season_year=season_year)
+            if player is not None
+            else {
+                "rights_through": e.get("rights_expiry_year"),
+                "returning_to": e.get("current_league_id"),
+                "elc_decision": "Unsigned",
+                "available_actions": [
+                    {
+                        "id": "keep_unsigned",
+                        "label": "Keep unsigned",
+                        "enabled": True,
+                        "pros": ["Preserves a contract slot for other signings"],
+                        "cons": ["No roster control until signed"],
+                        "summary": "Leave unsigned and revisit later",
+                    }
+                ],
+            }
+        )
         prospect_cards.append({
             "player_id": pid,
             "name": e.get("name") or card.get("name"),
             "position": e.get("position"),
             "age": e.get("age") or getattr(getattr(player, "identity", None), "age", None) if player else None,
-            "decision_status": "pending",
+            "decision_status": card.get("decision_status") or e.get("decision_status") or "pending",
             "contract_slot_impact": 1 if card.get("entry_level_contract_eligible", True) else 0,
             **card,
         })
@@ -4372,7 +4886,7 @@ def _run_prospect_rights_stage(session: FranchiseSession, *, force: bool = False
         warnings.append(f"{len(expiring)} rights nearing expiry")
 
     payload = {
-        "version": 2,
+        "version": STAGE_PAYLOAD_VERSION["prospect_rights"],
         "season_year": season_year,
         "contracts": f"{used}/{slots.get('contract_slots_limit', CONTRACT_SLOTS_LIMIT)}",
         "contract_slots_used": used,
@@ -4423,10 +4937,14 @@ def _prepare_draft_payload(session: FranchiseSession) -> Dict[str, Any]:
 
 
 def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -> Dict[str, Any]:
-    from services.contract_economy import build_contract_office, compute_player_demand
+    from services.contract_economy import (
+        build_contract_office,
+        compute_player_demand,
+        contract_row_available_actions,
+    )
 
     existing = getattr(session, "resign_payload", None)
-    if not force and isinstance(existing, dict) and existing.get("version") == 2:
+    if not force and isinstance(existing, dict) and existing.get("version") == STAGE_PAYLOAD_VERSION["re_sign"]:
         return {"contracts": existing, "re_sign": existing}
 
     office = build_contract_office(session)
@@ -4436,9 +4954,9 @@ def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -
     summary = dict(office.get("summary") or {})
     user_team = session.team_by_id.get(session.user_team_id)
     league = getattr(session.sim, "league", None)
+    season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
 
-    # Attach demand bands without exposing hidden formulas.
-    for row in expiring:
+    def _enrich_demand(row: Dict[str, Any]) -> Dict[str, Any]:
         pid = str(row.get("player_id") or "")
         player = None
         try:
@@ -4451,13 +4969,44 @@ def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -
                 if str(getattr(p, "id", "")) == pid:
                     player = p
                     break
+        # Own expired UFAs sit in the FA pool during the exclusive window.
+        if player is None and league is not None and pid:
+            for p in list(getattr(league, "free_agents", None) or []):
+                if str(getattr(p, "id", "")) == pid:
+                    player = p
+                    break
+        # RFA rights holders are off-roster — resolve via rights entry / player_ref.
+        if player is None and user_team is not None and (
+            row.get("contract_status") == "rfa_rights" or row.get("can_qualify")
+        ):
+            try:
+                from services.contract_economy import find_rfa_rights, resolve_rfa_player
+
+                entry = find_rfa_rights(user_team, pid)
+                player = resolve_rfa_player(entry, league)
+            except Exception:
+                player = None
         if player is None:
-            continue
+            # Still surface a usable QO-based ask so Rights rows are not blank.
+            if row.get("contract_status") == "rfa_rights":
+                qo = row.get("qualifying_offer_aav_m") or row.get("previous_aav_m")
+                if qo is not None:
+                    row.setdefault("player_ask_aav_m", qo)
+                    row.setdefault("requested_cap_hit", qo)
+                    row.setdefault("requested_term", 1)
+                    row.setdefault("aav_m", row.get("previous_aav_m") or qo)
+                    row.setdefault("current_cap_hit", row.get("previous_aav_m") or qo)
+                row.setdefault("available_actions", contract_row_available_actions(row))
+            else:
+                row.setdefault("available_actions", contract_row_available_actions(row))
+            return row
         try:
             demand = compute_player_demand(player, user_team, league, context="re_sign")
             ask = demand.get("want_aav_m")
             years = int(demand.get("want_years") or 2)
             row["player_ask_aav_m"] = ask
+            row["requested_cap_hit"] = ask
+            row["requested_term"] = years
             row["expected_aav_range"] = [
                 demand.get("min_acceptable_aav_m"),
                 round(float(ask or 0) * 1.08, 3) if ask else None,
@@ -4465,43 +5014,297 @@ def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -
             row["expected_term_range"] = [max(1, years - 1), min(8, years + 1)]
             morale = float(getattr(player, "morale", None) or getattr(player, "happiness", 70) or 70)
             row["morale"] = round(morale, 1)
-            interest = "High" if morale >= 70 and float(demand.get("importance") or 0) >= 0.45 else (
-                "Low" if morale < 45 else "Medium"
+            loyalty = float((demand.get("profile") or {}).get("loyalty") or 0.5)
+            importance = float(demand.get("importance") or 0.5)
+            stay_interest = max(
+                0.0,
+                min(
+                    100.0,
+                    50.0 + (loyalty - 0.5) * 40.0 + (morale - 50.0) * 0.45 + importance * 20.0,
+                ),
             )
+            interest = "High" if stay_interest >= 70 else ("Low" if stay_interest < 45 else "Medium")
             row["interest_label"] = interest
+            row["interest_level"] = interest
+            row["stay_interest"] = round(stay_interest, 1)
             row["clause_ask"] = "NMC" if years >= 5 and _safe_attr_float(player, "overall", "ovr") >= 88 else (
                 "NTC" if years >= 4 and _safe_attr_float(player, "overall", "ovr") >= 84 else "None"
             )
+            row["negotiation_state"] = "open" if row.get("can_negotiate") or row.get("can_qualify") else "closed"
+            # Persist negotiation baseline on session so reopening does not invent new demands.
+            neg_map = getattr(session, "resign_negotiations", None)
+            if not isinstance(neg_map, dict):
+                session.resign_negotiations = {}
+                neg_map = session.resign_negotiations
+            if pid and pid not in neg_map:
+                neg_map[pid] = {
+                    "negotiation_id": f"resign-{pid}-{season_year}",
+                    "player_id": pid,
+                    "team_id": str(getattr(user_team, "team_id", "") or ""),
+                    "negotiation_type": "re_sign",
+                    "status": "open",
+                    "opened_season": season_year,
+                    "current_round": 0,
+                    "baseline_demand": {
+                        "minimum_acceptance": demand.get("min_acceptable_aav_m"),
+                        "target_aav": ask,
+                        "opening_request": round(float(ask or 0) * 1.06, 3) if ask else None,
+                        "target_term": years,
+                        "preferred_clause": row.get("clause_ask"),
+                    },
+                    "team_offers": [],
+                    "player_counters": [],
+                }
+            elif pid and pid in neg_map:
+                row["negotiation_id"] = neg_map[pid].get("negotiation_id")
+                row["negotiation_round"] = neg_map[pid].get("current_round", 0)
+                row["negotiation_status"] = neg_map[pid].get("status")
+                pending = neg_map[pid].get("pending_offer")
+                if isinstance(pending, dict):
+                    row["pending_offer"] = {
+                        "aav_m": pending.get("aav_m"),
+                        "years": pending.get("years"),
+                        "interest": pending.get("interest"),
+                        "resolve_days": pending.get("resolve_days"),
+                        "days_held": pending.get("days_held"),
+                        "days_remaining": max(
+                            0,
+                            int(pending.get("resolve_days") or 0) - int(pending.get("days_held") or 0),
+                        ),
+                    }
+                    row["negotiation_state"] = "pending"
+                base = neg_map[pid].get("baseline_demand") or {}
+                if base.get("target_aav") is not None:
+                    row["player_ask_aav_m"] = base.get("target_aav")
+                    row["requested_cap_hit"] = base.get("target_aav")
+                if base.get("target_term") is not None:
+                    row["requested_term"] = base.get("target_term")
+                counters = neg_map[pid].get("player_counters") or []
+                if counters:
+                    last = counters[-1]
+                    row["last_counter"] = last
+            row["legal_contract_types"] = _resign_legal_contract_types(row, player)
         except Exception:
+            pass
+        row["expiry_type"] = row.get("expiry_status") or row.get("rights_status") or row.get("expiry_type")
+        row["current_cap_hit"] = row.get("aav_m") or row.get("cap_hit_m")
+        row["current_salary"] = row.get("aav_m") or row.get("cap_hit_m")
+        row["available_actions"] = contract_row_available_actions(row)
+        return row
+
+    def _resign_legal_contract_types(row: Dict[str, Any], player: Any) -> List[Dict[str, Any]]:
+        types = []
+        ovr = _safe_attr_float(player, "overall", "ovr")
+        age = int(getattr(player, "age", 25) or 25)
+        types.append({"id": "nhl_one_way", "label": "NHL one-way", "enabled": True})
+        types.append({
+            "id": "nhl_two_way",
+            "label": "NHL two-way",
+            "enabled": ovr < 82 or age <= 24,
+            "blocked_reason": None if (ovr < 82 or age <= 24) else "Player expects one-way security",
+        })
+        if ovr < 72 or str(row.get("league") or "").upper() in ("AHL", "ECHL"):
+            types.append({"id": "ahl", "label": "AHL contract", "enabled": True})
+            types.append({"id": "ahl_echl_two_way", "label": "AHL/ECHL two-way", "enabled": True})
+        if ovr < 65:
+            types.append({"id": "echl", "label": "ECHL contract", "enabled": True})
+        if age >= 30 and ovr < 74:
+            types.append({"id": "pto", "label": "Professional tryout", "enabled": True})
+        return types
+
+    # Attach demand bands without exposing hidden formulas.
+    expiring = [_enrich_demand(dict(r)) for r in expiring]
+    rfa_rows = [_enrich_demand(dict(r)) for r in rfa_rows]
+    contracts = [_enrich_demand(dict(r)) for r in contracts]
+
+    # Deduped table universe: all org contracts + RFA rights + own UFAs not already listed.
+    contract_ids = {str(r.get("player_id") or "") for r in contracts}
+    table_rows = list(contracts)
+    for r in rfa_rows:
+        pid = str(r.get("player_id") or "")
+        if pid and pid not in contract_ids:
+            table_rows.append(r)
+            contract_ids.add(pid)
+    for r in expiring:
+        pid = str(r.get("player_id") or "")
+        if pid and pid not in contract_ids and (
+            bool(r.get("own_ufa")) or str(r.get("contract_status") or "") == "own_ufa"
+        ):
+            table_rows.append(r)
+            contract_ids.add(pid)
+
+    # Phase outcomes keep Accepted / Rejected / Released rows visible until Free Agency.
+    outcomes = ensure_resign_phase_outcomes(session)
+    live_by_id = {str(r.get("player_id") or ""): r for r in table_rows if r.get("player_id")}
+
+    # Seed open outcomes for anyone currently pending so filters can keep them later.
+    for r in list(expiring) + list(rfa_rows):
+        pid = str(r.get("player_id") or "")
+        if not pid:
             continue
+        if pid not in outcomes:
+            upsert_resign_phase_outcome(
+                session,
+                player_id=pid,
+                phase_status="open",
+                snapshot_row=dict(r),
+                name=r.get("name"),
+            )
+
+    for pid, outcome in list(outcomes.items()):
+        if not isinstance(outcome, dict):
+            continue
+        status = str(outcome.get("phase_status") or "open")
+        snap = dict(outcome.get("snapshot_row") or {})
+        live = live_by_id.get(pid)
+        if live is not None:
+            # Annotate the live row; preserve a snapshot for terminal display if they leave later.
+            live["phase_status"] = status
+            live["phase_terminal"] = bool(outcome.get("terminal") or status in RESIGN_PHASE_TERMINAL)
+            if outcome.get("terms"):
+                live["phase_terms"] = outcome.get("terms")
+            if outcome.get("last_offer"):
+                live["phase_last_offer"] = outcome.get("last_offer")
+            if outcome.get("reason"):
+                live["phase_reason"] = outcome.get("reason")
+            if status in RESIGN_PHASE_TERMINAL:
+                live["can_negotiate"] = False
+                if status in ("accepted", "released"):
+                    live["available_actions"] = []
+            # Refresh snapshot from live row while they remain on the board.
+            upsert_resign_phase_outcome(
+                session,
+                player_id=pid,
+                phase_status=status,
+                snapshot_row=dict(live),
+                terms=outcome.get("terms"),
+                last_offer=outcome.get("last_offer"),
+                reason=outcome.get("reason"),
+                name=live.get("name") or outcome.get("name"),
+            )
+        elif status in RESIGN_PHASE_TERMINAL or status in ("rejected", "countered", "pending"):
+            # Player left live eligibility (signed / walked) — keep frozen snapshot on the desk.
+            row = dict(snap) if snap else {"player_id": pid, "name": outcome.get("name") or pid}
+            row["player_id"] = pid
+            row["phase_status"] = status
+            row["phase_terminal"] = bool(outcome.get("terminal") or status in RESIGN_PHASE_TERMINAL)
+            if outcome.get("terms"):
+                row["phase_terms"] = outcome.get("terms")
+            if outcome.get("last_offer"):
+                row["phase_last_offer"] = outcome.get("last_offer")
+            if outcome.get("reason"):
+                row["phase_reason"] = outcome.get("reason")
+            if status == "accepted":
+                row["can_negotiate"] = False
+                row["available_actions"] = []
+                row["contract_status"] = row.get("contract_status") or "signed"
+                if int(row.get("years_remaining") or 0) <= 1 and outcome.get("terms"):
+                    yrs = outcome["terms"].get("years")
+                    if yrs is not None:
+                        row["years_remaining"] = yrs
+            elif status == "released":
+                row["can_negotiate"] = False
+                row["can_qualify"] = False
+                row["can_release_rights"] = False
+                row["available_actions"] = []
+                row["contract_status"] = "released"
+            table_rows.append(row)
+            contract_ids.add(pid)
 
     grouped = {
         "pending_ufa": [r for r in expiring if str(r.get("expiry_status") or r.get("rights") or "").upper() == "UFA"],
-        "pending_rfa": [r for r in expiring if str(r.get("expiry_status") or r.get("rights") or "").upper() == "RFA"] + rfa_rows,
+        "pending_rfa": (
+            [r for r in expiring if str(r.get("expiry_status") or r.get("rights") or "").upper() == "RFA"]
+            + rfa_rows
+        ),
         "buyout_candidates": list(office.get("buyout_candidates") or [])[:12],
         "signed_next_season": [r for r in contracts if int(r.get("years_remaining") or 0) > 1],
         "goalies": [r for r in contracts if str(r.get("position") or "").upper() == "G"],
+        "extension_eligible": [r for r in table_rows if r.get("extension_eligible")],
+        "phase_accepted": [r for r in table_rows if str(r.get("phase_status") or "") == "accepted"],
+        "phase_rejected": [r for r in table_rows if str(r.get("phase_status") or "") == "rejected"],
+        "phase_released": [r for r in table_rows if str(r.get("phase_status") or "") == "released"],
     }
+
+    blocking_decisions = []
+    rfa_warnings = []
+    for r in rfa_rows:
+        if r.get("can_qualify") or r.get("can_release_rights"):
+            # RFA rights can carry into Free Agency (qualify / offer sheet later).
+            # Do not hard-block July 1 open — warn only.
+            rfa_warnings.append({
+                "player_id": r.get("player_id"),
+                "name": r.get("name"),
+                "code": "rfa_rights",
+                "message": f"{r.get('name') or 'Player'}: qualify or release RFA rights",
+            })
+
+    pending_decisions = list(grouped["pending_ufa"]) + list(grouped["pending_rfa"])
+    # Deduplicate pending by player_id
+    seen_pending = set()
+    pending_unique = []
+    for r in pending_decisions:
+        pid = str(r.get("player_id") or "")
+        if not pid or pid in seen_pending:
+            continue
+        seen_pending.add(pid)
+        pending_unique.append(r)
+
     warnings = []
     if summary.get("ufaCount"):
         warnings.append(f"{summary.get('ufaCount')} pending UFAs")
     if summary.get("rfaCount"):
         warnings.append(f"{summary.get('rfaCount')} RFA situations")
+    if rfa_warnings:
+        warnings.append(f"{len(rfa_warnings)} RFA rights still open (can resolve during Free Agency)")
+
+    remaining_count = len(rfa_warnings)
+    resolved_count = max(0, int(summary.get("rfaCount") or 0) - remaining_count)
+    window = ensure_own_fa_window(session)
+    bonus = team_signing_bonus_eligibility(session)
+    # Opening FA is always allowed from re-sign; exclusive days and open RFAs are optional.
+    can_continue = True
+    if not window.get("complete"):
+        warnings.append(
+            f"Exclusive window Day {window.get('day', 0)}/{window.get('days_total', 6)} — "
+            "Sim Day to progress offers, or Open Free Agency to end exclusivity"
+        )
 
     payload = {
-        "version": 2,
+        "version": STAGE_PAYLOAD_VERSION["re_sign"],
+        "season_year": season_year,
+        "contracts": table_rows,
         "expiring_contracts": expiring,
         "cap_snapshot": office.get("cap_snapshot") or office.get("team_cap") or {},
         "contract_slots": office.get("contract_slots") or {},
-        "summary": summary,
+        "summary": {
+            **summary,
+            "pendingDecisions": len(pending_unique),
+            "blockingDecisions": 0,
+            "openRfaRights": remaining_count,
+            "tableRows": len(table_rows),
+            "phaseAccepted": len(grouped.get("phase_accepted") or []),
+            "phaseRejected": len(grouped.get("phase_rejected") or []),
+            "phaseReleased": len(grouped.get("phase_released") or []),
+        },
         "grouped": grouped,
         "rfa_rights": rfa_rows,
+        "pending_decisions": pending_unique,
+        "blocking_decisions": blocking_decisions,
+        "open_rfa_rights": rfa_warnings,
+        "phase_outcomes": dict(ensure_resign_phase_outcomes(session)),
         "needs": (office.get("team") or {}).get("needs") or {},
+        "team": office.get("team") or {},
         "stage_status": "ready",
-        "can_continue": True,
+        "can_continue": can_continue,
         "blocking_reasons": [],
         "warning_reasons": warnings,
-        "available_actions": ["open_cap_ledger", "continue_to_free_agency", "back_to_hub"],
+        "resolved_count": resolved_count,
+        "remaining_count": remaining_count,
+        "own_fa_window": window,
+        "signing_bonus": bonus,
+        "instant_accept_interest": INSTANT_ACCEPT_INTEREST,
+        "available_actions": ["sim_negotiation_day", "open_cap_ledger", "continue_to_free_agency", "back_to_hub"],
     }
     session.resign_payload = payload
     return {"contracts": payload, "re_sign": payload}
@@ -4510,67 +5313,188 @@ def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -
 def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict[str, Any]:
     from services.contract_economy import (
         build_contract_office,
-        run_cpu_free_agency,
+        expire_pending_july1_contracts,
+        run_cpu_own_ufa_resign,
         run_cpu_rfa_decisions,
+        sync_all_team_cap_fields,
     )
+    from services.fa_market_engine import (
+        annotate_fa_rows_with_decisions,
+        ensure_fa_market_book,
+        tick_free_agency_market,
+    )
+
+    window = own_fa_window_status(session)
+    # Entering the Free Agency stage always opens the market (July 1). The
+    # exclusive window is optional negotiating time on the re-sign desk — it must
+    # not leave the Wire empty when the GM chooses Open Free Agency.
+    if not force and not window.get("complete") and not session.free_agency_open:
+        force = True
 
     existing_market = getattr(session, "free_agency_market_payload", None)
     already_open = bool(session.free_agency_open)
     wave = int(getattr(session, "cpu_fa_wave", 0) or 0)
 
-    # Idempotent: first entry runs RFA settle + opening FA wave; later hydration refreshes board only.
+    # Idempotent: July 1 burn → RFAs + own UFAs, then opens the living market.
     if not already_open or force:
+        # Final-year UFAs deferred at salary-cap become free agents here (July 1).
+        if not getattr(session, "july1_contracts_expired", False):
+            session.july1_expiry_report = expire_pending_july1_contracts(session)
         if not getattr(session, "cpu_rfa_decisions", None):
             session.cpu_rfa_decisions = run_cpu_rfa_decisions(session)
-        if wave < 1:
-            session.cpu_fa_signings = run_cpu_free_agency(session, max_signings=24)
-            session.cpu_fa_wave = 1
-        elif force and wave < 2:
-            extra = run_cpu_free_agency(session, max_signings=16)
-            prev = dict(getattr(session, "cpu_fa_signings", None) or {})
-            prev_list = list(prev.get("signings") or [])
-            prev_list.extend(list((extra or {}).get("signings") or []))
-            prev["signings"] = prev_list
-            prev["count"] = len(prev_list)
-            session.cpu_fa_signings = prev
-            session.cpu_fa_wave = 2
-        session.free_agency_open = True
+        if not getattr(session, "cpu_own_ufa_resign", None):
+            # Retain stars on CPU clubs BEFORE exclusivity clears onto Opening Day.
+            session.cpu_own_ufa_resign = run_cpu_own_ufa_resign(session)
+        try:
+            league = getattr(session.sim, "league", None)
+            sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
+            if league is not None:
+                from app.sim_engine.league_hierarchy_bootstrap import ensure_overseas_fa_pool
 
+                ensure_overseas_fa_pool(league, session.sim.rng, min_count=120)
+                sync_all_team_cap_fields(league, session.sim, season_year=sy)
+        except Exception:
+            pass
+        ensure_fa_market_book(session)
+        if wave < 1:
+            # Opening day: offers circulate; only a couple fringe deals may close.
+            tick = tick_free_agency_market(
+                session,
+                days=1,
+                opening_day=True,
+                max_signings_per_day=2,
+                max_offers_per_day=2000,
+            )
+            session.cpu_fa_wave = 1
+            session._last_fa_market_tick = tick
+        elif force and int(getattr(session, "fa_market_day", 0) or 0) < 2:
+            tick_free_agency_market(session, days=1, max_signings_per_day=3)
+        session.free_agency_open = True
+        session.own_fa_window_active = False
+        # Release exclusive home-team UFAs onto the open market.
+        try:
+            league = getattr(session.sim, "league", None)
+            for pool_attr in ("free_agents", "overseas_free_agents"):
+                for p in list(getattr(league, pool_attr, None) or []) if league else []:
+                    try:
+                        setattr(p, "ufa_exclusive", False)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    try:
+        league = getattr(session.sim, "league", None)
+        sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
+        if league is not None:
+            from app.sim_engine.league_hierarchy_bootstrap import ensure_overseas_fa_pool
+            from services.franchise_sim import resync_league_ages_to_session
+
+            ensure_overseas_fa_pool(league, session.sim.rng, min_count=120)
+            sync_all_team_cap_fields(league, session.sim, season_year=sy)
+            resync_league_ages_to_session(session)
+    except Exception:
+        pass
+
+    ensure_fa_market_book(session)
     office = build_contract_office(session)
-    fa_list = list(office.get("free_agents") or office.get("freeAgents") or [])
+    fa_list = annotate_fa_rows_with_decisions(
+        session, list(office.get("free_agents") or office.get("freeAgents") or [])
+    )
     session.free_agents_payload = fa_list
     bonus = team_signing_bonus_eligibility(session)
     cap = office.get("cap_snapshot") or {}
     needs = (office.get("team") or {}).get("needs") or {}
     summary = office.get("summary") or {}
-    top = fa_list[:12]
+    # Keep a short "headline board" of stars, but the full pool is free_agents.
+    top = sorted(fa_list, key=lambda r: -float(r.get("ovr") or r.get("overall") or 0))[:24]
     cpu = getattr(session, "cpu_fa_signings", None) or {}
-    recent = list(cpu.get("signings") or [])[-8:]
+    recent = list(cpu.get("signings") or [])[-12:]
+    book = getattr(session, "fa_market_book", None) or {}
+    book_log = list(book.get("log") or [])[-20:]
+    news = []
+    for s in recent[-8:]:
+        news.append({
+            "kind": "signing",
+            "text": (
+                f"{s.get('team_name') or s.get('team_id') or 'A club'} signs "
+                f"{s.get('name') or s.get('player_id') or 'a free agent'} · "
+                f"{s.get('aav_m')}M × {s.get('years')}y"
+            ),
+        })
+    for entry in book_log[-8:]:
+        if isinstance(entry, dict) and entry.get("text"):
+            news.append({"kind": entry.get("kind") or "market", "text": entry.get("text")})
+        elif isinstance(entry, str):
+            news.append({"kind": "market", "text": entry})
+    decisions = (getattr(session, "_last_fa_market_tick", None) or {}).get("decision_snapshot")
+    if not decisions:
+        from services.fa_market_engine import _decision_snapshot
+        decisions = _decision_snapshot(book)
+
+    day = int(getattr(session, "fa_market_day", 0) or book.get("day") or 0)
+    if day <= 1:
+        phase = "opening_day"
+    elif day <= 3:
+        phase = "initial_rush"
+    elif day <= 7:
+        phase = "first_week"
+    elif day <= 14:
+        phase = "secondary_market"
+    elif day <= 30:
+        phase = "late_summer"
+    else:
+        phase = "camp_tryout_market"
 
     market = {
-        "version": 2,
+        "version": STAGE_PAYLOAD_VERSION["free_agency"],
         "market_status": "open" if session.free_agency_open else "closed",
         "wave": int(getattr(session, "cpu_fa_wave", 0) or 0),
+        "fa_market_day": day,
+        "market_phase": phase,
+        "market_phase_label": {
+            "opening_day": "Opening Day",
+            "initial_rush": "Initial Rush",
+            "first_week": "First Week",
+            "secondary_market": "Secondary Market",
+            "late_summer": "Late Summer",
+            "camp_tryout_market": "Camp / Tryout Market",
+        }.get(phase, phase),
         "available_count": len(fa_list),
         "major_available": top,
-        "cap_space_m": cap.get("usable_cap_space_m") or cap.get("cap_space_m"),
+        "free_agents": fa_list,
+        "market_news": news[-16:],
+        "cap_space_m": (
+            float(cap["usable_cap_space_m"])
+            if cap.get("usable_cap_space_m") is not None
+            else (float(cap["cap_space_m"]) if cap.get("cap_space_m") is not None else 0.0)
+        ),
+        "cap_snapshot": cap,
         "contract_slots": office.get("contract_slots") or {},
         "needs": needs,
         "pending_rfa_count": summary.get("rfaCount") or 0,
         "signing_bonus": bonus,
         "recent_league_signings": recent,
         "cpu_signings_count": len(list(cpu.get("signings") or [])),
+        "decision_snapshot": decisions,
         "stage_status": "ready",
         "can_continue": True,
         "blocking_reasons": [],
         "warning_reasons": (
             ["Pending RFAs still unresolved"] if (summary.get("rfaCount") or 0) > 0 else []
         ),
-        "available_actions": ["open_cap_ledger_fa", "continue_to_roster_check", "back_to_hub"],
+        "available_actions": [
+            "advance_fa_day",
+            "advance_fa_week",
+            "advance_fa_month",
+            "open_cap_ledger_fa",
+            "continue_to_roster_check",
+            "back_to_hub",
+        ],
     }
-    if isinstance(existing_market, dict) and existing_market.get("version") == 2 and already_open and not force:
-        # Keep wave progress; refresh board counts.
+    if isinstance(existing_market, dict) and already_open and not force:
         market["wave"] = existing_market.get("wave", market["wave"])
+        market["fa_market_day"] = existing_market.get("fa_market_day", market["fa_market_day"])
     session.free_agency_market_payload = market
     return {
         "free_agents": session.free_agents_payload,
@@ -4580,81 +5504,501 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
     }
 
 
+def advance_contract_negotiation_day(session: FranchiseSession, *, days: int = 1) -> Dict[str, Any]:
+    """Advance the exclusive own-FA window and resolve pending offers.
+
+    Insane offers already signed instantly. Competitive offers sit on the table and
+    resolve after their resolve_days — Sim Day is how you watch players sign.
+    """
+    from services.contract_economy import (
+        _find_player_in_league,
+        sign_player_to_team,
+    )
+
+    days = max(1, min(14, int(days or 1)))
+    ensure_own_fa_window(session)
+    if session.free_agency_open:
+        return {
+            "ok": False,
+            "reason": "Open free agency has already started",
+            "own_fa_window": own_fa_window_status(session),
+        }
+
+    sim = session.sim
+    league = getattr(sim, "league", None)
+    user_team = session.team_by_id.get(str(session.user_team_id))
+    season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    neg_map = getattr(session, "resign_negotiations", None)
+    if not isinstance(neg_map, dict):
+        session.resign_negotiations = {}
+        neg_map = session.resign_negotiations
+
+    signed: List[Dict[str, Any]] = []
+    still_pending: List[Dict[str, Any]] = []
+    rejected: List[Dict[str, Any]] = []
+
+    for _ in range(days):
+        session.own_fa_window_day = int(getattr(session, "own_fa_window_day", 0) or 0) + 1
+        for pid, entry in list(neg_map.items()):
+            if not isinstance(entry, dict):
+                continue
+            pending = entry.get("pending_offer")
+            if not isinstance(pending, dict):
+                continue
+            pending["days_held"] = int(pending.get("days_held") or 0) + 1
+            need = max(1, int(pending.get("resolve_days") or 2))
+            interest = float(pending.get("interest") or 0)
+            if pending["days_held"] < need:
+                still_pending.append(
+                    {
+                        "player_id": pid,
+                        "days_held": pending["days_held"],
+                        "resolve_days": need,
+                        "interest": interest,
+                    }
+                )
+                continue
+            player, _owner = _find_player_in_league(league, str(pid))
+            if player is None or user_team is None:
+                entry["status"] = "lapsed"
+                entry["pending_offer"] = None
+                rejected.append({"player_id": pid, "reason": "player_missing"})
+                try:
+                    upsert_resign_phase_outcome(
+                        session,
+                        player_id=str(pid),
+                        phase_status="lapsed",
+                        reason="player_missing",
+                    )
+                except Exception:
+                    pass
+                continue
+            offer = {
+                "aav_m": pending.get("aav_m"),
+                "years": pending.get("years"),
+                "ntc": pending.get("ntc"),
+                "nmc": pending.get("nmc"),
+                "signing_bonus_m": pending.get("signing_bonus_m") or 0,
+                "two_way": pending.get("two_way"),
+                "contract_category": pending.get("contract_category") or "nhl_one_way",
+                "context": pending.get("context") or "re_sign",
+                "force": True,
+                "resolve_pending": True,
+                "_session": session,
+            }
+            result = sign_player_to_team(player, user_team, league, season_year, offer)
+            if result.get("ok") and result.get("status") == "accepted":
+                entry["status"] = "accepted"
+                entry["pending_offer"] = None
+                name = str(getattr(player, "name", None) or getattr(player, "full_name", pid) or pid)
+                signing = {
+                    "player_id": pid,
+                    "name": name,
+                    "aav_m": pending.get("aav_m"),
+                    "years": pending.get("years"),
+                    "window_day": int(session.own_fa_window_day),
+                    "interest": interest,
+                }
+                signed.append(signing)
+                session.own_fa_window_signings = list(getattr(session, "own_fa_window_signings", None) or [])
+                session.own_fa_window_signings.append(signing)
+                try:
+                    upsert_resign_phase_outcome(
+                        session,
+                        player_id=str(pid),
+                        phase_status="accepted",
+                        name=name,
+                        terms={"aav_m": pending.get("aav_m"), "years": pending.get("years")},
+                        last_offer=dict(pending),
+                    )
+                except Exception:
+                    pass
+            else:
+                entry["status"] = "lapsed"
+                entry["pending_offer"] = None
+                rejected.append({"player_id": pid, "reason": result.get("reason") or "failed"})
+                try:
+                    upsert_resign_phase_outcome(
+                        session,
+                        player_id=str(pid),
+                        phase_status="lapsed",
+                        name=str(getattr(player, "name", None) or pid),
+                        reason=str(result.get("reason") or "failed"),
+                        last_offer=dict(pending),
+                    )
+                except Exception:
+                    pass
+
+    invalidate_offseason_decision_payloads(session, reason="advance_negotiation_day")
+    refreshed = _prepare_resign_payload(session, force=True)
+    window = own_fa_window_status(session)
+    return {
+        "ok": True,
+        "days_advanced": days,
+        "signed": signed,
+        "still_pending": still_pending,
+        "rejected": rejected,
+        "own_fa_window": window,
+        "re_sign": refreshed.get("re_sign") or refreshed.get("contracts"),
+        "contracts": refreshed.get("contracts") or refreshed.get("re_sign"),
+    }
+
+
+def resolve_user_fa_pending_offers(session: FranchiseSession, *, days: int = 1) -> Dict[str, Any]:
+    """Resolve pending user FA offers when Sim Day advances the open market.
+
+    Same mechanics as the exclusive re-sign window — competitive offers sit for
+    resolve_days, then force-sign. Instant accepts already cleared the pool.
+    """
+    from services.contract_economy import _find_player_in_league, sign_player_to_team
+    from services.fa_market_engine import mark_fa_player_signed, record_user_fa_offer
+
+    days = max(1, min(45, int(days or 1)))
+    sim = session.sim
+    league = getattr(sim, "league", None)
+    user_team = session.team_by_id.get(str(session.user_team_id))
+    season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    neg_map = getattr(session, "resign_negotiations", None)
+    if not isinstance(neg_map, dict):
+        return {"signed": [], "still_pending": [], "rejected": []}
+
+    signed: List[Dict[str, Any]] = []
+    still_pending: List[Dict[str, Any]] = []
+    rejected: List[Dict[str, Any]] = []
+
+    for _ in range(days):
+        for pid, entry in list(neg_map.items()):
+            if not isinstance(entry, dict):
+                continue
+            pending = entry.get("pending_offer")
+            if not isinstance(pending, dict):
+                continue
+            ctx = str(pending.get("context") or "").lower()
+            if ctx and ctx not in ("ufa", "free_agency", "fa", ""):
+                # Exclusive re-sign pending offers use advance_contract_negotiation_day.
+                if ctx in ("re_sign", "resign", "extension"):
+                    continue
+            pending["days_held"] = int(pending.get("days_held") or 0) + 1
+            need = max(1, int(pending.get("resolve_days") or 2))
+            interest = float(pending.get("interest") or 0)
+            if pending["days_held"] < need:
+                still_pending.append(
+                    {
+                        "player_id": pid,
+                        "days_held": pending["days_held"],
+                        "resolve_days": need,
+                        "interest": interest,
+                    }
+                )
+                continue
+            player, owner = _find_player_in_league(league, str(pid))
+            if player is None or user_team is None:
+                entry["status"] = "lapsed"
+                entry["pending_offer"] = None
+                rejected.append({"player_id": pid, "reason": "player_missing"})
+                continue
+            if owner is not None and owner is not user_team:
+                entry["status"] = "lapsed"
+                entry["pending_offer"] = None
+                name = str(getattr(player, "name", None) or getattr(player, "full_name", pid) or pid)
+                rejected.append({
+                    "player_id": pid,
+                    "name": name,
+                    "reason": "signed_elsewhere",
+                    "feedback": f"{name} signed elsewhere.",
+                })
+                continue
+            offer = {
+                "aav_m": pending.get("aav_m"),
+                "years": pending.get("years"),
+                "ntc": pending.get("ntc"),
+                "nmc": pending.get("nmc"),
+                "signing_bonus_m": pending.get("signing_bonus_m") or 0,
+                "two_way": pending.get("two_way"),
+                "contract_category": pending.get("contract_category") or "nhl_one_way",
+                "context": "ufa",
+                "force": True,
+                "resolve_pending": True,
+                "_session": session,
+            }
+            result = sign_player_to_team(player, user_team, league, season_year, offer)
+            if result.get("ok") and result.get("status") == "accepted":
+                entry["status"] = "accepted"
+                entry["pending_offer"] = None
+                name = str(getattr(player, "name", None) or getattr(player, "full_name", pid) or pid)
+                signing = {
+                    "player_id": pid,
+                    "name": name,
+                    "aav_m": pending.get("aav_m"),
+                    "years": pending.get("years"),
+                    "interest": interest,
+                    "team_id": str(session.user_team_id),
+                }
+                signed.append(signing)
+                try:
+                    mark_fa_player_signed(session, str(pid))
+                    record_user_fa_offer(
+                        session,
+                        player_id=str(pid),
+                        aav_m=float(pending.get("aav_m") or 0),
+                        years=int(pending.get("years") or 1),
+                        ntc=bool(pending.get("ntc")),
+                        nmc=bool(pending.get("nmc")),
+                        status="accepted",
+                    )
+                except Exception:
+                    pass
+                cpu = getattr(session, "cpu_fa_signings", None)
+                if not isinstance(cpu, dict):
+                    cpu = {"signings": []}
+                    session.cpu_fa_signings = cpu
+                cpu.setdefault("signings", []).append({
+                    **signing,
+                    "team_name": "Your club",
+                    "source": "user_pending_resolve",
+                })
+            else:
+                entry["status"] = "lapsed"
+                entry["pending_offer"] = None
+                name = str(getattr(player, "name", None) or getattr(player, "full_name", pid) or pid)
+                pr = result.get("player_response")
+                feedback = None
+                if isinstance(pr, dict):
+                    feedback = pr.get("feedback")
+                rejected.append({
+                    "player_id": pid,
+                    "name": name,
+                    "reason": result.get("reason") or "failed",
+                    "feedback": feedback or result.get("reason") or f"{name} declined.",
+                })
+
+    return {"signed": signed, "still_pending": still_pending, "rejected": rejected}
+
+
+def advance_free_agency_day(session: FranchiseSession, *, days: int = 1) -> Dict[str, Any]:
+    """
+    Advance free-agency market time by N days (default 1).
+    CPU teams extend offers; players evaluate / wait / sign on staggered schedules.
+    User pending FA offers also age and resolve on the same clock.
+    """
+    from services.fa_market_engine import tick_free_agency_market
+
+    days = max(1, min(45, int(days or 1)))
+    if not getattr(session, "free_agency_open", False):
+        opened = _open_free_agency(session, force=False)
+        # Opening already ticked day 1; for multi-day requests continue remaining days
+        remaining = days - 1
+        if remaining <= 0:
+            market = opened.get("free_agency_market") or {}
+            return {
+                "ok": True,
+                "free_agency_market": market,
+                "free_agents": opened.get("free_agents"),
+                "cpu_signings": session.cpu_fa_signings,
+                "day": int(getattr(session, "fa_market_day", 0) or 0),
+                "phase": market.get("market_phase"),
+                "tick": getattr(session, "_last_fa_market_tick", None),
+            }
+        days = remaining
+
+    user_resolve = resolve_user_fa_pending_offers(session, days=days)
+    tick = tick_free_agency_market(session, days=days)
+    session._last_fa_market_tick = tick
+    refreshed = _open_free_agency(session, force=False)
+    market = dict(refreshed.get("free_agency_market") or {})
+    market["version"] = STAGE_PAYLOAD_VERSION["free_agency"]
+    market["fa_market_day"] = int(tick.get("day") or getattr(session, "fa_market_day", 0) or 0)
+    # Merge user signings into the wire so Sim Day always moves the feed.
+    wire = list(market.get("market_news") or [])
+    for s in list(user_resolve.get("signed") or []):
+        wire.append({
+            "kind": "signing",
+            "text": (
+                f"Your club signs {s.get('name') or s.get('player_id')} · "
+                f"{s.get('aav_m')}M × {s.get('years')}y"
+            ),
+        })
+    for p in list(user_resolve.get("still_pending") or [])[:4]:
+        wire.append({
+            "kind": "pending",
+            "text": (
+                f"Your offer still on the table "
+                f"({p.get('days_held')}/{p.get('resolve_days')} days) · {p.get('player_id')}"
+            ),
+        })
+    market["market_news"] = wire[-24:]
+    market["day_events"] = {
+        "cpu_signings": len(tick.get("signings") or []),
+        "new_offers": len(tick.get("offers") or []),
+        "recent_signings": list(tick.get("signings") or [])[:8],
+        "user_signings": list(user_resolve.get("signed") or []),
+        "user_pending": list(user_resolve.get("still_pending") or []),
+        "decision_snapshot": tick.get("decision_snapshot"),
+        "days_advanced": days,
+    }
+    market["decision_snapshot"] = tick.get("decision_snapshot")
+    session.free_agency_market_payload = market
+    return {
+        "ok": True,
+        "free_agency_market": market,
+        "free_agents": refreshed.get("free_agents") or market.get("free_agents"),
+        "cpu_signings": session.cpu_fa_signings,
+        "day": market["fa_market_day"],
+        "phase": market.get("market_phase"),
+        "tick": tick,
+        "user_resolve": user_resolve,
+    }
+
+
+def _position_code(player: Any) -> str:
+    """Position code ("C"/"LW"/"RW"/"D"/"G") — delegates to shared roster_compliance."""
+    from services.roster_compliance import position_code
+
+    return position_code(player)
+
+
+def _revalidate_roster_cleanup(session: FranchiseSession, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Refresh the Roster Check gate from live rosters without replaying any moves."""
+    from services.contract_economy import get_team_cap_snapshot_full
+    from services.roster_compliance import evaluate_roster_compliance
+
+    user_team = session.team_by_id.get(session.user_team_id)
+    league = getattr(session.sim, "league", None)
+    season_year = int(session.season_calendar_year)
+
+    cap_snap: Dict[str, Any] = {}
+    cap_error: Optional[str] = None
+    if user_team is not None:
+        try:
+            cap_snap = get_team_cap_snapshot_full(user_team, league, session.sim, season_year=season_year) or {}
+        except Exception as exc:
+            cap_error = str(exc) or "unknown error"
+
+    evaluation = evaluate_roster_compliance(
+        user_team,
+        league=league,
+        sim=session.sim,
+        season_year=season_year,
+        cap_snap=cap_snap,
+        cap_error=cap_error,
+    )
+    capacity = evaluation.get("capacity") or {}
+    slots = evaluation.get("contract_slots") or {}
+    valid = bool(evaluation.get("valid"))
+
+    refreshed = dict(payload)
+    refreshed.update({
+        "nhl_roster_count": evaluation.get("nhl_roster_count"),
+        "forward_count": evaluation.get("forward_count"),
+        "defense_count": evaluation.get("defense_count"),
+        "goalie_count": evaluation.get("goalie_count"),
+        "composition": capacity.get("composition"),
+        "ir_count": evaluation.get("ir_count"),
+        "ltir_count": evaluation.get("ltir_count"),
+        "buried_count": capacity.get("buried_count"),
+        "payroll_m": evaluation.get("payroll_m"),
+        "cap_space_m": evaluation.get("cap_space_m"),
+        "contract_slots_used": evaluation.get("contract_slots_used"),
+        "contract_slots_limit": evaluation.get("contract_slots_limit"),
+        "contract_slots_available": slots.get("available"),
+        "blocking": list(evaluation.get("blocking") or []),
+        "warnings": list(evaluation.get("warnings") or []),
+        "issues": list(evaluation.get("issues") or []),
+        "warning_messages": list(evaluation.get("warning_messages") or []),
+        "valid": valid,
+        "status": "ready" if valid else "blocking",
+        "can_continue": valid,
+        "blocking_reasons": list(evaluation.get("blocking_reasons") or []),
+        "warning_reasons": list(evaluation.get("warning_reasons") or []),
+        "available_actions": (
+            ["generate_next_season", "back_to_hub"] if valid else ["resolve_issues", "open_cap_ledger", "back_to_hub"]
+        ),
+    })
+    session.roster_cleanup_payload = refreshed
+    session.next_important_event = "generate_next_season"
+    return refreshed
+
+
 def _run_roster_cleanup(session: FranchiseSession, *, force: bool = False) -> Dict[str, Any]:
     from services.contract_economy import (
         resolve_offer_sheets,
         run_cap_compliance_pipeline,
         run_prospect_promotion_pass,
-        validate_contract_slots,
-        CONTRACT_SLOTS_LIMIT,
+        run_roster_fill_pass,
         get_team_cap_snapshot_full,
+    )
+    from services.roster_compliance import (
+        ACTIVE_ROSTER_MAX,
+        ACTIVE_ROSTER_MIN,
+        MIN_DEFENSE,
+        MIN_FORWARDS,
+        MIN_GOALIES,
+        evaluate_roster_compliance,
     )
 
     existing = getattr(session, "roster_cleanup_payload", None)
-    if not force and isinstance(existing, dict) and existing.get("version") == 2 and existing.get("valid") is not None:
-        # Still re-validate lightly so Cap Ledger fixes unlock Generate.
-        pass
+    if (
+        not force
+        and isinstance(existing, dict)
+        and existing.get("version") == STAGE_PAYLOAD_VERSION["roster_cleanup"]
+        and existing.get("valid") is not None
+    ):
+        # Re-validate against live rosters so Cap Ledger fixes unlock Generate, but
+        # never replay the moves: promotions, waivers, buyouts and cap-casualty
+        # trades all live below and must fire once per visit to this desk.
+        return {"roster_cleanup": _revalidate_roster_cleanup(session, existing)}
 
     offer_sheets = resolve_offer_sheets(session)
     session.offer_sheet_resolutions = offer_sheets
     promo = run_prospect_promotion_pass(session)
     compliance = run_cap_compliance_pipeline(session, include_buyouts=True)
+    # Trim first, then fill: relief can free the spots the floor pass needs.
+    roster_fill = run_roster_fill_pass(session)
     user_team = session.team_by_id.get(session.user_team_id)
     league = getattr(session.sim, "league", None)
     sim = session.sim
     season_year = int(session.season_calendar_year)
-    roster = list(getattr(user_team, "roster", None) or []) if user_team else []
-    roster_count = len(roster)
 
-    forwards = sum(1 for p in roster if str(getattr(p, "position", "")).upper() in ("C", "LW", "RW", "W", "F"))
-    defense = sum(1 for p in roster if str(getattr(p, "position", "")).upper() in ("D", "LD", "RD"))
-    goalies = sum(1 for p in roster if str(getattr(p, "position", "")).upper() == "G")
+    cap_snap: Dict[str, Any] = {}
+    cap_error: Optional[str] = None
+    if user_team is not None:
+        try:
+            cap_snap = get_team_cap_snapshot_full(user_team, league, sim, season_year=season_year) or {}
+        except Exception as exc:
+            cap_error = str(exc) or "unknown error"
 
-    blocking: List[Dict[str, Any]] = []
-    warnings: List[Dict[str, Any]] = []
+    evaluation = evaluate_roster_compliance(
+        user_team,
+        league=league,
+        sim=sim,
+        season_year=season_year,
+        cap_snap=cap_snap,
+        cap_error=cap_error,
+    )
+    capacity = evaluation.get("capacity") or {}
+    slots = evaluation.get("contract_slots") or {}
+    valid = bool(evaluation.get("valid"))
 
-    if roster_count > 23:
-        blocking.append({"code": "roster_max", "message": f"NHL roster over limit ({roster_count}/23)", "route": "roster"})
-    if roster_count < 18:
-        warnings.append({"code": "roster_light", "message": f"NHL roster light ({roster_count})", "route": "free_agency"})
-    if forwards < 8:
-        warnings.append({"code": "forward_depth", "message": f"Forward count low ({forwards})", "route": "free_agency"})
-    if defense < 4:
-        warnings.append({"code": "defense_depth", "message": f"Defense count low ({defense})", "route": "free_agency"})
-    if goalies < 1:
-        blocking.append({"code": "no_goalie", "message": "No NHL goalie on roster", "route": "free_agency"})
-    elif goalies < 2:
-        warnings.append({"code": "goalie_depth", "message": f"Goalie count low ({goalies})", "route": "free_agency"})
-
-    cap_snap = {}
-    try:
-        cap_snap = get_team_cap_snapshot_full(user_team, league, sim, season_year=season_year) if user_team else {}
-        if float(cap_snap.get("usable_cap_space_m") or 0) < -0.01:
-            blocking.append({
-                "code": "cap_over",
-                "message": f"Over salary cap by ${abs(float(cap_snap.get('usable_cap_space_m') or 0)):.2f}M",
-                "route": "cap_ledger",
-            })
-    except Exception:
-        pass
-
-    slots = validate_contract_slots(user_team, league, additional=0) if user_team is not None else {}
-    used = int(slots.get("contract_slots_used") or 0)
-    limit = int(slots.get("contract_slots_limit") or CONTRACT_SLOTS_LIMIT)
-    if used > limit:
-        blocking.append({"code": "contract_slots", "message": f"Contract slots exceeded ({used}/{limit})", "route": "cap_ledger"})
-
-    valid = len(blocking) == 0
     payload = {
-        "version": 2,
-        "nhl_roster_count": roster_count,
-        "forward_count": forwards,
-        "defense_count": defense,
-        "goalie_count": goalies,
-        "payroll_m": cap_snap.get("total_cap_hit_m"),
-        "cap_space_m": cap_snap.get("usable_cap_space_m"),
-        "contract_slots_used": used,
-        "contract_slots_limit": limit,
+        "version": STAGE_PAYLOAD_VERSION["roster_cleanup"],
+        "nhl_roster_count": evaluation.get("nhl_roster_count"),
+        "nhl_roster_max": ACTIVE_ROSTER_MAX,
+        "nhl_roster_min": ACTIVE_ROSTER_MIN,
+        "forward_count": evaluation.get("forward_count"),
+        "defense_count": evaluation.get("defense_count"),
+        "goalie_count": evaluation.get("goalie_count"),
+        "min_forwards": MIN_FORWARDS,
+        "min_defense": MIN_DEFENSE,
+        "min_goalies": MIN_GOALIES,
+        "composition": capacity.get("composition"),
+        "ir_count": evaluation.get("ir_count"),
+        "ltir_count": evaluation.get("ltir_count"),
+        "buried_count": capacity.get("buried_count"),
+        "payroll_m": evaluation.get("payroll_m"),
+        "cap_space_m": evaluation.get("cap_space_m"),
+        "contract_slots_used": evaluation.get("contract_slots_used"),
+        "contract_slots_limit": evaluation.get("contract_slots_limit"),
+        "contract_slots_available": slots.get("available"),
         "prospect_promotions": promo,
         "cap_compliance": {
             "buried": len(compliance.get("buried") or []),
@@ -4663,17 +6007,21 @@ def _run_roster_cleanup(session: FranchiseSession, *, force: bool = False) -> Di
             "cleared": len(compliance.get("cleared") or []),
             "buyouts": len(compliance.get("buyouts") or []),
         },
+        "roster_fill": {
+            "recalls": int(roster_fill.get("recall_count") or 0),
+            "teams_filled": int(roster_fill.get("teams_filled") or 0),
+            "unresolved": len(roster_fill.get("unresolved") or []),
+        },
         "offer_sheets_resolved": offer_sheets.get("count", 0),
-        "blocking": blocking,
-        "warnings": warnings,
-        # Legacy string lists for older UI
-        "issues": [b["message"] for b in blocking],
-        "warning_messages": [w["message"] for w in warnings],
+        "blocking": list(evaluation.get("blocking") or []),
+        "warnings": list(evaluation.get("warnings") or []),
+        "issues": list(evaluation.get("issues") or []),
+        "warning_messages": list(evaluation.get("warning_messages") or []),
         "valid": valid,
         "status": "ready" if valid else "blocking",
         "can_continue": valid,
-        "blocking_reasons": [b["message"] for b in blocking],
-        "warning_reasons": [w["message"] for w in warnings],
+        "blocking_reasons": list(evaluation.get("blocking_reasons") or []),
+        "warning_reasons": list(evaluation.get("warning_reasons") or []),
         "available_actions": (
             ["generate_next_season", "back_to_hub"] if valid else ["resolve_issues", "open_cap_ledger", "back_to_hub"]
         ),
@@ -4681,6 +6029,401 @@ def _run_roster_cleanup(session: FranchiseSession, *, force: bool = False) -> Di
     session.roster_cleanup_payload = payload
     session.next_important_event = "generate_next_season"
     return {"roster_cleanup": payload}
+
+
+def _roll_development_league_draft_class(session: FranchiseSession, season_year: int) -> Dict[str, Any]:
+    """Age junior clubs one year, inject fresh draft-age talent, reset prospect season lines.
+
+    Drafted players stay on their clubs for rights/development but are filtered out of
+    the upcoming Prospect Board. Undrafted players age; new 16–17 year olds refill depth.
+    """
+    import random as _random
+
+    from app.sim_engine.entities.player import Position
+    from app.sim_engine.generation.prospect_league_scoring import initialize_prospect_season
+    from app.sim_engine.league_hierarchy_bootstrap import _set_assignment, _spawn_player
+    from services.franchise_sim import (
+        _bump_prospect_revision,
+        invalidate_session_payload_caches,
+    )
+
+    sim = getattr(session, "sim", None)
+    league = getattr(sim, "league", None) if sim else None
+    if league is None or sim is None:
+        return {"ok": False, "error": "no league"}
+
+    rng = getattr(sim, "rng", None) or _random.Random(int(season_year) * 9973)
+    aged = 0
+    reset_stats = 0
+    injected = 0
+    culled = 0
+    used_names: set = set()
+    league_players = list(getattr(league, "players", None) or [])
+    for p in league_players:
+        ident = getattr(p, "identity", None)
+        nm = str(getattr(ident, "name", "") or "")
+        if nm:
+            used_names.add(nm)
+
+    for block in getattr(league, "development_leagues", None) or []:
+        code = str(block.get("league_code") or "")
+        for tm in block.get("teams") or []:
+            players = list(tm.get("players") or [])
+            kept: List[Any] = []
+            for p in players:
+                if getattr(p, "retired", False):
+                    culled += 1
+                    continue
+                ident = getattr(p, "identity", None)
+                try:
+                    from services.franchise_sim import sync_player_age_to_session
+
+                    sync_player_age_to_session(p, session)
+                    aged += 1
+                except Exception:
+                    try:
+                        if ident is not None and hasattr(ident, "age"):
+                            ident.age = int(getattr(ident, "age", 17) or 17) + 1
+                        else:
+                            p.age = int(getattr(p, "age", 17) or 17) + 1
+                        aged += 1
+                    except Exception:
+                        pass
+                age_now = 99
+                try:
+                    age_now = int(getattr(ident, "age", 99) or 99) if ident else int(getattr(p, "age", 99) or 99)
+                except Exception:
+                    age_now = 99
+                # Age out undrafted overagers from junior clubs.
+                drafted = bool(getattr(p, "drafted", False)) or bool(
+                    getattr(p, "nhl_rights_team_id", None) or getattr(p, "rights_team_id", None)
+                )
+                if (not drafted) and age_now > 20:
+                    culled += 1
+                    continue
+                try:
+                    initialize_prospect_season(
+                        p,
+                        code,
+                        rng=rng,
+                        season_year=int(season_year),
+                        calendar_iso=None,
+                        force=True,
+                    )
+                    reset_stats += 1
+                except Exception:
+                    try:
+                        setattr(p, "_prospect_season_stats", None)
+                        setattr(p, "_prospect_season_year", int(season_year))
+                        setattr(p, "_prospect_last_stat_update_iso", "")
+                    except Exception:
+                        pass
+                kept.append(p)
+
+            # Target ~18 skaters + 2 goalies per junior club; refill with new draft-age kids.
+            goalies = sum(
+                1
+                for p in kept
+                if str(getattr(getattr(p, "identity", None), "position", "") or "").upper().endswith("G")
+            )
+            need_g = max(0, 2 - goalies)
+            need_sk = max(0, 18 - (len(kept) - goalies))
+            for _ in range(need_g + need_sk):
+                is_g = need_g > 0
+                if is_g:
+                    need_g -= 1
+                    pos = Position.G
+                    # Match bootstrap junior bands; pipeline shaping adds star power.
+                    ovr_lo, ovr_hi = 0.30, 0.48
+                else:
+                    need_sk -= 1
+                    pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D])
+                    roll = int(rng.randint(1, 100))
+                    if roll <= 6:
+                        ovr_lo, ovr_hi = 0.44, 0.54
+                    elif roll <= 22:
+                        ovr_lo, ovr_hi = 0.38, 0.50
+                    elif roll <= 55:
+                        ovr_lo, ovr_hi = 0.34, 0.46
+                    else:
+                        ovr_lo, ovr_hi = 0.30, 0.42
+                try:
+                    newbie = _spawn_player(
+                        rng,
+                        pos=pos,
+                        ovr_lo=ovr_lo,
+                        ovr_hi=ovr_hi,
+                        # Draft-eligible cohort (matches bootstrap CHL 17–20).
+                        age_lo=17,
+                        age_hi=18,
+                        used_names=used_names,
+                        league_players=league_players,
+                        pool_context="junior",
+                    )
+                    _set_assignment(
+                        newbie,
+                        level="junior",
+                        league_code=code,
+                        club=str(tm.get("name") or ""),
+                    )
+                    try:
+                        newbie.context.current_team_id = str(tm.get("team_id") or "")
+                    except Exception:
+                        pass
+                    try:
+                        initialize_prospect_season(
+                            newbie,
+                            code,
+                            rng=rng,
+                            season_year=int(season_year),
+                            calendar_iso=None,
+                            force=True,
+                        )
+                    except Exception:
+                        pass
+                    kept.append(newbie)
+                    league_players.append(newbie)
+                    injected += 1
+                except Exception:
+                    pass
+            tm["players"] = kept
+
+    try:
+        league.players = league_players
+    except Exception:
+        pass
+
+    # Rebuild NHL-scale star tiers from junior-raw injects (same as franchise start).
+    try:
+        from app.sim_engine.league_hierarchy_bootstrap import _shape_draft_class_pipeline
+
+        _shape_draft_class_pipeline(league, rng)
+    except Exception:
+        pass
+
+    # Keep the unsigned global pool aging so future drafts aren't a stale cohort.
+    try:
+        if hasattr(sim, "_advance_global_prospect_season"):
+            sim._advance_global_prospect_season(int(season_year), rng)
+    except Exception:
+        pass
+
+    session._prospect_stats_synced_iso = ""
+    session._prospect_sync_rows = None
+    session._prospect_sync_cache_key = None
+    session._prospect_retune_v4_applied = False
+    session.draft_rank_prev = {}
+    session.draft_preseason_rank = {}
+    session.draft_midseason_rank = {}
+    try:
+        _bump_prospect_revision(session)
+        invalidate_session_payload_caches(session, reason="season_reset")
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "aged": aged,
+        "stats_reset": reset_stats,
+        "injected": injected,
+        "culled": culled,
+        "season_year": int(season_year),
+    }
+
+
+def _ensure_undrafted_draft_depth(session: FranchiseSession, season_year: int) -> Dict[str, Any]:
+    """Inject draft-age kids when the undrafted board is thin (no re-aging)."""
+    import random as _random
+
+    from app.sim_engine.entities.player import Position
+    from app.sim_engine.generation.prospect_league_scoring import initialize_prospect_season
+    from app.sim_engine.league_hierarchy_bootstrap import _set_assignment, _spawn_player
+
+    sim = getattr(session, "sim", None)
+    league = getattr(sim, "league", None) if sim else None
+    if league is None or sim is None:
+        return {"ok": False}
+
+    undrafted = 0
+    for block in getattr(league, "development_leagues", None) or []:
+        for tm in block.get("teams") or []:
+            for p in tm.get("players") or []:
+                if getattr(p, "retired", False):
+                    continue
+                if bool(getattr(p, "drafted", False)):
+                    continue
+                if str(
+                    getattr(p, "nhl_rights_team_id", None)
+                    or getattr(p, "rights_team_id", None)
+                    or getattr(p, "drafted_by", None)
+                    or ""
+                ).strip():
+                    continue
+                ident = getattr(p, "identity", None)
+                age = int(getattr(ident, "age", 99) or 99) if ident else 99
+                if age <= 20:
+                    undrafted += 1
+    if undrafted >= 180:
+        return {"ok": True, "undrafted": undrafted, "injected": 0}
+
+    rng = getattr(sim, "rng", None) or _random.Random(int(season_year) * 4243)
+    used_names: set = set()
+    league_players = list(getattr(league, "players", None) or [])
+    for p in league_players:
+        ident = getattr(p, "identity", None)
+        nm = str(getattr(ident, "name", "") or "")
+        if nm:
+            used_names.add(nm)
+
+    injected = 0
+    need = max(0, 220 - undrafted)
+    targets: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    for block in getattr(league, "development_leagues", None) or []:
+        for tm in block.get("teams") or []:
+            if isinstance(tm, dict):
+                targets.append((block, tm))
+    if not targets:
+        return {"ok": True, "undrafted": undrafted, "injected": 0}
+
+    for i in range(need):
+        block, tm = targets[i % len(targets)]
+        code = str(block.get("league_code") or "CHL_OHL")
+        is_g = (i % 12) == 0
+        pos = Position.G if is_g else rng.choice([Position.C, Position.LW, Position.RW, Position.D])
+        try:
+            newbie = _spawn_player(
+                rng,
+                pos=pos,
+                # Junior-raw bands only — never NHL-starter OVRs on inject.
+                ovr_lo=0.30 if is_g else 0.32,
+                ovr_hi=0.48 if is_g else 0.52,
+                age_lo=17,
+                age_hi=19,
+                used_names=used_names,
+                league_players=league_players,
+                pool_context="junior",
+            )
+            _set_assignment(newbie, level="junior", league_code=code, club=str(tm.get("name") or ""))
+            try:
+                newbie.context.current_team_id = str(tm.get("team_id") or "")
+            except Exception:
+                pass
+            try:
+                initialize_prospect_season(
+                    newbie, code, rng=rng, season_year=int(season_year), force=True
+                )
+            except Exception:
+                pass
+            roster = list(tm.get("players") or [])
+            roster.append(newbie)
+            tm["players"] = roster
+            league_players.append(newbie)
+            injected += 1
+        except Exception:
+            continue
+    try:
+        league.players = league_players
+    except Exception:
+        pass
+    try:
+        from app.sim_engine.league_hierarchy_bootstrap import _shape_draft_class_pipeline
+
+        _shape_draft_class_pipeline(league, rng)
+    except Exception:
+        pass
+    try:
+        from services.franchise_sim import _bump_prospect_revision, invalidate_session_payload_caches
+
+        _bump_prospect_revision(session)
+        invalidate_session_payload_caches(session, reason="season_reset")
+    except Exception:
+        pass
+    return {"ok": True, "undrafted": undrafted, "injected": injected}
+
+
+def _retune_inflated_underage_prospects(session: FranchiseSession) -> Dict[str, Any]:
+    """One-shot: crush NHL-starter OVRs on pre-draft-age kids left by bad year-roll injects."""
+    if bool(getattr(session, "_underage_ovr_retune_v1", False)):
+        return {"ok": True, "skipped": True}
+
+    import random as _random
+
+    from app.sim_engine.league_hierarchy_bootstrap import (
+        _apply_shaped_player,
+        _player_ovr_frac,
+        _shape_draft_class_pipeline,
+    )
+
+    sim = getattr(session, "sim", None)
+    league = getattr(sim, "league", None) if sim else None
+    if league is None:
+        setattr(session, "_underage_ovr_retune_v1", True)
+        return {"ok": False, "error": "no league"}
+
+    rng = getattr(sim, "rng", None) or _random.Random(7711)
+    fixed = 0
+    code_by_id: Dict[int, str] = {}
+    for block in getattr(league, "development_leagues", None) or []:
+        code = str(block.get("league_code") or "JUNIOR")
+        for tm in block.get("teams") or []:
+            for p in tm.get("players") or []:
+                if getattr(p, "retired", False):
+                    continue
+                if bool(getattr(p, "drafted", False)):
+                    continue
+                if str(
+                    getattr(p, "nhl_rights_team_id", None)
+                    or getattr(p, "rights_team_id", None)
+                    or getattr(p, "drafted_by", None)
+                    or ""
+                ).strip():
+                    continue
+                ident = getattr(p, "identity", None)
+                try:
+                    age = int(getattr(ident, "age", 99) or 99) if ident else 99
+                except Exception:
+                    age = 99
+                if age > 16:
+                    continue
+                try:
+                    ovr = float(_player_ovr_frac(p))
+                except Exception:
+                    continue
+                # Age 16 should never sit near NHL starter ability.
+                if ovr <= 0.50 + 1e-6:
+                    continue
+                code_by_id[id(p)] = code
+                try:
+                    _apply_shaped_player(
+                        p,
+                        tier="pool",
+                        lo=0.34,
+                        hi=0.48,
+                        pot_lo=78,
+                        pot_hi=92,
+                        rng=rng,
+                        code_by_id=code_by_id,
+                        rng_inst=rng,
+                    )
+                    fixed += 1
+                except Exception:
+                    continue
+
+    if fixed:
+        try:
+            _shape_draft_class_pipeline(league, rng)
+        except Exception:
+            pass
+        try:
+            from services.franchise_sim import _bump_prospect_revision, invalidate_session_payload_caches
+
+            _bump_prospect_revision(session)
+            invalidate_session_payload_caches(session, reason="underage_ovr_retune")
+        except Exception:
+            pass
+
+    setattr(session, "_underage_ovr_retune_v1", True)
+    return {"ok": True, "fixed": fixed}
 
 
 def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
@@ -4772,6 +6515,13 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     session.development_report_done = False
     session.development_report_completed_season = 0
     session.development_report_generated_at = ""
+    # Final Skate is latched by retirements_processed; leaving it set meant no
+    # club retired anyone from year two onward.
+    session.retirements_processed = False
+    session.retirements_payload = {}
+    session.awards_generated = False
+    session.awards_payload = {}
+    session.offer_sheet_resolutions = {}
     # Reset per-team goalie workload state so Year 2+ does not inherit fatigue.
     try:
         for team in teams:
@@ -4784,9 +6534,39 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
                     setattr(team, "_gm_goalie_usage_strategy", None)
     except Exception:
         pass
+    # Clear stamped season production so year-2 GP cannot inherit year-1 totals.
+    try:
+        from services.franchise_sim import _iter_league_players_for_aging
+
+        league_clear = getattr(sim, "league", None)
+        for pl in _iter_league_players_for_aging(league_clear) if league_clear is not None else []:
+            for attr in (
+                "games_played",
+                "gp",
+                "nhl_games_played_this_season",
+                "goals",
+                "assists",
+                "points",
+            ):
+                try:
+                    if hasattr(pl, attr):
+                        setattr(pl, attr, 0)
+                except Exception:
+                    pass
+    except Exception:
+        pass
     # Keep next_season_generated False until payload is ready below; cleared again
     # when the new season actually starts (_finalize_next_season_reveal).
     session.season_calendar_year = next_sy
+    # Re-sync ages to Sept 15 of the new season year (birth-date accurate).
+    try:
+        from services.franchise_sim import _iter_league_players_for_aging, sync_player_age_to_season
+
+        league_obj = getattr(sim, "league", None)
+        for pl in _iter_league_players_for_aging(league_obj) if league_obj is not None else []:
+            sync_player_age_to_season(pl, next_sy)
+    except Exception:
+        pass
     session.draft_completed = False
     session.draft_lottery_done = False
     session.draft_lottery_payload = {}
@@ -4801,6 +6581,20 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     session.free_agency_open = False
     session.free_agents_payload = []
     session.free_agency_market_payload = {}
+    session.fa_market_book = {}
+    session.fa_market_day = 0
+    try:
+        from app.sim_engine.trades.trade_pick_registry import ensure_franchise_pick_registry, upcoming_draft_year
+
+        league = getattr(sim, "league", None)
+        if league is not None:
+            setattr(league, "season_year", next_sy)
+            setattr(league, "current_season", next_sy)
+            setattr(league, "draft_year", upcoming_draft_year(next_sy))
+            setattr(league, "season_is_calendar", True)
+            ensure_franchise_pick_registry(league, season_calendar_year=next_sy, years_ahead=4)
+    except Exception:
+        pass
     session.cpu_fa_signings = {}
     session.cpu_rfa_decisions = {}
     session.cpu_fa_wave = 0
@@ -4812,6 +6606,54 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     session.draft_preseason_rank = {}
     session.draft_midseason_rank = {}
     session.draft_rank_snapshot_week = ""
+
+    # World Juniors is season-scoped. Leaving last year's completed bundle /
+    # loan latch made September still look like a finished WJC and blocked
+    # the next Christmas loan prompts.
+    session.wjc_tournament_bundle = None
+    session.wjc_loan_prompts_enqueued = False
+    session.wjc_nhl_u20_loan = {}
+    session.wjc_draft_score_boosts = {}
+    try:
+        arch = list(getattr(session, "showcase_archive", None) or [])
+        session.showcase_archive = [
+            a
+            for a in arch
+            if not (
+                isinstance(a, dict)
+                and (a.get("kind") == "wjc_tournament" or a.get("wjc_live") or a.get("wjc_phase"))
+            )
+        ]
+    except Exception:
+        pass
+
+    # Age juniors, inject a fresh undrafted draft-age class, and zero prospect
+    # season lines so the Prospect Board is not last year's class with 60+ GP.
+    draft_roll: Dict[str, Any] = {}
+    try:
+        draft_roll = _roll_development_league_draft_class(session, next_sy)
+        session._draft_class_roll_year = int(next_sy)
+    except Exception as exc:
+        draft_roll = {"ok": False, "error": str(exc)}
+
+    # Drop last year's lifecycle cinematics so Enter Preseason lands on the hub,
+    # not a stale awards night / playoff bracket popup.
+    _scrub_lifecycle_popups_for_new_season(session)
+    try:
+        session.playoff_live = None
+    except Exception:
+        pass
+    if hasattr(session, "playoff_live"):
+        try:
+            delattr(session, "playoff_live")
+        except Exception:
+            session.playoff_live = None
+    _clear_trade_acquisition_cooldowns(session, teams)
+    try:
+        from services.league_operations import invalidate_league_ops_cache
+        invalidate_league_ops_cache(session)
+    except Exception:
+        pass
 
     first_opp = ""
     uid = str(session.user_team_id)
@@ -4848,19 +6690,144 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
         "blocking_reasons": [],
         "warning_reasons": [],
         "available_actions": ["enter_preseason", "back_to_hub"],
+        "draft_class_roll": draft_roll,
     }
     session.next_season_payload = payload
     session.next_season_generated = True
     _mark_stage_completed(session, "roster_cleanup")
+    # Seamless handoff: skip the reveal cinematic and park the club in September camp.
+    # Hub world opens with the new calendar; players are already aged from year-end.
     session.offseason_stage = "next_season_reveal"
     _mark_stage_entered(session, "next_season_reveal")
-    session.next_important_event = "preseason_start"
-    session.phase = "offseason"
-    session.season_phase = "offseason"
-    session.timeline.append(f"NEW SEASON: {next_sy}–{next_sy + 1} schedule generated.")
+    _finalize_next_season_reveal(session)
+    session.timeline.append(f"NEW SEASON: {next_sy}–{next_sy + 1} schedule generated — camp opens.")
     invalidate_session_payload_caches(session, "next_season")
-    _enqueue_offseason_popup(session, "next_season_reveal", "New Season", f"{next_sy}–{next_sy + 1} ready")
-    return {"next_season": payload, "status": "next_season_reveal"}
+    return {"next_season": payload, "status": "preseason", "season_phase": "preseason"}
+
+
+def _scrub_lifecycle_popups_for_new_season(session: FranchiseSession) -> None:
+    """Remove awards / playoff / prior-year offseason stage popups after rollover."""
+    drop_kinds = {
+        "playoff_start",
+        "awards",
+        "retirements",
+        "salary_cap",
+        "development_report",
+        "draft_lottery",
+        "draft_combine",
+        "draft",
+        "draft_review",
+        "prospect_rights",
+        "re_sign",
+        "free_agency",
+        "roster_cleanup",
+        "next_season_reveal",
+        "stanley_cup",
+        "playoffs",
+    }
+    pops = list(getattr(session, "pending_ui_popups", None) or [])
+    kept = []
+    for p in pops:
+        if not isinstance(p, dict):
+            continue
+        kind = str(p.get("kind") or p.get("type") or "").lower()
+        eid = str(p.get("id") or "").lower()
+        if kind in drop_kinds or any(k in eid for k in ("awards", "playoff", "stanley", "offseason")):
+            continue
+        if p.get("playoff_live") or p.get("wjc_live"):
+            continue
+        kept.append(p)
+    session.pending_ui_popups = kept
+
+
+def _clear_trade_acquisition_cooldowns(session: FranchiseSession, teams: Optional[List[Any]] = None) -> int:
+    """Wipe acquisition stamps so year-N deals cannot lock year-N+1 trades.
+
+    ``calendar_cursor`` resets to 0 on rollover; without clearing ``last_acquired_day``
+    the cooldown math ``(0 - old_day) < 7`` is always true.
+    """
+    cleared = 0
+    league = getattr(getattr(session, "sim", None), "league", None)
+    team_list = list(teams if teams is not None else (getattr(league, "teams", None) or []))
+    pools = []
+    for team in team_list:
+        for attr in ("roster", "ahl_roster", "echl_roster", "prospect_pool"):
+            pools.append(list(getattr(team, attr, None) or []))
+    pools.append(list(getattr(league, "free_agents", None) or []))
+    for pool in pools:
+        for p in pool:
+            if p is None:
+                continue
+            if not (
+                getattr(p, "acquired_via_trade", False)
+                or getattr(p, "last_acquired_day", None) is not None
+                or getattr(p, "last_acquired_date", None)
+            ):
+                continue
+            try:
+                p.acquired_via_trade = False
+                p.last_acquired_day = None
+                p.last_acquired_date = None
+                p.acquired_via_trade_season = None
+                p.acquired_from_team_id = None
+                cleared += 1
+            except Exception:
+                continue
+    return cleared
+
+
+def _scrub_lines_of_departed_players(session: FranchiseSession) -> int:
+    """Blank saved line slots holding players who retired or left the club.
+
+    Deploy only warns about stale ids, so a lineup saved before the offseason
+    silently carries last year's roster into camp. Only ids that are provably
+    players — and provably no longer ours — are cleared.
+    """
+    lines = getattr(session, "lines", None)
+    if not isinstance(lines, dict) or not lines:
+        return 0
+
+    user_team = session.team_by_id.get(str(session.user_team_id))
+    ours = {
+        str(getattr(p, "id", "") or "")
+        for p in (getattr(user_team, "roster", None) or [])
+        if getattr(p, "id", None) and not getattr(p, "retired", False)
+    }
+    if not ours:
+        return 0
+
+    known: set = set()
+    league = getattr(session.sim, "league", None)
+    for team in list(getattr(league, "teams", None) or []):
+        for attr in ("roster", "ahl_roster", "echl_roster", "prospect_pool"):
+            for p in list(getattr(team, attr, None) or []):
+                pid = str(getattr(p, "id", "") or "")
+                if pid:
+                    known.add(pid)
+    for p in list(getattr(league, "free_agents", None) or []):
+        pid = str(getattr(p, "id", "") or "")
+        if pid:
+            known.add(pid)
+
+    departed = {pid for pid in known if pid not in ours}
+    if not departed:
+        return 0
+
+    cleared = 0
+
+    def _walk(node: Any) -> Any:
+        nonlocal cleared
+        if isinstance(node, dict):
+            return {k: _walk(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [_walk(v) for v in node]
+        if isinstance(node, str) and node in departed:
+            cleared += 1
+            return ""
+        return node
+
+    session.lines = _walk(lines)
+    return cleared
 
 
 def _finalize_next_season_reveal(session: FranchiseSession) -> Dict[str, Any]:
@@ -4871,6 +6838,10 @@ def _finalize_next_season_reveal(session: FranchiseSession) -> Dict[str, Any]:
     session.next_important_event = "preseason_start"
     # Season has begun — clear the generation latch so the next offseason can regenerate.
     session.next_season_generated = False
+    # generate_next_season still reads last year's cap row to label the reveal, so
+    # the salary-cap desk is only cleared once the reveal is behind us.
+    session.salary_cap_payload = {}
+    _scrub_lines_of_departed_players(session)
     return {"next_season": session.next_season_payload, "season_phase": "preseason"}
 
 
@@ -5091,6 +7062,8 @@ def build_offseason_state_extras(session: FranchiseSession) -> Dict[str, Any]:
         "prospect_rights": getattr(session, "prospect_rights_payload", None),
         "free_agents": session.free_agents_payload,
         "free_agency_market": getattr(session, "free_agency_market_payload", None),
+        "free_agency_open": bool(getattr(session, "free_agency_open", False)),
+        "fa_market_day": int(getattr(session, "fa_market_day", 0) or 0),
         "contracts": session.resign_payload,
         "salary_cap": session.salary_cap_payload,
         "development_report": session.development_report_payload,

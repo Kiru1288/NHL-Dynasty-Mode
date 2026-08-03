@@ -18,11 +18,16 @@ from app.sim_engine.trades.trade_history import (
     serialize_trade_record,
 )
 from app.sim_engine.trades.trade_pick_registry import (
+    draft_year_from_context,
     ensure_draft_pick_registry,
+    ensure_franchise_pick_registry,
     get_pick_by_id,
     get_team_owned_picks,
+    retire_draft_year_picks,
     serialize_team_picks,
+    tradeable_draft_year,
     transfer_pick,
+    upcoming_draft_year,
     validate_pick_ownership,
 )
 
@@ -38,10 +43,15 @@ __all__ = [
     "ensure_trade_history",
     "get_trade_history",
     "serialize_trade_record",
+    "draft_year_from_context",
     "ensure_draft_pick_registry",
+    "ensure_franchise_pick_registry",
     "get_pick_by_id",
     "get_team_owned_picks",
+    "retire_draft_year_picks",
     "serialize_team_picks",
+    "tradeable_draft_year",
     "transfer_pick",
+    "upcoming_draft_year",
     "validate_pick_ownership",
 ]

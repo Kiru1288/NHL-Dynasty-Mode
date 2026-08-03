@@ -1,21 +1,22 @@
 .dlot-root {
-  --panel: rgba(9, 25, 38, 0.94);
-  --panel-2: rgba(12, 35, 52, 0.94);
-  --line: rgba(156, 218, 236, 0.14);
-  --cyan: #13d8e7;
-  --gold: #e9a83c;
-  --text: #e9f7fb;
-  --muted: #8096a8;
+  --panel: var(--ops-panel);
+  --panel-2: var(--ops-panel-2);
+  --line: var(--ops-grid);
+  --cyan: var(--ops-cyan);
+  --gold: var(--ops-gold);
+  --text: var(--ops-text);
+  --muted: var(--ops-text-secondary);
   position: relative;
-  min-height: 100vh;
+  min-height: 100dvh;
+  height: 100dvh;
   overflow: hidden;
   color: var(--text);
   background:
-    radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.12), transparent 30%),
-    radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.08), transparent 26%),
-    linear-gradient(180deg, #06131f 0%, #020a11 100%);
+    radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.1), transparent 30%),
+    radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.06), transparent 26%),
+    linear-gradient(180deg, var(--ops-black) 0%, var(--ops-navy-deep) 100%);
   isolation: isolate;
-  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-ops-ui);
 }
 
 .dlot-bg,
@@ -62,29 +63,33 @@
   background: rgba(12, 31, 47, 0.72);
   border: 1px solid var(--line);
   color: var(--text);
-  padding: 0.5rem 1rem;
-  border-radius: 999px;
+  padding: 0.45rem 0.9rem;
+  border-radius: var(--radius-hud);
   cursor: pointer;
-  font-weight: 700;
-  transition: border-color 0.2s ease, transform 0.2s ease;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition: border-color var(--motion-micro);
 }
 
 .dlot-ghost-btn:hover {
-  border-color: rgba(73, 231, 240, 0.5);
-  transform: translateY(-1px);
+  border-color: var(--ops-grid-strong);
+  background: var(--ops-cyan-soft);
+  transform: none;
 }
 
 .dlot-live-pill,
 .dlot-status-pill {
   display: inline-flex;
   align-items: center;
-  padding: 0.35rem 0.85rem;
-  border-radius: 999px;
-  background: rgba(19, 216, 231, 0.1);
+  padding: 0.3rem 0.75rem;
+  border-radius: var(--radius-ops);
+  background: var(--ops-cyan-soft);
   border: 1px solid rgba(19, 216, 231, 0.28);
-  font-size: 0.72rem;
+  font-size: var(--type-phase-label-size);
   font-weight: 900;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--cyan);
 }
@@ -102,37 +107,49 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: calc(100vh - 140px);
+  min-height: calc(100dvh - 120px);
   padding: 2rem;
   text-align: center;
 }
 
 .dlot-eyebrow {
-  font-size: 0.75rem;
+  font-size: var(--type-phase-label-size);
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--cyan);
-  margin: 0 0 0.5rem;
+  margin: 0 0 0.4rem;
   font-weight: 900;
 }
 
+/* Distinct title: live lottery scan bar */
 .dlot-title {
-  font-size: clamp(2.2rem, 5vw, 3.6rem);
+  position: relative;
+  font-family: var(--font-broadcast-display);
+  font-size: clamp(2rem, 5vw, 3.2rem);
   font-weight: 900;
-  letter-spacing: -0.03em;
-  margin: 0 0 0.75rem;
+  letter-spacing: 0.06em;
+  margin: 0 0 0.65rem;
   text-transform: uppercase;
-  background: linear-gradient(180deg, #fff 30%, #94a3b8);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: var(--text);
+  padding-bottom: 10px;
+}
+
+.dlot-title::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: min(280px, 60vw);
+  height: 3px;
+  transform: translateX(-50%);
+  background: linear-gradient(90deg, transparent, var(--cyan), var(--gold), var(--cyan), transparent);
 }
 
 .dlot-subtitle {
   max-width: 48ch;
-  margin: 0 0 1.75rem;
-  color: rgba(255, 255, 255, 0.55);
-  font-size: 0.95rem;
+  margin: 0 0 1.5rem;
+  color: var(--muted);
+  font-size: var(--type-compact-size);
   line-height: 1.5;
 }
 
@@ -167,17 +184,17 @@
   background: rgba(12, 31, 47, 0.72);
   border: 1px solid var(--line);
   color: var(--text);
-  padding: 0.85rem 1.5rem;
-  border-radius: 999px;
+  padding: 0.8rem 1.4rem;
+  border-radius: var(--radius-hud, 4px);
   cursor: pointer;
   font-weight: 700;
   letter-spacing: 0.03em;
-  transition: border-color 0.2s ease, transform 0.2s ease;
+  transition: border-color 0.2s ease, background 0.2s ease;
 }
 
 .dlot-secondary-btn:hover {
   border-color: rgba(73, 231, 240, 0.5);
-  transform: translateY(-1px);
+  background: rgba(73, 231, 240, 0.08);
 }
 
 .dlot-stage {
@@ -226,8 +243,92 @@
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.18em;
-  color: #c4b5fd;
+  color: var(--ops-gold);
   margin: 0 0 14px;
+}
+
+/* Broadcast lower third */
+.dlot-lower-third {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 96px;
+  z-index: 65;
+  display: flex;
+  justify-content: flex-start;
+  padding: 0 1.5rem;
+  pointer-events: none;
+}
+
+.dlot-lower-third__panel {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.75rem;
+  align-items: center;
+  min-width: min(520px, 92vw);
+  padding: 0.65rem 0.85rem;
+  border-left: 4px solid var(--cyan);
+  background: linear-gradient(90deg, rgba(9, 25, 38, 0.96), rgba(6, 18, 28, 0.88));
+  box-shadow: var(--depth-overlay);
+  animation: dlotLowerThirdIn 0.45s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+.dlot-lower-third.is-user .dlot-lower-third__panel {
+  border-left-color: var(--gold);
+  background: linear-gradient(90deg, rgba(233, 168, 60, 0.18), rgba(9, 25, 38, 0.94));
+}
+
+.dlot-lower-third__pick {
+  font-family: var(--font-broadcast-display);
+  font-size: 1.6rem;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--gold);
+  line-height: 1;
+}
+
+.dlot-lower-third__body strong {
+  display: block;
+  font-size: 1.05rem;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  color: #fff;
+}
+
+.dlot-lower-third__body span {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+@keyframes dlotLowerThirdIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.dlot-reveal-overlay.is-user-team {
+  background: rgba(2, 6, 23, 0.94);
+}
+
+.dlot-reveal-overlay.is-user-team .dlot-reveal-team {
+  color: var(--gold);
+  text-shadow: 0 0 32px rgba(233, 168, 60, 0.28);
+}
+
+.dlot-reveal-overlay.is-user-team .dlot-logo.lg,
+.dlot-reveal-overlay.is-user-team .dlot-logo.xl {
+  border-color: rgba(233, 168, 60, 0.45);
+  box-shadow: 0 0 28px rgba(233, 168, 60, 0.22);
 }
 
 .dlot-reveal-pick {
@@ -259,6 +360,16 @@
   height: 56px;
 }
 
+.dlot-logo.sm {
+  width: 28px;
+  height: 28px;
+}
+
+.dlot-logo.xs {
+  width: 16px;
+  height: 16px;
+}
+
 .dlot-logo.lg {
   width: 120px;
   height: 120px;
@@ -267,6 +378,29 @@
 .dlot-logo.xl {
   width: 160px;
   height: 160px;
+}
+
+.dlot-via,
+.dlot-via-inline,
+.dlot-reveal-via {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: rgba(191, 219, 254, 0.78);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.dlot-reveal-via {
+  justify-content: center;
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+}
+
+.dlot-via-inline {
+  margin-top: 2px;
+  display: flex;
 }
 
 .dlot-logo-fallback {
@@ -285,8 +419,8 @@
 .dlot-chip {
   display: inline-flex;
   align-items: center;
-  padding: 0.35rem 0.75rem;
-  border-radius: 999px;
+  padding: 0.3rem 0.6rem;
+  border-radius: 2px;
   background: rgba(30, 41, 59, 0.8);
   border: 1px solid rgba(148, 163, 184, 0.2);
   font-size: 0.8rem;
@@ -327,21 +461,21 @@
 .dlot-panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  backdrop-filter: blur(12px);
-  padding: 1rem;
-  max-height: calc(100vh - 200px);
+  border-radius: var(--radius-card);
+  padding: 0.85rem;
+  max-height: calc(100dvh - 180px);
   display: flex;
   flex-direction: column;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+  box-shadow: var(--depth-registered);
 }
 
 .dlot-panel h2 {
-  font-size: 0.85rem;
+  font-size: var(--type-phase-label-size);
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #64748b;
-  margin: 0 0 0.75rem;
+  color: var(--muted);
+  margin: 0 0 0.65rem;
+  font-weight: 900;
 }
 
 .dlot-rail {
@@ -356,17 +490,17 @@
 .dlot-card {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  border-radius: 0.75rem;
-  background: rgba(30, 41, 59, 0.5);
-  border: 1px solid rgba(148, 163, 184, 0.1);
-  transition: border-color 200ms, opacity 200ms;
+  gap: 0.65rem;
+  padding: 0.65rem;
+  border-radius: var(--radius-control);
+  background: rgba(7, 22, 34, 0.72);
+  border: 1px solid var(--line);
+  transition: border-color var(--motion-workspace), opacity var(--motion-workspace);
 }
 
 .dlot-card.is-active {
-  border-color: rgba(168, 85, 247, 0.45);
-  box-shadow: 0 0 20px rgba(124, 58, 237, 0.18);
+  border-color: var(--cyan);
+  box-shadow: inset 3px 0 0 var(--cyan);
 }
 
 .dlot-card.is-pending {
@@ -374,7 +508,8 @@
 }
 
 .dlot-card.is-user {
-  border-color: rgba(96, 165, 250, 0.45);
+  border-color: var(--gold);
+  background: var(--ops-gold-soft);
 }
 
 .dlot-card-rank {
@@ -432,20 +567,20 @@
   grid-template-columns: 72px 56px minmax(180px, 1fr) 120px 120px;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  background: rgba(30, 41, 59, 0.45);
+  padding: 8px 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--line);
+  background: rgba(7, 22, 34, 0.65);
 }
 
 .dlot-board-row.is-user {
-  border-color: rgba(96, 165, 250, 0.45);
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.2), rgba(15, 23, 42, 0.72));
+  border-color: var(--gold);
+  background: var(--ops-gold-soft);
 }
 
 .dlot-board-row.is-jump {
-  border-color: rgba(34, 197, 94, 0.4);
-  background: linear-gradient(135deg, rgba(22, 163, 74, 0.16), rgba(15, 23, 42, 0.72));
+  border-color: rgba(82, 223, 148, 0.4);
+  background: var(--ops-success-soft);
 }
 
 .dlot-board-pick {
@@ -492,15 +627,20 @@
   bottom: 0;
   left: 0;
   right: 0;
-  z-index: 20;
-  background: linear-gradient(0deg, rgba(2, 10, 17, 0.98), rgba(6, 19, 31, 0.9));
+  z-index: var(--z-sticky);
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 0.5rem;
+  background: rgba(2, 10, 17, 0.98);
   border-top: 1px solid var(--line);
-  padding: 0.75rem 1.5rem 1rem;
+  padding: 0.65rem 1.25rem 0.85rem;
 }
 
 .dlot-ticker {
-  margin-bottom: 0.75rem;
+  margin-bottom: 0;
   text-align: center;
+  overflow-x: auto;
+  max-width: 100%;
 }
 
 .dlot-ticker-track {
@@ -515,7 +655,7 @@
 }
 
 .dlot-ticker-group span {
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
   font-weight: 900;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -535,8 +675,8 @@
   background: rgba(12, 31, 47, 0.72);
   border: 1px solid var(--line);
   color: var(--muted);
-  padding: 0.75rem 1.25rem;
-  border-radius: 999px;
+  padding: 0.7rem 1.2rem;
+  border-radius: var(--radius-hud, 4px);
   cursor: pointer;
   font-weight: 700;
   transition: border-color 0.2s ease, transform 0.2s ease;
@@ -546,6 +686,20 @@
   border-color: rgba(73, 231, 240, 0.5);
   color: var(--text);
   transform: translateY(-1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dlot-reveal-overlay,
+  .dlot-lower-third__panel {
+    animation: none;
+  }
+
+  .dlot-cta-btn:hover:not(:disabled),
+  .dlot-secondary-btn:hover,
+  .dlot-skip-btn:hover,
+  .dlot-ghost-btn:hover {
+    transform: none;
+  }
 }
 
 @media (max-width: 760px) {

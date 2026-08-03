@@ -258,7 +258,7 @@ function rewriteTradeSummary(raw, left, right) {
   return text;
 }
 
-function TradeWireBody({ pop, onDismiss, onAction }) {
+function TradeWireBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTradeCount = 0 }) {
   const teams = (Array.isArray(pop.teams) ? pop.teams : []).filter(
     (t) => t && Array.isArray(t.acquired_assets)
   );
@@ -322,6 +322,16 @@ function TradeWireBody({ pop, onDismiss, onAction }) {
         <button type="button" className="trade-wire__btn" onClick={() => onAction({ id: "storylines" })}>
           Open Storylines
         </button>
+        {queuedTradeCount > 1 && typeof onDismissAllTrades === "function" ? (
+          <button
+            type="button"
+            className="trade-wire__btn trade-wire__btn--clear"
+            onClick={onDismissAllTrades}
+            title="Clear every queued trade alert"
+          >
+            Clear all trades ({queuedTradeCount})
+          </button>
+        ) : null}
         <button type="button" className="trade-wire__btn is-primary" onClick={onDismiss}>
           Continue →
         </button>
@@ -389,15 +399,35 @@ function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [] }) {
   );
 }
 
-function StorylineBody({ pop, onDismiss, onAction }) {
-  if (isTradePopup(pop)) {
-    return <TradeWireBody pop={pop} onDismiss={onDismiss} onAction={onAction} />;
+function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTradeCount = 0 }) {
+  if (isTradePopup(pop) && !pop.trade_demand) {
+    return (
+      <TradeWireBody
+        pop={pop}
+        onDismiss={onDismiss}
+        onDismissAllTrades={onDismissAllTrades}
+        onAction={onAction}
+        queuedTradeCount={queuedTradeCount}
+      />
+    );
   }
 
-  const storyText = pop.story_report || pop.summary || pop.description || pop.storyline_text || "";
+  const demand = pop.trade_demand || null;
+  const storyText =
+    pop.body ||
+    pop.headline ||
+    pop.story_report ||
+    pop.summary ||
+    pop.description ||
+    pop.storyline_text ||
+    "";
   const impactText = pop.franchise_impact || pop.effect_summary || "";
   const hasGames = Number(pop.games_remaining) > 0;
-  const sourceLabel = pop.source_label || pop.title || "Team Report";
+  const sourceLabel =
+    pop.source_label ||
+    (demand ? "Player Trade Demand" : null) ||
+    pop.title ||
+    "Team Report";
 
   const stats = [
     { label: "Source", value: sourceLabel },
@@ -405,9 +435,28 @@ function StorylineBody({ pop, onDismiss, onAction }) {
     { label: "Team", value: pop.team_abbrev || pop.team_abbr || "—" },
     {
       label: "Status",
-      value: hasGames ? "Away from team" : pop.legal_severity === "major" ? "Under review" : "Active",
+      value: demand
+        ? demand.disruptor
+          ? "Locker-room disruptor"
+          : "Trade demand"
+        : hasGames
+          ? "Away from team"
+          : pop.legal_severity === "major"
+            ? "Under review"
+            : "Active",
     },
   ];
+  if (demand) {
+    stats.push({
+      label: "Trade value",
+      value: `${demand.value_before ?? "—"} → ${demand.value_after ?? "—"}`,
+      sub: demand.value_delta != null ? `Δ ${demand.value_delta}` : "",
+    });
+    stats.push({
+      label: "Willing destinations",
+      value: demand.destination_label || `${(demand.preferred_destinations || []).length || 0} teams`,
+    });
+  }
   if (pop.cause || pop.cause_type) {
     stats.push({
       label: "Cause",
@@ -423,20 +472,24 @@ function StorylineBody({ pop, onDismiss, onAction }) {
   }
 
   const actions = [
-    { id: "storylines", label: "Open Storylines", primary: true },
-    { id: "roster", label: "View Player" },
+    { id: "storylines", label: "Open Storylines", primary: !demand },
+    { id: demand ? "tradehub" : "roster", label: demand ? "Open Trade Hub" : "View Player", primary: Boolean(demand) },
   ];
   if (pop.is_user_team) {
     actions.unshift({ id: "calendar", label: "View Calendar" });
   }
 
   return (
-    <MediaAlertShell pop={{ ...pop, source_label: sourceLabel }} onDismiss={onDismiss} onAction={onAction} actions={actions}>
+    <MediaAlertShell pop={{ ...pop, source_label: sourceLabel, headline: pop.headline || sourceLabel }} onDismiss={onDismiss} onAction={onAction} actions={actions}>
       <div className="media-alert__stat-grid">
         {stats.map((s) => (
           <StatCard key={s.label} label={s.label} value={s.value} sub={s.sub} />
         ))}
       </div>
+
+      {demand?.dossier_label ? (
+        <p className="media-alert__callout">{demand.dossier_label}</p>
+      ) : null}
 
       {pop.cause ? (
         <section className="media-alert__section">
@@ -446,29 +499,45 @@ function StorylineBody({ pop, onDismiss, onAction }) {
       ) : null}
 
       <section className="media-alert__section">
-        <h4 className="media-alert__section-title">Story Report</h4>
+        <h4 className="media-alert__section-title">{demand ? "Demand" : "Story Report"}</h4>
         <p className="media-alert__story">{storyText}</p>
       </section>
 
-      <section className="media-alert__section media-alert__section--impact">
-        <h4 className="media-alert__section-title">Franchise Impact</h4>
-        <OvrImpactBlock
-          before={pop.overall_before ?? pop.base_overall}
-          after={pop.overall_after ?? pop.effective_overall}
-          delta={pop.overall_delta}
-          reason={
-            pop.impact_reason ||
-            pop.cause ||
-            (hasGames
-              ? "Player temporarily unavailable — investigation / conduct penalty"
-              : "Temporary performance modifier from verified franchise trigger")
-          }
-        />
-        {impactText && !pop.overall_delta ? <p className="media-alert__impact-line">{impactText}</p> : null}
-        {!impactText && pop.overall_delta == null ? (
-          <p className="media-alert__impact-muted">No direct rating change reported.</p>
-        ) : null}
-      </section>
+      {demand ? (
+        <section className="media-alert__section media-alert__section--impact">
+          <h4 className="media-alert__section-title">Trade Value Impact</h4>
+          <OvrImpactBlock
+            before={demand.value_before}
+            after={demand.value_after}
+            delta={demand.value_delta}
+            reason={
+              demand.disruptor
+                ? "Disruptor penalty — value torpedoed while forcing a move"
+                : "Demand discount — clubs leverage his desire to leave"
+            }
+          />
+        </section>
+      ) : (
+        <section className="media-alert__section media-alert__section--impact">
+          <h4 className="media-alert__section-title">Franchise Impact</h4>
+          <OvrImpactBlock
+            before={pop.overall_before ?? pop.base_overall}
+            after={pop.overall_after ?? pop.effective_overall}
+            delta={pop.overall_delta}
+            reason={
+              pop.impact_reason ||
+              pop.cause ||
+              (hasGames
+                ? "Player temporarily unavailable — investigation / conduct penalty"
+                : "Temporary performance modifier from verified franchise trigger")
+            }
+          />
+          {impactText && !pop.overall_delta ? <p className="media-alert__impact-line">{impactText}</p> : null}
+          {!impactText && pop.overall_delta == null ? (
+            <p className="media-alert__impact-muted">No direct rating change reported.</p>
+          ) : null}
+        </section>
+      )}
 
       {pop.requires_decision ? (
         <p className="media-alert__callout">GM response may be required — check Storylines → Decisions.</p>
@@ -645,6 +714,295 @@ function AllStarBody({ pop }) {
   );
 }
 
+function ShowcasePopupStyles() {
+  return (
+    <style>{`
+      .showcase-popup {
+        position: fixed;
+        inset: 0;
+        z-index: var(--z-popup, 12000);
+        display: grid;
+        place-items: stretch;
+        pointer-events: auto;
+      }
+      .showcase-popup__backdrop {
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(90deg, rgba(2, 10, 17, 0.94) 0%, rgba(2, 10, 17, 0.82) 38%, rgba(2, 10, 17, 0.55) 100%),
+          repeating-linear-gradient(0deg, rgba(19, 216, 231, 0.03) 0px, rgba(19, 216, 231, 0.03) 1px, transparent 1px, transparent 3px);
+        backdrop-filter: blur(2px);
+      }
+      .showcase-popup__panel {
+        position: relative;
+        margin: 0;
+        width: min(720px, calc(100vw - 24px));
+        max-height: calc(100dvh - 24px);
+        align-self: center;
+        justify-self: end;
+        margin-right: max(12px, env(safe-area-inset-right));
+        border-radius: var(--radius-hud, 4px);
+        border: 1px solid var(--ops-grid-2, rgba(115, 229, 241, 0.25));
+        border-left: 4px solid var(--ops-cyan, #13d8e7);
+        background: var(--ops-panel, rgba(9, 25, 38, 0.98));
+        box-shadow: var(--depth-overlay, 0 24px 70px rgba(0, 0, 0, 0.42));
+        overflow: hidden;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+      }
+      .showcase-popup__panel--media,
+      .showcase-popup__panel--trade-wire {
+        width: min(560px, calc(100vw - 24px));
+      }
+      .showcase-popup__head {
+        padding: 10px 14px 8px;
+        border-bottom: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+        background: rgba(0, 0, 0, 0.22);
+      }
+      .showcase-popup__title {
+        margin: 0;
+        font-size: var(--type-ops-heading-size, 0.95rem);
+        font-weight: 900;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--ops-text, #e9f7fb);
+      }
+      .showcase-popup__season {
+        margin-top: 4px;
+        font-size: var(--type-phase-label-size, 0.68rem);
+        font-weight: 800;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--ops-text-secondary, #8096a8);
+      }
+      .showcase-popup__body {
+        min-height: 0;
+        overflow: auto;
+        padding: 12px 14px;
+      }
+      .showcase-popup__foot {
+        padding: 10px 14px;
+        border-top: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+        background: rgba(0, 0, 0, 0.18);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .showcase-popup__queue,
+      .media-alert__queue {
+        font-size: var(--type-phase-label-size, 0.68rem);
+        font-weight: 900;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--ops-gold, #e9a83c);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .media-alert__clear-trades,
+      .trade-wire__btn--clear {
+        min-height: 30px;
+        padding: 0 10px;
+        border-radius: var(--radius-control, 6px);
+        border: 1px solid rgba(233, 168, 60, 0.45);
+        background: rgba(233, 168, 60, 0.12);
+        color: var(--ops-gold, #e9a83c);
+        font-size: 0.65rem;
+        font-weight: 900;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+      .media-alert__clear-trades:hover,
+      .trade-wire__btn--clear:hover {
+        border-color: var(--ops-gold, #e9a83c);
+        background: rgba(233, 168, 60, 0.22);
+      }
+      .showcase-popup__btn,
+      .media-alert__continue,
+      .media-alert__dismiss {
+        min-height: 34px;
+        padding: 0 14px;
+        border-radius: var(--radius-control, 6px);
+        border: 1px solid var(--ops-grid-2, rgba(115, 229, 241, 0.25));
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--ops-text, #e9f7fb);
+        font-size: var(--type-dept-label-size, 0.72rem);
+        font-weight: 900;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+      .showcase-popup__btn:hover,
+      .media-alert__continue:hover {
+        border-color: var(--ops-cyan, #13d8e7);
+        background: var(--ops-cyan-soft, rgba(19, 216, 231, 0.13));
+      }
+      .media-alert {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .media-alert__source-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+      }
+      .media-alert__icon {
+        width: 28px;
+        height: 28px;
+        flex: 0 0 28px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--ops-grid-2, rgba(115, 229, 241, 0.25));
+        border-radius: var(--radius-ops, 2px);
+        background: rgba(0, 0, 0, 0.22);
+        font-size: 12px;
+        font-weight: 900;
+        color: var(--ops-cyan, #13d8e7);
+      }
+      .media-alert__source {
+        margin: 0;
+        font-size: var(--type-dept-label-size, 0.72rem);
+        font-weight: 900;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--ops-cyan, #13d8e7);
+      }
+      .media-alert__date {
+        display: block;
+        margin-top: 2px;
+        font-size: var(--type-table-meta-size, 0.72rem);
+        color: var(--ops-text-secondary, #8096a8);
+      }
+      .media-alert__hero {
+        display: grid;
+        grid-template-columns: 44px minmax(0, 1fr);
+        gap: 10px;
+        align-items: center;
+      }
+      .media-alert__avatar {
+        width: 44px;
+        height: 44px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+        border-radius: var(--radius-ops, 2px);
+        background: rgba(0, 0, 0, 0.22);
+        font-weight: 900;
+        letter-spacing: 0.04em;
+        color: var(--ops-text-secondary, #8096a8);
+      }
+      .media-alert__headline {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 800;
+        line-height: 1.2;
+      }
+      .media-alert__player-line {
+        margin: 4px 0 0;
+        font-size: var(--type-body-size, 0.875rem);
+        color: var(--ops-text-secondary, #8096a8);
+      }
+      .media-alert__team-badge {
+        margin-left: 6px;
+        padding: 2px 6px;
+        border: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+        border-radius: var(--radius-ops, 2px);
+        font-size: var(--type-table-meta-size, 0.72rem);
+        font-weight: 900;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .media-alert__stat-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+      }
+      .media-alert__stat {
+        padding: 8px;
+        border: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+        border-radius: var(--radius-ops, 2px);
+        background: rgba(0, 0, 0, 0.14);
+      }
+      .media-alert__stat-label {
+        display: block;
+        font-size: var(--type-phase-label-size, 0.68rem);
+        font-weight: 900;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--ops-text-secondary, #8096a8);
+      }
+      .media-alert__stat-value {
+        display: block;
+        margin-top: 4px;
+        font-size: var(--type-body-size, 0.875rem);
+        font-weight: 800;
+      }
+      .media-alert__section {
+        padding: 8px 0;
+        border-top: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+      }
+      .media-alert__section-title {
+        margin: 0 0 6px;
+        font-size: var(--type-dept-label-size, 0.72rem);
+        font-weight: 900;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--ops-text-secondary, #8096a8);
+      }
+      .media-alert__story,
+      .media-alert__impact-line {
+        margin: 0;
+        font-size: var(--type-body-size, 0.875rem);
+        line-height: 1.45;
+        color: var(--ops-text, #e9f7fb);
+      }
+      .media-alert__actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .media-alert__action {
+        min-height: 32px;
+        padding: 0 12px;
+        border-radius: var(--radius-control, 6px);
+        border: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--ops-text, #e9f7fb);
+        font-size: var(--type-dept-label-size, 0.72rem);
+        font-weight: 900;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+      .media-alert__action.is-primary {
+        border-color: var(--ops-cyan, #13d8e7);
+        background: var(--ops-cyan, #13d8e7);
+        color: var(--ops-navy, #04101a);
+      }
+      .media-alert__foot {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        padding-top: 8px;
+        border-top: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+      }
+      .trade-wire__title {
+        margin: 0 0 8px;
+        font-size: var(--type-ops-heading-size, 0.95rem);
+        font-weight: 900;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+    `}</style>
+  );
+}
+
 export function ShowcasePopupLayer() {
   const { franchiseState, onDismissShowcasePopups, setScreen } = useGameUI();
   const rawQueue = (franchiseState?.pending_ui_popups || []).filter(
@@ -669,6 +1027,10 @@ export function ShowcasePopupLayer() {
   const theme = resolveAlertTheme(first);
 
   const dismiss = () => onDismissShowcasePopups([first.id]);
+  const tradeQueueIds = visiblePopups.filter(isTradePopup).map((p) => p.id).filter(Boolean);
+  const dismissAllTrades = () => {
+    if (tradeQueueIds.length) onDismissShowcasePopups(tradeQueueIds);
+  };
 
   const handleAction = (act) => {
     dismiss();
@@ -683,7 +1045,9 @@ export function ShowcasePopupLayer() {
   const isTradeAlert = isMediaAlert && isTradePopup(first);
 
   return (
-    <div className="showcase-popup">
+    <>
+      <ShowcasePopupStyles />
+      <div className="showcase-popup">
       <div className="showcase-popup__backdrop" aria-hidden />
       <div
         className={`showcase-popup__panel ${isMediaAlert ? "showcase-popup__panel--media" : ""} ${isTradeAlert ? "showcase-popup__panel--trade-wire" : ""} showcase-popup__panel--${theme}`}
@@ -705,7 +1069,13 @@ export function ShowcasePopupLayer() {
           {kind === "allstar_game" ? <AllStarBody pop={first} /> : null}
           {kind === "injury" ? <InjuryBody pop={first} onDismiss={dismiss} onAction={handleAction} /> : null}
           {kind === "storyline" || kind === "legal_trouble" ? (
-            <StorylineBody pop={first} onDismiss={dismiss} onAction={handleAction} />
+            <StorylineBody
+              pop={first}
+              onDismiss={dismiss}
+              onDismissAllTrades={dismissAllTrades}
+              onAction={handleAction}
+              queuedTradeCount={tradeQueueIds.length}
+            />
           ) : null}
           {!["wjc_tournament", "showcase_game", "allstar_game", "injury", "storyline", "legal_trouble"].includes(
             kind
@@ -724,9 +1094,17 @@ export function ShowcasePopupLayer() {
           </footer>
         ) : null}
         {isMediaAlert && visiblePopups.length > 1 ? (
-          <div className="media-alert__queue">+{visiblePopups.length - 1} more alerts queued</div>
+          <div className="media-alert__queue">
+            +{visiblePopups.length - 1} more alerts queued
+            {tradeQueueIds.length > 1 ? (
+              <button type="button" className="media-alert__clear-trades" onClick={dismissAllTrades}>
+                Clear all trades
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
     </div>
+    </>
   );
 }

@@ -10,7 +10,7 @@ export default function PlayoffStartEvent({
   onBack,
 }) {
   return (
-    <div className="po-start-menu-host" role="presentation" style={{ height: "100%", overflow: "hidden" }}>
+    <div className="po-start-menu-host franchise-event-phase-host" role="presentation">
       <PlayoffStartMenu
         franchiseState={franchiseState}
         playoffData={playoffData}

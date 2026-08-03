@@ -61,6 +61,8 @@ import React, {
     WATCHLIST: "watchlist",
     REPORTS: "reports",
     SCOUTS: "scouts",
+    BUDGET: "budget",
+    ASSIGNMENTS: "assignments",
     PLAYER: "player",
   });
   
@@ -137,9 +139,10 @@ import React, {
     { mode: VIEW_MODES.OVERVIEW, label: "Overview" },
     { mode: VIEW_MODES.GLOBE, label: "Map" },
     { mode: VIEW_MODES.BOARD, label: "Board" },
-    { mode: VIEW_MODES.WATCHLIST, label: "Watchlist" },
+    { mode: VIEW_MODES.SCOUTS, label: "Staff" },
+    { mode: VIEW_MODES.BUDGET, label: "Budget" },
+    { mode: VIEW_MODES.ASSIGNMENTS, label: "Assignments" },
     { mode: VIEW_MODES.REPORTS, label: "Reports" },
-    { mode: VIEW_MODES.SCOUTS, label: "Scouts" },
   ];
   
   /* -------------------------------------------------------------------------- */
@@ -1773,13 +1776,11 @@ import React, {
   
   function StatTile({ label, value, sub, tone = "blue", icon }) {
     return (
-      <article className={cx("scout-stat-tile", `tone-${tone}`)}>
-        <div className="scout-stat-tile__icon">{icon || label.slice(0, 2)}</div>
-        <div>
-          <span>{label}</span>
-          <strong>{value}</strong>
-          {sub ? <small>{sub}</small> : null}
-        </div>
+      <article className={cx("scout-ops-metric", `tone-${tone}`)}>
+        <span className="scout-ops-metric__label">{label}</span>
+        <strong className="scout-ops-metric__value">{value}</strong>
+        {sub ? <small className="scout-ops-metric__sub">{sub}</small> : null}
+        {icon ? <span className="scout-ops-metric__code">{icon}</span> : null}
       </article>
     );
   }
@@ -1870,7 +1871,7 @@ import React, {
           <span />
           <i />
         </div>
-        <strong>Loading scouting...</strong>
+        <strong>Collecting scouting files</strong>
         <p>Board · map · reports</p>
       </div>
     );
@@ -1925,9 +1926,20 @@ import React, {
     const [busyAction, setBusyAction] = useState("");
     const [toast, setToast] = useState({ type: "", text: "" });
   
+    // Keyed on the franchise facts the payload depends on. Using the state
+    // object itself refetched all four scouting endpoints whenever any
+    // unrelated context field changed, doubling the load and stretching the
+    // loading state well past a second.
+    const franchiseKey = [
+      franchiseState?.team?.team_id ?? franchiseState?.team?.id ?? "",
+      franchiseState?.current_date ?? franchiseState?.date ?? "",
+      franchiseState?.phase ?? "",
+      safeArray(franchiseState?.draft_class ?? franchiseState?.prospects).length,
+    ].join("|");
+
     const scoutingLoad = useAsyncData(
       (signal) => loadScoutingPayload(signal, franchiseState),
-      [refreshToken, franchiseState]
+      [refreshToken, franchiseKey]
     );
   
     const payload = scoutingLoad.data || EMPTY_OBJECT;
@@ -2364,7 +2376,7 @@ import React, {
     const loadError = scoutingLoad.error;
   
     return (
-      <div className="scout-root">
+      <div className="scout-root register-ops" data-register="ops">
         <ScoutingStyles />
   
         <aside className="scout-sidebar">
@@ -2415,34 +2427,30 @@ import React, {
             </div>
           </section>
   
-          <section className="scout-top-strip">
+          <section className="scout-top-strip" aria-label="Scouting operations summary">
             <StatTile
-              icon="BD"
               label="Board"
-              value={dashboardStats.total}
-              sub={`${dashboardStats.finalReady} final`}
+              value={dashboardStats.total || "—"}
+              sub={dashboardStats.total ? `${dashboardStats.finalReady} final-ready` : "Early season — class not loaded"}
               tone="blue"
             />
             <StatTile
-              icon="CF"
               label="Confidence"
-              value={`${Math.round(dashboardStats.avgCoverage)}%`}
-              sub={`${dashboardStats.underScouted} weak`}
+              value={dashboardStats.total ? `${Math.round(dashboardStats.avgCoverage)}%` : "—"}
+              sub={dashboardStats.total ? `${dashboardStats.underScouted} thin files` : "No coverage yet"}
               tone={dashboardStats.avgCoverage >= 70 ? "green" : "gold"}
             />
             <StatTile
-              icon="SC"
-              label="Scouts"
-              value={dashboardStats.scouts}
-              sub={`${dashboardStats.activeAssignments} active`}
+              label="Staff"
+              value={dashboardStats.scouts || "—"}
+              sub={`${dashboardStats.activeAssignments} active assignments`}
               tone="cyan"
             />
             <StatTile
-              icon="BG"
               label="Budget"
               value={dashboardStats.budget ? formatMoney(dashboardStats.budget) : "—"}
-              sub={`${dashboardStats.countries} countries`}
-              tone="purple"
+              sub={dashboardStats.countries ? `${dashboardStats.countries} regions tracked` : "Budget not returned"}
+              tone="gold"
             />
           </section>
   
@@ -2555,6 +2563,22 @@ import React, {
                       setSelectedScoutId={setSelectedScoutId}
                     />
                   )}
+
+                  {viewMode === VIEW_MODES.BUDGET && (
+                    <BudgetView
+                      stats={dashboardStats}
+                      assignments={assignmentRows}
+                      countries={countries}
+                      regions={regions}
+                    />
+                  )}
+
+                  {viewMode === VIEW_MODES.ASSIGNMENTS && (
+                    <AssignmentsView
+                      assignments={assignmentRows}
+                      phase={phase}
+                    />
+                  )}
   
                   {viewMode === VIEW_MODES.PLAYER && (
                     <PlayerView
@@ -2614,6 +2638,150 @@ import React, {
       </button>
     );
   }
+  /* -------------------------------------------------------------------------- */
+  /* Budget & Assignments                                                       */
+  /* -------------------------------------------------------------------------- */
+
+  function BudgetView({ stats, assignments, countries, regions }) {
+    const committed = useMemo(() => {
+      return assignments.reduce((sum, row) => sum + numberOr(row.cost, 0), 0);
+    }, [assignments]);
+
+    const remaining = stats.budget ? Math.max(0, stats.budget - committed) : null;
+    const thinRegions = regions.filter((region) => percentage(region.scoutedAverage) < 45).length;
+    const thinCountries = countries.filter((country) => percentage(country.scoutedAverage) < 45).length;
+
+    return (
+      <div className="budget-view">
+        <header className="scout-section-head">
+          <div>
+            <span>Budget</span>
+            <h2>Scouting spend ledger</h2>
+          </div>
+        </header>
+
+        {!stats.budget ? (
+          <div className="ops-state">
+            <span className="ops-state__kicker">Early season</span>
+            <h3 className="ops-state__title">Budget not allocated yet</h3>
+            <p className="ops-state__body">
+              The front office has not returned a scouting budget for this phase. Assignments will still queue, but spend totals stay unavailable.
+            </p>
+          </div>
+        ) : (
+          <section className="budget-ledger-grid">
+            <article className="scout-card">
+              <div className="scout-card-head">
+                <h3>Allocation</h3>
+              </div>
+              <div className="budget-ledger-rows">
+                <div><span>Total budget</span><strong>{formatMoney(stats.budget)}</strong></div>
+                <div><span>Committed</span><strong>{formatMoney(committed)}</strong></div>
+                <div><span>Remaining</span><strong>{remaining != null ? formatMoney(remaining) : "—"}</strong></div>
+                <div><span>Active assignments</span><strong>{stats.activeAssignments}</strong></div>
+              </div>
+            </article>
+
+            <article className="scout-card">
+              <div className="scout-card-head">
+                <h3>Regional coverage</h3>
+                <span>{regions.length} regions</span>
+              </div>
+              <div className="budget-ledger-rows">
+                <div><span>Tracked countries</span><strong>{stats.countries}</strong></div>
+                <div><span>Thin regions</span><strong>{thinRegions}</strong></div>
+                <div><span>Thin countries</span><strong>{thinCountries}</strong></div>
+                <div><span>Final-ready files</span><strong>{stats.finalReady}</strong></div>
+              </div>
+            </article>
+          </section>
+        )}
+      </div>
+    );
+  }
+
+  function AssignmentsView({ assignments, phase }) {
+    const rows = safeArray(assignments);
+
+    return (
+      <div className="assignments-view">
+        <header className="scout-section-head">
+          <div>
+            <span>Assignments</span>
+            <h2>Active scout workload</h2>
+          </div>
+          <span>{phaseLabel(phase)}</span>
+        </header>
+
+        {!rows.length ? (
+          <div className="ops-state">
+            <span className="ops-state__kicker">No queue</span>
+            <h3 className="ops-state__title">No assignments on the board</h3>
+            <p className="ops-state__body">
+              Early-season scouting may not have live trips yet. Use the command panel to assign region sweeps or player focus when staff is available.
+            </p>
+          </div>
+        ) : (
+          <section className="assignments-table-wrap">
+            <table className="assignments-table">
+              <thead>
+                <tr>
+                  <th>Target</th>
+                  <th>Scout</th>
+                  <th>Action</th>
+                  <th>Status</th>
+                  <th>Progress</th>
+                  <th>Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((assignment) => {
+                  const targetName =
+                    assignment.prospect?.name ||
+                    assignment.country?.name ||
+                    assignment.targetId ||
+                    "Unknown";
+                  const scoutName = assignment.scout?.name || "Unassigned";
+                  const freshness =
+                    assignment.progress >= 90
+                      ? "Final"
+                      : assignment.progress >= 55
+                        ? "Updated"
+                        : assignment.progress > 0
+                          ? "In progress"
+                          : "Queued";
+
+                  return (
+                    <tr key={assignment.id}>
+                      <td>
+                        <strong>{targetName}</strong>
+                        {assignment.country?.region ? (
+                          <small>{assignment.country.region}</small>
+                        ) : null}
+                      </td>
+                      <td>{scoutName}</td>
+                      <td>{actionLabel(assignment.action)}</td>
+                      <td>
+                        <span className={cx("assignment-status", `is-${slugify(assignment.status)}`)}>
+                          {titleCase(assignment.status)}
+                        </span>
+                        <small>{freshness}</small>
+                      </td>
+                      <td>
+                        <CompactProgress value={assignment.progress} tone="blue" showValue />
+                      </td>
+                      <td>{formatMoney(assignment.cost)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </section>
+        )}
+      </div>
+    );
+  }
+
   /* -------------------------------------------------------------------------- */
 /* Overview                                                                   */
 /* -------------------------------------------------------------------------- */
@@ -2738,17 +2906,22 @@ function OverviewView({
               </button>
             </div>
   
-            <div className="top-prospect-row">
+            <div className="top-prospect-row top-prospect-row--compact">
               {topProspects.length ? (
                 topProspects.map((prospect) => (
-                  <ProspectTile
+                  <button
                     key={prospect.id}
-                    prospect={prospect}
+                    type="button"
+                    className="top-prospect-strip-row"
                     onClick={() => onSelectProspect(prospect.id)}
-                  />
+                  >
+                    <span>#{prospect.rank}</span>
+                    <strong>{prospect.name}</strong>
+                    <small>{prospect.position} · {Math.round(prospect.scouted)}% conf</small>
+                  </button>
                 ))
               ) : (
-                <EmptyState title="No prospects" text="Draft class unavailable." icon="DP" />
+                <EmptyState title="No prospects" text="Draft class unavailable this early in the season." icon="DP" />
               )}
             </div>
           </article>
@@ -3665,7 +3838,7 @@ function OverviewView({
         <header className="scout-section-head">
           <div>
             <span>Scouts</span>
-            <h2>Manage workload</h2>
+            <h2>Staff workload</h2>
           </div>
         </header>
   
@@ -4192,26 +4365,26 @@ function OverviewView({
     return (
       <style>{`
         .scout-root {
-          --scout-bg: #030b13;
-          --scout-bg-2: #061423;
-          --scout-panel: rgba(7, 20, 34, 0.94);
-          --scout-panel-2: rgba(10, 29, 47, 0.92);
-          --scout-panel-3: rgba(14, 39, 62, 0.82);
-          --scout-line: rgba(150, 205, 235, 0.16);
-          --scout-line-2: rgba(150, 205, 235, 0.28);
-          --scout-text: #eef8ff;
-          --scout-muted: rgba(220, 237, 248, 0.66);
-          --scout-faint: rgba(220, 237, 248, 0.46);
-          --scout-blue: #39b9ff;
-          --scout-cyan: #22e2ef;
-          --scout-green: #5cf29c;
-          --scout-gold: #ffd166;
+          --scout-bg: var(--ops-navy);
+          --scout-bg-2: var(--ops-black);
+          --scout-panel: var(--ops-panel);
+          --scout-panel-2: var(--ops-panel-2);
+          --scout-panel-3: rgba(15, 46, 66, 0.78);
+          --scout-line: var(--ops-grid);
+          --scout-line-2: var(--ops-grid-2);
+          --scout-text: var(--ops-text);
+          --scout-muted: var(--ops-text-secondary);
+          --scout-faint: var(--ops-text-disabled);
+          --scout-blue: var(--ops-info);
+          --scout-cyan: var(--ops-cyan);
+          --scout-green: var(--ops-success);
+          --scout-gold: var(--ops-gold);
           --scout-purple: #b892ff;
-          --scout-orange: #ff9f43;
-          --scout-red: #ff4f63;
-          --scout-radius: 18px;
-          --scout-radius-lg: 24px;
-          --scout-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+          --scout-orange: var(--shell-orange);
+          --scout-red: var(--ops-injury);
+          --scout-radius: var(--radius-card);
+          --scout-radius-lg: var(--radius-panel);
+          --scout-shadow: var(--depth-overlay);
   
           min-height: 100vh;
           width: 100%;
@@ -4308,7 +4481,10 @@ function OverviewView({
           place-items: center;
           align-content: center;
           gap: 4px;
-          transition: 160ms ease;
+          transition:
+            color 140ms ease,
+            background-color 140ms ease,
+            border-color 140ms ease;
         }
   
         .scout-side-button span {
@@ -4317,27 +4493,29 @@ function OverviewView({
         }
   
         .scout-side-button small {
-          font-size: 10px;
+          font-size: 11px;
           font-weight: 900;
           letter-spacing: 0.02em;
         }
   
         .scout-side-button:hover,
+        /* Command rail matches the network standard: hard rail, notched plate. */
         .scout-side-button.is-active {
           color: var(--scout-cyan);
           background: linear-gradient(90deg, rgba(34, 226, 239, 0.13), transparent);
+          clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
         }
   
         .scout-side-button.is-active::before {
           content: "";
           position: absolute;
           left: 0;
-          top: 12px;
-          bottom: 12px;
+          top: 0;
+          bottom: 0;
           width: 3px;
-          border-radius: 999px;
+          border-radius: 0;
           background: var(--scout-cyan);
-          box-shadow: 0 0 18px rgba(34, 226, 239, 0.8);
+          box-shadow: none;
         }
   
         .scout-settings {
@@ -4399,7 +4577,7 @@ function OverviewView({
           display: grid;
           place-items: center;
           overflow: hidden;
-          border-radius: 18px;
+          border-radius: 6px;
           border: 1px solid var(--scout-line-2);
           background:
             radial-gradient(circle at 34% 20%, rgba(255, 255, 255, 0.18), transparent 36%),
@@ -4415,13 +4593,13 @@ function OverviewView({
         .scout-team-logo--sm {
           width: 46px;
           height: 46px;
-          border-radius: 14px;
+          border-radius: 10px;
         }
   
         .scout-team-logo--lg {
           width: 92px;
           height: 92px;
-          border-radius: 24px;
+          border-radius: 8px;
         }
   
         .scout-team-logo img {
@@ -4446,19 +4624,21 @@ function OverviewView({
           font-weight: 1000;
         }
   
+        /* Club identity is context here, not the subject: the intelligence
+           board is. Title sits at heading scale instead of 48px. */
         .scout-title-block h1 {
           margin: 0;
-          font-size: clamp(30px, 3.1vw, 48px);
-          line-height: 0.95;
+          font-size: clamp(19px, 1.6vw, 24px);
+          line-height: 1;
           letter-spacing: 0.045em;
           text-transform: uppercase;
         }
-  
+
         .scout-title-block span {
           display: inline-flex;
-          margin-top: 7px;
-          color: var(--scout-red);
-          font-size: 14px;
+          margin-top: 5px;
+          color: var(--ops-gold, #e9a83c);
+          font-size: 11px;
           font-weight: 1000;
           letter-spacing: 0.12em;
           text-transform: uppercase;
@@ -4497,110 +4677,60 @@ function OverviewView({
         .scout-top-strip {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 10px;
+          gap: 0;
           margin-bottom: 12px;
-        }
-  
-        .scout-stat-tile {
-          min-height: 82px;
           border: 1px solid var(--scout-line);
-          border-radius: 16px;
-          background:
-            linear-gradient(135deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02)),
-            rgba(7, 21, 35, 0.86);
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 14px;
+          border-radius: var(--radius-control);
           overflow: hidden;
+          background: rgba(6, 21, 34, 0.72);
+        }
+
+        .scout-ops-metric {
           position: relative;
+          min-height: 64px;
+          padding: 10px 12px;
+          border-right: 1px solid rgba(156, 218, 236, 0.08);
         }
-  
-        .scout-stat-tile::after {
-          content: "";
-          position: absolute;
-          right: -32px;
-          top: -38px;
-          width: 100px;
-          height: 100px;
-          border-radius: 999px;
-          background: var(--tile-color);
-          opacity: 0.15;
-          filter: blur(14px);
+
+        .scout-ops-metric:last-child {
+          border-right: 0;
         }
-  
-        .scout-stat-tile__icon {
-          width: 42px;
-          height: 42px;
-          border-radius: 14px;
-          display: grid;
-          place-items: center;
-          color: var(--tile-color);
-          background: rgba(255, 255, 255, 0.06);
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          font-size: 11px;
-          font-weight: 1000;
-          letter-spacing: 0.04em;
-        }
-  
-        .scout-stat-tile > div:last-child {
-          min-width: 0;
-          position: relative;
-          z-index: 1;
-        }
-  
-        .scout-stat-tile span {
+
+        .scout-ops-metric__label {
           display: block;
           color: var(--scout-muted);
-          font-size: 10px;
-          font-weight: 1000;
+          font-size: var(--type-phase-label-size);
+          font-weight: 900;
           letter-spacing: 0.12em;
           text-transform: uppercase;
         }
-  
-        .scout-stat-tile strong {
+
+        .scout-ops-metric__value {
           display: block;
           margin-top: 2px;
-          color: var(--scout-text);
-          font-size: 23px;
-          line-height: 1;
-        }
-  
-        .scout-stat-tile small {
-          display: block;
-          margin-top: 6px;
-          color: var(--scout-faint);
-          font-size: 10px;
+          font-family: var(--font-mono-data);
+          font-size: var(--type-compact-size);
           font-weight: 800;
-          text-transform: uppercase;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
+          line-height: 1.2;
         }
-  
-        .scout-stat-tile.tone-blue {
-          --tile-color: var(--scout-blue);
+
+        .scout-ops-metric__sub {
+          display: block;
+          margin-top: 4px;
+          color: var(--scout-faint);
+          font-size: var(--type-table-meta-size);
+          font-weight: 700;
+          line-height: 1.3;
         }
-  
-        .scout-stat-tile.tone-cyan {
-          --tile-color: var(--scout-cyan);
+
+        .scout-ops-metric__code {
+          display: none;
         }
-  
-        .scout-stat-tile.tone-green {
-          --tile-color: var(--scout-green);
-        }
-  
-        .scout-stat-tile.tone-gold {
-          --tile-color: var(--scout-gold);
-        }
-  
-        .scout-stat-tile.tone-purple {
-          --tile-color: var(--scout-purple);
-        }
-  
-        .scout-stat-tile.tone-danger {
-          --tile-color: var(--scout-red);
-        }
+
+        .scout-ops-metric.tone-blue .scout-ops-metric__value { color: var(--scout-blue); }
+        .scout-ops-metric.tone-cyan .scout-ops-metric__value { color: var(--scout-cyan); }
+        .scout-ops-metric.tone-green .scout-ops-metric__value { color: var(--scout-green); }
+        .scout-ops-metric.tone-gold .scout-ops-metric__value { color: var(--scout-gold); }
   
         .scout-alert-stack {
           display: grid;
@@ -4610,7 +4740,7 @@ function OverviewView({
   
         .scout-alert {
           padding: 12px 14px;
-          border-radius: 14px;
+          border-radius: 10px;
           border: 1px solid var(--scout-line);
           background: rgba(255, 255, 255, 0.055);
           color: var(--scout-text);
@@ -4635,9 +4765,9 @@ function OverviewView({
   
         .scout-tabs {
           display: grid;
-          grid-template-columns: repeat(6, minmax(0, 1fr));
+          grid-template-columns: repeat(7, minmax(0, 1fr));
           border: 1px solid var(--scout-line);
-          border-radius: 16px;
+          border-radius: var(--radius-control);
           overflow: hidden;
           margin-bottom: 12px;
           background: rgba(7, 21, 35, 0.84);
@@ -4662,9 +4792,9 @@ function OverviewView({
         }
   
         .scout-tabs button.is-active {
-          color: var(--scout-text);
-          border-bottom-color: var(--scout-red);
-          background: linear-gradient(180deg, rgba(255, 79, 99, 0.11), rgba(255, 79, 99, 0.025));
+          color: var(--scout-cyan);
+          border-bottom-color: var(--scout-cyan);
+          background: var(--ops-cyan-soft);
         }
   
         .scout-layout {
@@ -4726,6 +4856,31 @@ function OverviewView({
           gap: 12px;
           margin-bottom: 14px;
         }
+
+        /* Department signature: every intelligence panel is opened by an
+           aperture bracket, the mark this build uses for observed data. */
+        .scout-card-head > h3,
+        .scout-card-head > h2,
+        .scout-section-head > h3,
+        .scout-section-head > h2 {
+          position: relative;
+          padding-left: 14px;
+        }
+
+        .scout-card-head > h3::before,
+        .scout-card-head > h2::before,
+        .scout-section-head > h3::before,
+        .scout-section-head > h2::before {
+          content: "";
+          position: absolute;
+          left: 0;
+          top: 0.32em;
+          width: 7px;
+          height: 0.72em;
+          border: 1px solid var(--ops-cyan, #13d8e7);
+          border-right: 0;
+          opacity: 0.75;
+        }
   
         .scout-card-head h3,
         .scout-section-head h2,
@@ -4766,7 +4921,7 @@ function OverviewView({
           border: 1px solid var(--scout-line);
           background: rgba(255, 255, 255, 0.055);
           color: var(--scout-text);
-          font-size: 10px;
+          font-size: 11px;
           font-weight: 1000;
           text-transform: uppercase;
         }
@@ -4778,14 +4933,14 @@ function OverviewView({
         }
   
         .scout-map-card {
-          min-height: 360px;
+          min-height: 220px;
         }
-  
+
         .mini-world {
           position: relative;
-          min-height: 300px;
+          min-height: 180px;
           overflow: hidden;
-          border-radius: 18px;
+          border-radius: 6px;
           border: 1px solid rgba(150, 205, 235, 0.12);
           background:
             radial-gradient(circle at 46% 48%, rgba(57, 185, 255, 0.15), transparent 42%),
@@ -4908,7 +5063,7 @@ function OverviewView({
   
         .position-need-card {
           min-height: 112px;
-          border-radius: 16px;
+          border-radius: 6px;
           border: 1px solid rgba(150, 205, 235, 0.14);
           background: rgba(0, 0, 0, 0.16);
           padding: 14px;
@@ -4928,10 +5083,123 @@ function OverviewView({
           line-height: 1;
         }
   
-        .top-prospect-row {
+        .top-prospect-row--compact {
           display: grid;
-          grid-template-columns: repeat(5, minmax(0, 1fr));
+          gap: 6px;
+        }
+
+        .top-prospect-strip-row {
+          width: 100%;
+          min-height: 44px;
+          display: grid;
+          grid-template-columns: 44px minmax(0, 1fr) auto;
+          align-items: center;
           gap: 10px;
+          padding: 8px 10px;
+          border: 1px solid rgba(150, 205, 235, 0.1);
+          border-radius: var(--radius-control);
+          background: rgba(0, 0, 0, 0.12);
+          color: var(--scout-text);
+          text-align: left;
+          cursor: pointer;
+        }
+
+        .top-prospect-strip-row:hover {
+          border-color: var(--scout-line-2);
+          background: var(--ops-cyan-soft);
+        }
+
+        .top-prospect-strip-row span {
+          font-family: var(--font-mono-data);
+          font-size: var(--type-table-meta-size);
+          font-weight: 800;
+          color: var(--scout-gold);
+        }
+
+        .top-prospect-strip-row strong {
+          font-size: var(--type-compact-size);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .top-prospect-strip-row small {
+          color: var(--scout-muted);
+          font-size: var(--type-table-meta-size);
+          white-space: nowrap;
+        }
+
+        .budget-ledger-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
+        }
+
+        .budget-ledger-rows {
+          display: grid;
+          gap: 8px;
+        }
+
+        .budget-ledger-rows > div {
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 8px 0;
+          border-bottom: 1px solid rgba(150, 205, 235, 0.08);
+          font-size: var(--type-compact-size);
+        }
+
+        .budget-ledger-rows > div span {
+          color: var(--scout-muted);
+          font-size: var(--type-table-meta-size);
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+        }
+
+        .budget-ledger-rows > div strong {
+          font-family: var(--font-mono-data);
+        }
+
+        .assignments-table-wrap {
+          overflow: auto;
+        }
+
+        .assignments-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: var(--type-compact-size);
+        }
+
+        .assignments-table th,
+        .assignments-table td {
+          padding: 10px 8px;
+          border-bottom: 1px solid rgba(150, 205, 235, 0.1);
+          text-align: left;
+          vertical-align: top;
+        }
+
+        .assignments-table th {
+          color: var(--scout-muted);
+          font-size: var(--type-phase-label-size);
+          font-weight: 900;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+        }
+
+        .assignments-table td small {
+          display: block;
+          margin-top: 2px;
+          color: var(--scout-faint);
+          font-size: var(--type-table-meta-size);
+        }
+
+        .assignment-status {
+          display: block;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          font-size: var(--type-table-meta-size);
         }
   
         .prospect-tile {
@@ -4943,7 +5211,7 @@ function OverviewView({
           align-content: start;
           gap: 10px;
           padding: 14px;
-          border-radius: 18px;
+          border-radius: 6px;
           border: 1px solid rgba(150, 205, 235, 0.14);
           background:
             linear-gradient(135deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.015)),
@@ -4981,7 +5249,7 @@ function OverviewView({
           place-items: center;
           overflow: hidden;
           flex: 0 0 auto;
-          border-radius: 16px;
+          border-radius: 6px;
           border: 1px solid rgba(150, 205, 235, 0.18);
           background:
             radial-gradient(circle at 34% 24%, rgba(255, 255, 255, 0.22), transparent 34%),
@@ -4996,13 +5264,13 @@ function OverviewView({
         .scout-avatar--lg {
           width: 76px;
           height: 76px;
-          border-radius: 22px;
+          border-radius: 8px;
         }
   
         .scout-avatar--xl {
           width: 110px;
           height: 110px;
-          border-radius: 30px;
+          border-radius: 12px;
         }
   
         .scout-avatar img {
@@ -5101,7 +5369,7 @@ function OverviewView({
           align-items: center;
           gap: 10px;
           border: 1px solid rgba(150, 205, 235, 0.12);
-          border-radius: 13px;
+          border-radius: 10px;
           background: rgba(0, 0, 0, 0.13);
           color: var(--scout-text);
           text-align: left;
@@ -5157,7 +5425,7 @@ function OverviewView({
   
         .assignment-mini {
           min-height: 104px;
-          border-radius: 16px;
+          border-radius: 6px;
           border: 1px solid rgba(150, 205, 235, 0.12);
           background: rgba(0, 0, 0, 0.13);
           padding: 13px;
@@ -5195,19 +5463,21 @@ function OverviewView({
           font-weight: 1000;
         }
   
+        /* Confidence rails, not glowing capsules: flat 3px measures that read
+           as instrument marks on an intelligence file. */
         .scout-compact-progress div {
-          height: 8px;
-          border-radius: 999px;
+          height: 3px;
+          border-radius: 0;
           overflow: hidden;
-          background: rgba(255, 255, 255, 0.08);
+          background: rgba(255, 255, 255, 0.07);
         }
   
         .scout-compact-progress i {
           display: block;
           height: 100%;
-          border-radius: inherit;
+          border-radius: 0;
           background: var(--progress-color);
-          box-shadow: 0 0 12px var(--progress-glow);
+          box-shadow: none;
         }
   
         .scout-compact-progress.tone-blue {
@@ -5234,9 +5504,10 @@ function OverviewView({
           --progress-glow: rgba(255, 209, 102, 0.62);
         }
   
+        /* Violet belongs to the franchise shell, not to an ops meter. */
         .scout-compact-progress.tone-purple {
-          --progress-color: var(--scout-purple);
-          --progress-glow: rgba(184, 146, 255, 0.62);
+          --progress-color: var(--ops-info, #8ab4ff);
+          --progress-glow: rgba(138, 180, 255, 0.5);
         }
   
         .scout-compact-progress.tone-danger,
@@ -5494,7 +5765,7 @@ function OverviewView({
         .risk-score {
           width: 74px;
           height: 74px;
-          border-radius: 20px;
+          border-radius: 8px;
           display: grid;
           place-items: center;
           align-content: center;
@@ -5510,7 +5781,7 @@ function OverviewView({
         .risk-score span {
           margin-top: 3px;
           color: var(--scout-muted);
-          font-size: 10px;
+          font-size: 11px;
           text-transform: uppercase;
         }
   
@@ -5542,7 +5813,7 @@ function OverviewView({
         .mini-metric {
           min-height: 76px;
           padding: 12px;
-          border-radius: 15px;
+          border-radius: 10px;
           border: 1px solid rgba(150, 205, 235, 0.12);
           background: rgba(0, 0, 0, 0.13);
           display: grid;
@@ -5619,7 +5890,7 @@ function OverviewView({
           gap: 10px;
           min-height: 54px;
           padding: 8px 10px;
-          border-radius: 14px;
+          border-radius: 10px;
           border: 1px solid rgba(150, 205, 235, 0.12);
           background: rgba(0, 0, 0, 0.13);
           color: var(--scout-text);
@@ -5667,7 +5938,7 @@ function OverviewView({
   
         .region-chip {
           padding: 12px;
-          border-radius: 16px;
+          border-radius: 6px;
           border: 1px solid var(--scout-line);
           background: rgba(255, 255, 255, 0.04);
           display: grid;
@@ -5705,7 +5976,7 @@ function OverviewView({
   
         .scout-field span {
           color: var(--scout-muted);
-          font-size: 10px;
+          font-size: 11px;
           font-weight: 1000;
           letter-spacing: 0.1em;
           text-transform: uppercase;
@@ -5761,7 +6032,7 @@ function OverviewView({
   
         .board-table-wrap {
           overflow: auto;
-          border-radius: 18px;
+          border-radius: 6px;
           border: 1px solid var(--scout-line);
           background: rgba(0, 0, 0, 0.15);
         }
@@ -5785,7 +6056,7 @@ function OverviewView({
           z-index: 2;
           color: var(--scout-muted);
           background: rgba(6, 18, 30, 0.98);
-          font-size: 10px;
+          font-size: 11px;
           font-weight: 1000;
           letter-spacing: 0.1em;
           text-transform: uppercase;
@@ -5834,13 +6105,15 @@ function OverviewView({
           color: var(--scout-muted);
         }
   
+        /* Intelligence marks are report plates, not pills. */
         .soft-pill,
         .risk-pill {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          border-radius: 999px;
-          padding: 6px 10px;
+          border-radius: var(--radius-ops, 2px);
+          padding: 4px 8px;
+          letter-spacing: 0.05em;
           border: 1px solid rgba(255, 255, 255, 0.09);
           background: rgba(255, 255, 255, 0.065);
           color: var(--scout-muted);
@@ -5876,7 +6149,7 @@ function OverviewView({
   
         .watch-card {
           min-height: 245px;
-          border-radius: 18px;
+          border-radius: 6px;
           border: 1px solid var(--scout-line);
           background: rgba(255, 255, 255, 0.04);
           color: var(--scout-text);
@@ -5961,7 +6234,7 @@ function OverviewView({
           place-items: center;
           align-content: center;
           gap: 4px;
-          border-radius: 16px;
+          border-radius: 6px;
           border: 1px solid rgba(57, 185, 255, 0.2);
           background:
             radial-gradient(circle at 50% 20%, rgba(57, 185, 255, 0.16), transparent 42%),
@@ -5991,7 +6264,7 @@ function OverviewView({
           align-items: center;
           gap: 10px;
           padding: 8px 10px;
-          border-radius: 13px;
+          border-radius: 10px;
           border: 1px solid rgba(255, 255, 255, 0.07);
           background: rgba(0, 0, 0, 0.13);
         }
@@ -6035,9 +6308,10 @@ function OverviewView({
           display: inline-flex;
           align-items: center;
           gap: 4px;
-          min-height: 36px;
-          padding: 0 11px;
-          border-radius: 999px;
+          min-height: 28px;
+          padding: 0 9px;
+          border-radius: var(--radius-ops, 2px);
+          font-variant-numeric: tabular-nums;
           border: 1px solid var(--scout-line);
           background: rgba(255, 255, 255, 0.045);
           color: var(--scout-muted);
@@ -6055,23 +6329,33 @@ function OverviewView({
           gap: 12px;
         }
   
+        /* Scout files, not cards: squared, hairline framed, with the
+           assignment rail on the leading edge when one is selected. */
         .staff-card {
-          min-height: 265px;
-          padding: 15px;
-          border-radius: 18px;
+          position: relative;
+          min-height: 248px;
+          padding: 13px 13px 13px 15px;
+          border-radius: var(--radius-ops, 2px);
           border: 1px solid var(--scout-line);
-          background: rgba(255, 255, 255, 0.04);
+          border-left: 3px solid rgba(128, 150, 168, 0.32);
+          background: rgba(255, 255, 255, 0.03);
           color: var(--scout-text);
           display: grid;
-          gap: 12px;
+          gap: 11px;
           text-align: left;
-          transition: 160ms ease;
+          transition:
+            border-color 160ms ease,
+            background-color 160ms ease;
         }
-  
-        .staff-card:hover,
+
+        .staff-card:hover {
+          border-color: rgba(57, 185, 255, 0.28);
+          background: rgba(57, 185, 255, 0.05);
+        }
+
         .staff-card.is-selected {
-          transform: translateY(-2px);
           border-color: rgba(57, 185, 255, 0.34);
+          border-left-color: var(--ops-cyan, #13d8e7);
           background: rgba(57, 185, 255, 0.08);
         }
   
@@ -6099,19 +6383,22 @@ function OverviewView({
           gap: 7px;
         }
   
+        /* Region and availability read as equipment plates. */
         .staff-card__meta span,
         .staff-card__footer span,
         .selected-scout__chips span {
           display: inline-flex;
           align-items: center;
-          min-height: 28px;
-          padding: 0 9px;
-          border-radius: 999px;
-          border: 1px solid rgba(255, 255, 255, 0.09);
-          background: rgba(255, 255, 255, 0.055);
+          min-height: 22px;
+          padding: 0 7px;
+          border-radius: var(--radius-ops, 2px);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: rgba(255, 255, 255, 0.04);
           color: var(--scout-muted);
           font-size: 11px;
           font-weight: 850;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
         }
   
         .staff-card__bars {
@@ -6145,7 +6432,7 @@ function OverviewView({
           grid-template-columns: 46px minmax(0, 1fr) 44px;
           align-items: center;
           gap: 8px;
-          border-radius: 13px;
+          border-radius: 10px;
           border: 1px solid var(--scout-line);
           background: rgba(255, 255, 255, 0.045);
           color: var(--scout-text);
@@ -6225,9 +6512,9 @@ function OverviewView({
         .player-tags span {
           display: inline-flex;
           align-items: center;
-          min-height: 30px;
-          padding: 0 10px;
-          border-radius: 999px;
+          min-height: 24px;
+          padding: 0 8px;
+          border-radius: var(--radius-ops, 2px);
           border: 1px solid rgba(255, 255, 255, 0.09);
           background: rgba(255, 255, 255, 0.055);
           color: var(--scout-muted);
@@ -6240,7 +6527,7 @@ function OverviewView({
           display: grid;
           place-items: center;
           align-content: center;
-          border-radius: 22px;
+          border-radius: 8px;
           border: 1px solid rgba(57, 185, 255, 0.28);
           background: rgba(57, 185, 255, 0.09);
           padding: 16px;
@@ -6274,7 +6561,7 @@ function OverviewView({
           position: relative;
           display: grid;
           place-items: center;
-          border-radius: 18px;
+          border-radius: 6px;
           border: 1px solid rgba(255, 255, 255, 0.08);
           background: rgba(0, 0, 0, 0.13);
         }
@@ -6419,9 +6706,9 @@ function OverviewView({
         .flag-list span {
           display: inline-flex;
           align-items: center;
-          min-height: 32px;
-          padding: 0 10px;
-          border-radius: 999px;
+          min-height: 26px;
+          padding: 0 8px;
+          border-radius: var(--radius-ops, 2px);
           font-size: 12px;
           font-weight: 850;
         }
@@ -6442,7 +6729,7 @@ function OverviewView({
           min-height: 90px;
           display: grid;
           place-items: center;
-          border-radius: 16px;
+          border-radius: 6px;
           border: 1px solid rgba(92, 242, 156, 0.24);
           background: rgba(92, 242, 156, 0.08);
           color: var(--scout-green);
@@ -6461,7 +6748,7 @@ function OverviewView({
           align-content: center;
           gap: 6px;
           text-align: center;
-          border-radius: 16px;
+          border-radius: 6px;
           border: 1px solid var(--scout-line);
           background: rgba(0, 0, 0, 0.13);
           color: var(--scout-text);
@@ -6499,10 +6786,10 @@ function OverviewView({
   
         .scout-note > b {
           width: 30px;
-          height: 30px;
+          height: 24px;
           display: grid;
           place-items: center;
-          border-radius: 999px;
+          border-radius: var(--radius-ops, 2px);
           color: var(--scout-blue);
           background: rgba(57, 185, 255, 0.1);
           border: 1px solid rgba(57, 185, 255, 0.22);
@@ -6562,7 +6849,7 @@ function OverviewView({
           display: grid;
           gap: 4px;
           padding: 14px;
-          border-radius: 17px;
+          border-radius: 6px;
           border: 1px solid rgba(57, 185, 255, 0.24);
           background:
             radial-gradient(circle at 12% 22%, rgba(57, 185, 255, 0.15), transparent 44%),
@@ -6592,7 +6879,7 @@ function OverviewView({
           display: grid;
           gap: 10px;
           padding: 13px;
-          border-radius: 17px;
+          border-radius: 6px;
           border: 1px solid var(--scout-line);
           background: rgba(0, 0, 0, 0.13);
         }
@@ -6620,41 +6907,57 @@ function OverviewView({
   
         .intensity-picker > span {
           color: var(--scout-muted);
-          font-size: 10px;
+          font-size: 11px;
           font-weight: 1000;
           text-transform: uppercase;
           letter-spacing: 0.1em;
         }
   
+        /* Effort selector is a segmented control-room switch, not four pills. */
         .intensity-picker > div {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 7px;
+          gap: 0;
+          border: 1px solid var(--scout-line);
+          border-radius: var(--radius-ops, 2px);
+          overflow: hidden;
         }
   
         .intensity-picker button {
-          min-height: 39px;
-          border-radius: 12px;
-          border: 1px solid var(--scout-line);
-          background: rgba(255, 255, 255, 0.045);
+          min-height: 32px;
+          border-radius: 0;
+          border: 0;
+          border-right: 1px solid var(--scout-line);
+          background: rgba(255, 255, 255, 0.02);
           color: var(--scout-muted);
           font-size: 11px;
           font-weight: 1000;
-          transition: 150ms ease;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          transition:
+            color 150ms ease,
+            background-color 150ms ease;
+        }
+
+        .intensity-picker button:last-child {
+          border-right: 0;
         }
   
-        .intensity-picker button:hover,
-        .intensity-picker button.is-active {
+        .intensity-picker button:hover {
           color: var(--scout-text);
-          border-color: rgba(255, 79, 99, 0.38);
-          background: rgba(255, 79, 99, 0.1);
+          background: rgba(255, 255, 255, 0.05);
+        }
+
+        .intensity-picker button.is-active {
+          color: #0b1720;
+          background: var(--ops-cyan, #13d8e7);
         }
   
         .cost-card {
           display: grid;
           gap: 6px;
           padding: 15px;
-          border-radius: 18px;
+          border-radius: 6px;
           border: 1px solid rgba(255, 209, 102, 0.26);
           background:
             radial-gradient(circle at 16% 22%, rgba(255, 209, 102, 0.14), transparent 42%),
@@ -6678,7 +6981,7 @@ function OverviewView({
         .assign-button {
           min-height: 54px;
           border: 0;
-          border-radius: 17px;
+          border-radius: 6px;
           color: #02101c;
           background: linear-gradient(135deg, #6bd2ff, #5cf29c);
           box-shadow:
@@ -6687,7 +6990,10 @@ function OverviewView({
           font-weight: 1000;
           text-transform: uppercase;
           letter-spacing: 0.04em;
-          transition: 160ms ease;
+          transition:
+            transform 160ms ease,
+            box-shadow 160ms ease,
+            filter 160ms ease;
         }
   
         .assign-button:hover {
@@ -6699,7 +7005,7 @@ function OverviewView({
   
         .assignment-card {
           border: 1px solid var(--scout-line);
-          border-radius: 18px;
+          border-radius: 6px;
           background: rgba(255, 255, 255, 0.04);
           padding: 14px;
           display: grid;
@@ -6732,10 +7038,13 @@ function OverviewView({
           color: var(--scout-muted);
         }
   
+        /* Assignment seal reads as a filed status mark. */
         .assignment-card header b {
           display: inline-flex;
-          padding: 6px 9px;
-          border-radius: 999px;
+          padding: 4px 8px;
+          border-radius: var(--radius-ops, 2px);
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
           color: var(--scout-green);
           background: rgba(92, 242, 156, 0.1);
           border: 1px solid rgba(92, 242, 156, 0.22);
@@ -6748,9 +7057,9 @@ function OverviewView({
         }
   
         .assignment-card footer button {
-          min-height: 32px;
+          min-height: 30px;
           padding: 0 11px;
-          border-radius: 10px;
+          border-radius: var(--radius-hud, 4px);
           border: 1px solid rgba(255, 79, 99, 0.3);
           background: rgba(255, 79, 99, 0.09);
           color: var(--scout-red);
@@ -6767,7 +7076,7 @@ function OverviewView({
           gap: 9px;
           text-align: center;
           padding: 22px;
-          border-radius: 18px;
+          border-radius: 6px;
           border: 1px dashed rgba(150, 205, 235, 0.22);
           background: rgba(255, 255, 255, 0.025);
         }
@@ -6799,63 +7108,79 @@ function OverviewView({
           line-height: 1.45;
         }
   
+        /* Intelligence-collection standby: a labelled intake strip, not a
+           novelty spinner looping in the middle of an empty stage. */
         .scout-loading {
-          min-height: 420px;
           display: grid;
-          place-items: center;
-          align-content: center;
-          gap: 14px;
-          text-align: center;
+          justify-items: start;
+          align-content: start;
+          gap: 8px;
+          margin: 14px;
+          padding: 14px 16px;
+          max-width: 520px;
+          border: 1px solid var(--scout-line, rgba(238, 248, 255, 0.14));
+          border-left: 3px solid var(--ops-cyan, #13d8e7);
+          background: rgba(6, 21, 34, 0.6);
+          text-align: left;
         }
   
         .scout-loading-rink {
           position: relative;
-          width: 250px;
-          height: 124px;
-          border-radius: 999px;
-          border: 1px solid rgba(238, 248, 255, 0.18);
-          background: rgba(255, 255, 255, 0.035);
+          order: 3;
+          width: 100%;
+          height: 2px;
+          border: 0;
+          border-radius: 0;
+          background: rgba(255, 255, 255, 0.07);
           overflow: hidden;
         }
   
         .scout-loading-rink span {
-          position: absolute;
-          top: 0;
-          left: 50%;
-          width: 2px;
-          height: 100%;
-          background: rgba(57, 185, 255, 0.32);
+          display: none;
         }
   
         .scout-loading-rink i {
           position: absolute;
-          top: 53px;
-          left: 26px;
-          width: 18px;
-          height: 18px;
-          border-radius: 999px;
-          background: #05070b;
-          box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5);
-          animation: scoutPuck 1.35s ease-in-out infinite alternate;
+          inset: 0 auto 0 0;
+          width: 34%;
+          border-radius: 0;
+          background: var(--ops-cyan, #13d8e7);
+          box-shadow: none;
+          animation: scoutIntake 1.6s linear infinite;
         }
   
-        @keyframes scoutPuck {
+        @keyframes scoutIntake {
           from {
-            transform: translateX(0);
+            transform: translateX(-100%);
           }
   
           to {
-            transform: translateX(180px);
+            transform: translateX(300%);
           }
         }
   
         .scout-loading strong {
-          font-size: 20px;
+          font-size: 13px;
+          font-weight: 900;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+          color: var(--ops-cyan, #13d8e7);
         }
   
         .scout-loading p {
           margin: 0;
           color: var(--scout-muted);
+          font-size: 11px;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .scout-loading-rink i {
+            animation: none;
+            width: 100%;
+            opacity: 0.5;
+          }
         }
   
         @media (max-width: 1560px) {
@@ -6961,6 +7286,10 @@ function OverviewView({
             min-height: 66px;
           }
   
+          .scout-side-button.is-active {
+            clip-path: none;
+          }
+
           .scout-side-button.is-active::before {
             left: 14px;
             right: 14px;
@@ -7030,7 +7359,7 @@ function OverviewView({
           .scout-team-logo--md {
             width: 58px;
             height: 58px;
-            border-radius: 16px;
+            border-radius: 6px;
           }
   
           .scout-title-block h1 {
@@ -7069,7 +7398,7 @@ function OverviewView({
   
           .scout-workspace {
             padding: 12px;
-            border-radius: 16px;
+            border-radius: 6px;
           }
   
           .interactive-globe {
@@ -7105,7 +7434,7 @@ function OverviewView({
           .scout-avatar--xl {
             width: 90px;
             height: 90px;
-            border-radius: 24px;
+            border-radius: 8px;
           }
   
           .skill-row {

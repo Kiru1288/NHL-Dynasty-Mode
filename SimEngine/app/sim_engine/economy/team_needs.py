@@ -47,6 +47,7 @@ def _pos(player: Any) -> str:
 
 
 def _ovr(player: Any) -> float:
+    """Display-scale overall (approx 0–99)."""
     fn = getattr(player, "ovr", None)
     if callable(fn):
         try:
@@ -58,7 +59,13 @@ def _ovr(player: Any) -> float:
     return v * 99.0 if v <= 1.5 else v
 
 
+def _ovr01(player: Any) -> float:
+    """Normalized overall on the same 0–1 scale as TeamNeeds targets."""
+    return _clamp(_ovr(player) / 99.0, 0.0, 1.0)
+
+
 def _bucket_priority(target: float, actual: float) -> float:
+    """Priority from a talent gap on the 0–1 OVR scale (0.20 ≈ 20 display OVR)."""
     gap = target - actual
     return _clamp(gap / 0.20, 0.0, 1.0)
 
@@ -177,10 +184,11 @@ class TeamNeeds:
         defs_sorted = sorted(defs, key=_ovr, reverse=True)
         gs_sorted = sorted(gs, key=_ovr, reverse=True)
 
-        top_fwd_avg = sum((_ovr(p) for p in fwds_sorted[:3]), 0.0) / max(1, min(3, len(fwds_sorted)))
-        top4_def_avg = sum((_ovr(p) for p in defs_sorted[:4]), 0.0) / max(1, min(4, len(defs_sorted)))
-        goalie_ovr = _ovr(gs_sorted[0]) if gs_sorted else 0.0
-        depth_fwd_avg = sum((_ovr(p) for p in fwds_sorted[6:12]), 0.0) / max(1, min(6, max(0, len(fwds_sorted) - 6)))
+        # Targets are 0–1 (e.g. 0.74 ≈ 74 OVR). Compare apples-to-apples.
+        top_fwd_avg = sum((_ovr01(p) for p in fwds_sorted[:3]), 0.0) / max(1, min(3, len(fwds_sorted)))
+        top4_def_avg = sum((_ovr01(p) for p in defs_sorted[:4]), 0.0) / max(1, min(4, len(defs_sorted)))
+        goalie_ovr = _ovr01(gs_sorted[0]) if gs_sorted else 0.0
+        depth_fwd_avg = sum((_ovr01(p) for p in fwds_sorted[6:12]), 0.0) / max(1, min(6, max(0, len(fwds_sorted) - 6)))
 
         needs = {
             "top_line_forward": _bucket_priority(self.target_top_line_fwd, top_fwd_avg),
@@ -189,7 +197,7 @@ class TeamNeeds:
             "depth_forward": _bucket_priority(self.target_depth_fwd, depth_fwd_avg),
         }
 
-        avg_team = sum((_ovr(p) for p in roster), 0.0) / max(1, len(roster))
+        avg_team = sum((_ovr01(p) for p in roster), 0.0) / max(1, len(roster))
         if avg_team < 0.62:
             needs["top_line_forward"] = _clamp(needs["top_line_forward"] + 0.15)
             needs["top_4_defense"] = _clamp(needs["top_4_defense"] + 0.12)

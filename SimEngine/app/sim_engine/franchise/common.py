@@ -433,9 +433,18 @@ def _find_player_on_team(session: FranchiseSession, team_id: str, player_name: s
 
 
 def _franchise_tick_conduct_and_resolve(session: FranchiseSession, calendar_idx: int, day_meta: Dict[str, Any]) -> None:
-    """After team games, emit resolution storylines when conduct suspensions expire."""
+    """After team games, emit resolution storylines when conduct leave/suspension expires."""
+    from app.sim_engine.franchise.conduct_incidents import (  # noqa: WPS433
+        REGISTRY_KEY,
+        advance_investigation,
+        get_active_incident_for_player,
+        serialize_incident_for_ui,
+    )
     from app.sim_engine.franchise.state import _record_storyline  # noqa: WPS433
-    from app.sim_engine.franchise.storyline_conduct import resolve_conduct_if_cleared  # noqa: WPS433
+    from app.sim_engine.franchise.storyline_conduct import (  # noqa: WPS433
+        get_effective_ovr_display,
+        resolve_conduct_if_cleared,
+    )
 
     if str(day_meta.get("segment") or "") not in ("preseason", "regular", "playoffs"):
         return
@@ -443,17 +452,114 @@ def _franchise_tick_conduct_and_resolve(session: FranchiseSession, calendar_idx:
     _ensure_session_event_lists(session)
     iso = str(day_meta.get("iso") or "")
     cur_date = int(calendar_idx)
+    rng = getattr(getattr(session, "sim", None), "rng", None)
 
     for tm in session.team_by_id.values():
         tid = str(getattr(tm, "team_id", None) or getattr(tm, "id", "") or "").strip()
         for pl in getattr(tm, "roster", None) or []:
-            res = resolve_conduct_if_cleared(pl)
+            pid = str(getattr(pl, "id", None) or getattr(pl, "player_id", "") or "")
+            inc = get_active_incident_for_player(session, pid)
+            if isinstance(inc, dict) and str(inc.get("status") or "") not in ("cleared", "resolved", "disciplined"):
+                # Investigation beat while matter is open — emit visible desk updates.
+                try:
+                    prev_info = str(inc.get("information_status") or "")
+                    prev_legal = str(inc.get("legal_status") or "")
+                    beat_chance = 0.22 if tid == str(getattr(session, "user_team_id", "") or "") else 0.14
+                    if rng is not None and float(rng.random()) < beat_chance:
+                        advanced = advance_investigation(
+                            session,
+                            incident_id=str(inc.get("incident_id") or ""),
+                            player=pl,
+                            rng=rng,
+                        )
+                        inc = get_active_incident_for_player(session, pid) or advanced or inc
+                        new_info = str(inc.get("information_status") or "")
+                        new_legal = str(inc.get("legal_status") or "")
+                        if (new_info, new_legal) != (prev_info, prev_legal):
+                            pname = str(getattr(pl, "name", "") or "Player")
+                            if new_legal == "charged" or new_info == "charges_filed":
+                                headline = f"Charges Filed — League Suspends {pname} Pending Review"
+                                summary = (
+                                    f"Prosecutors filed charges related to the {pname} matter. "
+                                    "This is not a conviction; league availability is separate from guilt."
+                                )
+                                pri = "HIGH"
+                            elif new_info == "confirmed_investigation":
+                                headline = f"League Confirms Investigation Into {pname}"
+                                summary = (
+                                    f"The league office confirmed an active investigation involving {pname}. "
+                                    "Reports remain allegations until an official ruling."
+                                )
+                                pri = "HIGH"
+                            elif new_legal == "no_charges":
+                                headline = f"UPDATE: No Charges — {pname} Cleared of Legal Exposure"
+                                summary = (
+                                    f"Authorities will not file charges involving {pname}. "
+                                    "Organizational leave/suspension may still need to clear separately."
+                                )
+                                pri = "MEDIUM"
+                            else:
+                                headline = f"Investigation Continues — {pname} Conduct Desk"
+                                summary = (
+                                    f"No new ruling yet on {pname}. Media heat remains while facts develop."
+                                )
+                                pri = "MEDIUM"
+                            ui = serialize_incident_for_ui(inc) if isinstance(inc, dict) else {}
+                            _record_storyline(
+                                session,
+                                {
+                                    "id": f"story:invest:{inc.get('incident_id')}:{cur_date}:{new_info}:{new_legal}",
+                                    "storyline_id": str(inc.get("storyline_id") or inc.get("incident_id") or ""),
+                                    "type": "legal_trouble",
+                                    "kind": "legal_trouble",
+                                    "category": "legal_trouble",
+                                    "headline": headline,
+                                    "summary": summary,
+                                    "details": summary,
+                                    "team_id": tid,
+                                    "team": tid,
+                                    "player_id": pid,
+                                    "player_name": pname,
+                                    "priority": pri,
+                                    "date": cur_date,
+                                    "calendar_day": cur_date,
+                                    "calendar_iso": iso,
+                                    "status": "active",
+                                    "heat": 72 if pri == "HIGH" else 48,
+                                    "credibility": 70,
+                                    "allegation_note": "Public reports are allegations until an official ruling.",
+                                    **ui,
+                                },
+                            )
+                except Exception:
+                    pass
+
+            res = None
+            if isinstance(inc, dict) and str(inc.get("status") or "") in ("cleared", "disciplined"):
+                # Fresh clearance from tick_incident_games / investigation — notify once.
+                if not getattr(pl, "_conduct_resolve_notified", False):
+                    res = {
+                        "storyline_id": str(inc.get("storyline_id") or inc.get("incident_id") or ""),
+                        "resolution_summary": str(inc.get("resolution") or "Cleared to return."),
+                        "overall_after_return": get_effective_ovr_display(pl),
+                        "overall_before_penalty": get_effective_ovr_display(pl),
+                        "incident": serialize_incident_for_ui(inc),
+                    }
+                    try:
+                        setattr(pl, "_conduct_resolve_notified", True)
+                    except Exception:
+                        pass
+            else:
+                res = resolve_conduct_if_cleared(pl)
+
             if not res:
                 continue
             pname = str(getattr(pl, "name", "") or "Player")
             sid = str(res.get("storyline_id") or f"conduct:{tid}:{getattr(pl, 'id', '')}")
             headline = f"UPDATE: {pname} Cleared to Return After Conduct Review"
-            summary = str(res.get("resolution_summary") or "")
+            summary = str(res.get("resolution_summary") or res.get("resolution") or "")
+            if not summary:
+                summary = f"{pname} has been cleared for team activities pending any remaining league conditions."
             _record_storyline(
                 session,
                 {
@@ -480,6 +586,8 @@ def _franchise_tick_conduct_and_resolve(session: FranchiseSession, calendar_idx:
                     "effect_summary": summary,
                     "follow_up": "Watch next game for on-ice response.",
                     "surfaces": ["storylines", "notifications", "calendar"],
+                    "allegation_note": "Clearance is organizational/league availability — not a legal verdict unless stated.",
+                    **(res.get("incident") or {}),
                 },
             )
             session.notifications.append(
@@ -497,16 +605,20 @@ def _franchise_tick_conduct_and_resolve(session: FranchiseSession, calendar_idx:
                 )
             )
 
+    # Keep registry reachable from league for any sim-side readers.
+    try:
+        league = getattr(getattr(session, "sim", None), "league", None)
+        if league is not None:
+            setattr(league, REGISTRY_KEY, getattr(session, REGISTRY_KEY, {}) or {})
+            setattr(league, "_conduct_org_pressure", getattr(session, "_conduct_org_pressure", {}) or {})
+    except Exception:
+        pass
+
 
 def _legal_gm_choice_options() -> List[Dict[str, Any]]:
-    return [
-        {"id": "suspend_internally", "label": "Suspend player internally"},
-        {"id": "wait_league", "label": "Wait for league investigation"},
-        {"id": "trade_immediately", "label": "Trade player immediately"},
-        {"id": "support_program", "label": "Send player to support program"},
-        {"id": "release_statement", "label": "Release statement"},
-        {"id": "do_nothing", "label": "Do nothing and risk backlash"},
-    ]
+    from app.sim_engine.franchise.conduct_incidents import legal_gm_choice_options  # noqa: WPS433
+
+    return legal_gm_choice_options()
 
 
 def _franchise_fanout_player_storylines(session: FranchiseSession, calendar_idx: int, day_meta: Dict[str, Any]) -> None:
@@ -609,8 +721,7 @@ def _franchise_fanout_player_storylines(session: FranchiseSession, calendar_idx:
             return {}, {}
         should_impact = (
             is_user_team
-            or (is_legal and legal_sev == "major")
-            or (is_legal and is_user_team)
+            or is_legal
             or (tier == "major")
             or (tier == "mid" and is_user_team)
         )
@@ -625,27 +736,40 @@ def _franchise_fanout_player_storylines(session: FranchiseSession, calendar_idx:
             return {}, {}
         rng = getattr(session.sim, "rng", None)
         meta: Dict[str, Any] = {}
-        if is_legal and legal_sev == "major":
+        if is_legal:
+            # All legal_crime families use the conduct state machine (no permanent OVR wipe).
+            sev = legal_sev if legal_sev in ("major", "moderate", "minor") else ("major" if tier == "major" else "moderate")
+            fame = 0.5
+            try:
+                ovr_fn = getattr(pl, "ovr", None)
+                o = float(ovr_fn() if callable(ovr_fn) else (ovr_fn or 70))
+                if o <= 1.5:
+                    o *= 99.0
+                fame = max(0.15, min(1.0, (o - 65.0) / 30.0))
+            except Exception:
+                pass
             meta = apply_conduct_suspension(
                 pl,
-                severity="major",
+                severity=sev,
                 storyline_id=base_id,
                 cause_type="LOW_CHARACTER_CONFLICT",
                 cause_event_id=str(row.get("cause_event_id") or ""),
                 rng=rng,
+                host=session,
+                team_id=tid,
+                storyline_text=str(row.get("storyline_text") or ""),
+                player_fame=fame,
             )
             ret_est, ret_iso = _estimate_return_from_games_remaining(
                 session, int(meta.get("games_remaining") or 0)
             )
             fields = build_conduct_storyline_fields(meta, return_estimate=ret_est, return_date=ret_iso)
-            if meta.get("games_remaining"):
-                fields["impact_reason"] = "League investigation / indefinite leave penalty"
             return meta, fields
-        sev_key = legal_sev if is_legal else tier
+        sev_key = tier
         meta = apply_storyline_ovr_nudge(
             pl,
             tier=str(sev_key or tier or "minor"),
-            legal_severity=legal_sev if is_legal else "",
+            legal_severity="",
             storyline_id=base_id,
             rng=rng,
         )
@@ -827,6 +951,14 @@ def _franchise_fanout_player_storylines(session: FranchiseSession, calendar_idx:
                 f"No suspension announced at this time. — {st}"
             )
 
+        requires_decision = bool(is_user_team and is_legal and legal_sev == "major")
+        legal_options = _legal_gm_choice_options() if requires_decision else []
+        # Seed heat/credibility for legal fanout so Rumour Mill / hero can show gossip signals.
+        if is_legal and conduct_fields.get("heat") is None:
+            conduct_fields["heat"] = 78 if legal_sev == "major" else 55 if legal_sev == "moderate" else 40
+        if is_legal and conduct_fields.get("credibility") is None:
+            conduct_fields["credibility"] = 70 if legal_sev == "major" else 48
+
         _record_storyline(
             session,
             {
@@ -853,6 +985,8 @@ def _franchise_fanout_player_storylines(session: FranchiseSession, calendar_idx:
                 "arc_tier": tier,
                 "arc_status": conduct_fields.get("arc_status", "active"),
                 "status": "active",
+                "requires_action": requires_decision,
+                "action_options": legal_options if requires_decision else [],
                 "surfaces": ["calendar", "storylines", "notifications"]
                 + (["popup"] if is_user_team or is_legal else []),
                 **conduct_fields,
@@ -877,7 +1011,6 @@ def _franchise_fanout_player_storylines(session: FranchiseSession, calendar_idx:
         if is_legal and not is_user_team and legal_popups_today >= legal_popup_cap:
             should_popup = False
         if should_popup and len(popups_today) < popup_cap:
-            requires_decision = bool(is_user_team and is_legal and legal_sev == "major")
             popup_kind = "legal_trouble" if is_legal else "storyline"
             pres = _storyline_presentation(
                 is_legal=is_legal,
@@ -918,8 +1051,10 @@ def _franchise_fanout_player_storylines(session: FranchiseSession, calendar_idx:
                 "is_user_team": is_user_team,
                 "popup_scope": "user_team" if is_user_team else "league_news",
                 "requires_decision": requires_decision,
+                "requires_action": requires_decision,
                 "decision_id": base_id if requires_decision else "",
-                "choices": _legal_gm_choice_options() if requires_decision else [],
+                "choices": legal_options if requires_decision else [],
+                "action_options": legal_options if requires_decision else [],
                 "surfaces": ["popup", "storylines", "notifications", "calendar"],
                 **pres,
                 **conduct_fields,
@@ -942,13 +1077,16 @@ def _franchise_fanout_player_storylines(session: FranchiseSession, calendar_idx:
                         "calendar_iso": iso,
                         "title": popup_title,
                         "description": summary,
-                        "options": _legal_gm_choice_options(),
+                        "options": legal_options,
                         "meta": {
                             "storyline_id": base_id,
+                            "incident_id": str(conduct_meta.get("incident_id") or conduct_fields.get("incident_id") or ""),
                             "team_id": tid,
+                            "player_id": str(row.get("player_id") or ""),
                             "player_name": pname,
                             "legal_severity": legal_sev,
                             "cause": st,
+                            "eligible_to_play": bool(conduct_meta.get("eligible_to_play", True)),
                         },
                     },
                 )

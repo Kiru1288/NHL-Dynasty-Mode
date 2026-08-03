@@ -1,45 +1,118 @@
+/* Chemistry — coaching-room analysis on Broadcast Ops base */
+
 .chemistry-screen {
-  padding: 18px 22px 112px;
-  color: #f4f0e8;
-  background: radial-gradient(circle at 18% 8%, rgba(31, 54, 92, 0.5), transparent 45%),
-    linear-gradient(180deg, #081019 0%, #070d14 100%);
+  --chem-warm: rgba(201, 168, 106, 0.12);
+  --chem-warm-line: rgba(201, 168, 106, 0.28);
+  --chem-panel: rgba(9, 25, 38, 0.92);
+  --chem-line: var(--ops-grid);
+  --chem-text: var(--ops-text);
+  --chem-muted: var(--ops-text-secondary);
+
+  padding: 18px 22px 96px;
+  color: var(--chem-text);
+  background:
+    radial-gradient(circle at 14% 6%, rgba(19, 216, 231, 0.07), transparent 38%),
+    radial-gradient(circle at 88% 12%, var(--chem-warm), transparent 32%),
+    linear-gradient(180deg, var(--ops-black) 0%, var(--ops-navy-deep) 100%);
   overflow-y: auto;
+  font-family: var(--font-ops-ui);
 }
 
 .chemistry-hero {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 14px;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--chem-line);
 }
 
 .chemistry-hero h2 {
   margin: 0 0 6px;
-  font-size: 26px;
+  font-family: var(--font-broadcast-display);
+  font-size: 1.35rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .chemistry-hero p {
-  margin: 0 0 3px;
-  color: #d8ccaf;
+  margin: 0 0 4px;
+  color: rgba(233, 247, 251, 0.88);
+  font-size: var(--type-compact-size);
+}
+
+.chemistry-hero small {
+  color: var(--chem-muted);
+  font-size: var(--type-table-meta-size);
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
 .chemistry-hero button {
-  border: 1px solid rgba(240, 198, 118, 0.45);
-  background: rgba(8, 12, 20, 0.8);
-  color: #fff0d0;
-  border-radius: 999px;
+  border: 1px solid var(--chem-line);
+  background: rgba(7, 22, 35, 0.88);
+  color: var(--chem-text);
+  border-radius: var(--radius-hud);
   padding: 8px 14px;
-  font-weight: 800;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color var(--motion-micro), background var(--motion-micro);
 }
+
+.chemistry-hero button:hover {
+  border-color: var(--ops-grid-strong);
+  background: var(--ops-cyan-soft);
+  color: var(--ops-cyan);
+}
+
+.chemistry-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  margin-bottom: 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--chem-line);
+  border-radius: var(--radius-hud);
+  background: rgba(6, 21, 34, 0.55);
+}
+
+.chemistry-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--type-table-meta-size);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--chem-muted);
+}
+
+.chemistry-legend span::before {
+  content: "";
+  width: 14px;
+  height: 2px;
+  flex-shrink: 0;
+}
+
+.chemistry-legend .is-high::before { background: var(--ops-success); }
+.chemistry-legend .is-mid::before { background: var(--ops-gold); }
+.chemistry-legend .is-low::before { background: var(--ops-injury); }
 
 .chemistry-room-card,
 .chemistry-line-card {
-  background: rgba(15, 22, 31, 0.78);
-  border: 1px solid rgba(142, 170, 200, 0.18);
-  border-radius: 14px;
-  padding: 12px;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.25);
+  background: var(--chem-panel);
+  border: 1px solid var(--chem-line);
+  border-radius: var(--radius-control);
+  padding: 12px 14px;
+  box-shadow: var(--depth-registered);
+}
+
+.chemistry-room-card {
+  border-left: 3px solid var(--ops-cyan);
 }
 
 .chemistry-group {
@@ -52,91 +125,300 @@
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+  margin-bottom: 8px;
+}
+
+.chemistry-room-header h3,
+.chemistry-line-top > span:first-child {
+  font-size: var(--type-ops-heading-size);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .chemistry-section-title {
   margin: 0 0 8px;
-  font-size: 17px;
-  color: #f9db99;
+  font-size: var(--type-ops-heading-size);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ops-cyan);
 }
 
 .chemistry-grid {
   display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.chemistry-meter {
+  padding: 6px 0;
 }
 
 .chemistry-meter-row {
   display: flex;
   justify-content: space-between;
-  margin-bottom: 5px;
-  font-size: 12px;
+  margin-bottom: 4px;
+  font-size: var(--type-table-meta-size);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--chem-muted);
 }
 
-.chemistry-meter-track {
-  height: 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.1);
+.chemistry-meter-row strong {
+  color: var(--chem-text);
+  font-family: var(--font-mono-data);
+  font-variant-numeric: tabular-nums;
 }
 
-.chemistry-meter-fill {
-  height: 8px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #f2c46f, #8ce9a2);
+/* Five-notch strength notation. Tone states the verdict so the board can be
+   scanned for friction without reading a single numeral. */
+.chemistry-notation {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 3px;
+  height: 3px;
 }
 
+.chemistry-notation i {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.chemistry-meter[data-tone="high"] .chemistry-notation i.is-on { background: var(--ops-success); }
+.chemistry-meter[data-tone="mid"] .chemistry-notation i.is-on { background: var(--ops-gold); }
+.chemistry-meter[data-tone="low"] .chemistry-notation i.is-on { background: var(--ops-injury); }
+
+.chemistry-meter[data-tone="low"] .chemistry-meter-row strong { color: var(--ops-injury); }
+
+/* Link chain — spatial relationship between linemates */
+.chemistry-line-players {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 7px;
+}
+
+.chemistry-node {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.chemistry-node strong {
+  color: var(--chem-text);
+  font-weight: 700;
+}
+
+.chemistry-node em {
+  font-style: normal;
+  font-size: var(--type-table-meta-size);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--chem-muted);
+}
+
+/* Relationship linkage: a short tactical tape between nameplates. Low tone
+   becomes dashed concern tape instead of a solid bar. */
+.chemistry-link-mark {
+  width: 18px;
+  height: 2px;
+  flex-shrink: 0;
+  background: var(--chem-muted);
+  box-shadow: 0 0 0 1px transparent;
+  position: relative;
+}
+
+.chemistry-link-mark::before,
+.chemistry-link-mark::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  width: 2px;
+  height: 6px;
+  background: inherit;
+  opacity: 0.85;
+}
+
+.chemistry-link-mark::before { left: 0; }
+.chemistry-link-mark::after { right: 0; }
+
+.chemistry-line-card[data-tone="high"] .chemistry-link-mark { background: var(--ops-success); }
+.chemistry-line-card[data-tone="mid"] .chemistry-link-mark { background: var(--ops-gold); }
+.chemistry-line-card[data-tone="low"] {
+  background: linear-gradient(90deg, rgba(255, 92, 92, 0.07), var(--chem-panel) 40%);
+}
+.chemistry-line-card[data-tone="low"] .chemistry-link-mark {
+  background: repeating-linear-gradient(90deg, var(--ops-injury) 0 3px, transparent 3px 6px);
+}
+
+/* Unit cards are board entries, not floating cards: flat, ruled, with the
+   verdict carried on a left rail. */
+.chemistry-line-card {
+  border-radius: var(--radius-ops);
+  box-shadow: none;
+  border-left: 3px solid var(--chem-muted);
+}
+
+.chemistry-line-card[data-tone="high"] { border-left-color: var(--ops-success); }
+.chemistry-line-card[data-tone="mid"] { border-left-color: var(--ops-gold); }
+.chemistry-line-card[data-tone="low"] { border-left-color: var(--ops-injury); }
+
+.chemistry-line-top > span:first-child {
+  font-family: var(--font-broadcast-display);
+  font-size: 1rem;
+  color: var(--ops-text);
+}
+
+/* Scheme-fit notation reads as a two-column coaching worksheet under a rule. */
+.chemistry-line-card .chemistry-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 18px;
+  padding-top: 6px;
+  border-top: 1px solid var(--chem-line);
+}
+
+.chemistry-line-card .chemistry-meter {
+  padding: 3px 0;
+}
+
+/* Column rules so a value never reads as part of the next label. */
+.chemistry-line-card .chemistry-meter:nth-child(even),
+.chemistry-room-card .chemistry-meter + .chemistry-meter {
+  padding-left: 16px;
+  border-left: 1px solid var(--chem-line);
+}
+
+.chemistry-room-card .chemistry-grid {
+  column-gap: 22px;
+}
+
+/* Score marks — not pills */
+.chemistry-score-mark,
 .chemistry-score-badge {
-  border-radius: 999px;
-  padding: 3px 10px;
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: var(--type-table-meta-size);
   font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.chemistry-score-elite { background: rgba(93, 224, 145, 0.22); color: #89f2b8; }
-.chemistry-score-strong { background: rgba(74, 203, 119, 0.2); color: #6be29c; }
-.chemistry-score-connected { background: rgba(238, 206, 112, 0.2); color: #f0ce70; }
-.chemistry-score-neutral { background: rgba(224, 178, 111, 0.2); color: #e9be79; }
-.chemistry-score-awkward { background: rgba(226, 129, 88, 0.22); color: #f5a37f; }
-.chemistry-score-broken { background: rgba(233, 91, 91, 0.22); color: #ff9f9f; }
+.chemistry-score-mark::before,
+.chemistry-score-badge::before {
+  content: "";
+  width: 10px;
+  height: 2px;
+  flex-shrink: 0;
+}
+
+.chemistry-score-elite { color: var(--ops-success); }
+.chemistry-score-elite::before { background: var(--ops-success); width: 12px; }
+
+.chemistry-score-strong { color: #6be29c; }
+.chemistry-score-strong::before { background: #6be29c; }
+
+.chemistry-score-connected { color: var(--ops-gold); }
+.chemistry-score-connected::before { background: var(--ops-gold); }
+
+.chemistry-score-neutral { color: var(--chem-muted); }
+.chemistry-score-neutral::before { background: var(--chem-muted); }
+
+.chemistry-score-awkward { color: #f5a37f; }
+.chemistry-score-awkward::before { background: #f5a37f; }
+
+.chemistry-score-broken { color: var(--ops-injury); }
+.chemistry-score-broken::before { background: var(--ops-injury); width: 12px; height: 10px; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 
 .chemistry-line-players {
-  margin-top: 6px;
-  color: #afc1d5;
-  font-size: 13px;
+  margin-top: 4px;
+  color: var(--chem-muted);
+  font-size: var(--type-compact-size);
+  line-height: 1.4;
+}
+
+.chemistry-line-card > p {
+  margin: 6px 0 0;
+  font-size: var(--type-compact-size);
+  color: rgba(233, 247, 251, 0.78);
+  line-height: 1.4;
 }
 
 .chemistry-risk {
-  color: #e1b5a0;
+  color: rgba(255, 160, 140, 0.92);
+  font-weight: 700;
+}
+
+.chemistry-mark-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 8px;
+}
+
+.chemistry-factor-mark,
+.chemistry-concern-mark,
+.chemistry-factor-chip,
+.chemistry-concern-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--type-table-meta-size);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--chem-muted);
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.chemistry-factor-mark::before,
+.chemistry-factor-chip::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  background: var(--ops-success);
+  flex-shrink: 0;
+}
+
+.chemistry-concern-mark::before,
+.chemistry-concern-chip::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  background: var(--ops-injury);
+  flex-shrink: 0;
 }
 
 .chemistry-chip-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-}
-
-.chemistry-factor-chip,
-.chemistry-concern-chip {
-  border-radius: 999px;
-  padding: 4px 9px;
-  font-size: 11px;
-}
-
-.chemistry-factor-chip {
-  border: 1px solid rgba(122, 219, 164, 0.5);
-  color: #91e7bc;
-}
-
-.chemistry-concern-chip {
-  border: 1px solid rgba(244, 144, 120, 0.6);
-  color: #ffc3b0;
+  gap: 10px 14px;
 }
 
 .chemistry-empty {
-  margin-top: 20px;
-  background: rgba(19, 27, 39, 0.75);
-  border: 1px solid rgba(156, 176, 206, 0.2);
-  padding: 16px;
-  border-radius: 12px;
+  margin-top: 16px;
+  border: 1px dashed var(--chem-line);
+  border-radius: var(--radius-control);
+  background: rgba(6, 21, 34, 0.55);
+  padding: 16px 18px;
+  color: var(--chem-muted);
+  font-size: var(--type-compact-size);
+  max-width: 420px;
 }
 
+.chemistry-empty::before {
+  content: "CHEMISTRY BOARD · IDLE";
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ops-cyan);
+  font-size: var(--type-phase-label-size);
+  font-weight: 900;
+  letter-spacing: 0.14em;
+}

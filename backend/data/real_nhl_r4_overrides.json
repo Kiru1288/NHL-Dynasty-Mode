@@ -1,0 +1,253 @@
+{
+  "_meta": {
+    "model": "R4",
+    "notes": "Hand-pinned target OVRs / profiles for immersion. Optional contract fields override Spotrac when present. Keys are NHL.com playerIds."
+  },
+  "8478402": {
+    "name": "Connor McDavid",
+    "target_ovr": 0.97,
+    "profile": "playmaker"
+  },
+  "8477492": {
+    "name": "Nathan MacKinnon",
+    "target_ovr": 0.96,
+    "profile": "sniper"
+  },
+  "8476453": {
+    "name": "Nikita Kucherov",
+    "target_ovr": 0.96,
+    "profile": "playmaker"
+  },
+  "8477934": {
+    "name": "Leon Draisaitl",
+    "target_ovr": 0.95,
+    "profile": "power_forward"
+  },
+  "8479318": {
+    "name": "Auston Matthews",
+    "target_ovr": 0.95,
+    "profile": "sniper"
+  },
+  "8484801": {
+    "name": "Macklin Celebrini",
+    "target_ovr": 0.93,
+    "profile": "two_way"
+  },
+  "8477956": {
+    "name": "David Pastrnak",
+    "target_ovr": 0.94,
+    "profile": "sniper"
+  },
+  "8480069": {
+    "name": "Cale Makar",
+    "target_ovr": 0.94,
+    "profile": "offensive_d"
+  },
+  "8480800": {
+    "name": "Quinn Hughes",
+    "target_ovr": 0.93,
+    "profile": "offensive_d"
+  },
+  "8480803": {
+    "name": "Evan Bouchard",
+    "target_ovr": 0.92,
+    "profile": "offensive_d"
+  },
+  "8478864": {
+    "name": "Kirill Kaprizov",
+    "target_ovr": 0.93,
+    "profile": "sniper"
+  },
+  "8478403": {
+    "name": "Jack Eichel",
+    "target_ovr": 0.92,
+    "profile": "playmaker"
+  },
+  "8476460": {
+    "name": "Mark Scheifele",
+    "target_ovr": 0.91,
+    "profile": "playmaker"
+  },
+  "8480018": {
+    "name": "Nick Suzuki",
+    "target_ovr": 0.91,
+    "profile": "two_way"
+  },
+  "8478398": {
+    "name": "Kyle Connor",
+    "target_ovr": 0.91,
+    "profile": "sniper"
+  },
+  "8478550": {
+    "name": "Artemi Panarin",
+    "target_ovr": 0.91,
+    "profile": "playmaker"
+  },
+  "8477939": {
+    "name": "William Nylander",
+    "target_ovr": 0.91,
+    "profile": "sniper"
+  },
+  "8478420": {
+    "name": "Mikko Rantanen",
+    "target_ovr": 0.91,
+    "profile": "power_forward"
+  },
+  "8478460": {
+    "name": "Zach Werenski",
+    "target_ovr": 0.91,
+    "profile": "offensive_d"
+  },
+  "8481559": {
+    "name": "Jack Hughes",
+    "target_ovr": 0.91,
+    "profile": "playmaker"
+  },
+  "8484144": {
+    "name": "Connor Bedard",
+    "target_ovr": 0.90,
+    "profile": "sniper"
+  },
+  "8471675": {
+    "name": "Sidney Crosby",
+    "target_ovr": 0.92,
+    "profile": "playmaker"
+  },
+  "8471214": {
+    "name": "Alex Ovechkin",
+    "target_ovr": 0.90,
+    "profile": "sniper"
+  },
+  "8477493": {
+    "name": "Aleksander Barkov",
+    "target_ovr": 0.92,
+    "profile": "two_way"
+  },
+  "8479314": {
+    "name": "Matthew Tkachuk",
+    "target_ovr": 0.91,
+    "profile": "power_forward"
+  },
+  "8480801": {
+    "name": "Brady Tkachuk",
+    "target_ovr": 0.5556,
+    "profile": "power_forward",
+    "notes": "House rule: forced 55 OVR / CANCER chaos mode"
+  },
+  "8482105": {
+    "name": "Jake Sanderson",
+    "target_ovr": 0.89,
+    "profile": "two_way_d"
+  },
+  "8482116": {
+    "name": "Tim Stützle",
+    "target_ovr": 0.90,
+    "profile": "playmaker"
+  },
+  "8480208": {
+    "name": "Drake Batherson",
+    "target_ovr": 0.88,
+    "profile": "sniper"
+  },
+  "8480002": {
+    "name": "Nico Hischier",
+    "target_ovr": 0.88,
+    "profile": "two_way"
+  },
+  "8478427": {
+    "name": "Sebastian Aho",
+    "target_ovr": 0.90,
+    "profile": "two_way"
+  },
+  "8478010": {
+    "name": "Brayden Point",
+    "target_ovr": 0.90,
+    "profile": "sniper"
+  },
+  "8478483": {
+    "name": "Mitch Marner",
+    "target_ovr": 0.91,
+    "profile": "playmaker"
+  },
+  "8479323": {
+    "name": "Adam Fox",
+    "target_ovr": 0.90,
+    "profile": "offensive_d"
+  },
+  "8474600": {
+    "name": "Roman Josi",
+    "target_ovr": 0.90,
+    "profile": "offensive_d"
+  },
+  "8475167": {
+    "name": "Victor Hedman",
+    "target_ovr": 0.89,
+    "profile": "two_way_d"
+  },
+  "8476945": {
+    "name": "Connor Hellebuyck",
+    "target_ovr": 0.939,
+    "profile": "butterfly_g",
+    "notes": "NHL Network #1 / Vezina-Hart tier"
+  },
+  "8476883": {
+    "name": "Andrei Vasilevskiy",
+    "target_ovr": 0.929,
+    "profile": "hybrid_g",
+    "notes": "NHL Network #2"
+  },
+  "8478048": {
+    "name": "Igor Shesterkin",
+    "target_ovr": 0.919,
+    "profile": "butterfly_g",
+    "notes": "NHL Network #3"
+  },
+  "8475683": {
+    "name": "Sergei Bobrovsky",
+    "target_ovr": 0.899,
+    "profile": "butterfly_g",
+    "notes": "NHL Network #4 / Cup pedigree"
+  },
+  "8479979": {
+    "name": "Jake Oettinger",
+    "target_ovr": 0.899,
+    "profile": "butterfly_g",
+    "notes": "NHL Network #5"
+  },
+  "8478009": {
+    "name": "Ilya Sorokin",
+    "target_ovr": 0.889,
+    "profile": "butterfly_g",
+    "notes": "NHL Network #6"
+  },
+  "8476412": {
+    "name": "Jordan Binnington",
+    "target_ovr": 0.859,
+    "profile": "butterfly_g",
+    "notes": "NHL Network #7"
+  },
+  "8479406": {
+    "name": "Filip Gustavsson",
+    "target_ovr": 0.869,
+    "profile": "butterfly_g",
+    "notes": "NHL Network #8"
+  },
+  "8475311": {
+    "name": "Darcy Kuemper",
+    "target_ovr": 0.859,
+    "profile": "butterfly_g",
+    "notes": "NHL Network #9"
+  },
+  "8476999": {
+    "name": "Linus Ullmark",
+    "target_ovr": 0.869,
+    "profile": "butterfly_g",
+    "notes": "NHL Network #10"
+  },
+  "8480280": {
+    "name": "Jeremy Swayman",
+    "target_ovr": 0.869,
+    "profile": "butterfly_g",
+    "notes": "Reputation floor; negative GSAx year capped via formula"
+  }
+}

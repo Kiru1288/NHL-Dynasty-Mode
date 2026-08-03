@@ -67,8 +67,8 @@ GOALIE_POSITIONS = {"G", "GOALIE"}
 QUALITY_START_SV_PCT = 0.915
 BAD_START_SV_PCT = 0.850
 
-LEAGUE_AVG_SV_PCT = 0.905
-LEAGUE_AVG_SH_PCT = 0.095
+LEAGUE_AVG_SV_PCT = 0.898
+LEAGUE_AVG_SH_PCT = 0.110
 LEAGUE_AVG_HD_SV_PCT = 0.820
 LEAGUE_AVG_MD_SV_PCT = 0.900
 LEAGUE_AVG_LD_SV_PCT = 0.970
@@ -81,8 +81,8 @@ IMPACT_CORE = 54.0
 IMPACT_DEPTH = 42.0
 
 REPLACEMENT_POINTS_PER_60 = 0.85
-REPLACEMENT_XG_PER_60 = 0.45
-REPLACEMENT_XGA_PER_60 = 2.85
+REPLACEMENT_XG_PER_60 = 0.55
+REPLACEMENT_XGA_PER_60 = 2.55
 REPLACEMENT_FACE_OFF_PCT = 0.475
 
 CAP_SAFE_DEFAULT = 0.0
@@ -403,8 +403,27 @@ def normalize_skater_counting_stats(row: Mapping[str, Any]) -> Dict[str, Any]:
     ixg = safe_float(first_present(row, ["ixg", "individual_xg", "individual_expected_goals", "xg"], 0.0), 0.0)
     xa = safe_float(first_present(row, ["xa", "expected_assists"], 0.0), 0.0)
 
+    # Repair triangular light-path inflation: season iXG/xA were re-added from
+    # cumulative SOG/G/A every game (~N²/2), producing ~3000 iXG and WAR ~200.
+    if ixg > 0 and sog > 0 and (ixg > sog * 0.45 or (g > 0 and ixg > g * 6.0)):
+        ixg = max(float(g) * 0.85, float(sog) * LEAGUE_AVG_SH_PCT)
+    elif ixg > 0 and sog <= 0 and g > 0 and ixg > g * 6.0:
+        ixg = float(g) * 0.90
+    if xa > 0 and a > 0 and xa > a * 2.5:
+        xa = float(a) * 0.70
+    elif xa > 0 and a <= 0 and xa > 5.0:
+        xa = 0.0
+    # Display/analytics: whole expected goals / assists (no long decimals).
+    if ixg > 0:
+        ixg = float(int(round(ixg)))
+    if xa > 0:
+        xa = float(int(round(xa)))
+
     gf_on = safe_float(first_present(row, ["gf_on", "on_ice_gf", "goals_for_on_ice"], 0.0), 0.0)
     ga_on = safe_float(first_present(row, ["ga_on", "on_ice_ga", "goals_against_on_ice"], 0.0), 0.0)
+    # NHL ledger historically wrote gf_on/ga_on without plus_minus; derive when missing.
+    if plus_minus == 0 and (gf_on > 0 or ga_on > 0):
+        plus_minus = int(round(gf_on - ga_on))
 
     on_ice_shots_for = safe_float(first_present(row, ["on_ice_shots_for", "shots_for_on_ice", "sf_on"], 0.0), 0.0)
     on_ice_shots_against = safe_float(first_present(row, ["on_ice_shots_against", "shots_against_on_ice", "sa_on"], 0.0), 0.0)
@@ -669,6 +688,9 @@ def normalize_goalie_counting_stats(row: Mapping[str, Any]) -> Dict[str, Any]:
 
     if toi_sec <= 0 and gp > 0:
         toi_sec = gp * DEFAULT_GOALIE_TOI_PER_GAME_SEC
+    # Light path used to omit per-game toi while still adding GA — GAA exploded (e.g. 30.00).
+    elif gp > 0 and toi_sec < float(gp) * 1800.0:
+        toi_sec = gp * DEFAULT_GOALIE_TOI_PER_GAME_SEC
 
     xga = safe_float(first_present(row, ["goalie_xga", "xga", "expected_goals_against"], 0.0), 0.0)
     xga_valid = xga > 0 and sa > 0
@@ -915,11 +937,11 @@ def calculate_skater_rates(row: Mapping[str, Any]) -> Dict[str, Any]:
     average_shot_quality_against = pct(xga, ca, default=0.0)
     shot_quality_differential = average_shot_quality_for - average_shot_quality_against
 
-    finishing = g - ixg if ixg > 0 else 0.0
+    finishing = float(int(round(g - ixg))) if ixg > 0 else 0.0
     finishing_per_60 = per_60(finishing, toi_sec)
     finishing_efficiency = pct(g, ixg, default=0.0) if ixg > 0 else 0.0
 
-    assists_above_expected = a - xa if xa > 0 else 0.0
+    assists_above_expected = float(int(round(a - xa))) if xa > 0 else 0.0
     playmaking_efficiency = pct(a, xa, default=0.0) if xa > 0 else 0.0
 
     transition_success_rate = pct(
@@ -1106,10 +1128,21 @@ def calculate_skater_component_scores(row: Mapping[str, Any]) -> Dict[str, Any]:
     xa60 = safe_float(first_present(row, ["xa_per_60", "expected_assists_per_60"], 0.0), 0.0)
     finishing60 = safe_float(first_present(row, ["finishing_per_60"], 0.0), 0.0)
 
-    cf_pct = safe_float(first_present(row, ["cf_pct", "corsi_pct"], 0.0), 0.0)
-    xgf_pct = safe_float(first_present(row, ["xgf_pct"], 0.0), 0.0)
-    gf_pct = safe_float(first_present(row, ["gf_pct", "goal_share"], 0.0), 0.0)
-    ff_pct = safe_float(first_present(row, ["ff_pct"], 0.0), 0.0)
+    cf_pct_raw = first_present(row, ["cf_pct", "corsi_pct"], None)
+    xgf_pct_raw = first_present(row, ["xgf_pct"], None)
+    gf_pct_raw = first_present(row, ["gf_pct", "goal_share"], None)
+    ff_pct_raw = first_present(row, ["ff_pct"], None)
+    cf_pct = safe_float(cf_pct_raw, 0.50) if cf_pct_raw is not None else 0.50
+    xgf_pct = safe_float(xgf_pct_raw, 0.50) if xgf_pct_raw is not None else 0.50
+    ff_pct = safe_float(ff_pct_raw, 0.50) if ff_pct_raw is not None else 0.50
+    gf_on_cs = safe_float(first_present(row, ["gf_on", "on_ice_gf"], 0.0), 0.0)
+    ga_on_cs = safe_float(first_present(row, ["ga_on", "on_ice_ga"], 0.0), 0.0)
+    if gf_on_cs + ga_on_cs > 0:
+        gf_pct = gf_on_cs / (gf_on_cs + ga_on_cs)
+    elif gf_pct_raw is not None:
+        gf_pct = safe_float(gf_pct_raw, 0.50)
+    else:
+        gf_pct = 0.50
 
     tak60 = safe_float(first_present(row, ["takeaways_per_60"], 0.0), 0.0)
     blk60 = safe_float(first_present(row, ["blocks_per_60", "blk_per_60"], 0.0), 0.0)
@@ -1350,7 +1383,15 @@ def calculate_skater_value_metrics(row: Mapping[str, Any]) -> Dict[str, Any]:
     gf_raw = first_present(row, ["gf_pct", "goal_share"], None)
     cf_pct = safe_float(cf_raw, 0.0) if cf_raw is not None else 0.0
     xgf_pct = safe_float(xgf_raw, 0.0) if xgf_raw is not None else 0.0
-    gf_pct = safe_float(gf_raw, 0.0) if gf_raw is not None else 0.0
+    # Prefer live on-ice goals when present so stored/stale gf_pct can't disagree
+    # with the GF-GA sublabel (e.g. 60.7% over 75-73).
+    gf_on_v = safe_float(first_present(row, ["gf_on", "on_ice_gf"], 0.0), 0.0)
+    ga_on_v = safe_float(first_present(row, ["ga_on", "on_ice_ga"], 0.0), 0.0)
+    if gf_on_v + ga_on_v > 0:
+        gf_pct = gf_on_v / (gf_on_v + ga_on_v)
+        gf_raw = gf_pct
+    else:
+        gf_pct = safe_float(gf_raw, 0.0) if gf_raw is not None else 0.0
     ca = safe_float(first_present(row, ["ca", "corsi_against"], 0.0), 0.0)
     xga = safe_float(first_present(row, ["xga", "expected_goals_against", "on_ice_xga"], 0.0), 0.0)
     possession_sample_valid = ca > 0 and xga > 0 and cf_raw is not None and xgf_raw is not None
@@ -1369,25 +1410,29 @@ def calculate_skater_value_metrics(row: Mapping[str, Any]) -> Dict[str, Any]:
     fo_pct = safe_float(first_present(row, ["fo_pct", "faceoff_pct"], 0.0), 0.0)
     faceoffs_taken = fow + fol
 
-    offensive_gar = (
-        (p60 - REPLACEMENT_POINTS_PER_60) * (toi_min / 60.0) * 0.35
-        + (ixg60 - REPLACEMENT_XG_PER_60) * (toi_min / 60.0) * 0.65
-    )
+    offensive_gar = (p60 - REPLACEMENT_POINTS_PER_60) * (toi_min / 60.0) * 0.28
+    ixg_sample = safe_float(first_present(row, ["ixg", "individual_xg", "individual_expected_goals"], 0.0), 0.0)
+    if ixg_sample > 0:
+        offensive_gar += (ixg60 - REPLACEMENT_XG_PER_60) * (toi_min / 60.0) * 0.32
+    else:
+        # Light boxes may omit ixg — don't punish production-only rows.
+        offensive_gar += (p60 - REPLACEMENT_POINTS_PER_60) * (toi_min / 60.0) * 0.12
 
     # Missing against-stats must not look like elite suppression (xga60==0 → huge WAR).
-    defensive_gar = (REPLACEMENT_XGA_PER_60 - xga60) * (toi_min / 60.0) if possession_sample_valid else 0.0
-    penalty_gar = penalty_diff60 * (toi_min / 60.0) * 0.15
-    faceoff_gar = (fo_pct - REPLACEMENT_FACE_OFF_PCT) * faceoffs_taken * 0.02 if faceoffs_taken > 0 else 0.0
+    defensive_gar = (REPLACEMENT_XGA_PER_60 - xga60) * (toi_min / 60.0) * 0.55 if possession_sample_valid else 0.0
+    penalty_gar = penalty_diff60 * (toi_min / 60.0) * 0.12
+    faceoff_gar = (fo_pct - REPLACEMENT_FACE_OFF_PCT) * faceoffs_taken * 0.015 if faceoffs_taken > 0 else 0.0
     if possession_sample_valid:
         possession_gar = (
-            max(-0.18, cf_pct - 0.475) * 1.10
-            + max(-0.18, xgf_pct - 0.475) * 1.80
-            + max(-0.18, (gf_pct if gf_raw is not None else 0.475) - 0.475) * 0.60
+            max(-0.18, cf_pct - 0.475) * 0.70
+            + max(-0.18, xgf_pct - 0.475) * 1.10
+            + max(-0.18, (gf_pct if gf_raw is not None else 0.475) - 0.475) * 0.40
         ) * (toi_min / 60.0)
     else:
         possession_gar = 0.0
-    playmaking_gar = max(-0.25, xa60 - 0.35) * (toi_min / 60.0) * 0.25
-    special_teams_gar = max(-0.20, special_points60 - 0.25) * (toi_min / 60.0) * 0.18
+    xa_sample = safe_float(first_present(row, ["xa", "expected_assists"], 0.0), 0.0)
+    playmaking_gar = max(-0.25, xa60 - 0.35) * (toi_min / 60.0) * 0.18 if xa_sample > 0 else 0.0
+    special_teams_gar = max(-0.20, special_points60 - 0.25) * (toi_min / 60.0) * 0.12
 
     gar = offensive_gar + defensive_gar + penalty_gar + faceoff_gar
     total_impact_gar = gar + possession_gar + playmaking_gar + special_teams_gar
@@ -1457,10 +1502,10 @@ def calculate_skater_value_metrics(row: Mapping[str, Any]) -> Dict[str, Any]:
         "special_teams_gar": round_to(special_teams_gar, 3),
         "gar": round_to(gar, 3),
         "base_war": round_to(base_war, 3),
-        "war": round_to(war, 3),
-        "watr": round_to(war, 3),
-        "WATR": round_to(war, 3),
-        "total_impact": round_to(war, 3),
+        "war": round_to(war, 1),
+        "watr": round_to(war, 1),
+        "WATR": round_to(war, 1),
+        "total_impact": round_to(war, 1),
         "total_impact_gar": round_to(total_impact_gar, 3),
         "war_formula": "WAR=(offensive_gar+defensive_gar+penalty_gar+faceoff_gar+possession_gar+playmaking_gar+special_teams_gar)/GOALS_PER_WIN",
         "war_valid": war_valid,
@@ -1671,6 +1716,10 @@ def calculate_goalie_rates(row: Mapping[str, Any]) -> Dict[str, Any]:
     saves = safe_int(first_present(row, ["saves"], 0))
     shutouts = safe_int(first_present(row, ["so", "shutouts"], 0))
     toi_sec = safe_float(first_present(row, ["toi_sec"], 0.0), 0.0)
+    if toi_sec <= 0 and gp > 0:
+        toi_sec = gp * DEFAULT_GOALIE_TOI_PER_GAME_SEC
+    elif gp > 0 and toi_sec < float(gp) * 1800.0:
+        toi_sec = gp * DEFAULT_GOALIE_TOI_PER_GAME_SEC
 
     xga_raw = first_present(row, ["goalie_xga", "xga", "expected_goals_against"], None)
     xga = safe_float(xga_raw, 0.0)
@@ -2166,9 +2215,18 @@ def aggregate_team_from_player_rows(
     xgf = sum(safe_float(r.get("xgf"), 0.0) for r in skaters)
     xga_skaters = sum(safe_float(r.get("xga"), 0.0) for r in skaters)
 
-    ga_goalies = sum(safe_int(r.get("ga"), 0) for r in goalies)
-    sa_goalies = sum(safe_int(r.get("sa"), 0) for r in goalies)
-    saves_goalies = sum(safe_int(r.get("saves"), 0) for r in goalies)
+    ga_goalies = sum(safe_int(first_present(r, ["ga", "goals_against"], 0)) for r in goalies)
+    sa_goalies = sum(safe_int(first_present(r, ["sa", "shots_against", "goalie_shots_against"], 0)) for r in goalies)
+    saves_goalies = sum(
+        safe_int(
+            first_present(
+                r,
+                ["saves"],
+                max(0, safe_int(first_present(r, ["sa", "shots_against"], 0)) - safe_int(first_present(r, ["ga"], 0))),
+            )
+        )
+        for r in goalies
+    )
 
     team_sh_pct = pct(gf, sog, default=0.0)
     team_sv_pct = pct(saves_goalies, sa_goalies, default=0.0)
@@ -2264,7 +2322,19 @@ def enrich_team_game_result_row(row: Mapping[str, Any]) -> Dict[str, Any]:
     cf_pct = (cf / (cf + ca)) if (cf + ca) > 0 else None
     ff_pct = (ff / (ff + fa)) if (ff + fa) > 0 else None
     sh_pct = pct(gf, sf, default=0.0) if sf > 0 else None
-    sv_pct = pct(sa - ga, sa, default=0.0) if sa > 0 else None
+    # Prefer goalie-ledger SV% when present — (sa - standings_ga)/sa invents .96
+    # team SV% that doesn't match any actual goalie.
+    goalie_sa = safe_int(first_present(out, ["shots_against_goalie_sum"], 0))
+    goalie_saves = safe_int(first_present(out, ["saves_goalie_sum"], 0))
+    if goalie_sa > 0 and goalie_saves >= 0:
+        sv_pct = pct(goalie_saves, goalie_sa, default=0.0)
+        sa = goalie_sa
+    elif out.get("sv_pct") is not None and safe_float(out.get("sv_pct"), 0.0) > 0:
+        sv_pct = safe_float(out.get("sv_pct"), 0.0)
+        if sv_pct > 1.5:
+            sv_pct = sv_pct / 100.0
+    else:
+        sv_pct = pct(sa - ga, sa, default=0.0) if sa > 0 else None
     pp_pct = pct(ppg, ppo, default=0.0) if ppo > 0 else None
     pk_pct = (1.0 - pct(ppga, opp_ppo, default=0.0)) if opp_ppo > 0 else None
 
@@ -2593,9 +2663,33 @@ def award_watch_scores(
     """
     Formula-driven award watch lists.
 
-    These are custom franchise-mode awards. They are not official NHL awards.
-    They are designed to make the sim feel smarter than raw goals/assists.
+    Custom franchise boards are intentionally sparse — a handful of named
+    flavors beside the official NHL races, not a 35-trophy flood.
     """
+    # Keep only these custom boards in Award Watch (plus official NHL keys below).
+    core_custom = {
+        "alexander_ovechkin_best_goal_scorer",
+        "joe_thornton_best_pure_playmaker",
+        "patrice_bergeron_best_defensive_forward",
+        "bobby_orr_best_offensive_defenseman",
+        "nicklas_lidstrom_best_complete_defenseman",
+        "teemu_selanne_best_rookie_scorer",
+        "dominik_hasek_best_goalie_advanced_analytics",
+        "martin_brodeur_best_workhorse_goalie",
+    }
+    official_keys = {
+        "art_ross",
+        "rocket",
+        "hart",
+        "norris",
+        "selke",
+        "calder",
+        "vezina",
+        "lady_byng",
+        "ted_lindsay",
+        "jennings",
+        "conn_smythe",
+    }
     enriched = enrich_player_rows(rows)
     skaters = [r for r in enriched if not is_goalie_row(r)]
     forwards = [r for r in skaters if not is_defenseman_row(r)]
@@ -3100,6 +3194,13 @@ def award_watch_scores(
                 r.setdefault("official", False)
                 r.setdefault("watch_type", "custom_franchise_award")
                 r.setdefault("ceremony_enabled", False)
+
+    # Massive cut: drop the long-tail named boards; keep a short core set.
+    award_map = {
+        k: v
+        for k, v in award_map.items()
+        if k in official_keys or k in core_custom
+    }
 
     return sanitize_awards_watch_for_public(award_map)
 

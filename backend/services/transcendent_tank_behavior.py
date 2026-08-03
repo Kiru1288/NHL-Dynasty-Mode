@@ -71,7 +71,7 @@ def refresh_transcendent_tank_pressure(
         return {}
     season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
     dy = int(draft_year or season_year + 1)
-    ensure_draft_pick_registry(league, start_year=season_year, years_ahead=4)
+    ensure_draft_pick_registry(league, start_year=dy, years_ahead=4)
 
     standings = getattr(session, "standings", None)
     out: Dict[str, Dict[str, Any]] = {}

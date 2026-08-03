@@ -124,7 +124,7 @@
 }
 
 .player-headshot.variant-card {
-  border-radius: 18px;
+  border-radius: 12px;
   padding: 6px;
   background: linear-gradient(145deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
   box-shadow: 0 16px 34px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.08);

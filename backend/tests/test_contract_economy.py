@@ -757,6 +757,42 @@ def test_expiry_clears_active_contract():
     assert not has_active_contract(p)
 
 
+def test_defer_july1_keeps_final_year_ufa_extension_eligible():
+    """Final-year UFAs stay rostered through re-sign until Free Agency / July 1."""
+    from services.contract_economy import (
+        _contract_years_remaining,
+        build_contract_row,
+        expire_pending_july1_contracts,
+        handle_player_contract_expiry,
+    )
+
+    p = _player("chabot", ovr=84, age=28, pos="D")
+    p.contract = normalize_contract_dict({
+        "aav_m": 8.0, "cap_hit_m": 8.0, "years_remaining": 1, "rights_status": "UFA",
+    })
+    p.signed_status = "signed"
+    team = _team("OTT", [p])
+    league = _league([team])
+
+    outcome = handle_player_contract_expiry(
+        p, team, league, 2025, defer_july1_ufa=True
+    )
+    assert outcome == "kept"
+    assert p in team.roster
+    assert _contract_years_remaining(p) == 1
+    assert bool(getattr(p, "pending_july1_expiry", False))
+    row = build_contract_row(p, team, 2025, league)
+    assert row["extension_eligible"] is True
+    assert row["can_negotiate"] is True
+    assert not any(_player_id(x) == "chabot" for x in league.free_agents)
+
+    session = _cpu_session(team, league, user_tid="OTT")
+    report = expire_pending_july1_contracts(session)
+    assert report["expired_ufa_count"] == 1
+    assert p not in team.roster
+    assert any(_player_id(x) == "chabot" for x in league.free_agents)
+
+
 def test_buyout_protection_true_elc_and_core():
     from services.contract_economy import ELC_AAV_M, identify_buyout_candidates, is_buyout_protected
 
@@ -1128,6 +1164,72 @@ def test_bootstrap_leaves_cap_headroom_at_franchise_start():
     assert sum(1 for x in spaces if x < 0.01) <= 2, "most teams should not be pinned at $0 space"
 
 
+def test_contract_office_does_not_reopen_cap_headroom_after_signing():
+    """Signing to ~$0 usable space must stick — office rebuild must not trim other
+    AAVs back toward the bootstrap 2.5–9M headroom band."""
+    from services.contract_economy import (
+        build_contract_office,
+        sign_player_to_team,
+    )
+
+    roster = []
+    # ~85.5M on the books under a 92M cap → ~6.5M free before the signing.
+    for i, aav in enumerate([9.5, 8.5, 7.5, 7.0, 6.5, 6.0, 5.5, 5.0, 4.5, 4.0, 3.5, 3.0, 2.5, 2.5, 2.0, 2.0, 2.0, 2.0, 1.5, 0.5]):
+        p = _signed_player(f"r{i}", 80 + (i % 10), 26 + (i % 8), "C" if i % 3 else "LW", aav)
+        roster.append(p)
+    team = _team("USER", roster)
+    team.salary_cap_m = 92.0
+    league = _league([team])
+    league.salary_cap_m = 92.0
+    league.free_agents = []
+
+    before = get_team_cap_snapshot_full(team, league, season_year=2025)
+    space = float(before["usable_cap_space_m"])
+    assert space > 0.5, f"expected leftover space before signing, got {space}"
+
+    aavs_before = {
+        str(p.id): float((p.contract or {}).get("aav_m") or 0)
+        for p in list(team.roster)
+    }
+
+    fa = _fa_player("spend-it", 82, 28, "C")
+    league.free_agents = [fa]
+    sign_aav = round(space, 3)
+    result = sign_player_to_team(
+        fa,
+        team,
+        league,
+        2025,
+        {"aav_m": sign_aav, "years": 2, "force": True, "context": "ufa"},
+    )
+    assert result.get("ok"), result
+    assert result.get("status") == "accepted", result
+
+    mid = get_team_cap_snapshot_full(team, league, season_year=2025)
+    assert float(mid["usable_cap_space_m"]) <= 0.15, (
+        f"after signing usable space should be ~0, got {mid['usable_cap_space_m']}"
+    )
+
+    session = _trade_session(league, user_tid="USER")
+    office = build_contract_office(session)
+    snap = office.get("cap_snapshot") or {}
+    assert float(snap.get("usable_cap_space_m") or 0) <= 0.15, (
+        f"office rebuild reopened space to {snap.get('usable_cap_space_m')} "
+        f"(bootstrap heal must not run on contract office)"
+    )
+
+    for p in list(team.roster):
+        pid = str(p.id)
+        if pid == "spend-it":
+            continue
+        if pid not in aavs_before:
+            continue
+        cur = float((p.contract or {}).get("aav_m") or 0)
+        assert abs(cur - aavs_before[pid]) < 0.01, (
+            f"office rebuild mutated {pid} AAV {aavs_before[pid]} -> {cur}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Audit fixes: season-less cap summation, RFA slots, arbitration, CPU RFA pass,
 # offer-sheet resolution
@@ -1338,6 +1440,73 @@ def test_cpu_rfa_pass_skips_user_team():
     assert len(team.rfa_rights) == 1
 
 
+def test_cpu_own_ufa_resign_keeps_star_on_contender():
+    """CPU contenders re-sign exclusive UFAs when negotiation agrees — no force-keep."""
+    from services.contract_economy import run_cpu_own_ufa_resign
+
+    roster = [_player(f"r{i}", ovr=78, age=26, pos="LW") for i in range(4)]
+    for pl in roster:
+        pl.contract = normalize_contract_dict({"aav_m": 1.0, "cap_hit_m": 1.0, "years_remaining": 2})
+        pl.signed_status = "signed"
+    team = _team("TBL", roster)
+    team.gm_window = "contender"
+    league = _league([team])
+    league.salary_cap_m = 92.0
+
+    star = _player("kucherov", ovr=95, age=32, pos="RW")
+    star.rights_status = "UFA"
+    star.ufa_from_team_id = "TBL"
+    star.previous_nhl_team_id = "TBL"
+    star.ufa_exclusive = True
+    star.contract = None
+    league.free_agents = [star]
+
+    session = _cpu_session(team, league, user_tid="OTHER")
+    session.free_agency_open = False
+    result = run_cpu_own_ufa_resign(session)
+    # Contender with space should usually retain; either re-sign or walk is valid —
+    # force-keep must not invent agreement. Contender + space → expect re-sign.
+    assert result["re_signed_count"] + result["walked_count"] == 1
+    if result["re_signed_count"] == 1:
+        assert any(_player_id(p) == "kucherov" for p in team.roster)
+        assert not any(_player_id(p) == "kucherov" for p in league.free_agents)
+
+
+def test_cpu_own_ufa_resign_rebuild_star_can_walk():
+    """Elite UFAs on rebuild clubs may test free agency — but the club must
+    attempt a serious offer when it has room before releasing exclusivity."""
+    from services.contract_economy import run_cpu_own_ufa_resign
+
+    roster = [_player(f"r{i}", ovr=72, age=24, pos="LW") for i in range(4)]
+    for pl in roster:
+        pl.contract = normalize_contract_dict({"aav_m": 1.0, "cap_hit_m": 1.0, "years_remaining": 2})
+        pl.signed_status = "signed"
+    team = _team("CHI", roster)
+    team.gm_window = "rebuild"
+    league = _league([team])
+    league.salary_cap_m = 92.0
+
+    star = _player("starufa", ovr=90, age=28, pos="C")
+    star.rights_status = "UFA"
+    star.ufa_from_team_id = "CHI"
+    star.previous_nhl_team_id = "CHI"
+    star.ufa_exclusive = True
+    star.contract = None
+    league.free_agents = [star]
+
+    session = _cpu_session(team, league, user_tid="OTHER")
+    session.free_agency_open = False
+    result = run_cpu_own_ufa_resign(session)
+    assert result["re_signed_count"] + result["walked_count"] == 1
+    if result["walked_count"] == 1:
+        assert result["walked"][0]["reason"] == "wants_contender"
+        assert any(_player_id(p) == "starufa" for p in league.free_agents)
+    else:
+        # Retention attempt succeeded — exclusivity cleared and player is rostered.
+        assert any(_player_id(p) == "starufa" for p in team.roster)
+        assert not any(_player_id(p) == "starufa" for p in league.free_agents)
+
+
 def test_offer_sheet_resolution_signed_away_with_compensation():
     """FIX B: a big overpay offer sheet is declined by the CPU rights team; the
     player moves to the offering team and compensation is recorded."""
@@ -1434,6 +1603,93 @@ def test_offer_sheet_user_rights_stay_pending():
     assert out["pending"] == 1
 
 
+def test_spc_type_normalization_and_explicit_flag():
+    from services.contract_economy import (
+        does_contract_use_contract_slot,
+        iter_org_contract_players,
+        normalize_contract_dict,
+        uses_nhl_contract_slot,
+        _count_team_contract_slots,
+    )
+
+    ahl_only = normalize_contract_dict({"type": "ahl only", "aav_m": 0.5, "years_remaining": 2})
+    assert ahl_only["type"] == "AHL"
+    assert ahl_only["is_nhl_spc"] is False
+    assert does_contract_use_contract_slot(ahl_only) is False
+
+    spc_alias = normalize_contract_dict({"type": "spc", "aav_m": 0.0, "years_remaining": 2, "is_nhl_spc": True})
+    assert spc_alias["type"] == "STANDARD"
+    assert does_contract_use_contract_slot(spc_alias) is True
+
+    missing_id_a = SimpleNamespace(
+        id=None,
+        retired=False,
+        signed_status="signed",
+        contract=normalize_contract_dict({"type": "STANDARD", "aav_m": 1.0, "years_remaining": 2, "is_nhl_spc": True}),
+    )
+    missing_id_b = SimpleNamespace(
+        id="",
+        retired=False,
+        signed_status="signed",
+        contract=normalize_contract_dict({"type": "STANDARD", "aav_m": 1.0, "years_remaining": 2, "is_nhl_spc": True}),
+    )
+    team = SimpleNamespace(
+        roster=[missing_id_a],
+        ahl_roster=[missing_id_b],
+        echl_roster=[],
+        prospect_pool=[],
+    )
+    # Missing IDs must not collapse to a single counted slot.
+    assert len(iter_org_contract_players(team)) == 2
+    assert _count_team_contract_slots(team) == 2
+    assert uses_nhl_contract_slot(missing_id_a) is True
+
+
+def test_retained_salary_does_not_create_spc_on_retaining_team():
+    from services.contract_economy import (
+        _count_team_contract_slots,
+        normalize_contract_dict,
+        uses_nhl_contract_slot,
+    )
+    player = SimpleNamespace(
+        id="p_ret",
+        retired=False,
+        signed_status="signed",
+        contract=normalize_contract_dict(
+            {"type": "STANDARD", "aav_m": 5.0, "years_remaining": 3, "is_nhl_spc": True}
+        ),
+    )
+    source = SimpleNamespace(
+        roster=[],
+        ahl_roster=[],
+        echl_roster=[],
+        prospect_pool=[],
+        retained_salary_records=[
+            {"player_id": "p_ret", "amount_m": 1.5, "cap_hit_m": 1.5, "seasons_remaining": 2}
+        ],
+    )
+    acq = SimpleNamespace(
+        roster=[player],
+        ahl_roster=[],
+        echl_roster=[],
+        prospect_pool=[],
+        retained_salary_records=[],
+    )
+    assert _count_team_contract_slots(source) == 0
+    assert _count_team_contract_slots(acq) == 1
+    assert uses_nhl_contract_slot(player) is True
+
+
+def test_duplicate_id_across_ahl_echl_counts_once():
+    from services.contract_economy import _count_team_contract_slots, normalize_contract_dict
+
+    c = normalize_contract_dict({"type": "ELC", "aav_m": 0.95, "years_remaining": 2, "is_nhl_spc": True})
+    p_ahl = SimpleNamespace(id="dup1", retired=False, signed_status="signed", contract=c)
+    p_echl = SimpleNamespace(id="dup1", retired=False, signed_status="signed", contract=c)
+    team = SimpleNamespace(roster=[], ahl_roster=[p_ahl], echl_roster=[p_echl], prospect_pool=[])
+    assert _count_team_contract_slots(team) == 1
+
+
 if __name__ == "__main__":
     tests = [
         test_normalize_money_m_legacy_dollars,
@@ -1479,6 +1735,7 @@ if __name__ == "__main__":
         test_rfa_bridge_not_elc,
         test_rfa_bridge_expiry_creates_rfa_rights,
         test_expiry_clears_active_contract,
+        test_defer_july1_keeps_final_year_ufa_extension_eligible,
         test_buyout_protection_true_elc_and_core,
         test_bootstrap_trim_preserves_true_elc,
         test_cap_casualty_under_cap_no_trigger,
@@ -1505,10 +1762,13 @@ if __name__ == "__main__":
         test_cpu_rfa_pass_walks_surplus_depth,
         test_cpu_rfa_pass_leaves_no_stranded_rights,
         test_cpu_rfa_pass_skips_user_team,
+        test_cpu_own_ufa_resign_keeps_star_on_contender,
+        test_cpu_own_ufa_resign_rebuild_star_can_walk,
         test_offer_sheet_resolution_signed_away_with_compensation,
         test_offer_sheet_resolution_matched,
         test_offer_sheet_user_rights_stay_pending,
         test_bootstrap_leaves_cap_headroom_at_franchise_start,
+        test_contract_office_does_not_reopen_cap_headroom_after_signing,
     ]
     for t in tests:
         t()

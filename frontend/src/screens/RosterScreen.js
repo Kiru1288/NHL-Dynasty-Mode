@@ -7,12 +7,14 @@ import PlayerHeadshot from "../components/PlayerHeadshot";
 import { formatProspectLeague, formatProspectTeam } from "../events/prospectDevelopment/prospectDevelopmentHelpers";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { nationalityCode, ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
+import { nearestFlagApiSize } from "../utils/countryFlags";
 import {
   getBaseOverall,
   getOverallDrop,
   getOverallTooltip,
   getUniversalOverall,
 } from "../utils/playerOverall";
+import { getRosterMoves, moveRosterPlayer, getStatsCentral } from "../services/franchiseService";
 
 /**
  * RosterScreen.js
@@ -76,12 +78,12 @@ const VIEW_MODE_OPTIONS = [
 ];
 
 const PANEL_TABS = [
-  { value: "overview", label: "Profile" },
-  { value: "ratings", label: "Ratings" },
-  { value: "production", label: "Stats" },
-  { value: "contract", label: "Contract" },
+  { value: "overview", label: "Overview" },
+  { value: "performance", label: "Performance" },
   { value: "development", label: "Development" },
-  { value: "history", label: "Timeline" },
+  { value: "contract", label: "Contract" },
+  { value: "career", label: "Career" },
+  { value: "moves", label: "Moves" },
 ];
 
 const SORT_KEYS = [
@@ -110,6 +112,8 @@ const STATUS_FILTERS = [
   "All",
   "Active",
   "Injured",
+  "Suspended",
+  "Leave",
   "Scratched",
   "Assigned",
   "Unsigned",
@@ -695,14 +699,25 @@ function mergeFranchiseStatsIntoPlayer(player, statsLookup) {
     saves: pickFirstDefined(statsRow.saves, statsRow.sv),
     shots_against: pickFirstDefined(statsRow.shots_against, statsRow.sa),
     goals_against: pickFirstDefined(statsRow.goals_against, statsRow.ga),
-    sv_pct: pickFirstDefined(statsRow.save_pct, statsRow.sv_pct, statsRow.savePct),
-    save_pct: pickFirstDefined(statsRow.save_pct, statsRow.sv_pct, statsRow.savePct),
+    sv_pct: pickFirstDefined(statsRow.save_pct, statsRow.sv_pct, statsRow.savePct, statsRow.svPct),
+    save_pct: pickFirstDefined(statsRow.save_pct, statsRow.sv_pct, statsRow.savePct, statsRow.svPct),
     gaa: statsRow.gaa,
     sog: pickFirstDefined(statsRow.sog, statsRow.shots),
     shots: pickFirstDefined(statsRow.shots, statsRow.sog),
     pim: statsRow.pim,
-    plus_minus: pickFirstDefined(statsRow.plus_minus, statsRow.pm),
+    plus_minus: pickFirstDefined(statsRow.plus_minus, statsRow.pm, statsRow.plusMinus),
+    plusMinus: pickFirstDefined(statsRow.plusMinus, statsRow.plus_minus, statsRow.pm),
     toi: pickFirstDefined(statsRow.toi, statsRow.average_toi),
+    hits: pickFirstDefined(statsRow.hits, statsRow.hit),
+    blocks: pickFirstDefined(statsRow.blocks, statsRow.blk),
+    shutouts: pickFirstDefined(statsRow.shutouts, statsRow.so),
+    war: pickFirstDefined(statsRow.war),
+    cfPct: pickFirstDefined(statsRow.cfPct, statsRow.cf_pct),
+    cf_pct: pickFirstDefined(statsRow.cf_pct, statsRow.cfPct),
+    xgfPct: pickFirstDefined(statsRow.xgfPct, statsRow.xgf_pct),
+    xgf_pct: pickFirstDefined(statsRow.xgf_pct, statsRow.xgfPct),
+    league_rank: pickFirstDefined(statsRow.league_rank, statsRow.pts_rank, statsRow.points_rank),
+    leagueRank: pickFirstDefined(statsRow.leagueRank, statsRow.league_rank, statsRow.pts_rank),
   };
 
   return {
@@ -735,10 +750,16 @@ function isUserOwnedProspect(raw, userTeamId) {
   const rightsFields = [
     raw?.drafted_by_team_id,
     raw?.draftedByTeamId,
+    raw?.drafted_by,
+    raw?.draftedBy,
+    raw?.draft_team_id,
+    raw?.draftTeamId,
     raw?.developed_by_team_id,
     raw?.developedByTeamId,
     raw?.rights_team_id,
     raw?.rightsTeamId,
+    raw?.nhl_rights_team_id,
+    raw?.nhlRightsTeamId,
     raw?.nhl_rights_id,
     raw?.nhlRightsId,
     raw?.owning_team_id,
@@ -776,9 +797,21 @@ function collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganiz
   const orgName = userOrganization?.name || franchiseState?.team?.name || "Organization";
 
   (userOrganization?.ahl || EMPTY_ARRAY).forEach((player) => {
+    const affiliateName = safeStr(
+      pickFirstDefined(
+        player?.affiliate_team_name,
+        player?.season_stats?.team_name,
+        player?.season_stats?.team,
+        player?.team_name,
+        player?.teamName
+      ),
+      ""
+    );
     push(player, {
       league: "AHL",
-      team_name: player.team_name || orgName,
+      team_name: affiliateName || orgName,
+      teamName: affiliateName || orgName,
+      affiliate_team_name: affiliateName || undefined,
       pipeline_level: "AHL",
     });
   });
@@ -788,6 +821,16 @@ function collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganiz
       league: "ECHL",
       team_name: player.team_name || orgName,
       pipeline_level: "ECHL",
+    });
+  });
+
+  // Drafted prospects the club holds rights to but who are not on a pro roster.
+  (userOrganization?.prospects || EMPTY_ARRAY).forEach((player) => {
+    const path = safeStr(player?.development_path || player?.post_draft_league, "");
+    push(player, {
+      league: path || "PROSPECT",
+      team_name: player.team_name || orgName,
+      pipeline_level: path || "Prospect",
     });
   });
 
@@ -829,6 +872,7 @@ function collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganiz
     franchiseState?.team_prospects,
     franchiseState?.teamProspects,
     franchiseState?.pipeline,
+    franchiseState?.wjc_tournament?.user_prospects,
     franchiseState?.wjc_tournament_bundle?.user_prospects,
     ...(Array.isArray(franchiseState?.pending_ui_popups) ? franchiseState.pending_ui_popups : [])
       .filter((pop) => pop?.kind === "wjc_tournament" || pop?.wjc_live)
@@ -945,6 +989,10 @@ function normalizeContract(player) {
     )
   );
 
+  const aav = normalizeMoneyMillions(
+    pickFirstDefined(contract.aav, contract.cap_hit, contract.capHit, player?.aav, capHit)
+  );
+
   const salary = normalizeMoneyMillions(
     pickFirstDefined(
       contract.salary,
@@ -972,6 +1020,16 @@ function normalizeContract(player) {
     0
   );
 
+  const yearsRemaining = safeNum(
+    pickFirstDefined(
+      contract.years_remaining,
+      contract.yearsRemaining,
+      player?.years_remaining,
+      player?.yearsRemaining
+    ),
+    term
+  );
+
   const rawExpiry = safeStr(
     pickFirstDefined(
       contract.expiry,
@@ -985,18 +1043,34 @@ function normalizeContract(player) {
     ""
   );
 
-  const type = safeStr(
-    pickFirstDefined(
-      contract.contract_type,
-      contract.contractType,
-      contract.type,
-      player?.contract_type,
-      player?.contractType
-    ),
-    term > 0 || capHit > 0 ? "Standard" : "Unsigned"
+  const expiryYear = safeNumOrNull(
+    pickFirstDefined(contract.expiry_year, contract.expiryYear, player?.expiry_year)
   );
 
-  const isSigned = capHit > 0 || term > 0 || type.toLowerCase() !== "unsigned";
+  const rawType = pickFirstDefined(
+    contract.contract_type,
+    contract.contractType,
+    contract.type,
+    player?.contract_type,
+    player?.contractType
+  );
+  const hasCapOrTerm = capHit > 0 || term > 0;
+
+  const signedStatusHint = safeStr(
+    pickFirstDefined(contract.signed_status, player?.signed_status, player?.rights_status),
+    ""
+  ).toLowerCase();
+
+  const rawTypeLower = safeStr(rawType, "").toLowerCase();
+  const explicitlyUnsigned =
+    rawTypeLower === "unsigned" || (!rawTypeLower && signedStatusHint.includes("unsign"));
+
+  // Unsigned only when there's no cap/term evidence AND the type explicitly
+  // (or via rights/signed status) says Unsigned — an empty/unknown type with
+  // real cap or term data should never read as unsigned.
+  const isSigned = hasCapOrTerm ? true : Boolean(rawTypeLower) && !explicitlyUnsigned;
+
+  const type = safeStr(rawType, isSigned ? "Standard" : "Unsigned");
 
   let expiry = rawExpiry;
   if (!expiry || expiry.toLowerCase() === "unsigned") {
@@ -1017,14 +1091,38 @@ function normalizeContract(player) {
     ""
   );
 
+  const twoWay = Boolean(pickFirstDefined(contract.two_way, contract.twoWay, player?.two_way));
+  const isEntryLevel = Boolean(
+    pickFirstDefined(contract.is_entry_level, contract.isEntryLevel, player?.is_entry_level)
+  );
+  const signingBonusM = normalizeMoneyMillions(
+    pickFirstDefined(contract.signing_bonus_m, contract.signingBonusM)
+  );
+  const performanceBonusM = normalizeMoneyMillions(
+    pickFirstDefined(contract.performance_bonus_m, contract.performanceBonusM)
+  );
+  const minorSalaryM = normalizeMoneyMillions(
+    pickFirstDefined(contract.minor_salary_m, contract.minorSalaryM)
+  );
+  const startYear = safeNumOrNull(pickFirstDefined(contract.start_year, contract.startYear));
+
   return {
     capHit,
+    aav,
     salary,
     term,
+    yearsRemaining,
     expiry,
+    expiryYear,
     type,
     clause,
     isSigned,
+    twoWay,
+    isEntryLevel,
+    signingBonusM,
+    performanceBonusM,
+    minorSalaryM,
+    startYear,
   };
 }
 
@@ -1036,12 +1134,26 @@ function normalizeSeasonStats(player) {
   const assists = safeNum(pickFirstDefined(s.a, s.assists, player?.assists, player?.a), 0);
   const points = safeNum(pickFirstDefined(s.pts, s.points, player?.points, player?.pts, goals + assists), goals + assists);
   const shots = safeNum(pickFirstDefined(s.sog, s.shots, s.shots_on_goal, s.shotsOnGoal, player?.shots), 0);
-  const hits = safeNum(pickFirstDefined(s.hits, player?.hits), 0);
-  const blocks = safeNum(pickFirstDefined(s.blocks, s.blocked_shots, s.blockedShots, player?.blocks), 0);
+  const hits = safeNum(pickFirstDefined(s.hits, s.hit, player?.hits, player?.hit), 0);
+  const blocks = safeNum(pickFirstDefined(s.blocks, s.blk, s.blocked_shots, s.blockedShots, player?.blocks, player?.blk), 0);
   const takeaways = safeNum(pickFirstDefined(s.takeaways, s.tk, player?.takeaways), 0);
   const giveaways = safeNum(pickFirstDefined(s.giveaways, s.gv, player?.giveaways), 0);
   const pim = safeNum(pickFirstDefined(s.pim, s.penalty_minutes, s.penaltyMinutes, player?.pim), 0);
-  const plusMinus = safeNum(pickFirstDefined(s.plus_minus, s.plusMinus, s.pm, player?.plus_minus, player?.pm), 0);
+    const plusMinusRaw = pickFirstDefined(
+      s.plus_minus,
+      s.plusMinus,
+      s.pm,
+      player?.plus_minus,
+      player?.pm,
+      s.goal_differential_on_ice,
+      player?.goal_differential_on_ice
+    );
+    const gfOn = safeNum(pickFirstDefined(s.gf_on, s.on_ice_gf, player?.gf_on), 0);
+    const gaOn = safeNum(pickFirstDefined(s.ga_on, s.on_ice_ga, player?.ga_on), 0);
+    const plusMinus =
+      plusMinusRaw != null && plusMinusRaw !== ""
+        ? safeNum(plusMinusRaw, 0)
+        : Math.round(gfOn - gaOn);
 
   const toi = safeNum(
     pickFirstDefined(
@@ -1116,6 +1228,12 @@ function normalizeSeasonStats(player) {
     goalsAgainst,
     svPct,
     gaa,
+    shutouts: safeNum(pickFirstDefined(s.shutouts, s.so, player?.shutouts), 0),
+    war: safeNumOrNull(pickFirstDefined(s.war, player?.war)),
+    cfPct: safeNumOrNull(pickFirstDefined(s.cfPct, s.cf_pct, player?.cfPct)),
+    xgfPct: safeNumOrNull(pickFirstDefined(s.xgfPct, s.xgf_pct, player?.xgfPct)),
+    leagueRank: safeNumOrNull(pickFirstDefined(s.league_rank, s.leagueRank, s.pts_rank, s.points_rank)),
+    teamRank: safeNumOrNull(pickFirstDefined(s.team_rank, s.teamRank)),
   };
 }
 
@@ -1444,6 +1562,11 @@ function normalizeHealth(player) {
     )
   );
 
+  const conductGames = Math.max(
+    0,
+    safeNum(pickFirstDefined(player?.conduct_games_remaining, player?.conductGamesRemaining), 0)
+  );
+
   const rawStatus = safeStr(
     pickFirstDefined(
       player?.injury_status,
@@ -1470,24 +1593,40 @@ function normalizeHealth(player) {
 
   const statusKey = normalizeKey(rawStatus);
   const injuryKey = normalizeKey(injuryLabel);
+  const availKey = normalizeKey(
+    pickFirstDefined(player?.availability_status, player?.availability, player?.status)
+  );
+
+  const onLeave =
+    player?.conduct_eligible_to_play === false ||
+    player?.suspended === true ||
+    availKey.includes("leave") ||
+    availKey.includes("suspended") ||
+    statusKey.includes("leave") ||
+    statusKey.includes("suspended");
+  const leaveLabel =
+    availKey.includes("leave") || statusKey.includes("leave")
+      ? "Leave"
+      : "Suspended";
 
   const injuredByFlag =
     player?.is_injured === true ||
     player?.injured === true ||
     player?.isInjured === true ||
-    gamesRemaining > 0;
+    (gamesRemaining > 0 && !onLeave);
 
   const injuredByText =
     Boolean(injuryKey) &&
     !["healthy", "none", "available", "active"].includes(injuryKey);
 
   const isInjured =
-    injuredByFlag ||
-    injuredByText ||
-    statusKey.includes("injured") ||
-    statusKey.includes("out") ||
-    statusKey.includes("day_to_day") ||
-    statusKey.includes("ltir");
+    !onLeave &&
+    (injuredByFlag ||
+      injuredByText ||
+      statusKey.includes("injured") ||
+      statusKey.includes("out") ||
+      statusKey.includes("day_to_day") ||
+      statusKey.includes("ltir"));
 
   const isDayToDay =
     statusKey.includes("day") ||
@@ -1502,7 +1641,10 @@ function normalizeHealth(player) {
 
   let label = "Healthy";
 
-  if (isLTIR) {
+  if (onLeave) {
+    const g = conductGames || gamesRemaining;
+    label = g > 0 ? `${leaveLabel} · ${g}g` : leaveLabel;
+  } else if (isLTIR) {
     label = gamesRemaining > 0 ? `LTIR · ${gamesRemaining}g` : "LTIR";
   } else if (isDayToDay) {
     label = gamesRemaining > 0 ? `Day-to-day · ${gamesRemaining}g` : "Day-to-day";
@@ -1520,7 +1662,9 @@ function normalizeHealth(player) {
     isInjured,
     isDayToDay,
     isLTIR,
-    gamesRemaining,
+    isConductLeave: onLeave,
+    conductLabel: onLeave ? leaveLabel : "",
+    gamesRemaining: onLeave ? conductGames || gamesRemaining : gamesRemaining,
     label,
     rawStatus,
     injuryLabel,
@@ -1530,6 +1674,7 @@ function normalizeHealth(player) {
 function normalizeRosterStatus(player, league) {
   const health = normalizeHealth(player);
 
+  if (health.isConductLeave) return health.conductLabel || "Suspended";
   if (health.isInjured) return "Injured";
   if (player?.scratched === true || player?.is_scratched === true || player?.isScratched === true) return "Scratched";
 
@@ -1579,6 +1724,7 @@ function getFatigueBand(fatigue) {
 function getHealthBand(player) {
   const health = normalizeHealth(player);
 
+  if (health.isConductLeave) return { label: health.label, tone: "bad" };
   if (!health.isInjured) return { label: "Healthy", tone: "good" };
   if (health.isDayToDay) return { label: health.label, tone: "warn" };
 
@@ -1831,7 +1977,7 @@ function normalizeRosterCountryCode(player) {
 function flagApiUrl(countryCode, size = 64, style = "flat") {
   const iso2 = resolveCountryCode(countryCode) || (/^[A-Za-z]{2}$/.test(String(countryCode || "")) ? String(countryCode).toUpperCase() : null);
   if (!iso2) return null;
-  return `https://flagsapi.com/${iso2}/${style}/${size}.png`;
+  return `https://flagsapi.com/${iso2}/${style}/${nearestFlagApiSize(size)}.png`;
 }
 
 function resolveRosterFlagLabel(player) {
@@ -1995,6 +2141,36 @@ function displayStatValue(value, { allowZero = true } = {}) {
   return n;
 }
 
+function lastCareerSeasonSummary(player) {
+  const seasons = Array.isArray(player?.career_seasons) ? player.career_seasons : EMPTY_ARRAY;
+  if (!seasons.length) return null;
+
+  // Prefer the most recent completed season over an in-progress current one.
+  const completed = seasons.filter((row) => !row?.is_current_season);
+  const pool = completed.length ? completed : seasons;
+  const last = pool[pool.length - 1];
+  if (!last) return null;
+
+  const seasonLabel = safeStr(pickFirstDefined(last?.season, last?.year), "");
+
+  if (isGoaliePosition(player.position)) {
+    const gp = safeNum(pickFirstDefined(last?.gp, last?.games_played), 0);
+    if (!gp) return null;
+    const wins = safeNum(pickFirstDefined(last?.wins, last?.w), 0);
+    const losses = safeNum(pickFirstDefined(last?.losses, last?.l), 0);
+    const otl = safeNum(last?.otl, 0);
+    return seasonLabel ? `${seasonLabel}: ${wins}-${losses}-${otl}` : `${wins}-${losses}-${otl}`;
+  }
+
+  const gp = safeNum(pickFirstDefined(last?.gp, last?.games_played), 0);
+  const goals = safeNum(pickFirstDefined(last?.g, last?.goals), 0);
+  const assists = safeNum(pickFirstDefined(last?.a, last?.assists), 0);
+  const pts = safeNum(pickFirstDefined(last?.pts, last?.points), 0);
+  if (!gp && !goals && !assists && !pts) return null;
+
+  return seasonLabel ? `${seasonLabel}: ${pts} pts` : `${goals}-${assists}-${pts} pts`;
+}
+
 function compactBoardStats(player) {
   if (!player) return "—";
 
@@ -2008,7 +2184,7 @@ function compactBoardStats(player) {
     const sv = safeNum(stats.svPct, 0);
     const gaa = safeNum(stats.gaa, 0);
 
-    if (!gp && !wins && !losses && !otl && !sv && !gaa) return "—";
+    if (!gp && !wins && !losses && !otl && !sv && !gaa) return lastCareerSeasonSummary(player) || "—";
 
     return `${gp} GP · ${wins}-${losses}-${otl} · ${sv ? formatDecimal(sv, 3) : "—"} SV% · ${gaa ? gaa.toFixed(2) : "—"} GAA`;
   }
@@ -2018,7 +2194,7 @@ function compactBoardStats(player) {
   const assists = safeNum(stats.a, 0);
   const points = safeNum(stats.pts, 0);
 
-  if (!gp && !goals && !assists && !points) return "—";
+  if (!gp && !goals && !assists && !points) return lastCareerSeasonSummary(player) || "—";
 
   return `${gp} GP · ${goals} G · ${assists} A · ${points} PTS`;
 }
@@ -2031,6 +2207,25 @@ function capHitDisplay(player) {
   if (capHit <= 0) return "—";
 
   return formatMoneyMillions(capHit);
+}
+
+function contractSummaryDisplay(player) {
+  const contract = player?.contract || EMPTY_OBJECT;
+
+  if (!contract.isSigned) return "Unsigned";
+  if (contract.capHit > 0 && contract.term > 0) return `${formatMoneyMillions(contract.capHit)} · ${contract.term} yr`;
+  if (contract.capHit > 0) return formatMoneyMillions(contract.capHit);
+  if (contract.term > 0) return `${contract.term} yr`;
+
+  return "—";
+}
+
+// The enriched roster row invents a deterministic jersey number for display
+// slots when no real number exists — never surface that fake value as if it
+// were the player's actual sweater number.
+function resolveJerseyNumber(player) {
+  const real = safeNumOrNull(pickFirstDefined(player?.jersey_number, player?.jerseyNumber));
+  return real !== null ? real : null;
 }
 
 function potentialToneClass(score) {
@@ -2235,13 +2430,41 @@ function buildPotentialModel(player, overallModel, ratingSummary, seasonStats) {
     player?.projectedRole
   );
 
-  const explicitScore = getPotentialScoreFromRaw(rawPotential);
   const pos = normalizePosition(player?.position || player?.pos);
   const age = safeNum(player?.age, 18);
   const trueOverall = safeNum(overallModel?.trueOverall, 0);
   const growth = inferGrowth(player);
   const ppg = safeNum(seasonStats?.ppg, 0);
   const gp = safeNum(seasonStats?.gp, 0);
+
+  // The backend may already carry a computed 0-100 potential score
+  // (potential_score, dev_potential, or a numeric `potential`). That value
+  // is authoritative — never blend it with the local estimation heuristics.
+  const backendScore = safeNumOrNull(
+    pickFirstDefined(player?.potential_score, player?.dev_potential, player?.potential)
+  );
+
+  if (backendScore !== null && backendScore > 0) {
+    const finalScore = clamp(backendScore, 0, 100);
+    const rawPotentialStr = typeof rawPotential === "string" ? rawPotential.trim() : "";
+    const isLabelString = rawPotentialStr && Number.isNaN(Number(rawPotentialStr));
+    const label = isLabelString ? rawPotentialStr : potentialLabelFromScore(pos, finalScore, trueOverall, age);
+
+    return {
+      rawPotential: rawPotential != null ? String(rawPotential) : "",
+      potentialLabel: label,
+      potentialScore: round0(finalScore),
+      potentialConfidence: "Backend",
+      potentialBreakdown: {
+        base: finalScore,
+        age: 0,
+        production: 0,
+        ratings: 0,
+      },
+    };
+  }
+
+  const explicitScore = typeof rawPotential === "string" ? getPotentialScoreFromRaw(rawPotential) : 0;
 
   let score = explicitScore || 0;
 
@@ -2555,6 +2778,149 @@ function buildPlayerNote(player) {
   if (asset?.label) pieces.push(`Asset read: ${asset.label}.`);
 
   return pieces.join(" ");
+}
+
+// Strictly evidence-driven — only concrete rating rows (top/bottom) and
+// measured analytics facts, never generic scouting buzzwords.
+function buildStrengthsConcerns(player) {
+  if (!player) return { strengths: [], concerns: [] };
+
+  const groups = Array.isArray(player.rating_groups) ? player.rating_groups : EMPTY_ARRAY;
+  const rows = [];
+  groups.forEach((group) => {
+    (group?.rows || EMPTY_ARRAY).forEach((row) => {
+      const value = safeNumOrNull(row?.value);
+      if (value !== null && row?.label) rows.push({ label: row.label, value });
+    });
+  });
+
+  const sortedDesc = [...rows].sort((a, b) => b.value - a.value);
+  const sortedAsc = [...rows].sort((a, b) => a.value - b.value);
+
+  const strengths = sortedDesc
+    .slice(0, 3)
+    .filter((row) => row.value >= 78)
+    .map((row) => `${row.label} rated ${round0(row.value)}`);
+
+  const concerns = sortedAsc
+    .slice(0, 3)
+    .filter((row) => row.value <= 68 && row.value > 0)
+    .map((row) => `${row.label} rated ${round0(row.value)}`);
+
+  const stats = player.season_stats || EMPTY_OBJECT;
+  const gp = safeNum(stats.gp, 0);
+  const isGoalie = isGoaliePosition(player.position);
+
+  if (gp >= 15) {
+    if (isGoalie) {
+      if (stats.svPct >= 0.918) strengths.push(`${formatDecimal(stats.svPct, 3)} SV% over ${gp} GP`);
+      if (stats.svPct > 0 && stats.svPct <= 0.897) concerns.push(`${formatDecimal(stats.svPct, 3)} SV% over ${gp} GP`);
+    } else {
+      if (stats.shots >= 40 && stats.shootingPct <= 0.06) {
+        concerns.push(`${(stats.shootingPct * 100).toFixed(1)}% shooting on ${displayStatValue(stats.shots)} shots`);
+      } else if (stats.shots >= 25 && stats.shootingPct >= 0.17) {
+        strengths.push(`${(stats.shootingPct * 100).toFixed(1)}% shooting on ${displayStatValue(stats.shots)} shots`);
+      }
+      if (stats.war != null && Number(stats.war) >= 2) strengths.push(`${Number(stats.war).toFixed(1)} WAR over ${gp} GP`);
+      if (stats.war != null && Number(stats.war) <= -1) concerns.push(`${Number(stats.war).toFixed(1)} WAR over ${gp} GP`);
+    }
+  }
+
+  const contract = player.contract || EMPTY_OBJECT;
+  if (!contract.isSigned) {
+    concerns.push("Unsigned — no active contract on file");
+  } else if (contract.term > 0 && contract.term <= 1) {
+    concerns.push(`Contract expires ${contract.expiry || "this season"}`);
+  }
+  if (contract.capHit >= 8 && getUniversalOverall(player) < 84) {
+    concerns.push(`${formatMoneyMillions(contract.capHit)} cap hit against a sub-84 overall`);
+  } else if (contract.capHit > 0 && contract.capHit <= 2.5 && getUniversalOverall(player) >= 80) {
+    strengths.push(`${formatMoneyMillions(contract.capHit)} cap hit for an 80+ overall`);
+  }
+
+  return {
+    strengths: strengths.slice(0, 4),
+    concerns: concerns.slice(0, 4),
+  };
+}
+
+// Factual bullets only — no invented recommendations. Every line traces to
+// a concrete field on the player object.
+function buildDecisionBullets(player) {
+  if (!player) return [];
+
+  const bullets = [];
+  const contract = player.contract || EMPTY_OBJECT;
+  const health = normalizeHealth(player);
+
+  if (!contract.isSigned) {
+    bullets.push({ tone: "warn", text: "Unsigned — no active contract on file" });
+  } else if (contract.term > 0 && contract.term <= 1) {
+    bullets.push({ tone: "warn", text: `Contract expires ${contract.expiry || "this season"}` });
+  }
+
+  const waiverExempt = pickFirstDefined(player.waiver_exempt, player.waiverExempt);
+  if (waiverExempt === false) {
+    bullets.push({ tone: "neutral", text: "Not waiver exempt — needs waivers to reach the minors" });
+  }
+
+  const waiverStatus = safeStr(pickFirstDefined(player.waiver_status, player.waiverStatus), "");
+  if (waiverStatus && waiverStatus !== "—") {
+    bullets.push({ tone: "neutral", text: `Waiver status: ${waiverStatus}` });
+  }
+
+  const rightsExpiry = pickFirstDefined(player.rights_expiry_year, player.rightsExpiryYear);
+  const rightsType = safeStr(pickFirstDefined(player.rights_type, player.rightsType), "");
+  if (rightsExpiry) {
+    bullets.push({
+      tone: "neutral",
+      text: `${rightsType ? `${rightsType} rights` : "Rights"} expire ${rightsExpiry}`,
+    });
+  }
+
+  if (health.isConductLeave) {
+    bullets.push({ tone: "bad", text: health.label });
+  } else if (health.isInjured) {
+    bullets.push({ tone: health.isDayToDay ? "warn" : "bad", text: `Injured — ${health.label}` });
+  }
+
+  const elcSlideEligible = pickFirstDefined(player.elc_slide_eligible, player.elcSlideEligible);
+  const slideThreshold = pickFirstDefined(player.slide_games_threshold, player.slideGamesThreshold);
+  if (elcSlideEligible && slideThreshold != null) {
+    bullets.push({ tone: "neutral", text: `ELC slide eligible below ${slideThreshold} GP` });
+  }
+
+  return bullets;
+}
+
+// A single factual status line — role, contract, and (only when real data
+// exists) a development direction from growth or tracked history.
+function buildCommandStatusLine(player) {
+  if (!player) return "No player selected";
+
+  const parts = [];
+  const role = player.roleLabel || player.role;
+  if (role && role !== "—") parts.push(role);
+
+  const contract = player.contract || EMPTY_OBJECT;
+  parts.push(contract.isSigned ? contractSummaryDisplay(player) : "Unsigned");
+
+  const growth = safeNumOrNull(player.growth);
+  const history = Array.isArray(player.development_history) ? player.development_history : EMPTY_ARRAY;
+
+  if (growth !== null && growth !== 0) {
+    parts.push(`Trending ${growth > 0 ? "up" : "down"} ${formatSignedNumber(growth)} OVR this season`);
+  } else if (history.length >= 2) {
+    const ovrs = history
+      .map((entry) => safeNumOrNull(pickFirstDefined(entry?.ovr_after, entry?.ovr)))
+      .filter((value) => value !== null);
+    if (ovrs.length >= 2) {
+      const delta = ovrs[ovrs.length - 1] - ovrs[0];
+      if (delta !== 0) parts.push(`${delta > 0 ? "Up" : "Down"} ${Math.abs(delta)} OVR across tracked seasons`);
+    }
+  }
+
+  return parts.length ? parts.join(" · ") : "No connected status data";
 }
 
 function normalizeLivePlayer(player, franchiseState, index) {
@@ -3117,6 +3483,20 @@ function InfoPair({ label, value, tone = "neutral" }) {
   );
 }
 
+/** Horizontal metric strip for dossier stats / contract (label over value, tiles in a row). */
+function Metric({ label, value, tone = "neutral" }) {
+  return (
+    <div className={`nhlrost-metric ${toneClass(tone)}`}>
+      <span>{label}</span>
+      <strong>{value ?? "—"}</strong>
+    </div>
+  );
+}
+
+function MetricStrip({ children, className = "" }) {
+  return <div className={`nhlrost-metric-strip ${className}`.trim()}>{children}</div>;
+}
+
 function ToolbarSelect({ id, label, value, onChange, options, disabled = false, compact = false }) {
   return (
     <label className={`nhlrost-control ${compact ? "nhlrost-control--compact" : ""}`} htmlFor={id}>
@@ -3167,10 +3547,11 @@ function ConnectedActionNotice({ title, body, tone = "neutral" }) {
   );
 }
 
-function EmptyPanel({ title = "No data", body = "Nothing is available for this view yet.", compact = false }) {
+function EmptyPanel({ title = "NO SIGNAL", body = "Board channel empty — adjust filters or reload roster feed.", compact = false }) {
   return (
     <section className={`nhlrost-empty-panel ${compact ? "is-compact" : ""}`}>
-      {!compact ? <div className="nhlrost-empty-panel__orb">◌</div> : null}
+      {!compact ? <div className="nhlrost-empty-panel__orb" aria-hidden="true">—</div> : null}
+      <p className="nhlrost-empty-panel__phase">{compact ? "OPS STATE" : "ROSTER OPS · STANDBY"}</p>
       <h3>{title}</h3>
       <p>{body}</p>
     </section>
@@ -3298,9 +3679,14 @@ function groupPlayersForBoard(players) {
 
   (players || EMPTY_ARRAY).forEach((player) => {
     const health = normalizeHealth(player);
-    const isInjured = player.status === "Injured" || health.isInjured;
+    const isOut =
+      player.status === "Injured" ||
+      player.status === "Suspended" ||
+      player.status === "Leave" ||
+      health.isInjured ||
+      health.isConductLeave;
 
-    if (isInjured) {
+    if (isOut) {
       injured.push(player);
       return;
     }
@@ -3403,39 +3789,48 @@ function RosterPlayerFlag({ player }) {
 }
 
 function PremiumPlayerRow({ player, selected, onSelect, showTeam = false }) {
+  const healthBand = getHealthBand(player);
+
   return (
     <button
       type="button"
       className={`nhlrost-board-row ${selected ? "is-selected" : ""}${showTeam ? " has-team" : ""}`}
       onClick={() => onSelect(player)}
     >
-      <PlayerIconPlate player={player} />
-
-      <span className="nhlrost-board-row__identity">
-        <span className="nhlrost-board-row__name-line">
-          <RosterPlayerFlag player={player} />
-          <strong>{player.name}</strong>
+      <span className="nhlrost-board-row__name">
+        <PlayerAvatar player={player} size="sm" />
+        <span>
+          <span className="nhlrost-board-row__name-line">
+            <RosterPlayerFlag player={player} />
+            <strong>{player.name}</strong>
+          </span>
+          {showTeam && player.teamName && player.teamName !== "—" ? (
+            <em className="nhlrost-board-row__team">{player.teamName}</em>
+          ) : null}
         </span>
-        {showTeam && player.teamName && player.teamName !== "—" ? (
-          <em className="nhlrost-board-row__team">{player.teamName}</em>
-        ) : null}
       </span>
 
       <span className={`nhlrost-board-row__pos pos-${player.positionClass}`}>{player.position}</span>
-
-      <span className="nhlrost-board-row__age">{player.age ? round0(player.age) : "—"}</span>
 
       <span className="nhlrost-board-row__ovr">
         <OvrPill player={player} />
       </span>
 
-      <span className="nhlrost-board-row__pot">
-        <PotentialPill player={player} />
+      <span className="nhlrost-board-row__age">{player.age ? round0(player.age) : "—"}</span>
+
+      <span className="nhlrost-board-row__contract">{capHitDisplay(player)}</span>
+
+      <span className="nhlrost-board-row__status">
+        <MiniBadge text={player.status} tone={healthBand.tone} />
       </span>
+
+      <span className="nhlrost-board-row__role">{player.roleLabel || player.role || "—"}</span>
 
       <span className="nhlrost-board-row__stats">{compactBoardStats(player)}</span>
 
-      <span className="nhlrost-board-row__cap">{capHitDisplay(player)}</span>
+      <span className="nhlrost-board-row__avail">
+        {player.availability?.label || player.availability_status || "Active"}
+      </span>
     </button>
   );
 }
@@ -3451,7 +3846,18 @@ function RosterBoardView({ players, selectedPlayerKey, onSelectPlayer, showTeam 
   }
 
   return (
-    <div className="nhlrost-board">
+    <div className="nhlrost-board nhlrost-board-sheet">
+      <div className="nhlrost-board-sheet__head" aria-hidden="true">
+        <span>Player</span>
+        <span>Pos</span>
+        <span>OVR</span>
+        <span>Age</span>
+        <span>Contract</span>
+        <span>Status</span>
+        <span>Role</span>
+        <span>Season</span>
+        <span>Avail</span>
+      </div>
       <div className="nhlrost-board-list">
         {players.map((player, index) => (
           <PremiumPlayerRow
@@ -3618,6 +4024,9 @@ function RosterTable({
                 <PlayerAvatar player={player} size="sm" />
                 <span>
                   <strong>{player.name}</strong>
+                  {(player.locker_room_cancer || player.brady_tkachuk_chaos || (player.name_tags || []).includes("CANCER")) ? (
+                    <em className="nhlrost-cancer-tag" title="Locker-room cancer">CANCER</em>
+                  ) : null}
                   <em>{player.teamName}</em>
                 </span>
               </span>
@@ -3932,7 +4341,9 @@ function RatingsEngineView({ players, selectedPlayerKey, onSelectPlayer }) {
   );
 }
 
-function PlayerOverviewPanel({ player }) {
+function PlayerOverviewPanel({ player, franchiseState }) {
+  const [expandedRatings, setExpandedRatings] = useState(false);
+
   if (!player) {
     return <EmptyPanel title="No player selected" body="Choose a player from the roster board." />;
   }
@@ -3944,6 +4355,26 @@ function PlayerOverviewPanel({ player }) {
   const healthBand = getHealthBand(player);
   const teamDisplay = player.teamName && player.teamName !== "—" ? player.teamName : "—";
   const leagueDisplay = player.league && player.league !== "—" ? player.league : "—";
+  const draftYear = player.draft_year || player.draftYear;
+  const draftRound = player.draft_round || player.draftRound;
+  const draftOverall = player.draft_overall_pick || player.draftOverallPick;
+  const draftTeamId =
+    player.drafted_by_team_id ||
+    player.draft_team_id ||
+    player.drafted_by_team ||
+    player.draftedByTeamId ||
+    "";
+  const draftTeamName =
+    player.drafted_by_team_name ||
+    player.draftedByTeamName ||
+    resolveDraftTeamName(draftTeamId, franchiseState);
+  const hasDraftMeta = Boolean(draftYear || draftOverall || draftTeamId || player.drafted);
+  const isUndrafted = Boolean(player.undrafted) && !hasDraftMeta;
+  const ratingGroups = (player.rating_groups || EMPTY_ARRAY).filter((group) => group?.rows?.length);
+  const { strengths, concerns } = buildStrengthsConcerns(player);
+  const measuredToi = safeNumOrNull(
+    pickFirstDefined(player.explicitMinutes, stats.toi, stats.average_toi, stats.avg_toi)
+  );
 
   return (
     <section className="nhlrost-player-overview">
@@ -3964,33 +4395,56 @@ function PlayerOverviewPanel({ player }) {
         </div>
       </article>
 
+      {hasDraftMeta ? (
+        <article className="nhlrost-profile-zone nhlrost-profile-zone--draft">
+          <header className="nhlrost-profile-zone__head">
+            <p>Draft History</p>
+            <h3>
+              {draftOverall != null && draftYear
+                ? `#${draftOverall} overall · ${draftYear}`
+                : draftYear
+                  ? String(draftYear)
+                  : "Drafted"}
+            </h3>
+          </header>
+          <div className="nhlrost-profile-kv-grid">
+            <InfoPair label="Draft Year" value={draftYear || "—"} />
+            <InfoPair
+              label="Pick"
+              value={
+                draftOverall != null
+                  ? draftRound != null
+                    ? `R${draftRound} · #${draftOverall}`
+                    : `#${draftOverall}`
+                  : "—"
+              }
+            />
+            <InfoPair label="Drafted By" value={draftTeamName || (draftTeamId ? String(draftTeamId) : "—")} />
+          </div>
+        </article>
+      ) : isUndrafted ? (
+        <article className="nhlrost-profile-zone nhlrost-profile-zone--draft">
+          <header className="nhlrost-profile-zone__head">
+            <p>Draft History</p>
+            <h3>Undrafted</h3>
+          </header>
+          <p className="nhlrost-muted-text">No NHL entry draft selection on file for this player.</p>
+        </article>
+      ) : null}
+
       <article className="nhlrost-profile-zone nhlrost-profile-zone--ability">
         <header className="nhlrost-profile-zone__head">
           <p>Ability & Role</p>
-          <h3>{player.roleLabel || player.role || "—"}</h3>
+          <h3>{player.explicitRole || player.roleLabel || player.role || "—"}</h3>
         </header>
-        <div className="nhlrost-profile-summary-strip">
-          <div className="nhlrost-profile-summary-item">
-            <span>Current OVR</span>
-            <OvrPill player={player} large />
-          </div>
-          <div className="nhlrost-profile-summary-item">
-            <span>Potential</span>
-            <PotentialPill player={player} large />
-          </div>
-          {player.asset?.label ? (
-            <div className="nhlrost-profile-summary-item">
-              <span>Asset Tier</span>
-              <strong>{player.asset.label}</strong>
-            </div>
-          ) : null}
-        </div>
-        <div className="nhlrost-profile-kv-grid">
-          <InfoPair label="Archetype" value={player.archetype || "—"} />
-          <InfoPair label="Special Teams" value={player.explicitSpecialTeams || player.specialTeams || "—"} />
-          <InfoPair label="Avg TOI" value={player.explicitMinutes != null ? `${round0(player.explicitMinutes)} min` : player.minutes ? `${round1(player.minutes)} min` : "—"} />
-          <InfoPair label="Stage" value={player.stage || "—"} />
-        </div>
+        <MetricStrip>
+          <Metric label="OVR" value={<OvrPill player={player} large />} />
+          <Metric label="POT" value={<PotentialPill player={player} large />} />
+          {player.asset?.label ? <Metric label="Asset" value={player.asset.label} /> : null}
+          <Metric label="Archetype" value={player.archetype || "—"} />
+          <Metric label="TOI" value={measuredToi != null ? `${round1(measuredToi)}` : "—"} />
+          <Metric label="Stage" value={player.stage || "—"} />
+        </MetricStrip>
       </article>
 
       <article className="nhlrost-profile-zone nhlrost-profile-zone--contract">
@@ -3998,48 +4452,173 @@ function PlayerOverviewPanel({ player }) {
           <p>Contract Snapshot</p>
           <h3>{capHitDisplay(player)}</h3>
         </header>
-        <div className="nhlrost-profile-kv-grid">
-          <InfoPair label="Status" value={formatContractStatus(contract)} />
-          <InfoPair label="Term" value={contract.term ? `${contract.term} yr` : "—"} />
-          <InfoPair label="Expiry" value={formatContractExpiry(contract)} />
-          <InfoPair label="Type" value={contract.type || "—"} />
-          <InfoPair label="Clause" value={contract.clause || "—"} />
-          <InfoPair label="Morale" value={player.morale != null ? round0(player.morale) : "—"} />
-        </div>
+        <MetricStrip>
+          <Metric label="Status" value={formatContractStatus(contract)} />
+          <Metric label="Term" value={contract.term ? `${contract.term} yr` : "—"} />
+          <Metric label="Expiry" value={formatContractExpiry(contract)} />
+          <Metric label="Type" value={contract.type || "—"} />
+          <Metric label="Clause" value={contract.clause || "—"} />
+          <Metric label="Morale" value={player.morale != null ? round0(player.morale) : "—"} />
+        </MetricStrip>
       </article>
 
       <article className="nhlrost-profile-zone nhlrost-profile-zone--performance">
         <header className="nhlrost-profile-zone__head">
-          <p>Season Performance</p>
-          <h3>{hasSeasonGames ? `${gp} GP` : "No games played"}</h3>
+          <p>Universe Season Stats</p>
+          <h3>
+            {hasSeasonGames
+              ? `${gp} GP · ${player.league && player.league !== "—" ? player.league : "NHL"}`
+              : "No games played"}
+          </h3>
         </header>
         {hasSeasonGames ? (
-          <div className="nhlrost-profile-stat-band">
+          <MetricStrip className="nhlrost-metric-strip--stats">
             {isGoaliePosition(player.position) ? (
               <>
-                <InfoPair label="Record" value={`${displayStatValue(stats.wins)}-${displayStatValue(stats.losses)}-${displayStatValue(stats.otl)}`} />
-                <InfoPair label="SV%" value={stats.svPct ? formatDecimal(stats.svPct, 3) : "—"} />
-                <InfoPair label="GAA" value={stats.gaa ? stats.gaa.toFixed(2) : "—"} />
-                <InfoPair label="Saves" value={displayStatValue(stats.saves)} />
+                <Metric label="GP" value={displayStatValue(stats.gp)} />
+                <Metric
+                  label="Record"
+                  value={`${displayStatValue(stats.wins)}-${displayStatValue(stats.losses)}-${displayStatValue(stats.otl)}`}
+                />
+                <Metric label="SV%" value={stats.svPct ? formatDecimal(stats.svPct, 3) : "—"} />
+                <Metric label="GAA" value={stats.gaa ? Number(stats.gaa).toFixed(2) : "—"} />
+                <Metric label="Saves" value={displayStatValue(stats.saves)} />
+                <Metric label="SO" value={displayStatValue(stats.shutouts)} />
               </>
             ) : (
               <>
-                <InfoPair label="G" value={displayStatValue(stats.g)} />
-                <InfoPair label="A" value={displayStatValue(stats.a)} />
-                <InfoPair label="PTS" value={displayStatValue(stats.pts)} />
-                <InfoPair label="P/GP" value={stats.ppg ? stats.ppg.toFixed(2) : displayStatValue(0)} />
-                <InfoPair label="Shots" value={displayStatValue(stats.shots)} />
-                <InfoPair label="+/-" value={stats.plusMinus != null ? formatSignedNumber(stats.plusMinus, 0) : "—"} />
-                <InfoPair label="TOI/GP" value={stats.toi ? `${round1(stats.toi)} min` : "—"} />
+                <Metric label="GP" value={displayStatValue(stats.gp)} />
+                <Metric label="G" value={displayStatValue(stats.g)} />
+                <Metric label="A" value={displayStatValue(stats.a)} />
+                <Metric label="PTS" value={displayStatValue(stats.pts)} />
+                <Metric label="P/GP" value={stats.ppg ? Number(stats.ppg).toFixed(2) : displayStatValue(0)} />
+                <Metric label="+/-" value={stats.plusMinus != null ? formatSignedNumber(stats.plusMinus, 0) : "—"} />
+                <Metric label="SOG" value={displayStatValue(stats.shots || stats.sog)} />
+                <Metric label="TOI" value={stats.toi ? `${round1(stats.toi)}` : "—"} />
+                {stats.war != null ? <Metric label="WAR" value={Number(stats.war).toFixed(2)} /> : null}
+                {stats.cfPct != null ? (
+                  <Metric
+                    label="CF%"
+                    value={`${Number(stats.cfPct) <= 1.5 ? (Number(stats.cfPct) * 100).toFixed(1) : Number(stats.cfPct).toFixed(1)}%`}
+                  />
+                ) : null}
+                {stats.leagueRank != null ? <Metric label="Lg Rk" value={`#${stats.leagueRank}`} /> : null}
               </>
             )}
-          </div>
+          </MetricStrip>
         ) : (
-          <p className="nhlrost-muted-text">No regular-season games played.</p>
+          <p className="nhlrost-muted-text">
+            No regular-season games played yet in this franchise universe. Lines fill in as the schedule simulates.
+          </p>
         )}
+      </article>
+
+      <article className="nhlrost-profile-zone nhlrost-profile-zone--ratings">
+        <header className="nhlrost-profile-zone__head">
+          <p>Attribute Profile</p>
+          <h3>{ratingGroups.length ? `${ratingGroups.length} rating group${ratingGroups.length === 1 ? "" : "s"}` : "No ratings loaded"}</h3>
+        </header>
+
+        {ratingGroups.length ? (
+          <>
+            <div className="nhlrost-overview-ratings-bars">
+              {ratingGroups.map((group) => {
+                const avg = averageRows(group.rows);
+                return (
+                  <ProgressBar
+                    key={group.key || group.title}
+                    label={group.title}
+                    value={avg}
+                    tone={avg >= 84 ? "good" : avg >= 72 ? "neutral" : "warn"}
+                  />
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              className="nhlrost-ratings-expand-toggle"
+              onClick={() => setExpandedRatings((value) => !value)}
+              aria-expanded={expandedRatings}
+            >
+              {expandedRatings ? "Hide full ratings ↑" : "View full ratings ↓"}
+            </button>
+
+            {expandedRatings ? (
+              <div className="nhlrost-overview-ratings-expanded">
+                <RatingsPanel player={player} />
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <p className="nhlrost-muted-text">Backend rating groups are not available for this player.</p>
+        )}
+      </article>
+
+      <article className="nhlrost-profile-zone nhlrost-profile-zone--signal">
+        <header className="nhlrost-profile-zone__head">
+          <p>Strengths &amp; Concerns</p>
+          <h3>Evidence Read</h3>
+        </header>
+        <div className="nhlrost-sc-columns">
+          <div className="nhlrost-sc-column">
+            <span className="nhlrost-sc-column__label is-good">Strengths</span>
+            {strengths.length ? (
+              <ul>
+                {strengths.map((line, index) => (
+                  <li key={index}>{line}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="nhlrost-muted-text">No standout attributes or analytics clear the threshold yet.</p>
+            )}
+          </div>
+          <div className="nhlrost-sc-column">
+            <span className="nhlrost-sc-column__label is-warn">Concerns</span>
+            {concerns.length ? (
+              <ul>
+                {concerns.map((line, index) => (
+                  <li key={index}>{line}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="nhlrost-muted-text">No flagged risks from current ratings, analytics, or contract data.</p>
+            )}
+          </div>
+        </div>
       </article>
     </section>
   );
+}
+
+function resolveDraftTeamName(teamId, franchiseState) {
+  if (!teamId) return "";
+  const tid = String(teamId).toLowerCase();
+  const pools = [
+    franchiseState?.roster_browser?.organizations,
+    franchiseState?.organizations,
+    franchiseState?.league_teams,
+    franchiseState?.teams,
+  ];
+  for (const pool of pools) {
+    if (!Array.isArray(pool)) continue;
+    for (const org of pool) {
+      const candidates = [
+        org?.team_id,
+        org?.id,
+        org?.abbr,
+        org?.abbreviation,
+        org?.short_name,
+        org?.shortName,
+      ]
+        .map((value) => String(value || "").toLowerCase())
+        .filter(Boolean);
+      if (candidates.includes(tid)) {
+        return org.name || org.full_name || org.fullName || org.abbr || org.abbreviation || String(teamId);
+      }
+    }
+  }
+  return String(teamId);
 }
 
 function RatingsPanel({ player }) {
@@ -4108,7 +4687,69 @@ function RatingsPanel({ player }) {
   );
 }
 
-function ProductionPanel({ player }) {
+function buildSeasonLabelFromFranchiseState(franchiseState) {
+  const y = safeNumOrNull(pickFirstDefined(franchiseState?.season_year, franchiseState?.seasonYear));
+  if (!y) return "";
+  return `${y}-${String(y + 1).slice(-2)}`;
+}
+
+function buildCurrentSeasonCareerRow(player, stats, { isGoalie, seasonLabel }) {
+  const gp = safeNum(stats.gp, 0);
+  if (gp <= 0) return null;
+
+  const row = {
+    season: seasonLabel || safeStr(pickFirstDefined(stats.season, stats.seasonLabel), "Current"),
+    team: safeStr(
+      pickFirstDefined(
+        stats.team_name,
+        stats.team,
+        player?.affiliate_team_name,
+        player?.teamName,
+        player?.team_name
+      ),
+      "—"
+    ),
+    league: safeStr(pickFirstDefined(stats.league, stats.league_code, player?.league), "NHL"),
+    gp,
+    is_current_season: true,
+  };
+
+  if (isGoalie) {
+    row.wins = pickFirstDefined(stats.wins, stats.w);
+    row.losses = pickFirstDefined(stats.losses, stats.l);
+    row.otl = stats.otl;
+    row.sv_pct = pickFirstDefined(stats.svPct, stats.sv_pct);
+    row.gaa = stats.gaa;
+    row.shutouts = stats.shutouts;
+  } else {
+    row.g = stats.g;
+    row.a = stats.a;
+    row.pts = stats.pts;
+    row.plus_minus = pickFirstDefined(stats.plusMinus, stats.plus_minus);
+    row.pim = stats.pim;
+    row.war = stats.war;
+  }
+
+  return row;
+}
+
+function mergeCareerSeasonsWithCurrent(player, stats, options) {
+  const existing = Array.isArray(player?.career_seasons) ? player.career_seasons : EMPTY_ARRAY;
+  const currentRow = buildCurrentSeasonCareerRow(player, stats, options);
+  if (!currentRow) return existing;
+
+  const dedupKey = `${currentRow.season}__${safeStr(currentRow.league, "NHL").toUpperCase()}__${currentRow.team}`;
+  const filtered = existing.filter((row) => {
+    const key = `${safeStr(pickFirstDefined(row?.season, row?.year), "")}__${safeStr(
+      pickFirstDefined(row?.league, "NHL"),
+      "NHL"
+    ).toUpperCase()}__${safeStr(pickFirstDefined(row?.team, row?.team_name, row?.teamName), "")}`;
+    return key !== dedupKey;
+  });
+  return [...filtered, currentRow];
+}
+
+function ProductionPanel({ player, franchiseState }) {
   if (!player) {
     return <EmptyPanel title="No player selected" body="Select a player to view stats." />;
   }
@@ -4117,8 +4758,13 @@ function ProductionPanel({ player }) {
   const isGoalie = isGoaliePosition(player.position);
   const gp = safeNum(stats.gp, 0);
   const hasSeasonGames = gp > 0;
+  const seasonLabel = buildSeasonLabelFromFranchiseState(franchiseState);
+  const careerSeasons = mergeCareerSeasonsWithCurrent(player, stats, { isGoalie, seasonLabel });
+  const hasCareerSeasons = careerSeasons.length > 0;
+  const leagueTag = safeStr(stats.league, "").toUpperCase();
+  const isAhlLine = leagueTag === "AHL";
 
-  if (!hasSeasonGames) {
+  if (!hasSeasonGames && !hasCareerSeasons) {
     return (
       <section className="nhlrost-stats-layout">
         <EmptyPanel
@@ -4130,43 +4776,81 @@ function ProductionPanel({ player }) {
     );
   }
 
-  if (isGoalie) {
-    return (
-      <section className="nhlrost-stats-layout">
-        <article className="nhlrost-panel nhlrost-stats-band">
-          <div className="nhlrost-stat-grid nhlrost-stat-grid--wide">
-            <InfoPair label="GP" value={displayStatValue(stats.gp)} />
-            <InfoPair label="Record" value={`${displayStatValue(stats.wins)}-${displayStatValue(stats.losses)}-${displayStatValue(stats.otl)}`} />
-            <InfoPair label="SV%" value={stats.svPct ? formatDecimal(stats.svPct, 3) : "—"} />
-            <InfoPair label="GAA" value={stats.gaa ? stats.gaa.toFixed(2) : "—"} />
-            <InfoPair label="Saves" value={displayStatValue(stats.saves)} />
-            <InfoPair label="Shots Against" value={displayStatValue(stats.shotsAgainst)} />
-            <InfoPair label="Shutouts" value={displayStatValue(stats.shutouts)} />
-            <InfoPair label="TOI/GP" value={stats.toi ? `${round1(stats.toi)} min` : "—"} />
-          </div>
-        </article>
-      </section>
-    );
-  }
-
   return (
     <section className="nhlrost-stats-layout">
-      <article className="nhlrost-panel nhlrost-stats-band">
-        <div className="nhlrost-stat-grid nhlrost-stat-grid--wide">
-          <InfoPair label="GP" value={displayStatValue(stats.gp)} />
-          <InfoPair label="G" value={displayStatValue(stats.g)} />
-          <InfoPair label="A" value={displayStatValue(stats.a)} />
-          <InfoPair label="PTS" value={displayStatValue(stats.pts)} />
-          <InfoPair label="P/GP" value={stats.ppg ? stats.ppg.toFixed(2) : displayStatValue(0)} />
-          <InfoPair label="Shots" value={displayStatValue(stats.shots)} />
-          <InfoPair label="SH%" value={stats.shootingPct ? `${(stats.shootingPct * 100).toFixed(1)}%` : "—"} />
-          <InfoPair label="+/-" value={stats.plusMinus != null ? formatSignedNumber(stats.plusMinus, 0) : "—"} />
-          <InfoPair label="TOI/GP" value={stats.toi ? `${round1(stats.toi)} min` : "—"} />
-          <InfoPair label="Hits" value={displayStatValue(stats.hits)} />
-          <InfoPair label="Blocks" value={displayStatValue(stats.blocks)} />
-          <InfoPair label="PIM" value={displayStatValue(stats.pim)} />
-        </div>
-      </article>
+      {hasSeasonGames ? (
+        isGoalie ? (
+          <article className="nhlrost-panel nhlrost-stats-band">
+            <header className="nhlrost-panel__head">
+              <div>
+                <p>{isAhlLine ? "AHL Season" : "Universe Season"}</p>
+                <h3>{gp} GP</h3>
+              </div>
+            </header>
+            <MetricStrip className="nhlrost-metric-strip--stats">
+              <Metric label="GP" value={displayStatValue(stats.gp)} />
+              <Metric label="Record" value={`${displayStatValue(stats.wins)}-${displayStatValue(stats.losses)}-${displayStatValue(stats.otl)}`} />
+              <Metric label="SV%" value={stats.svPct ? formatDecimal(stats.svPct, 3) : "—"} />
+              <Metric label="GAA" value={stats.gaa ? Number(stats.gaa).toFixed(2) : "—"} />
+              <Metric label="Saves" value={displayStatValue(stats.saves)} />
+              <Metric label="SA" value={displayStatValue(stats.shotsAgainst)} />
+              <Metric label="SO" value={displayStatValue(stats.shutouts)} />
+              <Metric label="TOI/GP" value={stats.toi ? `${round1(stats.toi)}` : "—"} />
+            </MetricStrip>
+          </article>
+        ) : (
+          <article className="nhlrost-panel nhlrost-stats-band">
+            <header className="nhlrost-panel__head">
+              <div>
+                <p>{isAhlLine ? "AHL Season" : "Universe Season"}</p>
+                <h3>
+                  {gp} GP · {displayStatValue(stats.pts)} PTS
+                  {stats.leagueRank != null ? ` · League #${stats.leagueRank}` : ""}
+                </h3>
+              </div>
+            </header>
+            <MetricStrip className="nhlrost-metric-strip--stats">
+              <Metric label="GP" value={displayStatValue(stats.gp)} />
+              <Metric label="G" value={displayStatValue(stats.g)} />
+              <Metric label="A" value={displayStatValue(stats.a)} />
+              <Metric label="PTS" value={displayStatValue(stats.pts)} />
+              <Metric label="P/GP" value={stats.ppg ? Number(stats.ppg).toFixed(2) : displayStatValue(0)} />
+              <Metric label="SOG" value={displayStatValue(stats.shots)} />
+              <Metric label="SH%" value={stats.shootingPct ? `${(stats.shootingPct * 100).toFixed(1)}%` : "—"} />
+              <Metric label="+/-" value={stats.plusMinus != null ? formatSignedNumber(stats.plusMinus, 0) : "—"} />
+              <Metric label="TOI" value={stats.toi ? `${round1(stats.toi)}` : "—"} />
+              <Metric label="Hits" value={displayStatValue(stats.hits)} />
+              <Metric label="Blocks" value={displayStatValue(stats.blocks)} />
+              <Metric label="PIM" value={displayStatValue(stats.pim)} />
+              <Metric label="WAR" value={stats.war != null ? Number(stats.war).toFixed(2) : "—"} />
+              {!isAhlLine ? (
+                <>
+                  <Metric
+                    label="CF%"
+                    value={
+                      stats.cfPct != null
+                        ? `${Number(stats.cfPct) <= 1.5 ? (Number(stats.cfPct) * 100).toFixed(1) : Number(stats.cfPct).toFixed(1)}%`
+                        : "—"
+                    }
+                  />
+                  <Metric
+                    label="xGF%"
+                    value={
+                      stats.xgfPct != null
+                        ? `${Number(stats.xgfPct) <= 1.5 ? (Number(stats.xgfPct) * 100).toFixed(1) : Number(stats.xgfPct).toFixed(1)}%`
+                        : "—"
+                    }
+                  />
+                </>
+              ) : null}
+            </MetricStrip>
+          </article>
+        )
+      ) : null}
+
+      {hasCareerSeasons ? (
+        <CareerSeasonsTable seasons={careerSeasons} isGoalie={isGoalie} />
+      ) : null}
     </section>
   );
 }
@@ -4184,6 +4868,43 @@ function ContractPanel({ player }) {
         ? "good"
         : "neutral";
 
+  const rightsType = safeStr(pickFirstDefined(player.rights_type, player.rightsType), "");
+  const rightsExpiryYear = pickFirstDefined(player.rights_expiry_year, player.rightsExpiryYear);
+  const orgStatus = safeStr(pickFirstDefined(player.organizational_status, player.organizationalStatus), "");
+  const signedStatus = safeStr(pickFirstDefined(player.signed_status, player.signedStatus), "");
+  const rightsStatus = safeStr(pickFirstDefined(player.rights_status, player.rightsStatus), "");
+  const elcEligible = pickFirstDefined(player.elc_eligible, player.elcEligible);
+  const elcSlideEligible = pickFirstDefined(player.elc_slide_eligible, player.elcSlideEligible);
+  const slideThreshold = pickFirstDefined(player.slide_games_threshold, player.slideGamesThreshold);
+  const rosterLocation = safeStr(pickFirstDefined(player.roster_location, player.rosterLocation), "");
+  const inMinors = Boolean(pickFirstDefined(player.in_minors, player.inMinors));
+  const waiverStatus = safeStr(pickFirstDefined(player.waiver_status, player.waiverStatus), "");
+  const waiverExempt = pickFirstDefined(player.waiver_exempt, player.waiverExempt);
+
+  const contractRights = safeStr(contract.rightsStatus || contract.rights_status, "");
+  const rightsHeadline = (() => {
+    if (contract.isSigned && (rightsStatus || contractRights)) {
+      const code = rightsStatus || contractRights;
+      if (/^[ur]fa$/i.test(code)) return `Expires as ${code.toUpperCase()}`;
+      return code;
+    }
+    return rightsStatus || rightsType || (contract.isSigned ? "Under contract" : "Unsigned");
+  })();
+
+  const hasRightsInfo = Boolean(
+    rightsType ||
+      rightsExpiryYear ||
+      orgStatus ||
+      signedStatus ||
+      rightsStatus ||
+      contractRights ||
+      rosterLocation ||
+      waiverStatus ||
+      elcEligible != null ||
+      elcSlideEligible != null ||
+      waiverExempt != null
+  );
+
   return (
     <section className="nhlrost-contract-layout">
       <article className="nhlrost-panel nhlrost-contract-panel">
@@ -4192,16 +4913,100 @@ function ContractPanel({ player }) {
           <strong className={toneClass(valueTone)}>{capHitDisplay(player)}</strong>
         </div>
 
-        <div className="nhlrost-stat-grid nhlrost-stat-grid--wide">
-          <InfoPair label="Salary" value={formatMoneyMillions(contract.salary)} />
-          <InfoPair label="Term" value={contract.term ? `${contract.term} yr` : "—"} />
-          <InfoPair label="Expiry" value={formatContractExpiry(contract)} />
-          <InfoPair label="Type" value={contract.type || "—"} />
-          <InfoPair label="Clause" value={contract.clause || "—"} />
-          <InfoPair label="Status" value={formatContractStatus(contract)} />
-        </div>
+        <MetricStrip className="nhlrost-metric-strip--stats">
+          <Metric label="AAV" value={contract.aav ? formatMoneyMillions(contract.aav) : "—"} />
+          <Metric label="Salary" value={formatMoneyMillions(contract.salary)} />
+          <Metric label="Term" value={contract.term ? `${contract.term} yr` : "—"} />
+          <Metric label="Yrs Left" value={contract.yearsRemaining ? `${contract.yearsRemaining}` : "—"} />
+          <Metric label="Expiry" value={formatContractExpiry(contract)} />
+          <Metric label="Type" value={contract.type || "—"} />
+          <Metric label="Clause" value={contract.clause || "—"} />
+          <Metric label="Status" value={formatContractStatus(contract)} />
+          {contract.twoWay ? <Metric label="Two-Way" value="Yes" /> : null}
+          {contract.isEntryLevel ? <Metric label="ELC" value="Yes" /> : null}
+          {contract.signingBonusM ? <Metric label="Signing" value={formatMoneyMillions(contract.signingBonusM)} /> : null}
+          {contract.performanceBonusM ? (
+            <Metric label="Perf Bonus" value={formatMoneyMillions(contract.performanceBonusM)} />
+          ) : null}
+          {contract.minorSalaryM ? <Metric label="Minor $" value={formatMoneyMillions(contract.minorSalaryM)} /> : null}
+          {contract.startYear ? <Metric label="Start" value={contract.startYear} /> : null}
+        </MetricStrip>
       </article>
+
+      {hasRightsInfo ? (
+        <article className="nhlrost-panel">
+          <header className="nhlrost-panel__head">
+            <div>
+              <p>Rights &amp; Roster Status</p>
+              <h3>{rightsHeadline}</h3>
+            </div>
+          </header>
+          <MetricStrip className="nhlrost-metric-strip--stats">
+            {rightsType ? <Metric label="Rights" value={rightsType} /> : null}
+            {rightsExpiryYear ? <Metric label="Rights Exp" value={rightsExpiryYear} /> : null}
+            {orgStatus ? <Metric label="Org Status" value={orgStatus} /> : null}
+            {signedStatus ? <Metric label="Signed" value={signedStatus} /> : null}
+            {(rightsStatus || contractRights) ? (
+              <Metric label="Expiry" value={(rightsStatus || contractRights).toUpperCase()} />
+            ) : null}
+            {(rosterLocation || inMinors) ? (
+              <Metric label="Location" value={rosterLocation || "Minors"} />
+            ) : null}
+            {waiverStatus ? <Metric label="Waivers" value={waiverStatus} /> : null}
+            {waiverExempt != null ? (
+              <Metric label="Exempt" value={waiverExempt ? "Yes" : "No"} tone={waiverExempt ? "good" : "warn"} />
+            ) : null}
+            {elcEligible != null ? <Metric label="ELC Elig" value={elcEligible ? "Yes" : "No"} /> : null}
+            {elcSlideEligible != null ? (
+              <Metric label="Slide Elig" value={elcSlideEligible ? "Yes" : "No"} />
+            ) : null}
+            {slideThreshold != null ? <Metric label="Slide GP" value={`<${slideThreshold}`} /> : null}
+          </MetricStrip>
+        </article>
+      ) : null}
     </section>
+  );
+}
+
+function DevelopmentTimelineChart({ points }) {
+  const width = 560;
+  const height = 168;
+  const padding = 28;
+
+  const ovrs = points.map((p) => p.ovr);
+  const min = Math.min(...ovrs);
+  const max = Math.max(...ovrs);
+  const span = Math.max(1, max - min);
+  const stepX = points.length > 1 ? (width - padding * 2) / (points.length - 1) : 0;
+
+  const coords = points.map((point, index) => {
+    const x = padding + index * stepX;
+    const y = height - padding - ((point.ovr - min) / span) * (height - padding * 2);
+    return { ...point, x, y };
+  });
+
+  const path = coords.map((c, index) => `${index === 0 ? "M" : "L"} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(" ");
+
+  return (
+    <svg
+      className="nhlrost-dev-chart"
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label="Overall rating development curve across tracked seasons"
+    >
+      <path d={path} className="nhlrost-dev-chart__line" fill="none" />
+      {coords.map((c, index) => (
+        <g key={index}>
+          <circle cx={c.x} cy={c.y} r="3.5" className="nhlrost-dev-chart__dot" />
+          <text x={c.x} y={c.y - 10} textAnchor="middle" className="nhlrost-dev-chart__value">
+            {c.ovr}
+          </text>
+          <text x={c.x} y={height - 8} textAnchor="middle" className="nhlrost-dev-chart__label">
+            {c.season}
+          </text>
+        </g>
+      ))}
+    </svg>
   );
 }
 
@@ -4213,12 +5018,36 @@ function DevelopmentPanel({ player }) {
   const hasMorale = player.morale != null && Number.isFinite(Number(player.morale));
   const hasFatigue = player.fatigue != null && Number.isFinite(Number(player.fatigue));
   const hasGrowth = player.growth != null && Number.isFinite(Number(player.growth));
+  const seasonStartOvr = safeNumOrNull(player.season_start_ovr);
+
+  const rawHistory = Array.isArray(player.development_history) ? player.development_history : EMPTY_ARRAY;
+  const validSnapshots = rawHistory
+    .map((entry, index) => {
+      const ovr = safeNumOrNull(pickFirstDefined(entry?.ovr_after, entry?.ovr, entry?.ovr_before));
+      if (ovr === null) return null;
+      return {
+        season: safeStr(pickFirstDefined(entry?.season, entry?.year), `Snapshot ${index + 1}`),
+        ovr,
+        delta: safeNumOrNull(entry?.delta),
+        sourcePath: entry?.source_path,
+      };
+    })
+    .filter(Boolean);
+
+  const hasCurve = validSnapshots.length >= 2;
 
   return (
     <section className="nhlrost-development-layout">
       <article className="nhlrost-panel">
+        <header className="nhlrost-panel__head">
+          <div>
+            <p>Development</p>
+            <h3>Current Read</h3>
+          </div>
+        </header>
         <div className="nhlrost-stat-grid nhlrost-stat-grid--wide">
           <InfoPair label="Current OVR" value={displayOverallValue(player)} />
+          {seasonStartOvr !== null ? <InfoPair label="Season Start OVR" value={seasonStartOvr} /> : null}
           <InfoPair label="Age" value={player.age || "—"} />
           <InfoPair label="Potential" value={player.potential || "—"} />
           <InfoPair label="Stage" value={player.stage || "—"} />
@@ -4231,14 +5060,134 @@ function DevelopmentPanel({ player }) {
           <InfoPair label="Confidence" value={player.overallConfidence || "—"} />
         </div>
       </article>
+
+      <article className="nhlrost-panel nhlrost-dev-timeline-panel">
+        <header className="nhlrost-panel__head">
+          <div>
+            <p>Development History</p>
+            <h3>{hasCurve ? `${validSnapshots.length} tracked seasons` : "Overall trend"}</h3>
+          </div>
+        </header>
+
+        {hasCurve ? (
+          <>
+            <DevelopmentTimelineChart points={validSnapshots} />
+            <div className="nhlrost-dev-timeline-list">
+              {validSnapshots.map((snap, index) => (
+                <div key={index} className="nhlrost-dev-timeline-row">
+                  <span>{snap.season}</span>
+                  <strong>{snap.ovr}</strong>
+                  {snap.delta !== null ? (
+                    <em className={snap.delta > 0 ? "is-up" : snap.delta < 0 ? "is-down" : "is-flat"}>
+                      {formatSignedNumber(snap.delta, 0)}
+                    </em>
+                  ) : (
+                    <em className="is-flat">—</em>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <EmptyPanel
+            compact
+            title="Not enough tracked seasons"
+            body="A development curve appears once at least two overall snapshots are recorded for this player."
+          />
+        )}
+      </article>
     </section>
   );
 }
 
-function UsagePanel({ player }) {
+function UsagePanel({ player, onRefresh }) {
+  const [moves, setMoves] = useState(EMPTY_ARRAY);
+  const [meta, setMeta] = useState(EMPTY_OBJECT);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [note, setNote] = useState("");
+
+  const playerId = String(player?.id || player?.player_id || player?.key || "");
+
+  useEffect(() => {
+    let cancelled = false;
+    setError("");
+    setNote("");
+    setMoves(EMPTY_ARRAY);
+    if (!playerId) return undefined;
+    getRosterMoves(playerId)
+      .then((data) => {
+        if (cancelled) return;
+        setMeta(data || EMPTY_OBJECT);
+        setMoves(Array.isArray(data?.actions) ? data.actions : EMPTY_ARRAY);
+        if (!data?.ok && data?.reason) setError(String(data.reason));
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err?.message || "Could not load roster moves");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [playerId]);
+
   if (!player) {
     return <EmptyPanel title="No usage selected" body="Select a player to view role and deployment." />;
   }
+
+  const runMove = async (action, extra = {}) => {
+    setBusy(action);
+    setError("");
+    setNote("");
+    try {
+      const result = await moveRosterPlayer({
+        player_id: playerId,
+        action,
+        ...extra,
+      });
+      if (!result?.ok) {
+        if (result?.requires_waivers) {
+          const ok = window.confirm(
+            `${player.name || "Player"} requires waivers to be assigned to the AHL. Place on waivers and send down?`
+          );
+          if (ok) {
+            const forced = await moveRosterPlayer({
+              player_id: playerId,
+              action,
+              confirm_waivers: true,
+            });
+            if (!forced?.ok) {
+              setError(forced?.reason || "Move failed");
+              return;
+            }
+            setNote(forced.moved || "Move completed");
+            setMoves(Array.isArray(forced.available_moves) ? forced.available_moves : EMPTY_ARRAY);
+            if (typeof onRefresh === "function") onRefresh();
+            return;
+          }
+          setError("Waivers required — move cancelled");
+          return;
+        }
+        setError(result?.reason || "Move failed");
+        return;
+      }
+      setNote(
+        [
+          result.moved,
+          result.slide_preserved === true ? "ELC slide preserved" : null,
+          result.slide_preserved === false ? "Slide threshold already passed" : null,
+          result.slide_note,
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      );
+      setMoves(Array.isArray(result.available_moves) ? result.available_moves : EMPTY_ARRAY);
+      if (typeof onRefresh === "function") onRefresh();
+    } catch (err) {
+      setError(err?.message || "Move failed");
+    } finally {
+      setBusy("");
+    }
+  };
 
   return (
     <section className="nhlrost-detail-grid">
@@ -4257,65 +5206,389 @@ function UsagePanel({ player }) {
           <InfoPair label="Average TOI" value={player.minutes ? `${round1(player.minutes)} min` : "—"} />
           <InfoPair label="Status" value={player.status} tone={getHealthBand(player).tone} />
           <InfoPair label="League" value={player.league} />
-          <InfoPair label="Position Class" value={player.positionClass} />
+          <InfoPair label="Location" value={meta.location || player.league || "—"} />
+          <InfoPair label="NHL GP" value={meta.nhl_gp != null ? meta.nhl_gp : "—"} />
+          <InfoPair
+            label="Slide threshold"
+            value={meta.slide_games_threshold != null ? `<${meta.slide_games_threshold} GP` : "—"}
+          />
         </div>
       </article>
 
       <article className="nhlrost-panel">
         <header className="nhlrost-panel__head">
           <div>
-            <p>Usage Logic</p>
-            <h3>No Fake Save</h3>
+            <p>Roster Moves</p>
+            <h3>Call-ups & Assignments</h3>
           </div>
-          <span>Read-only</span>
+          <span>{moves.length ? `${moves.length} available` : "None"}</span>
         </header>
 
-        <p className="nhlrost-muted-text">
-          This panel reads current player usage from backend fields when available. If no backend usage exists, it derives a read-only estimate from position and calculated overall. It does not pretend to save roster moves.
-        </p>
+        {error ? <p className="nhlrost-muted-text" style={{ color: "#f0a0a0" }}>{error}</p> : null}
+        {note ? <p className="nhlrost-muted-text">{note}</p> : null}
 
-        <ConnectedActionNotice
-          tone="neutral"
-          title="Roster actions hidden until connected"
-          body="Call-ups, scratches, waivers, trade block, and lineup saves should only appear here after real backend handlers exist."
-        />
+        {moves.length ? (
+          <div className="nhlrost-stat-grid" style={{ gap: "0.75rem" }}>
+            {moves.map((action) => (
+              <button
+                key={action.id}
+                type="button"
+                className="nhlrost-action-btn"
+                disabled={Boolean(busy) || action.enabled === false}
+                title={action.reason || action.slide_note || ""}
+                onClick={() => runMove(action.id)}
+              >
+                {busy === action.id ? "Working…" : action.label}
+                {action.requires_waivers ? " (waivers)" : ""}
+                {action.reason ? ` — ${action.reason}` : ""}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="nhlrost-muted-text">
+            No call-up or send-down actions for this player right now. Unsigned juniors need an ELC
+            first; NHL veterans may require waivers to go to the AHL.
+          </p>
+        )}
       </article>
     </section>
   );
 }
 
-function HistoryPanel({ player, storylines }) {
+function CareerTotalsCard({ totals, isGoalie }) {
+  if (!totals || typeof totals !== "object") return null;
+
+  const gp = pickFirstDefined(totals.gp, totals.games_played);
+  if (isGoalie) {
+    const wins = pickFirstDefined(totals.wins, totals.w);
+    const losses = pickFirstDefined(totals.losses, totals.l);
+    const svPct = pickFirstDefined(totals.sv_pct, totals.svPct);
+    const gaa = totals.gaa;
+    if (gp == null && wins == null && losses == null && svPct == null && gaa == null) return null;
+
+    return (
+      <article className="nhlrost-panel">
+        <header className="nhlrost-panel__head">
+          <div>
+            <p>Career Totals</p>
+            <h3>NHL</h3>
+          </div>
+        </header>
+        <div className="nhlrost-stat-grid nhlrost-stat-grid--wide">
+          <InfoPair label="GP" value={displayStatValue(gp)} />
+          <InfoPair label="W" value={displayStatValue(wins)} />
+          <InfoPair label="L" value={displayStatValue(losses)} />
+          <InfoPair label="OTL" value={displayStatValue(pickFirstDefined(totals.otl))} />
+          <InfoPair label="SV%" value={svPct != null ? formatDecimal(svPct, 3) : "—"} />
+          <InfoPair label="GAA" value={gaa != null ? Number(gaa).toFixed(2) : "—"} />
+        </div>
+      </article>
+    );
+  }
+
+  const goals = pickFirstDefined(totals.g, totals.goals);
+  const assists = pickFirstDefined(totals.a, totals.assists);
+  const pts = pickFirstDefined(totals.pts, totals.points);
+  if (gp == null && goals == null && assists == null && pts == null) return null;
+
+  return (
+    <article className="nhlrost-panel">
+      <header className="nhlrost-panel__head">
+        <div>
+          <p>Career Totals</p>
+          <h3>NHL</h3>
+        </div>
+      </header>
+      <div className="nhlrost-stat-grid nhlrost-stat-grid--wide">
+        <InfoPair label="GP" value={displayStatValue(gp)} />
+        <InfoPair label="G" value={displayStatValue(goals)} />
+        <InfoPair label="A" value={displayStatValue(assists)} />
+        <InfoPair label="PTS" value={displayStatValue(pts)} />
+      </div>
+    </article>
+  );
+}
+
+function CareerSeasonsTable({ seasons, isGoalie }) {
+  if (!Array.isArray(seasons) || !seasons.length) return null;
+
+  return (
+    <article className="nhlrost-panel nhlrost-career-seasons">
+      <header className="nhlrost-panel__head">
+        <div>
+          <p>Career</p>
+          <h3>Season by Season</h3>
+        </div>
+      </header>
+      <div className="nhlrost-table-scroll">
+        <table className="nhlrost-mini-table">
+          <thead>
+            <tr>
+              <th scope="col">Season</th>
+              <th scope="col">Team</th>
+              <th scope="col">Lg</th>
+              <th scope="col">GP</th>
+              {isGoalie ? (
+                <>
+                  <th scope="col">W</th>
+                  <th scope="col">L</th>
+                  <th scope="col">OTL</th>
+                  <th scope="col">SV%</th>
+                  <th scope="col">GAA</th>
+                </>
+              ) : (
+                <>
+                  <th scope="col">G</th>
+                  <th scope="col">A</th>
+                  <th scope="col">PTS</th>
+                  <th scope="col">+/-</th>
+                  <th scope="col">PIM</th>
+                  <th scope="col">WAR</th>
+                </>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {seasons.map((row, index) => (
+              <tr key={index} className={row?.is_current_season ? "is-current-season" : undefined}>
+                <td>{safeStr(pickFirstDefined(row?.season, row?.year), "—")}</td>
+                <td>{safeStr(pickFirstDefined(row?.team, row?.team_name, row?.teamName), "—")}</td>
+                <td>{safeStr(pickFirstDefined(row?.league, row?.league_name), "—")}</td>
+                <td>{displayStatValue(pickFirstDefined(row?.gp, row?.games_played))}</td>
+                {isGoalie ? (
+                  <>
+                    <td>{displayStatValue(pickFirstDefined(row?.wins, row?.w))}</td>
+                    <td>{displayStatValue(pickFirstDefined(row?.losses, row?.l))}</td>
+                    <td>{displayStatValue(pickFirstDefined(row?.otl))}</td>
+                    <td>
+                      {pickFirstDefined(row?.sv_pct, row?.svPct) != null
+                        ? formatDecimal(pickFirstDefined(row?.sv_pct, row?.svPct), 3)
+                        : "—"}
+                    </td>
+                    <td>{row?.gaa != null ? Number(row.gaa).toFixed(2) : "—"}</td>
+                  </>
+                ) : (
+                  <>
+                    <td>{displayStatValue(pickFirstDefined(row?.g, row?.goals))}</td>
+                    <td>{displayStatValue(pickFirstDefined(row?.a, row?.assists))}</td>
+                    <td>{displayStatValue(pickFirstDefined(row?.pts, row?.points))}</td>
+                    <td>
+                      {pickFirstDefined(row?.plus_minus, row?.plusMinus) != null
+                        ? formatSignedNumber(pickFirstDefined(row?.plus_minus, row?.plusMinus), 0)
+                        : "—"}
+                    </td>
+                    <td>{displayStatValue(pickFirstDefined(row?.pim))}</td>
+                    <td>{row?.war != null ? Number(row.war).toFixed(2) : "—"}</td>
+                  </>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  );
+}
+
+function CareerAwardsCard({ awards }) {
+  if (!Array.isArray(awards) || !awards.length) return null;
+
+  return (
+    <article className="nhlrost-panel">
+      <header className="nhlrost-panel__head">
+        <div>
+          <p>Career</p>
+          <h3>Awards</h3>
+        </div>
+      </header>
+      <ul className="nhlrost-award-list">
+        {awards.map((award, index) => {
+          if (typeof award === "string" || typeof award === "number") {
+            return <li key={index}>{award}</li>;
+          }
+          const name = safeStr(pickFirstDefined(award?.name, award?.award, award?.title), "Award");
+          const year = pickFirstDefined(award?.season, award?.year);
+          return (
+            <li key={index}>
+              {name}
+              {year ? ` — ${year}` : ""}
+            </li>
+          );
+        })}
+      </ul>
+    </article>
+  );
+}
+
+function CareerTransactionsCard({ transactions }) {
+  if (!Array.isArray(transactions) || !transactions.length) return null;
+
+  return (
+    <article className="nhlrost-panel">
+      <header className="nhlrost-panel__head">
+        <div>
+          <p>Career</p>
+          <h3>Transactions</h3>
+        </div>
+      </header>
+      <div className="nhlrost-storyline-list">
+        {transactions.map((tx, index) => (
+          <article key={index} className="nhlrost-storyline-card">
+            <strong>{safeStr(pickFirstDefined(tx?.type, tx?.headline, tx?.title), "Transaction")}</strong>
+            {tx?.date || tx?.season ? <span>{tx.date || tx.season}</span> : null}
+            {tx?.description || tx?.summary ? <p>{tx.description || tx.summary}</p> : null}
+          </article>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function CareerPanel({ player, storylines, franchiseState }) {
   if (!player) {
-    return <EmptyPanel title="No history selected" body="Select a player to view timeline events." compact />;
+    return <EmptyPanel title="No career selected" body="Select a player to view career history." compact />;
+  }
+
+  const draftYear = player.draft_year || player.draftYear;
+  const draftRound = player.draft_round || player.draftRound;
+  const draftOverall = player.draft_overall_pick || player.draftOverallPick;
+  const draftTeamId =
+    player.drafted_by_team_id ||
+    player.draft_team_id ||
+    player.drafted_by_team ||
+    player.draftedByTeamId ||
+    "";
+  const draftTeamName = player.drafted_by_team_name || resolveDraftTeamName(draftTeamId, franchiseState);
+  const isUndrafted = Boolean(player.undrafted) || (!player.drafted && !draftYear && draftOverall == null);
+
+  const isGoalie = isGoaliePosition(player.position);
+  const seasons = Array.isArray(player.career_seasons) ? player.career_seasons : EMPTY_ARRAY;
+  const awards = Array.isArray(player.career_awards) ? player.career_awards : EMPTY_ARRAY;
+  const transactions = Array.isArray(player.transactions) ? player.transactions : EMPTY_ARRAY;
+  const events = Array.isArray(storylines) ? storylines : EMPTY_ARRAY;
+
+  const hasAnyCareerData = Boolean(
+    player.drafted ||
+      draftYear ||
+      draftOverall != null ||
+      isUndrafted ||
+      seasons.length ||
+      awards.length ||
+      transactions.length ||
+      events.length ||
+      player.career_totals
+  );
+
+  if (!hasAnyCareerData) {
+    return (
+      <EmptyPanel
+        compact
+        title="No career record yet"
+        body="Draft, season-by-season, award, and transaction data appear here once connected to franchise history."
+      />
+    );
   }
 
   return (
     <section className="nhlrost-history-layout">
-      {storylines.length ? (
-        <div className="nhlrost-storyline-list">
-          {storylines.map((event, index) => (
-            <article key={event.id || event.storyline_id || index} className="nhlrost-storyline-card">
-              <strong>{event.headline || event.title || event.type || "Storyline"}</strong>
-              {event.season || event.date ? (
-                <span>{event.season || event.date}</span>
-              ) : null}
-              {event.effect_summary ? <p>{event.effect_summary}</p> : null}
-            </article>
-          ))}
-        </div>
-      ) : (
-        <EmptyPanel compact title="No recorded career events yet" body="Timeline events appear when this player is tied to franchise storylines." />
-      )}
+      <article className="nhlrost-panel">
+        <header className="nhlrost-panel__head">
+          <div>
+            <p>Draft Record</p>
+            <h3>{isUndrafted ? "Undrafted" : draftYear ? String(draftYear) : "Drafted"}</h3>
+          </div>
+        </header>
+        {isUndrafted ? (
+          <p className="nhlrost-muted-text">Undrafted — entered the organization outside the entry draft.</p>
+        ) : (
+          <div className="nhlrost-stat-grid nhlrost-stat-grid--wide">
+            <InfoPair label="Draft Year" value={draftYear || "—"} />
+            <InfoPair label="Round" value={draftRound != null ? draftRound : "—"} />
+            <InfoPair label="Overall Pick" value={draftOverall != null ? `#${draftOverall}` : "—"} />
+            <InfoPair label="Drafted By" value={draftTeamName || "—"} />
+          </div>
+        )}
+      </article>
+
+      <CareerTotalsCard totals={player.career_totals} isGoalie={isGoalie} />
+      <CareerSeasonsTable seasons={seasons} isGoalie={isGoalie} />
+      <CareerAwardsCard awards={awards} />
+      <CareerTransactionsCard transactions={transactions} />
+
+      <article className="nhlrost-panel">
+        <header className="nhlrost-panel__head">
+          <div>
+            <p>Career</p>
+            <h3>Storyline Timeline</h3>
+          </div>
+        </header>
+        {events.length ? (
+          <div className="nhlrost-storyline-list">
+            {events.map((event, index) => (
+              <article key={event.id || event.storyline_id || index} className="nhlrost-storyline-card">
+                <strong>{event.headline || event.title || event.type || "Storyline"}</strong>
+                {event.season || event.date ? <span>{event.season || event.date}</span> : null}
+                {event.effect_summary ? <p>{event.effect_summary}</p> : null}
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="nhlrost-muted-text">No recorded storyline events yet for this player.</p>
+        )}
+      </article>
     </section>
   );
 }
 
-function PlayerProfileModal({ player, activeTab, setActiveTab, storylines, onClose }) {
+function PlayerProfileModal({
+  player,
+  players,
+  playerIndex,
+  onSelectPlayer,
+  activeTab,
+  setActiveTab,
+  storylines,
+  onClose,
+  franchiseState,
+  onRefresh,
+}) {
   const modalBodyRef = React.useRef(null);
+  const rosterList = Array.isArray(players) ? players : EMPTY_ARRAY;
+  const total = rosterList.length;
+  const currentIndex = safeNum(playerIndex, -1);
+  const hasPrev = total > 0 && currentIndex > 0;
+  const hasNext = total > 0 && currentIndex >= 0 && currentIndex < total - 1;
+
+  const goToIndex = useCallback(
+    (index) => {
+      if (typeof onSelectPlayer !== "function") return;
+      if (index < 0 || index >= total) return;
+      onSelectPlayer(index);
+    },
+    [onSelectPlayer, total]
+  );
 
   useEffect(() => {
     function onKey(event) {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        onClose();
+        return;
+      }
+
+      if (event.target?.matches?.("input, textarea, select")) return;
+
+      // `[` / `]` cycle the player without stealing ArrowLeft/ArrowRight,
+      // which the roster screen already uses to cycle tabs while open.
+      if (event.key === "[") {
+        event.preventDefault();
+        goToIndex(currentIndex - 1);
+        return;
+      }
+
+      if (event.key === "]") {
+        event.preventDefault();
+        goToIndex(currentIndex + 1);
+      }
     }
 
     const previousOverflow = document.body.style.overflow;
@@ -4326,7 +5599,7 @@ function PlayerProfileModal({ player, activeTab, setActiveTab, storylines, onClo
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", onKey);
     };
-  }, [onClose]);
+  }, [onClose, goToIndex, currentIndex]);
 
   useEffect(() => {
     if (modalBodyRef.current) {
@@ -4345,6 +5618,10 @@ function PlayerProfileModal({ player, activeTab, setActiveTab, storylines, onClo
     player.nationality_code ||
     nationalityCode(pickFirstDefined(player.nat, player.nationality, player.country) || "") ||
     resolveRosterFlagLabel(player);
+  const jerseyNumber = resolveJerseyNumber(player);
+  const hand = formatHandLabel(player);
+  const statusLine = buildCommandStatusLine(player);
+  const decisionBullets = buildDecisionBullets(player);
 
   return (
     <div className="nhlrost-profile-modal" role="dialog" aria-modal="true" aria-label={`${player.name} profile`}>
@@ -4358,7 +5635,7 @@ function PlayerProfileModal({ player, activeTab, setActiveTab, storylines, onClo
               size="md"
               variant="card"
               className="nhlrost-profile-modal__headshot"
-              number={player.num}
+              number={jerseyNumber != null ? jerseyNumber : player.num}
               flag={flagCode || null}
             />
           </div>
@@ -4367,9 +5644,10 @@ function PlayerProfileModal({ player, activeTab, setActiveTab, storylines, onClo
             <div className="nhlrost-profile-modal__identity-row">
               {flagCode ? <PlayerFlagBadge player={player} size="sm" /> : null}
               <h2 id="nhlrost-profile-title">{player.name}</h2>
+              {jerseyNumber != null ? <span className="nhlrost-profile-modal__jersey">#{jerseyNumber}</span> : null}
             </div>
             <p>
-              {getPositionDisplay(player.position)} · {player.age || "—"}
+              {getPositionDisplay(player.position)} · {player.age || "—"} · {hand}
               {teamLeague ? ` · ${teamLeague}` : ""}
               {player.status && player.status !== "Active" ? ` · ${player.status}` : ""}
             </p>
@@ -4380,21 +5658,66 @@ function PlayerProfileModal({ player, activeTab, setActiveTab, storylines, onClo
               {player.roleLabel || player.role ? (
                 <span className="nhlrost-profile-modal__role">{player.roleLabel || player.role}</span>
               ) : null}
-              {healthBand.tone === "medical" || healthBand.tone === "bad" ? (
-                <span className={`nhlrost-profile-modal__health ${toneClass(healthBand.tone)}`}>{healthBand.label}</span>
-              ) : null}
+              <span className={`nhlrost-profile-modal__health ${toneClass(healthBand.tone)}`}>{healthBand.label}</span>
+              <span className="nhlrost-profile-modal__contract">{contractSummaryDisplay(player)}</span>
             </div>
           </div>
 
-          <button type="button" className="nhlrost-profile-modal__close" onClick={onClose} aria-label="Close profile">
-            ×
-          </button>
+          <div className="nhlrost-profile-modal__nav-close">
+            {total > 1 ? (
+              <nav className="nhlrost-profile-modal__nav" aria-label="Browse players">
+                <button
+                  type="button"
+                  disabled={!hasPrev}
+                  onClick={() => goToIndex(currentIndex - 1)}
+                  aria-label="Previous player"
+                  title="Previous player ([)"
+                >
+                  ‹
+                </button>
+                <span>
+                  {currentIndex >= 0 ? currentIndex + 1 : "—"} of {total}
+                </span>
+                <button
+                  type="button"
+                  disabled={!hasNext}
+                  onClick={() => goToIndex(currentIndex + 1)}
+                  aria-label="Next player"
+                  title="Next player (])"
+                >
+                  ›
+                </button>
+              </nav>
+            ) : null}
+
+            <button type="button" className="nhlrost-profile-modal__close" onClick={onClose} aria-label="Close profile">
+              ×
+            </button>
+          </div>
         </header>
+
+        <p className="nhlrost-profile-modal__status-line">{statusLine}</p>
+
+        {decisionBullets.length ? (
+          <ul className="nhlrost-profile-modal__decision-strip" aria-label="Decision factors">
+            {decisionBullets.map((bullet, index) => (
+              <li key={index} className={toneClass(bullet.tone)}>
+                {bullet.text}
+              </li>
+            ))}
+          </ul>
+        ) : null}
 
         <DetailTabs activeTab={activeTab} setActiveTab={setActiveTab} />
 
         <div className="nhlrost-profile-modal__body" ref={modalBodyRef}>
-          <DetailPanelRouter activeTab={activeTab} player={player} storylines={storylines} />
+          <DetailPanelRouter
+            activeTab={activeTab}
+            player={player}
+            storylines={storylines}
+            franchiseState={franchiseState}
+            onRefresh={onRefresh}
+          />
         </div>
       </div>
     </div>
@@ -4418,15 +5741,15 @@ function DetailTabs({ activeTab, setActiveTab }) {
   );
 }
 
-function DetailPanelRouter({ activeTab, player, storylines }) {
-  if (activeTab === "overview") return <PlayerOverviewPanel player={player} />;
-  if (activeTab === "ratings") return <RatingsPanel player={player} />;
-  if (activeTab === "production") return <ProductionPanel player={player} />;
-  if (activeTab === "contract") return <ContractPanel player={player} />;
+function DetailPanelRouter({ activeTab, player, storylines, franchiseState, onRefresh }) {
+  if (activeTab === "overview") return <PlayerOverviewPanel player={player} franchiseState={franchiseState} />;
+  if (activeTab === "performance") return <ProductionPanel player={player} franchiseState={franchiseState} />;
   if (activeTab === "development") return <DevelopmentPanel player={player} />;
-  if (activeTab === "history") return <HistoryPanel player={player} storylines={storylines} />;
+  if (activeTab === "contract") return <ContractPanel player={player} />;
+  if (activeTab === "career") return <CareerPanel player={player} storylines={storylines} franchiseState={franchiseState} />;
+  if (activeTab === "moves") return <UsagePanel player={player} onRefresh={onRefresh} />;
 
-  return <PlayerOverviewPanel player={player} />;
+  return <PlayerOverviewPanel player={player} franchiseState={franchiseState} />;
 }
 
 function resolveRosterTeamToken(franchiseState) {
@@ -4522,6 +5845,7 @@ export function RosterScreen() {
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [roleFilter, setRoleFilter] = useState("ALL");
   const [sortKey, setSortKey] = useState("overall_desc");
+  const [statsCentralPayload, setStatsCentralPayload] = useState(null);
   const [viewMode, setViewMode] = useState(VIEW_MODES.BOARD);
   const [activeTab, setActiveTab] = useState("overview");
   const [showCoreOnly, setShowCoreOnly] = useState(false);
@@ -4571,7 +5895,29 @@ export function RosterScreen() {
     );
   }, [organizations, userTeamId, defaultOrgId, selectedOrganization]);
 
-  const franchiseStatsLookup = useMemo(() => buildFranchiseStatsLookup(franchiseState), [franchiseState]);
+  const franchiseStatsLookup = useMemo(
+    () =>
+      buildFranchiseStatsLookup({
+        ...franchiseState,
+        stats_central: franchiseState?.stats_central || statsCentralPayload || EMPTY_OBJECT,
+      }),
+    [franchiseState, statsCentralPayload]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    getStatsCentral()
+      .then((payload) => {
+        if (cancelled || !payload || typeof payload !== "object") return;
+        setStatsCentralPayload(payload);
+      })
+      .catch(() => {
+        if (!cancelled) setStatsCentralPayload(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [franchiseState?.session_id, franchiseState?.stats_revision]);
 
   const devLeagues = rb?.development_leagues || EMPTY_ARRAY;
   const devTeams = devLeagues[devLeagueIdx]?.teams || EMPTY_ARRAY;
@@ -4869,6 +6215,15 @@ export function RosterScreen() {
     [highlightPlayer]
   );
 
+  const handleSelectPlayerByIndex = useCallback(
+    (index) => {
+      const target = filteredPlayers[index];
+      if (!target) return;
+      highlightPlayer(target);
+    },
+    [filteredPlayers, highlightPlayer]
+  );
+
   const clearSelection = useCallback(() => {
     setProfileOpen(false);
     setDetailsCollapsed(false);
@@ -4986,7 +6341,35 @@ export function RosterScreen() {
       ? Number(backendCapSpaceRaw)
       : backendCapLimit - capUsed;
 
-    const signedContracts = players.filter((player) => player.contract?.isSigned).length;
+    const org = franchiseState?.roster_browser?.organizations?.find(
+      (o) => String(o.team_id) === String(franchiseState?.user_team_id || franchiseState?.team?.id || "")
+    );
+    const countSigned = (rows) =>
+      (Array.isArray(rows) ? rows : []).filter((player) => {
+        const c = player?.contract || {};
+        const typed = String(c.type || c.contract_type || "").toUpperCase();
+        if (["AHL", "ECHL", "AHL_ECHL", "PTO", "ATO", "TRYOUT"].includes(typed)) return false;
+        const aav = Number(c.capHit ?? c.aav ?? c.aav_m ?? c.cap_hit_m ?? 0);
+        return Boolean(c.isSigned) && aav > 0;
+      }).length;
+    const orgSpcCount =
+      countSigned(org?.nhl) +
+      countSigned(org?.ahl) +
+      countSigned(org?.echl) +
+      countSigned(org?.prospects);
+    const backendSlots =
+      snap?.nhl_spcs_used ??
+      snap?.contract_slots_used ??
+      franchiseState?.contract_slots?.used ??
+      franchiseState?.contract_slots?.nhl_spcs_used ??
+      franchiseState?.team?.nhl_spcs_used ??
+      franchiseState?.team?.contract_slots_used;
+    const signedContracts =
+      backendSlots != null && Number.isFinite(Number(backendSlots))
+        ? Number(backendSlots)
+        : orgSpcCount > 0
+          ? orgSpcCount
+          : players.filter((player) => player.contract?.isSigned).length;
 
     return {
       capLimit: backendCapLimit,
@@ -4996,6 +6379,7 @@ export function RosterScreen() {
       contractLimit: NHL_CONTRACT_RESERVE_LIMIT,
       activeLimit: NHL_ACTIVE_ROSTER_LIMIT,
       source: backendCapHit > 0 ? "Backend" : "Computed",
+      label: "NHL SPCs",
     };
   }, [players, franchiseState]);
 
@@ -5430,7 +6814,7 @@ export function RosterScreen() {
           </button>
 
           <button type="button" onClick={() => openScreen(SCREENS.STORYLINES)}>
-            <span>📰</span>
+            <span>≡</span>
             <em>Stories</em>
           </button>
 
@@ -5631,9 +7015,14 @@ export function RosterScreen() {
         {profileOpen && selectedPlayer ? (
           <PlayerProfileModal
             player={selectedPlayer}
+            players={filteredPlayers}
+            playerIndex={selectedPlayerIndex}
+            onSelectPlayer={handleSelectPlayerByIndex}
             activeTab={activeTab}
             setActiveTab={setActiveTab}
             storylines={selectedStorylines}
+            franchiseState={franchiseState}
+            onRefresh={handleRefresh}
             onClose={clearSelection}
           />
         ) : null}
@@ -5655,7 +7044,7 @@ export function RosterScreen() {
         />
       ) : null}
 
-      <GameFooter hints="↑↓ PLAYERS · ENTER PROFILE · ESC CLOSE · MENU" />
+      <GameFooter hints="↑↓ PLAYERS · ENTER PROFILE · [ ] PREV/NEXT PLAYER · ESC CLOSE · MENU" />
     </div>
   );
 }
@@ -5790,7 +7179,7 @@ function RosterCommandDrawer({
                 </article>
 
                 <article>
-                  <strong>Contract Slots</strong>
+                  <strong>NHL SPCs</strong>
                   <p>{capInfo.signedContracts} / {capInfo.contractLimit}</p>
                 </article>
 
@@ -5991,34 +7380,34 @@ function RosterScreenStyles() {
   return (
     <style>{`
       .nhlrost-root {
-        --bg: #06121d;
-        --bg-2: #04101a;
-        --panel: rgba(10, 28, 42, 0.94);
-        --panel-2: rgba(12, 36, 54, 0.92);
-        --panel-3: rgba(17, 49, 72, 0.82);
-        --line: rgba(150, 190, 210, 0.16);
-        --line-2: rgba(150, 220, 235, 0.28);
-        --text: #e8f4fb;
-        --muted: #8ba0af;
-        --muted-2: #617484;
-        --cyan: #00d8df;
-        --blue: #62b7ff;
-        --gold: #e8a536;
-        --green: #48d88b;
-        --red: #ff6464;
-        --orange: #ff9f43;
-        --purple: #b18cff;
+        --bg: var(--ops-navy, #04101a);
+        --bg-2: var(--ops-navy-deep, #020a11);
+        --panel: var(--ops-panel, rgba(9, 25, 38, 0.94));
+        --panel-2: var(--ops-panel-2, rgba(12, 35, 52, 0.94));
+        --panel-3: var(--ops-panel-3, rgba(15, 46, 66, 0.78));
+        --line: var(--ops-grid, rgba(156, 218, 236, 0.14));
+        --line-2: var(--ops-grid-2, rgba(115, 229, 241, 0.25));
+        --text: var(--ops-text, #e9f7fb);
+        --muted: var(--ops-text-secondary, #8096a8);
+        --muted-2: var(--ops-text-disabled, #607789);
+        --cyan: var(--ops-cyan, #13d8e7);
+        --blue: var(--ops-info, #8ab4ff);
+        --gold: var(--ops-gold, #e9a83c);
+        --green: var(--ops-success, #52df94);
+        --red: var(--ops-injury, #ff606d);
+        --orange: var(--shell-orange, #e07020);
+        --purple: var(--ops-gold, #e9a83c);
         min-height: 100vh;
         width: 100%;
         display: grid;
         grid-template-columns: 72px minmax(0, 1fr);
         overflow: hidden;
         background:
-          radial-gradient(circle at 22% 0%, rgba(0, 216, 223, 0.13), transparent 28%),
-          radial-gradient(circle at 88% 12%, rgba(232, 165, 54, 0.12), transparent 24%),
-          linear-gradient(180deg, #06111b, #03080e 72%);
+          radial-gradient(circle at 22% 0%, rgba(19, 216, 231, 0.08), transparent 28%),
+          radial-gradient(circle at 88% 12%, rgba(233, 168, 60, 0.06), transparent 24%),
+          linear-gradient(180deg, var(--ops-navy, #06111b), var(--ops-navy-deep, #03080e) 72%);
         color: var(--text);
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-family: var(--font-ops-ui, Inter, ui-sans-serif, system-ui, sans-serif);
       }
 
       .nhlrost-root *,
@@ -6052,7 +7441,7 @@ function RosterScreenStyles() {
       .nhlrost-brand {
         width: 48px;
         height: 48px;
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(0, 216, 223, 0.28);
         background: rgba(0, 216, 223, 0.08);
         display: grid;
@@ -6078,7 +7467,7 @@ function RosterScreenStyles() {
         width: 100%;
         min-height: 48px;
         border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 14px;
+        border-radius: 10px;
         background: rgba(255, 255, 255, 0.025);
         color: var(--muted);
         display: flex;
@@ -6115,7 +7504,7 @@ function RosterScreenStyles() {
 
       .nhlrost-side-nav em,
       .nhlrost-menu-button em {
-        font-size: 0.52rem;
+        font-size: 0.6875rem;
         font-style: normal;
         text-transform: uppercase;
         letter-spacing: 0.1em;
@@ -6129,7 +7518,7 @@ function RosterScreenStyles() {
       .nhlrost-menu-button > span {
         width: 24px;
         height: 2px;
-        border-radius: 99px;
+        border-radius: 12px;
         background: currentColor;
       }
 
@@ -6145,7 +7534,7 @@ function RosterScreenStyles() {
 
       .nhlrost-panel {
         border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 24px;
+        border-radius: 8px;
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
           var(--panel);
@@ -6163,7 +7552,7 @@ function RosterScreenStyles() {
         align-items: center;
         min-height: 78px;
         padding: 10px 14px;
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.1);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
@@ -6203,7 +7592,7 @@ function RosterScreenStyles() {
 
       .nhlrost-hud-tile__body small {
         color: var(--muted);
-        font-size: 0.52rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.1em;
         font-weight: 900;
@@ -6220,7 +7609,7 @@ function RosterScreenStyles() {
 
       .nhlrost-hud-tile__body em {
         font-style: normal;
-        font-size: 0.52rem;
+        font-size: 0.6875rem;
         line-height: 1.15;
         color: var(--muted-2);
         white-space: nowrap;
@@ -6255,7 +7644,7 @@ function RosterScreenStyles() {
       .nhlrost-filters-bar {
         flex: 0 0 auto;
         padding: 10px 14px;
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.1);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
@@ -6271,14 +7660,18 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-search-mode-segment,
+      /* Registry switches: one continuous bank of hard-edged segments so the
+         roster filters read as club paperwork rather than floating pills. */
+      .nhlrost-search-mode-segment,
       .nhlrost-pool-segment {
         display: grid;
-        gap: 6px;
+        gap: 0;
         min-width: 0;
-        padding: 4px;
-        border-radius: 14px;
+        padding: 0;
+        border-radius: var(--radius-ops, 2px);
         border: 1px solid rgba(255, 255, 255, 0.08);
-        background: rgba(255, 255, 255, 0.03);
+        background: rgba(255, 255, 255, 0.02);
+        overflow: hidden;
       }
 
       .nhlrost-search-mode-segment {
@@ -6288,9 +7681,10 @@ function RosterScreenStyles() {
 
       .nhlrost-search-mode-segment button,
       .nhlrost-pool-segment button {
-        min-height: 34px;
+        min-height: 32px;
         border: 0;
-        border-radius: 10px;
+        border-right: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 0;
         background: transparent;
         color: var(--muted);
         font-size: 0.72rem;
@@ -6300,8 +7694,12 @@ function RosterScreenStyles() {
         cursor: pointer;
         transition:
           background 140ms ease,
-          color 140ms ease,
-          box-shadow 140ms ease;
+          color 140ms ease;
+      }
+
+      .nhlrost-search-mode-segment button:last-child,
+      .nhlrost-pool-segment button:last-child {
+        border-right: 0;
       }
 
       .nhlrost-search-mode-segment button:hover,
@@ -6313,8 +7711,8 @@ function RosterScreenStyles() {
       .nhlrost-search-mode-segment button.is-active,
       .nhlrost-pool-segment button.is-active {
         color: #031018;
-        background: linear-gradient(180deg, #00e2e8, #00b9c2);
-        box-shadow: 0 0 16px rgba(0, 216, 223, 0.24);
+        background: #00d0d8;
+        box-shadow: none;
       }
 
       .nhlrost-pool-segment {
@@ -6323,34 +7721,11 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-pool-segment button {
-        min-height: 40px;
-        border-radius: 10px;
-        border: 1px solid transparent;
-        background: transparent;
-        color: var(--muted);
+        min-height: 36px;
         padding: 0 8px;
-        font-size: 0.72rem;
         font-weight: 900;
         letter-spacing: 0.06em;
-        text-transform: uppercase;
-        cursor: pointer;
         white-space: nowrap;
-        transition:
-          color 150ms ease,
-          background 150ms ease,
-          border-color 150ms ease;
-      }
-
-      .nhlrost-pool-segment button:hover {
-        color: var(--text);
-        background: rgba(255, 255, 255, 0.04);
-      }
-
-      .nhlrost-pool-segment button.is-active {
-        color: #fff;
-        border-color: rgba(0, 216, 223, 0.42);
-        background: rgba(0, 216, 223, 0.12);
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
       }
 
       .nhlrost-filters-advanced {
@@ -6369,7 +7744,7 @@ function RosterScreenStyles() {
 
       .nhlrost-view-modes__label {
         color: var(--muted);
-        font-size: 0.61rem;
+        font-size: 0.6875rem;
         line-height: 1;
         text-transform: uppercase;
         letter-spacing: 0.14em;
@@ -6389,7 +7764,7 @@ function RosterScreenStyles() {
         background: rgba(255, 255, 255, 0.04);
         color: var(--muted);
         padding: 0 10px;
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         font-weight: 900;
         letter-spacing: 0.06em;
         text-transform: uppercase;
@@ -6408,93 +7783,155 @@ function RosterScreenStyles() {
         min-height: 0;
         display: grid;
         grid-template-rows: auto minmax(0, 1fr) auto;
-        border-radius: 18px;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        background: rgba(6, 18, 29, 0.78);
+        border-radius: var(--radius-hud, 4px);
+        border: 1px solid var(--line);
+        background: var(--panel);
         overflow: hidden;
+        box-shadow: var(--depth-registered, inset 0 1px 0 rgba(255, 255, 255, 0.04));
       }
 
       .nhlrost-board-shell__head {
-        padding: 8px 14px;
+        padding: 6px 12px;
         display: flex;
         align-items: center;
-        justify-content: flex-end;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        justify-content: space-between;
+        border-bottom: 1px solid var(--line);
+        background: rgba(0, 0, 0, 0.22);
       }
 
       .nhlrost-board-shell__head > span {
-        border-radius: 999px;
-        padding: 4px 10px;
+        border-radius: var(--radius-ops, 2px);
+        padding: 3px 8px;
         color: var(--cyan);
-        background: rgba(0, 216, 223, 0.08);
-        border: 1px solid rgba(0, 216, 223, 0.14);
-        font-size: 0.68rem;
+        background: var(--ops-cyan-soft, rgba(19, 216, 231, 0.13));
+        border: 1px solid var(--line-2);
+        font-size: var(--type-phase-label-size, 0.68rem);
         font-weight: 900;
-        letter-spacing: 0.06em;
+        letter-spacing: 0.14em;
         text-transform: uppercase;
       }
 
+      /* Department signature: the personnel-file edge. A punched binder
+         margin runs down the sheet so the roster reads as a club document. */
       .nhlrost-board-shell__body {
+        position: relative;
         min-height: 0;
         overflow: auto;
-        padding: 10px 12px 12px;
+        padding: 0;
+        border-left: 3px solid rgba(4, 16, 26, 0.9);
+        background-image: repeating-linear-gradient(
+          180deg,
+          var(--line-2) 0 10px,
+          transparent 10px 34px
+        );
+        background-repeat: no-repeat;
+        background-size: 1px 100%;
+        background-position: 1px 0;
       }
 
-      .nhlrost-board {
+      .nhlrost-board,
+      .nhlrost-board-sheet {
         display: flex;
         flex-direction: column;
         min-height: 0;
+      }
+
+      .nhlrost-board-sheet__head {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        display: grid;
+        grid-template-columns:
+          minmax(168px, 1.55fr)
+          44px
+          52px
+          40px
+          72px
+          minmax(72px, 0.75fr)
+          minmax(84px, 0.85fr)
+          minmax(128px, 1.15fr)
+          minmax(64px, 0.62fr);
+        align-items: center;
+        gap: 8px;
+        padding: 0 10px;
+        min-height: 30px;
+        border-bottom: 1px solid var(--line-2);
+        background: rgba(4, 16, 26, 0.98);
+        color: var(--muted);
+        font-size: var(--type-dept-label-size, 0.72rem);
+        font-weight: 900;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
       }
 
       .nhlrost-board-list {
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 0;
       }
 
       .nhlrost-board-row {
         width: 100%;
-        min-height: 68px;
+        min-height: 42px;
         display: grid;
         grid-template-columns:
-          148px
-          minmax(160px, 1.5fr)
-          48px
+          minmax(168px, 1.55fr)
           44px
-          80px
-          minmax(108px, 0.95fr)
-          minmax(180px, 1.4fr)
-          92px;
+          52px
+          40px
+          72px
+          minmax(72px, 0.75fr)
+          minmax(84px, 0.85fr)
+          minmax(128px, 1.15fr)
+          minmax(64px, 0.62fr);
         align-items: center;
-        gap: 12px;
-        padding: 10px 14px;
-        border-radius: 14px;
-        border: 1px solid rgba(255, 255, 255, 0.07);
-        background: rgba(255, 255, 255, 0.028);
+        gap: 8px;
+        padding: 0 10px;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        border-radius: 0;
+        background: transparent;
         color: var(--text);
         text-align: left;
         cursor: pointer;
         transition:
-          border-color 140ms ease,
-          background 140ms ease,
-          box-shadow 140ms ease;
+          background var(--motion-micro, 110ms ease),
+          box-shadow var(--motion-micro, 110ms ease);
+      }
+
+      .nhlrost-board-row:nth-child(even) {
+        background: rgba(255, 255, 255, 0.015);
       }
 
       .nhlrost-board-row:hover {
-        border-color: rgba(0, 216, 223, 0.24);
-        background: rgba(0, 216, 223, 0.05);
+        background: var(--ops-cyan-soft, rgba(19, 216, 231, 0.13));
       }
 
+      /* Selected personnel row lifts out of the file like a pulled tab. */
       .nhlrost-board-row.is-selected {
-        border-color: rgba(0, 216, 223, 0.48);
-        background: rgba(0, 216, 223, 0.09);
-        box-shadow: 0 0 18px rgba(0, 216, 223, 0.12);
+        background: var(--ops-table-sel, rgba(19, 216, 231, 0.13));
+        box-shadow: inset 3px 0 0 var(--cyan);
+        clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
       }
 
-      .nhlrost-board-row__avatar {
+      .nhlrost-board-row__name {
         display: flex;
         align-items: center;
-        justify-content: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .nhlrost-board-row__name > span {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+
+      .nhlrost-board-row__name .nhlrost-headshot.player-headshot {
+        --size: 28px;
+        flex: 0 0 auto;
+        opacity: 0.92;
       }
 
       .nhlrost-player-icon-plate {
@@ -6571,7 +8008,7 @@ function RosterScreenStyles() {
         position: relative;
         flex-shrink: 0;
         padding: 3px;
-        border-radius: 11px 13px 10px 9px;
+        border-radius: 11px 10px 10px 9px;
         background:
           linear-gradient(155deg, rgba(255, 255, 255, 0.1) 0%, transparent 42%),
           linear-gradient(325deg, var(--plate-inner), rgba(4, 10, 20, 0.88));
@@ -6644,7 +8081,7 @@ function RosterScreenStyles() {
         z-index: 4;
         min-width: 20px;
         padding: 1px 5px;
-        font-size: 0.55rem;
+        font-size: 0.6875rem;
         font-weight: 900;
         letter-spacing: 0.05em;
         text-transform: uppercase;
@@ -6661,12 +8098,13 @@ function RosterScreenStyles() {
       .nhlrost-board-row__name-line {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 6px;
         min-width: 0;
       }
 
       .nhlrost-board-row__name-line strong {
-        font-size: 0.98rem;
+        font-size: var(--type-table-value-size, 0.8125rem);
+        font-weight: 800;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -6674,20 +8112,77 @@ function RosterScreenStyles() {
 
       .nhlrost-board-row__team {
         display: block;
-        margin-top: 2px;
         color: var(--muted);
-        font-size: 0.68rem;
+        font-size: var(--type-table-meta-size, 0.72rem);
         font-style: normal;
         font-weight: 700;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.06em;
         text-transform: uppercase;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
       }
 
-      .nhlrost-board-row.has-team .nhlrost-board-row__identity {
+      .nhlrost-board-row__pos {
+        font-size: var(--type-table-meta-size, 0.72rem);
+        font-weight: 900;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .nhlrost-board-row__age,
+      .nhlrost-board-row__role,
+      .nhlrost-board-row__avail {
+        font-size: var(--type-table-value-size, 0.8125rem);
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .nhlrost-board-row__contract {
+        color: var(--gold);
+        font-size: var(--type-financial-size, 0.875rem);
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      .nhlrost-board-row__status {
+        display: flex;
+        align-items: center;
         min-width: 0;
+      }
+
+      .nhlrost-board-row__stats {
+        color: var(--muted);
+        font-size: var(--type-table-meta-size, 0.72rem);
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .nhlrost-ovr-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        min-width: 36px;
+        min-height: 24px;
+        padding: 0 6px;
+        border-radius: var(--radius-ops, 2px);
+        font-size: var(--type-score-size, 1.25rem);
+        font-weight: 900;
+        line-height: 1;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--text);
+        box-shadow: none;
       }
 
       .nhlrost-filters-primary .nhlrost-control--compact {
@@ -6718,7 +8213,7 @@ function RosterScreenStyles() {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         font-weight: 900;
         letter-spacing: 0.04em;
         color: #dff7ff;
@@ -6729,11 +8224,11 @@ function RosterScreenStyles() {
       .nhlrost-flag-fallback.is-lg {
         min-width: 42px;
         height: 28px;
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
       }
 
       .nhlrost-headshot .ph-flag {
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         font-weight: 900;
         letter-spacing: 0.03em;
         opacity: 1;
@@ -6857,8 +8352,8 @@ function RosterScreenStyles() {
         justify-content: center;
         min-height: 28px;
         padding: 0 12px;
-        border-radius: 999px;
-        font-size: 0.68rem;
+        border-radius: 6px;
+        font-size: 0.6875rem;
         font-weight: 900;
         letter-spacing: 0.08em;
         text-transform: uppercase;
@@ -6908,9 +8403,9 @@ function RosterScreenStyles() {
         position: relative;
         width: clamp(900px, 88vw, 1180px);
         max-height: calc(100dvh - 48px);
-        display: grid;
-        grid-template-rows: auto auto minmax(0, 1fr);
-        border-radius: 20px;
+        display: flex;
+        flex-direction: column;
+        border-radius: 8px;
         border: 1px solid rgba(255, 255, 255, 0.1);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
@@ -6927,6 +8422,116 @@ function RosterScreenStyles() {
         align-items: center;
         padding: 14px 16px 10px;
         border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        flex-shrink: 0;
+      }
+
+      .nhlrost-profile-modal__jersey {
+        color: var(--muted);
+        font-size: 0.9rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .nhlrost-profile-modal__nav-close {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+
+      .nhlrost-profile-modal__nav {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .nhlrost-profile-modal__nav button {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+        font-size: 1rem;
+        line-height: 1;
+        cursor: pointer;
+      }
+
+      .nhlrost-profile-modal__nav button:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+
+      .nhlrost-profile-modal__nav span {
+        color: var(--muted);
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .nhlrost-profile-modal__contract {
+        font-size: 0.6875rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        color: var(--cyan);
+        border-radius: 999px;
+        padding: 4px 10px;
+        border: 1px solid rgba(19, 216, 231, 0.25);
+        background: rgba(19, 216, 231, 0.07);
+      }
+
+      .nhlrost-profile-modal__status-line {
+        margin: 0;
+        padding: 8px 16px;
+        color: var(--muted);
+        font-size: 0.8rem;
+        letter-spacing: 0.01em;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        flex-shrink: 0;
+      }
+
+      .nhlrost-profile-modal__decision-strip {
+        margin: 0;
+        list-style: none;
+        padding: 8px 16px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 16px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        flex-shrink: 0;
+      }
+
+      .nhlrost-profile-modal__decision-strip li {
+        position: relative;
+        padding-left: 12px;
+        font-size: 0.78rem;
+        color: var(--text);
+      }
+
+      .nhlrost-profile-modal__decision-strip li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0.5em;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--muted);
+      }
+
+      .nhlrost-profile-modal__decision-strip li.is-warn::before {
+        background: var(--gold);
+      }
+
+      .nhlrost-profile-modal__decision-strip li.is-bad::before {
+        background: var(--red);
+      }
+
+      .nhlrost-profile-modal__decision-strip li.is-good::before {
+        background: var(--green);
       }
 
       .nhlrost-profile-modal__visual {
@@ -6977,7 +8582,7 @@ function RosterScreenStyles() {
 
       .nhlrost-profile-modal__role,
       .nhlrost-profile-modal__health {
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         font-weight: 800;
         letter-spacing: 0.05em;
         text-transform: uppercase;
@@ -7004,6 +8609,7 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-profile-modal__body {
+        flex: 1 1 auto;
         min-height: 0;
         overflow: auto;
         padding: 12px 16px 16px;
@@ -7017,7 +8623,7 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-profile-scorecard {
-        border-radius: 14px;
+        border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.03);
         padding: 12px;
@@ -7028,7 +8634,7 @@ function RosterScreenStyles() {
 
       .nhlrost-profile-scorecard span {
         color: var(--muted);
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         font-weight: 900;
         letter-spacing: 0.1em;
         text-transform: uppercase;
@@ -7056,7 +8662,7 @@ function RosterScreenStyles() {
 
       .nhlrost-contract-hero span {
         color: var(--muted);
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         font-weight: 900;
         letter-spacing: 0.1em;
         text-transform: uppercase;
@@ -7068,7 +8674,7 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-storyline-card {
-        border-radius: 14px;
+        border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.03);
         padding: 12px 14px;
@@ -7095,10 +8701,12 @@ function RosterScreenStyles() {
         max-height: min(38vh, 420px);
         display: grid;
         grid-template-rows: auto auto minmax(0, 1fr);
-        border-radius: 16px;
-        border: 1px solid rgba(0, 216, 223, 0.18);
-        background: rgba(8, 23, 36, 0.92);
+        border-radius: var(--radius-hud, 4px);
+        border: 1px solid var(--line-2);
+        border-top: 2px solid var(--cyan);
+        background: var(--panel);
         overflow: hidden;
+        box-shadow: var(--depth-registered, inset 0 1px 0 rgba(255, 255, 255, 0.04));
       }
 
       .nhlrost-inspector.is-collapsed {
@@ -7186,7 +8794,7 @@ function RosterScreenStyles() {
       .nhlrost-team-mark {
         width: clamp(64px, 5.4vw, 74px);
         height: clamp(64px, 5.4vw, 74px);
-        border-radius: 14px;
+        border-radius: 10px;
         display: grid;
         place-items: center;
         flex: 0 0 auto;
@@ -7211,11 +8819,13 @@ function RosterScreenStyles() {
         text-shadow: 0 0 12px rgba(43, 228, 255, 0.22);
       }
 
+      /* Personnel-registry controls: squared operational keys, flat fills,
+         and a 1px press instead of a floating lift. */
       .nhlrost-chip-button,
       .nhlrost-primary-button {
-        min-height: 38px;
-        border-radius: 999px;
-        padding: 0 14px;
+        min-height: 34px;
+        border-radius: var(--radius-hud, 4px);
+        padding: 0 13px;
         border: 1px solid rgba(255, 255, 255, 0.12);
         background: rgba(255, 255, 255, 0.045);
         color: var(--text);
@@ -7225,36 +8835,41 @@ function RosterScreenStyles() {
         text-transform: uppercase;
         cursor: pointer;
         transition:
-          transform 150ms ease,
           background 150ms ease,
           border-color 150ms ease,
-          box-shadow 150ms ease;
+          color 150ms ease;
       }
 
       .nhlrost-chip-button:hover,
       .nhlrost-primary-button:hover {
-        transform: translateY(-1px);
         border-color: rgba(0, 216, 223, 0.36);
         background: rgba(0, 216, 223, 0.08);
+      }
+
+      .nhlrost-chip-button:active,
+      .nhlrost-primary-button:active {
+        transform: translateY(1px);
       }
 
       .nhlrost-chip-button.is-active {
         border-color: rgba(0, 216, 223, 0.42);
         background: rgba(0, 216, 223, 0.12);
-        box-shadow: 0 0 12px rgba(0, 216, 223, 0.08);
+        box-shadow: inset 3px 0 0 var(--ops-cyan, #13d8e7);
       }
 
+      /* Primary roster action carries the rink cut. */
       .nhlrost-primary-button {
-        background:
-          linear-gradient(135deg, rgba(0, 216, 223, 0.3), rgba(98, 183, 255, 0.16)),
-          rgba(0, 216, 223, 0.08);
+        background: rgba(0, 216, 223, 0.16);
         border-color: rgba(0, 216, 223, 0.45);
+        border-radius: 0;
+        clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 9px 100%, 0 calc(100% - 9px));
       }
 
+      /* Read-only registry notice reads as a filed stamp. */
       .nhlrost-readonly-pill {
-        min-height: 38px;
-        border-radius: 999px;
-        padding: 0 14px;
+        min-height: 34px;
+        border-radius: var(--radius-ops, 2px);
+        padding: 0 12px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -7275,7 +8890,7 @@ function RosterScreenStyles() {
 
       .nhlrost-stat-strip article {
         min-height: 82px;
-        border-radius: 22px;
+        border-radius: 8px;
         border: 1px solid rgba(255, 255, 255, 0.09);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.052), rgba(255, 255, 255, 0.02)),
@@ -7298,7 +8913,7 @@ function RosterScreenStyles() {
 
       .nhlrost-stat-strip span {
         color: var(--muted);
-        font-size: 0.64rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.16em;
         font-weight: 900;
@@ -7384,7 +8999,7 @@ function RosterScreenStyles() {
         color: var(--muted);
         text-transform: uppercase;
         letter-spacing: 0.16em;
-        font-size: 0.64rem;
+        font-size: 0.6875rem;
         font-weight: 900;
       }
 
@@ -7396,12 +9011,13 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-panel__head > span {
-        border-radius: 999px;
-        padding: 5px 9px;
+        border-radius: var(--radius-ops, 2px);
+        padding: 3px 7px;
+        letter-spacing: 0.08em;
         color: var(--cyan);
         background: rgba(0, 216, 223, 0.08);
         border: 1px solid rgba(0, 216, 223, 0.16);
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         font-weight: 900;
       }
 
@@ -7416,7 +9032,7 @@ function RosterScreenStyles() {
 
       .nhlrost-info-pair {
         min-width: 0;
-        border-radius: 14px;
+        border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.075);
         background: rgba(255, 255, 255, 0.035);
         padding: 9px 10px;
@@ -7427,7 +9043,7 @@ function RosterScreenStyles() {
 
       .nhlrost-info-pair span {
         color: var(--muted);
-        font-size: 0.63rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.12em;
         font-weight: 900;
@@ -7435,10 +9051,10 @@ function RosterScreenStyles() {
 
       .nhlrost-info-pair strong {
         font-size: 0.86rem;
-        white-space: normal;
-        overflow: visible;
-        text-overflow: unset;
-        word-break: break-word;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        word-break: normal;
       }
 
       .nhlrost-info-pair.is-good strong,
@@ -7472,7 +9088,7 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-cap-meter > div {
-        border-radius: 14px;
+        border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         padding: 10px 12px;
@@ -7483,7 +9099,7 @@ function RosterScreenStyles() {
 
       .nhlrost-cap-meter span {
         color: var(--muted);
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.12em;
         font-weight: 900;
@@ -7520,18 +9136,21 @@ function RosterScreenStyles() {
         color: var(--text);
       }
 
+      /* Roster limits read against a ruled certification scale. */
       .nhlrost-progress__track {
         height: 8px;
-        border-radius: 999px;
+        border-radius: 1px;
         overflow: hidden;
-        background: rgba(255, 255, 255, 0.11);
+        background:
+          repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.14) 0 1px, transparent 1px 25%),
+          rgba(255, 255, 255, 0.11);
       }
 
       .nhlrost-progress__track span {
         display: block;
         height: 100%;
-        border-radius: inherit;
-        background: linear-gradient(90deg, var(--cyan), var(--blue));
+        border-radius: 0;
+        background: var(--cyan);
       }
 
       .nhlrost-progress.is-good .nhlrost-progress__track span {
@@ -7556,7 +9175,7 @@ function RosterScreenStyles() {
       .nhlrost-warning-card,
       .nhlrost-warning-clean,
       .nhlrost-action-notice {
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         padding: 10px 12px;
@@ -7651,7 +9270,7 @@ function RosterScreenStyles() {
 
       .nhlrost-control span {
         color: var(--muted);
-        font-size: 0.61rem;
+        font-size: 0.6875rem;
         line-height: 1;
         text-transform: uppercase;
         letter-spacing: 0.14em;
@@ -7662,7 +9281,7 @@ function RosterScreenStyles() {
       .nhlrost-control select {
         width: 100%;
         height: 38px;
-        border-radius: 14px;
+        border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.11);
         outline: none;
         background:
@@ -7712,7 +9331,7 @@ function RosterScreenStyles() {
       .nhlrost-list-shell__head p {
         margin: 0 0 4px;
         color: var(--muted);
-        font-size: 0.65rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         letter-spacing: 0.16em;
         text-transform: uppercase;
@@ -7726,8 +9345,9 @@ function RosterScreenStyles() {
 
       .nhlrost-list-shell__head > span {
         flex: 0 0 auto;
-        border-radius: 999px;
-        padding: 6px 10px;
+        border-radius: var(--radius-ops, 2px);
+        padding: 4px 8px;
+        letter-spacing: 0.08em;
         color: var(--cyan);
         background: rgba(0, 216, 223, 0.08);
         border: 1px solid rgba(0, 216, 223, 0.15);
@@ -7759,14 +9379,14 @@ function RosterScreenStyles() {
         align-items: center;
         gap: 8px;
         padding: 0 10px;
-        border-radius: 14px;
+        border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.09);
         background:
           linear-gradient(180deg, rgba(10, 28, 42, 0.98), rgba(6, 18, 29, 0.98));
         color: var(--muted);
         text-transform: uppercase;
         letter-spacing: 0.12em;
-        font-size: 0.6rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         backdrop-filter: blur(12px);
       }
@@ -7813,7 +9433,7 @@ function RosterScreenStyles() {
         align-items: center;
         gap: 8px;
         padding: 7px 10px;
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.075);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.018)),
@@ -7985,7 +9605,7 @@ function RosterScreenStyles() {
       .nhlrost-ovr-stack span,
       .nhlrost-ovr-stack em {
         color: var(--muted);
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         font-style: normal;
         font-weight: 800;
         letter-spacing: 0.04em;
@@ -8008,22 +9628,22 @@ function RosterScreenStyles() {
 
       .nhlrost-potential-stack > span {
         color: var(--muted);
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         font-weight: 800;
       }
 
       .nhlrost-mini-badge {
         max-width: 100%;
-        min-height: 24px;
-        border-radius: 999px;
-        padding: 4px 8px;
+        min-height: 22px;
+        border-radius: var(--radius-ops, 2px);
+        padding: 3px 7px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
         border: 1px solid rgba(255, 255, 255, 0.1);
         background: rgba(255, 255, 255, 0.045);
         color: var(--text);
-        font-size: 0.64rem;
+        font-size: 0.6875rem;
         line-height: 1;
         font-weight: 950;
         letter-spacing: 0.06em;
@@ -8035,21 +9655,38 @@ function RosterScreenStyles() {
       .nhlrost-archetype-tag {
         --arch-color: #9aa7bd;
         max-width: 100%;
-        min-height: 26px;
-        border-radius: 999px;
-        padding: 5px 9px;
+        min-height: 22px;
+        border-radius: var(--radius-ops, 2px);
+        padding: 3px 7px;
         display: inline-flex;
         align-items: center;
         border: 1px solid color-mix(in srgb, var(--arch-color) 72%, transparent);
         background: color-mix(in srgb, var(--arch-color) 15%, transparent);
         color: var(--arch-color);
         font-style: normal;
-        font-size: 0.64rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         letter-spacing: 0.06em;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+
+      .nhlrost-cancer-tag {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 2px 10px;
+        border-radius: 2px;
+        background: #7a0f0f;
+        color: #ffd0d0;
+        border: 2px solid #ff3b3b;
+        font-style: normal;
+        font-size: 0.78rem;
+        font-weight: 950;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        vertical-align: middle;
+        box-shadow: 0 0 0 1px #2a0000;
       }
 
       .nhlrost-status-strip {
@@ -8060,43 +9697,39 @@ function RosterScreenStyles() {
 
       .nhlrost-card-grid,
       .nhlrost-ratings-grid-view {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
-        gap: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-hud, 4px);
+        overflow: hidden;
       }
 
       .nhlrost-player-card,
       .nhlrost-rating-card {
         min-width: 0;
-        border-radius: 22px;
-        border: 1px solid rgba(255, 255, 255, 0.09);
-        background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.052), rgba(255, 255, 255, 0.018)),
-          rgba(5, 18, 29, 0.72);
-        padding: 13px;
+        border-radius: 0;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        background: transparent;
+        padding: 8px 10px;
         color: var(--text);
         text-align: left;
         cursor: pointer;
-        transition:
-          transform 150ms ease,
-          border-color 150ms ease,
-          box-shadow 150ms ease,
-          background 150ms ease;
+        transition: background var(--motion-micro, 110ms ease);
+        box-shadow: none;
       }
 
       .nhlrost-player-card:hover,
       .nhlrost-rating-card:hover {
-        transform: translateY(-2px);
-        border-color: rgba(0, 216, 223, 0.26);
-        background:
-          linear-gradient(180deg, rgba(0, 216, 223, 0.065), rgba(255, 255, 255, 0.02)),
-          rgba(5, 18, 29, 0.86);
+        transform: none;
+        background: var(--ops-cyan-soft, rgba(19, 216, 231, 0.13));
       }
 
       .nhlrost-player-card.is-selected,
       .nhlrost-rating-card.is-selected {
-        border-color: rgba(232, 165, 54, 0.56);
-        box-shadow: 0 0 24px rgba(232, 165, 54, 0.08);
+        background: var(--ops-table-sel, rgba(19, 216, 231, 0.13));
+        box-shadow: inset 3px 0 0 var(--cyan);
       }
 
       .nhlrost-player-card__top,
@@ -8236,9 +9869,9 @@ function RosterScreenStyles() {
 
       .nhlrost-draft-trend {
         width: fit-content;
-        border-radius: 999px;
-        padding: 4px 8px;
-        font-size: 0.62rem;
+        border-radius: var(--radius-ops, 2px);
+        padding: 3px 7px;
+        font-size: 0.6875rem;
         font-weight: 950;
         border: 1px solid rgba(255, 255, 255, 0.1);
         background: rgba(255, 255, 255, 0.04);
@@ -8264,7 +9897,7 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-line-section {
-        border-radius: 22px;
+        border-radius: 8px;
         border: 1px solid rgba(255, 255, 255, 0.085);
         background: rgba(255, 255, 255, 0.025);
         padding: 12px;
@@ -8298,7 +9931,7 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-line-row > strong {
-        border-radius: 14px;
+        border-radius: 10px;
         display: grid;
         place-items: center;
         color: var(--cyan);
@@ -8319,7 +9952,7 @@ function RosterScreenStyles() {
 
       .nhlrost-line-chip {
         min-height: 58px;
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         color: var(--text);
@@ -8348,7 +9981,7 @@ function RosterScreenStyles() {
 
       .nhlrost-line-chip span {
         color: var(--muted);
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         letter-spacing: 0.12em;
         text-transform: uppercase;
@@ -8391,8 +10024,8 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-pagination button {
-        min-height: 30px;
-        border-radius: 999px;
+        min-height: 28px;
+        border-radius: var(--radius-hud, 4px);
         border: 1px solid rgba(255, 255, 255, 0.1);
         background: rgba(255, 255, 255, 0.04);
         color: var(--text);
@@ -8451,7 +10084,7 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-selected-card__big > div {
-        border-radius: 18px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         padding: 12px;
@@ -8460,7 +10093,7 @@ function RosterScreenStyles() {
       .nhlrost-selected-card__big span {
         display: block;
         color: var(--muted);
-        font-size: 0.64rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         letter-spacing: 0.14em;
         text-transform: uppercase;
@@ -8491,6 +10124,7 @@ function RosterScreenStyles() {
         gap: 8px;
         flex-wrap: wrap;
         border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        flex-shrink: 0;
       }
 
       .nhlrost-detail-tabs button {
@@ -8500,7 +10134,7 @@ function RosterScreenStyles() {
         background: rgba(255, 255, 255, 0.04);
         color: var(--muted);
         padding: 0 12px;
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         text-transform: uppercase;
         letter-spacing: 0.09em;
@@ -8523,36 +10157,149 @@ function RosterScreenStyles() {
 
       .nhlrost-player-overview {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 12px;
+        grid-template-columns: minmax(200px, 0.95fr) minmax(0, 1.15fr) minmax(0, 1.35fr);
+        grid-template-rows: auto auto auto;
+        gap: 0;
         align-content: start;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-hud, 4px);
+        overflow: hidden;
+        background: rgba(0, 0, 0, 0.18);
       }
 
       .nhlrost-profile-zone {
-        border-radius: 14px;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        background: rgba(255, 255, 255, 0.03);
-        padding: 12px;
+        border-radius: 0;
+        border: 0;
+        border-right: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        background: transparent;
+        padding: 10px 12px;
         min-width: 0;
       }
 
+      .nhlrost-profile-zone--bio {
+        grid-column: 1;
+        grid-row: 1 / span 2;
+        background: rgba(19, 216, 231, 0.04);
+        border-left: 3px solid var(--cyan);
+      }
+
+      .nhlrost-profile-zone--draft {
+        grid-column: 2;
+        grid-row: 1;
+      }
+
+      .nhlrost-profile-zone--ability {
+        grid-column: 3;
+        grid-row: 1;
+        border-right: 0;
+      }
+
+      .nhlrost-profile-zone--contract {
+        grid-column: 2;
+        grid-row: 2;
+        border-right: 1px solid var(--line);
+      }
+
       .nhlrost-profile-zone--performance {
+        grid-column: 3;
+        grid-row: 2;
+        border-right: 0;
+        background: rgba(0, 0, 0, 0.14);
+      }
+
+      .nhlrost-profile-zone--ratings,
+      .nhlrost-profile-zone--signal {
         grid-column: 1 / -1;
+        border-right: 0;
+      }
+
+      .nhlrost-profile-zone--signal {
+        border-bottom: 0;
+        background: rgba(0, 0, 0, 0.14);
+      }
+
+      .nhlrost-metric-strip {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: stretch;
+        gap: 0;
+        width: 100%;
+      }
+
+      .nhlrost-metric {
+        flex: 1 1 68px;
+        min-width: 60px;
+        max-width: 120px;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        gap: 3px;
+        padding: 6px 10px 6px 0;
+        border-right: 1px solid rgba(255, 255, 255, 0.08);
+        min-height: 0;
+      }
+
+      .nhlrost-metric:last-child {
+        border-right: 0;
+        padding-right: 0;
+      }
+
+      .nhlrost-metric span {
+        color: var(--muted);
+        font-size: 0.625rem;
+        font-weight: 900;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        line-height: 1.2;
+      }
+
+      .nhlrost-metric strong {
+        font-size: 0.92rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        line-height: 1.15;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .nhlrost-metric.is-good strong {
+        color: var(--green);
+      }
+
+      .nhlrost-metric.is-warn strong {
+        color: var(--gold);
+      }
+
+      .nhlrost-metric.is-bad strong {
+        color: #f0a0a0;
+      }
+
+      .nhlrost-metric-strip--stats .nhlrost-metric {
+        flex: 1 1 56px;
+        max-width: 96px;
       }
 
       .nhlrost-profile-zone__head p {
         margin: 0 0 2px;
         color: var(--muted);
-        font-size: 0.62rem;
+        font-size: var(--type-dept-label-size, 0.72rem);
         font-weight: 900;
-        letter-spacing: 0.1em;
+        letter-spacing: 0.14em;
         text-transform: uppercase;
       }
 
       .nhlrost-profile-zone__head h3 {
-        margin: 0 0 10px;
-        font-size: 1rem;
+        margin: 0 0 8px;
+        font-size: var(--type-ops-heading-size, 0.95rem);
         line-height: 1.2;
+        font-weight: 800;
+      }
+
+      .nhlrost-profile-zone--bio .nhlrost-profile-zone__head h3 {
+        font-size: 1.05rem;
       }
 
       .nhlrost-profile-kv-grid {
@@ -8577,7 +10324,7 @@ function RosterScreenStyles() {
 
       .nhlrost-profile-summary-item span {
         color: var(--muted);
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         font-weight: 900;
         letter-spacing: 0.1em;
         text-transform: uppercase;
@@ -8590,9 +10337,16 @@ function RosterScreenStyles() {
 
       .nhlrost-profile-stat-band,
       .nhlrost-stat-grid--wide {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-        gap: 8px;
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 0;
+      }
+
+      .nhlrost-profile-modal__body .nhlrost-stat-grid--wide {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
       }
 
       .nhlrost-ratings-layout,
@@ -8625,7 +10379,7 @@ function RosterScreenStyles() {
 
       .nhlrost-ratings-summary-card span {
         color: var(--muted);
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         font-weight: 900;
         letter-spacing: 0.08em;
         text-transform: uppercase;
@@ -8638,7 +10392,7 @@ function RosterScreenStyles() {
       .nhlrost-ratings-summary-card em {
         font-style: normal;
         color: var(--muted);
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         line-height: 1.35;
       }
 
@@ -8668,7 +10422,7 @@ function RosterScreenStyles() {
       .nhlrost-profile-readout header p {
         margin: 0 0 5px;
         color: var(--muted);
-        font-size: 0.65rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.16em;
         font-weight: 950;
@@ -8696,7 +10450,7 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-profile-card__score-row > div {
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         padding: 10px;
@@ -8705,7 +10459,7 @@ function RosterScreenStyles() {
       .nhlrost-profile-card__score-row span {
         display: block;
         color: var(--muted);
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         letter-spacing: 0.12em;
         text-transform: uppercase;
@@ -8723,7 +10477,7 @@ function RosterScreenStyles() {
         margin-top: 3px;
         color: var(--muted);
         font-style: normal;
-        font-size: 0.65rem;
+        font-size: 0.6875rem;
       }
 
       .nhlrost-profile-readout p,
@@ -8767,7 +10521,7 @@ function RosterScreenStyles() {
       .nhlrost-rating-group header p {
         margin: 0 0 4px;
         color: var(--muted);
-        font-size: 0.65rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.14em;
         font-weight: 950;
@@ -8798,7 +10552,7 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-engine-score > div {
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         padding: 10px;
@@ -8807,7 +10561,7 @@ function RosterScreenStyles() {
       .nhlrost-engine-score span {
         display: block;
         color: var(--muted);
-        font-size: 0.58rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         letter-spacing: 0.12em;
         text-transform: uppercase;
@@ -8828,7 +10582,7 @@ function RosterScreenStyles() {
 
       .nhlrost-storyline-list article,
       .nhlrost-drawer-feed article {
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         padding: 10px 12px;
@@ -8850,45 +10604,50 @@ function RosterScreenStyles() {
 
       .nhlrost-empty-panel {
         min-height: 120px;
-        border-radius: 14px;
-        border: 1px dashed rgba(255, 255, 255, 0.1);
-        background: rgba(255, 255, 255, 0.02);
+        border-radius: var(--radius-hud, 4px);
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--muted);
+        background: rgba(0, 0, 0, 0.22);
         display: flex;
         flex-direction: column;
-        align-items: center;
+        align-items: flex-start;
         justify-content: center;
-        padding: 28px 20px;
-        text-align: center;
+        padding: 20px 18px;
+        text-align: left;
       }
 
       .nhlrost-empty-panel.is-compact {
         min-height: 0;
-        padding: 16px 14px;
-        border-style: solid;
+        padding: 12px 14px;
+        align-items: stretch;
+      }
+
+      .nhlrost-empty-panel__phase {
+        margin: 0 0 6px;
+        color: var(--cyan);
+        font-size: var(--type-phase-label-size, 0.68rem);
+        font-weight: 900;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
       }
 
       .nhlrost-empty-panel__orb {
-        width: 58px;
-        height: 58px;
-        border-radius: 50%;
-        display: grid;
-        place-items: center;
-        color: var(--muted);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        background: rgba(255, 255, 255, 0.035);
-        margin-bottom: 12px;
+        display: none;
       }
 
       .nhlrost-empty-panel h3 {
         margin: 0;
-        font-size: 1.05rem;
+        font-size: var(--type-ops-heading-size, 0.95rem);
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
       }
 
       .nhlrost-empty-panel p {
         margin: 6px 0 0;
-        max-width: 420px;
+        max-width: 520px;
         color: var(--muted);
-        font-size: 0.82rem;
+        font-size: var(--type-body-size, 0.875rem);
         line-height: 1.45;
       }
 
@@ -8928,7 +10687,7 @@ function RosterScreenStyles() {
         color: var(--muted);
         text-transform: uppercase;
         letter-spacing: 0.18em;
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         font-weight: 950;
       }
 
@@ -8947,7 +10706,7 @@ function RosterScreenStyles() {
       .nhlrost-drawer__head button {
         width: 38px;
         height: 38px;
-        border-radius: 14px;
+        border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.12);
         background: rgba(255, 255, 255, 0.055);
         cursor: pointer;
@@ -8963,13 +10722,13 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-drawer__tabs button {
-        min-height: 34px;
-        border-radius: 999px;
+        min-height: 32px;
+        border-radius: var(--radius-ops, 2px);
         border: 1px solid rgba(255, 255, 255, 0.1);
         background: rgba(255, 255, 255, 0.04);
         color: var(--muted);
         cursor: pointer;
-        font-size: 0.68rem;
+        font-size: 0.6875rem;
         font-weight: 950;
         text-transform: uppercase;
         letter-spacing: 0.08em;
@@ -8991,7 +10750,7 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-drawer-section {
-        border-radius: 22px;
+        border-radius: 8px;
         border: 1px solid rgba(255, 255, 255, 0.09);
         background: rgba(255, 255, 255, 0.035);
         padding: 14px;
@@ -9011,7 +10770,7 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-drawer-metric-grid article {
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         background: rgba(255, 255, 255, 0.035);
         padding: 10px;
@@ -9020,7 +10779,7 @@ function RosterScreenStyles() {
       .nhlrost-drawer-metric-grid span {
         display: block;
         color: var(--muted);
-        font-size: 0.62rem;
+        font-size: 0.6875rem;
         text-transform: uppercase;
         letter-spacing: 0.12em;
         font-weight: 950;
@@ -9033,7 +10792,7 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-drawer-player {
-        border-radius: 22px;
+        border-radius: 8px;
         border: 1px solid rgba(255, 255, 255, 0.09);
         background:
           linear-gradient(135deg, rgba(0, 216, 223, 0.08), rgba(255, 255, 255, 0.035)),
@@ -9049,7 +10808,7 @@ function RosterScreenStyles() {
         color: var(--muted);
         text-transform: uppercase;
         letter-spacing: 0.14em;
-        font-size: 0.64rem;
+        font-size: 0.6875rem;
         font-weight: 950;
       }
 
@@ -9081,7 +10840,7 @@ function RosterScreenStyles() {
       .nhlrost-drawer-actions span,
       .nhlrost-drawer-nav-grid button {
         min-height: 42px;
-        border-radius: 16px;
+        border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.1);
         background: rgba(255, 255, 255, 0.04);
         color: var(--text);
@@ -9163,22 +10922,24 @@ function RosterScreenStyles() {
 
         .nhlrost-pool-segment button {
           min-height: 38px;
-          font-size: 0.68rem;
+          font-size: 0.6875rem;
           padding: 0 6px;
         }
 
-        .nhlrost-board-row {
+        .nhlrost-board-row,
+        .nhlrost-board-sheet__head {
           grid-template-columns:
-            132px
-            minmax(120px, 1.2fr)
-            40px
+            minmax(120px, 1.4fr)
             36px
-            72px
-            minmax(92px, 0.8fr)
-            minmax(120px, 1fr)
-            80px;
-          gap: 8px;
-          padding: 8px 10px;
+            44px
+            36px
+            64px
+            minmax(64px, 0.7fr)
+            minmax(72px, 0.75fr)
+            minmax(100px, 1fr)
+            56px;
+          gap: 6px;
+          padding: 0 8px;
         }
       }
 
@@ -9212,8 +10973,14 @@ function RosterScreenStyles() {
           grid-template-columns: 1fr;
         }
 
+        .nhlrost-profile-zone--bio,
+        .nhlrost-profile-zone--draft,
+        .nhlrost-profile-zone--ability,
+        .nhlrost-profile-zone--contract,
         .nhlrost-profile-zone--performance {
-          grid-column: auto;
+          grid-column: 1;
+          grid-row: auto;
+          border-right: 0;
         }
 
         .nhlrost-detail-grid--ratings {
@@ -9225,26 +10992,19 @@ function RosterScreenStyles() {
           max-height: calc(100dvh - 32px);
         }
 
-        .nhlrost-board-row {
-          grid-template-columns: 112px minmax(0, 1.1fr) 36px 36px 70px minmax(140px, 1.2fr) 72px;
+        .nhlrost-board-row,
+        .nhlrost-board-sheet__head {
+          grid-template-columns: minmax(0, 1fr) 36px 44px 36px 64px;
         }
 
-        .nhlrost-player-icon-plate {
-          max-width: 120px;
-          height: 50px;
+        .nhlrost-board-row__role,
+        .nhlrost-board-row__stats,
+        .nhlrost-board-row__avail,
+        .nhlrost-board-sheet__head span:nth-child(n+6) {
+          display: none;
         }
 
-        .nhlrost-player-icon-plate__number {
-          width: 30px;
-          min-width: 30px;
-          height: 44px;
-        }
-
-        .nhlrost-player-icon-plate__portrait .nhlrost-headshot.player-headshot.size-lg {
-          --size: 54px;
-        }
-
-        .nhlrost-board-row__pot {
+        .nhlrost-board-row__status {
           display: none;
         }
       }
@@ -9287,25 +11047,21 @@ function RosterScreenStyles() {
           grid-template-columns: 1fr;
         }
 
-        .nhlrost-board-row {
-          grid-template-columns: 108px minmax(0, 1fr) 32px 32px 56px;
-        }
-
-        .nhlrost-player-icon-plate {
-          max-width: 108px;
-        }
-
-        .nhlrost-player-icon-plate__number span {
-          font-size: 0.88rem;
-        }
-
-        .nhlrost-player-icon-plate__portrait .nhlrost-headshot.player-headshot.size-lg {
-          --size: 48px;
+        .nhlrost-board-row,
+        .nhlrost-board-sheet__head {
+          grid-template-columns: minmax(0, 1fr) 32px 40px;
+          min-height: 38px;
         }
 
         .nhlrost-board-row__age,
-        .nhlrost-board-row__cap {
+        .nhlrost-board-row__contract,
+        .nhlrost-board-row__status,
+        .nhlrost-board-sheet__head span:nth-child(n+4) {
           display: none;
+        }
+
+        .nhlrost-board-row__name .nhlrost-headshot.player-headshot {
+          --size: 24px;
         }
 
         .nhlrost-inspector {
@@ -9324,6 +11080,464 @@ function RosterScreenStyles() {
         .nhlrost-line-row > div,
         .nhlrost-line-section--goalies .nhlrost-line-row > div {
           grid-template-columns: 1fr;
+        }
+      }
+
+      /* ─── Personnel sheet corrections ─────────────────────────────────
+         The roster is an official team sheet, so the header reads as one
+         divided register strip instead of six free-floating metric cards,
+         and every column is wide enough for its own label and values. */
+
+      .nhlrost-command-bar__metrics {
+        gap: 0;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: var(--radius-hud, 4px);
+        background: rgba(4, 16, 26, 0.4);
+        overflow: hidden;
+      }
+
+      .nhlrost-hud-tile {
+        border: 0;
+        border-right: 1px solid rgba(255, 255, 255, 0.07);
+        border-radius: 0;
+        background: transparent;
+        padding: 6px 12px;
+      }
+
+      .nhlrost-hud-tile:last-child {
+        border-right: 0;
+      }
+
+      .nhlrost-command-bar {
+        min-height: 0;
+        padding: 8px 12px;
+      }
+
+      /* CONTRACT was clipped at 72px and AVAIL truncated every value while
+         SEASON held a quarter of the sheet for a single em dash. */
+      .nhlrost-board-sheet__head,
+      .nhlrost-board-row {
+        grid-template-columns:
+          minmax(168px, 1.5fr)
+          44px
+          52px
+          40px
+          86px
+          minmax(76px, 0.7fr)
+          minmax(88px, 0.8fr)
+          minmax(104px, 0.9fr)
+          minmax(92px, 0.72fr);
+      }
+
+      .nhlrost-board-sheet__head span,
+      .nhlrost-board-row__avail,
+      .nhlrost-board-row__status {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* Selection is a single leading rail plus a wash — one treatment, so a
+         selected row cannot be confused with a hover or a status accent. */
+      .nhlrost-board-row.is-selected {
+        background: var(--ops-table-sel, rgba(19, 216, 231, 0.13));
+        box-shadow: inset 3px 0 0 var(--ops-cyan, #13d8e7);
+      }
+
+      .nhlrost-board-row:focus-visible {
+        outline-offset: -2px;
+      }
+
+      /* A pill on every one of 23 rows reads as decoration. In the board the
+         normal state is a quiet mark; only exceptions keep a filled badge. */
+      .nhlrost-board-row .nhlrost-mini-badge.is-good {
+        min-height: 0;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .nhlrost-board-row .nhlrost-mini-badge.is-warn,
+      .nhlrost-board-row .nhlrost-mini-badge.is-bad,
+      .nhlrost-board-row .nhlrost-mini-badge.is-medical {
+        border-radius: var(--radius-ops, 2px);
+      }
+
+      /* One control row: the lone sort field did not need a second band. */
+      .nhlrost-filters-bar {
+        padding-block: 8px;
+      }
+
+      /* ─── Personnel file (player dossier) ─────────────────────────────
+         Previously eighteen identically weighted label/value cards, which
+         gave age, hand, league and cap hit the same importance. Now the
+         file reads as a registry: hairline definition rows under a single
+         section rule, with identity and ability carrying the weight. */
+
+      .nhlrost-profile-modal__panel {
+        border-radius: var(--radius-panel, 10px);
+        max-height: calc(100dvh - 24px);
+      }
+
+      .nhlrost-profile-modal__hero {
+        padding: 10px 16px 8px;
+        border-bottom: 2px solid var(--ops-cyan, #13d8e7);
+      }
+
+      .nhlrost-profile-modal__headshot.player-headshot.size-md {
+        --size: 84px;
+      }
+
+      .nhlrost-profile-modal__meta h2 {
+        font-size: 1.5rem;
+        letter-spacing: 0.01em;
+      }
+
+      .nhlrost-profile-modal__role,
+      .nhlrost-profile-modal__health {
+        border-radius: var(--radius-ops, 2px);
+        padding: 3px 8px;
+      }
+
+      .nhlrost-info-pair {
+        border: 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+        border-radius: 0;
+        background: transparent;
+        padding: 5px 2px;
+        display: grid;
+        grid-template-columns: minmax(78px, 0.85fr) minmax(0, 1fr);
+        align-items: baseline;
+        gap: 10px;
+      }
+
+      .nhlrost-info-pair span {
+        letter-spacing: 0.1em;
+        font-weight: 800;
+      }
+
+      .nhlrost-info-pair strong {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Column separation so a value never reads as part of the next label. */
+      .nhlrost-info-pair:nth-child(odd) {
+        padding-right: 14px;
+      }
+
+      .nhlrost-info-pair:nth-child(even) {
+        padding-left: 14px;
+        border-left: 1px solid rgba(255, 255, 255, 0.07);
+      }
+
+      /* Ability, contract and production are the three registry blocks; the
+         section rule replaces per-card borders. */
+      .nhlrost-profile-scorecard {
+        border: 0;
+        border-left: 3px solid var(--ops-cyan, #13d8e7);
+        border-radius: 0;
+        background: rgba(19, 216, 231, 0.05);
+      }
+
+      .nhlrost-profile-scorecard:nth-child(2) {
+        border-left-color: var(--ops-gold, #e9a83c);
+        background: rgba(233, 168, 60, 0.05);
+      }
+
+      .nhlrost-profile-scorecard:nth-child(3) {
+        border-left-color: var(--ops-info, #8ab4ff);
+        background: rgba(138, 180, 255, 0.05);
+      }
+
+      /* Dossier tabs read as file dividers, not a pill collection. */
+      .nhlrost-detail-tabs {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        gap: 0;
+        padding-inline: 12px;
+      }
+
+      .nhlrost-detail-tabs button {
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        padding: 7px 13px;
+        box-shadow: inset 0 -2px 0 transparent;
+      }
+
+      .nhlrost-detail-tabs button:hover {
+        background: rgba(255, 255, 255, 0.03);
+        box-shadow: inset 0 -2px 0 rgba(19, 216, 231, 0.35);
+      }
+
+      .nhlrost-detail-tabs button.is-active {
+        background: rgba(19, 216, 231, 0.08);
+        color: var(--ops-cyan, #13d8e7);
+        box-shadow: inset 0 -2px 0 var(--ops-cyan, #13d8e7);
+      }
+
+      .nhlrost-profile-modal__body {
+        animation: inspectorSwap 190ms var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)) both;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .nhlrost-profile-modal__body {
+          animation: none !important;
+        }
+      }
+
+      @media (max-height: 800px) {
+        .nhlrost-command-bar {
+          padding: 5px 12px;
+        }
+
+        .nhlrost-hud-tile {
+          padding: 4px 10px;
+        }
+
+        .nhlrost-board-row {
+          min-height: 38px;
+        }
+      }
+
+      /* ─── Dossier: attribute profile, strengths/concerns, development
+         curve, and career registry — flat report sections, not card walls. */
+
+      .nhlrost-overview-ratings-bars {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+      }
+
+      .nhlrost-ratings-expand-toggle {
+        margin-top: 10px;
+        border: 0;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        background: transparent;
+        color: var(--cyan);
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        padding: 8px 0 0;
+        cursor: pointer;
+        width: 100%;
+        text-align: left;
+      }
+
+      .nhlrost-overview-ratings-expanded {
+        margin-top: 10px;
+      }
+
+      .nhlrost-sc-columns {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .nhlrost-sc-column {
+        min-width: 0;
+      }
+
+      .nhlrost-sc-column__label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 0.6875rem;
+        font-weight: 900;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .nhlrost-sc-column__label.is-good {
+        color: var(--green);
+      }
+
+      .nhlrost-sc-column__label.is-warn {
+        color: var(--gold);
+      }
+
+      .nhlrost-sc-column ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .nhlrost-sc-column li {
+        position: relative;
+        padding-left: 12px;
+        font-size: 0.8rem;
+        line-height: 1.4;
+        color: var(--text);
+      }
+
+      .nhlrost-sc-column li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0.55em;
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: var(--muted);
+      }
+
+      .nhlrost-dev-timeline-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .nhlrost-dev-chart {
+        width: 100%;
+        height: auto;
+        margin: 4px 0 6px;
+      }
+
+      .nhlrost-dev-chart__line {
+        stroke: var(--cyan);
+        stroke-width: 2;
+      }
+
+      .nhlrost-dev-chart__dot {
+        fill: var(--cyan);
+      }
+
+      .nhlrost-dev-chart__value {
+        fill: var(--text);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .nhlrost-dev-chart__label {
+        fill: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.04em;
+      }
+
+      .nhlrost-dev-timeline-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+      }
+
+      .nhlrost-dev-timeline-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 48px 48px;
+        align-items: baseline;
+        gap: 10px;
+        padding: 6px 2px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        font-size: 0.8rem;
+      }
+
+      .nhlrost-dev-timeline-row span {
+        color: var(--muted);
+      }
+
+      .nhlrost-dev-timeline-row strong {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .nhlrost-dev-timeline-row em {
+        font-style: normal;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        font-weight: 800;
+        color: var(--muted);
+      }
+
+      .nhlrost-dev-timeline-row em.is-up {
+        color: var(--green);
+      }
+
+      .nhlrost-dev-timeline-row em.is-down {
+        color: var(--red);
+      }
+
+      .nhlrost-table-scroll {
+        overflow-x: auto;
+      }
+
+      .nhlrost-mini-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.8rem;
+      }
+
+      .nhlrost-mini-table th,
+      .nhlrost-mini-table td {
+        padding: 6px 8px;
+        text-align: right;
+        white-space: nowrap;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .nhlrost-mini-table th:first-child,
+      .nhlrost-mini-table td:first-child,
+      .nhlrost-mini-table th:nth-child(2),
+      .nhlrost-mini-table td:nth-child(2),
+      .nhlrost-mini-table th:nth-child(3),
+      .nhlrost-mini-table td:nth-child(3) {
+        text-align: left;
+      }
+
+      .nhlrost-mini-table th {
+        color: var(--muted);
+        font-size: 0.6875rem;
+        font-weight: 900;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+      }
+
+      .nhlrost-award-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .nhlrost-award-list li {
+        position: relative;
+        padding-left: 14px;
+        font-size: 0.84rem;
+      }
+
+      .nhlrost-award-list li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0.5em;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--gold);
+      }
+
+      @media (max-width: 900px) {
+        .nhlrost-sc-columns {
+          grid-template-columns: 1fr;
+        }
+
+        .nhlrost-profile-modal__hero {
+          grid-template-columns: auto minmax(0, 1fr);
+        }
+
+        .nhlrost-profile-modal__nav-close {
+          grid-column: 1 / -1;
+          flex-direction: row;
+          justify-content: space-between;
+          align-items: center;
         }
       }
     `}</style>

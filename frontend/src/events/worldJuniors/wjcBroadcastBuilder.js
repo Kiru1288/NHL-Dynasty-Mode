@@ -382,7 +382,7 @@ export function buildWjcDraftStockRows(payload, franchiseState) {
     return merged.slice(0, 24);
   }
 
-  return asArray(payload?.user_prospects).map((p) => ({
+  const userRows = asArray(payload?.user_prospects).map((p) => ({
     player_id: p.player_id,
     prospect_classification: "drafted_user",
     name: p.name,
@@ -395,6 +395,44 @@ export function buildWjcDraftStockRows(payload, franchiseState) {
     owner_team_abbr: franchiseState?.team?.abbreviation || franchiseState?.team?.abbr || "YOU",
     is_user_prospect: true,
   }));
+  if (userRows.length) return userRows;
+
+  // Pre-tournament: persistent board from draft class rankings (backend entries only).
+  const board = asArray(franchiseState?.draft_class_rankings?.entries);
+  if (!board.length) return [];
+
+  return board
+    .filter((e) => e && (e.name || e.player_name))
+    .slice(0, 24)
+    .map((e) => {
+      const rank = int(e.rank || e.board_rank || 0) || null;
+      const country =
+        e.wjc_country ||
+        e.country_code ||
+        e.nationality ||
+        e.country ||
+        "";
+      return {
+        player_id: e.key || e.player_id || e.id,
+        draft_prospect_id: e.key || e.player_id || e.id,
+        prospect_classification: "draft_eligible",
+        name: e.name || e.player_name,
+        wjc_country: country,
+        wjc_country_label: e.wjc_country_label || e.nationality || country,
+        age: e.age,
+        position: e.position || e.pos,
+        stock_before: rank,
+        stock_after: rank,
+        stock_delta: 0,
+        tournament_pts: 0,
+        tournament_g: 0,
+        tournament_gp: 0,
+        junior_league: e.league || e.junior_league || "",
+        junior_team: e.team || e.junior_team || "",
+        is_user_prospect: false,
+        is_npc: false,
+      };
+    });
 }
 
 export function buildWjcStatLeaders(payload) {

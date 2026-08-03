@@ -1,6 +1,48 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+# 2025–26 NHL CBA payroll range (millions USD).
+# Upper Limit announced at $95.5M; Lower Limit is $16M below Upper Limit.
+NHL_UPPER_LIMIT_BY_SEASON_START: Dict[int, float] = {
+    2024: 88.0,
+    2025: 95.5,
+    2026: 104.0,  # projected band used by public trackers; overridden if league sets explicit
+}
+NHL_CAP_FLOOR_GAP_M = 16.0
+NHL_MINIMUM_SALARY_BY_SEASON_START: Dict[int, float] = {
+    2024: 0.775,
+    2025: 0.775,
+    2026: 0.850,
+}
+NHL_BURY_BONUS_M = 0.375  # CBA: min salary + $375k = bury relief ceiling
+
+
+def nhl_upper_limit_millions(season_start_year: Optional[int] = None) -> float:
+    y = int(season_start_year) if season_start_year is not None else 2025
+    if y in NHL_UPPER_LIMIT_BY_SEASON_START:
+        return float(NHL_UPPER_LIMIT_BY_SEASON_START[y])
+    # Outside table: grow ~8% from 2025 baseline as a soft extrapolation.
+    if y > 2025:
+        return round(95.5 * (1.08 ** (y - 2025)), 1)
+    return 88.0
+
+
+def nhl_lower_limit_millions(season_start_year: Optional[int] = None) -> float:
+    return max(0.0, nhl_upper_limit_millions(season_start_year) - NHL_CAP_FLOOR_GAP_M)
+
+
+def nhl_minimum_salary_millions(season_start_year: Optional[int] = None) -> float:
+    y = int(season_start_year) if season_start_year is not None else 2025
+    if y in NHL_MINIMUM_SALARY_BY_SEASON_START:
+        return float(NHL_MINIMUM_SALARY_BY_SEASON_START[y])
+    if y >= 2026:
+        return 0.850
+    return 0.775
+
+
+def nhl_bury_threshold_millions(season_start_year: Optional[int] = None) -> float:
+    return nhl_minimum_salary_millions(season_start_year) + NHL_BURY_BONUS_M
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -40,6 +82,14 @@ def _season_keys(season_label: Optional[str]) -> List[str]:
     return out
 
 
+def _is_pending_july1_expiry(player: Any) -> bool:
+    """Final-year UFAs deferred for the extension window — not yet off the books."""
+    if bool(_get(player, "pending_july1_expiry", False)):
+        return True
+    c = _get(player, "contract", None)
+    return bool(isinstance(c, dict) and c.get("pending_july1_expiry"))
+
+
 def player_cap_hit_millions(player: Any) -> float:
     for key in ("cap_hit_m", "contract_aav_m", "aav_m", "salary_m"):
         v = normalize_money_to_millions(_get(player, key, 0))
@@ -55,16 +105,30 @@ def player_cap_hit_millions(player: Any) -> float:
     return 0.0
 
 
-def buried_cap_hit_millions(player: Any, league_minimum_m: float = 0.775, burying_bonus_m: float = 0.375) -> float:
+def buried_cap_hit_millions(
+    player: Any,
+    league_minimum_m: float = 0.775,
+    burying_bonus_m: float = 0.375,
+    *,
+    season_start_year: Optional[int] = None,
+) -> float:
+    """NHL CBA bury residual: max(0, AAV − (league min + $375k))."""
     cap_hit = player_cap_hit_millions(player)
     if cap_hit <= 0:
         return 0.0
 
-    buried_flag = bool(_get(player, "is_buried", False) or _get(player, "buried", False) or _get(player, "in_minors", False))
+    buried_flag = bool(
+        _get(player, "is_buried", False)
+        or _get(player, "buried", False)
+        or _get(player, "in_minors", False)
+    )
     if not buried_flag:
         return 0.0
 
-    relief = float(league_minimum_m) + float(burying_bonus_m)
+    if season_start_year is not None:
+        relief = nhl_bury_threshold_millions(season_start_year)
+    else:
+        relief = float(league_minimum_m) + float(burying_bonus_m)
     return max(0.0, cap_hit - relief)
 
 
@@ -76,13 +140,37 @@ def _iter_team_roster(team: Any) -> List[Any]:
         return []
 
 
+def _iter_org_contracted_players(team: Any) -> List[Any]:
+    """NHL roster + AHL/ECHL affiliates (SPC holders can still carry buried cap)."""
+    out: List[Any] = []
+    seen: set = set()
+    for attr in ("roster", "ahl_roster", "echl_roster"):
+        for p in list(_get(team, attr, None) or []):
+            pid = id(p)
+            if pid in seen:
+                continue
+            seen.add(pid)
+            out.append(p)
+    return out
+
+
 def _is_active_roster_player(player: Any) -> bool:
-    return (
-        not bool(_get(player, "retired", False))
-        and not bool(_get(player, "is_buried", False))
-        and not bool(_get(player, "buried", False))
-        and not bool(_get(player, "in_minors", False))
-    )
+    try:
+        from services.roster_compliance import is_active_nhl_roster_player
+
+        return is_active_nhl_roster_player(player)
+    except Exception:
+        return (
+            not bool(_get(player, "retired", False))
+            and not bool(_get(player, "is_buried", False))
+            and not bool(_get(player, "buried", False))
+            and not bool(_get(player, "in_minors", False))
+            and not bool(_get(player, "on_ir", False))
+            and not bool(_get(player, "on_ltir", False))
+            and not bool(_get(player, "is_ir", False))
+            and not bool(_get(player, "is_ltir", False))
+            and not bool(_get(player, "excluded_from_cap_while_ltir", False))
+        )
 
 
 def team_active_roster_cap_hit_millions(team: Any) -> float:
@@ -90,17 +178,67 @@ def team_active_roster_cap_hit_millions(team: Any) -> float:
     for p in _iter_team_roster(team):
         if not _is_active_roster_player(p):
             continue
+        # Deferred July-1 UFAs stay on the roster for extension talks, but their
+        # AAV must not squat usable opening-day space (re-sign / FA desk).
+        if _is_pending_july1_expiry(p):
+            continue
         total += player_cap_hit_millions(p)
     return max(0.0, total)
 
 
-def team_buried_cap_hit_millions(team: Any) -> float:
+def team_buried_cap_hit_millions(team: Any, *, season_start_year: Optional[int] = None) -> float:
+    """Sum bury residuals for minors/AHL/ECHL SPC holders (NHL CBA)."""
     total = 0.0
-    for p in _iter_team_roster(team):
+    for p in _iter_org_contracted_players(team):
         if bool(_get(p, "retired", False)):
             continue
-        total += buried_cap_hit_millions(p)
+        # Active NHL roster players are never buried residual.
+        if _is_active_roster_player(p):
+            continue
+        total += buried_cap_hit_millions(p, season_start_year=season_start_year)
     return max(0.0, total)
+
+
+def _season_start_year_from_label(season_label: Optional[str], league: Any = None) -> Optional[int]:
+    if season_label:
+        try:
+            return int(str(season_label).split("-")[0])
+        except Exception:
+            pass
+    for key in ("season_year", "season_start_year", "current_season_year"):
+        v = _get(league, key, None)
+        if v is not None:
+            try:
+                return int(v)
+            except Exception:
+                pass
+    return None
+
+
+def apply_nhl_salary_cap_for_season(league: Any, season_start_year: int) -> Dict[str, float]:
+    """Stamp league upper/lower limits to the real NHL payroll range for the season."""
+    upper = nhl_upper_limit_millions(season_start_year)
+    lower = nhl_lower_limit_millions(season_start_year)
+    try:
+        setattr(league, "salary_cap_m", float(upper))
+        setattr(league, "salary_cap", float(upper))
+        setattr(league, "cap_floor_m", float(lower))
+        setattr(league, "cap_floor", float(lower))
+        setattr(league, "season_year", int(season_start_year))
+    except Exception:
+        pass
+    econ = _get(league, "economics", None)
+    if econ is not None:
+        try:
+            if isinstance(econ, dict):
+                econ["salary_cap"] = float(upper)
+                econ["cap_floor"] = float(lower)
+            else:
+                setattr(econ, "salary_cap", float(upper))
+                setattr(econ, "cap_floor", float(lower))
+        except Exception:
+            pass
+    return {"upper": upper, "lower": lower}
 
 
 def _sum_money_records_millions(records: Any, season_label: Optional[str] = None) -> float:
@@ -219,6 +357,10 @@ def team_ltir_pool_millions(team: Any) -> float:
 
 
 def _league_cap_bounds_millions(league: Any, sim: Any) -> Dict[str, float]:
+    season_y = _season_start_year_from_label(None, league)
+    default_upper = nhl_upper_limit_millions(season_y)
+    default_lower = nhl_lower_limit_millions(season_y)
+
     # First choice: explicit league attrs.
     if league is not None:
         upper = normalize_money_to_millions(
@@ -229,7 +371,7 @@ def _league_cap_bounds_millions(league: Any, sim: Any) -> Dict[str, float]:
         )
         if upper > 0:
             if floor <= 0:
-                floor = upper * 0.74
+                floor = max(0.0, upper - NHL_CAP_FLOOR_GAP_M)
             return {"upper": upper, "lower": floor}
 
         econ = _get(league, "economics", None)
@@ -237,7 +379,7 @@ def _league_cap_bounds_millions(league: Any, sim: Any) -> Dict[str, float]:
         floor = normalize_money_to_millions(_get(econ, "cap_floor", 0))
         if upper > 0:
             if floor <= 0:
-                floor = upper * 0.74
+                floor = max(0.0, upper - NHL_CAP_FLOOR_GAP_M)
             return {"upper": upper, "lower": floor}
 
     # Fallback: sim context economics payload.
@@ -247,10 +389,12 @@ def _league_cap_bounds_millions(league: Any, sim: Any) -> Dict[str, float]:
             econ = (_get(_get(sim, "league", None), "get_league_context", lambda: {})() or {}).get("economics") or {}
         except Exception:
             econ = {}
-    upper = normalize_money_to_millions(econ.get("salary_cap", 92_000_000.0))
-    lower = normalize_money_to_millions(econ.get("cap_floor", upper * 0.74))
+    upper = normalize_money_to_millions(econ.get("salary_cap", default_upper))
+    lower = normalize_money_to_millions(econ.get("cap_floor", default_lower))
+    if upper <= 0:
+        upper = default_upper
     if lower <= 0:
-        lower = upper * 0.74
+        lower = max(0.0, upper - NHL_CAP_FLOOR_GAP_M)
     return {"upper": upper, "lower": lower}
 
 
@@ -346,11 +490,13 @@ def calculate_team_cap_snapshot(
     bounds = _league_cap_bounds_millions(league, sim)
     upper_limit_m = max(0.0, bounds["upper"])
     lower_limit_m = max(0.0, bounds["lower"])
+    season_y = _season_start_year_from_label(season_label, league)
 
     active_m = team_active_roster_cap_hit_millions(team)
-    if active_m <= 0.0:
-        active_m = max(0.0, normalize_money_to_millions(_get(team, "total_cap_hit", 0.0)))
-    buried_m = team_buried_cap_hit_millions(team)
+    # Do NOT fall back to team.total_cap_hit when active is 0 — that mirror is the
+    # FULL snapshot total and reinstates pending July-1 UFAs (and double-counts
+    # buried/bonus), leaving every club at ~$0 usable space for FA.
+    buried_m = team_buried_cap_hit_millions(team, season_start_year=season_y)
     retained_m = team_retained_salary_millions(team, season_label=season_label)
     buyout_m = team_buyout_cap_hit_millions(team, season_label=season_label)
     bonus_overage_m = team_bonus_overage_millions(team, season_label=season_label)
@@ -580,9 +726,80 @@ def can_recall_player(team: Any, player: Any, league: Any = None) -> Dict[str, A
 CONTRACT_SLOTS_LIMIT = 50
 
 
+_NON_NHL_SPC_TYPES = frozenset({
+    "AHL", "ECHL", "AHL_ECHL", "PTO", "ATO", "TRYOUT",
+    "AHL_ONLY", "ECHL_ONLY", "AHLONLY", "ECHLONLY", "MINORS", "MINOR",
+})
+_NHL_SPC_ALIASES = {
+    "SPC": "STANDARD",
+    "NHL": "STANDARD",
+    "NHL_SPC": "STANDARD",
+    "ONE_WAY": "STANDARD",
+    "TWO_WAY": "STANDARD",
+    "TWOWAY": "STANDARD",
+    "ONEWAY": "STANDARD",
+    "ENTRY_LEVEL": "ELC",
+    "ENTRYLEVEL": "ELC",
+}
+
+
+def _normalize_contract_type_token(raw: Any) -> str:
+    s = str(raw or "").strip().upper().replace("-", "_").replace(" ", "_")
+    while "__" in s:
+        s = s.replace("__", "_")
+    if s in _NHL_SPC_ALIASES:
+        return _NHL_SPC_ALIASES[s]
+    if s in ("AHL_ONLY", "AHLONLY"):
+        return "AHL"
+    if s in ("ECHL_ONLY", "ECHLONLY"):
+        return "ECHL"
+    return s or "STANDARD"
+
+
 def _player_has_active_contract(player: Any) -> bool:
+    """NHL SPC only — pure AHL/ECHL/PTO deals do not consume the 50-contract limit.
+
+    Prefer explicit is_nhl_spc / standard_player_contract. Retained-salary records
+    are not players and are never scanned here; the acquiring club holds the SPC.
+    """
+    if bool(_get(player, "retired", False)):
+        return False
+    if str(_get(player, "signed_status", "") or "").lower() == "unsigned":
+        return False
+    c = getattr(player, "contract", None)
+    if _get(c, "is_nhl_spc", None) is False or _get(player, "is_nhl_spc", None) is False:
+        return False
+    if _get(c, "standard_player_contract", None) is False:
+        return False
+    ctype = _normalize_contract_type_token(
+        _get(c, "contract_type", None)
+        or _get(c, "type", None)
+        or _get(player, "contract_type", None)
+        or _get(player, "type", None)
+        or ""
+    )
+    if ctype in _NON_NHL_SPC_TYPES:
+        return False
+    if _get(c, "is_nhl_spc", None) is True or _get(c, "standard_player_contract", None) is True:
+        yrs_ok = False
+        for obj in (player, c):
+            if obj is None:
+                continue
+            for key in ("years_remaining", "term_remaining", "remaining_years", "term"):
+                val = _get(obj, key, None)
+                if val is None:
+                    continue
+                try:
+                    if int(val) > 0:
+                        yrs_ok = True
+                        break
+                except (TypeError, ValueError):
+                    continue
+            if yrs_ok:
+                break
+        return yrs_ok
     yrs = 0
-    for obj in (player, getattr(player, "contract", None)):
+    for obj in (player, c):
         if obj is None:
             continue
         for key in ("years_remaining", "term_remaining", "remaining_years", "term"):
@@ -593,31 +810,30 @@ def _player_has_active_contract(player: Any) -> bool:
                 yrs = max(yrs, int(val))
             except (TypeError, ValueError):
                 continue
-    if yrs <= 0:
-        return False
-    return player_cap_hit_millions(player) > 0 or yrs > 0
+    return yrs > 0
+
+
+def _org_slot_dedupe_key(player: Any) -> str:
+    pid = str(_get(player, "id", "") or _get(player, "player_id", "") or "")
+    if pid:
+        return f"id:{pid}"
+    return f"obj:{id(player)}"
 
 
 def count_team_contract_slots(team: Any) -> int:
-    """Count distinct players under contract on NHL roster + prospect_pool."""
+    """Count distinct NHL SPCs across roster + AHL + ECHL + prospect_pool."""
     seen: set = set()
     count = 0
-    for p in list(getattr(team, "roster", None) or []):
-        if bool(_get(p, "retired", False)):
-            continue
-        pid = str(_get(p, "id", "") or "")
-        if not pid or pid in seen:
-            continue
-        if _player_has_active_contract(p):
-            count += 1
-            seen.add(pid)
-    for p in list(getattr(team, "prospect_pool", None) or []):
-        pid = str(_get(p, "id", "") or "")
-        if not pid or pid in seen:
-            continue
-        if _player_has_active_contract(p):
-            count += 1
-            seen.add(pid)
+    for attr in ("roster", "ahl_roster", "echl_roster", "prospect_pool"):
+        for p in list(getattr(team, attr, None) or []):
+            if bool(_get(p, "retired", False)):
+                continue
+            key = _org_slot_dedupe_key(p)
+            if key in seen:
+                continue
+            if _player_has_active_contract(p):
+                count += 1
+                seen.add(key)
     return count
 
 

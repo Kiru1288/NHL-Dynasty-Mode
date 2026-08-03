@@ -9,8 +9,8 @@ export function GameHeader({ teamName, sectionTitle, showEspn }) {
       </div>
       <div className="game-header__section">{sectionTitle}</div>
       <div className="game-header__brand">
-        {showEspn !== false && <span className="game-header__espn">ESPN</span>}
-        <span className="game-header__tag">NHL FRANCHISE</span>
+        {showEspn !== false && <span className="game-header__espn">FCN</span>}
+        <span className="game-header__tag">FRANCHISE COMMAND NETWORK</span>
       </div>
     </header>
   );

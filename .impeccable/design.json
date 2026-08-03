@@ -1,0 +1,301 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-28T20:30:00.000Z",
+  "title": "Design System: NHL Franchise Mode",
+  "extensions": {
+    "colorMeta": {
+      "rink-cyan": {
+        "role": "primary",
+        "displayName": "Rink Cyan",
+        "canonical": "#13d8e7",
+        "tonalRamp": ["oklch(15.0% 0.140 210)", "oklch(25.0% 0.140 210)", "oklch(35.0% 0.140 210)", "oklch(45.0% 0.140 210)", "oklch(55.0% 0.140 210)", "oklch(70.0% 0.140 210)", "oklch(85.0% 0.140 210)", "oklch(95.0% 0.140 210)"]
+      },
+      "deadline-gold": {
+        "role": "secondary",
+        "displayName": "Deadline Gold",
+        "canonical": "#e9a83c",
+        "tonalRamp": ["oklch(15.0% 0.140 75)", "oklch(25.0% 0.140 75)", "oklch(35.0% 0.140 75)", "oklch(45.0% 0.140 75)", "oklch(55.0% 0.140 75)", "oklch(70.0% 0.140 75)", "oklch(85.0% 0.140 75)", "oklch(95.0% 0.140 75)"]
+      },
+      "office-brass": {
+        "role": "secondary",
+        "displayName": "Office Brass",
+        "canonical": "#c9a86a",
+        "tonalRamp": ["oklch(15.0% 0.080 85)", "oklch(25.0% 0.080 85)", "oklch(35.0% 0.080 85)", "oklch(45.0% 0.080 85)", "oklch(55.0% 0.080 85)", "oklch(70.0% 0.080 85)", "oklch(85.0% 0.080 85)", "oklch(95.0% 0.080 85)"]
+      },
+      "arena-orange": {
+        "role": "tertiary",
+        "displayName": "Arena Orange",
+        "canonical": "#e07020",
+        "tonalRamp": ["oklch(15.0% 0.160 45)", "oklch(25.0% 0.160 45)", "oklch(35.0% 0.160 45)", "oklch(45.0% 0.160 45)", "oklch(55.0% 0.160 45)", "oklch(70.0% 0.160 45)", "oklch(85.0% 0.160 45)", "oklch(95.0% 0.160 45)"]
+      },
+      "franchise-violet": {
+        "role": "tertiary",
+        "displayName": "Franchise Violet",
+        "canonical": "#7b3eb0",
+        "tonalRamp": ["oklch(15.0% 0.180 305)", "oklch(25.0% 0.180 305)", "oklch(35.0% 0.180 305)", "oklch(45.0% 0.180 305)", "oklch(55.0% 0.180 305)", "oklch(70.0% 0.180 305)", "oklch(85.0% 0.180 305)", "oklch(95.0% 0.180 305)"]
+      },
+      "ice-neon": {
+        "role": "tertiary",
+        "displayName": "Ice Neon",
+        "canonical": "#38bdf8",
+        "tonalRamp": ["oklch(15.0% 0.120 230)", "oklch(25.0% 0.120 230)", "oklch(35.0% 0.120 230)", "oklch(45.0% 0.120 230)", "oklch(55.0% 0.120 230)", "oklch(70.0% 0.120 230)", "oklch(85.0% 0.120 230)", "oklch(95.0% 0.120 230)"]
+      },
+      "nhl-signal-red": {
+        "role": "tertiary",
+        "displayName": "NHL Signal Red",
+        "canonical": "#c8102e",
+        "tonalRamp": ["oklch(15.0% 0.200 25)", "oklch(25.0% 0.200 25)", "oklch(35.0% 0.200 25)", "oklch(45.0% 0.200 25)", "oklch(55.0% 0.200 25)", "oklch(70.0% 0.200 25)", "oklch(85.0% 0.200 25)", "oklch(95.0% 0.200 25)"]
+      },
+      "void-teal": {
+        "role": "neutral",
+        "displayName": "Void Teal",
+        "canonical": "#04101a",
+        "tonalRamp": ["oklch(15.0% 0.030 230)", "oklch(25.0% 0.030 230)", "oklch(35.0% 0.030 230)", "oklch(45.0% 0.030 230)", "oklch(55.0% 0.030 230)", "oklch(70.0% 0.030 230)", "oklch(85.0% 0.030 230)", "oklch(95.0% 0.030 230)"]
+      },
+      "void-navy": {
+        "role": "neutral",
+        "displayName": "Void Navy",
+        "canonical": "#03050c",
+        "tonalRamp": ["oklch(8.0% 0.025 260)", "oklch(15.0% 0.025 260)", "oklch(25.0% 0.025 260)", "oklch(35.0% 0.025 260)", "oklch(45.0% 0.025 260)", "oklch(60.0% 0.025 260)", "oklch(80.0% 0.020 260)", "oklch(95.0% 0.010 260)"]
+      },
+      "office-charcoal": {
+        "role": "neutral",
+        "displayName": "Office Charcoal",
+        "canonical": "#101218",
+        "tonalRamp": ["oklch(10.0% 0.015 260)", "oklch(18.0% 0.015 260)", "oklch(28.0% 0.015 260)", "oklch(38.0% 0.015 260)", "oklch(50.0% 0.015 260)", "oklch(65.0% 0.012 260)", "oklch(80.0% 0.010 85)", "oklch(94.0% 0.010 85)"]
+      },
+      "text-ice": {
+        "role": "neutral",
+        "displayName": "Text Ice",
+        "canonical": "#e9f7fb",
+        "tonalRamp": ["oklch(15.0% 0.020 210)", "oklch(25.0% 0.020 210)", "oklch(35.0% 0.020 210)", "oklch(45.0% 0.020 210)", "oklch(55.0% 0.020 210)", "oklch(70.0% 0.020 210)", "oklch(85.0% 0.020 210)", "oklch(95.0% 0.020 210)"]
+      },
+      "muted-ops": {
+        "role": "neutral",
+        "displayName": "Muted Ops",
+        "canonical": "#8096a8",
+        "tonalRamp": ["oklch(20.0% 0.025 230)", "oklch(30.0% 0.025 230)", "oklch(40.0% 0.025 230)", "oklch(50.0% 0.030 230)", "oklch(58.0% 0.030 230)", "oklch(70.0% 0.025 230)", "oklch(82.0% 0.020 230)", "oklch(94.0% 0.015 230)"]
+      },
+      "status-green": {
+        "role": "tertiary",
+        "displayName": "Status Green",
+        "canonical": "#52df94",
+        "tonalRamp": ["oklch(15.0% 0.150 155)", "oklch(25.0% 0.150 155)", "oklch(35.0% 0.150 155)", "oklch(45.0% 0.150 155)", "oklch(55.0% 0.150 155)", "oklch(70.0% 0.150 155)", "oklch(85.0% 0.150 155)", "oklch(95.0% 0.150 155)"]
+      },
+      "status-red": {
+        "role": "tertiary",
+        "displayName": "Status Red",
+        "canonical": "#ff606d",
+        "tonalRamp": ["oklch(15.0% 0.180 20)", "oklch(25.0% 0.180 20)", "oklch(35.0% 0.180 20)", "oklch(45.0% 0.180 20)", "oklch(55.0% 0.180 20)", "oklch(70.0% 0.180 20)", "oklch(85.0% 0.180 20)", "oklch(95.0% 0.180 20)"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Office sanctum titles and condensed franchise identity (Archivo Black)."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Franchise Shell chrome headers (Chakra Petch)."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Board section headers and event titles — heavy Inter, tracked uppercase."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Tables, descriptions, and feed copy on dark panels."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Phase chips, column headers, and meta kickers — uppercase tracked."
+      }
+    },
+    "shadows": [
+      {
+        "name": "board-lift",
+        "value": "0 24px 70px rgba(0, 0, 0, 0.42)",
+        "purpose": "Ops and cinematic event panels."
+      },
+      {
+        "name": "hud-lift",
+        "value": "0 18px 42px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.04)",
+        "purpose": "Office HUD cards over the 3D hub."
+      },
+      {
+        "name": "shell-glass",
+        "value": "0 12px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06)",
+        "purpose": "Franchise Shell glass panels (.hub-glass)."
+      },
+      {
+        "name": "cyan-active-glow",
+        "value": "0 0 22px rgba(19, 216, 231, 0.8)",
+        "purpose": "Active ops nav rail indicator."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-interactive",
+        "value": "0.24s ease",
+        "purpose": "Default transform/border/background transitions on interactive shell controls."
+      },
+      {
+        "name": "hub-bg-drift",
+        "value": "28s ease-in-out infinite alternate",
+        "purpose": "Slow radial glow drift on the franchise canvas."
+      },
+      {
+        "name": "hub-noise",
+        "value": "6s steps(4) infinite",
+        "purpose": "Subtle grain opacity pulse (~3–5%)."
+      },
+      {
+        "name": "tooltip-in",
+        "value": "0.22s ease",
+        "purpose": "Tooltip opacity/transform reveal."
+      }
+    ],
+    "breakpoints": [
+      { "name": "phone", "value": "560px" },
+      { "name": "compact", "value": "680px" },
+      { "name": "tablet", "value": "900px" },
+      { "name": "laptop", "value": "1100px" },
+      { "name": "wide", "value": "1400px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Ops Primary Button",
+      "kind": "button",
+      "refersTo": "button-ops-primary",
+      "description": "Broadcast Ops primary action — rink cyan fill, tracked uppercase label.",
+      "html": "<button class=\"ds-btn-ops-primary\" type=\"button\">ADVANCE DAY</button>",
+      "css": ".ds-btn-ops-primary { background: #13d8e7; color: #04101a; border: 0; border-radius: 6px; padding: 10px 16px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 0.72rem; font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer; transition: background 0.2s ease, transform 0.2s ease; } .ds-btn-ops-primary:hover { background: #38bdf8; } .ds-btn-ops-primary:focus-visible { outline: 2px solid #13d8e7; outline-offset: 2px; } .ds-btn-ops-primary:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Ops Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ops-ghost",
+      "description": "Secondary event/ops action — pill ghost with cyan hover wash.",
+      "html": "<button class=\"ds-btn-ops-ghost\" type=\"button\">CONTINUE</button>",
+      "css": ".ds-btn-ops-ghost { background: rgba(12, 31, 47, 0.72); color: #e9f7fb; border: 1px solid rgba(156, 218, 236, 0.14); border-radius: 999px; padding: 0.45rem 0.9rem; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 0.78rem; font-weight: 700; cursor: pointer; transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease; } .ds-btn-ops-ghost:hover { border-color: rgba(73, 231, 240, 0.5); background: rgba(19, 216, 231, 0.12); transform: translateY(-1px); } .ds-btn-ops-ghost:focus-visible { outline: 2px solid #13d8e7; outline-offset: 2px; }"
+    },
+    {
+      "name": "Shell Accent Button",
+      "kind": "button",
+      "refersTo": "button-shell-accent",
+      "description": "Franchise Shell CTA using arena orange chrome.",
+      "html": "<button class=\"ds-btn-shell\" type=\"button\">SIM</button>",
+      "css": ".ds-btn-shell { background: #e07020; color: #eef0f5; border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 8px 14px; font-family: \"Chakra Petch\", \"Arial Black\", sans-serif; font-size: 0.8rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; transition: filter 0.24s ease, transform 0.24s ease; } .ds-btn-shell:hover { filter: brightness(1.08); transform: scale(1.03); } .ds-btn-shell:focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; } .ds-btn-shell:active { transform: scale(0.98); }"
+    },
+    {
+      "name": "Ops Panel",
+      "kind": "card",
+      "refersTo": "panel-ops",
+      "description": "Translucent broadcast board surface with hairline cyan border and board lift.",
+      "html": "<section class=\"ds-panel-ops\"><header class=\"ds-panel-ops__head\">LEAGUE DAY</header><p class=\"ds-panel-ops__body\">Next: vs TOR — manage roster before puck drop.</p></section>",
+      "css": ".ds-panel-ops { background: rgba(9, 25, 38, 0.94); color: #e9f7fb; border: 1px solid rgba(156, 218, 236, 0.14); border-radius: 8px; padding: 16px; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42); font-family: Inter, ui-sans-serif, system-ui, sans-serif; } .ds-panel-ops__head { margin: 0 0 8px; font-size: 0.72rem; font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; color: #8096a8; } .ds-panel-ops__body { margin: 0; font-size: 0.875rem; line-height: 1.45; color: #e9f7fb; }"
+    },
+    {
+      "name": "Office HUD Card",
+      "kind": "card",
+      "refersTo": "panel-office-hud",
+      "description": "Frosted sanctum HUD overlay with brass accent bar.",
+      "html": "<aside class=\"ds-office-hud\"><div class=\"ds-office-hud__kicker\">FRANCHISE</div><div class=\"ds-office-hud__title\">TORONTO MAPLE LEAFS</div><div class=\"ds-office-hud__meta\">Cap space · Ready</div></aside>",
+      "css": ".ds-office-hud { position: relative; max-width: 320px; padding: 12px 16px; border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; background: linear-gradient(180deg, rgba(8,10,14,0.94), rgba(4,6,10,0.88)); color: #ece8e0; box-shadow: 0 18px 42px rgba(0,0,0,0.48), inset 0 1px 0 rgba(255,255,255,0.04); font-family: \"Archivo Black\", Rajdhani, \"Arial Narrow\", sans-serif; letter-spacing: 0.03em; } .ds-office-hud::before { content: \"\"; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, #c9a86a, transparent); opacity: 0.55; } .ds-office-hud__kicker { font-size: 0.65rem; color: rgba(220,216,208,0.58); text-transform: uppercase; letter-spacing: 0.14em; } .ds-office-hud__title { margin-top: 4px; font-size: 1rem; color: #ece8e0; } .ds-office-hud__meta { margin-top: 6px; font-size: 0.72rem; color: #c9a86a; }"
+    },
+    {
+      "name": "Ops Side Nav Active",
+      "kind": "nav",
+      "refersTo": "nav-ops-active",
+      "description": "Narrow ops rail item with cyan wash and glowing left bar.",
+      "html": "<button class=\"ds-nav-ops is-active\" type=\"button\"><span class=\"ds-nav-ops__icon\" aria-hidden=\"true\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"18\" rx=\"2\"/><path d=\"M16 2v4M8 2v4M3 10h18\"/></svg></span><span class=\"ds-nav-ops__label\">CAL</span></button>",
+      "css": ".ds-nav-ops { position: relative; display: grid; place-items: center; gap: 6px; width: 100%; padding: 14px 8px; border: 0; background: transparent; color: #8096a8; cursor: pointer; font-family: Inter, ui-sans-serif, system-ui, sans-serif; } .ds-nav-ops.is-active { color: #13d8e7; background: linear-gradient(90deg, rgba(19,216,231,0.17), rgba(19,216,231,0.03)); } .ds-nav-ops.is-active::before { content: \"\"; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 999px; background: #13d8e7; box-shadow: 0 0 22px rgba(19,216,231,0.8); } .ds-nav-ops__label { font-size: 0.65rem; font-weight: 900; letter-spacing: 0.14em; } .ds-nav-ops:hover { color: #e9f7fb; } .ds-nav-ops:focus-visible { outline: 2px solid #13d8e7; outline-offset: -2px; }"
+    },
+    {
+      "name": "Live Chip",
+      "kind": "chip",
+      "refersTo": "chip-live",
+      "description": "Pill status chip for live/phase meta on ops boards.",
+      "html": "<span class=\"ds-chip-live\">LIVE · REG SEASON</span>",
+      "css": ".ds-chip-live { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; background: rgba(19, 216, 231, 0.17); color: #13d8e7; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 0.68rem; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; }"
+    },
+    {
+      "name": "Ops Text Field",
+      "kind": "input",
+      "refersTo": null,
+      "description": "Dark translucent field with cyan focus border for ops tools.",
+      "html": "<label class=\"ds-field\"><span class=\"ds-field__label\">GM NAME</span><input class=\"ds-field__input\" type=\"text\" value=\"Quinn\" /></label>",
+      "css": ".ds-field { display: grid; gap: 6px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #e9f7fb; } .ds-field__label { font-size: 0.68rem; font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; color: #8096a8; } .ds-field__input { background: rgba(12, 35, 52, 0.94); color: #e9f7fb; border: 1px solid rgba(156, 218, 236, 0.14); border-radius: 6px; padding: 10px 12px; font: inherit; font-size: 0.875rem; outline: none; transition: border-color 0.2s ease, box-shadow 0.2s ease; } .ds-field__input:hover { border-color: rgba(115, 229, 241, 0.25); } .ds-field__input:focus { border-color: rgba(73, 231, 240, 0.5); box-shadow: 0 0 0 3px rgba(19, 216, 231, 0.13); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The GM War Room",
+    "overview": "This product looks and feels like the private command center of an NHL general manager: a dark sanctum you return to, then luminous ops boards and broadcast nights when the league calendar demands attention. The visual system is intentionally multi-register—not one flat theme—because the season job itself switches between sitting in the office, working dense tools, and living cinematic events.\n\nHome is the Office Sanctum: warm charcoal, brass gold, condensed display type, glass HUD cards over a 3D office. Tools and many events speak Broadcast Ops: deep teal void, rink cyan accents, deadline gold highlights, hairline cyan rules, Inter UI. A third Franchise Shell register (navy, violet, arena orange, ice neon; Chakra Petch + IBM Plex) still wraps the app canvas and some hub chrome. Legacy NHL signal red remains available for older menu primitives but is not the default voice of new work.\n\nAtmosphere is glass over the void: depth comes from stacked dark tones, frosted panels, soft inset highlights, and structural drop shadows—not from bright flat cards. Dense tables stay flatter; HUD cards and event boards lift. Reject light “sports marketing” dashboards, purple-on-white AI defaults, and toy/cartoon UI that breaks season-job seriousness.",
+    "keyCharacteristics": [
+      "Multi-register dark system: Office Sanctum → Broadcast Ops → Franchise Shell",
+      "Cyan + gold as the ops/event accent pair; brass gold for office home",
+      "Glass panels, radial void glows, film grain / noise at very low opacity",
+      "Condensed uppercase labels; heavy tracking on phase/meta text",
+      "Sharp-to-soft radius ladder: 2px ops → 4px HUD → 8–12px cards → pills for chips"
+    ],
+    "rules": [
+      {
+        "name": "The Scarce Light Rule",
+        "body": "Luminous accents (cyan, gold, brass, orange) should read as signals on a dark field—never as large flooded backgrounds. Soft washes exist so fills stay translucent.",
+        "section": "colors"
+      },
+      {
+        "name": "The Register Rule",
+        "body": "Do not mash Office Brass chrome onto a Broadcast Ops board, or Franchise Violet into the 3D office HUD, without an intentional scene transition. Each register keeps its accent family.",
+        "section": "colors"
+      },
+      {
+        "name": "The Phase Label Rule",
+        "body": "Calendar phase, live status, and event kickers are uppercase tracked labels—not sentence-case chips. Their typography is part of the broadcast language.",
+        "section": "typography"
+      },
+      {
+        "name": "The Office Type Rule",
+        "body": "Inside .office-hub, inherit Archivo Black / motion-control; do not silently switch to Inter for primary HUD chrome.",
+        "section": "typography"
+      },
+      {
+        "name": "The Home Base Rule",
+        "body": "After tools and events, return visual gravity to the office sanctum—not to a generic dashboard home.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat-Table Rule",
+        "body": "Data grids and long lists stay relatively flat; reserve heavy shadows for HUD cards, modal boards, and featured event panels.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Grain Whisper Rule",
+        "body": "Film-grain / noise overlays stay around ~3–5% opacity. Atmosphere, not texture wallpaper.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Radius Ladder Rule",
+        "body": "Pick radius from the register’s step; don’t invent a new corner language per screen.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "Do treat the Office Sanctum as home and Broadcast Ops as the default language for calendar/tools/events.",
+      "Do keep accents scarce on dark voids; use soft washes for fills.",
+      "Do use uppercase tracked labels for phase, live, and meta chrome.",
+      "Do climb the radius ladder (2 → 4 → 6 → 8–12 → pill) instead of inventing corners.",
+      "Do lift HUD cards and event boards; keep dense tables flatter.",
+      "Do preserve existing team logos, real NHL abbreviations, and sim terminology in UI chrome."
+    ],
+    "donts": [
+      "Don't flood screens with purple/orange shell glow inside the office sanctum or cyan boards.",
+      "Don't introduce light-mode paper backgrounds or large white cards as the default surface.",
+      "Don't replace Archivo Black office HUD type with Inter (or Inter ops boards with Cookie/display novelty fonts) without a scene reason.",
+      "Don't use heavy grain, neon everything, or emoji as decoration.",
+      "Don't fabricate broadcast network branding, NHL/EA logos as product identity, or fake endorsements in chrome.",
+      "Don't flatten cinematic events into ordinary CRUD pages—ceremony is part of the system."
+    ]
+  }
+}

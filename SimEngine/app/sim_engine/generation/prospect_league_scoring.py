@@ -719,6 +719,56 @@ def _simulate_skater_games(
     cur_gp = _safe_int(stats.get("gp"), 0)
     cur_pim = _safe_int(stats.get("pim"), 0)
 
+    # Large catch-up (season/bulk end): aggregate sampling — same expected totals,
+    # O(chunks) instead of O(delta_gp) per-game loops across thousands of prospects.
+    if delta_gp > 16:
+        chunks = min(12, delta_gp)
+        base = delta_gp // chunks
+        rem = delta_gp % chunks
+        for i in range(chunks):
+            n = base + (1 if i < rem else 0)
+            if n <= 0:
+                continue
+            streak = 1.0
+            if len(recent) >= 3:
+                avg3 = sum(recent[-3:]) / 3.0
+                if avg3 >= target_ppg * 1.35:
+                    streak = rng.uniform(0.90, 1.02)
+                elif avg3 <= target_ppg * 0.55:
+                    streak = rng.uniform(0.98, 1.10)
+            game_lam = target_ppg * streak * n
+            hot_game = offensive >= 0.80 and rng.random() < min(0.25, 0.035 * n)
+            if _has_character_concerns(prospect) and rng.random() < min(0.2, 0.04 * n):
+                chunk_pts = max(0, int(round(game_lam * rng.uniform(0.35, 0.7))))
+            else:
+                chunk_pts = _sample_prospect_game_points(
+                    game_lam,
+                    rng,
+                    overdispersion=vol,
+                    hot_game=hot_game,
+                    elite_tail=offensive >= 0.76,
+                )
+            # Spread a few recent samples for form/stock (not one giant game).
+            per = max(0, chunk_pts // max(1, n))
+            leftover = max(0, chunk_pts - per * n)
+            for j in range(min(n, 8)):
+                recent.append(per + (1 if j < leftover else 0))
+            if len(recent) > 8:
+                recent = recent[-8:]
+            cur_pts += chunk_pts
+            cur_gp += n
+            if style in ("grinder", "power_forward"):
+                cur_pim += int(rng.randint(0, 4) * n * 0.55)
+            else:
+                cur_pim += int(rng.randint(0, 2) * n * 0.35)
+        stats["gp"] = cur_gp
+        stats["games_played"] = cur_gp
+        stats["points"] = cur_pts
+        stats["pim"] = cur_pim
+        stats["_recent_game_points"] = recent
+        _recalc_skater_line_from_totals(stats, style, rng)
+        return
+
     for _ in range(delta_gp):
         streak = 1.0
         if len(recent) >= 3:
@@ -786,6 +836,44 @@ def _simulate_goalie_games(
     gaa_samples: List[float] = list(stats.get("_gaa_samples") or [])
 
     win_rate = proj_w / float(proj_gp)
+    if delta_gp > 16:
+        chunks = min(12, delta_gp)
+        base = delta_gp // chunks
+        rem = delta_gp % chunks
+        for i in range(chunks):
+            n = base + (1 if i < rem else 0)
+            if n <= 0:
+                continue
+            sv = _clamp(proj_sv + rng.uniform(-vol * 0.08, vol * 0.06), 0.845, 0.945)
+            gaa = _clamp(proj_gaa + rng.uniform(-vol * 0.9, vol * 0.9), 1.85, 4.10)
+            for _ in range(min(n, 2)):
+                sv_samples.append(sv)
+                gaa_samples.append(gaa)
+            if len(sv_samples) > 12:
+                sv_samples = sv_samples[-12:]
+            if len(gaa_samples) > 12:
+                gaa_samples = gaa_samples[-12:]
+            cur_gp += n
+            wins_chunk = sum(1 for _ in range(n) if rng.random() < win_rate * rng.uniform(0.88, 1.12))
+            cur_w += wins_chunk
+            if sv >= 0.94 and gaa <= 2.1 and rng.random() < min(0.35, (0.12 + offensive * 0.08) * n):
+                cur_so += 1
+        stats["gp"] = cur_gp
+        stats["games_played"] = cur_gp
+        stats["wins"] = cur_w
+        stats["losses"] = max(0, cur_gp - cur_w - rng.randint(0, min(3, cur_gp)))
+        stats["ot_losses"] = max(0, cur_gp - cur_w - _safe_int(stats.get("losses"), 0))
+        if sv_samples:
+            avg_sv = sum(sv_samples) / len(sv_samples)
+            stats["save_pct"] = round(avg_sv, 3)
+            stats["savePct"] = stats["save_pct"]
+        if gaa_samples:
+            stats["gaa"] = round(sum(gaa_samples) / len(gaa_samples), 2)
+        stats["shutouts"] = cur_so
+        stats["_sv_samples"] = sv_samples
+        stats["_gaa_samples"] = gaa_samples
+        return
+
     for _ in range(delta_gp):
         sv = _clamp(proj_sv + rng.uniform(-vol * 0.08, vol * 0.06), 0.845, 0.945)
         gaa = _clamp(proj_gaa + rng.uniform(-vol * 0.9, vol * 0.9), 1.85, 4.10)
@@ -1414,11 +1502,23 @@ def advance_prospect_stats_to_date(
         rng = random.Random(int(seed) & 0xFFFFFFFF)
 
     stored_year = getattr(prospect, "_prospect_season_year", None)
-    if (
-        season_year is not None
-        and stored_year is not None
-        and int(season_year) != int(stored_year)
-    ):
+    # Reset when the calendar year advances — including the first tick after a
+    # rollover where `_prospect_season_year` was never stamped (None). Without
+    # that branch, last season's GP/points leak into September of the new year.
+    needs_year_reset = False
+    if season_year is not None:
+        if stored_year is None:
+            actual0 = getattr(prospect, "_prospect_season_stats", None)
+            gp0 = 0
+            if isinstance(actual0, dict):
+                try:
+                    gp0 = int(actual0.get("gp") or 0)
+                except (TypeError, ValueError):
+                    gp0 = 0
+            needs_year_reset = gp0 > 0
+        elif int(season_year) != int(stored_year):
+            needs_year_reset = True
+    if needs_year_reset:
         initialize_prospect_season(
             prospect,
             league,
@@ -1442,6 +1542,27 @@ def advance_prospect_stats_to_date(
     proj_gp = max(1, _safe_int(projected.get("gp"), 60))
     target_iso = str(calendar_iso or "")[:10]
     last_iso = str(getattr(prospect, "_prospect_last_stat_update_iso", "") or "")[:10]
+
+    # Catch prior-season lines that kept high GP after a calendar rollover
+    # when `_prospect_season_year` was already stamped to the new year.
+    try:
+        expected_probe = expected_games_for_date(league, proj_gp, target_iso) if target_iso else 0
+        actual_probe = getattr(prospect, "_prospect_season_stats", None)
+        cur_probe = _safe_int(actual_probe.get("gp"), 0) if isinstance(actual_probe, dict) else 0
+        if target_iso and cur_probe > int(expected_probe) + 8:
+            initialize_prospect_season(
+                prospect,
+                league,
+                rng=rng,
+                season_year=season_year,
+                calendar_iso=None,
+                force=True,
+            )
+            projected = getattr(prospect, "_prospect_projected_stats", None) or projected
+            proj_gp = max(1, _safe_int(projected.get("gp"), 60))
+            last_iso = ""
+    except Exception:
+        pass
 
     if season_year is not None:
         try:

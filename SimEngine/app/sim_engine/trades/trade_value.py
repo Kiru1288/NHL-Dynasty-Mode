@@ -1,9 +1,14 @@
 """
-Authoritative backend trade valuation (0-100 scale per team perspective).
+Primary NHL player-and-pick package valuation path (uncapped relative scale).
+
+Separate stacks still exist for draft-day trades, cap-casualty partner scoring,
+and some ambient heuristics — do not treat this module as the only valuation system.
 """
 
 from __future__ import annotations
 
+import logging
+import math
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from app.sim_engine.economy.team_needs import TeamNeeds, is_player_injured
@@ -17,24 +22,33 @@ from app.sim_engine.trades.trade_asset import (
 )
 from app.sim_engine.trades.trade_pick_registry import get_pick_by_id
 
+logger = logging.getLogger(__name__)
+
 # Bump when the talent curve / depth-star spread changes so Trade Hub caches rebuild
 # without requiring a new franchise save.
-TRADE_VALUE_FORMULA_VERSION = 3
+TRADE_VALUE_FORMULA_VERSION = 6
+# Soft ceiling used only for UI-relative clamps / legacy helpers — player totals are uncapped.
+TRADE_VALUE_SOFT_CEIL = 220.0
+# Reduced fallback when enrichment fails — never return raw OVR (82 ≈ elite TV).
+TRADE_VALUE_FALLBACK_SCALE = 0.55
+TRADE_VALUE_FALLBACK_FLOOR = 3.0
+TRADE_VALUE_FALLBACK_CEIL = 45.0
 
 
-def _clamp(x: float, lo: float = 0.0, hi: float = 100.0) -> float:
+def _clamp(x: float, lo: float = 0.0, hi: float = TRADE_VALUE_SOFT_CEIL) -> float:
     return lo if x < lo else hi if x > hi else x
 
 
 def player_value_tier(total: float) -> str:
+    """Tier bands on the uncapped scale (stars can exceed 100)."""
     v = float(total)
-    if v >= 90:
+    if v >= 120:
         return "Franchise"
-    if v >= 75:
+    if v >= 90:
         return "Elite"
-    if v >= 55:
+    if v >= 60:
         return "Top Asset"
-    if v >= 35:
+    if v >= 38:
         return "Useful"
     if v >= 18:
         return "Depth"
@@ -42,11 +56,11 @@ def player_value_tier(total: float) -> str:
 
 
 def pick_value_tier(total: float) -> str:
-    """Hidden pick tiers aligned with Trade Hub bar scale (0-100)."""
+    """Pick tiers on the shared uncapped asset scale."""
     v = float(total)
-    if v >= 90:
+    if v >= 110:
         return "FRANCHISE"
-    if v >= 75:
+    if v >= 85:
         return "ELITE"
     if v >= 60:
         return "TOP ASSET"
@@ -114,6 +128,42 @@ def _pick_projected_range(proj: Dict[str, Any], rnd: int) -> str:
     if window in ("declining", "emerging"):
         return "TOP 10"
     return "UNKNOWN"
+
+
+def slot_curve_value(overall_slot: int) -> float:
+    """Value of a known draft slot on the shared uncapped asset scale.
+
+    Exponential decay anchored near a mid-elite 1st overall (~95), falling to
+    ~40 at the end of round one and ~2 in the last round. True franchise
+    players sit well above even top lottery picks.
+    """
+    slot = max(1, int(overall_slot))
+    return _clamp(2.0 + 93.0 * math.exp(-0.03056 * (slot - 1)), 2.0, 120.0)
+
+
+def _known_pick_slot(pick_row: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[int]:
+    """Overall slot when the draft board has already resolved this pick."""
+    for key in ("overall_pick", "overall", "known_slot"):
+        val = pick_row.get(key)
+        if val not in (None, ""):
+            try:
+                slot = int(val)
+            except (TypeError, ValueError):
+                continue
+            if slot >= 1:
+                return slot
+    slots = ctx.get("known_pick_slots")
+    if isinstance(slots, dict):
+        pid = str(pick_row.get("pick_id") or "")
+        val = slots.get(pid)
+        if val not in (None, ""):
+            try:
+                slot = int(val)
+            except (TypeError, ValueError):
+                return None
+            if slot >= 1:
+                return slot
+    return None
 
 
 def _pick_projected_slot(proj: Dict[str, Any], rnd: int) -> Optional[int]:
@@ -205,30 +255,45 @@ def _scouting_confidence(player: Any) -> float:
 
 
 def _prospect_upside_score(player: Any, ovr: float, age: int, pot: float) -> float:
+    """Youth upside for trade value — bounded so age alone cannot mint stars.
+
+    Age bonuses require real upside (potential above current OVR) or an already
+    established NHL floor. Draft tier and high-pot/low-ovr premiums still apply,
+    but the total cannot overwhelm intrinsic talent.
+    """
     if age >= 23:
         return 0.0
     upside = max(0.0, pot - ovr)
     tier = _prospect_draft_tier(player)
     confidence = _scouting_confidence(player)
-    base = upside * 0.22
-    if age <= 20:
-        base += 2.5
-    elif age <= 21:
-        base += 1.5
-    elif age <= 22:
-        base += 0.8
+    base = upside * 0.18
+    # Age bump only when there is projection or proven NHL ability.
+    if upside >= 4.0 or ovr >= 74:
+        if age <= 20:
+            base += 1.6
+        elif age <= 21:
+            base += 1.0
+        elif age <= 22:
+            base += 0.5
+    elif age <= 21 and upside >= 2.0:
+        base += 0.6
     if tier >= 0.85:
-        base += 6.0
+        base += 4.0
     elif tier >= 0.65:
-        base += 4.0
-    elif tier >= 0.45:
-        base += 2.0
-    if pot >= 88 and ovr < 76:
-        base += 4.0
-    elif pot >= 84 and ovr < 72:
         base += 2.5
+    elif tier >= 0.45:
+        base += 1.2
+    if pot >= 88 and ovr < 76:
+        base += 2.5
+    elif pot >= 84 and ovr < 72:
+        base += 1.5
+    # Low-overall depth prospects stay cheap even when young.
+    if ovr < 70:
+        base *= 0.55
+    elif ovr < 74:
+        base *= 0.75
     base *= 0.75 + 0.5 * confidence
-    return _clamp(base, 0.0, 14.0)
+    return _clamp(base, 0.0, 8.0)
 
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
@@ -391,37 +456,62 @@ def _player_potential_ovr(player: Any, current_ovr: float) -> float:
 
 def _talent_base(ovr: float) -> float:
     """
-    Aggressive ability curve — depth is cheap roster chips; stars demand real return.
+    Aggressive uncapped ability curve — depth stays cheap; stars separate clearly.
 
     Approx anchors (before contract/need nudges):
-      70 4th-line → ~10 · 75 bottom-6 → ~20 · 78 middle-6 → ~31
-      82 top-6 → ~48 · 85 star → ~66 · 88 superstar → ~86 · 90+ franchise → ~96
+      70 4th-line → ~12 · 75 bottom-6 → ~22 · 80 middle-6 → ~42
+      82 top-6 → ~55 · 85 star → ~78 · 88 elite → ~108
+      90 franchise → ~130 · 93+ generational → ~155–180
     """
     o = float(ovr or 0.0)
     if o <= 0:
         return 3.0
     if o < 70.0:
-        # 62 → ~3 · 68 → ~9
-        anchor = 3.0 + max(0.0, o - 60.0) * 1.0
+        # 62 → ~5 · 68 → ~11
+        anchor = 5.0 + max(0.0, o - 60.0) * 1.0
     elif o < 76.0:
-        # 70 → ~10 · 75 → ~20
-        anchor = 10.0 + (o - 70.0) * 2.0
+        # 70 → ~12 · 75 → ~22
+        anchor = 12.0 + (o - 70.0) * 2.0
     elif o < 81.0:
-        # 76 → ~24 · 80 → ~40
-        anchor = 20.0 + (o - 75.0) * 4.0
+        # 76 → ~26 · 80 → ~42
+        anchor = 22.0 + (o - 75.0) * 4.0
     elif o < 85.0:
-        # 81 → ~46 · 84 → ~60
-        anchor = 40.0 + (o - 80.0) * 5.0
+        # 81 → ~50 · 84 → ~70
+        anchor = 45.0 + (o - 80.0) * 6.25
     elif o < 88.0:
-        # 85 → ~68 · 87 → ~80
-        anchor = 60.0 + (o - 84.0) * 6.5
+        # 85 → ~78 · 87 → ~96
+        anchor = 72.0 + (o - 84.0) * 8.0
     elif o < 91.0:
-        # 88 → ~88 · 90 → ~96
-        anchor = 80.0 + (o - 87.0) * 5.5
+        # 88 → ~108 · 90 → ~128
+        anchor = 100.0 + (o - 87.0) * 10.0
+    elif o < 94.0:
+        # 91 → ~140 · 93 → ~160
+        anchor = 130.0 + (o - 90.0) * 10.0
     else:
-        # 91+ → ~97–99
-        anchor = 96.0 + min(3.0, (o - 91.0) * 1.0)
-    return _clamp(anchor, 3.0, 99.0)
+        # 94+ → 165+ uncapped
+        anchor = 160.0 + (o - 93.0) * 12.0
+    return max(3.0, float(anchor))
+
+
+def reduced_trade_value_fallback(player: Any, *, reason: str = "") -> float:
+    """Deterministic safe fallback: scaled talent base, capped well below star territory."""
+    ovr = _player_ovr(player)
+    try:
+        base = float(_talent_base(ovr))
+    except Exception:
+        base = max(TRADE_VALUE_FALLBACK_FLOOR, min(35.0, float(ovr or 0.0) * 0.4))
+    total = _clamp(
+        base * TRADE_VALUE_FALLBACK_SCALE,
+        TRADE_VALUE_FALLBACK_FLOOR,
+        TRADE_VALUE_FALLBACK_CEIL,
+    )
+    logger.warning(
+        "trade_value fallback used (total=%.2f ovr=%.1f reason=%s)",
+        total,
+        ovr,
+        reason or "unknown",
+    )
+    return float(total)
 
 
 def _player_age(player: Any) -> int:
@@ -467,30 +557,50 @@ def _team_cap_pressure(team: Any) -> str:
     return str(getattr(team, "cap_pressure_tier", getattr(team, "cap_pressure", "moderate")) or "moderate").lower()
 
 
-def _contract_years(player: Any) -> int:
+def _contract_field(player: Any, *keys: str, default: Any = None) -> Any:
+    """Read a contract field from dict or object contracts (real-NHL uses dicts)."""
     c = getattr(player, "contract", None)
-    for obj in (player, c):
+    for obj in (c, player):
         if obj is None:
             continue
-        for key in ("years_remaining", "term_remaining", "remaining_years", "term"):
-            v = _safe_int(getattr(obj, key, 0), 0)
-            if v > 0:
-                return v
+        for key in keys:
+            if isinstance(obj, dict):
+                if key in obj and obj.get(key) is not None:
+                    return obj.get(key)
+            else:
+                if hasattr(obj, key):
+                    val = getattr(obj, key, None)
+                    if val is not None:
+                        return val
+    return default
+
+
+def _contract_years(player: Any) -> int:
+    for key in ("years_remaining", "term_remaining", "remaining_years", "term", "years"):
+        v = _safe_int(_contract_field(player, key, default=0), 0)
+        if v > 0:
+            return v
+    # Derive from expiry_year when remaining term was lost on a dict contract.
+    expiry_year = _safe_int(_contract_field(player, "expiry_year", default=0), 0)
+    if expiry_year > 0:
+        # Franchise season is usually stamped on the contract effective year.
+        eff = _safe_int(
+            _contract_field(player, "effective_season", "season_year", default=0),
+            0,
+        )
+        if eff > 0:
+            return max(0, expiry_year - eff)
     return 0
 
 
 def _expiry_status(player: Any) -> str:
-    c = getattr(player, "contract", None)
-    for obj in (player, c):
-        if obj is None:
-            continue
-        for key in ("expiry_status", "ufa_rfa_status", "rights_status", "rights"):
-            val = str(getattr(obj, key, "") or "").strip().upper()
-            if val in ("UFA", "RFA", "ELC"):
-                return val
-        ctype = str(getattr(obj, "contract_type", getattr(obj, "type", "")) or "").strip().upper()
-        if ctype == "ELC":
-            return "ELC"
+    for key in ("expiry_status", "ufa_rfa_status", "rights_status", "rights"):
+        val = str(_contract_field(player, key, default="") or "").strip().upper()
+        if val in ("UFA", "RFA", "ELC"):
+            return val
+    ctype = str(_contract_field(player, "contract_type", "type", default="") or "").strip().upper()
+    if ctype == "ELC":
+        return "ELC"
     if _is_elc_contract(player):
         return "ELC"
     age = _player_age(player)
@@ -498,21 +608,37 @@ def _expiry_status(player: Any) -> str:
 
 
 def _contract_type_label(player: Any) -> str:
-    c = getattr(player, "contract", None)
-    for obj in (player, c):
-        if obj is None:
-            continue
-        ctype = str(getattr(obj, "contract_type", getattr(obj, "type", "")) or "").strip().upper()
-        if ctype:
-            return ctype
-    return ""
+    ctype = str(_contract_field(player, "contract_type", "type", default="") or "").strip().upper()
+    return ctype
 
 
 def _is_elc_contract(player: Any) -> bool:
+    """True ELC only — do not treat every cheap under-25 deal as entry-level."""
     if _contract_type_label(player) == "ELC":
         return True
+    c = getattr(player, "contract", None)
+    if isinstance(c, dict):
+        if bool(c.get("is_elc") or c.get("entry_level") or c.get("elc")):
+            return True
+        label = str(c.get("type") or c.get("contract_type") or "").upper()
+        if label in ("ELC", "ENTRY", "ENTRY_LEVEL"):
+            return True
+        # Spotrac / real-NHL tags sometimes set rights without type.
+        if str(c.get("source") or "").lower().startswith("real_nhl") and bool(c.get("entry_level_contract")):
+            return True
+    elif c is not None:
+        if bool(getattr(c, "is_elc", False) or getattr(c, "entry_level", False)):
+            return True
+        label = str(getattr(c, "type", None) or getattr(c, "contract_type", None) or "").upper()
+        if label in ("ELC", "ENTRY", "ENTRY_LEVEL"):
+            return True
+    # Heuristic last resort: league-min AAV + young + short remaining term only.
     cap = player_cap_hit_millions(player)
-    return 0 < cap <= 1.05 and _player_age(player) <= 25
+    years = _contract_years(player)
+    age = _player_age(player)
+    if 0 < cap <= 0.95 and age <= 24 and 0 < years <= 3:
+        return True
+    return False
 
 
 def _injury_games_out(player: Any) -> int:
@@ -635,12 +761,15 @@ def _bad_contract_score(player: Any, ovr: float, cap_hit: float, years: int, age
     elif years >= 4 and age >= 32:
         term_risk = 1.35
     score = max(0.0, (overpay / max(0.5, expected)) * term_risk * max(0.0, ratio - 1.0))
-    c = getattr(player, "contract", None)
-    bad_type = getattr(c, "bad_contract_type", None) if c else None
+    bad_type = _contract_field(player, "bad_contract_type", default=None)
     if bad_type:
         score = max(score, 0.35)
     try:
-        tagged = float(getattr(player, "bad_contract_score", 0) or getattr(c, "bad_contract_score", 0) or 0)
+        tagged = float(
+            getattr(player, "bad_contract_score", 0)
+            or _contract_field(player, "bad_contract_score", default=0)
+            or 0
+        )
         if tagged > 0:
             score = max(score, tagged)
     except Exception:
@@ -678,12 +807,35 @@ def _cap_dump_value_mod(
 
 def _production_score(player: Any) -> float:
     st = getattr(player, "season_stats", None) or {}
-    if isinstance(st, dict):
-        gp = max(1, _safe_int(st.get("gp"), 1))
-        pts = _safe_float(st.get("pts"), _safe_float(st.get("g"), 0) + _safe_float(st.get("a"), 0))
+    if isinstance(st, dict) and "gp" not in st and "pts" not in st and "points" not in st:
+        # Year-keyed sim sync or empty — do not treat nested seasons as flat gp.
+        st = {}
+    if not isinstance(st, dict) or not st:
+        # Prefer boxed import stats (prior NHL season) before career archive.
+        imp = getattr(player, "real_nhl_import_stats", None) or {}
+        if isinstance(imp, dict) and imp:
+            st = {
+                "gp": imp.get("gamesPlayed") or imp.get("gp"),
+                "g": imp.get("goals") or imp.get("g"),
+                "a": imp.get("assists") or imp.get("a"),
+                "pts": imp.get("points") or imp.get("pts"),
+                "sv_pct": imp.get("savePct") or imp.get("sv_pct"),
+                "savePct": imp.get("savePct"),
+            }
+        else:
+            career = getattr(player, "career_stats", None) or {}
+            seasons = career.get("seasons") if isinstance(career, dict) else None
+            if isinstance(seasons, list) and seasons:
+                st = seasons[-1] if isinstance(seasons[-1], dict) else {}
+    if isinstance(st, dict) and st:
+        gp = max(1, _safe_int(st.get("gp") or st.get("gamesPlayed"), 1))
+        pts = _safe_float(
+            st.get("pts"),
+            _safe_float(st.get("points"), _safe_float(st.get("g"), 0) + _safe_float(st.get("a"), 0)),
+        )
         ppg = pts / gp
         if _player_pos(player) == "G":
-            sv = _safe_float(st.get("sv_pct"), 0.905)
+            sv = _safe_float(st.get("sv_pct") or st.get("savePct"), 0.905)
             return _clamp((sv - 0.88) * 120.0, 0.0, 18.0)
         return _clamp(ppg * 14.0, 0.0, 16.0)
     return 0.0
@@ -691,10 +843,33 @@ def _production_score(player: Any) -> float:
 
 def _clause_penalty(player: Any) -> float:
     c = getattr(player, "contract", None)
-    clauses = getattr(c, "clauses", None) if c else None
-    nmc = bool(getattr(clauses, "noMoveClause", False) if clauses else getattr(c, "no_move_clause", False) if c else False)
-    ntc = bool(getattr(clauses, "noTradeClause", False) if clauses else getattr(c, "no_trade_clause", False) if c else False)
-    mntc = _safe_int(getattr(clauses, "modifiedNoTradeTeams", 0) if clauses else getattr(c, "modified_no_trade_teams", 0) if c else 0)
+    if isinstance(c, dict):
+        nmc = bool(c.get("no_move_clause") or c.get("nmc"))
+        ntc = bool(c.get("no_trade_clause") or c.get("ntc"))
+        mntc = _safe_int(c.get("modified_no_trade_teams") or c.get("mntc"), 0)
+    else:
+        clauses = getattr(c, "clauses", None) if c else None
+        nmc = bool(
+            getattr(clauses, "noMoveClause", False)
+            if clauses
+            else getattr(c, "no_move_clause", False)
+            if c
+            else False
+        )
+        ntc = bool(
+            getattr(clauses, "noTradeClause", False)
+            if clauses
+            else getattr(c, "no_trade_clause", False)
+            if c
+            else False
+        )
+        mntc = _safe_int(
+            getattr(clauses, "modifiedNoTradeTeams", 0)
+            if clauses
+            else getattr(c, "modified_no_trade_teams", 0)
+            if c
+            else 0
+        )
     if nmc:
         return 6.0
     if ntc:
@@ -732,6 +907,73 @@ def evaluate_player_asset_value(
     context: Optional[Dict[str, Any]] = None,
     retained_pct: float = 0.0,
 ) -> Dict[str, Any]:
+    try:
+        # House-rule negative asset (Brady Tkachuk chaos) — keep import soft.
+        if bool(getattr(player, "brady_tkachuk_chaos", False)) or bool(
+            getattr(player, "locker_room_cancer", False)
+        ):
+            try:
+                nhl_id = int(getattr(player, "nhl_player_id", 0) or 0)
+            except Exception:
+                nhl_id = 0
+            name = str(getattr(getattr(player, "identity", None), "name", "") or "").lower()
+            if nhl_id == 8480801 or ("brady" in name and "tkachuk" in name) or bool(
+                getattr(player, "brady_tkachuk_chaos", False)
+            ):
+                return {
+                    "total": -42.0,
+                    "base": -42.0,
+                    "context_mod": 0.0,
+                    "tier": "negative",
+                    "brady_tkachuk_chaos": True,
+                    "risk_flags": [
+                        "Locker-room CANCER",
+                        "Active substance / rehab storyline",
+                        "Negative asset — clubs pay to move him",
+                    ],
+                    "contract_flags": ["Toxic asset"],
+                    "explain": [
+                        "House rule: Brady Tkachuk is a negative trade asset",
+                        "CANCER tag depresses every offer sheet",
+                    ],
+                    "retained_pct_supported": True,
+                }
+        return _evaluate_player_asset_value_impl(
+            player,
+            source_team,
+            acquiring_team,
+            league,
+            context=context,
+            retained_pct=retained_pct,
+        )
+    except Exception as exc:
+        pid = str(getattr(player, "id", None) or getattr(player, "player_id", "") or "")
+        logger.exception(
+            "evaluate_player_asset_value failed for player_id=%s: %s",
+            pid,
+            exc,
+        )
+        fb = reduced_trade_value_fallback(player, reason=f"{type(exc).__name__}:{exc}")
+        return {
+            "total": fb,
+            "base": fb,
+            "context_mod": 0.0,
+            "tier": player_value_tier(fb),
+            "fallback": True,
+            "fallback_reason": str(exc),
+            "retained_pct_supported": True,
+        }
+
+
+def _evaluate_player_asset_value_impl(
+    player: Any,
+    source_team: Any,
+    acquiring_team: Any,
+    league: Any,
+    *,
+    context: Optional[Dict[str, Any]] = None,
+    retained_pct: float = 0.0,
+) -> Dict[str, Any]:
     ctx = context or {}
     ovr = _player_ovr(player)
     age = _player_age(player)
@@ -752,16 +994,23 @@ def evaluate_player_asset_value(
     elif age <= 30:
         age_mod = 1.0
     elif age <= 33:
-        age_mod = -2.0
+        # Elite stars still in their window; do not dump them solely for age 31–33.
+        age_mod = -0.5 if ovr >= 88 else (-1.0 if ovr >= 84 else -2.0)
     else:
         age_mod = -5.0 - (age - 33) * 0.8
+        if ovr >= 90:
+            age_mod = max(age_mod, -3.5)
+        elif ovr >= 86:
+            age_mod = max(age_mod, -5.5)
 
     upside = max(0.0, pot - ovr)
     prospect_upside = _prospect_upside_score(player, ovr, age, pot)
     if age <= 25:
         potential_mod = _clamp(upside * 0.14, 0.0, 5.0) + prospect_upside
         if ovr < 76:
-            potential_mod = min(potential_mod, 3.0 + prospect_upside)
+            potential_mod = min(potential_mod, 2.5 + prospect_upside * 0.85)
+        # Soft cap: youth bag cannot rival a full tier of talent by itself.
+        potential_mod = min(potential_mod, 9.0 if ovr >= 78 else 7.0)
     else:
         potential_mod = _clamp(upside * 0.06, 0.0, 2.0)
 
@@ -777,9 +1026,21 @@ def evaluate_player_asset_value(
 
     expected_cap = _clamp(0.75 + max(0.0, ovr - 72.0) * 0.22, 0.85, 14.0)
     contract_mod = _clamp((expected_cap - cap_hit) * 1.4, -8.0, 6.0)
+    # Cheap replacement / depth AAV is not franchise surplus — clamp positive
+    # surplus for sub-star talent so league-min deals cannot mint premium assets.
+    if ovr < 76 and contract_mod > 0:
+        contract_mod = min(contract_mod, 1.5 if ovr >= 72 else 0.75)
+    elif ovr < 80 and contract_mod > 0:
+        contract_mod = min(contract_mod, 3.0)
     if years <= 1 and expiry == "UFA":
-        contract_mod -= 3.0
-    elif years >= 4 and cap_hit < expected_cap:
+        # Elite rentals retain meaningful value; fringe UFAs take the full discount.
+        if ovr >= 88:
+            contract_mod -= 1.0
+        elif ovr >= 82:
+            contract_mod -= 2.0
+        else:
+            contract_mod -= 3.0
+    elif years >= 4 and cap_hit < expected_cap and ovr >= 78:
         contract_mod += 2.0
     elif years >= 5 and age >= 30 and cap_hit > expected_cap + 1.5:
         contract_mod -= 4.0
@@ -796,7 +1057,13 @@ def evaluate_player_asset_value(
         need_mod = needs.get("top_4_defense", 0.0) * need_scale * talent_fit
     elif pos == "G":
         need_mod = needs.get("goalie", 0.0) * (need_scale + 0.8) * talent_fit
-    need_mod = _clamp(need_mod, 0.0, 7.0 if ovr < 82 else 4.5)
+    # Bound need so positional desperation cannot turn fringe players into stars.
+    if ovr < 76:
+        need_mod = _clamp(need_mod, 0.0, 3.0)
+    elif ovr < 82:
+        need_mod = _clamp(need_mod, 0.0, 5.0)
+    else:
+        need_mod = _clamp(need_mod, 0.0, 4.5)
 
     window = _team_window(acquiring_team)
     source_window = _team_window(source_team)
@@ -886,6 +1153,12 @@ def evaluate_player_asset_value(
 
     risk_flags: List[str] = []
     contract_flags: List[str] = []
+    if bool(getattr(player, "_trade_demand_active", False) or getattr(player, "trade_demand_active", False)):
+        risk_mod -= 6.0 if bool(getattr(player, "locker_room_disruptor", False)) else 3.5
+        risk_flags.append("Active trade demand — value depressed")
+    if bool(getattr(player, "locker_room_disruptor", False)):
+        risk_flags.append("Locker-room disruptor")
+        risk_mod -= 4.0
     if waived:
         risk_flags.append("NTC waived — slightly reduced trade value")
         contract_flags.append("NTC_WAIVED")
@@ -958,20 +1231,25 @@ def evaluate_player_asset_value(
         "context_cap": round(context_mod - context_raw, 2),
     }
     total = base_core + context_mod
-    # Hard star premium / depth tax — 4th-liners stay cheap; superstars are scarce.
-    if ovr >= 90.0:
-        total += 4.0 + (ovr - 90.0) * 1.5
+    # Extra star premium / depth tax on top of the uncapped talent curve.
+    # Depth tax was too harsh (sub-73 crushed to near-junk), which made packages
+    # look absurd when a real NHL piece was "balanced" by three worthless names.
+    if ovr >= 92.0:
+        total += 8.0 + (ovr - 92.0) * 3.0
+    elif ovr >= 90.0:
+        total += 6.0 + (ovr - 90.0) * 2.0
     elif ovr >= 87.0:
-        total += 5.0 + (ovr - 87.0) * 1.5
+        total += 4.0 + (ovr - 87.0) * 1.5
     elif ovr >= 84.0:
-        total += 3.5
+        total += 2.5
     elif ovr < 73.0:
-        total -= (73.0 - ovr) * 1.6
+        total -= (73.0 - ovr) * 1.15
     elif ovr < 77.0:
-        total -= (77.0 - ovr) * 0.9
+        total -= (77.0 - ovr) * 0.65
     elif ovr < 80.0:
-        total -= (80.0 - ovr) * 0.4
-    total = _clamp(total, 0.0, 100.0)
+        total -= (80.0 - ovr) * 0.30
+    # Uncapped — only soft-floor junk assets so negative contracts can still dump.
+    total = max(-15.0, float(total))
     tier = player_value_tier(total)
 
     explain: List[str] = []
@@ -1039,7 +1317,15 @@ def evaluate_pick_asset_value(
     ctx = context or {}
     year = _safe_int(pick_row.get("year"), 0)
     rnd = _safe_int(pick_row.get("round"), 7)
-    anchor = _safe_int(ctx.get("season_year"), year)
+    # Prefer upcoming draft year so "current" capital matches Entry Draft consumption.
+    if ctx.get("draft_year") is not None:
+        anchor = _safe_int(ctx.get("draft_year"), year)
+    elif ctx.get("season_is_calendar") or ctx.get("use_upcoming_draft_year"):
+        from app.sim_engine.trades.trade_pick_registry import upcoming_draft_year
+
+        anchor = upcoming_draft_year(_safe_int(ctx.get("season_year"), year))
+    else:
+        anchor = _safe_int(ctx.get("season_year"), year)
 
     round_base = {
         1: 58.0,
@@ -1054,6 +1340,13 @@ def evaluate_pick_asset_value(
     years_out = max(0, year - anchor)
     age_discount = years_out * 4.0
     base = max(2.0, round_base - age_discount)
+
+    # Once the board is set, the exact slot is known and replaces the
+    # round-average base plus the standings guesswork that estimates it.
+    known_slot = _known_pick_slot(pick_row, ctx) if years_out == 0 else None
+    if known_slot is not None:
+        base = slot_curve_value(known_slot)
+        age_discount = 0.0
 
     window = _team_window(acquiring_team)
     window_mod = 0.0
@@ -1075,7 +1368,10 @@ def evaluate_pick_asset_value(
     points_pct = proj.get("points_pct")
     lottery_mod = 0.0
     league_rank = proj.get("league_rank")
-    if rnd == 1:
+    if known_slot is not None:
+        # Slot is settled: no finish risk or lottery upside left to price in.
+        original_team_mod = 0.0
+    elif rnd == 1:
         if league_rank is not None:
             n_teams = len(team_by_id) if isinstance(team_by_id, dict) and team_by_id else 32
             if league_rank >= max(1, n_teams - 4):
@@ -1134,7 +1430,7 @@ def evaluate_pick_asset_value(
         "risk": round(risk_mod, 2),
         "injury": round(injury_factor, 2),
     }
-    total = _clamp(sum(components.values()), 0.5, 100.0)
+    total = max(0.5, float(sum(components.values())))
 
     explain = [f"Round {rnd} pick in {year}"]
     if original_team is not None:
@@ -1150,6 +1446,10 @@ def evaluate_pick_asset_value(
 
     projected_range = _pick_projected_range(proj, rnd)
     projected_slot = _pick_projected_slot(proj, rnd)
+    if known_slot is not None:
+        explain.insert(0, f"Pick #{known_slot} overall (slot known)")
+        projected_slot = known_slot
+        projected_range = f"#{known_slot}"
     pick_context = _pick_value_context(
         proj,
         years_out=years_out,
@@ -1175,6 +1475,7 @@ def evaluate_pick_asset_value(
             "round": int(rnd or 0),
             "original_team_id": orig_tid,
             "current_owner_team_id": str(pick_row.get("current_owner_team_id") or ""),
+            "known_overall_slot": known_slot,
             "base_round_value": round(base, 2),
             "year_discount": round(age_discount, 2),
             "projected_finish_risk": proj.get("projected_risk_score"),
@@ -1218,7 +1519,11 @@ def evaluate_asset_value(
 ) -> Dict[str, Any]:
     if isinstance(asset, PlayerTradeAsset):
         src = source_team
-        player, _ = find_player_on_team_roster(src, asset.player_id)
+        from app.sim_engine.trades.trade_asset import find_player_in_organization
+
+        player, _loc, _idx = find_player_in_organization(src, asset.player_id)
+        if player is None:
+            player, _ = find_player_on_team_roster(src, asset.player_id)
         if player is None:
             return {
                 "asset_id": asset.player_id,
@@ -1226,7 +1531,7 @@ def evaluate_asset_value(
                 "name": asset.player_name or asset.player_id,
                 "total": 0.0,
                 "components": {},
-                "explain": ["Player not found on source roster"],
+                "explain": ["Player not found on source organization"],
             }
         return evaluate_player_asset_value(
             player,

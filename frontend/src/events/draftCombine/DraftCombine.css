@@ -1,7 +1,7 @@
 /* Draft Combine — calendar shell matched (nhlcalShell.css) */
 
 .dcb-root {
-  --dcb-panel-h: calc(100vh - 240px);
+  --dcb-panel-h: calc(100dvh - 240px);
 }
 
 .dcb-main {
@@ -11,17 +11,18 @@
 .dcb-summary-line {
   margin: 0 0 10px;
   padding: 8px 12px;
-  border: 1px solid rgba(156, 218, 236, 0.12);
-  border-radius: 8px;
+  border: 1px solid var(--ops-grid);
+  border-left: 3px solid var(--ops-cyan);
+  border-radius: var(--radius-hud);
   background: rgba(7, 22, 34, 0.55);
   color: rgba(233, 247, 251, 0.88);
-  font-size: 12px;
+  font-size: var(--type-compact-size);
   font-weight: 800;
 }
 
 .dcb-tab-bar {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
   margin-bottom: 10px;
 }
@@ -42,11 +43,15 @@
   padding-right: 4px;
 }
 
+/* Stat strip — not metric card grid */
 .dcb-stat-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
+  gap: 0;
   margin-bottom: 10px;
+  border: 1px solid var(--ops-grid);
+  border-radius: var(--radius-control);
+  overflow: hidden;
 }
 
 .dcb-overview-grid {
@@ -56,18 +61,23 @@
 }
 
 .dcb-stat {
-  padding: 12px 14px;
-  min-height: 76px;
-  border: 1px solid rgba(156, 218, 236, 0.12);
-  border-radius: 10px;
-  background: linear-gradient(180deg, rgba(11, 31, 45, 0.72), rgba(7, 22, 34, 0.72));
+  padding: 10px 12px;
+  min-height: 68px;
+  border: 0;
+  border-right: 1px solid var(--ops-grid);
+  border-radius: 0;
+  background: rgba(7, 22, 34, 0.65);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
 }
 
+.dcb-stat:last-child {
+  border-right: 0;
+}
+
 .dcb-stat span {
-  font-size: 10px;
+  font-size: var(--type-phase-label-size);
   font-weight: 900;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -75,24 +85,26 @@
 }
 
 .dcb-stat strong {
-  font-size: 28px;
+  font-family: var(--font-mono-data);
+  font-size: 24px;
   line-height: 1;
   color: var(--cyan);
+  font-variant-numeric: tabular-nums;
 }
 
 .dcb-stat.is-safe {
-  border-color: rgba(82, 223, 148, 0.35);
+  box-shadow: inset 3px 0 0 var(--ops-success);
 }
 
 .dcb-stat.is-risk {
-  border-color: rgba(255, 96, 109, 0.35);
+  box-shadow: inset 3px 0 0 var(--ops-injury);
 }
 
 .dcb-panel-card {
-  border: 1px solid rgba(156, 218, 236, 0.12);
-  border-radius: 10px;
-  background: rgba(9, 25, 38, 0.72);
-  padding: 12px 14px;
+  border: 1px solid var(--ops-grid);
+  border-radius: var(--radius-control);
+  background: var(--ops-panel);
+  padding: 10px 12px;
 }
 
 .dcb-panel-head {
@@ -101,26 +113,28 @@
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(156, 218, 236, 0.08);
 }
 
 .dcb-panel-head h3 {
   margin: 0;
-  font-size: 12px;
-  font-weight: 1000;
-  letter-spacing: 0.08em;
+  font-size: var(--type-phase-label-size);
+  font-weight: 900;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--ops-cyan);
 }
 
 .dcb-chip {
-  font-size: 9px;
-  font-weight: 1000;
+  font-size: var(--type-phase-label-size);
+  font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  padding: 4px 8px;
-  border-radius: 4px;
-  border: 1px solid rgba(156, 218, 236, 0.16);
-  background: rgba(255, 255, 255, 0.04);
+  padding: 2px 6px;
+  border-radius: var(--radius-ops);
+  border: 1px solid var(--ops-grid);
+  background: rgba(255, 255, 255, 0.03);
   white-space: nowrap;
   color: var(--text);
 }
@@ -145,22 +159,24 @@
 
 .dcb-prospect-row {
   width: 100%;
-  border: 1px solid rgba(156, 218, 236, 0.1);
-  border-radius: 8px;
-  background: linear-gradient(180deg, rgba(11, 31, 45, 0.72), rgba(7, 22, 34, 0.72));
+  border: 1px solid var(--ops-grid);
+  border-radius: var(--radius-hud);
+  background: rgba(7, 22, 34, 0.72);
   color: var(--text);
   text-align: left;
-  padding: 10px 12px;
+  padding: 8px 10px;
   cursor: pointer;
   display: flex;
   gap: 12px;
   align-items: center;
+  transition: border-color var(--motion-micro), background var(--motion-micro);
 }
 
 .dcb-prospect-row:hover,
 .dcb-prospect-row.is-selected {
-  border-color: rgba(19, 216, 231, 0.45);
-  box-shadow: 0 0 16px rgba(19, 216, 231, 0.08);
+  border-color: var(--ops-grid-strong);
+  background: var(--ops-cyan-soft);
+  box-shadow: inset 3px 0 0 var(--cyan);
 }
 
 .dcb-prospect-row strong {
@@ -173,40 +189,40 @@
   gap: 6px;
   margin-top: 4px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--type-phase-label-size);
   font-weight: 800;
   text-transform: uppercase;
 }
 
 .dcb-avatar {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-control);
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  background: radial-gradient(circle at 35% 20%, rgba(255,255,255,0.2), rgba(19, 216, 231, 0.18) 35%, rgba(7, 22, 34, 0.95) 72%);
-  border: 1px solid rgba(156, 218, 236, 0.16);
+  background: rgba(19, 216, 231, 0.12);
+  border: 1px solid var(--ops-grid);
   position: relative;
   color: var(--cyan);
-  font-size: 12px;
-  font-weight: 1000;
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .dcb-avatar-pos {
   position: absolute;
   right: -4px;
   bottom: -5px;
-  min-width: 22px;
-  height: 22px;
-  border-radius: 999px;
+  min-width: 20px;
+  height: 20px;
+  border-radius: var(--radius-ops);
   display: grid;
   place-items: center;
-  padding: 0 5px;
-  font-size: 9px;
+  padding: 0 4px;
+  font-size: 11px;
   font-weight: 900;
   background: rgba(7, 22, 34, 0.98);
-  border: 1px solid rgba(156, 218, 236, 0.16);
+  border: 1px solid var(--ops-grid);
 }
 
 .dcb-meetings-grid {
@@ -221,9 +237,9 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
-  padding: 10px 12px;
-  border: 1px solid rgba(156, 218, 236, 0.1);
-  border-radius: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--ops-grid);
+  border-radius: var(--radius-hud);
   background: rgba(7, 22, 34, 0.55);
 }
 
@@ -235,11 +251,11 @@
 
 .dcb-meeting-actions button {
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-hud);
   background: rgba(12, 31, 47, 0.72);
   color: var(--text);
-  padding: 6px 10px;
-  font-size: 10px;
+  padding: 5px 9px;
+  font-size: var(--type-phase-label-size);
   font-weight: 900;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -248,7 +264,7 @@
 
 .dcb-meeting-actions button:hover:not(:disabled) {
   border-color: var(--line-strong);
-  background: rgba(19, 216, 231, 0.12);
+  background: var(--ops-cyan-soft);
 }
 
 .dcb-meeting-actions button:disabled {
@@ -266,14 +282,17 @@
 .dcb-empty {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--type-compact-size);
   font-weight: 700;
+  padding: 12px;
+  border: 1px dashed var(--ops-grid);
+  border-radius: var(--radius-hud);
 }
 
 .dcb-error {
   margin: 8px 0 0;
   color: var(--red);
-  font-size: 12px;
+  font-size: var(--type-compact-size);
   font-weight: 800;
 }
 
@@ -290,17 +309,17 @@
 }
 
 .dcb-timeline-wrap {
-  margin-top: 12px;
-  padding: 10px 12px;
-  border: 1px solid rgba(156, 218, 236, 0.1);
-  border-radius: 10px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--ops-grid);
+  border-radius: var(--radius-control);
   background: rgba(7, 22, 34, 0.45);
   overflow-x: auto;
 }
 
 .dcb-root .franchise-timeline-track {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -311,20 +330,21 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  border: 1px solid rgba(156, 218, 236, 0.1);
+  padding: 5px 8px;
+  border-radius: var(--radius-hud);
+  border: 1px solid var(--ops-grid);
   background: rgba(9, 25, 38, 0.55);
-  font-size: 10px;
+  font-size: var(--type-phase-label-size);
   font-weight: 800;
   color: var(--muted);
   white-space: nowrap;
 }
 
 .dcb-root .franchise-timeline-step.is-current {
-  border-color: rgba(19, 216, 231, 0.45);
+  border-color: var(--ops-grid-strong);
   color: var(--cyan);
-  background: rgba(19, 216, 231, 0.1);
+  background: var(--ops-cyan-soft);
+  box-shadow: inset 2px 0 0 var(--cyan);
 }
 
 .dcb-root .franchise-timeline-step.is-done {
@@ -332,18 +352,26 @@
 }
 
 .dcb-root .franchise-timeline-dot {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-ops);
   display: grid;
   place-items: center;
-  font-size: 9px;
-  border: 1px solid rgba(156, 218, 236, 0.2);
+  font-size: 11px;
+  border: 1px solid var(--ops-grid);
 }
 
 @media (max-width: 1200px) {
   .dcb-stat-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .dcb-stat:nth-child(3) {
+    border-right: 0;
+  }
+
+  .dcb-stat:nth-child(n+4) {
+    border-top: 1px solid var(--ops-grid);
   }
 
   .dcb-overview-grid,
@@ -353,6 +381,10 @@
 }
 
 @media (max-width: 900px) {
+  .dcb-root {
+    --dcb-panel-h: calc(100dvh - 200px);
+  }
+
   .dcb-stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

@@ -46,6 +46,69 @@ def _display_team_name(session: Any, team_id: str) -> str:
         return str(team_id)
 
 
+def annotate_lottery_picks_with_ownership(session: Any, picks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Attach selecting owner + via original owner for lottery R1 slots.
+
+    Lottery order is earned by standings/lottery teams (original owners of those
+    first-round slots). Traded picks are selected by the current registry owner
+    and should display as \"Toronto via Ottawa\".
+    """
+    if not picks:
+        return []
+    draft_year = int(getattr(session, "season_calendar_year", 2025) or 2025) + 1
+    out: List[Dict[str, Any]] = []
+    for raw in picks:
+        p = dict(raw or {})
+        earner = str(
+            p.get("lottery_team_id")
+            or p.get("original_owner_team_id")
+            or p.get("team_id")
+            or ""
+        )
+        earner_name = str(
+            p.get("lottery_team_name")
+            or p.get("original_owner_team_name")
+            or p.get("team_name")
+            or earner
+        )
+        slot = {
+            "pick": p.get("pick"),
+            "round": 1,
+            "pick_in_round": p.get("pick"),
+            "overall_pick": p.get("pick"),
+            "original_owner_team_id": earner,
+            "team_id": earner,
+            "team_name": earner_name,
+        }
+        owned = apply_registry_owner_to_slot(session, slot, draft_year)
+        selecting = str(owned.get("team_id") or earner)
+        selecting_name = str(owned.get("team_name") or earner_name)
+        orig = str(owned.get("original_owner_team_id") or earner)
+        orig_name = str(owned.get("original_owner_team_name") or earner_name)
+        traded = bool(owned.get("is_traded")) or (selecting and orig and selecting != orig)
+        annotated = {
+            **p,
+            "pick": int(p.get("pick") or owned.get("pick") or 0),
+            "lottery_team_id": earner,
+            "lottery_team_name": earner_name,
+            "original_owner_team_id": orig,
+            "original_owner_team_name": orig_name,
+            # Selecting club (who owns the pick / makes the pick).
+            "team_id": selecting,
+            "team_name": selecting_name,
+            "pick_id": owned.get("pick_id") or p.get("pick_id"),
+            "is_traded": traded,
+        }
+        if traded:
+            annotated["via_team_id"] = orig
+            annotated["via_team_name"] = orig_name
+        else:
+            annotated.pop("via_team_id", None)
+            annotated.pop("via_team_name", None)
+        out.append(annotated)
+    return out
+
+
 def apply_registry_owner_to_slot(session: Any, slot: Dict[str, Any], draft_year: int) -> Dict[str, Any]:
     league = getattr(getattr(session, "sim", None), "league", None)
     if league is None:

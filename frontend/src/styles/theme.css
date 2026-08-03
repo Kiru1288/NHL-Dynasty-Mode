@@ -1,15 +1,1130 @@
+/**
+ * NHL Franchise Mode — canonical design tokens
+ * Authority: DESIGN.md / .impeccable/design.json
+ * Three registers: Office Sanctum · Broadcast Ops · Franchise Shell
+ */
+
 :root {
-  --bg-deep: #050a14;
-  --bg-panel: #0c1526;
-  --bg-panel-alt: #111d32;
-  --border: #3a4a63;
-  --border-bright: #6b7c95;
-  --text: #f0f2f5;
-  --text-muted: #a8b0bf;
-  --accent: #c8102e;
+  /* ─── Office Sanctum ─── */
+  --office-bg: #101218;
+  --office-bg-deep: #0c0e14;
+  --office-desk: rgba(14, 16, 22, 0.9);
+  --office-desk-strong: rgba(10, 12, 18, 0.94);
+  --office-brass: #c9a86a;
+  --office-brass-soft: rgba(201, 168, 106, 0.14);
+  --office-illumination: rgba(201, 168, 106, 0.1);
+  --office-line: rgba(255, 255, 255, 0.08);
+  --office-line-strong: rgba(201, 168, 106, 0.32);
+  --office-text: #ece8e0;
+  --office-text-secondary: rgba(220, 216, 208, 0.58);
+  --office-text-faint: rgba(220, 216, 208, 0.32);
+  --office-focus: #c9a86a;
+  --office-selection: rgba(201, 168, 106, 0.18);
+  --office-blue: #6a9ab8;
+  --office-red: #a84a44;
+  --office-green: #6a9a82;
+
+  /* ─── Broadcast Operations ─── */
+  --ops-navy: #04101a;
+  --ops-navy-deep: #020a11;
+  --ops-black: #061522;
+  --ops-panel: rgba(9, 25, 38, 0.94);
+  --ops-panel-2: rgba(12, 35, 52, 0.94);
+  --ops-panel-3: rgba(15, 46, 66, 0.78);
+  --ops-cyan: #13d8e7;
+  --ops-cyan-soft: rgba(19, 216, 231, 0.13);
+  --ops-gold: #e9a83c;
+  --ops-gold-soft: rgba(233, 168, 60, 0.14);
+  --ops-ice: #38bdf8;
+  --ops-signal-red: #c8102e;
+  --ops-text: #e9f7fb;
+  --ops-text-secondary: #8096a8;
+  --ops-text-disabled: #607789;
+  --ops-grid: rgba(156, 218, 236, 0.14);
+  --ops-grid-2: rgba(115, 229, 241, 0.25);
+  --ops-grid-strong: rgba(73, 231, 240, 0.5);
+  --ops-scan: rgba(19, 216, 231, 0.04);
+  --ops-table-sel: rgba(19, 216, 231, 0.13);
+  --ops-injury: #ff606d;
+  --ops-injury-soft: rgba(255, 96, 109, 0.13);
+  --ops-warning: #e9a83c;
+  --ops-success: #52df94;
+  --ops-success-soft: rgba(82, 223, 148, 0.13);
+  --ops-info: #8ab4ff;
+  --ops-info-soft: rgba(138, 180, 255, 0.13);
+
+  /* ─── Franchise Shell ─── */
+  --shell-bg: #03050c;
+  --shell-bg-1: #070d1c;
+  --shell-bg-2: #0f1830;
+  --shell-structure: rgba(26, 36, 61, 0.55);
+  --shell-structure-hi: #2a3555;
+  --shell-violet: #7b3eb0;
+  --shell-violet-hi: #9d5fd4;
+  --shell-orange: #e07020;
+  --shell-orange-dim: #a85518;
+  --shell-text: #eef0f5;
+  --shell-text-muted: #8b93a8;
+  --shell-silver: #c8cdd8;
+  --shell-neon: #38bdf8;
+  --shell-nav-focus: #38bdf8;
+  --shell-scrim: rgba(3, 5, 12, 0.72);
+
+  /* ─── Typography roles ─── */
+  --font-office-display: "Archivo Black", "Rajdhani", "Barlow Condensed", "Arial Narrow", sans-serif;
+  --font-broadcast-display: "Archivo Black", "Rajdhani", "Barlow Condensed", "Arial Narrow", sans-serif;
+  --font-shell-headline: "Chakra Petch", "Arial Black", sans-serif;
+  --font-ops-ui: Inter, ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-shell-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-editorial: Inter, "IBM Plex Sans", Georgia, serif;
+  --font-mono-data: "IBM Plex Mono", Consolas, "Courier New", monospace;
+
+  --type-office-display-size: 1.35rem;
+  --type-broadcast-display-size: 1.2rem;
+  --type-ops-heading-size: 0.95rem;
+  --type-dept-label-size: 0.72rem;
+  --type-phase-label-size: 0.6875rem;
+  --type-body-size: 0.875rem;
+  --type-compact-size: 0.8125rem;
+  --type-table-value-size: 0.8125rem;
+  --type-table-meta-size: 0.72rem;
+  --type-score-size: 1.25rem;
+  --type-financial-size: 0.875rem;
+  --type-control-label-size: 0.72rem;
+  --type-editorial-size: 1.05rem;
+  --type-wire-ts-size: 0.72rem;
+
+  /* ─── Radius ladder ─── */
+  --radius-ops: 2px;
+  --radius-hud: 4px;
+  --radius-control: 6px;
+  --radius-card: 8px;
+  --radius-panel: 10px;
+  --radius-panel-lg: 12px;
+  --radius-pill: 999px;
+
+  /* ─── Spacing ─── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* ─── Depth / shadow ─── */
+  --depth-flat: none;
+  --depth-registered: 0 1px 0 rgba(255, 255, 255, 0.04);
+  --depth-lifted: 0 12px 32px rgba(0, 0, 0, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --depth-overlay: 0 24px 70px rgba(0, 0, 0, 0.42);
+  --depth-cinematic: 0 32px 90px rgba(0, 0, 0, 0.55);
+  --depth-hud: 0 18px 42px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --depth-shell-glass: 0 12px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --glow-cyan-active: 0 0 22px rgba(19, 216, 231, 0.8);
+  --glow-brass: 0 0 18px rgba(201, 168, 106, 0.35);
+
+  /* ─── Motion ─── */
+  --motion-micro: 110ms ease;
+  --motion-workspace: 200ms cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-department: 380ms cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-cinematic: 620ms cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ─── Z-index layers (absolute values match live overlay stack) ─── */
+  --z-shell: 10;
+  --z-rail: 20;
+  --z-sticky: 30;
+  --z-ticker: 40;
+  --z-inspector: 50;
+  --z-tooltip: 400;
+  --z-modal: 1200;
+  --z-popup: 12000;
+  --z-cinematic: 13000;
+  --z-toast: 14000;
+
+  /* ═══════════════════════════════════════════
+     Compatibility aliases (legacy selectors)
+     ═══════════════════════════════════════════ */
+
+  /* theme.css legacy */
+  --bg-deep: var(--shell-bg);
+  --bg-panel: var(--ops-panel);
+  --bg-panel-alt: var(--ops-panel-2);
+  --border: var(--ops-grid);
+  --border-bright: var(--ops-grid-2);
+  --text: var(--ops-text);
+  --text-muted: var(--ops-text-secondary);
+  --accent: var(--ops-signal-red);
   --accent-dim: #8b0b20;
-  --silver: #c5ccd6;
+  --silver: var(--shell-silver);
   --highlight: rgba(200, 16, 46, 0.18);
-  --font-head: "Arial Black", "Franklin Gothic Heavy", Arial, sans-serif;
-  --font-body: "Segoe UI", Roboto, Arial, sans-serif;
+  --font-head: var(--font-shell-headline);
+  --font-body: var(--font-ops-ui);
+  --font-motion-control: var(--font-office-display);
+
+  /* DESIGN.md color names */
+  --rink-cyan: var(--ops-cyan);
+  --rink-cyan-soft: var(--ops-cyan-soft);
+  --deadline-gold: var(--ops-gold);
+  --deadline-gold-soft: var(--ops-gold-soft);
+  --arena-orange: var(--shell-orange);
+  --franchise-violet: var(--shell-violet);
+  --ice-neon: var(--ops-ice);
+  --nhl-signal-red: var(--ops-signal-red);
+  --void-teal: var(--ops-navy);
+  --void-teal-deep: var(--ops-navy-deep);
+  --void-navy: var(--shell-bg);
+  --office-charcoal: var(--office-bg);
+  --panel-ops: var(--ops-panel);
+  --panel-ops-2: var(--ops-panel-2);
+  --panel-shell: var(--shell-structure);
+  --line-ops: var(--ops-grid);
+  --line-ops-strong: var(--ops-grid-strong);
+  --text-ice: var(--ops-text);
+  --text-shell: var(--shell-text);
+  --text-office: var(--office-text);
+  --muted-ops: var(--ops-text-secondary);
+  --muted-shell: var(--shell-text-muted);
+  --muted-office: var(--office-text-secondary);
+  --status-green: var(--ops-success);
+  --status-red: var(--ops-injury);
+  --status-blue: var(--ops-info);
+
+  /* game-ui shell aliases */
+  --g-navy0: var(--shell-bg);
+  --g-navy1: var(--shell-bg-1);
+  --g-navy2: var(--shell-bg-2);
+  --g-panel: var(--shell-structure);
+  --g-panel-hi: var(--shell-structure-hi);
+  --g-silver: var(--shell-silver);
+  --g-silver-dim: var(--shell-text-muted);
+  --g-purple: var(--shell-violet);
+  --g-purple-hi: var(--shell-violet-hi);
+  --g-orange: var(--shell-orange);
+  --g-orange-dim: var(--shell-orange-dim);
+  --g-neon: var(--shell-neon);
+  --g-text: var(--shell-text);
+  --g-font-head: var(--font-shell-headline);
+  --g-font-body: var(--font-shell-body);
+  --g-space-1: var(--space-3);
+  --g-space-2: var(--space-4);
+  --g-space-3: var(--space-5);
+
+  /* nhlcalShell aliases */
+  --bg: var(--ops-navy);
+  --bg-2: var(--ops-black);
+  --panel: var(--ops-panel);
+  --panel-2: var(--ops-panel-2);
+  --panel-3: var(--ops-panel-3);
+  --line: var(--ops-grid);
+  --line-2: var(--ops-grid-2);
+  --line-strong: var(--ops-grid-strong);
+  --muted: var(--ops-text-secondary);
+  --muted-2: var(--ops-text-disabled);
+  --cyan: var(--ops-cyan);
+  --cyan-soft: var(--ops-cyan-soft);
+  --gold: var(--ops-gold);
+  --gold-soft: var(--ops-gold-soft);
+  --green: var(--ops-success);
+  --green-soft: var(--ops-success-soft);
+  --red: var(--ops-injury);
+  --red-soft: var(--ops-injury-soft);
+  --blue: var(--ops-info);
+  --blue-soft: var(--ops-info-soft);
+  --purple: var(--ops-info, #8ab4ff);
+  --shadow: var(--depth-overlay);
+}
+
+/* Font guard — nothing may fall back to a serif or Arial default */
+html {
+  font-family: var(--font-ops-ui);
+  -webkit-text-size-adjust: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+/* Readability floor for operational surfaces */
+.game-root {
+  --type-floor: 11px;
+}
+
+/* Semantic type utilities (opt-in classes) */
+.type-office-display {
+  font-family: var(--font-office-display);
+  font-size: var(--type-office-display-size);
+  font-weight: 400;
+  line-height: 1.1;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.type-ops-heading {
+  font-family: var(--font-ops-ui);
+  font-size: var(--type-ops-heading-size);
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.type-phase-label,
+.type-dept-label {
+  font-family: var(--font-ops-ui);
+  font-size: var(--type-phase-label-size);
+  font-weight: 900;
+  line-height: 1.2;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.type-body {
+  font-family: var(--font-ops-ui);
+  font-size: var(--type-body-size);
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.type-financial {
+  font-family: var(--font-mono-data);
+  font-size: var(--type-financial-size);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.type-score {
+  font-family: var(--font-broadcast-display);
+  font-size: var(--type-score-size);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+/* Register scopes */
+[data-register="office"],
+.register-office {
+  --local-bg: var(--office-bg);
+  --local-text: var(--office-text);
+  --local-muted: var(--office-text-secondary);
+  --local-accent: var(--office-brass);
+  --local-line: var(--office-line);
+  --local-panel: var(--office-desk);
+  --local-radius: var(--radius-hud);
+  --local-font: var(--font-office-display);
+  color: var(--local-text);
+  font-family: var(--local-font);
+}
+
+[data-register="ops"],
+.register-ops {
+  --local-bg: var(--ops-navy);
+  --local-text: var(--ops-text);
+  --local-muted: var(--ops-text-secondary);
+  --local-accent: var(--ops-cyan);
+  --local-line: var(--ops-grid);
+  --local-panel: var(--ops-panel);
+  --local-radius: var(--radius-card);
+  --local-font: var(--font-ops-ui);
+  color: var(--local-text);
+  font-family: var(--local-font);
+}
+
+[data-register="shell"],
+.register-shell {
+  --local-bg: var(--shell-bg);
+  --local-text: var(--shell-text);
+  --local-muted: var(--shell-text-muted);
+  --local-accent: var(--shell-orange);
+  --local-line: rgba(255, 255, 255, 0.08);
+  --local-panel: var(--shell-structure);
+  --local-radius: var(--radius-control);
+  --local-font: var(--font-shell-body);
+  color: var(--local-text);
+  font-family: var(--local-font);
+}
+
+/* Depth helpers */
+.depth-flat { box-shadow: var(--depth-flat); }
+.depth-registered { box-shadow: var(--depth-registered); }
+.depth-lifted { box-shadow: var(--depth-lifted); }
+.depth-overlay { box-shadow: var(--depth-overlay); }
+.depth-cinematic { box-shadow: var(--depth-cinematic); }
+
+/* Status marks — not pills by default */
+.mark-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-ops-ui);
+  font-size: var(--type-table-meta-size);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ops-text-secondary);
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.mark-status::before {
+  content: "";
+  width: 8px;
+  height: 2px;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.mark-status--injured { color: var(--ops-injury); }
+.mark-status--injured::before { width: 10px; height: 10px; border: 1.5px solid currentColor; background: transparent; border-radius: 1px; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+
+.mark-status--warning { color: var(--ops-warning); }
+.mark-status--success { color: var(--ops-success); }
+.mark-status--info { color: var(--ops-info); }
+.mark-status--expiring { color: var(--ops-gold); }
+.mark-status--unsigned { color: var(--ops-ice); }
+.mark-status--scouted { color: var(--ops-cyan); }
+
+.mark-seal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  padding: 2px 6px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-ops);
+  font-size: 0.65rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.92;
+}
+
+/* Operational empty / loading / error states */
+.ops-state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px dashed var(--ops-grid);
+  border-radius: var(--radius-control);
+  background: rgba(6, 21, 34, 0.55);
+  color: var(--ops-text-secondary);
+  max-width: 420px;
+}
+
+.ops-state__kicker {
+  font-size: var(--type-phase-label-size);
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ops-cyan);
+}
+
+.ops-state__title {
+  margin: 0;
+  font-size: var(--type-ops-heading-size);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ops-text);
+}
+
+.ops-state__body {
+  margin: 0;
+  font-size: var(--type-compact-size);
+  line-height: 1.45;
+}
+
+.ops-state--error {
+  border-style: solid;
+  border-color: rgba(255, 96, 109, 0.35);
+}
+
+.ops-state--loading .ops-state__kicker::after {
+  content: "";
+  display: inline-block;
+  width: 28px;
+  height: 2px;
+  margin-left: 8px;
+  vertical-align: middle;
+  background: linear-gradient(90deg, transparent, var(--ops-cyan), transparent);
+  background-size: 200% 100%;
+  animation: opsSyncSweep 1.1s linear infinite;
+}
+
+@keyframes opsSyncSweep {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* Focus rings */
+:focus-visible {
+  outline: 2px solid var(--ops-cyan);
+  outline-offset: 2px;
+}
+
+[data-register="office"] :focus-visible,
+.register-office :focus-visible {
+  outline-color: var(--office-brass);
+}
+
+[data-register="shell"] :focus-visible,
+.register-shell :focus-visible {
+  outline-color: var(--shell-neon);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .ops-state--loading .ops-state__kicker::after {
+    animation: none !important;
+    opacity: 0.5;
+  }
+}
+
+/* --- Motion system utilities --- */
+.motion-micro {
+  transition:
+    color var(--motion-micro),
+    background var(--motion-micro),
+    border-color var(--motion-micro),
+    box-shadow var(--motion-micro),
+    transform var(--motion-micro);
+}
+
+.motion-workspace-enter {
+  animation: workspaceEnter var(--motion-workspace) var(--ease-out-expo) both;
+}
+
+.motion-department-enter {
+  animation: departmentEnter var(--motion-department) var(--ease-out-expo) both;
+}
+
+.motion-focus-sweep::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 40%, rgba(19, 216, 231, 0.08) 50%, transparent 60%);
+  background-size: 220% 100%;
+  animation: focusSweep 520ms var(--ease-out-expo) both;
+}
+
+@keyframes workspaceEnter {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+    clip-path: inset(0 8% 0 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes departmentEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes focusSweep {
+  from { background-position: 120% 0; }
+  to { background-position: -20% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-workspace-enter,
+  .motion-department-enter,
+  .motion-focus-sweep::after {
+    animation: none !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   State-change motion vocabulary
+   Each entry communicates one specific change. No entry animates
+   a layout dimension, so nothing reflows while it plays.
+   ═══════════════════════════════════════════════════════════ */
+
+/* Tab / category swap: the panel shell stays put, only content is replaced. */
+.motion-tabswap {
+  animation: tabSwap 170ms var(--ease-out-expo) both;
+}
+
+@keyframes tabSwap {
+  from { opacity: 0; transform: translate3d(0, 4px, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Inspector content swap: no travel, so the reader's eye stays on the value. */
+.motion-inspector-swap {
+  animation: inspectorSwap 190ms var(--ease-out-expo) both;
+}
+
+@keyframes inspectorSwap {
+  from { opacity: 0.15; }
+  to { opacity: 1; }
+}
+
+/* Row / unit selection confirm: a rail wipes in from the leading edge. */
+.motion-select-confirm::before {
+  animation: selectRail 200ms var(--ease-out-expo) both;
+}
+
+@keyframes selectRail {
+  from { transform: scaleY(0.2); opacity: 0; }
+  to { transform: scaleY(1); opacity: 1; }
+}
+
+/* Trade asset entering / leaving a package well. */
+.motion-asset-in {
+  animation: assetIn 220ms var(--ease-out-expo) both;
+}
+
+.motion-asset-out {
+  animation: assetOut 160ms ease-in both;
+}
+
+@keyframes assetIn {
+  from { opacity: 0; transform: translate3d(0, -6px, 0); box-shadow: inset 0 0 0 1px var(--ops-gold); }
+  to { opacity: 1; transform: none; box-shadow: none; }
+}
+
+@keyframes assetOut {
+  from { opacity: 1; }
+  to { opacity: 0; transform: translate3d(0, 4px, 0); }
+}
+
+/* Lineup placement feedback: the affected unit flashes its rail, not the board. */
+.motion-placement {
+  animation: placementMark 420ms var(--ease-out-expo) both;
+}
+
+@keyframes placementMark {
+  0% { box-shadow: inset 3px 0 0 var(--ops-cyan), inset 0 0 0 100vmax rgba(19, 216, 231, 0.12); }
+  100% { box-shadow: inset 3px 0 0 var(--ops-cyan), inset 0 0 0 100vmax rgba(19, 216, 231, 0); }
+}
+
+/* Value changed in a table cell (sort / filter / refresh). */
+.motion-value-change {
+  animation: valueChange 380ms ease-out both;
+}
+
+@keyframes valueChange {
+  0% { color: var(--ops-cyan); }
+  100% { color: inherit; }
+}
+
+/* ─── Overlay categories ─── */
+
+/* Standard modal: restrained. It is a form, not an event. */
+.overlay-anim--modal {
+  animation: overlayModal 170ms var(--ease-out-expo) both;
+}
+
+@keyframes overlayModal {
+  from { opacity: 0; transform: translate3d(0, 8px, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Transaction popup: consequence lands from the side, like a wire slip. */
+.overlay-anim--transaction {
+  animation: overlayTransaction 260ms var(--ease-out-expo) both;
+}
+
+@keyframes overlayTransaction {
+  from { opacity: 0; transform: translate3d(24px, 0, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Broadcast interrupt: a hard horizontal wipe, no fade-in drift. */
+.overlay-anim--broadcast {
+  animation: overlayBroadcast 300ms cubic-bezier(0.7, 0, 0.2, 1) both;
+}
+
+@keyframes overlayBroadcast {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
+/* Decision event: the frame settles before the choices become readable. */
+.overlay-anim--decision {
+  animation: overlayDecision 340ms var(--ease-out-expo) both;
+}
+
+@keyframes overlayDecision {
+  0% { opacity: 0; transform: scale(0.985); }
+  60% { opacity: 1; }
+  100% { opacity: 1; transform: none; }
+}
+
+/* Cinematic event: longest reveal, reserved for league-scale moments. */
+.overlay-anim--cinematic {
+  animation: overlayCinematic var(--motion-cinematic) both;
+}
+
+@keyframes overlayCinematic {
+  0% { opacity: 0; transform: scale(1.015); filter: brightness(0.7); }
+  100% { opacity: 1; transform: none; filter: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-tabswap,
+  .motion-inspector-swap,
+  .motion-select-confirm::before,
+  .motion-asset-in,
+  .motion-asset-out,
+  .motion-placement,
+  .motion-value-change,
+  .overlay-anim--modal,
+  .overlay-anim--transaction,
+  .overlay-anim--broadcast,
+  .overlay-anim--decision,
+  .overlay-anim--cinematic {
+    animation: none !important;
+  }
+
+  /* Selected and consequence states must still read without motion. */
+  .motion-asset-in {
+    box-shadow: inset 3px 0 0 var(--ops-gold);
+  }
+
+  .overlay-anim--broadcast {
+    clip-path: none;
+    border-left: 3px solid var(--ops-cyan);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   FRANCHISE COMMAND NETWORK — brand vocabulary
+   Reusable marks shared by every department. Each one encodes a
+   state or a role; none of them is decoration you can apply freely.
+   ═══════════════════════════════════════════════════════════ */
+
+:root {
+  --fcn-cut: 10px;
+  --fcn-cut-sm: 6px;
+  --fcn-rail-w: 3px;
+}
+
+/* 1 · Rink Cut — a single clipped corner taken from rink-board geometry.
+   Reserved for committing actions and department headers. */
+.fcn-cut {
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--fcn-cut)) 0,
+    100% var(--fcn-cut),
+    100% 100%,
+    0 100%
+  );
+  border-radius: 0;
+}
+
+.fcn-cut--sm {
+  --fcn-cut: var(--fcn-cut-sm);
+}
+
+.fcn-cut--lead {
+  clip-path: polygon(
+    var(--fcn-cut) 0,
+    100% 0,
+    100% 100%,
+    0 100%,
+    0 var(--fcn-cut)
+  );
+  border-radius: 0;
+}
+
+/* 2 · Broadcast Rail — encodes selection, live state, or side ownership. */
+.fcn-rail {
+  position: relative;
+}
+
+.fcn-rail::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--fcn-rail-w);
+  background: var(--fcn-rail-color, var(--ops-cyan));
+  transform-origin: center top;
+}
+
+.fcn-rail--gold { --fcn-rail-color: var(--ops-gold); }
+.fcn-rail--red { --fcn-rail-color: var(--ops-signal-red); }
+.fcn-rail--brass { --fcn-rail-color: var(--office-brass); }
+.fcn-rail--quiet { --fcn-rail-color: var(--ops-text-disabled); }
+
+.fcn-rail--top::before {
+  left: 0;
+  right: 0;
+  bottom: auto;
+  width: auto;
+  height: var(--fcn-rail-w);
+}
+
+/* 3 · Equipment Plate — identification label: number, position, code, term. */
+.fcn-plate {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  padding: 1px 5px;
+  border: 1px solid var(--fcn-plate-line, var(--ops-grid));
+  border-radius: var(--radius-ops);
+  background: var(--fcn-plate-fill, rgba(255, 255, 255, 0.03));
+  color: var(--fcn-plate-ink, var(--ops-text));
+  font-family: var(--font-ops-ui);
+  font-size: var(--type-table-meta-size);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+  text-transform: uppercase;
+  line-height: 1.5;
+}
+
+.fcn-plate--number {
+  --fcn-plate-ink: var(--ops-text);
+  --fcn-plate-line: var(--ops-grid-2);
+  letter-spacing: 0.02em;
+}
+
+.fcn-plate--position {
+  --fcn-plate-ink: var(--ops-cyan);
+  --fcn-plate-line: rgba(19, 216, 231, 0.32);
+  --fcn-plate-fill: var(--ops-cyan-soft);
+}
+
+.fcn-plate--term {
+  --fcn-plate-ink: var(--ops-gold);
+  --fcn-plate-line: rgba(233, 168, 60, 0.32);
+  --fcn-plate-fill: var(--ops-gold-soft);
+}
+
+.fcn-plate--office {
+  --fcn-plate-ink: var(--office-brass);
+  --fcn-plate-line: var(--office-line-strong);
+  --fcn-plate-fill: var(--office-brass-soft);
+  font-family: var(--font-office-display);
+}
+
+/* 4 · League Stamp — formal document status. Framed text, never a bubble. */
+.fcn-stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 7px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-ops);
+  font-family: var(--font-ops-ui);
+  font-size: var(--type-table-meta-size);
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ops-text-secondary);
+  background: transparent;
+}
+
+.fcn-stamp--approved { color: var(--ops-success); }
+.fcn-stamp--pending { color: var(--ops-gold); }
+.fcn-stamp--rejected { color: var(--ops-injury); }
+.fcn-stamp--filed { color: var(--ops-info); }
+.fcn-stamp--locked { color: var(--ops-text-disabled); }
+.fcn-stamp--office {
+  color: var(--office-brass);
+  font-family: var(--font-office-display);
+  letter-spacing: 0.14em;
+}
+
+/* 5 · Scorebug Header — compact department context, never a hero banner. */
+.fcn-scorebug {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 38px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--ops-grid);
+  background: linear-gradient(180deg, rgba(9, 25, 38, 0.94), rgba(4, 16, 26, 0.88));
+  font-family: var(--font-ops-ui);
+}
+
+.fcn-scorebug__code {
+  font-size: var(--type-phase-label-size);
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ops-cyan);
+}
+
+.fcn-scorebug__title {
+  margin: 0;
+  font-size: var(--type-ops-heading-size);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ops-text);
+}
+
+.fcn-scorebug__context {
+  font-size: var(--type-compact-size);
+  font-weight: 700;
+  color: var(--ops-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.fcn-scorebug__spacer { margin-left: auto; }
+
+/* 6 · Tactical Tape — coaching emphasis and concern annotation. */
+.fcn-tape {
+  position: relative;
+  padding-left: 12px;
+  font-size: var(--type-compact-size);
+  color: var(--ops-text-secondary);
+}
+
+.fcn-tape::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 8px;
+  height: 2px;
+  background: var(--fcn-tape-color, var(--ops-gold));
+}
+
+.fcn-tape--concern { --fcn-tape-color: var(--ops-injury); }
+.fcn-tape--strength { --fcn-tape-color: var(--ops-success); }
+
+/* 7 · Ledger Spine — connects paired financial or transaction structure. */
+.fcn-spine {
+  position: relative;
+}
+
+.fcn-spine::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    var(--ops-grid-2) 12%,
+    var(--ops-grid-2) 88%,
+    transparent
+  );
+  pointer-events: none;
+}
+
+/* 8 · Signal Lamp — live binary state. Text is mandatory, colour never alone. */
+.fcn-lamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-ops-ui);
+  font-size: var(--type-table-meta-size);
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ops-text-secondary);
+}
+
+.fcn-lamp::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 1px;
+  background: var(--fcn-lamp-color, var(--ops-text-disabled));
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4) inset;
+  flex-shrink: 0;
+}
+
+.fcn-lamp--live { --fcn-lamp-color: var(--ops-success); color: var(--ops-success); }
+.fcn-lamp--working { --fcn-lamp-color: var(--ops-cyan); color: var(--ops-cyan); }
+.fcn-lamp--warning { --fcn-lamp-color: var(--ops-gold); color: var(--ops-gold); }
+.fcn-lamp--fault { --fcn-lamp-color: var(--ops-injury); color: var(--ops-injury); }
+.fcn-lamp--idle { --fcn-lamp-color: var(--ops-text-disabled); }
+
+.fcn-lamp--working::before {
+  animation: fcnLampPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes fcnLampPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* 9 · Broadcast Wipe — context change and interruption only. */
+.fcn-wipe {
+  animation: fcnWipe var(--motion-department) cubic-bezier(0.7, 0, 0.2, 1) both;
+}
+
+@keyframes fcnWipe {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
+/* ─── Loader families: one per register, none of them a spinner ─── */
+.fcn-load {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--font-ops-ui);
+}
+
+.fcn-load__label {
+  margin: 0;
+  font-size: var(--type-phase-label-size);
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ops-text-secondary);
+}
+
+/* Office: a brass registration line sweeping a filing drawer. */
+.fcn-load--office .fcn-load__track {
+  height: 2px;
+  background: var(--office-line);
+  position: relative;
+  overflow: hidden;
+}
+
+.fcn-load--office .fcn-load__track::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--office-brass), transparent);
+  transform: translateX(-100%);
+  animation: fcnOfficeRegister 1.6s ease-in-out infinite;
+}
+
+.fcn-load--office .fcn-load__label {
+  color: var(--office-text-secondary);
+  font-family: var(--font-office-display);
+}
+
+@keyframes fcnOfficeRegister {
+  to { transform: translateX(100%); }
+}
+
+/* Ops: three scoreboard segments cycling like a data rail update. */
+.fcn-load--ops .fcn-load__track {
+  display: flex;
+  gap: 3px;
+}
+
+.fcn-load--ops .fcn-load__track span {
+  height: 3px;
+  flex: 1;
+  background: var(--ops-grid);
+  animation: fcnOpsSegment 1.2s ease-in-out infinite;
+}
+
+.fcn-load--ops .fcn-load__track span:nth-child(2) { animation-delay: 0.16s; }
+.fcn-load--ops .fcn-load__track span:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes fcnOpsSegment {
+  0%, 100% { background: var(--ops-grid); }
+  40% { background: var(--ops-cyan); }
+}
+
+/* Cinematic: an event title bar registering into place. */
+.fcn-load--cinematic .fcn-load__track {
+  height: 4px;
+  background: rgba(233, 168, 60, 0.16);
+  position: relative;
+  overflow: hidden;
+}
+
+.fcn-load--cinematic .fcn-load__track::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--ops-gold);
+  transform: scaleX(0.18);
+  transform-origin: left center;
+  animation: fcnCinematicRegister 1.8s var(--ease-out-expo) infinite;
+}
+
+.fcn-load--cinematic .fcn-load__label {
+  color: var(--ops-gold);
+  letter-spacing: 0.2em;
+}
+
+@keyframes fcnCinematicRegister {
+  0% { transform: scaleX(0.12); opacity: 0.6; }
+  60% { transform: scaleX(1); opacity: 1; }
+  100% { transform: scaleX(1); opacity: 0.25; }
+}
+
+/* Table skeletons keep the real row geometry so nothing shifts on arrival. */
+.fcn-skeleton-row {
+  height: 28px;
+  border-bottom: 1px solid rgba(156, 218, 236, 0.08);
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.02) 0%,
+    rgba(255, 255, 255, 0.05) 40%,
+    rgba(255, 255, 255, 0.02) 80%
+  );
+  background-size: 220% 100%;
+  animation: fcnSkeleton 1.4s linear infinite;
+}
+
+@keyframes fcnSkeleton {
+  from { background-position: 120% 0; }
+  to { background-position: -60% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fcn-wipe,
+  .fcn-lamp--working::before,
+  .fcn-skeleton-row,
+  .fcn-load--office .fcn-load__track::after,
+  .fcn-load--ops .fcn-load__track span,
+  .fcn-load--cinematic .fcn-load__track::after {
+    animation: none !important;
+  }
+
+  /* Loading must still read as loading without movement. */
+  .fcn-load--ops .fcn-load__track span:first-child { background: var(--ops-cyan); }
+  .fcn-load--office .fcn-load__track::after { transform: none; opacity: 0.5; }
+  .fcn-load--cinematic .fcn-load__track::after { transform: scaleX(0.4); }
+  .fcn-lamp--working::before { opacity: 1; }
+}
+
+/* Short viewport densify (1366x768 class) */
+@media (max-height: 800px) {
+  .nhlcal-topbar {
+    min-height: 72px !important;
+    gap: 12px !important;
+  }
+  .nhlcal-main {
+    padding: 14px 16px 16px !important;
+  }
+}
+
+@media (max-width: 1400px) and (max-height: 800px) {
+  .game-screen .ops-state {
+    padding: 10px 12px;
+  }
 }

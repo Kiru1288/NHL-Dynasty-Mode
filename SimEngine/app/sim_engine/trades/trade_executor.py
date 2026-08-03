@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import uuid
 import copy
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.sim_engine.trades.trade_asset import (
     DraftPickTradeAsset,
@@ -21,6 +21,7 @@ from app.sim_engine.trades.trade_evaluator import evaluate_trade_package
 from app.sim_engine.trades.trade_history import append_trade_record
 from app.sim_engine.trades.trade_pick_registry import (
     audit_pick_registry_integrity,
+    draft_year_from_context,
     ensure_draft_pick_registry,
     sync_owned_pick_ids_from_registry,
     transfer_pick,
@@ -48,6 +49,120 @@ def _append_retained_record(team: Any, record: RetainedSalaryRecord, season_labe
     setattr(team, "retained_salary_records", rows)
 
 
+def _org_list_attrs() -> Tuple[str, ...]:
+    return ("roster", "ahl_roster", "echl_roster", "prospect_pool")
+
+
+def _snapshot_team_org_lists(team: Any) -> Dict[str, List[Any]]:
+    return {attr: list(getattr(team, attr, None) or []) for attr in _org_list_attrs()}
+
+
+def _restore_team_org_lists(team: Any, snap: Dict[str, List[Any]]) -> None:
+    for attr, rows in snap.items():
+        setattr(team, attr, list(rows))
+
+
+def _purge_player_id_from_team_lists(team: Any, player_id: str) -> int:
+    """Remove every roster/affiliate/scratch reference to player_id on one club."""
+    pid = str(player_id or "")
+    if not pid or team is None:
+        return 0
+    removed = 0
+    for attr in _org_list_attrs():
+        rows = list(getattr(team, attr, None) or [])
+        keep = [p for p in rows if str(getattr(p, "id", "")) != pid]
+        if len(keep) != len(rows):
+            removed += len(rows) - len(keep)
+            setattr(team, attr, keep)
+    scratches = list(getattr(team, "scratches", None) or [])
+    if scratches:
+        keep_sc = []
+        for entry in scratches:
+            eid = str(getattr(entry, "id", "") or entry or "")
+            if eid == pid:
+                removed += 1
+                continue
+            keep_sc.append(entry)
+        try:
+            setattr(team, "scratches", keep_sc)
+        except Exception:
+            pass
+    return removed
+
+
+def _purge_player_from_other_organizations(
+    team_by_id: Dict[str, Any],
+    player_id: str,
+    *,
+    keep_team_id: str,
+) -> None:
+    """
+    After a trade move, ensure the player exists on only the acquiring club.
+
+    Incomplete removals (duplicate org copies, stale scratches) previously let the
+    same identity dress for two NHL clubs and accumulate ~164 GP in an 82-game season.
+    """
+    pid = str(player_id or "")
+    keep = str(keep_team_id or "")
+    if not pid:
+        return
+    for tid, tm in (team_by_id or {}).items():
+        if str(tid) == keep or str(team_id_of(tm) if tm is not None else "") == keep:
+            continue
+        _purge_player_id_from_team_lists(tm, pid)
+
+
+def _resolve_trade_destination_attr(loc: str, player: Any) -> str:
+    """Deterministic post-trade assignment (validate before commit).
+
+    Rules:
+    - NHL roster source → NHL roster
+    - AHL / ECHL / prospect with an NHL SPC → receiving AHL (preserve affiliate level)
+    - Unsigned prospect (draft rights) → receiving prospect pool
+    - Otherwise → NHL roster
+    """
+    from app.sim_engine.trades.trade_asset import player_holds_nhl_spc
+
+    if loc == "nhl":
+        return "roster"
+    if loc in ("ahl", "echl", "prospect") and player_holds_nhl_spc(player):
+        return "ahl_roster"
+    if loc == "prospect":
+        return "prospect_pool"
+    return "roster"
+
+
+def _sync_assignment_flags(player: Any, dest_attr: str) -> None:
+    if dest_attr == "roster":
+        player.in_minors = False
+        player.is_buried = False
+        player.roster_location = "nhl"
+    elif dest_attr == "ahl_roster":
+        player.in_minors = True
+        player.roster_location = "ahl"
+    elif dest_attr == "echl_roster":
+        player.in_minors = True
+        player.roster_location = "echl"
+    elif dest_attr == "prospect_pool":
+        player.in_minors = True
+        player.roster_location = "prospect"
+
+
+def _move_reserve_list_entry(source: Any, acq: Any, player_id: str, acquiring_team_id: Any) -> None:
+    """Carry the unsigned-rights reserve row across with the player."""
+    src_rows = list(getattr(source, "reserve_list", None) or [])
+    moved = [r for r in src_rows if isinstance(r, dict) and str(r.get("player_id") or "") == player_id]
+    if not moved:
+        return
+    setattr(source, "reserve_list", [r for r in src_rows if r not in moved])
+    dest_rows = list(getattr(acq, "reserve_list", None) or [])
+    for row in moved:
+        row["team_id"] = str(acquiring_team_id)
+        row["rights_team_id"] = str(acquiring_team_id)
+        dest_rows.append(row)
+    setattr(acq, "reserve_list", dest_rows)
+
+
 def _apply_player_move(
     asset: PlayerTradeAsset,
     team_by_id: Dict[str, Any],
@@ -57,21 +172,67 @@ def _apply_player_move(
     retained_records: List[Dict[str, Any]],
     context: Optional[Dict[str, Any]] = None,
 ) -> None:
+    from app.sim_engine.trades.trade_asset import find_player_in_organization
+
     source = team_by_id.get(str(asset.source_team_id)) or team_by_id.get(asset.source_team_id)
     acq = team_by_id.get(str(asset.acquiring_team_id)) or team_by_id.get(asset.acquiring_team_id)
     if source is None or acq is None:
         raise ValueError(f"Teams missing for player move {asset.player_id}")
 
-    src_roster = list(getattr(source, "roster", None) or [])
-    idx = next((i for i, p in enumerate(src_roster) if str(getattr(p, "id", "")) == asset.player_id), -1)
-    if idx < 0:
-        raise ValueError(f"Player {asset.player_id} not on source roster during execution")
+    player, loc, idx = find_player_in_organization(source, asset.player_id)
+    if player is None or idx < 0:
+        raise ValueError(f"Player {asset.player_id} not in source organization during execution")
 
-    player = src_roster.pop(idx)
-    acq_roster = list(getattr(acq, "roster", None) or [])
-    acq_roster.append(player)
-    setattr(source, "roster", src_roster)
-    setattr(acq, "roster", acq_roster)
+    list_attr = {
+        "nhl": "roster",
+        "ahl": "ahl_roster",
+        "echl": "echl_roster",
+        "prospect": "prospect_pool",
+    }.get(loc, "roster")
+    src_list = list(getattr(source, list_attr, None) or [])
+    if idx >= len(src_list) or str(getattr(src_list[idx], "id", "")) != str(asset.player_id):
+        player, loc, idx = find_player_in_organization(source, asset.player_id)
+        list_attr = {
+            "nhl": "roster",
+            "ahl": "ahl_roster",
+            "echl": "echl_roster",
+            "prospect": "prospect_pool",
+        }.get(loc, "roster")
+        src_list = list(getattr(source, list_attr, None) or [])
+        if player is None or idx < 0 or idx >= len(src_list):
+            raise ValueError(f"Player {asset.player_id} list index invalid during execution")
+
+    dest_attr = _resolve_trade_destination_attr(loc, src_list[idx])
+    # Validate destination before mutating source.
+    if not hasattr(acq, dest_attr) or getattr(acq, dest_attr, None) is None:
+        setattr(acq, dest_attr, [])
+
+    player = src_list.pop(idx)
+    setattr(source, list_attr, src_list)
+
+    dest_list = list(getattr(acq, dest_attr) or [])
+    dest_list.append(player)
+    setattr(acq, dest_attr, dest_list)
+    try:
+        _sync_assignment_flags(player, dest_attr)
+    except Exception:
+        pass
+
+    # Belt-and-suspenders: drop any leftover copies on every other club.
+    _purge_player_from_other_organizations(
+        team_by_id,
+        str(asset.player_id),
+        keep_team_id=str(asset.acquiring_team_id),
+    )
+    # Also scrub non-destination lists on the acquiring club (e.g. duplicate
+    # prospect_pool entry after an NHL move).
+    for attr in _org_list_attrs():
+        if attr == dest_attr:
+            continue
+        rows = list(getattr(acq, attr, None) or [])
+        keep = [p for p in rows if str(getattr(p, "id", "")) != str(asset.player_id)]
+        if len(keep) != len(rows):
+            setattr(acq, attr, keep)
 
     for field in ("team_id", "current_team_id", "last_team_id"):
         try:
@@ -82,6 +243,16 @@ def _apply_player_move(
         except Exception:
             pass
 
+    # Draft rights follow the player, otherwise the prospect still reads as
+    # belonging to the club that drafted him on every rights surface.
+    if getattr(player, "nhl_rights_team_id", None) is not None:
+        for field in ("nhl_rights_team_id", "rights_team_id"):
+            try:
+                setattr(player, field, asset.acquiring_team_id)
+            except Exception:
+                pass
+        _move_reserve_list_entry(source, acq, str(asset.player_id), asset.acquiring_team_id)
+
     ctx = context or {}
     cursor = int(ctx.get("calendar_cursor", 0) or 0)
     for field, val in (
@@ -89,6 +260,7 @@ def _apply_player_move(
         ("last_acquired_date", ctx.get("calendar_iso")),
         ("acquired_from_team_id", asset.source_team_id),
         ("acquired_via_trade", True),
+        ("acquired_via_trade_season", ctx.get("season_year")),
     ):
         try:
             setattr(player, field, val)
@@ -111,10 +283,13 @@ def _apply_player_move(
             "acquiring_team_id": asset.acquiring_team_id,
             "applied": True,
             "retained_pct": asset.retained_pct,
+            "from_level": loc,
+            "to_level": {"roster": "nhl", "ahl_roster": "ahl", "prospect_pool": "prospect"}.get(dest_attr, "nhl"),
         }
     )
 
     if asset.retained_pct > 0:
+        # Cap charge stays with source; SPC / 50-slot follows the player to acquiring.
         cap_hit = player_cap_hit_millions(player)
         retained_m = cap_hit * (asset.retained_pct / 100.0)
         rec = RetainedSalaryRecord(
@@ -203,19 +378,35 @@ def execute_validated_trade(
         y = int(ctx["season_year"])
         season_label = f"{y}-{(y + 1) % 100:02d}"
 
-    ensure_draft_pick_registry(league, start_year=ctx.get("season_year"))
+    ensure_draft_pick_registry(league, start_year=draft_year_from_context(ctx, league=league))
 
-    # Snapshot mutable state for rollback
-    snapshots: Dict[str, List[Any]] = {}
+    # Snapshot mutable org state for full rollback (NHL + affiliates + retention).
+    snapshots: Dict[str, Dict[str, List[Any]]] = {}
+    retained_snapshots: Dict[str, List[Any]] = {}
     registry_snapshot = copy.deepcopy(dict(getattr(league, "draft_pick_registry", {}) or {}))
     owned_pick_ids_snapshot: Dict[str, List[str]] = {}
     for tid, tm in team_by_id.items():
-        snapshots[tid] = list(getattr(tm, "roster", None) or [])
+        snapshots[tid] = _snapshot_team_org_lists(tm)
+        retained_snapshots[tid] = list(getattr(tm, "retained_salary_records", None) or [])
         owned_pick_ids_snapshot[tid] = list(getattr(tm, "owned_pick_ids", None) or [])
 
     moved_players: List[Dict[str, Any]] = []
     moved_picks: List[Dict[str, Any]] = []
     retained_records: List[Dict[str, Any]] = []
+
+    def _rollback_all() -> None:
+        for tid, tm in team_by_id.items():
+            if tid in snapshots:
+                _restore_team_org_lists(tm, snapshots[tid])
+            if tid in retained_snapshots:
+                setattr(tm, "retained_salary_records", list(retained_snapshots[tid]))
+            if tid in owned_pick_ids_snapshot:
+                setattr(tm, "owned_pick_ids", list(owned_pick_ids_snapshot[tid]))
+        setattr(league, "draft_pick_registry", registry_snapshot)
+        try:
+            sync_owned_pick_ids_from_registry(league)
+        except Exception:
+            pass
 
     try:
         for asset in package.normalized_assets:
@@ -231,21 +422,12 @@ def execute_validated_trade(
             elif isinstance(asset, DraftPickTradeAsset):
                 _apply_pick_move(asset, league, moved_picks)
     except Exception as exc:
-        for tid, tm in team_by_id.items():
-            if tid in snapshots:
-                setattr(tm, "roster", snapshots[tid])
-            if tid in owned_pick_ids_snapshot:
-                setattr(tm, "owned_pick_ids", list(owned_pick_ids_snapshot[tid]))
-        setattr(league, "draft_pick_registry", registry_snapshot)
-        try:
-            sync_owned_pick_ids_from_registry(league)
-        except Exception:
-            pass
+        _rollback_all()
         raise ValueError(f"Trade execution failed and was rolled back: {exc}") from exc
 
     try:
         sync_owned_pick_ids_from_registry(league)
-        start_y = int(ctx.get("season_year") or 2025)
+        start_y = int(draft_year_from_context(ctx, league=league))
         audit = audit_pick_registry_integrity(
             league,
             start_year=start_y,
@@ -257,16 +439,7 @@ def execute_validated_trade(
                 f"Post-trade pick registry integrity check failed: {(audit.get('errors') or ['unknown'])[0]}"
             )
     except Exception as exc:
-        for tid, tm in team_by_id.items():
-            if tid in snapshots:
-                setattr(tm, "roster", snapshots[tid])
-            if tid in owned_pick_ids_snapshot:
-                setattr(tm, "owned_pick_ids", list(owned_pick_ids_snapshot[tid]))
-        setattr(league, "draft_pick_registry", registry_snapshot)
-        try:
-            sync_owned_pick_ids_from_registry(league)
-        except Exception:
-            pass
+        _rollback_all()
         raise ValueError(f"Trade execution failed and was rolled back: {exc}") from exc
 
     headline_bits = []

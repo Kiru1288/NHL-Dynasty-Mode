@@ -62,12 +62,18 @@ def _iter_known_players(league: Any) -> Iterable[Any]:
         for entry in getattr(team, "reserve_list", None) or []:
             if isinstance(entry, dict) and entry.get("player_ref") is not None:
                 yield entry["player_ref"]
+        for entry in getattr(team, "rfa_rights", None) or []:
+            if isinstance(entry, dict) and entry.get("player_ref") is not None:
+                yield entry["player_ref"]
     for block in getattr(league, "development_leagues", None) or []:
         for tm in block.get("teams") or []:
             for p in tm.get("players") or []:
                 yield p
     for p in getattr(league, "global_player_pool", None) or []:
         yield p
+    for pool_attr in ("free_agents", "overseas_free_agents"):
+        for p in getattr(league, pool_attr, None) or []:
+            yield p
 
 
 def rebuild_players_by_id(league: Any, *, only_if_missing: bool = False) -> Dict[str, Any]:

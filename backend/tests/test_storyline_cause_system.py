@@ -18,6 +18,8 @@ for p in (str(ROOT / "backend"), str(ROOT / "SimEngine")):
 
 os.environ.setdefault("NHL_FRANCHISE_DEBUG", "1")
 
+import pytest
+
 from services.franchise_sim import (  # noqa: E402
     advance_franchise_day,
     build_state_payload,
@@ -51,6 +53,12 @@ FAKE_MARKERS = (
 )
 
 RESULTS: List[Dict[str, Any]] = []
+
+
+@pytest.fixture
+def session_holder() -> Dict[str, Any]:
+    """Shared bag so sequential storyline tests can reuse franchise context."""
+    return {}
 
 
 def record(test_id: str, name: str, passed: bool, details: str, notes: str = "") -> None:

@@ -137,10 +137,20 @@ export function resolveCountryCode(raw) {
   return null;
 }
 
+/** flagsapi.com serves these sizes only; anything else 500s and renders as a broken image. */
+const FLAG_API_SIZES = [16, 24, 32, 48, 64];
+
+/** Rounds up so a flag is never sourced smaller than the box it renders into. */
+export function nearestFlagApiSize(size) {
+  const n = Number(size);
+  if (!Number.isFinite(n)) return 64;
+  return FLAG_API_SIZES.find((candidate) => candidate >= n) || 64;
+}
+
 export function flagApiUrl(countryOrCode, size = 64, style = "flat") {
   const iso2 = resolveCountryCode(countryOrCode);
   if (!iso2) return null;
-  return `https://flagsapi.com/${iso2}/${style}/${size}.png`;
+  return `https://flagsapi.com/${iso2}/${style}/${nearestFlagApiSize(size)}.png`;
 }
 
 export function wjcCodeToIso(wjcCode) {

@@ -1,44 +1,45 @@
 /**
- * Shared NHL calendar shell — matches CalendarScreen.js visual system.
- * Used by Prospect Development and other franchise screens.
+ * Shared NHL calendar shell — Broadcast Ops register
+ * Authority: theme.css · DESIGN.md
  */
 
 .nhlcal-root {
-  --bg: #04101a;
-  --bg-2: #061522;
-  --panel: rgba(9, 25, 38, 0.94);
-  --panel-2: rgba(12, 35, 52, 0.94);
-  --panel-3: rgba(15, 46, 66, 0.78);
-  --line: rgba(156, 218, 236, 0.14);
-  --line-2: rgba(115, 229, 241, 0.25);
-  --line-strong: rgba(73, 231, 240, 0.5);
-  --text: #e9f7fb;
-  --muted: #8096a8;
-  --muted-2: #607789;
-  --cyan: #13d8e7;
-  --cyan-soft: rgba(19, 216, 231, 0.13);
-  --gold: #e9a83c;
-  --gold-soft: rgba(233, 168, 60, 0.14);
-  --green: #52df94;
-  --green-soft: rgba(82, 223, 148, 0.13);
-  --red: #ff606d;
-  --red-soft: rgba(255, 96, 109, 0.13);
-  --blue: #8ab4ff;
-  --blue-soft: rgba(138, 180, 255, 0.13);
-  --purple: #c992ff;
-  --shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  --bg: var(--ops-navy);
+  --bg-2: var(--ops-black);
+  --panel: var(--ops-panel);
+  --panel-2: var(--ops-panel-2);
+  --panel-3: var(--ops-panel-3);
+  --line: var(--ops-grid);
+  --line-2: var(--ops-grid-2);
+  --line-strong: var(--ops-grid-strong);
+  --text: var(--ops-text);
+  --muted: var(--ops-text-secondary);
+  --muted-2: var(--ops-text-disabled);
+  --cyan: var(--ops-cyan);
+  --cyan-soft: var(--ops-cyan-soft);
+  --gold: var(--ops-gold);
+  --gold-soft: var(--ops-gold-soft);
+  --green: var(--ops-success);
+  --green-soft: var(--ops-success-soft);
+  --red: var(--ops-injury);
+  --red-soft: var(--ops-injury-soft);
+  --blue: var(--ops-info);
+  --blue-soft: var(--ops-info-soft);
+  --purple: var(--ops-info, #8ab4ff);
+  --shadow: var(--depth-overlay);
 
-  min-height: 100vh;
+  min-height: 100dvh;
+  height: 100dvh;
   width: 100%;
   background:
-    radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.12), transparent 30%),
-    radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.08), transparent 26%),
-    linear-gradient(180deg, #06131f 0%, #020a11 100%);
+    radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.08), transparent 30%),
+    radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.05), transparent 26%),
+    linear-gradient(180deg, var(--ops-black) 0%, var(--ops-navy-deep) 100%);
   color: var(--text);
   display: grid;
   grid-template-columns: 94px minmax(0, 1fr);
   overflow: hidden;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-ops-ui);
 }
 
 .nhlcal-root *,
@@ -51,17 +52,19 @@
   font-family: inherit;
 }
 
+/* ─── Sidebar rail ─── */
+
 .nhlcal-sidebar {
-  min-height: 100vh;
+  min-height: 100dvh;
+  height: 100dvh;
   background:
-    linear-gradient(180deg, rgba(5, 16, 26, 0.98), rgba(3, 10, 17, 0.98)),
-    radial-gradient(circle at 100% 14%, rgba(19, 216, 231, 0.14), transparent 34%);
+    linear-gradient(180deg, rgba(5, 16, 26, 0.98), rgba(3, 10, 17, 0.98));
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   align-items: stretch;
   position: relative;
-  z-index: 4;
+  z-index: var(--z-rail);
 }
 
 .nhlcal-brand-button {
@@ -78,19 +81,20 @@
 .nhlcal-shield-icon {
   width: 30px;
   height: 34px;
-  border: 2px solid rgba(223, 245, 250, 0.52);
+  border: 2px solid rgba(223, 245, 250, 0.42);
   display: grid;
   place-items: center;
-  color: rgba(223, 245, 250, 0.75);
+  color: rgba(223, 245, 250, 0.68);
   clip-path: polygon(50% 0, 92% 16%, 92% 72%, 50% 100%, 8% 72%, 8% 16%);
   font-size: 15px;
+  border-radius: var(--radius-ops);
 }
 
 .nhlcal-side-nav {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 18px 0;
+  gap: 2px;
+  padding: 16px 0;
 }
 
 .nhlcal-side-button {
@@ -104,31 +108,29 @@
   gap: 4px;
   cursor: pointer;
   position: relative;
-  transition: color 0.2s ease, background 0.2s ease;
+  transition: color var(--motion-micro), background var(--motion-micro);
 }
 
 .nhlcal-side-button:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.035);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .nhlcal-side-button.is-active {
   color: var(--cyan);
-  background:
-    linear-gradient(90deg, rgba(19, 216, 231, 0.17), rgba(19, 216, 231, 0.03)),
-    radial-gradient(circle at 100% 50%, rgba(19, 216, 231, 0.24), transparent 52%);
+  background: linear-gradient(90deg, rgba(19, 216, 231, 0.12), transparent 72%);
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
 }
 
 .nhlcal-side-button.is-active::before {
   content: "";
   position: absolute;
   left: 0;
-  top: 12px;
-  bottom: 12px;
+  top: 0;
+  bottom: 0;
   width: 3px;
-  border-radius: 999px;
+  border-radius: 0;
   background: var(--cyan);
-  box-shadow: 0 0 22px rgba(19, 216, 231, 0.8);
 }
 
 .nhlcal-side-icon {
@@ -137,48 +139,57 @@
 }
 
 .nhlcal-side-label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
+
+/* ─── Main scroll owner ─── */
 
 .nhlcal-main {
   min-width: 0;
-  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
   overflow: auto;
-  padding: 24px 26px 26px;
+  overscroll-behavior: contain;
+  padding: 20px 24px 24px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(110, 173, 191, 0.28) transparent;
 }
 
 .nhlcal-main::-webkit-scrollbar {
-  width: 10px;
+  width: 8px;
 }
 
 .nhlcal-main::-webkit-scrollbar-thumb {
-  background: rgba(110, 173, 191, 0.25);
-  border-radius: 999px;
+  background: rgba(110, 173, 191, 0.28);
+  border-radius: var(--radius-ops);
 }
 
+/* ─── Topbar ─── */
+
 .nhlcal-topbar {
-  min-height: 102px;
+  min-height: 96px;
   display: grid;
   grid-template-columns: minmax(250px, 1fr) minmax(280px, 1.2fr) minmax(320px, 1fr);
   align-items: center;
-  gap: 22px;
+  gap: 20px;
 }
 
 .nhlcal-team-identity {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 16px;
   min-width: 0;
 }
 
 .nhlcal-team-logo {
   display: grid;
   place-items: center;
-  border-radius: 12px;
+  border-radius: var(--radius-control);
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--line);
 }
 
@@ -206,21 +217,21 @@
 
 .nhlcal-team-city {
   margin: 0 0 2px;
-  color: rgba(233, 247, 251, 0.78);
-  font-size: 15px;
+  color: rgba(233, 247, 251, 0.72);
+  font-size: var(--type-dept-label-size);
   font-weight: 900;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .nhlcal-team-identity h1 {
   margin: 0;
-  font-size: clamp(28px, 2.8vw, 42px);
+  font-family: var(--font-broadcast-display);
+  font-size: clamp(26px, 2.6vw, 38px);
   line-height: 0.92;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text);
-  text-shadow: 0 0 24px rgba(19, 216, 231, 0.12);
 }
 
 .nhlcal-month-control {
@@ -229,26 +240,27 @@
 }
 
 .nhlcal-month-control p {
-  margin: 0 0 7px;
+  margin: 0 0 6px;
   color: var(--cyan);
   text-transform: uppercase;
-  letter-spacing: 0.36em;
-  font-size: 12px;
+  letter-spacing: 0.32em;
+  font-size: var(--type-phase-label-size);
   font-weight: 900;
 }
 
 .nhlcal-month-control h2 {
   margin: 0;
-  font-size: clamp(28px, 2.6vw, 40px);
+  font-family: var(--font-broadcast-display);
+  font-size: clamp(26px, 2.4vw, 36px);
   line-height: 0.92;
   text-transform: uppercase;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.14em;
 }
 
 .nhlcal-month-control .nhlcal-subtitle {
-  margin-top: 8px;
+  margin-top: 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: none;
@@ -259,51 +271,51 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
   flex-wrap: wrap;
 }
 
 .nhlcal-quick-link {
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius-hud);
   background: rgba(12, 31, 47, 0.72);
   color: var(--text);
-  padding: 9px 14px;
+  padding: 8px 12px;
   font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   cursor: pointer;
-  transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
+  transition: border-color var(--motion-micro), background var(--motion-micro);
 }
 
 .nhlcal-quick-link:hover,
 .nhlcal-quick-link.is-active {
   border-color: var(--line-strong);
-  background: rgba(19, 216, 231, 0.12);
-  transform: translateY(-1px);
+  background: var(--cyan-soft);
+  color: var(--cyan);
 }
 
 .nhlcal-date-chip {
   min-width: 158px;
-  height: 58px;
+  height: 54px;
   border-left: 1px solid var(--line);
-  padding-left: 20px;
+  padding-left: 18px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .nhlcal-date-icon {
-  width: 42px;
-  height: 42px;
+  width: 40px;
+  height: 40px;
   display: grid;
   place-items: center;
-  border-radius: 12px;
-  background: rgba(136, 180, 255, 0.12);
-  border: 1px solid rgba(136, 180, 255, 0.14);
-  color: #b8ceff;
+  border-radius: var(--radius-control);
+  background: var(--blue-soft);
+  border: 1px solid rgba(138, 180, 255, 0.18);
+  color: var(--blue);
 }
 
 .nhlcal-date-chip strong,
@@ -312,38 +324,35 @@
 }
 
 .nhlcal-date-chip strong {
-  font-size: 13px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
 
 .nhlcal-date-chip span {
-  margin-top: 3px;
+  margin-top: 2px;
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
 }
 
 .nhlcal-advance-button {
-  height: 58px;
+  height: 54px;
   min-width: 190px;
   border: 0;
-  border-radius: 7px;
-  background:
-    linear-gradient(180deg, #f4bd52, #d99023),
-    radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.5), transparent 30%);
+  border-radius: var(--radius-hud);
+  background: linear-gradient(180deg, #f4bd52, #d99023);
   color: #1b1002;
   text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-size: 13px;
-  font-weight: 1000;
+  letter-spacing: 0.12em;
+  font-size: 12px;
+  font-weight: 900;
   cursor: pointer;
-  box-shadow: 0 14px 36px rgba(217, 144, 35, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.35);
-  transition: transform 0.2s ease, filter 0.2s ease;
+  box-shadow: var(--depth-registered);
+  transition: filter var(--motion-micro);
 }
 
 .nhlcal-advance-button:hover {
-  transform: translateY(-1px);
   filter: brightness(1.04);
 }
 
@@ -354,18 +363,18 @@
 
 .nhlcal-advance-button-secondary {
   min-width: 92px;
-  background:
-    linear-gradient(180deg, rgba(19, 216, 231, 0.22), rgba(19, 216, 231, 0.08)),
-    rgba(7, 22, 35, 0.92);
+  background: rgba(7, 22, 35, 0.92);
   color: #dffcff;
   border: 1px solid rgba(19, 216, 231, 0.32);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow: none;
 }
 
 .nhlcal-advance-button-secondary:hover:not(:disabled) {
   border-color: rgba(19, 216, 231, 0.52);
-  filter: brightness(1.06);
+  background: var(--cyan-soft);
 }
+
+/* ─── Stat strip (flat board, not card grid) ─── */
 
 .nhlcal-stat-strip {
   display: grid;
@@ -373,22 +382,20 @@
   gap: 0;
   border: 1px solid var(--line);
   background: rgba(8, 23, 35, 0.86);
-  border-radius: 12px;
+  border-radius: var(--radius-control);
   overflow: hidden;
-  box-shadow: var(--shadow);
+  box-shadow: var(--depth-registered);
   margin-top: 4px;
 }
 
 .nhlcal-stat-pill {
-  min-height: 86px;
-  padding: 15px 18px;
+  min-height: 78px;
+  padding: 12px 16px;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   border-right: 1px solid rgba(156, 218, 236, 0.08);
-  background:
-    linear-gradient(180deg, rgba(18, 42, 61, 0.45), rgba(6, 20, 31, 0.34)),
-    radial-gradient(circle at 100% 0%, rgba(19, 216, 231, 0.05), transparent 52%);
+  background: rgba(6, 20, 31, 0.55);
 }
 
 .nhlcal-stat-pill:last-child {
@@ -396,16 +403,16 @@
 }
 
 .nhlcal-stat-icon {
-  width: 42px;
-  height: 42px;
+  width: 36px;
+  height: 36px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  border-radius: 14px;
-  background: rgba(148, 185, 205, 0.12);
+  border-radius: var(--radius-hud);
+  background: rgba(148, 185, 205, 0.1);
   border: 1px solid rgba(148, 185, 205, 0.12);
-  color: rgba(233, 247, 251, 0.8);
-  font-size: 18px;
+  color: rgba(233, 247, 251, 0.75);
+  font-size: 16px;
 }
 
 .nhlcal-stat-pill span,
@@ -415,25 +422,27 @@
 
 .nhlcal-stat-pill span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--type-phase-label-size);
   text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-weight: 1000;
+  letter-spacing: 0.12em;
+  font-weight: 900;
 }
 
 .nhlcal-stat-pill strong {
   display: block;
   margin-top: 2px;
   color: var(--text);
-  font-size: 23px;
+  font-family: var(--font-mono-data);
+  font-size: 20px;
   line-height: 1;
-  font-weight: 1000;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
 }
 
 .nhlcal-stat-pill small {
-  margin-top: 6px;
+  margin-top: 4px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -444,32 +453,32 @@
 .nhlcal-stat-pill.tone-gold .nhlcal-stat-icon { color: var(--gold); background: var(--gold-soft); }
 .nhlcal-stat-pill.tone-blue .nhlcal-stat-icon { color: var(--blue); background: var(--blue-soft); }
 
+/* ─── Content grid & panels ─── */
+
 .nhlcal-content-grid {
-  margin-top: 16px;
+  margin-top: 14px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 400px;
-  gap: 16px;
+  gap: 14px;
   align-items: start;
 }
 
 .nhlcal-calendar-panel {
   min-width: 0;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background:
-    linear-gradient(180deg, rgba(9, 27, 40, 0.94), rgba(5, 17, 27, 0.94)),
-    radial-gradient(circle at 66% 20%, rgba(19, 216, 231, 0.07), transparent 35%);
+  border-radius: var(--radius-card);
+  background: var(--panel);
   overflow: hidden;
-  box-shadow: var(--shadow);
+  box-shadow: var(--depth-registered);
 }
 
 .nhlcal-week-header {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  min-height: 52px;
+  min-height: 48px;
   align-items: center;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--line);
   background: rgba(5, 17, 27, 0.62);
 }
@@ -477,67 +486,66 @@
 .nhlcal-right-rail {
   min-width: 0;
   display: grid;
-  gap: 14px;
+  gap: 12px;
 }
 
 .nhlcal-card {
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background:
-    linear-gradient(180deg, rgba(10, 30, 45, 0.94), rgba(5, 18, 29, 0.94)),
-    radial-gradient(circle at 90% 0%, rgba(19, 216, 231, 0.07), transparent 38%);
-  box-shadow: var(--shadow);
+  border-radius: var(--radius-card);
+  background: var(--panel);
+  box-shadow: var(--depth-registered);
 }
 
 .nhlcal-card-header {
-  min-height: 58px;
+  min-height: 52px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 14px;
-  padding: 16px 18px 10px;
+  gap: 12px;
+  padding: 14px 16px 8px;
+  border-bottom: 1px solid rgba(156, 218, 236, 0.08);
 }
 
 .nhlcal-card-header p {
   margin: 0;
   color: var(--cyan);
-  font-size: 11px;
-  font-weight: 1000;
-  letter-spacing: 0.13em;
+  font-size: var(--type-phase-label-size);
+  font-weight: 900;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .nhlcal-card-header h3 {
   margin: 4px 0 0;
-  font-size: 16px;
+  font-size: var(--type-ops-heading-size);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
 
 .nhlcal-header-pill {
   border: 1px solid var(--line);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.035);
+  border-radius: var(--radius-hud);
+  background: rgba(255, 255, 255, 0.03);
   color: var(--muted);
-  padding: 6px 10px;
-  font-size: 10px;
-  font-weight: 1000;
+  padding: 4px 8px;
+  font-size: var(--type-phase-label-size);
+  font-weight: 900;
   text-transform: uppercase;
   white-space: nowrap;
 }
 
 .nhlcal-preview-lines {
-  padding: 10px 14px 14px;
+  padding: 8px 12px 12px;
   display: grid;
 }
 
 .nhlcal-preview-lines div {
-  min-height: 31px;
+  min-height: 30px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
-  border-bottom: 1px solid rgba(156, 218, 236, 0.09);
+  border-bottom: 1px solid rgba(156, 218, 236, 0.08);
 }
 
 .nhlcal-preview-lines div:last-child {
@@ -547,34 +555,36 @@
 .nhlcal-preview-lines span {
   color: var(--muted);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .nhlcal-preview-lines strong {
   color: rgba(233, 247, 251, 0.9);
+  font-family: var(--font-mono-data);
   font-size: 12px;
-  font-weight: 1000;
+  font-weight: 800;
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .nhlcal-meter-row {
-  padding: 0 14px 12px;
+  padding: 0 12px 10px;
 }
 
 .nhlcal-meter-row label {
   display: flex;
   justify-content: space-between;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--type-phase-label-size);
   font-weight: 900;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  margin-bottom: 6px;
+  margin-bottom: 5px;
 }
 
 .nhlcal-meter {
-  height: 6px;
-  border-radius: 999px;
+  height: 4px;
+  border-radius: var(--radius-ops);
   background: rgba(30, 41, 59, 0.9);
   overflow: hidden;
 }
@@ -582,47 +592,62 @@
 .nhlcal-meter span {
   display: block;
   height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--cyan), #38bdf8);
+  border-radius: var(--radius-ops);
+  background: var(--cyan);
 }
 
 .nhlcal-meter.is-risk span {
   background: linear-gradient(90deg, var(--gold), var(--red));
 }
 
+/* ─── Empty states ─── */
+
 .nhlcal-small-empty {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--type-compact-size);
   text-align: center;
-  padding: 2rem 1rem;
+  padding: 1.5rem 1rem;
 }
 
 .nhlcal-empty-state {
-  margin-top: 16px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: rgba(8, 23, 35, 0.86);
-  padding: 3rem 1.5rem;
+  margin-top: 14px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-control);
+  background: rgba(8, 23, 35, 0.55);
+  padding: 2.5rem 1.5rem;
   text-align: center;
-  box-shadow: var(--shadow);
+  max-width: 420px;
+}
+
+.nhlcal-empty-state::before {
+  content: "NO DATA";
+  display: block;
+  margin-bottom: 8px;
+  color: var(--cyan);
+  font-size: var(--type-phase-label-size);
+  font-weight: 900;
+  letter-spacing: 0.14em;
 }
 
 .nhlcal-empty-state h3 {
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   color: var(--text);
+  font-size: var(--type-ops-heading-size);
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
 }
 
 .nhlcal-empty-state p {
   margin: 0;
   color: var(--muted);
+  font-size: var(--type-compact-size);
+  line-height: 1.45;
 }
 
 @media (max-width: 1100px) {
   .nhlcal-topbar {
     grid-template-columns: 1fr;
-    gap: 14px;
+    gap: 12px;
   }
   .nhlcal-action-cluster {
     justify-self: start;
@@ -638,8 +663,24 @@
 @media (max-width: 720px) {
   .nhlcal-root {
     grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100dvh;
   }
   .nhlcal-sidebar {
     display: none;
   }
+  .nhlcal-main {
+    height: auto;
+    max-height: none;
+    min-height: 100dvh;
+  }
+}
+
+
+/* QA polish densify */
+@media (max-height: 800px) {
+  .nhlcal-brand-button { height: 72px; }
+  .nhlcal-side-button { min-height: 52px; padding: 8px 4px; }
+  .nhlcal-team-logo.size-large { width: 56px; height: 56px; }
+  .nhlcal-team-logo.size-large img { width: 44px; height: 44px; }
 }

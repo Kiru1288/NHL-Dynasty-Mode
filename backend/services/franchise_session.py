@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
@@ -41,6 +42,7 @@ class FranchiseSession:
     chaos_index: float = 0.5
     use_world: bool = False
     injuries_enabled: bool = True
+    player_universe: str = "generated"  # generated | real_nhl
     preseason_applied: bool = False
 
     phase: str = "regular"  # regular | playoff_ready | playoffs | post_cup | offseason | preseason
@@ -76,9 +78,20 @@ class FranchiseSession:
     prospect_rights_payload: Dict[str, Any] = field(default_factory=dict)
     draft_rights_review_payload: Dict[str, Any] = field(default_factory=dict)
     resign_payload: Dict[str, Any] = field(default_factory=dict)
+    resign_negotiations: Dict[str, Any] = field(default_factory=dict)
+    # Phase-scoped re-sign board: Accepted / Rejected / etc. survive until Free Agency.
+    resign_phase_outcomes: Dict[str, Any] = field(default_factory=dict)
+    # Player trade demands keyed by player_id (open / resolved ledger).
+    trade_demands: Dict[str, Any] = field(default_factory=dict)
+    # Exclusive own-FA window before open market (days elapsed of OWN_FA_MORATORIUM_DAYS).
+    own_fa_window_day: int = 0
+    own_fa_window_active: bool = False
+    own_fa_window_signings: List[Dict[str, Any]] = field(default_factory=list)
     free_agency_open: bool = False
     free_agents_payload: List[Dict[str, Any]] = field(default_factory=list)
     free_agency_market_payload: Dict[str, Any] = field(default_factory=dict)
+    fa_market_book: Dict[str, Any] = field(default_factory=dict)
+    fa_market_day: int = 0
     cpu_fa_signings: Dict[str, Any] = field(default_factory=dict)
     cpu_rfa_decisions: Dict[str, Any] = field(default_factory=dict)
     cpu_fa_wave: int = 0
@@ -162,3 +175,23 @@ class FranchiseSession:
     @staticmethod
     def new_id() -> str:
         return str(uuid.uuid4())
+
+    def __getstate__(self) -> Dict[str, Any]:
+        """Drop non-serializable runtime locks/caches so pickle/save clones work."""
+        state = dict(self.__dict__)
+        for key in list(state.keys()):
+            if key.endswith("_lock") or key.endswith("_Lock"):
+                state.pop(key, None)
+        return state
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        self.__dict__.update(state)
+
+    def __deepcopy__(self, memo: Dict[int, Any]) -> "FranchiseSession":
+        """deepcopy cannot clone threading.Lock — reuse pickle-safe state."""
+        cls = type(self)
+        clone = cls.__new__(cls)
+        memo[id(self)] = clone
+        for key, value in self.__getstate__().items():
+            setattr(clone, key, copy.deepcopy(value, memo))
+        return clone

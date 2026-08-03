@@ -889,7 +889,7 @@ function OfficeCustomizationRow({
           </div>
           <div
             style={{
-              fontSize: "0.68rem",
+              fontSize: "0.6875rem",
               color: "var(--g-silver-dim)",
               lineHeight: 1.35,
               marginBottom: 6,
@@ -960,7 +960,7 @@ function OfficeTierCard({ tier, currentTierId, prestige }) {
         </div>
         <div
           style={{
-            fontSize: "0.62rem",
+            fontSize: "0.6875rem",
             lineHeight: 1.35,
             color: "var(--g-silver-dim)",
           }}
@@ -975,7 +975,7 @@ function OfficeTierCard({ tier, currentTierId, prestige }) {
         </div>
         <div
           style={{
-            fontSize: "0.58rem",
+            fontSize: "0.6875rem",
             letterSpacing: "0.08em",
             color: unlocked ? "var(--g-neon)" : "var(--g-silver-dim)",
           }}
@@ -990,12 +990,17 @@ function OfficeTierCard({ tier, currentTierId, prestige }) {
             position: "absolute",
             top: 10,
             right: 10,
-            fontSize: "1rem",
+            fontFamily: "var(--font-ops-ui, Inter, sans-serif)",
+            fontSize: "0.6875rem",
+            fontWeight: 800,
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+            color: "var(--office-text-secondary, rgba(220, 216, 208, 0.58))",
             opacity: 0.9,
           }}
           aria-hidden="true"
         >
-          🔒
+          LOCK
         </div>
       )}
     </div>
@@ -1062,7 +1067,7 @@ function OfficeAdditionCard({
             >
               {addition.label}
             </div>
-            <div style={{ fontSize: "0.62rem", color: "var(--g-silver-dim)" }}>
+            <div style={{ fontSize: "0.6875rem", color: "var(--g-silver-dim)" }}>
               {addition.bonusLabel}
             </div>
           </div>
@@ -1073,7 +1078,7 @@ function OfficeAdditionCard({
 
       <div
         style={{
-          fontSize: "0.68rem",
+          fontSize: "0.6875rem",
           color: "var(--g-silver-dim)",
           lineHeight: 1.45,
           marginBottom: 10,
@@ -1092,7 +1097,7 @@ function OfficeAdditionCard({
 
       <div
         style={{
-          fontSize: "0.64rem",
+          fontSize: "0.6875rem",
           lineHeight: 1.4,
           color: "var(--g-silver)",
           marginBottom: 10,
@@ -1121,7 +1126,7 @@ function OfficeAdditionCard({
           >
             {formatCurrency(addition.cost)}
           </div>
-          <div style={{ fontSize: "0.58rem", color: "var(--g-silver-dim)" }}>{statusText}</div>
+          <div style={{ fontSize: "0.6875rem", color: "var(--g-silver-dim)" }}>{statusText}</div>
         </div>
 
         <button
@@ -1474,7 +1479,7 @@ function OfficePreviewCanvas({
               <div key={obj.id} className="hub-glass hub-glass--inner" style={{ padding: 8, borderRadius: 10 }}>
                 <div
                   style={{
-                    fontSize: "0.56rem",
+                    fontSize: "0.6875rem",
                     letterSpacing: "0.12em",
                     color: "var(--g-silver-dim)",
                     marginBottom: 4,
@@ -1485,7 +1490,7 @@ function OfficePreviewCanvas({
                 </div>
                 <div
                   style={{
-                    fontSize: "0.66rem",
+                    fontSize: "0.6875rem",
                     lineHeight: 1.35,
                     color: "var(--g-text)",
                   }}
@@ -1525,7 +1530,7 @@ function OfficePreviewCanvas({
             </div>
             <div
               style={{
-                fontSize: "0.66rem",
+                fontSize: "0.6875rem",
                 color: "var(--g-silver-dim)",
                 lineHeight: 1.45,
               }}
@@ -1817,11 +1822,11 @@ export function OfficeScreen() {
   }, [additionsOwned, currentTier, customization]);
 
   return (
-    <div className="game-screen hub-screen hub-screen--takeover office-screen">
+    <div className="game-screen hub-screen hub-screen--takeover office-screen register-office" data-register="office">
       <div className="hub-franchise-shell">
         <aside className="hub-sidebar hub-glass" aria-label="Franchise command rail">
           <div className="hub-sidebar__brand">
-            <span className="hub-sidebar__espn">ESPN</span>
+            <span className="hub-sidebar__espn">FCN</span>
             <span className="hub-sidebar__title">NHL FRANCHISE</span>
             <span className="hub-sidebar__tag">GM TAKEOVER</span>
           </div>
@@ -1846,12 +1851,10 @@ export function OfficeScreen() {
         <div className="hub-workspace">
           <header className="office-screen__header hub-glass">
             <div style={{ minWidth: 0 }}>
-              <span className="office-screen__kicker">OFFICE CREATION SYSTEM</span>
-              <h1 className="office-screen__title">Franchise Infrastructure HQ</h1>
+              <span className="office-screen__kicker">Office Sanctum // Infrastructure</span>
+              <h1 className="office-screen__title">Franchise HQ Progression</h1>
               <p className="office-screen__sub">
-                This is your franchise’s brain, personality, and evolution — visualized. Start in a gritty
-                low-resource office, build prestige, unlock stronger headquarters, and shape how the
-                organization feels as it grows.
+                Prestige-driven headquarters evolution — from survival workspace to legacy monument. Preview and configure; apply when ready.
               </p>
             </div>
 
@@ -2027,7 +2030,7 @@ export function OfficeScreen() {
                   style={{
                     marginTop: 10,
                     marginBottom: 0,
-                    fontSize: "0.66rem",
+                    fontSize: "0.6875rem",
                     lineHeight: 1.4,
                     color: "var(--g-silver-dim)",
                   }}
@@ -2269,8 +2272,106 @@ export function OfficeScreen() {
       </div>
 
       <GameFooter />
+      <style>{OFFICE_SCREEN_CSS}</style>
     </div>
   );
 }
+
+const OFFICE_SCREEN_CSS = `
+.office-screen.register-office {
+  background:
+    radial-gradient(circle at 18% 0%, rgba(201, 168, 106, 0.06), transparent 32%),
+    linear-gradient(180deg, var(--office-bg, #101218), var(--office-bg-deep, #0c0e14));
+  color: var(--office-text, #ece8e0);
+}
+
+.office-screen.register-office .hub-franchise-shell {
+  background: transparent;
+}
+
+.office-screen.register-office .hub-sidebar,
+.office-screen.register-office .office-screen__header,
+.office-screen.register-office .office-screen__body,
+.office-screen.register-office .hub-action-bar,
+.office-screen.register-office .hub-glass,
+.office-screen.register-office .hub-glass--inner {
+  border-color: var(--office-line, rgba(255, 255, 255, 0.08)) !important;
+  border-radius: var(--radius-hud, 4px) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 24%),
+    var(--office-desk, rgba(14, 16, 22, 0.9)) !important;
+  box-shadow: var(--depth-hud, 0 18px 42px rgba(0, 0, 0, 0.48)) !important;
+  backdrop-filter: blur(14px);
+}
+
+.office-screen.register-office .hub-sidebar__link.is-selected {
+  background: rgba(201, 168, 106, 0.12) !important;
+  color: var(--office-brass, #c9a86a) !important;
+  box-shadow: inset 3px 0 0 rgba(201, 168, 106, 0.55);
+}
+
+.office-screen.register-office .hub-live-status__chip {
+  border-radius: var(--radius-ops, 2px) !important;
+  background: rgba(201, 168, 106, 0.08) !important;
+  color: var(--office-brass, #c9a86a) !important;
+  border: 1px solid rgba(201, 168, 106, 0.22);
+}
+
+.office-screen.register-office .office-screen__kicker {
+  font-family: var(--font-mono-data, "IBM Plex Mono", monospace);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--office-brass, #c9a86a);
+}
+
+.office-screen.register-office .office-screen__title {
+  font-family: var(--font-office-display, "Archivo Black", sans-serif);
+  letter-spacing: 0.05em;
+  color: var(--office-text, #ece8e0);
+}
+
+.office-screen.register-office .office-screen__sub,
+.office-screen.register-office .hub-office-rail__p {
+  font-family: var(--font-ops-ui, Inter, sans-serif);
+  color: var(--office-text-secondary, rgba(220, 216, 208, 0.58));
+}
+
+.office-screen.register-office .hub-office-rail__h {
+  font-family: var(--font-office-display, "Archivo Black", sans-serif);
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--office-text, #ece8e0);
+}
+
+.office-screen.register-office .hub-progress__fill {
+  background: linear-gradient(90deg, rgba(201, 168, 106, 0.45), var(--office-brass, #c9a86a)) !important;
+}
+
+.office-screen.register-office .hub-progress__fill--gold {
+  background: linear-gradient(90deg, rgba(201, 168, 106, 0.55), var(--office-brass, #c9a86a)) !important;
+}
+
+.office-screen.register-office .game-btn--primary {
+  border-color: rgba(201, 168, 106, 0.45) !important;
+  background: rgba(201, 168, 106, 0.14) !important;
+  color: var(--office-text, #ece8e0) !important;
+}
+
+.office-screen.register-office .game-btn--secondary {
+  border-color: var(--office-line, rgba(255, 255, 255, 0.08)) !important;
+  color: var(--office-text-secondary, rgba(220, 216, 208, 0.72)) !important;
+}
+
+.office-screen.register-office .hub-reward-tile__v {
+  color: var(--office-brass, #c9a86a) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .office-screen.register-office * {
+    transition-duration: 0.01ms !important;
+  }
+}
+`;
 
 export default OfficeScreen;

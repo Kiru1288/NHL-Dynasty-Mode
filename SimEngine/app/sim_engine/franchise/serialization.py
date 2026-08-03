@@ -1471,6 +1471,36 @@ def _serialize_player_row(
             row["ovr"] = eff_ovr
     except Exception:
         pass
+    try:
+        from app.sim_engine.franchise.conduct_incidents import (  # noqa: WPS433
+            get_active_incident_for_player,
+            player_eligible_to_dress,
+            serialize_incident_for_ui,
+        )
+
+        eligible = bool(player_eligible_to_dress(p, session))
+        row["conduct_eligible_to_play"] = eligible
+        row["conduct_incident_id"] = str(getattr(p, "_conduct_incident_id", "") or "")
+        row["conduct_dress_backlash_risk"] = float(getattr(p, "_conduct_dress_backlash_risk", 0) or 0)
+        row["conduct_trade_restricted"] = bool(getattr(p, "_conduct_trade_restricted", False))
+        cgr = int(getattr(p, "_world_conduct_games_remaining", 0) or 0)
+        row["conduct_games_remaining"] = cgr
+        if not eligible:
+            row["availability_status"] = (
+                "Suspended"
+                if str(getattr(p, "_world_conduct_status", "") or "") == "league_suspended"
+                else "Leave"
+            )
+            if cgr > 0:
+                row["return_estimate"] = f"In {cgr} games"
+        if session is not None and row.get("conduct_incident_id"):
+            inc = get_active_incident_for_player(
+                session, str(getattr(p, "id", "") or getattr(p, "player_id", "") or "")
+            )
+            if isinstance(inc, dict):
+                row["conduct_incident"] = serialize_incident_for_ui(inc)
+    except Exception:
+        pass
     return row
 def _prospect_league_for_player(p: Any) -> Optional[str]:
     asg = getattr(p, "_franchise_assignment", None) or {}
@@ -2039,11 +2069,43 @@ def _normalize_storyline_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         "resolution_condition",
         "resolution_reason",
         "culprit_player_name",
+        "incident_id",
+        "eligible_to_play",
+        "team_can_override",
+        "allegation_note",
+        "information_status",
+        "legal_status",
+        "league_status",
+        "team_status",
+        "conduct_model",
+        "dress_backlash_risk",
+        "incident_family",
+        "evidence_confidence",
+        "resolution",
+        "kind",
+        "arc_tier",
+        "calendar_day",
+        "team_abbr",
+        "from_team_name",
+        "to_team_name",
+        "from_team_abbrev",
+        "to_team_abbrev",
+        "related_teams",
+        "teams",
+        "trade_category",
+        "trade_id",
+        "reason_codes",
+        "reason_text",
+        "execution",
     ):
         if raw.get(key) is not None:
             out[key] = raw.get(key)
     if raw.get("requires_action") is not None:
         out["requires_action"] = bool(raw.get("requires_action"))
+    if raw.get("eligible_to_play") is not None:
+        out["eligible_to_play"] = bool(raw.get("eligible_to_play"))
+    if raw.get("team_can_override") is not None:
+        out["team_can_override"] = bool(raw.get("team_can_override"))
     return out
 def _normalize_notification_payload(raw: Any, index: int) -> Dict[str, Any]:
     if isinstance(raw, dict):

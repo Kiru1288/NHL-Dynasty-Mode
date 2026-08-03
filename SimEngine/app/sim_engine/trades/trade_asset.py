@@ -222,13 +222,108 @@ def find_player_on_ahl_roster(team: Any, player_id: str) -> Tuple[Optional[Any],
     return None, -1
 
 
+def find_player_on_echl_roster(team: Any, player_id: str) -> Tuple[Optional[Any], int]:
+    pid = _safe_str(player_id)
+    echl = list(getattr(team, "echl_roster", None) or [])
+    for i, p in enumerate(echl):
+        if _safe_str(getattr(p, "id", "")) == pid:
+            return p, i
+    return None, -1
+
+
+def find_player_in_organization(team: Any, player_id: str) -> Tuple[Optional[Any], str, int]:
+    """Return (player, location, index) where location is nhl|ahl|echl|prospect|''."""
+    p, i = find_player_on_team_roster(team, player_id)
+    if p is not None:
+        return p, "nhl", i
+    p, i = find_player_on_ahl_roster(team, player_id)
+    if p is not None:
+        return p, "ahl", i
+    p, i = find_player_on_echl_roster(team, player_id)
+    if p is not None:
+        return p, "echl", i
+    pid = _safe_str(player_id)
+    pool = list(getattr(team, "prospect_pool", None) or [])
+    for i, p in enumerate(pool):
+        if _safe_str(getattr(p, "id", "")) == pid:
+            return p, "prospect", i
+    return None, "", -1
+
+
 def player_trade_roster_location(team: Any, player_id: str) -> str:
-    """Return 'nhl', 'ahl', or '' if the player is not on either list."""
-    if find_player_on_team_roster(team, player_id)[0] is not None:
-        return "nhl"
-    if find_player_on_ahl_roster(team, player_id)[0] is not None:
-        return "ahl"
-    return ""
+    """Return nhl|ahl|echl|prospect|''."""
+    _p, loc, _i = find_player_in_organization(team, player_id)
+    return loc
+
+
+def player_is_tradeable_draft_rights(player: Any) -> bool:
+    """True for an unsigned drafted prospect whose exclusive rights can be dealt.
+
+    Draft rights are assets in their own right, so a prospect in the pool is
+    tradeable even though he holds no NHL contract.
+    """
+    if player is None or bool(getattr(player, "retired", False)):
+        return False
+    if not _safe_str(getattr(player, "nhl_rights_team_id", None) or getattr(player, "rights_team_id", None)):
+        return False
+    status = str(getattr(player, "rights_status", "") or "").lower()
+    if status in ("rights_relinquished", "expired", "lapsed"):
+        return False
+    return True
+
+
+def player_holds_nhl_spc(player: Any) -> bool:
+    """True when the player has an NHL SPC (counts toward 50), not a pure AHL/ECHL deal."""
+    if player is None or bool(getattr(player, "retired", False)):
+        return False
+    if str(getattr(player, "signed_status", "") or "").lower() == "unsigned":
+        return False
+    c = getattr(player, "contract", None)
+
+    def _flag(obj: Any, key: str) -> Any:
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    for flag_key in ("is_nhl_spc", "nhl_spc", "standard_player_contract"):
+        flagged = _flag(c, flag_key)
+        if flagged is False:
+            return False
+        if flagged is True:
+            try:
+                if isinstance(c, dict):
+                    yrs = int(c.get("years_remaining") or c.get("years") or 0)
+                else:
+                    yrs = int(getattr(c, "years_remaining", None) or getattr(c, "years", None) or 0)
+            except (TypeError, ValueError):
+                return False
+            return yrs > 0
+
+    raw_type = (
+        _flag(c, "contract_type")
+        or _flag(c, "type")
+        or getattr(player, "contract_type", None)
+        or ""
+    )
+    ctype = str(raw_type or "").strip().upper().replace("-", "_").replace(" ", "_")
+    while "__" in ctype:
+        ctype = ctype.replace("__", "_")
+    if ctype in ("AHL_ONLY", "AHLONLY"):
+        ctype = "AHL"
+    if ctype in ("ECHL_ONLY", "ECHLONLY"):
+        ctype = "ECHL"
+    if ctype in ("AHL", "ECHL", "AHL_ECHL", "PTO", "ATO", "TRYOUT", "MINORS", "MINOR"):
+        return False
+    try:
+        if isinstance(c, dict):
+            yrs = int(c.get("years_remaining") or c.get("years") or 0)
+        else:
+            yrs = int(getattr(c, "years_remaining", None) or getattr(c, "years", None) or 0)
+    except (TypeError, ValueError):
+        return False
+    return yrs > 0
 
 
 def player_display_name(player: Any) -> str:

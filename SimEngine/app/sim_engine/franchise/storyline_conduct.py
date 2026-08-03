@@ -1,4 +1,4 @@
-"""Conduct / storyline OVR impact — permanent base-rating nudges (plus optional temporary overlays)."""
+"""Conduct / storyline OVR impact — eligibility + temporary readiness (not permanent talent wipes)."""
 
 from __future__ import annotations
 
@@ -471,6 +471,9 @@ def get_conduct_games_remaining(player: Any) -> int:
 
 
 def is_under_conduct_suspension(player: Any) -> bool:
+    """True when player cannot dress due to leave/suspension (or legacy games remaining)."""
+    if getattr(player, "_conduct_incident_id", None):
+        return not bool(getattr(player, "_conduct_eligible_to_play", True))
     return get_conduct_games_remaining(player) > 0
 
 
@@ -482,9 +485,13 @@ def apply_conduct_suspension(
     cause_type: str = "LOW_CHARACTER_CONFLICT",
     cause_event_id: str = "",
     rng: Optional[random.Random] = None,
+    host: Any = None,
+    team_id: str = "",
+    storyline_text: str = "",
+    player_fame: float = 0.5,
 ) -> Dict[str, Any]:
-    """Apply league conduct suspension via temporary modifier + games out."""
-    if is_under_conduct_suspension(player):
+    """Open a conduct incident (eligibility + soft readiness). No permanent talent wipe."""
+    if is_under_conduct_suspension(player) and getattr(player, "_conduct_incident_id", None):
         gr = get_conduct_games_remaining(player)
         eff = get_effective_ovr_display(player)
         return {
@@ -495,34 +502,51 @@ def apply_conduct_suspension(
             "base_overall": get_base_ovr_display(player),
             "effective_overall": eff,
             "already_active": True,
+            "conduct_model": "state_machine",
         }
 
-    games, drop_pts = conduct_spec(severity, rng)
-    sid = str(storyline_id or "")
-    sev = str(severity or "minor").lower()
+    from app.sim_engine.franchise.conduct_incidents import create_conduct_incident
 
-    setattr(player, GAMES_KEY, int(games))
-    setattr(player, STORYLINE_ID_KEY, sid)
-    setattr(player, SEVERITY_KEY, sev)
-    setattr(player, STATUS_KEY, "active")
-    setattr(player, RESOLVED_KEY, False)
-
-    meta = apply_permanent_ovr_delta(
-        player,
-        -int(drop_pts),
-        reason="League investigation / conduct suspension",
-        storyline_id=sid,
-        cause_type=cause_type or "LOW_CHARACTER_CONFLICT",
+    registry_host = host
+    incident = create_conduct_incident(
+        registry_host,
+        player=player,
+        team_id=str(team_id or ""),
+        storyline_text=str(storyline_text or "Off-ice conduct matter under review"),
+        severity=str(severity or "major"),
+        storyline_id=str(storyline_id or ""),
+        cause_event_id=str(cause_event_id or ""),
+        player_fame=float(player_fame),
+        rng=rng,
     )
-    meta.update(
-        {
-            "games_remaining": int(games),
-            "games_initial": int(games),
-            "conduct_severity": sev,
-            "already_active": False,
-        }
-    )
-    return meta
+    games = int(incident.get("games_remaining") or 0)
+    eff = get_effective_ovr_display(player)
+    base = get_base_ovr_display(player)
+    return {
+        "games_remaining": games,
+        "games_initial": int(incident.get("games_initial") or games),
+        "overall_before": base,
+        "overall_after": eff,
+        "overall_delta": int(eff - base),
+        "base_overall": base,
+        "effective_overall": eff,
+        "already_active": False,
+        "conduct_severity": str(severity or "major").lower(),
+        "conduct_model": "state_machine",
+        "incident_id": incident.get("incident_id"),
+        "eligible_to_play": bool(incident.get("eligible_to_play")),
+        "information_status": incident.get("information_status"),
+        "legal_status": incident.get("legal_status"),
+        "league_status": incident.get("league_status"),
+        "team_status": incident.get("team_status"),
+        "impact_reason": (
+            "Player unavailable pending investigation / leave — physical attributes unchanged"
+            if not incident.get("eligible_to_play")
+            else "Under investigation — eligible but organizational backlash risk if dressed"
+        ),
+        "allegation_note": "Reports are allegations until an official ruling.",
+        "cause_type": cause_type,
+    }
 
 
 def tick_conduct_games_missed(player: Any) -> bool:
@@ -593,25 +617,28 @@ def resolve_conduct_if_cleared(player: Any) -> Optional[Dict[str, Any]]:
 
 
 def build_conduct_storyline_fields(meta: Dict[str, Any], *, return_estimate: str = "", return_date: str = "") -> Dict[str, Any]:
-    """Extra storyline/notification fields mirroring injury return timetable."""
+    """Extra storyline/notification fields for conduct incidents (eligibility-first)."""
     gr = int(meta.get("games_remaining") or 0)
-    ret_est = return_estimate or (f"In {gr} games" if gr > 0 else "")
+    eligible = bool(meta.get("eligible_to_play", gr <= 0))
+    ret_est = return_estimate or (f"In {gr} games" if gr > 0 and not eligible else "")
     ovr_b = meta.get("overall_before")
     ovr_a = meta.get("overall_after")
     base = meta.get("base_overall")
     eff = meta.get("effective_overall") or ovr_a
     delta = meta.get("overall_delta")
     parts = []
-    if gr > 0:
-        parts.append(f"Projected return: {ret_est or f'{gr} games'}")
+    if not eligible and gr > 0:
+        parts.append(f"Unavailable — projected return: {ret_est or f'{gr} games'}")
+    elif not eligible:
+        parts.append("Unavailable pending leave / league suspension")
+    else:
+        parts.append("Eligible to dress — organizational backlash risk if played")
     if delta is not None and int(delta) != 0:
-        if base is not None:
-            parts.append(f"Effective OVR {base} → {eff} ({int(delta):+d})")
-        else:
-            parts.append(f"OVR {ovr_b} → {ovr_a} ({int(delta):+d})")
+        parts.append(f"Temporary readiness {base} → {eff} ({int(delta):+d}; talent base unchanged)")
     reason = str(meta.get("impact_reason") or "")
     if reason:
         parts.append(reason)
+    allegation = str(meta.get("allegation_note") or "Reports are allegations until an official ruling.")
     return {
         "games_remaining": gr,
         "games_initial": int(meta.get("games_initial") or gr),
@@ -627,10 +654,18 @@ def build_conduct_storyline_fields(meta: Dict[str, Any], *, return_estimate: str
         "effect_summary": " · ".join(parts) if parts else "",
         "arc_status": "active",
         "category": "legal_trouble",
+        "incident_id": meta.get("incident_id"),
+        "eligible_to_play": eligible,
+        "information_status": meta.get("information_status"),
+        "legal_status": meta.get("legal_status"),
+        "league_status": meta.get("league_status"),
+        "team_status": meta.get("team_status"),
+        "conduct_model": meta.get("conduct_model") or "state_machine",
+        "allegation_note": allegation,
         "follow_up": (
-            "Monitor league investigation; player unavailable until return date."
-            if gr > 0
-            else "Monitor on-ice response; distraction may linger via temporary modifiers."
+            "Player cannot dress while suspended or on leave."
+            if not eligible
+            else "Dressing an investigated player can hit owner/fan/media/sponsor/revenue pressure."
         ),
     }
 
@@ -647,7 +682,7 @@ def apply_storyline_ovr_nudge(
     rng: Optional[random.Random] = None,
     amount: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Storyline beat — permanent base OVR change (real overall, not a fake overlay)."""
+    """Storyline beat — temporary readiness change (no permanent talent wipe)."""
     if is_under_conduct_suspension(player):
         return {}
     sid = str(storyline_id or "")
@@ -661,7 +696,7 @@ def apply_storyline_ovr_nudge(
             "base_overall": base,
             "effective_overall": eff,
             "already_active": True,
-            "permanent": True,
+            "permanent": False,
         }
 
     r = rng or random.Random()
@@ -670,39 +705,45 @@ def apply_storyline_ovr_nudge(
     if amount is not None:
         signed = int(amount)
     elif sev == "major":
-        signed = -int(r.randint(8, 14))
+        signed = -int(r.randint(4, 8))
     elif sev in ("moderate", "mid"):
-        signed = -int(r.randint(3, 7))
+        signed = -int(r.randint(2, 5))
     else:
-        signed = -int(r.randint(1, 4))
+        signed = -int(r.randint(1, 3))
 
     impact_reason = str(reason or "").strip()
     if not impact_reason:
         if signed >= 0:
             impact_reason = "Momentum / confidence surge lifting form"
         elif sev == "major":
-            impact_reason = "Major controversy weighing on performance"
+            impact_reason = "Major controversy weighing on readiness"
         elif sev in ("moderate", "mid"):
             impact_reason = "Media pressure / locker-room distraction"
         else:
             impact_reason = "Off-ice distraction affecting form"
 
     src = str(cause_type or "STORYLINE_MORALE")
-    meta = apply_permanent_ovr_delta(
+    duration = 18 if sev == "major" else 12 if sev in ("moderate", "mid") else 8
+    meta = apply_temporary_ovr_modifier(
         player,
-        signed,
+        source=src,
+        amount=signed,
         reason=impact_reason,
+        duration_games=duration,
         storyline_id=sid,
         cause_type=src,
+        cause_event_id=str(cause_event_id or ""),
+        modifier_type="storyline_readiness",
     )
     if not meta or meta.get("already_active"):
         return meta or {}
-    meta.setdefault("games_remaining", 0)
-    meta.setdefault("games_initial", 0)
+    meta.setdefault("games_remaining", duration if signed < 0 else 0)
+    meta.setdefault("games_initial", duration if signed < 0 else 0)
     meta["impact_reason"] = impact_reason
     meta["cause_event_id"] = str(cause_event_id or "")
+    meta["permanent"] = False
     meta["effect_summary"] = (
-        f"Overall {meta.get('overall_before')} → {meta.get('overall_after')} "
+        f"Temporary readiness {meta.get('overall_before')} → {meta.get('overall_after')} "
         f"({meta.get('overall_delta'):+d}) — {impact_reason}"
         if meta.get("overall_delta")
         else impact_reason

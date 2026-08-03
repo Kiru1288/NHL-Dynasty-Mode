@@ -24,6 +24,7 @@ export function FranchiseEventLayer() {
   const {
     franchiseState,
     onContinueOffseason,
+    onReopenOffseasonStage,
     onGenerateNextSeason,
     onEnterPlayoffs,
     onAdvanceSeasonPhase,
@@ -74,11 +75,13 @@ export function FranchiseEventLayer() {
   if (!shouldShow || !event) return null;
 
   return (
-    <div className="franchise-event-layer" role="presentation">
+    <div className="franchise-event-layer register-ops" data-register="ops" role="presentation">
+      <style>{FRANCHISE_EVENT_LAYER_CSS}</style>
       <FranchiseEventOverlay
         franchiseState={franchiseState}
         onClose={handleLeaveToHub}
         onContinueOffseason={onContinueOffseason}
+        onReopenOffseasonStage={onReopenOffseasonStage}
         onGenerateNextSeason={onGenerateNextSeason}
         onEnterPlayoffs={onEnterPlayoffs}
         onAdvancePhase={onAdvanceSeasonPhase}
@@ -86,3 +89,29 @@ export function FranchiseEventLayer() {
     </div>
   );
 }
+
+const FRANCHISE_EVENT_LAYER_CSS = `
+.franchise-event-layer {
+  background: var(--ops-navy-deep);
+  color: var(--ops-text);
+  font-family: var(--font-ops-ui);
+  isolation: isolate;
+}
+.franchise-event-overlay {
+  background: var(--ops-navy-deep);
+}
+.franchise-event-phase-host {
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+  width: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.franchise-event-phase-host > * {
+  flex: 1;
+  min-height: 0;
+  max-height: 100%;
+}
+`;

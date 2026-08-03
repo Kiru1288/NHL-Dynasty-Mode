@@ -10,7 +10,6 @@ import React, {
 import { useGameUI } from "../game/GameUIContext";
 import { teamNameToNhlAbbr } from "../game/constants";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
-import cookieFontUrl from "../styles/Cookie/Cookie-Regular.ttf";
 
 const EASTERN_ORDER = [
   "BOS",
@@ -55,6 +54,7 @@ const DEFAULT_TEAM_ORDER = [...EASTERN_ORDER, ...WESTERN_ORDER];
 const FIELD_KEYS = [
   "team",
   "gmName",
+  "universe",
   "injuries",
   "signature",
   "start",
@@ -658,6 +658,58 @@ function InjuriesToggle({
   );
 }
 
+function UniverseToggle({
+  value,
+  onChange,
+  isActive,
+}) {
+  const selected = value === "real_nhl" ? "real_nhl" : "generated";
+
+  return (
+    <div
+      className={`setup-universe-toggle ${
+        isActive ? "is-active" : ""
+      }`}
+      role="radiogroup"
+      aria-label="Player universe"
+    >
+      <button
+        type="button"
+        role="radio"
+        aria-checked={selected === "generated"}
+        className={`setup-universe-btn ${
+          selected === "generated" ? "is-selected" : ""
+        }`}
+        onClick={() => onChange("generated")}
+      >
+        <span className="setup-universe-btn-title">
+          Generated Players
+        </span>
+        <span className="setup-universe-btn-copy">
+          Create a fully fictional hockey universe.
+        </span>
+      </button>
+
+      <button
+        type="button"
+        role="radio"
+        aria-checked={selected === "real_nhl"}
+        className={`setup-universe-btn ${
+          selected === "real_nhl" ? "is-selected" : ""
+        }`}
+        onClick={() => onChange("real_nhl")}
+      >
+        <span className="setup-universe-btn-title">
+          Real NHL Players
+        </span>
+        <span className="setup-universe-btn-copy">
+          Live NHL.com rosters + MoneyPuck xG/GSAx; Spotrac deals; R2–R4 ratings (unofficial).
+        </span>
+      </button>
+    </div>
+  );
+}
+
 function formatContractDate(date = new Date()) {
   return date.toLocaleDateString("en-US", {
     month: "long",
@@ -1061,6 +1113,7 @@ function SetupLoadingScreen({
   selected,
   gmName,
   injuriesEnabled,
+  playerUniverse,
 }) {
   const shuffledFacts = useMemo(
     () => shuffleArray(NHL_FUN_FACTS),
@@ -1083,6 +1136,8 @@ function SetupLoadingScreen({
     return () =>
       window.clearInterval(intervalId);
   }, [shuffledFacts.length]);
+
+  const isRealNhl = playerUniverse === "real_nhl";
 
   return (
     <div
@@ -1108,22 +1163,34 @@ function SetupLoadingScreen({
         </h2>
 
         <p className="setup-loading-copy">
-          GM{" "}
-          {gmName?.trim() ||
-            "General Manager"}{" "}
-          has entered hockey operations.
+          {isRealNhl
+            ? "Preparing real NHL roster universe…"
+            : `GM ${
+                gmName?.trim() ||
+                "General Manager"
+              } has entered hockey operations.`}
         </p>
 
         <div className="setup-loading-steps">
-          <span>Loading roster</span>
-
-          <span>Building schedule</span>
-
-          <span>
-            {injuriesEnabled
-              ? "Enabling injuries"
-              : "Disabling injuries"}
-          </span>
+          {isRealNhl ? (
+            <>
+              <span>Downloading NHL rosters</span>
+              <span>Building player ratings</span>
+              <span>Validating league</span>
+              <span>Saving roster universe</span>
+              <span>Starting franchise</span>
+            </>
+          ) : (
+            <>
+              <span>Loading roster</span>
+              <span>Building schedule</span>
+              <span>
+                {injuriesEnabled
+                  ? "Enabling injuries"
+                  : "Disabling injuries"}
+              </span>
+            </>
+          )}
         </div>
 
         <div className="setup-fact-card">
@@ -1152,6 +1219,8 @@ export function SetupScreen() {
     setSetupTeamIndex,
     gmName,
     setGmName,
+    playerUniverse,
+    setPlayerUniverse,
     injuriesEnabled,
     setInjuriesEnabled,
     beginFranchise,
@@ -1288,6 +1357,23 @@ export function SetupScreen() {
       [setInjuriesEnabled]
     );
 
+  const handleUniverseChange =
+    useCallback(
+      (next) => {
+        const value =
+          next === "real_nhl"
+            ? "real_nhl"
+            : "generated";
+        setPlayerUniverse(value);
+        setStatusText(
+          value === "real_nhl"
+            ? "Real NHL Players selected."
+            : "Generated Players selected."
+        );
+      },
+      [setPlayerUniverse]
+    );
+
   const onStart = useCallback(() => {
     if (
       !selected ||
@@ -1320,6 +1406,15 @@ export function SetupScreen() {
         return;
       }
 
+      if (fieldKey === "universe") {
+        handleUniverseChange(
+          playerUniverse === "real_nhl"
+            ? "generated"
+            : "real_nhl"
+        );
+        return;
+      }
+
       if (fieldKey === "injuries") {
         handleInjuriesChange(
           !injuriesEnabled
@@ -1328,8 +1423,10 @@ export function SetupScreen() {
     },
     [
       handleInjuriesChange,
+      handleUniverseChange,
       injuriesEnabled,
       orderedIndex,
+      playerUniverse,
       setTeamByOrderedIndex,
     ]
   );
@@ -1463,7 +1560,8 @@ export function SetupScreen() {
 
   return (
     <div
-      className="nhlcal-root setup-root"
+      className="nhlcal-root setup-root register-office"
+      data-register="office"
       style={{
         "--team-accent": accentPrimary,
         "--team-accent-2":
@@ -1477,6 +1575,7 @@ export function SetupScreen() {
           injuriesEnabled={
             injuriesEnabled
           }
+          playerUniverse={playerUniverse}
         />
       ) : null}
 
@@ -1520,9 +1619,7 @@ export function SetupScreen() {
             <div
               className="setup-contract-ornament"
               aria-hidden="true"
-            >
-              ✦ ✦ ✦
-            </div>
+            />
 
             <h2 className="setup-contract-title">
               GENERAL MANAGER AGREEMENT
@@ -1615,6 +1712,46 @@ export function SetupScreen() {
               aria-hidden="true"
             />
 
+            <div
+              className="setup-contract-divider setup-contract-divider--thin"
+              aria-hidden="true"
+            />
+
+            <article
+              className={`setup-clause ${
+                activeField === "universe"
+                  ? "is-active"
+                  : ""
+              }`}
+            >
+              <h4 className="setup-clause-heading">
+                Clause 01 — Player Universe
+              </h4>
+
+              <p className="setup-clause-text">
+                Choose whether this franchise
+                begins with generated players
+                or current NHL rosters.
+              </p>
+
+              <p className="setup-clause-question">
+                Player universe?
+              </p>
+
+              <UniverseToggle
+                value={playerUniverse}
+                onChange={handleUniverseChange}
+                isActive={
+                  activeField === "universe"
+                }
+              />
+            </article>
+
+            <div
+              className="setup-contract-divider setup-contract-divider--thin"
+              aria-hidden="true"
+            />
+
             <article
               className={`setup-clause ${
                 activeField === "injuries"
@@ -1623,7 +1760,7 @@ export function SetupScreen() {
               }`}
             >
               <h4 className="setup-clause-heading">
-                Clause 01 — League Health System
+                Clause 02 — League Health System
               </h4>
 
               <p className="setup-clause-text">
@@ -1653,7 +1790,7 @@ export function SetupScreen() {
 
             <article className="setup-clause">
               <h4 className="setup-clause-heading">
-                Clause 02 — Role and Authority
+                Clause 03 — Role and Authority
               </h4>
 
               <p className="setup-clause-text">
@@ -1671,7 +1808,7 @@ export function SetupScreen() {
 
             <article className="setup-clause">
               <h4 className="setup-clause-heading">
-                Clause 03 — Term
+                Clause 04 — Term
               </h4>
 
               <p className="setup-clause-text">
@@ -1688,7 +1825,7 @@ export function SetupScreen() {
 
             <article className="setup-clause">
               <h4 className="setup-clause-heading">
-                Clause 04 — Acceptance
+                Clause 05 — Acceptance
               </h4>
 
               <p className="setup-clause-text">
@@ -1821,19 +1958,11 @@ export function SetupScreen() {
 }
 
 const SETUP_SCREEN_CSS = `
-@font-face {
-  font-family: "CookieAgreement";
-  src: url("${cookieFontUrl}") format("truetype");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-
 .nhlcal-root.setup-root {
-  --text: #f0e0c0;
-  --muted: rgba(200, 175, 130, 0.62);
-  --gold: #e8c894;
-  --red: #ff606d;
+  --text: var(--office-text, #ece8e0);
+  --muted: var(--office-text-secondary, rgba(220, 216, 208, 0.58));
+  --gold: var(--office-brass, #c9a86a);
+  --red: var(--ops-injury, #ff606d);
 
   position: relative;
   display: flex;
@@ -1850,32 +1979,17 @@ const SETUP_SCREEN_CSS = `
   background:
     radial-gradient(
       circle at 18% 0%,
-      color-mix(
-        in srgb,
-        var(--team-accent) 10%,
-        rgba(191, 109, 54, 0.12)
-      ),
+      color-mix(in srgb, var(--team-accent) 8%, transparent),
       transparent 32%
     ),
     radial-gradient(
       circle at 86% 12%,
-      rgba(120, 34, 23, 0.1),
+      rgba(201, 168, 106, 0.06),
       transparent 30%
     ),
-    linear-gradient(
-      180deg,
-      #0c0e12,
-      #06080a
-    );
+    linear-gradient(180deg, var(--office-bg, #101218), var(--office-bg-deep, #0c0e14));
 
-  font-family:
-    Inter,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  font-family: var(--font-ops-ui, Inter, ui-sans-serif, system-ui, sans-serif);
 }
 
 .setup-root *,
@@ -1940,7 +2054,7 @@ const SETUP_SCREEN_CSS = `
     rgba(255, 255, 255, 0.08);
 
   border-radius:
-    7px 14px 9px 18px;
+    7px 10px 9px 12px;
 
   background:
     radial-gradient(
@@ -2049,7 +2163,7 @@ const SETUP_SCREEN_CSS = `
 
 .appointment-registry-title span,
 .appointment-registry-file span {
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 800;
 
   letter-spacing: 0.2em;
@@ -3288,7 +3402,7 @@ const SETUP_SCREEN_CSS = `
 
   z-index: 2;
 
-  font-size: 7px;
+  font-size: 11px;
   font-weight: 900;
 
   letter-spacing: 0.19em;
@@ -3381,7 +3495,7 @@ const SETUP_SCREEN_CSS = `
 
   z-index: 2;
 
-  font-size: 7px;
+  font-size: 11px;
   font-weight: 850;
 
   letter-spacing: 0.18em;
@@ -3428,7 +3542,7 @@ const SETUP_SCREEN_CSS = `
 
   gap: 6px;
 
-  font-size: 7px;
+  font-size: 11px;
   font-weight: 950;
 
   letter-spacing: 0.12em;
@@ -3592,7 +3706,7 @@ const SETUP_SCREEN_CSS = `
 
   text-align: center;
 
-  font-size: 7px;
+  font-size: 11px;
   font-weight: 900;
 
   letter-spacing: 0.18em;
@@ -3848,7 +3962,7 @@ const SETUP_SCREEN_CSS = `
 }
 
 .appointment-offer-code {
-  font-size: 7px;
+  font-size: 11px;
   font-weight: 950;
 
   letter-spacing: 0.14em;
@@ -3898,126 +4012,31 @@ const SETUP_SCREEN_CSS = `
   display: flex;
   flex-direction: column;
 
-  color: #d8c9a8;
+  color: var(--office-text, #ece8e0);
 
-  transform: rotate(0.35deg);
-
-  clip-path:
-    polygon(
-      1.5% 0.8%,
-      6% 0%,
-      11% 1.8%,
-      17% 0.4%,
-      24% 2.2%,
-      31% 0.2%,
-      39% 1.6%,
-      47% 0%,
-      55% 2%,
-      63% 0.5%,
-      71% 1.4%,
-      79% 0.2%,
-      87% 2.5%,
-      94% 0.8%,
-      99% 2.5%,
-      100% 7%,
-      98.5% 14%,
-      100% 22%,
-      99.2% 31%,
-      100% 41%,
-      98.8% 52%,
-      100% 63%,
-      99% 74%,
-      100% 84%,
-      98.5% 93%,
-      96% 99%,
-      89% 97.5%,
-      81% 100%,
-      73% 98.2%,
-      64% 99.6%,
-      55% 97.8%,
-      46% 100%,
-      37% 98.5%,
-      28% 99.8%,
-      19% 97.2%,
-      10% 99.5%,
-      3% 96.5%,
-      0.5% 91%,
-      0% 82%,
-      1.8% 71%,
-      0% 60%,
-      2.2% 49%,
-      0% 38%,
-      1.5% 27%,
-      0% 16%,
-      1.2% 7%
-    );
+  border: 1px solid var(--office-line, rgba(255, 255, 255, 0.08));
+  border-radius: var(--radius-card, 8px);
 
   background:
-    radial-gradient(
-      ellipse at 12% 8%,
-      rgba(219, 129, 52, 0.32),
-      transparent 22%
-    ),
-    radial-gradient(
-      ellipse at 94% 6%,
-      rgba(184, 87, 39, 0.38),
-      transparent 20%
-    ),
-    radial-gradient(
-      ellipse at 100% 88%,
-      rgba(96, 38, 25, 0.55),
-      transparent 24%
-    ),
-    radial-gradient(
-      ellipse at 48% 52%,
-      rgba(0, 0, 0, 0.28),
-      transparent 48%
-    ),
-    linear-gradient(
-      168deg,
-      rgba(38, 32, 26, 0.98),
-      rgba(18, 16, 14, 0.99) 42%,
-      rgba(10, 12, 14, 1)
-    );
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 24%),
+    var(--office-desk-strong, rgba(10, 12, 18, 0.94));
 
-  box-shadow:
-    0 28px 70px
-      rgba(0, 0, 0, 0.72),
-    0 0 0 1px
-      rgba(120, 68, 32, 0.45),
-    inset 0 0 90px
-      rgba(0, 0, 0, 0.65);
-
-  filter:
-    drop-shadow(
-      0 18px 42px
-      rgba(0, 0, 0, 0.55)
-    );
+  box-shadow: var(--depth-hud, 0 18px 42px rgba(0, 0, 0, 0.48));
 }
 
 .setup-config-panel::before {
   content: "";
 
   position: absolute;
-  inset: 0;
-
-  z-index: 4;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
 
   pointer-events: none;
 
-  opacity: 0.36;
-
-  background:
-    repeating-linear-gradient(
-      8deg,
-      rgba(255, 235, 190, 0.06) 0 1px,
-      transparent 1px 5px
-    ),
-    repeating-linear-gradient(
-      104deg,
-      rgba(0, 0, 0, 0.42) 0 1px,
-      transparent 1px 9px
-    );
+  background: linear-gradient(90deg, transparent, var(--gold), transparent);
+  opacity: 0.45;
 }
 
 .setup-contract-scroll {
@@ -4057,21 +4076,10 @@ const SETUP_SCREEN_CSS = `
 }
 
 .setup-contract-ornament {
-  margin-bottom: -2px;
-
-  text-align: center;
-
-  font-family:
-    "CookieAgreement",
-    Georgia,
-    serif;
-
-  font-size: 14px;
-
-  letter-spacing: 0.45em;
-
-  color:
-    rgba(220, 162, 92, 0.55);
+  height: 1px;
+  margin-bottom: 6px;
+  background: linear-gradient(90deg, transparent, var(--gold), transparent);
+  opacity: 0.55;
 }
 
 .setup-contract-title {
@@ -4079,50 +4087,28 @@ const SETUP_SCREEN_CSS = `
 
   text-align: center;
 
-  font-family:
-    "CookieAgreement",
-    Georgia,
-    serif;
-
-  font-size:
-    clamp(
-      32px,
-      2.8vw,
-      48px
-    );
-
+  font-family: var(--font-office-display, "Archivo Black", sans-serif);
+  font-size: clamp(1.15rem, 2.2vw, 1.45rem);
   font-weight: 400;
+  line-height: 1.05;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 
-  line-height: 0.92;
-
-  color: #e8c894;
-
-  text-shadow:
-    0 2px 0
-      rgba(0, 0, 0, 0.85),
-    0 0 18px
-      rgba(199, 139, 68, 0.22);
+  color: var(--gold);
 }
 
 .setup-contract-intro {
-  margin: 2px 0 0;
+  margin: 4px 0 0;
 
   text-align: center;
 
-  font-family:
-    "CookieAgreement",
-    Georgia,
-    serif;
+  font-family: var(--font-ops-ui, Inter, sans-serif);
+  font-size: var(--type-compact-size, 0.8125rem);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 
-  font-size:
-    clamp(
-      16px,
-      1.6vw,
-      22px
-    );
-
-  color:
-    rgba(220, 190, 140, 0.82);
+  color: var(--muted);
 }
 
 .setup-contract-parties {
@@ -4179,21 +4165,13 @@ const SETUP_SCREEN_CSS = `
 .setup-contract-team-name {
   margin: 0;
 
-  font-size:
-    clamp(
-      14px,
-      1.4vw,
-      18px
-    );
-
-  font-weight: 800;
-
-  letter-spacing: 0.04em;
+  font-family: var(--font-office-display, "Archivo Black", sans-serif);
+  font-size: clamp(0.95rem, 1.6vw, 1.15rem);
+  font-weight: 400;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-
   line-height: 1.15;
-
-  color: #f0e0c0;
+  color: var(--text);
 }
 
 .setup-contract-gm-field {
@@ -4206,15 +4184,13 @@ const SETUP_SCREEN_CSS = `
 
   margin-bottom: 3px;
 
-  font-family:
-    "CookieAgreement",
-    Georgia,
-    serif;
+  font-family: var(--font-ops-ui, Inter, sans-serif);
+  font-size: var(--type-dept-label-size, 0.72rem);
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 
-  font-size: 16px;
-
-  color:
-    rgba(220, 190, 140, 0.78);
+  color: var(--muted);
 }
 
 .setup-contract-gm-input {
@@ -4258,19 +4234,11 @@ const SETUP_SCREEN_CSS = `
 }
 
 .setup-contract-year-label {
-  font-family:
-    "CookieAgreement",
-    Georgia,
-    serif;
-
-  font-size:
-    clamp(
-      17px,
-      1.8vw,
-      22px
-    );
-
-  color: #e8c894;
+  font-family: var(--font-office-display, "Archivo Black", sans-serif);
+  font-size: clamp(0.85rem, 1.4vw, 1rem);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gold);
 }
 
 .setup-contract-divider {
@@ -4309,59 +4277,39 @@ const SETUP_SCREEN_CSS = `
 
 .setup-clause {
   display: grid;
-
   gap: 4px;
+  padding: 8px 0;
 }
 
 .setup-clause.is-active {
   margin: -4px -8px;
-
-  padding: 6px 8px;
-
-  border-radius: 4px;
-
-  background:
-    rgba(0, 0, 0, 0.22);
-
-  box-shadow:
-    inset 0 0 0 1px
-      rgba(220, 162, 92, 0.22);
+  padding: 8px;
+  border-radius: var(--radius-hud, 4px);
+  background: rgba(201, 168, 106, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(201, 168, 106, 0.22);
 }
 
 .setup-clause-heading {
   margin: 0;
 
-  font-family:
-    "CookieAgreement",
-    Georgia,
-    serif;
-
-  font-size:
-    clamp(
-      17px,
-      1.7vw,
-      22px
-    );
-
-  font-weight: 400;
-
-  line-height: 1.05;
-
-  color: #e0b878;
+  font-family: var(--font-ops-ui, Inter, sans-serif);
+  font-size: var(--type-ops-heading-size, 0.95rem);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.15;
+  color: var(--gold);
 }
 
 .setup-clause-question {
   margin: 0;
 
-  font-family:
-    "CookieAgreement",
-    Georgia,
-    serif;
+  font-family: var(--font-ops-ui, Inter, sans-serif);
+  font-size: var(--type-compact-size, 0.8125rem);
+  font-weight: 700;
+  letter-spacing: 0.04em;
 
-  font-size: 16px;
-
-  color:
-    rgba(232, 200, 148, 0.9);
+  color: var(--text);
 }
 
 .setup-injuries-toggle {
@@ -4376,56 +4324,76 @@ const SETUP_SCREEN_CSS = `
 }
 
 .setup-injuries-btn {
-  min-height: 36px;
+  min-height: 34px;
 
   padding: 0 10px;
 
-  border:
-    1px solid
-    rgba(191, 109, 54, 0.45);
+  border: 1px solid rgba(201, 168, 106, 0.35);
+  border-radius: var(--radius-control, 6px);
 
-  border-radius:
-    4px 10px 5px 8px;
+  background: rgba(0, 0, 0, 0.28);
 
-  background:
-    linear-gradient(
-      180deg,
-      rgba(0, 0, 0, 0.32),
-      rgba(0, 0, 0, 0.18)
-    ),
-    rgba(40, 32, 24, 0.55);
+  color: var(--muted);
 
-  color:
-    rgba(200, 175, 130, 0.72);
-
-  font-family:
-    "CookieAgreement",
-    Georgia,
-    serif;
-
-  font-size: 22px;
+  font-family: var(--font-ops-ui, Inter, sans-serif);
+  font-size: var(--type-compact-size, 0.8125rem);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 
   cursor: pointer;
 }
 
 .setup-injuries-btn.is-selected {
-  border:
-    2px solid
-    rgba(220, 162, 92, 0.85);
+  border-color: rgba(201, 168, 106, 0.72);
+  background: rgba(201, 168, 106, 0.12);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px rgba(201, 168, 106, 0.22);
+}
 
-  background:
-    linear-gradient(
-      180deg,
-      rgba(120, 34, 23, 0.35),
-      rgba(0, 0, 0, 0.25)
-    ),
-    rgba(60, 38, 22, 0.65);
+.setup-universe-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  max-width: 100%;
+  margin-top: 8px;
+}
 
-  color: #f0d8a8;
+.setup-universe-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 64px;
+  padding: 10px 12px;
+  border: 1px solid rgba(201, 168, 106, 0.28);
+  border-radius: var(--radius-control, 6px);
+  background: rgba(0, 0, 0, 0.24);
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
 
-  box-shadow:
-    0 0 18px
-      rgba(199, 139, 68, 0.28);
+.setup-universe-btn.is-selected {
+  border-color: rgba(201, 168, 106, 0.62);
+  background: rgba(201, 168, 106, 0.1);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px rgba(201, 168, 106, 0.18);
+}
+
+.setup-universe-btn-title {
+  font-family: var(--font-ops-ui, Inter, sans-serif);
+  font-size: var(--type-compact-size, 0.8125rem);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.setup-universe-btn-copy {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: 0.9;
 }
 
 .setup-signature-area {
@@ -4551,15 +4519,13 @@ const SETUP_SCREEN_CSS = `
 
   pointer-events: none;
 
-  font-family:
-    "CookieAgreement",
-    Georgia,
-    serif;
+  font-family: var(--font-ops-ui, Inter, sans-serif);
+  font-size: var(--type-compact-size, 0.8125rem);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 
-  font-size: 22px;
-
-  color:
-    rgba(191, 109, 54, 0.48);
+  color: rgba(201, 168, 106, 0.42);
 
   transition:
     opacity 150ms ease;
@@ -4582,7 +4548,7 @@ const SETUP_SCREEN_CSS = `
   color:
     rgba(220, 190, 140, 0.62);
 
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
 
   letter-spacing: 0.08em;
@@ -4665,15 +4631,11 @@ const SETUP_SCREEN_CSS = `
 }
 
 .setup-wax-seal-mark {
-  font-family:
-    "CookieAgreement",
-    Georgia,
-    serif;
-
-  font-size: 22px;
-
-  color:
-    rgba(255, 220, 180, 0.75);
+  font-family: var(--font-office-display, "Archivo Black", sans-serif);
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 220, 180, 0.75);
 }
 
 .setup-config-panel >
@@ -4714,29 +4676,20 @@ const SETUP_SCREEN_CSS = `
 }
 
 .setup-signature-hint {
-  padding: 12px 14px;
+  padding: 10px 12px;
 
-  border:
-    1px dashed
-    rgba(191, 109, 54, 0.35);
+  border: 1px dashed rgba(201, 168, 106, 0.28);
+  border-radius: var(--radius-control, 6px);
 
-  border-radius:
-    5px 10px 4px 8px;
-
-  background:
-    rgba(0, 0, 0, 0.22);
+  background: rgba(0, 0, 0, 0.22);
 
   text-align: center;
 
-  font-family:
-    "CookieAgreement",
-    Georgia,
-    serif;
+  font-family: var(--font-ops-ui, Inter, sans-serif);
+  font-size: var(--type-compact-size, 0.8125rem);
+  font-weight: 600;
 
-  font-size: 18px;
-
-  color:
-    rgba(220, 190, 140, 0.72);
+  color: var(--muted);
 }
 
 .setup-start-btn {
@@ -4747,57 +4700,35 @@ const SETUP_SCREEN_CSS = `
 
   gap: 2px;
 
-  border:
-    2px solid
-    rgba(191, 109, 54, 0.7);
-
-  border-radius:
-    5px 12px 6px 10px;
+  border: 1px solid rgba(201, 168, 106, 0.55);
+  border-radius: var(--radius-control, 6px);
 
   background:
-    linear-gradient(
-      180deg,
-      rgba(80, 48, 22, 0.85),
-      rgba(30, 20, 12, 0.92)
-    );
+    linear-gradient(180deg, rgba(201, 168, 106, 0.18), rgba(201, 168, 106, 0.06)),
+    rgba(8, 11, 16, 0.94);
 
-  color: #e8c894;
+  color: var(--gold);
 
   cursor: pointer;
 
-  box-shadow:
-    0 14px 32px
-      rgba(0, 0, 0, 0.45);
+  box-shadow: var(--depth-lifted, 0 12px 32px rgba(0, 0, 0, 0.36));
 
   transition:
     transform 150ms ease,
     border-color 150ms ease,
     box-shadow 150ms ease;
-
-  animation:
-    setupStartReveal
-    320ms
-    ease-out;
 }
 
 .setup-start-btn span {
-  font-family:
-    "CookieAgreement",
-    Georgia,
-    serif;
-
-  font-size:
-    clamp(
-      22px,
-      2.2vw,
-      28px
-    );
-
+  font-family: var(--font-office-display, "Archivo Black", sans-serif);
+  font-size: clamp(1rem, 1.8vw, 1.2rem);
   font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .setup-start-btn small {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
 
   letter-spacing: 0.14em;
@@ -4913,7 +4844,7 @@ const SETUP_SCREEN_CSS = `
       rgba(255, 255, 255, 0.12)
     );
 
-  border-radius: 26px;
+  border-radius: var(--radius-card, 8px);
 
   background:
     rgba(5, 17, 27, 0.88);
@@ -5011,14 +4942,15 @@ const SETUP_SCREEN_CSS = `
   margin: 22px 0;
 }
 
+/* Appointment steps register as filing marks on the executive dossier. */
 .setup-loading-steps span {
-  padding: 8px 11px;
+  padding: 7px 10px;
 
   border:
     1px solid
     rgba(255, 255, 255, 0.1);
 
-  border-radius: 999px;
+  border-radius: 2px;
 
   background:
     rgba(255, 255, 255, 0.035);
@@ -5046,7 +4978,7 @@ const SETUP_SCREEN_CSS = `
     1px solid
     rgba(255, 255, 255, 0.09);
 
-  border-radius: 18px;
+  border-radius: var(--radius-card, 8px);
 
   background:
     rgba(4, 10, 18, 0.58);
@@ -5059,7 +4991,7 @@ const SETUP_SCREEN_CSS = `
 
   margin-bottom: 8px;
 
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 950;
 
   letter-spacing: 0.16em;

@@ -19,6 +19,7 @@ import ChemistryScreen from "./screens/ChemistryScreen";
 import EditLines from "./screens/editLines";
 import Scouting from "./screens/Scouting";
 import CapLedger from "./screens/CapLedger";
+import FreeAgency from "./screens/FreeAgency";
 import LeagueOperations from "./screens/LeagueOperations";
 
 /** TEMP: remove with frontend/src/dev/EventMenuReplay.js after menu QA */
@@ -134,7 +135,6 @@ function GameRoot() {
       SCREENS.POWER_PLAY,
       SCREENS.PENALTY_KILL,
       SCREENS.SCOUTING,
-      SCREENS.DRAFT_CLASS,
       SCREENS.HUB,
     ].includes(screen);
     const needsDraft = [SCREENS.DRAFT_CLASS, SCREENS.SCOUTING].includes(screen);
@@ -144,7 +144,7 @@ function GameRoot() {
       includeDraftClassRankings: needsDraft,
       includeDraftClassHud: needsDraft,
     });
-  }, [screen, hydrateFranchiseHeavyState, franchiseState?.stats_revision]);
+  }, [screen, hydrateFranchiseHeavyState, franchiseState?.stats_revision, franchiseState?.prospect_revision]);
 
   return (
     <GameCanvas>
@@ -167,6 +167,7 @@ function GameRoot() {
       {screen === SCREENS.LEAGUE_OPERATIONS && <LeagueOperations />}
       {screen === SCREENS.GM_WORLD && <LeagueOperations />}
       {screen === SCREENS.CAP_LEDGER && <CapLedger />}
+      {screen === SCREENS.FREE_AGENCY && <FreeAgency />}
       {screen === SCREENS.SETTINGS && <SettingsScreen />}
       {screen === SCREENS.PLACEHOLDER && <CommandPlaceholderScreen />}
     </GameCanvas>
@@ -184,49 +185,97 @@ function CommandPlaceholderScreen() {
 
   return (
     <div
-      className="command-placeholder-screen"
+      className="command-placeholder-screen register-office"
+      data-register="office"
       style={{
         minHeight: "100%",
         display: "grid",
         placeItems: "center",
         padding: 24,
         background:
-          "radial-gradient(circle at 50% 0%, rgba(201,168,106,0.12), transparent 40%), linear-gradient(180deg, #10131a, #07080c)",
-        color: "#f3ead8",
+          "radial-gradient(circle at 50% 18%, rgba(201,168,106,0.08), transparent 36%), linear-gradient(180deg, #141820 0%, #0c0e14 100%)",
+        color: "var(--office-text, #ece8e0)",
+        fontFamily: 'var(--font-office-display, "Archivo Black", sans-serif)',
       }}
     >
       <div
         className="command-placeholder-card"
         style={{
-          width: "min(720px, 100%)",
-          padding: "28px 26px",
-          borderRadius: 14,
-          border: "1px solid rgba(201,168,106,0.28)",
-          background: "rgba(8,10,14,0.92)",
-          boxShadow: "0 24px 64px rgba(0,0,0,0.45)",
+          width: "min(520px, 100%)",
+          padding: "20px 22px",
+          borderRadius: 6,
+          border: "1px solid rgba(255,255,255,0.08)",
+          background: "rgba(8,10,14,0.94)",
+          boxShadow: "0 18px 42px rgba(0,0,0,0.48)",
+          position: "relative",
         }}
       >
-        <span
+        <div
+          aria-hidden="true"
           style={{
-            display: "inline-block",
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 2,
+            background: "linear-gradient(90deg, transparent, #c9a86a, transparent)",
+            opacity: 0.55,
+          }}
+        />
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
             marginBottom: 10,
-            color: "#c9a86a",
-            fontSize: 11,
-            letterSpacing: "0.16em",
-            textTransform: "uppercase",
-            fontWeight: 800,
           }}
         >
-          Not Built Yet
-        </span>
-        <h1 style={{ margin: "0 0 10px", fontSize: "clamp(28px, 4vw, 42px)", lineHeight: 1.05 }}>
+          <span
+            style={{
+              color: "#c9a86a",
+              fontSize: 11,
+              letterSpacing: "0.16em",
+              textTransform: "uppercase",
+              fontWeight: 800,
+            }}
+          >
+            Office · Filing
+          </span>
+          <span className="fcn-stamp fcn-stamp--office">Not in service</span>
+        </div>
+        <h1
+          style={{
+            margin: "0 0 8px",
+            fontSize: "clamp(22px, 3vw, 32px)",
+            lineHeight: 1.05,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+          }}
+        >
           {payload.title}
         </h1>
-        <p style={{ margin: "0 0 12px", color: "rgba(243,234,216,0.78)", fontSize: 16 }}>
+        <p
+          style={{
+            margin: "0 0 10px",
+            color: "rgba(220,216,208,0.72)",
+            fontSize: 14,
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontWeight: 600,
+          }}
+        >
           {payload.subtitle}
         </p>
         {payload.description ? (
-          <p style={{ margin: "0 0 16px", color: "rgba(243,234,216,0.62)", lineHeight: 1.5 }}>
+          <p
+            style={{
+              margin: "0 0 14px",
+              color: "rgba(220,216,208,0.55)",
+              lineHeight: 1.45,
+              fontSize: 13,
+              fontFamily: "Inter, system-ui, sans-serif",
+            }}
+          >
             {payload.description}
           </p>
         ) : null}
@@ -234,12 +283,13 @@ function CommandPlaceholderScreen() {
           <code
             style={{
               display: "inline-block",
-              marginBottom: 18,
-              padding: "6px 10px",
-              borderRadius: 8,
+              marginBottom: 16,
+              padding: "4px 8px",
+              borderRadius: 2,
               background: "rgba(255,255,255,0.04)",
               color: "rgba(201,168,106,0.85)",
-              fontSize: 12,
+              fontSize: 11,
+              letterSpacing: "0.06em",
             }}
           >
             Target: {payload.targetId}
@@ -247,20 +297,16 @@ function CommandPlaceholderScreen() {
         ) : null}
         <button
           type="button"
+          className="ui-btn ui-btn--executive"
           onClick={() => setScreen(SCREENS.HUB)}
           style={{
-            marginTop: 8,
-            minHeight: 42,
+            marginTop: 4,
+            minHeight: 40,
             padding: "0 16px",
-            borderRadius: 999,
-            border: "1px solid rgba(201,168,106,0.38)",
-            background: "rgba(201,168,106,0.1)",
-            color: "#fff7e7",
-            fontWeight: 800,
             cursor: "pointer",
           }}
         >
-          ← Back to Franchise Office
+          Return to Office
         </button>
       </div>
     </div>

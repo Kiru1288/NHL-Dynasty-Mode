@@ -566,13 +566,31 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
             )
 
         for tm in (home, away):
+            tid_tm = str(getattr(tm, "team_id", None) or getattr(tm, "id", "") or "")
             for pl in getattr(tm, "roster", None) or []:
                 if int(getattr(pl, "_world_injury_games_remaining", 0) or 0) > 0:
                     world_injuries.tick_games_missed(pl)
-                if int(getattr(pl, "_world_conduct_games_remaining", 0) or 0) > 0:
-                    from app.sim_engine.franchise.storyline_conduct import tick_conduct_games_missed  # noqa: WPS433
+                has_conduct = bool(getattr(pl, "_conduct_incident_id", None)) or int(
+                    getattr(pl, "_world_conduct_games_remaining", 0) or 0
+                ) > 0
+                if has_conduct:
+                    try:
+                        from app.sim_engine.franchise.conduct_incidents import (  # noqa: WPS433
+                            apply_dress_backlash,
+                            player_eligible_to_dress,
+                            tick_incident_games,
+                        )
 
-                    tick_conduct_games_missed(pl)
+                        tick_incident_games(session, pl)
+                        # Eligible but controversial: dressing during an active matter hits the org.
+                        if player_eligible_to_dress(pl, session) and float(
+                            getattr(pl, "_conduct_dress_backlash_risk", 0) or 0
+                        ) >= 0.08:
+                            apply_dress_backlash(session, team_id=tid_tm, player=pl)
+                    except Exception:
+                        from app.sim_engine.franchise.storyline_conduct import tick_conduct_games_missed  # noqa: WPS433
+
+                        tick_conduct_games_missed(pl)
 
         if getattr(session, "injuries_enabled", True):
             for tm in (home, away):
@@ -615,9 +633,35 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
 
         if world_injuries is not None:
             for tm in (home, away):
+                tid_tm = str(getattr(tm, "team_id", None) or getattr(tm, "id", "") or "")
                 for pl in getattr(tm, "roster", None) or []:
                     if int(getattr(pl, "_world_injury_games_remaining", 0) or 0) > 0:
                         world_injuries.tick_games_missed(pl)
+                    has_conduct = bool(getattr(pl, "_conduct_incident_id", None)) or int(
+                        getattr(pl, "_world_conduct_games_remaining", 0) or 0
+                    ) > 0
+                    if has_conduct:
+                        try:
+                            from app.sim_engine.franchise.conduct_incidents import (  # noqa: WPS433
+                                apply_dress_backlash,
+                                player_eligible_to_dress,
+                                tick_incident_games,
+                            )
+
+                            tick_incident_games(session, pl)
+                            if player_eligible_to_dress(pl, session) and float(
+                                getattr(pl, "_conduct_dress_backlash_risk", 0) or 0
+                            ) >= 0.08:
+                                apply_dress_backlash(session, team_id=tid_tm, player=pl)
+                        except Exception:
+                            try:
+                                from app.sim_engine.franchise.storyline_conduct import (  # noqa: WPS433
+                                    tick_conduct_games_missed,
+                                )
+
+                                tick_conduct_games_missed(pl)
+                            except Exception:
+                                pass
             if getattr(session, "injuries_enabled", True):
                 for tm in (home, away):
                     ev = world_injuries.maybe_injure_roster_subset(

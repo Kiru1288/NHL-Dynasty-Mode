@@ -8,6 +8,31 @@ function asArray(v) {
   return Array.isArray(v) ? v : [];
 }
 
+function safeText(value, fallback = "—") {
+  if (value == null || value === "") return fallback;
+  const text = String(value).trim();
+  return text || fallback;
+}
+
+function abbrCode(value) {
+  return safeText(value, "?").slice(0, 3).toUpperCase();
+}
+
+function gameIsComplete(game) {
+  return game?.home_goals != null && game?.away_goals != null;
+}
+
+function gameStatusLabel(game) {
+  if (gameIsComplete(game)) {
+    if (game?.shootout || game?.decided_by === "so") return "Final / SO";
+    if (game?.overtime || game?.decided_by === "ot") return "Final / OT";
+    return "Final";
+  }
+  if (game?.is_live || game?.status === "live") return "Live";
+  if (!game?.home || !game?.away) return "TBD";
+  return "Scheduled";
+}
+
 export function wjcPlayerHeadshot(row) {
   const code = row?.wjc_country || "";
   return ensurePlayerHeadshotFields({
@@ -101,21 +126,36 @@ export function NationFlagsBar({ standings, countries }) {
         label: labelBy[code] || c.label || code,
         w: 0,
         l: 0,
+        pts: 0,
       }
     );
   });
 
+  const leaderPts = Math.max(0, ...rows.map((row) => Number(row.pts) || 0));
+  const hasStandings = rows.some((row) => (Number(row.gp) || 0) > 0 || (Number(row.pts) || 0) > 0);
+
   return (
     <div className="wjc-nation-bar" aria-label="Tournament nations">
-      {rows.map((row) => (
-        <div key={row.code} className="wjc-nation-chip" title={`${row.label} U20`}>
-          <FlagImg code={row.code} size={40} className="wjc-nation-chip__flag" />
-          <span className="wjc-nation-chip__code">{row.code}</span>
-          <span className="wjc-nation-chip__record">
-            {row.w ?? 0}-{row.l ?? 0}
-          </span>
-        </div>
-      ))}
+      {rows.map((row) => {
+        const isLeader =
+          hasStandings && leaderPts > 0 && Number(row.pts) === leaderPts;
+        const fullName = safeText(row.label || labelBy[row.code] || row.code);
+        const record = `${row.w ?? 0}-${row.l ?? 0}`;
+        return (
+          <div
+            key={row.code}
+            className={`wjc-nation-chip${isLeader ? " is-leader" : ""}`}
+            title={`${fullName} U20 · ${record}${hasStandings ? ` · ${row.pts ?? 0} PTS` : ""}`}
+          >
+            <FlagImg code={row.code} size={40} className="wjc-nation-chip__flag" />
+            <span className="wjc-nation-chip__code">{abbrCode(row.code)}</span>
+            <span className="wjc-nation-chip__record">{record}</span>
+            {hasStandings ? (
+              <span className="wjc-nation-chip__pts">{row.pts ?? 0} PTS</span>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -193,56 +233,99 @@ export function DeskControls({
 
 export function DraftStockSidebar({ rows, onSelectPlayer }) {
   const draftRows = asArray(rows).filter(
-    (row) => row.prospect_classification !== "drafted_user" && row.prospect_classification !== "tournament_npc"
+    (row) =>
+      row.prospect_classification !== "drafted_user" &&
+      row.prospect_classification !== "tournament_npc"
   );
-  const displayRows = draftRows.length ? draftRows : asArray(rows).filter((r) => r.prospect_classification === "drafted_user");
+  const displayRows = draftRows.length
+    ? draftRows
+    : asArray(rows).filter((r) => r.prospect_classification === "drafted_user");
+
+  const sorted = [...displayRows].sort(
+    (a, b) =>
+      Math.abs(Number(b.stock_delta) || 0) -
+      Math.abs(Number(a.stock_delta) || 0)
+  );
 
   return (
     <aside className="wjc-side-panel wjc-side-panel--stock" aria-label="Draft stock watch">
       <header className="wjc-side-panel__head">
-        <span>DRAFT STOCK</span>
-        <em>PERSISTENT BOARD</em>
+        <span>Draft Risers</span>
+        <em>WJC Board Movement</em>
       </header>
-      {displayRows.length === 0 ? (
-        <p className="wjc-empty">NO PROSPECT DATA</p>
+      {sorted.length === 0 ? (
+        <p className="wjc-empty">No prospect data</p>
       ) : (
         <ul className="wjc-stock-sidebar-list wjc-scroll-panel">
-          {displayRows
-            .sort((a, b) => Math.abs(Number(b.stock_delta) || 0) - Math.abs(Number(a.stock_delta) || 0))
-            .slice(0, 20)
-            .map((row) => {
+          {sorted.slice(0, 20).map((row) => {
             const isDrafted = row.prospect_classification === "drafted_user";
-            const delta = Number(row.stock_delta) || 0;
+            const delta = Number(row.stock_delta);
+            const hasDelta = Number.isFinite(delta);
             const player = wjcPlayerHeadshot(row);
+            const pts =
+              row.tournament_pts ?? row.pts ?? null;
+            const moveClass = !hasDelta
+              ? ""
+              : delta > 0
+                ? " is-up"
+                : delta < 0
+                  ? " is-down"
+                  : " is-flat";
+            const moveText = !hasDelta
+              ? "—"
+              : delta > 0
+                ? `▲ ${delta}`
+                : delta < 0
+                  ? `▼ ${Math.abs(delta)}`
+                  : "— 0";
+
             return (
               <li key={row.player_id || row.name}>
                 <button
                   type="button"
                   className="wjc-stock-sidebar-card"
                   onClick={() => onSelectPlayer?.(row)}
+                  title={safeText(row.name)}
                 >
-                  <PlayerHeadshot player={player} size="sm" variant="card" flag={row.wjc_country} />
+                  <span className="wjc-stock-sidebar-card__shot">
+                    <PlayerHeadshot
+                      player={player}
+                      size="sm"
+                      variant="card"
+                      flag={row.wjc_country}
+                    />
+                  </span>
                   <div className="wjc-stock-sidebar-card__body">
-                    <strong>{row.name}</strong>
+                    <strong>{safeText(row.name, "Unknown")}</strong>
+                    <span className="wjc-stock-sidebar-card__meta">
+                      <FlagImg code={row.wjc_country} size={16} />
+                      <span>{abbrCode(row.wjc_country)}</span>
+                      <span>{safeText(row.position, "—")}</span>
+                      {row.age != null ? <span>Age {row.age}</span> : null}
+                    </span>
                     {isDrafted ? (
                       <span className="wjc-stock-sidebar-card__owned">
-                        PROPERTY OF {row.owner_team_abbr || "YOU"}
+                        Org · {safeText(row.owner_team_abbr, "YOU")}
                       </span>
                     ) : (
-                      <>
-                        <span className="wjc-stock-sidebar-card__nation">
-                          <FlagImg code={row.wjc_country} size={20} />
-                          {row.wjc_country_label || row.wjc_country}
-                        </span>
-                        <div className="wjc-stock-sidebar-card__ranks">
-                          <em>#{row.stock_before ?? "—"}</em>
+                      <div className="wjc-stock-sidebar-card__metrics">
+                        <span title="Draft rank before / after WJC">
+                          #{row.stock_before ?? "—"}
                           <i aria-hidden="true">→</i>
-                          <b>#{row.stock_after ?? "—"}</b>
-                        </div>
-                        <span className={`wjc-stock-sidebar-card__delta${delta >= 0 ? " is-up" : " is-down"}`}>
-                          {delta > 0 ? "▲" : delta < 0 ? "▼" : "—"} {Math.abs(delta) || 0}
+                          #{row.stock_after ?? "—"}
                         </span>
-                      </>
+                        <span
+                          className={`wjc-stock-sidebar-card__delta${moveClass}`}
+                          title="Board spots gained or lost"
+                        >
+                          {moveText}
+                        </span>
+                        {pts != null ? (
+                          <span className="wjc-stock-sidebar-card__pts">
+                            {pts} PTS
+                          </span>
+                        ) : null}
+                      </div>
                     )}
                   </div>
                 </button>
@@ -257,53 +340,36 @@ export function DraftStockSidebar({ rows, onSelectPlayer }) {
 
 export function StatLeadersSidebar({ leaders }) {
   const blocks = [
-    { title: "Points", rows: leaders.byPts, metric: "pts", label: "PTS" },
-    { title: "Goals", rows: leaders.byGoals, metric: "g", label: "G" },
-    { title: "Plus/Minus", rows: leaders.byPm, metric: "plus_minus", label: "+/-" },
+    { id: "pts", title: "Points", rows: asArray(leaders?.byPts), metric: "pts", label: "PTS" },
+    { id: "g", title: "Goals", rows: asArray(leaders?.byGoals), metric: "g", label: "G" },
+    { id: "pm", title: "Plus/Minus", rows: asArray(leaders?.byPm), metric: "plus_minus", label: "+/−" },
+    { id: "teams", title: "Teams", rows: asArray(leaders?.teamLeaders), metric: "pts", label: "PTS", teams: true },
   ];
+  const [activeId, setActiveId] = useState("pts");
+  const active = blocks.find((b) => b.id === activeId) || blocks[0];
 
   return (
-    <aside className="wjc-side-panel wjc-side-panel--leaders" aria-label="Tournament stat leaders">
+    <aside className="wjc-side-panel wjc-side-panel--leaders" aria-label="Tournament leaders">
       <header className="wjc-side-panel__head">
-        <span>STAT LEADERS</span>
-        <em>TOURNAMENT</em>
+        <span>Tournament Leaders</span>
+        <em>{active.title}</em>
       </header>
-      <div className="wjc-scroll-panel">
+      <div className="wjc-leader-tabs" role="tablist" aria-label="Leader categories">
         {blocks.map((block) => (
-          <div key={block.title} className="wjc-leader-block">
-            <h3>{block.title}</h3>
-            <table className="wjc-mini-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Player</th>
-                  <th>CTY</th>
-                  <th>{block.label}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {block.rows.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="wjc-empty-inline">
-                      —
-                    </td>
-                  </tr>
-                ) : (
-                  block.rows.map((row, i) => (
-                    <tr key={row.player_id || `${block.title}-${i}`}>
-                      <td>{i + 1}</td>
-                      <td>{row.name}</td>
-                      <td>{row.wjc_country}</td>
-                      <td>{row[block.metric] ?? 0}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+          <button
+            key={block.id}
+            type="button"
+            role="tab"
+            aria-selected={activeId === block.id}
+            className={activeId === block.id ? "is-active" : ""}
+            onClick={() => setActiveId(block.id)}
+          >
+            {block.title}
+          </button>
         ))}
-        <div className="wjc-leader-block">
-          <h3>Team Standings</h3>
+      </div>
+      <div className="wjc-scroll-panel">
+        {active.teams ? (
           <table className="wjc-standings-table">
             <thead>
               <tr>
@@ -312,29 +378,62 @@ export function StatLeadersSidebar({ leaders }) {
                 <th>Team</th>
                 <th>W</th>
                 <th>L</th>
-                <th>GF</th>
-                <th>GA</th>
                 <th>PTS</th>
               </tr>
             </thead>
             <tbody>
-              {leaders.teamLeaders.map((row, i) => (
-                <tr key={row.code}>
-                  <td>{i + 1}</td>
-                  <td>
-                    <FlagImg code={row.code} size={22} className="wjc-standings-table__flag" />
+              {active.rows.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="wjc-empty-inline">
+                    No standings yet
                   </td>
-                  <td>{row.code}</td>
-                  <td>{row.w}</td>
-                  <td>{row.l}</td>
-                  <td>{row.gf}</td>
-                  <td>{row.ga}</td>
-                  <td>{row.pts}</td>
                 </tr>
-              ))}
+              ) : (
+                active.rows.slice(0, 10).map((row, i) => (
+                  <tr key={row.code || i}>
+                    <td>{i + 1}</td>
+                    <td>
+                      <FlagImg code={row.code} size={22} className="wjc-standings-table__flag" />
+                    </td>
+                    <td title={row.label || row.code}>{abbrCode(row.code)}</td>
+                    <td>{row.w ?? 0}</td>
+                    <td>{row.l ?? 0}</td>
+                    <td>{row.pts ?? 0}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
-        </div>
+        ) : (
+          <table className="wjc-mini-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Player</th>
+                <th>Cty</th>
+                <th>{active.label}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {active.rows.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="wjc-empty-inline">
+                    No stats yet
+                  </td>
+                </tr>
+              ) : (
+                active.rows.slice(0, 10).map((row, i) => (
+                  <tr key={row.player_id || `${active.id}-${i}`}>
+                    <td>{i + 1}</td>
+                    <td title={safeText(row.name)}>{safeText(row.name, "—")}</td>
+                    <td>{abbrCode(row.wjc_country)}</td>
+                    <td>{row[active.metric] ?? 0}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        )}
       </div>
     </aside>
   );
@@ -612,7 +711,7 @@ export function GamesBrowser({ games, onSelectGame, formatScoreLine }) {
   const list = asArray(games);
   const byDay = {};
   list.forEach((g) => {
-    const d = g.game_day || 0;
+    const d = Number(g.game_day) || 0;
     if (!byDay[d]) byDay[d] = [];
     byDay[d].push(g);
   });
@@ -620,29 +719,66 @@ export function GamesBrowser({ games, onSelectGame, formatScoreLine }) {
     .map(Number)
     .sort((a, b) => a - b);
 
+  const completedCount = list.filter(gameIsComplete).length;
+
   return (
     <section className="wjc-games-browser" aria-label="Tournament games">
-      <header className="wjc-games-browser__head">
-        <span>TOURNAMENT GAMES</span>
-        <em>{list.length} PLAYED</em>
-      </header>
       {list.length === 0 ? (
-        <p className="wjc-empty">No games played yet. Use Sim Day to advance the tournament.</p>
+        <p className="wjc-empty">No games scheduled. Use Sim Day to advance.</p>
       ) : (
-        <div className="wjc-games-browser__scroll wjc-scroll-panel">
+        <div className="wjc-games-browser__scroll">
+          <p className="wjc-games-browser__summary">
+            <span>{completedCount} completed</span>
+            <span aria-hidden="true">·</span>
+            <span>{list.length} total</span>
+          </p>
           {dayKeys.map((day) => (
             <div key={day} className="wjc-games-day-group">
-              <h4>Day {day}</h4>
-              <ul className="wjc-games-browser__list">
-                {byDay[day].map((g, i) => (
-                  <li key={`${g.home}-${g.away}-${day}-${i}`}>
-                    <button type="button" onClick={() => onSelectGame(g)}>
-                      <span className="wjc-games-browser__round">{g.round || "FINAL"}</span>
-                      <span className="wjc-games-browser__line">{formatScoreLine(g)}</span>
+              <h4>Day {day || "—"}</h4>
+              <div className="wjc-games-browser__list">
+                {byDay[day].map((g, i) => {
+                  const complete = gameIsComplete(g);
+                  const homeCode = abbrCode(g.home || g.home_label);
+                  const awayCode = abbrCode(g.away || g.away_label);
+                  const hg = g.home_goals;
+                  const ag = g.away_goals;
+                  const homeWins = complete && Number(hg) > Number(ag);
+                  const awayWins = complete && Number(ag) > Number(hg);
+                  const status = gameStatusLabel(g);
+                  const roundLabel = safeText(g.round, "Game");
+
+                  return (
+                    <button
+                      key={`${g.home}-${g.away}-${day}-${i}`}
+                      type="button"
+                      className={`wjc-fixture-row${complete ? " is-final" : " is-upcoming"}`}
+                      onClick={() => onSelectGame?.(g)}
+                      aria-label={`${roundLabel}: ${awayCode} versus ${homeCode}, ${status}`}
+                    >
+                      <span className="wjc-fixture-row__stage">
+                        <em>{roundLabel}</em>
+                      </span>
+                      <span className="wjc-fixture-row__matchup">
+                        <span className={`wjc-fixture-team${awayWins ? " is-winner" : ""}`}>
+                          <FlagImg code={g.away} size={28} />
+                          <strong>{awayCode}</strong>
+                          <b>{complete ? ag : "—"}</b>
+                        </span>
+                        <span className="wjc-fixture-row__sep" aria-hidden="true">
+                          {complete ? "—" : "vs"}
+                        </span>
+                        <span className={`wjc-fixture-team${homeWins ? " is-winner" : ""}`}>
+                          <b>{complete ? hg : "—"}</b>
+                          <strong>{homeCode}</strong>
+                          <FlagImg code={g.home} size={28} />
+                        </span>
+                      </span>
+                      <span className="wjc-fixture-row__status">{status}</span>
+                      <span className="wjc-sr-only">{formatScoreLine?.(g)}</span>
                     </button>
-                  </li>
-                ))}
-              </ul>
+                  );
+                })}
+              </div>
             </div>
           ))}
         </div>

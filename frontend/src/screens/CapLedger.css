@@ -1,23 +1,25 @@
 .cap-ledger-screen {
-  --cap-bg: #03080e;
-  --cap-panel: rgba(8, 21, 34, 0.9);
+  --cap-bg: var(--ops-navy-deep);
+  --cap-panel: var(--ops-panel);
   --cap-panel-strong: rgba(6, 18, 29, 0.96);
-  --cap-panel-soft: rgba(255, 255, 255, 0.035);
-  --cap-line: rgba(118, 200, 245, 0.2);
-  --cap-line-strong: rgba(0, 216, 223, 0.34);
-  --cap-gold: #2be4ff;
-  --cap-gold-bright: #7cf0ff;
-  --cap-text: #e9f6ff;
-  --cap-muted: #8aa0b6;
+  --cap-panel-soft: rgba(255, 255, 255, 0.03);
+  --cap-line: var(--ops-grid);
+  --cap-line-strong: var(--ops-grid-strong);
+  --cap-cyan: var(--ops-cyan);
+  --cap-cyan-bright: #7cf0ff;
+  --cap-gold: var(--ops-gold);
+  --cap-gold-bright: #f4c66e;
+  --cap-text: var(--ops-text);
+  --cap-muted: var(--ops-text-secondary);
   --cap-muted-strong: rgba(233, 246, 255, 0.74);
-  --cap-danger: #ff6f7e;
-  --cap-danger-soft: rgba(255, 111, 126, 0.14);
-  --cap-warning: #f4c66e;
-  --cap-warning-soft: rgba(244, 198, 110, 0.14);
-  --cap-good: #6cf7a6;
-  --cap-good-soft: rgba(108, 247, 166, 0.12);
-  --cap-blue: #8fd3ff;
-  --cap-blue-soft: rgba(143, 211, 255, 0.14);
+  --cap-danger: var(--ops-injury);
+  --cap-danger-soft: var(--ops-injury-soft);
+  --cap-warning: var(--ops-gold);
+  --cap-warning-soft: var(--ops-gold-soft);
+  --cap-good: var(--ops-success);
+  --cap-good-soft: var(--ops-success-soft);
+  --cap-blue: var(--ops-info);
+  --cap-blue-soft: var(--ops-info-soft);
 
   min-height: 0;
   height: 100%;
@@ -27,7 +29,9 @@
     radial-gradient(circle at 12% 0%, rgba(0, 216, 223, 0.12), transparent 32%),
     radial-gradient(circle at 88% 4%, rgba(124, 190, 231, 0.08), transparent 34%),
     linear-gradient(180deg, #06111b 0%, #03080e 62%, #020509 100%);
-  font-family: Inter, var(--font-motion-control, "Segoe UI"), sans-serif;
+  font-family: var(--font-ops-ui);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
   overflow: hidden;
 }
 
@@ -54,19 +58,15 @@
   position: relative;
   overflow: hidden;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
-  gap: 18px;
-  min-height: 86px;
-  padding: 14px 16px;
-  border: 1px solid var(--cap-line-strong);
-  border-radius: 18px;
-  background:
-    linear-gradient(135deg, rgba(0, 216, 223, 0.1), transparent 34%),
-    linear-gradient(180deg, rgba(8, 23, 36, 0.98), rgba(4, 12, 20, 0.96));
-  box-shadow:
-    0 22px 50px rgba(0, 0, 0, 0.42),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  gap: 0;
+  min-height: 78px;
+  padding: 0;
+  border: 1px solid var(--cap-line);
+  border-radius: var(--radius-control);
+  background: var(--cap-panel);
+  box-shadow: var(--depth-registered);
 }
 
 .cap-ledger-hero::after,
@@ -97,28 +97,28 @@
   align-items: center;
   gap: 12px;
   min-width: 0;
+  padding: 12px 16px;
+  border-right: 1px solid var(--cap-line);
 }
 
 .cap-office-back {
-  width: 40px;
-  height: 40px;
-  border-radius: 14px;
-  border: 1px solid rgba(0, 216, 223, 0.28);
-  background: rgba(255, 255, 255, 0.045);
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-hud);
+  border: 1px solid var(--cap-line);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--cap-text);
-  font-size: 19px;
+  font-size: 18px;
   font-weight: 900;
   cursor: pointer;
   transition:
-    transform 0.16s ease,
-    border-color 0.16s ease,
-    background 0.16s ease;
+    border-color var(--motion-micro),
+    background var(--motion-micro);
 }
 
 .cap-office-back:hover {
-  transform: translateY(-1px);
-  border-color: rgba(0, 216, 223, 0.52);
-  background: rgba(0, 216, 223, 0.12);
+  border-color: var(--cap-line-strong);
+  background: var(--ops-cyan-soft);
 }
 
 .cap-office-logo {
@@ -126,7 +126,7 @@
   height: 50px;
   flex: 0 0 auto;
   object-fit: contain;
-  border-radius: 16px;
+  border-radius: 6px;
   padding: 6px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background:
@@ -138,7 +138,7 @@
 .cap-office-logo-fallback {
   display: grid;
   place-items: center;
-  color: var(--cap-gold-bright);
+  color: var(--cap-cyan);
   font-size: 13px;
   font-weight: 900;
   letter-spacing: 0.08em;
@@ -146,14 +146,17 @@
 
 .cap-ledger-hero-main {
   min-width: 0;
+  padding: 12px 16px;
+  flex: 1;
 }
 
 .cap-ledger-hero-main .eyebrow {
   margin: 0 0 4px;
-  font-size: 10px;
-  letter-spacing: 0.18em;
+  font-size: var(--type-phase-label-size);
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--cap-gold);
+  color: var(--cap-cyan);
+  font-weight: 900;
 }
 
 .cap-ledger-hero-main h1 {
@@ -181,19 +184,25 @@
   z-index: 1;
   display: grid;
   grid-template-columns: repeat(3, minmax(96px, 1fr));
-  gap: 10px;
+  gap: 0;
   min-width: min(440px, 48vw);
+  border-left: 1px solid var(--cap-line);
 }
 
 .cap-ledger-hero-stats > div,
 .cap-office-metrics > div {
-  min-height: 54px;
-  padding: 10px 12px;
-  border-radius: 14px;
-  border: 1px solid var(--cap-line);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.025));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  min-height: 78px;
+  padding: 10px 14px;
+  border-radius: 0;
+  border: 0;
+  border-right: 1px solid var(--cap-line);
+  background: rgba(6, 18, 29, 0.55);
+  box-shadow: none;
+}
+
+.cap-ledger-hero-stats > div:last-child,
+.cap-office-metrics > div:last-child {
+  border-right: 0;
 }
 
 .cap-ledger-hero-stats > div.is-danger,
@@ -208,7 +217,7 @@
   display: block;
   margin-bottom: 4px;
   color: var(--cap-muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 850;
   letter-spacing: 0.13em;
   text-transform: uppercase;
@@ -218,10 +227,12 @@
 .cap-office-metrics strong {
   display: block;
   color: var(--cap-gold-bright);
-  font-size: clamp(18px, 2vw, 25px);
-  font-weight: 950;
-  letter-spacing: -0.04em;
+  font-family: var(--font-mono-data);
+  font-size: clamp(17px, 2vw, 22px);
+  font-weight: 800;
+  letter-spacing: -0.02em;
   line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 .cap-office-metrics > div.is-danger strong {
@@ -232,7 +243,7 @@
   display: block;
   margin-top: 5px;
   color: var(--cap-muted);
-  font-size: 10px;
+  font-size: 11px;
   font-style: normal;
   font-weight: 700;
   letter-spacing: 0.03em;
@@ -244,35 +255,38 @@
 .cap-ledger-tabs,
 .cap-office-tabs {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: stretch;
+  gap: 0;
   width: fit-content;
-  padding: 6px;
+  padding: 0;
   margin: 0;
   border: 1px solid var(--cap-line);
-  border-radius: 999px;
+  border-radius: var(--radius-hud);
   background: rgba(0, 0, 0, 0.22);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  box-shadow: none;
 }
 
 .cap-ledger-tab {
-  min-height: 38px;
+  min-height: 36px;
   min-width: 82px;
-  padding: 0 16px;
-  border-radius: 999px;
-  border: 1px solid transparent;
+  padding: 0 14px;
+  border-radius: 0;
+  border: 0;
+  border-right: 1px solid var(--cap-line);
   background: transparent;
   color: var(--cap-muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   cursor: pointer;
   transition:
-    color 0.16s ease,
-    border-color 0.16s ease,
-    background 0.16s ease,
-    transform 0.16s ease;
+    color var(--motion-micro),
+    background var(--motion-micro);
+}
+
+.cap-ledger-tab:last-child {
+  border-right: 0;
 }
 
 .cap-ledger-tab:hover {
@@ -282,10 +296,8 @@
 
 .cap-ledger-tab-active {
   color: var(--cap-text);
-  border-color: rgba(0, 216, 223, 0.42);
-  background:
-    linear-gradient(180deg, rgba(0, 216, 223, 0.2), rgba(0, 216, 223, 0.08));
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
+  background: var(--ops-cyan-soft);
+  box-shadow: inset 3px 0 0 var(--cap-cyan);
 }
 
 /* MAIN PANELS */
@@ -301,12 +313,9 @@
 
 .cap-office-panel {
   border: 1px solid var(--cap-line);
-  border-radius: 18px;
-  background:
-    linear-gradient(180deg, rgba(8, 23, 36, 0.92), rgba(4, 12, 20, 0.88));
-  box-shadow:
-    0 18px 42px rgba(0, 0, 0, 0.34),
-    inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  border-radius: var(--radius-control);
+  background: var(--cap-panel);
+  box-shadow: var(--depth-registered);
 }
 
 .cap-office-main > .cap-office-panel {
@@ -346,7 +355,7 @@
 .cap-search,
 .cap-select {
   min-height: 40px;
-  border-radius: 13px;
+  border-radius: 10px;
   border: 1px solid var(--cap-line);
   background: rgba(0, 0, 0, 0.36);
   color: var(--cap-text);
@@ -378,34 +387,33 @@
 }
 
 .cap-filter-pill {
-  min-height: 34px;
-  padding: 0 12px;
-  border-radius: 999px;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-hud);
   border: 1px solid var(--cap-line);
-  background: rgba(255, 255, 255, 0.035);
+  background: rgba(255, 255, 255, 0.03);
   color: var(--cap-muted);
-  font-size: 10px;
-  font-weight: 950;
+  font-size: 11px;
+  font-weight: 900;
   letter-spacing: 0.07em;
   text-transform: uppercase;
   cursor: pointer;
   transition:
-    transform 0.16s ease,
-    color 0.16s ease,
-    border-color 0.16s ease,
-    background 0.16s ease;
+    color var(--motion-micro),
+    border-color var(--motion-micro),
+    background var(--motion-micro);
 }
 
 .cap-filter-pill:hover {
-  transform: translateY(-1px);
   color: var(--cap-text);
-  border-color: rgba(0, 216, 223, 0.26);
+  border-color: var(--cap-line-strong);
+  transform: none;
 }
 
 .cap-filter-pill.is-active {
   color: var(--cap-text);
-  border-color: rgba(0, 216, 223, 0.48);
-  background: rgba(0, 216, 223, 0.14);
+  border-color: var(--cap-cyan);
+  background: var(--ops-cyan-soft);
 }
 
 /* CONTRACT BOARD */
@@ -425,7 +433,7 @@
   align-items: center;
   padding: 10px 16px;
   color: rgba(138, 160, 182, 0.72);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 950;
   letter-spacing: 0.13em;
   text-transform: uppercase;
@@ -435,10 +443,10 @@
 .cap-contract-list,
 .cap-board-list {
   display: grid;
-  gap: 8px;
+  gap: 0;
   flex: 1;
   min-height: 0;
-  padding: 10px;
+  padding: 0;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: thin;
@@ -473,6 +481,8 @@
   background: rgba(0, 216, 223, 0.48);
 }
 
+/* Register lines, not contract cards: hairline-ruled rows so payroll can be
+   read down the page and twice as many deals fit on a 768px screen. */
 .cap-contract-card,
 .cap-contract-row {
   width: 100%;
@@ -480,46 +490,37 @@
   grid-template-columns: minmax(260px, 1fr) 72px 76px 118px 76px 178px;
   gap: 12px;
   align-items: center;
-  min-height: 74px;
-  padding: 10px 14px;
-  border-radius: 16px;
-  border: 1px solid var(--cap-line);
-  border-left-width: 4px;
-  background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.045), transparent 42%),
-    rgba(6, 18, 29, 0.88);
+  min-height: 38px;
+  padding: 4px 12px;
+  border-radius: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  border-left: 3px solid transparent;
+  background: transparent;
   color: var(--cap-text);
   cursor: pointer;
   text-align: left;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  box-shadow: none;
   transition:
-    transform 0.16s ease,
-    border-color 0.16s ease,
-    box-shadow 0.16s ease,
-    background 0.16s ease;
+    border-color var(--motion-micro),
+    background var(--motion-micro);
 }
 
 .cap-contract-card:hover,
 .cap-contract-row:hover {
-  transform: translateY(-1px);
-  border-color: rgba(0, 216, 223, 0.42);
-  background:
-    linear-gradient(90deg, rgba(0, 216, 223, 0.08), transparent 44%),
-    linear-gradient(135deg, rgba(8, 23, 36, 0.98), rgba(4, 12, 20, 0.96));
-  box-shadow:
-    0 12px 28px rgba(0, 0, 0, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  background: rgba(19, 216, 231, 0.05);
+  box-shadow: none;
+  transform: none;
 }
 
 .cap-contract-row.is-selected {
-  border-color: rgba(0, 216, 223, 0.58);
-  background:
-    linear-gradient(90deg, rgba(0, 216, 223, 0.14), transparent 46%),
-    linear-gradient(135deg, rgba(8, 23, 36, 0.98), rgba(4, 12, 20, 0.96));
-  box-shadow:
-    0 0 0 1px rgba(0, 216, 223, 0.22),
-    0 12px 28px rgba(0, 0, 0, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  background: var(--ops-cyan-soft);
+  border-left-color: var(--cap-cyan);
+}
+
+/* Zebra banding carries the eye across a wide money row. */
+.cap-contract-list .cap-contract-row:nth-child(even) {
+  background: rgba(255, 255, 255, 0.014);
 }
 
 .cap-stripe-bad,
@@ -566,14 +567,12 @@
 
 .cap-card-headshot,
 .cap-contract-headshot {
-  width: 46px;
-  height: 46px;
+  width: 26px;
+  height: 26px;
   flex: 0 0 auto;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.06);
-  box-shadow:
-    0 8px 18px rgba(0, 0, 0, 0.28),
-    0 0 0 1px rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.07);
 }
 
 .cap-contract-meta,
@@ -589,18 +588,26 @@
   overflow: hidden;
   margin: 0;
   color: var(--cap-text);
-  font-size: 16px;
-  font-weight: 950;
-  letter-spacing: -0.025em;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
   line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Identity reads on one register line: name, then position and age inline. */
+.cap-contract-row .cap-contract-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
 .cap-contract-row__sub,
 .cap-contract-subline {
   display: block;
-  margin-top: 4px;
+  margin-top: 0;
   color: var(--cap-muted);
   font-size: 11px;
   font-style: normal;
@@ -616,42 +623,37 @@
 .cap-contract-row__cell strong {
   display: block;
   color: var(--cap-text);
-  font-size: 16px;
-  font-weight: 950;
-  letter-spacing: -0.03em;
+  font-family: var(--font-mono-data);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
   line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
+/* The column header already names the figure; repeating OVR / AAV / YR on
+   every row tripled the ink for no information. */
 .cap-contract-row__cell em {
-  display: block;
-  margin-top: 4px;
-  color: rgba(138, 160, 182, 0.72);
-  font-size: 9px;
-  font-style: normal;
-  font-weight: 950;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  display: none;
 }
 
 .cap-contract-row__pos {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   width: fit-content;
-  min-width: 44px;
-  min-height: 32px;
-  border-radius: 10px;
-  border: 1px solid rgba(0, 216, 223, 0.28);
-  color: var(--cap-gold-bright);
-  background: rgba(0, 216, 223, 0.08);
-  font-size: 12px;
-  font-weight: 950;
-  letter-spacing: 0.06em;
+  border: 0;
+  background: transparent;
+  color: var(--cap-cyan);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
 }
 
 .cap-contract-row__ovr strong {
   color: var(--cap-gold-bright);
-  font-size: 22px;
+  font-size: 14px;
+  font-family: var(--font-mono-data);
+  font-variant-numeric: tabular-nums;
 }
 
 .cap-contract-row__tags {
@@ -662,17 +664,18 @@
   min-width: 0;
 }
 
+/* Status marks: a rail-and-label pair, not a pill collection. */
 .cap-chip {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-height: 24px;
-  padding: 0 9px;
-  border-radius: 999px;
-  border: 1px solid var(--cap-line);
-  background: rgba(255, 255, 255, 0.035);
+  gap: 5px;
+  min-height: 18px;
+  padding: 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
   color: var(--cap-muted-strong);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 950;
   letter-spacing: 0.07em;
   line-height: 1;
@@ -680,28 +683,23 @@
   white-space: nowrap;
 }
 
-.cap-chip-danger {
-  color: #ffd0d6;
-  border-color: rgba(255, 111, 126, 0.46);
-  background: var(--cap-danger-soft);
+.cap-chip::before {
+  content: "";
+  width: 8px;
+  height: 2px;
+  flex-shrink: 0;
+  background: currentColor;
+  opacity: 0.75;
 }
 
-.cap-chip-warning {
-  color: #ffe3a8;
-  border-color: rgba(244, 198, 110, 0.46);
-  background: var(--cap-warning-soft);
-}
-
-.cap-chip-good {
-  color: #c8f9da;
-  border-color: rgba(108, 247, 166, 0.46);
-  background: var(--cap-good-soft);
-}
+.cap-chip-danger { color: #ff8f9c; }
+.cap-chip-warning { color: #f4c66e; }
+.cap-chip-good { color: rgba(160, 190, 205, 0.78); }
 
 /* STAT CARDS */
 
 .cap-ledger-stat-card {
-  border-radius: 18px;
+  border-radius: 6px;
   border: 1px solid var(--cap-line);
   background:
     linear-gradient(180deg, rgba(13, 16, 24, 0.92), rgba(6, 8, 12, 0.88));
@@ -729,25 +727,22 @@
   position: relative;
   overflow: hidden;
   display: grid;
-  gap: 16px;
-  min-height: 190px;
-  padding: 26px 28px;
-  margin-bottom: 12px;
-  border-radius: 20px;
-  border: 1px solid rgba(0, 216, 223, 0.26);
-  background:
-    radial-gradient(circle at 82% 10%, rgba(0, 216, 223, 0.13), transparent 30%),
-    linear-gradient(135deg, rgba(0, 216, 223, 0.1), rgba(0, 0, 0, 0.22));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 18px 36px rgba(0, 0, 0, 0.28);
+  gap: 12px;
+  min-height: 140px;
+  padding: 18px 20px;
+  margin-bottom: 10px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--cap-line);
+  border-left: 3px solid var(--cap-cyan);
+  background: rgba(6, 18, 29, 0.72);
+  box-shadow: var(--depth-registered);
 }
 
+/* Over the ceiling is a filing condition, not a lightshow. */
 .cap-meter-board.is-over {
   border-color: rgba(255, 111, 126, 0.42);
-  background:
-    radial-gradient(circle at 82% 10%, rgba(255, 111, 126, 0.17), transparent 34%),
-    linear-gradient(135deg, rgba(255, 111, 126, 0.13), rgba(0, 0, 0, 0.24));
+  border-left-color: #ff6f7e;
+  background: rgba(38, 12, 17, 0.55);
 }
 
 .cap-meter-board__main {
@@ -757,10 +752,10 @@
 
 .cap-meter-label {
   margin: 0;
-  color: var(--cap-gold);
-  font-size: 11px;
-  font-weight: 950;
-  letter-spacing: 0.18em;
+  color: var(--cap-cyan);
+  font-size: var(--type-phase-label-size);
+  font-weight: 900;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
@@ -769,12 +764,14 @@
 }
 
 .cap-meter-board h2 {
-  margin: 6px 0 4px;
+  margin: 4px 0 2px;
   color: var(--cap-text);
-  font-size: clamp(46px, 8vw, 84px);
-  font-weight: 950;
-  letter-spacing: -0.09em;
+  font-family: var(--font-mono-data);
+  font-size: clamp(36px, 6vw, 64px);
+  font-weight: 800;
+  letter-spacing: -0.06em;
   line-height: 0.9;
+  font-variant-numeric: tabular-nums;
 }
 
 .cap-meter-pct {
@@ -784,67 +781,98 @@
   font-weight: 750;
 }
 
+/* Department signature: the cap ceiling ruler. Payroll is read against a
+   measured scale with quarter ticks and a hard ceiling at the right edge,
+   rather than against a decorative progress gradient. */
 .cap-bar {
-  height: 12px;
+  position: relative;
+  height: 8px;
   overflow: hidden;
   margin: 0;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  border-radius: 0;
+  background: rgba(255, 255, 255, 0.06);
+  border-right: 2px solid var(--cap-gold);
+  box-shadow: none;
+}
+
+.cap-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.22) 0 1px,
+    transparent 1px 25%
+  );
 }
 
 .cap-bar-hero {
   position: relative;
   z-index: 1;
-  height: 14px;
+  height: 10px;
 }
 
 .cap-bar-fill {
   height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--cap-good), var(--cap-gold));
-  box-shadow: 0 0 22px rgba(0, 216, 223, 0.22);
+  border-radius: 0;
+  background: var(--cap-good);
+  box-shadow: none;
 }
 
 .cap-bar-fill.is-danger {
-  background: linear-gradient(90deg, #ff6f7e, #c94a57);
+  background: #ff6f7e;
 }
 
 .cap-bar-fill.is-tight {
-  background: linear-gradient(90deg, #f4c66e, #ff6f7e);
+  background: #f4c66e;
 }
 
 .cap-bar-fill.is-warning {
-  background: linear-gradient(90deg, #d9a441, #c9a86a);
+  background: #d9a441;
 }
 
 .cap-bar-fill.is-comfortable {
-  background: linear-gradient(90deg, #6cf7a6, #2be4ff);
+  background: var(--cap-good);
 }
 
 .cap-ledger-grid,
 .cap-cap-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  gap: 0;
   margin-bottom: 0;
+  border: 1px solid var(--cap-line);
+  border-radius: var(--radius-control);
+  overflow: hidden;
 }
 
 .cap-tile,
 .cap-ledger-stat-card {
-  min-height: 92px;
-  padding: 14px;
+  min-height: 72px;
+  padding: 12px 14px;
+  border-right: 1px solid var(--cap-line);
+  border-radius: 0;
+  background: rgba(6, 18, 29, 0.55);
+  box-shadow: none;
+}
+
+.cap-tile:last-child,
+.cap-ledger-stat-card:last-child {
+  border-right: 0;
 }
 
 .cap-tile strong,
 .cap-ledger-stat-card strong {
   display: block;
-  margin-top: 8px;
-  color: var(--cap-text);
-  font-size: clamp(19px, 2vw, 28px);
-  font-weight: 950;
-  letter-spacing: -0.055em;
+  margin-top: 6px;
+  color: var(--cap-gold-bright);
+  font-family: var(--font-mono-data);
+  font-size: clamp(17px, 2vw, 24px);
+  font-weight: 800;
+  letter-spacing: -0.03em;
   line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 .cap-tile.is-danger strong {
@@ -869,23 +897,21 @@
   grid-template-rows: auto auto;
   gap: 10px 18px;
   align-items: center;
-  padding: 16px 18px;
-  border-radius: 18px;
-  border: 1px solid rgba(0, 216, 223, 0.36);
-  background:
-    radial-gradient(circle at 92% 0%, rgba(0, 216, 223, 0.12), transparent 32%),
-    linear-gradient(180deg, rgba(8, 23, 36, 0.96), rgba(4, 12, 20, 0.94));
-  box-shadow:
-    0 18px 42px rgba(0, 0, 0, 0.38),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  padding: 14px 16px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--cap-line);
+  border-left: 3px solid var(--cap-cyan);
+  background: var(--cap-panel);
+  box-shadow: var(--depth-registered);
 }
 
 .cap-action-panel--empty {
-  flex: 0 0 72px;
+  flex: 0 0 52px;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0 18px;
+  border-left-width: 1px;
 }
 
 .cap-action-panel--empty p {
@@ -905,7 +931,7 @@
   display: grid;
   place-items: center;
   border: 1px solid var(--cap-line);
-  border-radius: 999px;
+  border-radius: 2px;
   background: rgba(0, 0, 0, 0.32);
   color: var(--cap-text);
   font-size: 20px;
@@ -953,19 +979,26 @@
   gap: 10px;
 }
 
+/* Contract facts are register lines on a ruled sheet: ten equal tiles read as a
+   dashboard and pushed the free-agent board down to six rows. */
 .cap-action-panel__stats div {
-  min-width: 88px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--cap-line);
-  background: rgba(255, 255, 255, 0.04);
+  min-width: 84px;
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 7px;
+  padding: 3px 12px 3px 0;
+  border-radius: 0;
+  border: 0;
+  border-bottom: 1px solid var(--cap-line);
+  background: transparent;
 }
 
 .cap-action-panel__stats span {
   display: block;
-  margin-bottom: 5px;
+  margin-bottom: 0;
   color: var(--cap-muted);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 950;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -973,9 +1006,10 @@
 
 .cap-action-panel__stats strong {
   color: var(--cap-text);
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 950;
-  letter-spacing: -0.04em;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
 }
 
 .cap-action-panel__tags {
@@ -997,10 +1031,44 @@
   max-width: 360px;
 }
 
+.cap-action-panel__moves {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.cap-action-panel__moves h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cap-muted, #9aa3b2);
+}
+
+.cap-action-panel__moves-meta,
+.cap-action-panel__moves-note,
+.cap-action-panel__moves-error {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--cap-muted, #9aa3b2);
+}
+
+.cap-action-panel__moves-error {
+  color: #f0a0a0;
+}
+
+.cap-action-panel__moves .cap-action-panel__actions {
+  grid-column: auto;
+  grid-row: auto;
+  justify-content: flex-start;
+  max-width: none;
+}
+
 .cap-action-btn {
   min-height: 40px;
   padding: 0 16px;
-  border-radius: 999px;
+  border-radius: var(--radius-hud, 4px);
   border: 1px solid rgba(0, 216, 223, 0.35);
   background:
     linear-gradient(180deg, rgba(0, 216, 223, 0.16), rgba(0, 216, 223, 0.08));
@@ -1044,14 +1112,14 @@
 /* EMPTY / ERROR */
 
 .cap-empty-state {
-  padding: 28px;
-  border-radius: 16px;
-  border: 1px dashed rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.025);
+  padding: 14px 18px;
+  border-radius: var(--radius-hud);
+  border: 1px dashed var(--cap-line);
+  background: rgba(255, 255, 255, 0.02);
   color: var(--cap-muted);
   text-align: center;
-  font-size: 13px;
-  font-weight: 800;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .cap-error {
@@ -1303,7 +1371,7 @@
 
 .cap-fa-trend em {
   font-style: normal;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1342,8 +1410,8 @@
   grid-template-columns: minmax(200px, 236px) minmax(0, 1fr) auto;
   grid-template-rows: auto;
   align-items: stretch;
-  gap: 14px 22px;
-  flex-basis: clamp(206px, 33vh, 288px);
+  gap: 12px 22px;
+  flex-basis: clamp(150px, 24vh, 210px);
 }
 
 @media (max-width: 1120px) {
@@ -1415,12 +1483,12 @@
 
 .cap-fa-proj-tag {
   margin-left: auto;
-  padding: 2px 8px;
-  border-radius: 999px;
+  padding: 2px 7px;
+  border-radius: 2px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.05);
   color: #9fb0be;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -1443,7 +1511,7 @@
 .cap-fa-detail__blocktitle {
   margin: 0 0 7px;
   color: #7f909e;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1456,9 +1524,9 @@
 
 .cap-fa-detail__stats div,
 .cap-fa-detail__terms div {
-  min-width: 72px;
-  flex: 1 1 72px;
-  max-width: 130px;
+  min-width: 108px;
+  flex: 1 1 108px;
+  max-width: 190px;
 }
 
 .cap-fa-detail__loading {
@@ -1482,7 +1550,7 @@
 .cap-fa-detail__risk span {
   color: #7f909e;
   text-transform: uppercase;
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.04em;
   font-weight: 800;
 }
@@ -1504,7 +1572,7 @@
 
 .cap-fa-detail__blocker {
   color: #e79a9a;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1515,9 +1583,10 @@
 @media (max-width: 1440px) {
   .cap-fa-head,
   .cap-fa-list .cap-fa-row {
+    /* League names such as "Czech Extraliga" must survive the 1366px board. */
     grid-template-columns:
-      minmax(150px, 1fr) 40px 40px 78px 40px 66px 54px 56px 84px;
-    gap: 8px;
+      minmax(140px, 1fr) 38px 38px 104px 38px 62px 50px 54px 82px;
+    gap: 7px;
   }
 }
 
