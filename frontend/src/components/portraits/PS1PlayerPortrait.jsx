@@ -2,7 +2,10 @@ import React, { Component, Suspense, useEffect, useMemo, useRef, useState } from
 import { Canvas } from "@react-three/fiber";
 import * as THREE from "three";
 import PlayerHeadshot from "../PlayerHeadshot";
-import { ensurePlayerHeadshotFields } from "../../utils/playerHeadshots";
+import {
+  ensurePlayerHeadshotFields,
+  getNhlHeadshotUrl,
+} from "../../utils/playerHeadshots";
 import PS1PlayerModel from "./PS1PlayerModel";
 import {
   derivePortraitAppearance,
@@ -100,6 +103,10 @@ export default function PS1PlayerPortrait({
   }, [lazy, shouldMount]);
 
   const resolvedPlayer = useMemo(() => ensurePlayerHeadshotFields(player || {}), [player]);
+  const nhlHeadshotSrc = useMemo(
+    () => getNhlHeadshotUrl(resolvedPlayer),
+    [resolvedPlayer]
+  );
   const resolvedFaceSrc = useMemo(
     () => getPS1FaceSrc(resolvedPlayer, faceSrcProp),
     [resolvedPlayer, faceSrcProp]
@@ -119,7 +126,7 @@ export default function PS1PlayerPortrait({
 
   const camera = useMemo(() => getPortraitCamera(size), [size]);
 
-  if (webglFailed) {
+  if (nhlHeadshotSrc || webglFailed) {
     return <PortraitFallback player={resolvedPlayer} size={size} className={className} />;
   }
 

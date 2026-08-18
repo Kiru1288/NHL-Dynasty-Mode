@@ -189,8 +189,216 @@ def _parse_yearly_team_html(html: str) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def fetch_team_contracts(abbr: str, season_year: int) -> Dict[str, Any]:
-    slug = SPOTRAC_TEAM_SLUGS.get(str(abbr or "").upper())
+def _spotrac_team_slug(abbr: str) -> Optional[str]:
+    return SPOTRAC_TEAM_SLUGS.get(str(abbr or "").upper())
+
+
+def _parse_cap_table_rows(html: str, table_id: str) -> List[Dict[str, Any]]:
+    """Parse one Spotrac cap-page table (active / dead / retained)."""
+    marker = html.find(f'id="{table_id}"')
+    if marker < 0:
+        return []
+    tbody_s = html.find("<tbody", marker)
+    if tbody_s < 0:
+        return []
+    tbody_e = html.find("</tbody>", tbody_s)
+    if tbody_e < 0:
+        return []
+    tbody = html[tbody_s:tbody_e]
+    out: List[Dict[str, Any]] = []
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", tbody, re.S):
+        pl = re.search(
+            r'nhl/player/_/id/(\d+)/([^"]+)"[^>]*>\s*([^<]+)',
+            row,
+        )
+        if pl:
+            display = pl.group(3).strip()
+            spotrac_id = int(pl.group(1))
+        else:
+            pl2 = re.search(r">([A-ZÀ-ÖØ-Þ][^<]{1,60})</a>", row)
+            if not pl2:
+                continue
+            display = pl2.group(1).strip()
+            spotrac_id = 0
+        key = normalize_player_name(display)
+        if not key:
+            continue
+        sorts = re.findall(r'data-sort="([^"]*)"', row)
+        money = [m for m in (_parse_money_sort(s) for s in sorts) if m is not None]
+        if not money:
+            continue
+        # Cap Hit Total / Adjusted are the leading money sorts on these tables.
+        aav_m = round(float(money[0]), 3)
+        out.append(
+            {
+                "name": display,
+                "name_key": key,
+                "spotrac_id": spotrac_id,
+                "aav_m": aav_m,
+                "cap_hit_m": aav_m,
+                "source": "real_nhl_spotrac_cap",
+            }
+        )
+    return out
+
+
+def fetch_team_cap_sheet(abbr: str, season_year: int) -> Dict[str, Any]:
+    """
+    Current-season Spotrac cap sheet: active AAVs + buyouts + retained.
+
+    The yearly multi-year board often leads with NEXT season's extension AAV
+    (e.g. Pinto $7.5M / Spence $5.0M) while the club is still on the prior deal.
+    Cap-page active rows are the source of truth for *this* season's hit.
+    """
+    slug = _spotrac_team_slug(abbr)
+    empty = {"active": {}, "buyouts": [], "retained": []}
+    if not slug:
+        return empty
+    year = int(season_year)
+    urls = [
+        f"https://www.spotrac.com/nhl/{slug}/cap/_/year/{year}",
+        f"https://www.spotrac.com/nhl/{slug}/cap",
+    ]
+    if str(abbr).upper() == "UTA":
+        urls.extend(
+            [
+                f"https://www.spotrac.com/nhl/utah-hockey-club/cap/_/year/{year}",
+                "https://www.spotrac.com/nhl/utah-hockey-club/cap",
+            ]
+        )
+    html = ""
+    last_err: Optional[Exception] = None
+    for url in urls:
+        try:
+            html = _http_get_text(url)
+            if 'id="table_active"' in html or "Cap Space" in html:
+                break
+        except Exception as e:
+            last_err = e
+            html = ""
+    if not html:
+        if last_err:
+            raise last_err
+        return empty
+
+    active_rows = _parse_cap_table_rows(html, "table_active")
+    buyout_rows = _parse_cap_table_rows(html, "table_dead")
+    retained_rows = _parse_cap_table_rows(html, "table_retained")
+    active: Dict[str, Dict[str, Any]] = {}
+    for row in active_rows:
+        entry = {
+            "name": row["name"],
+            "spotrac_id": row["spotrac_id"],
+            "aav_m": row["aav_m"],
+            "cap_hit_m": row["cap_hit_m"],
+            "years_remaining": 1,
+            "years": 1,
+            "rights_status": "UFA",
+            "contract_type": "ELC" if row["aav_m"] <= 1.0 else "STANDARD",
+            "no_move_clause": False,
+            "no_trade_clause": False,
+            "source": "real_nhl_spotrac_cap",
+        }
+        key = row["name_key"]
+        existing = active.get(key)
+        if existing is None:
+            active[key] = entry
+        elif isinstance(existing, list):
+            existing.append(entry)
+        else:
+            active[key] = [existing, entry]
+    return {
+        "active": active,
+        "buyouts": [
+            {
+                "player": r["name"],
+                "amount_m": r["cap_hit_m"],
+                "cap_hit_m": r["cap_hit_m"],
+                "season": f"{year}-{str(year + 1)[-2:]}",
+                "source": "real_nhl_spotrac_cap",
+            }
+            for r in buyout_rows
+            if float(r.get("cap_hit_m") or 0) > 0
+        ],
+        "retained": [
+            {
+                "player": r["name"],
+                "amount_m": r["cap_hit_m"],
+                "cap_hit_m": r["cap_hit_m"],
+                "season": f"{year}-{str(year + 1)[-2:]}",
+                "seasons_remaining": 1,
+                "source": "real_nhl_spotrac_cap",
+            }
+            for r in retained_rows
+            if float(r.get("cap_hit_m") or 0) > 0
+        ],
+    }
+
+
+def _merge_cap_aav_over_yearly(
+    yearly: Dict[str, Any],
+    cap_active: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Overlay current-season AAV from the cap sheet onto yearly rows."""
+    if not cap_active:
+        return yearly
+    out: Dict[str, Any] = dict(yearly or {})
+    for key, cap_entry in cap_active.items():
+        caps = cap_entry if isinstance(cap_entry, list) else [cap_entry]
+        existing = out.get(key)
+        if existing is None:
+            out[key] = [dict(c) for c in caps] if len(caps) > 1 else dict(caps[0])
+            continue
+
+        def _overlay(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
+            merged = dict(dst)
+            cap_aav = float(src.get("aav_m") or src.get("cap_hit_m") or 0)
+            old_aav = float(merged.get("aav_m") or merged.get("cap_hit_m") or 0)
+            merged["aav_m"] = cap_aav
+            merged["cap_hit_m"] = cap_aav
+            merged["source"] = "real_nhl_spotrac"
+            # Yearly boards often lead with an already-signed extension AAV. When the
+            # current-season hit disagrees, do not trust the future-year remaining count.
+            if old_aav > 0 and abs(old_aav - cap_aav) > 0.25:
+                merged["years_remaining"] = 1
+                merged["years"] = 1
+                merged["extension_aav_m"] = old_aav
+            return merged
+
+        if isinstance(existing, list):
+            if len(existing) == 1 and len(caps) == 1:
+                out[key] = _overlay(existing[0], caps[0])
+            else:
+                # Match by spotrac_id when possible; else replace with cap rows.
+                by_id = {int(c.get("spotrac_id") or 0): c for c in caps if c.get("spotrac_id")}
+                merged_rows = []
+                for row in existing:
+                    sid = int(row.get("spotrac_id") or 0)
+                    if sid and sid in by_id:
+                        merged_rows.append(_overlay(row, by_id.pop(sid)))
+                    else:
+                        merged_rows.append(dict(row))
+                for leftover in by_id.values():
+                    merged_rows.append(dict(leftover))
+                out[key] = merged_rows if len(merged_rows) > 1 else merged_rows[0]
+        else:
+            out[key] = _overlay(existing, caps[0])
+    return out
+
+
+def fetch_team_contracts(
+    abbr: str,
+    season_year: int,
+    *,
+    cap_sheet: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Team contracts for Real NHL import.
+
+    Yearly table supplies term / clause context; cap sheet supplies *current*
+    season AAV (and is used alone when yearly is empty).
+    """
+    slug = _spotrac_team_slug(abbr)
     if not slug:
         return {}
     year = int(season_year)
@@ -207,16 +415,34 @@ def fetch_team_contracts(abbr: str, season_year: int) -> Dict[str, Any]:
                 "https://www.spotrac.com/nhl/utah-hockey-club/yearly",
             ]
         )
+    yearly: Dict[str, Any] = {}
     last_err: Optional[Exception] = None
     for url in urls:
         try:
             html = _http_get_text(url)
             parsed = _parse_yearly_team_html(html)
             if parsed:
-                return parsed
+                yearly = parsed
+                break
         except Exception as e:
             last_err = e
             continue
+
+    sheet = cap_sheet
+    if sheet is None:
+        try:
+            sheet = fetch_team_cap_sheet(abbr, year)
+        except Exception as e:
+            last_err = e
+            sheet = {}
+
+    active = dict((sheet or {}).get("active") or {})
+    if yearly and active:
+        return _merge_cap_aav_over_yearly(yearly, active)
+    if active:
+        return active
+    if yearly:
+        return yearly
     if last_err:
         raise last_err
     return {}
@@ -227,28 +453,41 @@ def fetch_league_contracts_by_team(
     season_year: int,
     *,
     max_workers: int = 10,
-) -> Tuple[Dict[str, Dict[str, Dict[str, Any]]], List[str]]:
+) -> Tuple[Dict[str, Dict[str, Dict[str, Any]]], List[str], Dict[str, Dict[str, Any]]]:
     """
-    Returns (by_abbr → name_key → contract, failures).
+    Returns (by_abbr → name_key → contract, failures, dead_by_abbr).
+
+    dead_by_abbr holds {"buyouts": [...], "retained": [...]} from the cap sheet.
     """
     by_team: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    dead_by_team: Dict[str, Dict[str, Any]] = {}
     failures: List[str] = []
     abbrs = [str(a).upper() for a in abbreviations if a]
 
-    def _one(abbr: str) -> Tuple[str, Dict[str, Dict[str, Any]]]:
-        return abbr, fetch_team_contracts(abbr, season_year)
+    def _one(abbr: str) -> Tuple[str, Dict[str, Dict[str, Any]], Dict[str, Any]]:
+        try:
+            sheet = fetch_team_cap_sheet(abbr, season_year)
+        except Exception:
+            sheet = {"active": {}, "buyouts": [], "retained": []}
+        contracts = fetch_team_contracts(abbr, season_year, cap_sheet=sheet)
+        dead = {
+            "buyouts": list(sheet.get("buyouts") or []),
+            "retained": list(sheet.get("retained") or []),
+        }
+        return abbr, contracts, dead
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futs = [pool.submit(_one, a) for a in abbrs]
         for fut in as_completed(futs):
             try:
-                abbr, parsed = fut.result()
+                abbr, parsed, dead = fut.result()
                 by_team[abbr] = parsed
+                dead_by_team[abbr] = dead
                 if not parsed:
-                    failures.append(f"{abbr}: empty Spotrac yearly table")
+                    failures.append(f"{abbr}: empty Spotrac contract tables")
             except Exception as e:
                 failures.append(f"spotrac: {e}")
-    return by_team, failures
+    return by_team, failures, dead_by_team
 
 
 def match_contract_for_player(

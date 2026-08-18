@@ -317,3 +317,56 @@ export function ensurePlayerHeadshotFields(player = {}) {
   const meta = generatePlayerHeadshotMetadata(player);
   return { ...player, ...meta };
 }
+
+const NHL_HEADSHOT_HOSTS = new Set([
+  "assets.nhle.com",
+  "cms.nhl.bamgrid.com",
+]);
+
+function safeNhlHeadshotUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === "https:" && NHL_HEADSHOT_HOSTS.has(parsed.hostname.toLowerCase())
+      ? parsed.href
+      : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Resolve a real NHL photograph without weakening the deterministic portrait
+ * fallback. Metadata lookup happens during backend import, never in React.
+ */
+export function getNhlHeadshotUrl(player = {}) {
+  if (!player || typeof player !== "object") return "";
+  const hasNhlIdentity = Boolean(
+    player.nhl_player_id ||
+      player.nhl_id ||
+      player.real_nhl_import ||
+      player.portrait_source === "nhl"
+  );
+  if (!hasNhlIdentity) return "";
+
+  return safeNhlHeadshotUrl(
+    player.nhl_headshot_url ||
+      player.nhlHeadshotUrl ||
+      player.headshot_url ||
+      player.headshotUrl ||
+      player.headshot ||
+      player.portrait_url ||
+      player.portrait
+  );
+}
+
+export function resolvePlayerHeadshot(player = {}) {
+  const generatedPlayer = ensurePlayerHeadshotFields(player);
+  const nhlUrl = getNhlHeadshotUrl(generatedPlayer);
+  return {
+    player: generatedPlayer,
+    src: nhlUrl,
+    source: nhlUrl ? "nhl" : "generated",
+  };
+}

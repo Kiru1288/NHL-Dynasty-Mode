@@ -7,7 +7,7 @@ import React, {
     useEffect,
   } from "react";
   
-  import { Canvas, useFrame, useThree } from "@react-three/fiber";
+  import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
   
   import {
     Html,
@@ -16,12 +16,9 @@ import React, {
     RoundedBox,
     ContactShadows,
     Environment,
-    Edges,
     SoftShadows,
-    Sparkles,
     AccumulativeShadows,
     RandomizedLight,
-    CameraShake,
     useGLTF,
   } from "@react-three/drei";
   
@@ -29,7 +26,6 @@ import React, {
     EffectComposer,
     Bloom,
     Vignette,
-    Noise,
   } from "@react-three/postprocessing";
   
   import { motion, AnimatePresence } from "framer-motion";
@@ -42,48 +38,437 @@ import React, {
   import "./FirstPersonOfficeHub.css";
   import officeFontBold from "../styles/ArchivoBlack-Regular.ttf";
   import retroOfficePackGlb from "../styles/Retro Office Pack/Itch Upload/90s Retro Office Pack.glb";
+  import officeWallTextureSrc from "../pictures/gray-abstract-texture-background.jpg";
 
+  /**
+   * One standardized landmark footprint for every menu destination.
+   *
+   * `artPx` is the square box each scene is fitted into (drei's Html transform
+   * maps 1px to `distanceFactor / 400` world units), so a portrait scene and a
+   * wide scene end up with the same perceived weight instead of one dwarfing
+   * the other. Hitboxes, labels and vignettes all derive from the same numbers.
+   */
+  const MENU_LANDMARK = {
+    artPx: 208,
+    padPx: 17,
+    distanceFactor: 1.92,
+    hitBox: [1.16, 1.3, 0.52],
+    hitBoxOffset: [0, -0.04, 0.28],
+    vignette: [1.26, 1.36],
+    /** Two hanging lines plus the elevated crest medallion above them. */
+    crestY: 2.66,
+    upperBandY: 2.46,
+    lowerBandY: 1.18,
+  };
+
+  /**
+   * Back-wall grid. The columns are deliberately clustered rather than evenly
+   * spaced — team building to the left, the club in the middle, league
+   * intelligence to the right — so the wall reads as three installations
+   * instead of one row of identical posters.
+   */
+  const MENU_COLUMNS = {
+    farLeft: -3.72,
+    left: -2.44,
+    innerLeft: -1.16,
+    center: 0,
+    innerRight: 1.16,
+    right: 2.44,
+    farRight: 3.72,
+    lowLeftOuter: -3.38,
+    lowLeftInner: -2.08,
+    lowRightInner: 2.08,
+    lowRightOuter: 3.38,
+  };
+
+  /**
+   * Interaction volumes. Wall landmarks all share `MENU_LANDMARK.hitBox`; the
+   * entries below cover the physical props that are not standardized scenes.
+   */
   const OFFICE_HITBOXES = {
-    dashboard: [0.72, 0.38, 0.38],
-    messages: [0.42, 0.24, 0.42],
-    calendar: [0.68, 0.18, 0.74],
-    scouting: [0.48, 0.16, 0.42],
-    contracts: [0.48, 0.16, 0.42],
-    stats: [0.42, 0.16, 0.52],
+    dashboard: [1.15, 0.95, 0.85],
+    calendar: [0.86, 0.7, 0.9],
+    scouting: [1.55, 1.15, 0.42],
     gameDayPuck: [0.24, 0.14, 0.24],
-    news: [0.58, 0.16, 0.42],
     tasks: [0.42, 0.16, 0.52],
-    teamIdentity: [1.25, 1.35, 0.24],
-    lines: [0.9, 1.35, 0.42],
-    standings: [1.28, 0.88, 0.24],
-    leagueCentral: [1.45, 0.78, 0.24],
-    draft: [1.65, 1.12, 0.24],
-    awards: [0.82, 0.62, 0.28],
+    draft: [2.05, 2.35, 0.55],
     arenaWindow: [1.85, 1.08, 0.24],
   };
 
-  /** First-person executive seated eye line — command desk focal point */
+  /**
+   * First-person executive seated eye line. The rest position sits dead centre
+   * on the room axis so the look-around allowance is symmetric — the previous
+   * off-axis rest pose spent most of its right-hand travel before the player
+   * touched the mouse, which left the right wall unreachable.
+   */
   const OFFICE_CAMERA = {
-    position: [0, 1.62, 3.85],
-    target: [0, 1.36, -0.35],
+    position: [0, 1.96, 4.05],
+    target: [0, 1.62, -1.15],
     fov: 46,
-    minDistance: 2.5,
+    minDistance: 2.4,
     maxDistance: 6.8,
   };
 
+  /** League Ops diorama focal point — used for hover/click camera nudge */
+  const LEAGUE_OPS_FOCUS = [3.72, 2.46, -3.34];
+
+  /**
+   * Rear-facing executive — authored SVG paths (code only).
+   * ViewBox 500×760. Center X = 250.
+   */
+  const LO_HEAD =
+    "M 250 42 C 268 42 282 49 288 63 C 292 73 293 84 291 96" +
+    "C 290 108 286 120 279 130 C 272 139 263 145 254 148" +
+    "C 251 149 248 149 245 148 C 235 145 226 139 220 130" +
+    "C 213 120 209 108 208 96 C 207 84 208 73 212 63" +
+    "C 218 49 232 42 250 42 Z";
+
+  const LO_HAIR_CROWN =
+    "M 216 72 C 220 55 234 45 251 45 C 267 45 280 53 285 68" +
+    "C 281 64 277 61 272 59 C 269 54 263 51 257 50" +
+    "C 250 47 244 51 238 51 C 230 53 223 60 216 72 Z";
+
+  const LO_HAIR_SIDES =
+    "M 211 78 C 208 94 212 113 220 128 L 225 133 C 219 116 218 96 221 76 Z" +
+    "M 289 78 C 292 94 288 113 280 128 L 275 133 C 281 116 282 96 279 76 Z";
+
+  const LO_NAPE =
+    "M 226 125 C 233 139 240 146 250 148 C 260 146 268 139 274 125" +
+    "C 270 143 262 153 250 154 C 238 153 230 143 226 125 Z";
+
+  const LO_NECK =
+    "M 232 135 C 233 149 232 163 229 176 C 240 184 260 184 271 176" +
+    "C 268 163 267 149 268 135 C 259 145 241 145 232 135 Z";
+
+  const LO_COLLAR_SHIRT =
+    "M 224 169 C 236 178 264 178 276 169 L 278 178" +
+    "C 264 188 236 188 222 178 Z";
+
+  const LO_COLLAR_SUIT =
+    "M 212 177 C 225 186 235 192 250 194 C 265 192 275 186 288 177" +
+    "L 302 199 C 284 204 269 210 250 220 C 231 210 216 204 198 199 Z";
+
+  const LO_JACKET =
+    "M 230 180 C 194 184 158 193 126 207 C 134 220 147 231 163 238" +
+    "C 168 292 173 354 178 414 C 181 464 178 514 171 558" +
+    "C 194 572 220 578 250 576 C 280 578 306 572 329 558" +
+    "C 322 514 319 464 322 414 C 327 354 332 292 337 238" +
+    "C 353 231 366 220 374 207 C 342 193 306 184 270 180" +
+    "C 260 190 240 190 230 180 Z";
+
+  const LO_SLEEVE_L =
+    "M 128 206 C 106 216 91 235 84 259 C 78 287 82 321 91 354" +
+    "C 100 389 110 421 122 450 C 132 474 145 496 160 515" +
+    "C 170 527 183 531 194 523 C 196 514 191 504 184 495" +
+    "C 174 475 166 450 158 421 C 150 387 145 351 144 318" +
+    "C 143 283 149 254 163 238 C 153 225 140 214 128 206 Z";
+
+  const LO_SLEEVE_R =
+    "M 372 206 C 394 216 409 235 416 259 C 422 287 418 321 409 354" +
+    "C 400 389 390 421 378 450 C 368 474 355 496 340 515" +
+    "C 330 527 317 531 306 523 C 304 514 309 504 316 495" +
+    "C 326 475 334 450 342 421 C 350 387 355 351 356 318" +
+    "C 357 283 351 254 337 238 C 347 225 360 214 372 206 Z";
+
+  const LO_HAND_L =
+    "M 160 515 C 168 528 180 538 196 541 C 205 537 209 529 207 519" +
+    "C 199 515 191 507 184 495 C 181 512 173 521 160 515 Z";
+
+  const LO_HAND_R =
+    "M 340 515 C 332 528 320 538 304 541 C 295 537 291 529 293 519" +
+    "C 301 515 309 507 316 495 C 319 512 327 521 340 515 Z";
+
+  const LO_SHOULDER_PLANE =
+    "M 128 205 C 174 188 215 183 250 184 C 285 183 326 188 372 205" +
+    "C 364 217 350 228 335 234 C 306 222 278 216 250 216" +
+    "C 222 216 194 222 165 234 C 150 228 136 217 128 205 Z";
+
+  const LO_TORSO_PANEL =
+    "M 168 235 C 177 300 183 365 187 424 C 190 476 194 525 202 563" +
+    "C 218 570 235 573 250 572 C 265 573 282 570 298 563" +
+    "C 306 525 310 476 313 424 C 317 365 323 300 332 235" +
+    "C 302 224 198 224 168 235 Z";
+
+  const LO_RIM_HEAD =
+    "M 212 111 C 206 94 207 75 212 63 C 218 49 232 42 250 42" +
+    "C 268 42 282 49 288 63 C 293 75 294 94 288 111";
+  const LO_RIM_SHOULDERS =
+    "M 126 207 C 166 190 205 182 230 180 C 240 190 260 190 270 180" +
+    "C 295 182 334 190 374 207";
+  const LO_RIM_ARM_L =
+    "M 128 207 C 104 220 89 239 84 263 C 78 298 85 337 95 372";
+  const LO_RIM_ARM_R =
+    "M 372 207 C 396 220 411 239 416 263 C 422 298 415 337 405 372";
+
+  const LO_SEAM_CENTER = "M 250 218 L 250 568";
+  const LO_SEAM_SHOULDER_L = "M 230 190 C 194 196 174 212 164 236";
+  const LO_SEAM_SHOULDER_R = "M 270 190 C 306 196 326 212 336 236";
+  const LO_SEAM_SIDE_L = "M 169 250 C 176 330 181 416 176 520";
+  const LO_SEAM_SIDE_R = "M 331 250 C 324 330 319 416 324 520";
+  const LO_SEAM_SLEEVE_L = "M 141 230 C 125 302 132 396 161 484";
+  const LO_SEAM_SLEEVE_R = "M 359 230 C 375 302 368 396 339 484";
+  const LO_HEM = "M 173 555 C 197 570 225 578 250 574 C 275 578 303 570 327 555";
+
+  const LO_SHIELD =
+    "M 86 268 L 118 262 L 150 268 L 148 312 C 148 332 128 348 118 354" +
+    "C 108 348 88 332 88 312 Z";
+  const LO_TROPHY =
+    "M 370 268 L 382 268 L 386 292 L 402 292 C 406 304 398 312 386 314" +
+    "L 382 334 L 402 348 L 350 348 L 370 334 L 366 314" +
+    "C 354 312 346 304 350 292 L 366 292 Z";
+
+  let leagueOpsVignetteTexture = null;
+
+  function getLeagueOpsVignetteTexture() {
+    if (leagueOpsVignetteTexture) return leagueOpsVignetteTexture;
+    if (typeof document === "undefined") return null;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext("2d");
+    const grad = ctx.createRadialGradient(128, 118, 18, 128, 128, 148);
+    grad.addColorStop(0, "rgba(5,8,12,0.62)");
+    grad.addColorStop(0.52, "rgba(4,7,11,0.38)");
+    grad.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    leagueOpsVignetteTexture = new THREE.CanvasTexture(canvas);
+    leagueOpsVignetteTexture.needsUpdate = true;
+    return leagueOpsVignetteTexture;
+  }
+
+  /**
+   * Deep navy-charcoal room. The walls used to be bright teal, which made every
+   * wall-mounted destination read as a coloured poster; the landmarks carry the
+   * colour now, the architecture stays dark.
+   */
   const OFFICE_PALETTE = {
-    void: "#12151c",
-    wall: "#1e2430",
-    panel: "#181c26",
-    walnut: "#2a2018",
-    gunmetal: "#3a4048",
-    leather: "#1a1816",
-    gold: "#c9a86a",
-    goldDim: "#8a7348",
-    monitor: "#0f1824",
-    monitorGlow: "#1a4a68",
+    void: "#06161b",
+    wall: "#122e37",
+    wallLight: "#1b4653",
+    wallDeep: "#0a2027",
+    wallWainscot: "#081d23",
+    wallPanel: "#0d262d",
+    panel: "#0f2830",
+    walnut: "#3d2a1c",
+    gunmetal: "#2a3038",
+    leather: "#1c1816",
+    gold: "#c4a46a",
+    goldDim: "#8a7048",
+    monitor: "#0c141c",
+    monitorGlow: "#1a3850",
     alert: "#8a3028",
   };
+
+  /** Gray abstract photo + executive teal tint, cached after first bake. */
+  let tintedOfficeWallCache = null;
+
+  function buildTintedOfficeWallMaps(sourceImage) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1024;
+    canvas.height = 1024;
+    const ctx = canvas.getContext("2d");
+
+    const pattern = ctx.createPattern(sourceImage, "repeat");
+    ctx.fillStyle = pattern;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.globalCompositeOperation = "multiply";
+    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    grad.addColorStop(0, OFFICE_PALETTE.wallLight);
+    grad.addColorStop(0.32, OFFICE_PALETTE.wall);
+    grad.addColorStop(0.62, OFFICE_PALETTE.wallDeep);
+    grad.addColorStop(1, OFFICE_PALETTE.wallWainscot);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    /* One low wainscot break only. The wall used to be scored into a grid of
+       panels, which drew a rectangle around every landmark and made the whole
+       room read as a poster board. */
+    const railY = canvas.height * 0.74;
+    ctx.fillStyle = "rgba(5, 26, 33, 0.5)";
+    ctx.fillRect(0, railY + 4, canvas.width, canvas.height - railY - 4);
+
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = "rgba(0, 0, 0, 0.18)";
+    ctx.fillRect(0, railY, canvas.width, 3);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+    ctx.fillRect(0, railY, canvas.width, 1.2);
+
+    const edge = ctx.createRadialGradient(
+      canvas.width / 2,
+      canvas.height / 2,
+      canvas.width * 0.18,
+      canvas.width / 2,
+      canvas.height / 2,
+      canvas.width * 0.78
+    );
+    edge.addColorStop(0, "rgba(0,0,0,0)");
+    edge.addColorStop(1, "rgba(0,0,0,0.24)");
+    ctx.fillStyle = edge;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const colorMap = new THREE.CanvasTexture(canvas);
+    colorMap.wrapS = THREE.RepeatWrapping;
+    colorMap.wrapT = THREE.RepeatWrapping;
+    colorMap.colorSpace = THREE.SRGBColorSpace;
+
+    const bumpCanvas = document.createElement("canvas");
+    bumpCanvas.width = canvas.width;
+    bumpCanvas.height = canvas.height;
+    const bctx = bumpCanvas.getContext("2d");
+    bctx.drawImage(canvas, 0, 0);
+    const pixels = bctx.getImageData(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      const lum =
+        pixels.data[i] * 0.299 +
+        pixels.data[i + 1] * 0.587 +
+        pixels.data[i + 2] * 0.114;
+      pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = lum;
+    }
+    bctx.putImageData(pixels, 0, 0);
+
+    const bumpMap = new THREE.CanvasTexture(bumpCanvas);
+    bumpMap.wrapS = THREE.RepeatWrapping;
+    bumpMap.wrapT = THREE.RepeatWrapping;
+
+    return { colorMap, bumpMap };
+  }
+
+  function getTintedOfficeWallMaps(sourceImage) {
+    if (!tintedOfficeWallCache) {
+      tintedOfficeWallCache = buildTintedOfficeWallMaps(sourceImage);
+    }
+    return tintedOfficeWallCache;
+  }
+
+  function createExecutiveWallMaterial(sourceImage, repeatX = 2, repeatY = 1.4) {
+    const { colorMap, bumpMap } = getTintedOfficeWallMaps(sourceImage);
+    const color = colorMap.clone();
+    const bump = bumpMap.clone();
+    color.repeat.set(repeatX, repeatY);
+    bump.repeat.set(repeatX, repeatY);
+    return new THREE.MeshStandardMaterial({
+      map: color,
+      bumpMap: bump,
+      bumpScale: 0.024,
+      roughness: 0.84,
+      metalness: 0.02,
+      envMapIntensity: 0.28,
+    });
+  }
+
+  function ExecutiveWallSurface({ size, position, rotation = [0, 0, 0], repeat = [2.2, 1.5] }) {
+    const [repeatX, repeatY] = repeat;
+    // TextureLoader lives on fiber's useLoader, not drei.
+    const sourceTexture = useLoader(THREE.TextureLoader, officeWallTextureSrc);
+
+    const material = useMemo(() => {
+      const img = sourceTexture?.image;
+      if (!img?.width) return null;
+      return createExecutiveWallMaterial(img, repeatX, repeatY);
+    }, [sourceTexture, repeatX, repeatY]);
+
+    useEffect(() => () => material?.dispose(), [material]);
+
+    if (!material) return null;
+
+    return (
+      <mesh position={position} rotation={rotation} receiveShadow castShadow raycast={() => null}>
+        <boxGeometry args={size} />
+        <primitive object={material} attach="material" />
+      </mesh>
+    );
+  }
+
+  useLoader.preload(THREE.TextureLoader, officeWallTextureSrc);
+
+  /** Google Maps Weather API (optional). Set REACT_APP_GOOGLE_WEATHER_API_KEY in frontend/.env */
+  const GOOGLE_WEATHER_API_KEY =
+    typeof process !== "undefined"
+      ? process.env.REACT_APP_GOOGLE_WEATHER_API_KEY || process.env.REACT_APP_GOOGLE_MAPS_API_KEY || ""
+      : "";
+
+  function parseFranchiseDateParts(currentDate) {
+    const raw = String(currentDate || "").trim();
+    const match = raw.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+    if (match) {
+      return {
+        year: Number(match[1]),
+        month: Number(match[2]),
+        day: Number(match[3]),
+      };
+    }
+    const d = new Date(raw);
+    if (!Number.isNaN(d.getTime())) {
+      return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate() };
+    }
+    return { year: 0, month: 9, day: 15 };
+  }
+
+  /** Seasonal weather from the franchise sim date. Google Weather only covers live/near-term, not arbitrary sim years. */
+  function deriveSeasonalWeather(currentDate) {
+    const { month } = parseFranchiseDateParts(currentDate);
+    if (month >= 11 || month <= 2) {
+      return {
+        condition: "snow",
+        label: "Snow / overcast",
+        sky: "#6a7a90",
+        haze: "#d8e4f0",
+        light: "#c8d8e8",
+        precip: "snow",
+      };
+    }
+    if (month === 3 || month === 4 || month === 10) {
+      return {
+        condition: "rain",
+        label: "Cool rain",
+        sky: "#4a5a6e",
+        haze: "#8a9aac",
+        light: "#a8b8c8",
+        precip: "rain",
+      };
+    }
+    if (month >= 5 && month <= 8) {
+      return {
+        condition: "clear",
+        label: "Clear summer",
+        sky: "#4a7ab8",
+        haze: "#c8dff8",
+        light: "#f0e8d0",
+        precip: "none",
+      };
+    }
+    return {
+      condition: "clear",
+      label: "Clear autumn",
+      sky: "#3a5a88",
+      haze: "#b8c8e0",
+      light: "#e8d8b8",
+      precip: "none",
+    };
+  }
+
+  function mapGoogleWeatherCondition(payload) {
+    const type = String(
+      payload?.weatherCondition?.type ||
+        payload?.weatherCondition?.description?.text ||
+        payload?.condition ||
+        ""
+    ).toUpperCase();
+    if (/SNOW|ICE|BLIZZARD|FLURRY/.test(type)) {
+      return { condition: "snow", label: "Snow", precip: "snow", sky: "#6a7a90", haze: "#d8e4f0", light: "#c8d8e8" };
+    }
+    if (/RAIN|SHOWER|STORM|THUNDER|DRIZZLE/.test(type)) {
+      return { condition: "rain", label: "Rain", precip: "rain", sky: "#4a5a6e", haze: "#8a9aac", light: "#a8b8c8" };
+    }
+    if (/CLOUD|OVERCAST|FOG/.test(type)) {
+      return { condition: "cloudy", label: "Cloudy", precip: "none", sky: "#5a6a80", haze: "#a8b8c8", light: "#d0d8e0" };
+    }
+    return { condition: "clear", label: "Clear", precip: "none", sky: "#4a7ab8", haze: "#c8dff8", light: "#f0e8d0" };
+  }
 
   const USE_RETRO_OFFICE_PACK = false;
   const USE_PROCEDURAL_ROOM_SHELL = true;
@@ -278,10 +663,15 @@ import React, {
 
   function deriveOfficeMood(franchiseState, team, officeSummary = {}) {
     const fs = franchiseState || {};
-    const ph = String(fs.season_phase || fs.phase || "regular").toLowerCase();
+    const calSeg = String(fs.nhl_today?.segment || fs.nhl_today?.season_segment || "").toLowerCase();
+    const ph = String(
+      calSeg === "preseason"
+        ? "preseason"
+        : fs.season_phase || fs.phase || (calSeg || "regular")
+    ).toLowerCase();
     const stage = String(fs.offseason_stage || "").toLowerCase();
     const uiPhase = String(fs.nhl_today?.ui_phase || "").toLowerCase();
-    const combined = `${ph} ${stage} ${uiPhase}`;
+    const combined = `${ph} ${stage} ${uiPhase} ${calSeg}`;
 
     const isOffseason = ph === "offseason" || combined.includes("offseason");
     const isPlayoffs =
@@ -463,6 +853,7 @@ import React, {
     }
 
     const capRaw =
+      officeSummary?.capSpaceMillions ??
       team?.cap_space ??
       team?.capSpace ??
       fs.cap_space ??
@@ -591,6 +982,8 @@ import React, {
     NEWS: "news",
     AWARDS: "awards",
     DRAFT: "draft",
+    DRAFT_CLASS: "draftClass",
+    ROSTER: "roster",
     STANDINGS: "standings",
     GAME_DAY: "gameDay",
     TEAM_IDENTITY: "teamIdentity",
@@ -675,51 +1068,17 @@ import React, {
   };
 
   /*
-   * ============================================================================
-   * LEAGUE OPERATIONS — CONNECTION AUDIT (placeholder, not built yet)
-   * ============================================================================
-   * 1) WHERE THE UI LIVES
-   *    - 3D Hub World wall: InteractiveGroup id="leagueCentral" (~line 4631)
-   *      renders BroadcastScoreboard (static wall text + user record/next game).
-   *    - Panel copy/registry: PANEL_CONTENT[OFFICE_PANEL_IDS.LEAGUE_CENTRAL],
-   *      PLACEHOLDER_COPY.leagueCentral, FRANCHISE_COMMAND_REGISTRY id "league-central".
-   *    - Full-screen placeholder: App.js CommandPlaceholderScreen via SCREENS.PLACEHOLDER.
+   * ==========================================================================
+   * LEAGUE OPERATIONS — LIVE INTELLIGENCE DISPLAY
+   * ==========================================================================
+   * Wired end-to-end:
+   *   - Screen: frontend/src/screens/LeagueOperations.js (SCREENS.LEAGUE_OPERATIONS / GM_WORLD)
+   *   - API: GET /api/franchise/league-operations → services/league_operations.py
+   *   - Also embedded (slim) on franchise /state as league_operations + franchise_pulse
+   *   - Office wall "League Central" navigates here for CBA desk, cap forecast, markets, risk
    *
-   * 2) WHAT OPENS IT
-   *    - Clicking the 3D "League Operations" wall calls handleOpenPanel("leagueCentral").
-   *    - PANEL_TO_COMMAND_TARGET maps leagueCentral → "league-central", so onNavigate
-   *      runs BEFORE the in-office OfficePanel overlay (panel copy is bypassed).
-   *    - HubScreen.handleNavigate → navigateFranchiseCommand → resolveCommandTarget
-   *      ("league-central") → GameUIContext.openCommandPlaceholder → setScreen(PLACEHOLDER).
-   *    - HubScreen OFFICE_PANEL_TO_SCREEN[LEAGUE_CENTRAL] also maps to PLACEHOLDER.
-   *    - Sub-actions (Scores / League News / Broadcast / Game Recaps) are registered in
-   *      OFFICE_NAV_TARGETS but only reachable if OfficePanel opens; most map to other
-   *      placeholders (leagueNews, gameRecaps, arenaWindow for Broadcast).
-   *
-   * 3) DATA IT CURRENTLY RECEIVES
-   *    - Wall decoration only: record + nextGame props from HubScreen (franchise state).
-   *    - HubScreen derives record from team/franchiseState; nextGame from schedule_upcoming
-   *      / next_game fields (see HubScreen findNextGame).
-   *    - Placeholder screen gets static PLACEHOLDER_COPY.leagueCentral (title/subtitle/
-   *      description) via commandPlaceholder in GameUIContext — no franchise payload.
-   *    - No dedicated league_operations API call or route param.
-   *
-   * 4) BACKEND / SIM DATA TO POWER THE REAL FEATURE (already on franchise state)
-   *    - build_state_payload (backend/services/franchise_sim.py): standings,
-   *      schedule_upcoming, nhl_calendar_full (daily slates + final scores),
-   *      storyline_events / notifications (league_news popup_scope), stats_central,
-   *      game_results-derived scores. No league_central payload yet.
-   *
-   * 5) FILES TO EDIT WHEN BUILDING THE REAL FEATURE
-   *    - frontend/src/screens/LeagueOperations.js (new) or extend Stats/Calendar patterns
-   *    - frontend/src/screens/FirstPersonOfficeHub.js — wire league-central to real screen
-   *      (FRANCHISE_COMMAND_REGISTRY, COMMAND_TARGET_ROUTES, PANEL_TO_COMMAND_TARGET)
-   *    - frontend/src/screens/HubScreen.js — OFFICE_PANEL_TO_SCREEN mapping
-   *    - frontend/src/game/constants.js — SCREENS entry if new route
-   *    - frontend/src/App.js — mount real screen instead of CommandPlaceholderScreen
-   *    - Optional backend: league_operations slice in build_state_payload if UI needs
-   *      curated nightly scores / recaps / headlines bundle (no endpoint required today).
-   * ============================================================================
+   * Read-only: CBA negotiations are display-only pressure estimates (no vote/apply yet).
+   * ==========================================================================
    */
 
   export const FRANCHISE_COMMAND_GROUPS = {
@@ -1201,7 +1560,7 @@ import React, {
 
   const PANEL_TO_COMMAND_TARGET = {
     [OFFICE_PANEL_IDS.DASHBOARD]: "command-center",
-    [OFFICE_PANEL_IDS.MESSAGES]: "gm-phone",
+    [OFFICE_PANEL_IDS.MESSAGES]: "trade-hub",
     [OFFICE_PANEL_IDS.CALENDAR]: "calendar",
     [OFFICE_PANEL_IDS.SCOUTING]: "scouting",
     [OFFICE_PANEL_IDS.CONTRACTS]: "contracts",
@@ -1210,6 +1569,8 @@ import React, {
     [OFFICE_PANEL_IDS.NEWS]: "storylines",
     [OFFICE_PANEL_IDS.AWARDS]: "stats-analytics",
     [OFFICE_PANEL_IDS.DRAFT]: "draft-war-room",
+    [OFFICE_PANEL_IDS.DRAFT_CLASS]: "draft-class",
+    [OFFICE_PANEL_IDS.ROSTER]: "roster",
     [OFFICE_PANEL_IDS.STANDINGS]: "standings",
     [OFFICE_PANEL_IDS.GAME_DAY]: "arena-window",
     [OFFICE_PANEL_IDS.TEAM_IDENTITY]: "culture-wall",
@@ -1231,6 +1592,8 @@ import React, {
     OFFICE_PANEL_IDS.STANDINGS,
     OFFICE_PANEL_IDS.LEAGUE_CENTRAL,
     OFFICE_PANEL_IDS.DRAFT,
+    OFFICE_PANEL_IDS.DRAFT_CLASS,
+    OFFICE_PANEL_IDS.ROSTER,
     OFFICE_PANEL_IDS.AWARDS,
     OFFICE_PANEL_IDS.GAME_DAY,
   ];
@@ -1251,13 +1614,13 @@ import React, {
     },
   
     [OFFICE_PANEL_IDS.MESSAGES]: {
-      title: "GM Phone",
-      eyebrow: "Trade Calls / Inbox",
+      title: "Trade Desk",
+      eyebrow: "Negotiation Table",
       description:
-        "Trade calls, owner messages, staff updates, league communication, and urgent front office notes.",
+        "Trade calls, offers, counter-proposals, and front-office negotiation paperwork.",
       actions: [
-        ["Inbox", OFFICE_NAV_TARGETS.INBOX],
         ["Trade Calls", OFFICE_NAV_TARGETS.TRADE_CALLS],
+        ["Inbox", OFFICE_NAV_TARGETS.INBOX],
         ["Staff Updates", OFFICE_NAV_TARGETS.STAFF],
         ["Owner Messages", OFFICE_NAV_TARGETS.OWNER],
       ],
@@ -1356,15 +1719,40 @@ import React, {
   
     [OFFICE_PANEL_IDS.DRAFT]: {
       title: "Draft War Room",
-      eyebrow: "Physical Draft Board",
+      eyebrow: "Entry Draft Floor",
       description:
-        "Prepare for the draft with rankings, team needs, scouting lists, lottery odds, and prospect tiers.",
+        "Conduct the NHL Entry Draft — board, pick order, and selection strategy.",
       actions: [
         ["Draft Board", OFFICE_NAV_TARGETS.DRAFT_BOARD],
         ["Prospect Rankings", OFFICE_NAV_TARGETS.PROSPECT_RANKINGS],
-        ["Scouting", OFFICE_NAV_TARGETS.SCOUTING],
-        ["Team Needs", OFFICE_NAV_TARGETS.TEAM_NEEDS],
         ["Draft Lottery", OFFICE_NAV_TARGETS.DRAFT_LOTTERY],
+        ["Team Needs", OFFICE_NAV_TARGETS.TEAM_NEEDS],
+      ],
+    },
+
+    [OFFICE_PANEL_IDS.DRAFT_CLASS]: {
+      title: "Draft Class",
+      eyebrow: "Prospect Research",
+      description:
+        "Research the draft pool — rankings, dossiers, tiers, and scouting notes before draft day.",
+      actions: [
+        ["Draft Class", OFFICE_NAV_TARGETS.DRAFT_CLASS],
+        ["Prospect Rankings", OFFICE_NAV_TARGETS.PROSPECT_RANKINGS],
+        ["Scouting", OFFICE_NAV_TARGETS.SCOUTING],
+        ["Watchlist", OFFICE_NAV_TARGETS.WATCHLIST],
+      ],
+    },
+
+    [OFFICE_PANEL_IDS.ROSTER]: {
+      title: "Roster Board",
+      eyebrow: "Dressing Room",
+      description:
+        "NHL roster, depth chart, scratches, and injury list.",
+      actions: [
+        ["Roster", OFFICE_NAV_TARGETS.ROSTER],
+        ["Depth Chart", OFFICE_NAV_TARGETS.DEPTH_CHART],
+        ["Injury Watch", OFFICE_NAV_TARGETS.INJURIES],
+        ["Lines", OFFICE_NAV_TARGETS.LINES],
       ],
     },
 
@@ -1474,6 +1862,14 @@ import React, {
       role: "Head Scout",
       fallback: "Your board should be opinionated, tiered, and ready for chaos.",
     },
+    [OFFICE_PANEL_IDS.DRAFT_CLASS]: {
+      role: "Head Scout",
+      fallback: "Know the pool before you walk into the war room.",
+    },
+    [OFFICE_PANEL_IDS.ROSTER]: {
+      role: "Head Coach",
+      fallback: "The lineup board is where roles become minutes.",
+    },
     [OFFICE_PANEL_IDS.STANDINGS]: {
       role: "Analytics Director",
       fallback: "Playoff probability and division math are tightening every week.",
@@ -1513,64 +1909,89 @@ import React, {
 
   const PANEL_CAMERA_TARGETS = {
     [OFFICE_PANEL_IDS.DASHBOARD]: {
-      position: [0, 1.62, 2.55],
-      target: [0, 1.12, 0.45],
+      position: [1.05, 1.48, 2.28],
+      target: [0.22, 1.22, 0.18],
+      fov: 38,
     },
     [OFFICE_PANEL_IDS.MESSAGES]: {
-      position: [-0.95, 1.58, 2.35],
-      target: [-1.35, 1.08, 0.72],
+      position: [-1.5, 2.4, -0.75],
+      target: [-2.44, 2.44, -3.3],
+      fov: 30,
     },
     [OFFICE_PANEL_IDS.CALENDAR]: {
-      position: [0.85, 1.58, 2.35],
-      target: [1.28, 1.06, 0.74],
+      position: [1.72, 1.42, 2.05],
+      target: [1.48, 1.02, 0.62],
+      fov: 32,
     },
     [OFFICE_PANEL_IDS.SCOUTING]: {
-      position: [-0.55, 1.58, 2.15],
-      target: [-0.88, 1.06, 0.22],
+      position: [-2.0, 1.7, -1.35],
+      target: [-4.1, 1.62, -2.35],
+      fov: 38,
     },
     [OFFICE_PANEL_IDS.CONTRACTS]: {
-      position: [0.55, 1.58, 2.15],
-      target: [0.9, 1.06, 0.2],
+      position: [-2.05, 1.3, -0.85],
+      target: [-3.38, 1.12, -3.3],
+      fov: 30,
     },
     [OFFICE_PANEL_IDS.STATS]: {
-      position: [0.45, 1.62, 2.35],
-      target: [0.72, 1.1, 0.68],
+      position: [1.5, 2.4, -0.75],
+      target: [2.44, 2.44, -3.3],
+      fov: 30,
     },
     [OFFICE_PANEL_IDS.NEWS]: {
-      position: [-0.65, 1.6, 2.45],
-      target: [-1.05, 1.08, 1.05],
+      position: [1.3, 1.3, -0.85],
+      target: [2.08, 1.12, -3.28],
+      fov: 30,
     },
     [OFFICE_PANEL_IDS.TASKS]: {
-      position: [1.0, 1.6, 2.45],
-      target: [1.38, 1.08, 1.1],
+      position: [1.35, 1.52, 2.22],
+      target: [1.22, 1.1, 0.95],
+      fov: 36,
     },
     [OFFICE_PANEL_IDS.TEAM_IDENTITY]: {
-      position: [1.05, 1.82, 1.35],
-      target: [1.62, 2.45, -3.2],
+      position: [0, 2.6, -0.72],
+      target: [0, 2.68, -3.34],
+      fov: 30,
     },
     [OFFICE_PANEL_IDS.LINES]: {
-      position: [-0.95, 1.82, 1.35],
-      target: [-2.35, 2.0, -3.2],
+      position: [0.72, 2.4, -0.78],
+      target: [1.16, 2.44, -3.32],
+      fov: 30,
     },
     [OFFICE_PANEL_IDS.STANDINGS]: {
-      position: [-1.15, 1.45, 0.85],
-      target: [-2.65, 0.92, -3.2],
+      position: [2.05, 1.3, -0.85],
+      target: [3.38, 1.12, -3.32],
+      fov: 30,
     },
     [OFFICE_PANEL_IDS.LEAGUE_CENTRAL]: {
-      position: [1.05, 1.82, 1.35],
-      target: [2.35, 2.05, -3.2],
+      position: [2.28, 2.4, -0.7],
+      target: [3.72, 2.46, -3.34],
+      fov: 30,
     },
     [OFFICE_PANEL_IDS.DRAFT]: {
-      position: [-2.35, 1.72, 0.15],
-      target: [-4.2, 1.72, -1.35],
+      position: [-1.55, 1.72, 1.85],
+      target: [-4.15, 1.65, 0.45],
+      fov: 40,
+    },
+    [OFFICE_PANEL_IDS.DRAFT_CLASS]: {
+      position: [-2.28, 2.4, -0.7],
+      target: [-3.72, 2.46, -3.34],
+      fov: 30,
+    },
+    [OFFICE_PANEL_IDS.ROSTER]: {
+      position: [-0.72, 2.4, -0.78],
+      target: [-1.16, 2.44, -3.32],
+      fov: 30,
     },
     [OFFICE_PANEL_IDS.AWARDS]: {
-      position: [2.35, 1.55, 0.15],
-      target: [4.2, 1.52, -1.55],
+      position: [-1.3, 1.3, -0.85],
+      target: [-2.08, 1.12, -3.26],
+      fov: 30,
     },
     [OFFICE_PANEL_IDS.GAME_DAY]: {
-      position: [2.15, 1.68, 0.55],
-      target: [3.65, 1.62, -0.75],
+      position: [2.05, 1.62, 1.85],
+      target: [3.85, 1.65, 1.0],
+      fov: 36,
     },
   };
 
@@ -1580,10 +2001,11 @@ import React, {
     franchiseState,
     team,
     officeMood,
-    urgentItems
+    urgentItems,
+    officeSummary = null
   ) {
     const panel = basePanel || PANEL_CONTENT[panelId] || {};
-    const mood = officeMood || deriveOfficeMood(franchiseState, team);
+    const mood = officeMood || deriveOfficeMood(franchiseState, team, officeSummary || {});
     const urgent = officeSafeArray(urgentItems);
     const urgentCount = urgent.length;
     const phase = officePhaseText(franchiseState);
@@ -1614,10 +2036,13 @@ import React, {
           "Contract season is live. Market pressure, comparables, and cap timing are all moving.";
       }
       const capRaw =
-        team?.cap_space ?? team?.capSpace ?? franchiseState?.cap_space;
+        officeSummary?.capSpaceMillions ??
+        team?.cap_space ??
+        team?.capSpace ??
+        franchiseState?.cap_space;
       const capMillions = officeCapMillions(capRaw);
       if (Number.isFinite(capMillions) && capMillions < 2.0) {
-        description = `Cap space is tight at ${formatMoney(capRaw)}. Every move needs a second look.`;
+        description = `Cap space is tight at ${formatMoney(capMillions)}. Every move needs a second look.`;
         pressureLine = PANEL_PRESSURE_COPY[panelId];
       }
       staffNote = speaker.fallback;
@@ -1831,15 +2256,29 @@ import React, {
     activePanel,
     lowPowerMode = false,
     prefersReducedMotion = false,
+    hoveredId = null,
+    leagueOpsClickToken = 0,
   }) {
     const controlsRef = useRef(null);
     const { camera } = useThree();
     const focusRef = useRef({
       position: new THREE.Vector3(...OFFICE_CAMERA.position),
       target: new THREE.Vector3(...OFFICE_CAMERA.target),
+      fov: OFFICE_CAMERA.fov,
     });
+    const hoverBlendRef = useRef(0);
+    const clickBlendRef = useRef(0);
+    const clickStartRef = useRef(0);
+    const leagueFocusRef = useRef(new THREE.Vector3(...LEAGUE_OPS_FOCUS));
     const [camX, camY, camZ] = OFFICE_CAMERA.position;
     const [tgtX, tgtY, tgtZ] = OFFICE_CAMERA.target;
+
+    useEffect(() => {
+      if (leagueOpsClickToken > 0) {
+        clickStartRef.current = performance.now();
+        clickBlendRef.current = 0;
+      }
+    }, [leagueOpsClickToken]);
 
     useEffect(() => {
       const snap = prefersReducedMotion || lowPowerMode;
@@ -1849,9 +2288,12 @@ import React, {
 
       focusRef.current.position.set(...nextPos);
       focusRef.current.target.set(...nextTarget);
+      focusRef.current.fov = panelTarget?.fov || OFFICE_CAMERA.fov;
 
       if (snap) {
         camera.position.set(...nextPos);
+        camera.fov = focusRef.current.fov;
+        camera.updateProjectionMatrix();
         if (controlsRef.current) {
           controlsRef.current.target.set(...nextTarget);
           controlsRef.current.update();
@@ -1876,15 +2318,52 @@ import React, {
     useFrame(() => {
       if (!controlsRef.current) return;
       const snap = prefersReducedMotion || lowPowerMode;
-      const lerpFactor = snap ? 1 : 0.06;
+      const lerpFactor = snap ? 1 : 0.085;
+
+      const panelTarget = activePanel ? PANEL_CAMERA_TARGETS[activePanel] : null;
+      const basePos = new THREE.Vector3(...(panelTarget?.position || OFFICE_CAMERA.position));
+      const baseTarget = new THREE.Vector3(...(panelTarget?.target || OFFICE_CAMERA.target));
+      const baseFov = panelTarget?.fov || OFFICE_CAMERA.fov;
+
+      let destPos = basePos;
+      let destTarget = baseTarget;
+
+      if (!snap && !activePanel) {
+        const hoverTarget = hoveredId === "leagueCentral" ? 1 : 0;
+        hoverBlendRef.current +=
+          (hoverTarget - hoverBlendRef.current) * (hoverTarget ? 0.07 : 0.11);
+
+        if (leagueOpsClickToken > 0 && clickStartRef.current) {
+          const elapsed = (performance.now() - clickStartRef.current) / 1000;
+          const clickT = Math.min(elapsed / 0.82, 1);
+          clickBlendRef.current = Math.sin(clickT * Math.PI * 0.5);
+          if (elapsed > 0.92) clickBlendRef.current *= 0.86;
+        } else {
+          clickBlendRef.current *= 0.88;
+        }
+
+        const blend = hoverBlendRef.current * 0.032 + clickBlendRef.current * 0.06;
+        if (blend > 0.0005) {
+          destPos = basePos.clone().lerp(leagueFocusRef.current, blend);
+          destTarget = baseTarget.clone().lerp(leagueFocusRef.current, blend * 0.92);
+        }
+      } else if (activePanel) {
+        hoverBlendRef.current *= 0.85;
+        clickBlendRef.current *= 0.85;
+      }
+
+      focusRef.current.position.lerp(destPos, lerpFactor);
+      focusRef.current.target.lerp(destTarget, lerpFactor);
+      focusRef.current.fov += (baseFov - focusRef.current.fov) * lerpFactor;
 
       camera.position.lerp(focusRef.current.position, lerpFactor);
+      camera.fov += (focusRef.current.fov - camera.fov) * lerpFactor;
+      camera.updateProjectionMatrix();
       controlsRef.current.target.lerp(focusRef.current.target, lerpFactor);
       controlsRef.current.update();
     });
 
     return (
-      <>
         <OrbitControls
           ref={controlsRef}
           enablePan={false}
@@ -1895,26 +2374,88 @@ import React, {
           enableDamping
           dampingFactor={0.11}
           rotateSpeed={0.28}
-          minPolarAngle={Math.PI / 2.88}
-          maxPolarAngle={Math.PI / 2.04}
-          minAzimuthAngle={-0.58}
-          maxAzimuthAngle={0.58}
+          minPolarAngle={Math.PI / 2.78}
+          maxPolarAngle={Math.PI / 2.06}
+          minAzimuthAngle={-0.64}
+          maxAzimuthAngle={0.64}
           target={OFFICE_CAMERA.target}
         />
-
-        null
-      </>
     );
   }
-  function HoverLabel({ visible, label, description, badge }) {
-    if (!visible) return null;
-  
+  function StationPlaque({ text, hovered = false, width = 0.52, position = [0, 0.02, 0.38] }) {
     return (
-      <Html center distanceFactor={8.5} position={[0, 0.32, 0]}>
-        <div className="office-object-label">
+      <group position={[0, 0.02, 0.38]} rotation={[-0.18, 0, 0]} raycast={() => null}>
+        <RoundedBox args={[width, 0.07, 0.018]} radius={0.008} smoothness={4}>
+          <meshStandardMaterial
+            color={hovered ? "#1a1610" : "#12141a"}
+            roughness={0.55}
+            metalness={0.12}
+            emissive={hovered ? OFFICE_PALETTE.goldDim : "#000000"}
+            emissiveIntensity={hovered ? 0.18 : 0}
+          />
+        </RoundedBox>
+        <mesh position={[0, 0.028, 0.012]} raycast={() => null}>
+          <boxGeometry args={[width * 0.92, 0.006, 0.008]} />
+          <meshStandardMaterial
+            color={OFFICE_PALETTE.gold}
+            roughness={0.42}
+            metalness={0.62}
+            emissive={OFFICE_PALETTE.goldDim}
+            emissiveIntensity={hovered ? 0.22 : 0.08}
+          />
+        </mesh>
+        <WallText position={[0, 0, 0.014]} size={0.028} color={hovered ? "#f0e4c8" : "#d8d0c4"}>
+          {text}
+        </WallText>
+      </group>
+    );
+  }
+
+  function InteractCorners({ args = [0.75, 0.5, 0.2], position = [0, 0, 0], hovered = false }) {
+    if (!hovered) return null;
+    const [w, h] = args;
+    const hw = w * 0.48;
+    const hh = h * 0.48;
+    const marks = [
+      [-hw, hh],
+      [hw, hh],
+      [-hw, -hh],
+      [hw, -hh],
+    ];
+    return (
+      <group position={position} raycast={() => null}>
+        {marks.map(([x, y], i) => (
+          <mesh key={`corner-${i}`} position={[x, y, 0.04]}>
+            <boxGeometry args={[0.04, 0.04, 0.006]} />
+            <meshStandardMaterial
+              color={OFFICE_PALETTE.gold}
+              emissive={OFFICE_PALETTE.goldDim}
+              emissiveIntensity={0.45}
+              roughness={0.4}
+              metalness={0.55}
+            />
+          </mesh>
+        ))}
+      </group>
+    );
+  }
+
+  function HoverLabel({
+    visible,
+    label,
+    description,
+    badge,
+    compact = false,
+    position = [0, 0.34, 0.08],
+  }) {
+    if (!visible) return null;
+
+    return (
+      <Html center distanceFactor={compact ? 9.2 : 7.2} position={position} zIndexRange={[40, 0]}>
+        <div className={compact ? "office-proximity office-proximity--compact" : "office-proximity"}>
           <strong>{label}</strong>
-          <span>{description}</span>
-          {badge ? <em>{badge}</em> : null}
+          {!compact && description ? <span>{description}</span> : null}
+          <em>{badge ? badge : "Enter"}</em>
         </div>
       </Html>
     );
@@ -1956,11 +2497,20 @@ import React, {
     setHoveredId,
     onOpen,
     hoverScale = 1.008,
-    hoverLift = 0.0015,
+    hoverLift = 0,
     hitBoxArgs,
     hitBoxPosition = [0, 0.18, 0],
     openId = id,
     lowPowerMode = false,
+    showPlaque = false,
+    plaqueText = "",
+    plaqueWidth = 0.52,
+    plaquePosition = [0, 0.02, 0.38],
+    labelCompact = false,
+    labelPosition = [0, 0.34, 0.08],
+    showHoverCorners = true,
+    hideHoverLabel = false,
+    activateOnPointerDown = false,
   }) {
     const groupRef = useRef();
     const scaleVec = useRef(new THREE.Vector3(1, 1, 1));
@@ -2007,12 +2557,35 @@ import React, {
           setHoveredId(null);
           document.body.classList.remove("office-cursor-active");
         }}
+        onPointerDown={
+          activateOnPointerDown
+            ? (e) => {
+                e.stopPropagation();
+                onOpen(openId);
+              }
+            : undefined
+        }
         onClick={(e) => {
           e.stopPropagation();
-          onOpen(openId);
+          if (!activateOnPointerDown) onOpen(openId);
         }}
       >
-        <mesh position={hitBoxPosition} renderOrder={999}>
+        <mesh
+          position={hitBoxPosition}
+          renderOrder={999}
+          onPointerDown={
+            activateOnPointerDown
+              ? (e) => {
+                  e.stopPropagation();
+                  onOpen(openId);
+                }
+              : undefined
+          }
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!activateOnPointerDown) onOpen(openId);
+          }}
+        >
           <boxGeometry
             args={hitBoxArgs || OFFICE_HITBOXES[id] || [0.75, 0.5, 0.75]}
           />
@@ -2020,18 +2593,29 @@ import React, {
             transparent
             opacity={0}
             depthWrite={false}
+            depthTest={false}
             color="#ffffff"
           />
         </mesh>
   
         {children(isHovered)}
-  
-        <HoverLabel
-          visible={isHovered}
-          label={label}
-          description={description}
-          badge={badge}
+
+        <InteractCorners
+          args={hitBoxArgs || OFFICE_HITBOXES[id] || [0.75, 0.5, 0.75]}
+          position={hitBoxPosition}
+          hovered={showHoverCorners && isHovered}
         />
+
+        {!hideHoverLabel ? (
+          <HoverLabel
+            visible={isHovered}
+            label={label}
+            description={description}
+            badge={badge}
+            compact={labelCompact}
+            position={labelPosition}
+          />
+        ) : null}
       </group>
     );
   }
@@ -2045,12 +2629,13 @@ import React, {
   }) {
     return (
       <meshStandardMaterial
-        color={color}
-        emissive={emissive}
-        emissiveIntensity={intensity}
-        roughness={roughness}
-        metalness={metalness}
-      />
+          color={color}
+          emissive={emissive}
+          emissiveIntensity={intensity}
+          roughness={roughness}
+          metalness={metalness}
+          envMapIntensity={0.35}
+        />
     );
   }
   
@@ -2087,8 +2672,9 @@ import React, {
         color={hovered ? "#081420" : OFFICE_PALETTE.monitor}
         emissive={hovered ? "#1e5a82" : OFFICE_PALETTE.monitorGlow}
         emissiveIntensity={hovered ? 0.48 : 0.26}
-        roughness={0.12}
-        metalness={0.18}
+        roughness={0.08}
+        metalness={0.12}
+        envMapIntensity={0.55}
         clearcoat={0.82}
         clearcoatRoughness={0.14}
         transparent
@@ -2114,35 +2700,68 @@ import React, {
   }
 
   function WoodMaterial({
-    color = "#4b2a19",
-    roughness = 0.44,
-    metalness = 0.05,
+    color = "#4a3424",
+    roughness = 0.78,
+    metalness = 0.02,
   }) {
     return (
-      <meshStandardMaterial color={color} roughness={roughness} metalness={metalness} />
+      <meshPhysicalMaterial
+        color={color}
+        roughness={roughness}
+        metalness={metalness}
+        envMapIntensity={0.28}
+        clearcoat={0.08}
+        clearcoatRoughness={0.62}
+      />
     );
   }
 
-  function PaperMaterial({ color = "#f0ead8", roughness = 0.78 }) {
-    return <meshStandardMaterial color={color} roughness={roughness} metalness={0.02} />;
+  function PaperMaterial({ color = "#e8dfcc", roughness = 0.96 }) {
+    return (
+      <meshStandardMaterial
+        color={color}
+        roughness={roughness}
+        metalness={0}
+        envMapIntensity={0.08}
+      />
+    );
   }
 
-  function LeatherMaterial({ color = "#231f1d", roughness = 0.72 }) {
-    return <meshStandardMaterial color={color} roughness={roughness} metalness={0.03} />;
+  function LeatherMaterial({ color = "#231f1d", roughness = 0.88 }) {
+    return (
+      <meshStandardMaterial
+        color={color}
+        roughness={roughness}
+        metalness={0.02}
+        envMapIntensity={0.12}
+      />
+    );
   }
 
   function MetalMaterial({
     color = "#8a7350",
-    roughness = 0.28,
-    metalness = 0.72,
+    roughness = 0.42,
+    metalness = 0.78,
   }) {
     return (
-      <meshStandardMaterial color={color} roughness={roughness} metalness={metalness} />
+      <meshStandardMaterial
+        color={color}
+        roughness={roughness}
+        metalness={metalness}
+        envMapIntensity={0.7}
+      />
     );
   }
 
-  function PlasticMaterial({ color = "#1a1f28", roughness = 0.52 }) {
-    return <meshStandardMaterial color={color} roughness={roughness} metalness={0.08} />;
+  function PlasticMaterial({ color = "#1a1f28", roughness = 0.62 }) {
+    return (
+      <meshStandardMaterial
+        color={color}
+        roughness={roughness}
+        metalness={0.04}
+        envMapIntensity={0.22}
+      />
+    );
   }
 
   function GlassMaterial({ opacity = 0.22 }) {
@@ -2156,6 +2775,120 @@ import React, {
         clearcoat={0.85}
         clearcoatRoughness={0.12}
       />
+    );
+  }
+
+  function DustMotes({ count = 48, enabled = true }) {
+    const pointsRef = useRef();
+    const positions = useMemo(() => {
+      const arr = new Float32Array(count * 3);
+      for (let i = 0; i < count; i += 1) {
+        arr[i * 3] = (Math.random() - 0.5) * 6.4;
+        arr[i * 3 + 1] = 0.35 + Math.random() * 2.6;
+        arr[i * 3 + 2] = (Math.random() - 0.5) * 5.2;
+      }
+      return arr;
+    }, [count]);
+
+    useFrame((state) => {
+      if (!pointsRef.current || !enabled) return;
+      pointsRef.current.rotation.y = state.clock.elapsedTime * 0.008;
+      pointsRef.current.position.y = Math.sin(state.clock.elapsedTime * 0.12) * 0.04;
+    });
+
+    if (!enabled) return null;
+
+    return (
+      <points ref={pointsRef} raycast={() => null}>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        </bufferGeometry>
+        <pointsMaterial
+          size={0.016}
+          color="#c4bba8"
+          transparent
+          opacity={0.11}
+          depthWrite={false}
+          sizeAttenuation
+        />
+      </points>
+    );
+  }
+
+  function PracticalLights({ lowPowerMode = false, prefersReducedMotion = false }) {
+    const deskRef = useRef();
+    const monitorRef = useRef();
+
+    useFrame((state) => {
+      if (prefersReducedMotion || lowPowerMode) return;
+      const t = state.clock.elapsedTime;
+      if (deskRef.current) {
+        deskRef.current.intensity = 0.55 + Math.sin(t * 0.35) * 0.03;
+      }
+      if (monitorRef.current) {
+        monitorRef.current.intensity = 0.22 + Math.sin(t * 0.9) * 0.02;
+      }
+    });
+
+    return (
+      <>
+        <directionalLight
+          position={[-5.2, 3.6, 0.4]}
+          intensity={1.35}
+          color="#c8dce8"
+          castShadow={!lowPowerMode}
+          shadow-mapSize-width={lowPowerMode ? 1024 : 1536}
+          shadow-mapSize-height={lowPowerMode ? 1024 : 1536}
+          shadow-bias={-0.00018}
+          shadow-normalBias={0.04}
+          shadow-camera-near={0.4}
+          shadow-camera-far={16}
+          shadow-camera-left={-6}
+          shadow-camera-right={6}
+          shadow-camera-top={6}
+          shadow-camera-bottom={-6}
+        />
+        <spotLight
+          position={[0, 3.5, -2.2]}
+          angle={0.95}
+          penumbra={0.92}
+          intensity={0.42}
+          color="#a8d0dc"
+          distance={8}
+        />
+        <spotLight
+          position={[-3.8, 2.8, -1.5]}
+          angle={0.75}
+          penumbra={0.88}
+          intensity={0.28}
+          color="#88b8c4"
+          distance={6}
+        />
+        <spotLight
+          position={[3.8, 2.8, -1.5]}
+          angle={0.75}
+          penumbra={0.88}
+          intensity={0.28}
+          color="#88b8c4"
+          distance={6}
+        />
+        <spotLight
+          ref={deskRef}
+          position={[-1.2, 2.35, 0.85]}
+          angle={0.62}
+          penumbra={0.88}
+          intensity={0.72}
+          color="#e8c898"
+          distance={6}
+          castShadow={false}
+        />
+        <directionalLight
+          position={[3.8, 2.6, 4.2]}
+          intensity={0.42}
+          color="#e4ddd0"
+          castShadow={false}
+        />
+      </>
     );
   }
 
@@ -2257,76 +2990,181 @@ import React, {
   function WallDisplayFrame({ width = 1.85, height = 1.08, children, accent = "#c9a86a" }) {
     return (
       <group>
-        <mesh position={[0, 0, -0.028]} castShadow raycast={() => null}>
-          <boxGeometry args={[width + 0.12, height + 0.12, 0.05]} />
-          <MetalMaterial color="#14161c" roughness={0.42} metalness={0.68} />
+        <RoundedBox
+          position={[0, 0, -0.055]}
+          args={[width + 0.28, height + 0.28, 0.1]}
+          radius={0.04}
+          smoothness={6}
+          castShadow
+          raycast={() => null}
+        >
+          <MetalMaterial color="#12151c" roughness={0.55} metalness={0.55} />
+        </RoundedBox>
+        <mesh position={[0, 0, -0.018]} raycast={() => null}>
+          <boxGeometry args={[width + 0.08, height + 0.08, 0.04]} />
+          <meshStandardMaterial color="#080a10" roughness={0.82} metalness={0.06} />
         </mesh>
-        <mesh position={[0, 0, -0.012]} raycast={() => null}>
-          <boxGeometry args={[width, height, 0.03]} />
-          <meshStandardMaterial color="#080a0e" roughness={0.72} metalness={0.08} />
+        <mesh position={[0, 0, -0.002]} raycast={() => null}>
+          <boxGeometry args={[width, height, 0.012]} />
+          <meshStandardMaterial color="#0a1218" roughness={0.35} metalness={0.08} emissive="#102030" emissiveIntensity={0.18} />
         </mesh>
-        <mesh position={[0, height / 2 + 0.02, 0.01]} raycast={() => null}>
-          <boxGeometry args={[width - 0.08, 0.012, 0.008]} />
+        <mesh position={[0, height / 2 + 0.08, 0.0]} raycast={() => null}>
+          <boxGeometry args={[width + 0.12, 0.016, 0.02]} />
           <meshStandardMaterial
             color={accent}
             emissive={accent}
-            emissiveIntensity={0.18}
-            roughness={0.45}
+            emissiveIntensity={0.12}
+            roughness={0.48}
+            metalness={0.62}
           />
         </mesh>
-        {children}
+        <group position={[0, 0, -0.01]}>
+          {children}
+        </group>
       </group>
     );
   }
 
   function Baseboards() {
     const trimMat = (
-      <meshStandardMaterial color="#1a1512" roughness={0.68} metalness={0.04} />
+      <meshStandardMaterial
+        color="#1a120e"
+        roughness={0.55}
+        metalness={0.12}
+        envMapIntensity={0.2}
+      />
+    );
+    const capMat = (
+      <meshStandardMaterial
+        color={OFFICE_PALETTE.goldDim}
+        roughness={0.38}
+        metalness={0.55}
+        emissive={OFFICE_PALETTE.goldDim}
+        emissiveIntensity={0.08}
+      />
     );
 
     return (
       <group raycast={() => null}>
-        <mesh position={[0, 0.08, -3.48]} receiveShadow>
-          <boxGeometry args={[8.6, 0.14, 0.06]} />
-          {trimMat}
-        </mesh>
-        <mesh position={[-4.38, 0.08, -0.15]} rotation={[0, Math.PI / 2, 0]} receiveShadow>
-          <boxGeometry args={[6.7, 0.14, 0.06]} />
-          {trimMat}
-        </mesh>
-        <mesh position={[4.38, 0.08, -0.15]} rotation={[0, Math.PI / 2, 0]} receiveShadow>
-          <boxGeometry args={[6.7, 0.14, 0.06]} />
-          {trimMat}
-        </mesh>
+        {[
+          [0, -3.48, 0, [8.6, 0.14, 0.06]],
+          [-4.38, -0.15, Math.PI / 2, [6.7, 0.14, 0.06]],
+          [4.38, -0.15, Math.PI / 2, [6.7, 0.14, 0.06]],
+        ].map(([x, z, rot, args], i) => (
+          <group key={`base-${i}`}>
+            <mesh position={[x, 0.08, z]} rotation={[0, rot, 0]} receiveShadow>
+              <boxGeometry args={args} />
+              {trimMat}
+            </mesh>
+            <mesh position={[x, 0.16, z]} rotation={[0, rot, 0]}>
+              <boxGeometry args={[args[0], 0.018, args[2] + 0.02]} />
+              {capMat}
+            </mesh>
+          </group>
+        ))}
       </group>
     );
   }
 
   function WallPanelStrips() {
+    const railMat = (
+      <meshStandardMaterial
+        color="#2a2018"
+        roughness={0.48}
+        metalness={0.18}
+        envMapIntensity={0.35}
+      />
+    );
+    const brassMat = (
+      <meshStandardMaterial
+        color={OFFICE_PALETTE.goldDim}
+        roughness={0.35}
+        metalness={0.62}
+        emissive={OFFICE_PALETTE.goldDim}
+        emissiveIntensity={0.12}
+      />
+    );
+
+    /* Chair-rail height only — a rail at landmark height cut every scene in
+       half and finished the "framed poster" illusion. */
+    const rails = [
+      { pos: [0, 0.68, -3.46], rot: 0, len: 8.2 },
+      { pos: [-4.36, 0.68, -0.15], rot: Math.PI / 2, len: 6.6 },
+      { pos: [4.36, 0.68, -0.15], rot: Math.PI / 2, len: 6.6 },
+    ];
+
+    const crowns = [
+      { pos: [0, 3.72, -3.46], rot: 0, len: 8.2 },
+      { pos: [-4.36, 3.72, -0.15], rot: Math.PI / 2, len: 6.6 },
+      { pos: [4.36, 3.72, -0.15], rot: Math.PI / 2, len: 6.6 },
+    ];
+
     return (
-      <group position={[0, 2.05, -3.41]} raycast={() => null}>
-        {[-3.2, -1.6, 0, 1.6, 3.2].map((x) => (
-          <mesh key={`panel-${x}`} position={[x, 0, 0.02]}>
-            <boxGeometry args={[0.028, 3.8, 0.012]} />
-            <meshStandardMaterial color="#16181f" roughness={0.78} metalness={0.06} />
-          </mesh>
+      <group raycast={() => null}>
+        {rails.map(({ pos, rot, len }, i) => (
+          <group key={`rail-${i}`} position={pos} rotation={[0, rot, 0]}>
+            <mesh position={[0, 0, 0.04]}>
+              <boxGeometry args={[len, 0.055, 0.045]} />
+              {railMat}
+            </mesh>
+            <mesh position={[0, 0.028, 0.05]}>
+              <boxGeometry args={[len, 0.012, 0.02]} />
+              {brassMat}
+            </mesh>
+          </group>
         ))}
-        {[-1.2, 0.5, 2.1].map((y) => (
-          <mesh key={`seam-${y}`} position={[0, y, 0.022]}>
-            <boxGeometry args={[8.4, 0.012, 0.01]} />
-            <meshStandardMaterial color="#0e1016" roughness={0.82} metalness={0.04} />
-          </mesh>
+        {crowns.map(({ pos, rot, len }, i) => (
+          <group key={`crown-${i}`} position={pos} rotation={[0, rot, 0]}>
+            <mesh position={[0, 0, 0.04]}>
+              <boxGeometry args={[len, 0.08, 0.05]} />
+              {railMat}
+            </mesh>
+            <mesh position={[0, 0.035, 0.055]}>
+              <boxGeometry args={[len, 0.014, 0.018]} />
+              {brassMat}
+            </mesh>
+          </group>
         ))}
-        <mesh position={[0, -1.55, 0.03]}>
-          <boxGeometry args={[6.8, 0.018, 0.01]} />
+        {/* Continuous picture rail the upper landmarks hang from. One line of
+            architecture for the whole wall, never a box around a scene. */}
+        <mesh position={[0, 3.22, -3.42]}>
+          <boxGeometry args={[8.2, 0.024, 0.024]} />
           <meshStandardMaterial
-            color={OFFICE_PALETTE.goldDim}
+            color="#5d4c2f"
+            roughness={0.42}
+            metalness={0.5}
             emissive={OFFICE_PALETTE.goldDim}
-            emissiveIntensity={0.08}
-            roughness={0.5}
-            metalness={0.35}
+            emissiveIntensity={0.04}
           />
         </mesh>
+        {/* Wall sconces — pushed into the corners so no lamp sits inside a menu
+            composition */}
+        {[
+          [-4.2, 2.9, -3.42],
+          [4.2, 2.9, -3.42],
+        ].map(([x, y, z], i) => (
+          <group key={`sconce-${i}`} position={[x, y, z]}>
+            <mesh position={[0, 0, 0.03]}>
+              <boxGeometry args={[0.08, 0.22, 0.06]} />
+              <MetalMaterial color="#2a2620" roughness={0.45} metalness={0.55} />
+            </mesh>
+            <mesh position={[0, -0.02, 0.06]}>
+              <sphereGeometry args={[0.045, 12, 12]} />
+              <meshStandardMaterial
+                color="#f0ddb0"
+                emissive="#d4b060"
+                emissiveIntensity={0.42}
+                roughness={0.4}
+              />
+            </mesh>
+            <pointLight
+              position={[0, -0.05, 0.15]}
+              intensity={0.24}
+              color="#e8c898"
+              distance={2.2}
+            />
+          </group>
+        ))}
       </group>
     );
   }
@@ -2363,42 +3201,26 @@ import React, {
     );
   }
 
-  function DeskLamp({ position = [-1.88, 1.034, 0.38] }) {
+  function DeskLamp({ position = [-2.05, 0.89, 0.12] }) {
     return (
       <group position={position} raycast={() => null}>
-        <mesh position={[0, 0.018, 0]} castShadow>
-          <cylinderGeometry args={[0.055, 0.065, 0.028, 16]} />
-          <MetalMaterial color="#5c4a32" roughness={0.32} metalness={0.68} />
+        <RoundedBox args={[0.14, 0.04, 0.14]} radius={0.02} smoothness={4} position={[0, 0.02, 0]} castShadow>
+          <MetalMaterial color="#2a241c" roughness={0.48} metalness={0.55} />
+        </RoundedBox>
+        <mesh position={[0, 0.11, 0]} castShadow>
+          <cylinderGeometry args={[0.045, 0.055, 0.14, 16]} />
+          <meshStandardMaterial color="#1c1814" roughness={0.72} metalness={0.08} />
         </mesh>
-        <mesh position={[0.04, 0.09, -0.02]} rotation={[0.35, 0, -0.42]} castShadow>
-          <cylinderGeometry args={[0.008, 0.008, 0.14, 8]} />
-          <MetalMaterial color="#4a4034" roughness={0.38} metalness={0.62} />
-        </mesh>
-        <mesh position={[0.08, 0.16, -0.04]} rotation={[0.15, 0, 0]} castShadow>
-          <cylinderGeometry args={[0.09, 0.11, 0.08, 20, 1, true]} />
+        <mesh position={[0, 0.18, 0]}>
+          <cylinderGeometry args={[0.07, 0.05, 0.05, 20]} />
           <meshStandardMaterial
-            color="#2a2218"
-            roughness={0.78}
-            metalness={0.04}
-            side={THREE.DoubleSide}
+            color="#3a3228"
+            emissive="#e8c898"
+            emissiveIntensity={0.22}
+            roughness={0.55}
           />
         </mesh>
-        <mesh position={[0.08, 0.145, -0.04]}>
-          <circleGeometry args={[0.055, 20]} />
-          <meshStandardMaterial
-            color="#ffd8a0"
-            emissive="#ffb86a"
-            emissiveIntensity={0.35}
-            roughness={0.5}
-          />
-        </mesh>
-        <pointLight
-          position={[0.08, 0.12, -0.04]}
-          intensity={0.55}
-          color="#ffcc88"
-          distance={1.8}
-          castShadow={false}
-        />
+        <pointLight position={[0, 0.16, 0.08]} intensity={0.42} color="#e8c898" distance={1.6} />
       </group>
     );
   }
@@ -2626,46 +3448,22 @@ import React, {
     );
   }
   
-  function LaptopObject({ hovered, teamName, teamLogo }) {
+  function LaptopObject({
+    hovered,
+    focused = false,
+    teamName,
+    teamLogo,
+    currentDate,
+    nextGame,
+    record = "0-0-0",
+    priorityCount = 0,
+    seasonPhase = "",
+  }) {
     const screenRef = useRef(null);
     const pulseRef = useRef(null);
-
-    const commandGroups = [
-      {
-        label: "TEAM OPERATIONS",
-        color: "#5a8aaa",
-        items: [
-          ["OVERVIEW", "Franchise pulse"],
-          ["ROSTER", "Active roster"],
-          ["LINES", "Matchups"],
-        ],
-      },
-      {
-        label: "FRONT OFFICE",
-        color: "#8a7348",
-        items: [
-          ["SCOUTING", "Draft intel"],
-          ["CONTRACTS", "Cap ledger"],
-          ["TRADE DESK", "Active calls"],
-        ],
-      },
-      {
-        label: "LEAGUE / ANALYTICS",
-        color: "#4a7a8a",
-        items: [
-          ["CALENDAR", "Schedule"],
-          ["ANALYTICS", "Advanced stats"],
-          ["HEADLINES", "League news"],
-        ],
-      },
-    ];
-
-    const statusStrip = [
-      ["CAP ROOM", "AVAILABLE"],
-      ["INJURY", "WATCH"],
-      ["OWNER", "GOALS"],
-      ["ALERTS", "LIVE"],
-    ];
+    const stripRefs = useRef([]);
+    const phaseLabel = safeText(String(seasonPhase || "").replace(/_/g, " "), "");
+    const showDetail = focused || hovered;
 
     useFrame((state) => {
       const t = state.clock.elapsedTime;
@@ -2681,10 +3479,19 @@ import React, {
           ? 0.14 + Math.sin(t * 2.2) * 0.04
           : 0.08 + Math.sin(t * 1.4) * 0.02;
       }
+
+      // Telemetry strips idle almost flat and come alive under the cursor.
+      stripRefs.current.forEach((strip, i) => {
+        if (!strip) return;
+        const wave = 0.5 + Math.sin(t * (1.6 + i * 0.45) + i) * 0.5;
+        const target = hovered ? 0.35 + wave * 0.65 : 0.16 + wave * 0.1;
+        strip.scale.x += (target - strip.scale.x) * 0.14;
+        strip.position.x = -0.52 + (strip.scale.x * 0.42) / 2;
+      });
     });
 
     return (
-      <group>
+      <group scale={[0.62, 0.62, 0.62]} rotation={[0, 0.22, 0]} position={[0.16, 0.02, 0.06]}>
         <RoundedBox
           position={[0, 0.02, 0.02]}
           args={[1.92, 0.08, 0.88]}
@@ -2723,10 +3530,10 @@ import React, {
               emissiveIntensity={hovered ? 0.22 : 0.1}
               roughness={0.32}
               metalness={0.45}
-              clearcoat={0.7}
-              clearcoatRoughness={0.15}
+              clearcoat={0.45}
+              clearcoatRoughness={0.28}
+              envMapIntensity={0.4}
             />
-            <Edges color={hovered ? "#5a8aaa" : "#1a3040"} />
           </RoundedBox>
 
           <RoundedBox
@@ -2740,135 +3547,124 @@ import React, {
             <ScreenGlassMaterial hovered={hovered} />
           </RoundedBox>
 
-          <mesh ref={pulseRef} position={[0, 0, 0.036]} raycast={() => null}>
+          <mesh ref={pulseRef} position={[0, 0, 0.036]} visible={false} raycast={() => null}>
             <planeGeometry args={[1.62, 0.94]} />
-            <meshBasicMaterial color="#4a9ac8" transparent opacity={0.08} depthWrite={false} />
+            <meshBasicMaterial color="#4a9ac8" transparent opacity={0} depthWrite={false} />
           </mesh>
 
-          <RoundedBox
-            position={[0, 0.4, 0.048]}
-            args={[1.44, 0.05, 0.01]}
-            radius={0.01}
-            smoothness={4}
-            raycast={() => null}
-          >
-            <meshStandardMaterial
-              color="#0c1824"
-              emissive="#1a3048"
-              emissiveIntensity={0.2}
-              roughness={0.45}
-            />
-          </RoundedBox>
-
-          <WallText position={[-0.66, 0.402, 0.056]} size={0.02} color="#6a8a9a" anchorX="left">
+          <WallText position={[0, 0.38, 0.056]} size={0.028} color="#c4a46a">
             FRANCHISE COMMAND
-          </WallText>
-
-          <WallText position={[0.58, 0.402, 0.056]} size={0.016} color={hovered ? "#7eb896" : "#5a8a6a"}>
-            LIVE
           </WallText>
 
           <TeamLogoDecal
             teamLogo={teamLogo}
             teamName={teamName}
-            position={[-0.58, 0.28, 0.055]}
-            width={0.14}
-            height={0.14}
-            opacity={0.92}
+            position={[-0.52, 0.22, 0.055]}
+            width={0.18}
+            height={0.18}
+            opacity={0.95}
             hovered={hovered}
           />
 
-          <WallText
-            position={[-0.42, 0.29, 0.058]}
-            size={0.038}
-            color="#e8f0f4"
-            anchorX="left"
-          >
+          <WallText position={[-0.28, 0.26, 0.058]} size={0.048} color="#f0f4f8" anchorX="left">
             {teamName}
           </WallText>
 
-          <WallText
-            position={[-0.42, 0.24, 0.058]}
-            size={0.018}
-            color="#6a8a9a"
-            anchorX="left"
-          >
-            EXECUTIVE DASHBOARD
+          <WallText position={[-0.28, 0.16, 0.058]} size={0.022} color="#8aa0b0" anchorX="left">
+            {safeText(currentDate, "Today")}
           </WallText>
 
-          {commandGroups.map((group, gi) => {
-            const x = -0.48 + gi * 0.48;
-            return (
-              <group key={group.label} position={[x, -0.02, 0.056]}>
-                <WallText position={[0, 0.14, 0]} size={0.014} color={group.color}>
-                  {group.label}
-                </WallText>
-                {group.items.map(([label, sub], ii) => {
-                  const y = 0.06 - ii * 0.1;
-                  return (
-                    <group key={label} position={[0, y, 0]}>
-                      <RoundedBox
-                        args={[0.42, 0.072, 0.008]}
-                        radius={0.008}
-                        smoothness={3}
-                        raycast={() => null}
-                      >
-                        <meshStandardMaterial
-                          color={hovered ? "#0c1c2a" : "#081420"}
-                          emissive={hovered ? "#1a4060" : "#0c2438"}
-                          emissiveIntensity={hovered ? 0.28 : 0.14}
-                          roughness={0.48}
-                        />
-                      </RoundedBox>
-                      <WallText position={[-0.16, 0.012, 0.008]} size={0.016} color="#d8e8f0" anchorX="left">
-                        {label}
-                      </WallText>
-                      <WallText position={[-0.16, -0.018, 0.008]} size={0.011} color="#5a7a8a" anchorX="left">
-                        {sub}
-                      </WallText>
-                    </group>
-                  );
-                })}
-              </group>
-            );
-          })}
-
-          {statusStrip.map(([top, bottom], index) => {
-            const x = -0.54 + index * 0.36;
-            return (
-              <group key={top} position={[x, -0.38, 0.056]}>
-                <RoundedBox args={[0.3, 0.05, 0.008]} radius={0.006} smoothness={3} raycast={() => null}>
-                  <meshStandardMaterial
-                    color="#060c14"
-                    emissive="#102838"
-                    emissiveIntensity={hovered ? 0.2 : 0.1}
-                    roughness={0.5}
-                  />
-                </RoundedBox>
-                <WallText position={[0, 0.01, 0.008]} size={0.012} color="#8aaaba">
-                  {top}
-                </WallText>
-                <WallText position={[0, -0.012, 0.008]} size={0.01} color="#5a7a88">
-                  {bottom}
-                </WallText>
-              </group>
-            );
-          })}
-
-          <mesh position={[0.68, 0.26, 0.056]} raycast={() => null}>
-            <circleGeometry args={[0.018, 20]} />
-            <meshBasicMaterial color={hovered ? "#c94a44" : "#6a2824"} />
-          </mesh>
-          <WallText position={[0.68, 0.22, 0.058]} size={0.01} color="#a86a64">
-            ALERT
+          <WallText position={[0.42, 0.22, 0.058]} size={0.04} color="#e8f0f4">
+            {safeText(record, "0-0-0")}
           </WallText>
+          <WallText position={[0.42, 0.14, 0.058]} size={0.016} color="#6a8898">
+            RECORD
+          </WallText>
+
+          <WallText position={[-0.52, 0.0, 0.058]} size={0.018} color="#6a8898" anchorX="left">
+            NEXT GAME
+          </WallText>
+          <WallText position={[-0.52, -0.08, 0.058]} size={0.026} color="#d8e0e8" anchorX="left" maxWidth={1.2}>
+            {safeText(nextGame, "No game listed")}
+          </WallText>
+
+          {phaseLabel ? (
+            <WallText position={[0.42, 0.0, 0.058]} size={0.018} color="#c4a46a">
+              {phaseLabel}
+            </WallText>
+          ) : null}
+
+          {[0, 1, 2].map((i) => (
+            <mesh
+              key={`command-strip-${i}`}
+              ref={(node) => {
+                stripRefs.current[i] = node;
+              }}
+              position={[-0.52, -0.4 + i * 0.055, 0.056]}
+              scale={[0.2, 1, 1]}
+              raycast={() => null}
+            >
+              <planeGeometry args={[0.42, 0.012]} />
+              <meshBasicMaterial
+                color={i === 0 ? "#c4a46a" : "#4a9ac8"}
+                transparent
+                opacity={hovered ? 0.72 : 0.34}
+                depthWrite={false}
+              />
+            </mesh>
+          ))}
+
+          {showDetail ? (
+            <>
+              <WallText position={[-0.52, -0.22, 0.058]} size={0.022} color="#c4a46a" anchorX="left">
+                {Number(priorityCount || 0) > 0
+                  ? `${priorityCount} URGENT GM ITEM${Number(priorityCount) === 1 ? "" : "S"}`
+                  : "DESK CLEAR"}
+              </WallText>
+              <WallText position={[-0.52, -0.32, 0.058]} size={0.016} color="#6a8898" anchorX="left">
+                OPEN COMMAND CENTER
+              </WallText>
+            </>
+          ) : (
+            <WallText position={[-0.52, -0.26, 0.058]} size={0.018} color="#5a7080" anchorX="left">
+              YOUR TEAM · YOUR DAY
+            </WallText>
+          )}
         </group>
+
+        {[
+          ["ROSTER", -0.46],
+          ["CAP", 0],
+          ["OPS", 0.46],
+        ].map(([label, x]) => (
+          <group key={label} position={[x, 0.068, 0.28]} raycast={() => null}>
+            <RoundedBox args={[0.4, 0.022, 0.24]} radius={0.018} smoothness={4}>
+              <meshStandardMaterial color="#12151c" roughness={0.52} metalness={0.2} />
+            </RoundedBox>
+            <WallText
+              position={[0, 0.016, 0]}
+              rotation={[-Math.PI / 2, 0, 0]}
+              size={0.022}
+              color="#8a8070"
+            >
+              {label}
+            </WallText>
+          </group>
+        ))}
 
         <pointLight
           position={[0, 0.35, 0.1]}
-          intensity={hovered ? 0.42 : 0.22}
-          color="#4a8ab8"
-          distance={1.6}
+          intensity={hovered ? 0.32 : 0.16}
+          color="#6a7a88"
+          distance={1.4}
+        />
+
+        {/* Desk pool light — the command station warms up when addressed */}
+        <pointLight
+          position={[0, 0.22, 0.42]}
+          intensity={hovered ? 0.42 : 0.1}
+          color="#e8c898"
+          distance={1.8}
         />
       </group>
     );
@@ -2880,77 +3676,61 @@ import React, {
     hasTradeActivity = false,
     callerLabel = "LEAGUE GM",
   }) {
-    const badgeText = Number(unreadMessages || 0) > 0 ? String(unreadMessages) : "";
     const notify = hasTradeActivity || Number(unreadMessages || 0) > 0;
-  
+
     return (
-      <group rotation={[0, -0.18, 0]}>
-        <RoundedBox args={[0.58, 0.12, 0.9]} radius={0.06} smoothness={7}>
-          <GlowMaterial
-            color={hovered ? "#252a32" : "#11141a"}
-            emissive={hovered ? "#4b87aa" : "#000000"}
-            intensity={0.28}
+      <group rotation={[0, 0.12, 0]} scale={[0.82, 0.82, 0.82]}>
+        {/* Negotiation blotter */}
+        <RoundedBox args={[0.72, 0.06, 0.88]} radius={0.035} smoothness={5} castShadow>
+          <WoodMaterial color={hovered ? "#3a2a1c" : "#2e2218"} roughness={0.62} />
+        </RoundedBox>
+        {/* Two opposing team sides */}
+        <RoundedBox args={[0.28, 0.02, 0.34]} radius={0.015} smoothness={3} position={[-0.18, 0.045, -0.12]}>
+          <PaperMaterial color="#d8cfc0" />
+        </RoundedBox>
+        <RoundedBox args={[0.28, 0.02, 0.34]} radius={0.015} smoothness={3} position={[0.18, 0.045, -0.12]}>
+          <PaperMaterial color="#c8d0d8" />
+        </RoundedBox>
+        <WallText position={[-0.18, 0.06, -0.22]} rotation={[-Math.PI / 2, 0, 0]} size={0.022} color="#5a4030">
+          US
+        </WallText>
+        <WallText position={[0.18, 0.06, -0.22]} rotation={[-Math.PI / 2, 0, 0]} size={0.022} color="#304050">
+          THEM
+        </WallText>
+        {/* Trade arrow */}
+        <mesh position={[0, 0.055, -0.12]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+          <boxGeometry args={[0.12, 0.02, 0.008]} />
+          <meshStandardMaterial color="#c4a46a" emissive="#c4a46a" emissiveIntensity={hovered ? 0.35 : 0.12} />
+        </mesh>
+        {/* Desk phone */}
+        <RoundedBox args={[0.18, 0.08, 0.22]} radius={0.02} smoothness={4} position={[0, 0.07, 0.28]}>
+          <meshStandardMaterial
+            color="#14181e"
             roughness={0.5}
+            metalness={0.2}
+            emissive={hovered ? OFFICE_PALETTE.goldDim : "#000000"}
+            emissiveIntensity={hovered ? 0.12 : 0}
           />
         </RoundedBox>
-  
-        <mesh position={[0, 0.073, -0.22]}>
-          <boxGeometry args={[0.42, 0.012, 0.22]} />
-          <meshStandardMaterial
-            color="#071018"
-            emissive="#5cc8ff"
-            emissiveIntensity={hovered ? 0.55 : 0.25}
-          />
+        <mesh position={[0.06, 0.12, 0.32]} rotation={[0.4, 0, 0.2]} raycast={() => null}>
+          <cylinderGeometry args={[0.025, 0.03, 0.16, 12]} />
+          <meshStandardMaterial color="#1a1e24" roughness={0.45} metalness={0.25} />
         </mesh>
-  
         <WallText
-          position={[0, 0.088, -0.22]}
+          position={[0, 0.06, 0.08]}
           rotation={[-Math.PI / 2, 0, 0]}
-          size={0.045}
-          color="#daf5ff"
+          size={0.024}
+          color="#c8c0b4"
         >
-          TRADE CALLS
+          {safeText(callerLabel, "TRADE DESK")}
         </WallText>
-
-        <WallText
-          position={[0, 0.09, -0.08]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          size={0.022}
-          color="#9fdfff"
-        >
-          {safeText(callerLabel, "LEAGUE GM")}
-        </WallText>
-
-        <BlinkingNotificationLight active={notify} position={[-0.24, 0.1, -0.42]} />
-  
-        {[0, 1, 2].map((row) =>
-          [0, 1, 2].map((col) => (
-            <mesh
-              key={`${row}-${col}`}
-              position={[-0.16 + col * 0.16, 0.083, 0.09 + row * 0.12]}
-            >
-              <cylinderGeometry args={[0.025, 0.025, 0.014, 18]} />
-              <meshStandardMaterial color="#343b45" roughness={0.4} />
-            </mesh>
-          ))
-        )}
-  
-        {badgeText ? (
-          <group position={[0.26, 0.18, -0.42]}>
-            <mesh>
-              <sphereGeometry args={[0.09, 22, 22]} />
-              <meshStandardMaterial
-                color="#d94a41"
-                emissive="#b72a20"
-                emissiveIntensity={0.4}
-              />
-            </mesh>
-  
-            <WallText position={[0, 0, 0.095]} size={0.08} color="#ffffff">
-              {badgeText}
-            </WallText>
-          </group>
+        {Number(unreadMessages || 0) > 0 ? (
+          <WallText position={[0, 0.06, 0.2]} rotation={[-Math.PI / 2, 0, 0]} size={0.018} color="#c4a46a">
+            {`${unreadMessages} OFFERS`}
+          </WallText>
         ) : null}
+        <BlinkingNotificationLight active={notify} position={[0.28, 0.08, 0.35]} color={OFFICE_PALETTE.gold} />
+        <pointLight position={[0, 0.25, 0.1]} intensity={hovered ? 0.22 : 0.08} color="#e8c898" distance={0.9} />
       </group>
     );
   }
@@ -3201,237 +3981,177 @@ import React, {
     );
   }
   
-  function CalendarObject({ hovered, currentDate, nextGame, teamLogo, teamName }) {
-    const calendarDays = [
-      ["", "", "1", "2", "3", "4", "5"],
-      ["6", "7", "8", "9", "10", "11", "12"],
-      ["13", "14", "15", "16", "17", "18", "19"],
-      ["20", "21", "22", "23", "24", "25", "26"],
-      ["27", "28", "29", "30", "31", "", ""],
-    ];
-  
-    const markedDays = {
-      "6": "home",
-      "11": "away",
-      "14": "meeting",
-      "20": "travel",
-      "25": "deadline",
-    };
-  
-    return (
-      <group rotation={[0, -0.22, 0]}>
-        <mesh position={[0.035, -0.018, 0.035]} rotation={[0, 0, -0.015]}>
-          <boxGeometry args={[0.82, 0.035, 0.98]} />
-          <meshStandardMaterial color="#cfc3aa" roughness={0.88} />
-        </mesh>
-  
-        <RoundedBox args={[0.88, 0.06, 1.02]} radius={0.035} smoothness={6}>
-          <meshStandardMaterial
-            color={hovered ? "#fff3d4" : "#eee2c4"}
-            roughness={0.78}
-            metalness={0.03}
-            emissive={hovered ? "#d9a441" : "#000000"}
-            emissiveIntensity={hovered ? 0.08 : 0}
-          />
-        </RoundedBox>
-  
-        <mesh position={[0, 0.047, -0.43]}>
-          <boxGeometry args={[0.88, 0.028, 0.16]} />
-          <meshStandardMaterial
-            color={hovered ? "#d94338" : "#a92f2b"}
-            roughness={0.5}
-            metalness={0.08}
-            emissive={hovered ? "#5c0e0b" : "#000000"}
-            emissiveIntensity={hovered ? 0.2 : 0}
-          />
-        </mesh>
-  
-        {[-0.32, -0.16, 0, 0.16, 0.32].map((x) => (
-          <mesh key={x} position={[x, 0.071, -0.5]} rotation={[Math.PI / 2, 0, 0]}>
-            <torusGeometry args={[0.035, 0.006, 8, 22]} />
-            <meshStandardMaterial color="#d8d8d8" metalness={0.55} roughness={0.32} />
-          </mesh>
-        ))}
-  
-        <WallText
-          position={[0, 0.078, -0.43]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          size={0.048}
-          color="#ffffff"
-        >
-          SEASON CALENDAR
-        </WallText>
+  /** Sep → Jun reading order, matching how a hockey season actually runs. */
+  const SEASON_TIMELINE_MONTHS = [
+    "SEP",
+    "OCT",
+    "NOV",
+    "DEC",
+    "JAN",
+    "FEB",
+    "MAR",
+    "APR",
+    "JUN",
+  ];
 
+  function CalendarObject({ hovered, currentDate, nextGame, teamLogo, teamName }) {
+    const { month } = parseFranchiseDateParts(currentDate);
+    const timelineIndex = SEASON_TIMELINE_MONTHS.indexOf(
+      new Date(2000, Math.max(month - 1, 0), 1)
+        .toLocaleString("en-US", { month: "short" })
+        .toUpperCase()
+    );
+    const nowIndex = timelineIndex >= 0 ? timelineIndex : 0;
+
+    return (
+      <group rotation={[0, -0.18, 0]} scale={[0.78, 0.78, 0.78]}>
+        <RoundedBox args={[0.78, 0.05, 0.88]} radius={0.03} smoothness={6} castShadow>
+          <PaperMaterial color={hovered ? "#d2c6ae" : "#c4b79c"} />
+        </RoundedBox>
+        <mesh position={[0, 0.032, -0.34]} raycast={() => null}>
+          <boxGeometry args={[0.78, 0.022, 0.16]} />
+          <meshStandardMaterial color="#6a2a28" roughness={0.62} metalness={0.06} />
+        </mesh>
+        <WallText
+          position={[0, 0.048, -0.34]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          size={0.034}
+          color="#e8dcc8"
+        >
+          SEASON
+        </WallText>
         <TeamLogoDecal
           teamLogo={teamLogo}
           teamName={teamName}
-          position={[0.3, 0.076, -0.38]}
+          position={[0.28, 0.045, -0.2]}
           rotation={[-Math.PI / 2, 0, 0]}
-          width={0.11}
-          height={0.11}
-          opacity={0.8}
+          width={0.08}
+          height={0.08}
+          opacity={0.7}
           hovered={hovered}
         />
-  
         <WallText
-          position={[-0.27, 0.075, -0.27]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          size={0.039}
-          color="#1d1a16"
-          anchorX="left"
-        >
-          OCTOBER
-        </WallText>
-  
-        <WallText
-          position={[0.27, 0.075, -0.27]}
+          position={[-0.08, 0.045, -0.18]}
           rotation={[-Math.PI / 2, 0, 0]}
           size={0.028}
-          color="#69513b"
+          color="#3a3228"
+          anchorX="left"
         >
           {safeText(currentDate, "Today")}
         </WallText>
-  
-        {["S", "M", "T", "W", "T", "F", "S"].map((day, i) => (
-          <WallText
-            key={`${day}-${i}`}
-            position={[-0.33 + i * 0.11, 0.078, -0.16]}
-            rotation={[-Math.PI / 2, 0, 0]}
-            size={0.027}
-            color="#8d332b"
-          >
-            {day}
-          </WallText>
-        ))}
-  
-        {[0, 1, 2, 3, 4, 5].map((row) => (
-          <mesh key={`row-${row}`} position={[0, 0.066, -0.1 + row * 0.095]}>
-            <boxGeometry args={[0.74, 0.004, 0.006]} />
-            <meshStandardMaterial color="#c9bda5" roughness={0.85} />
-          </mesh>
-        ))}
-  
-        {[0, 1, 2, 3, 4, 5, 6, 7].map((col) => (
-          <mesh
-            key={`col-${col}`}
-            position={[-0.385 + col * 0.11, 0.066, 0.095]}
-          >
-            <boxGeometry args={[0.004, 0.004, 0.47]} />
-            <meshStandardMaterial color="#c9bda5" roughness={0.85} />
-          </mesh>
-        ))}
-  
-        {calendarDays.map((week, row) =>
-          week.map((day, col) => {
-            if (!day) return null;
-  
-            const eventType = markedDays[day];
-  
-            const eventColor =
-              eventType === "home"
-                ? "#2f79d8"
-                : eventType === "away"
-                ? "#d83d32"
-                : eventType === "meeting"
-                ? "#d6a02e"
-                : eventType === "travel"
-                ? "#4a9d68"
-                : eventType === "deadline"
-                ? "#8e4ee6"
-                : null;
-  
-            return (
-              <group
-                key={`${row}-${col}-${day}`}
-                position={[-0.33 + col * 0.11, 0.079, -0.06 + row * 0.095]}
+        {/* Season timeline — the desk plans time, not dates in a month grid */}
+        <mesh position={[0, 0.042, 0.06]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+          <planeGeometry args={[0.62, 0.008]} />
+          <meshBasicMaterial color="#6a5f4c" transparent opacity={0.75} />
+        </mesh>
+
+        {SEASON_TIMELINE_MONTHS.map((month, i) => {
+          const x = -0.28 + i * 0.0933;
+          const isNow = i === nowIndex;
+          return (
+            <group key={`season-tick-${month}`} position={[x, 0, 0]}>
+              <mesh
+                position={[0, 0.043, 0.06]}
+                rotation={[-Math.PI / 2, 0, 0]}
+                raycast={() => null}
               >
-                <WallText
-                  position={[0, 0, 0]}
+                <planeGeometry args={[0.009, 0.038]} />
+                <meshBasicMaterial
+                  color={isNow ? "#e8c07a" : "#7a6e58"}
+                  transparent
+                  opacity={isNow ? 0.95 : 0.55}
+                />
+              </mesh>
+              <WallText
+                position={[0, 0.044, 0.13]}
+                rotation={[-Math.PI / 2, 0, 0]}
+                size={0.019}
+                color={isNow ? "#2a2118" : "#6a5f4c"}
+              >
+                {month}
+              </WallText>
+              {i % 2 === 0 ? (
+                <mesh
+                  position={[0.024, 0.043, 0.005]}
                   rotation={[-Math.PI / 2, 0, 0]}
-                  size={0.028}
-                  color={eventType ? "#15110d" : "#4b4034"}
+                  raycast={() => null}
                 >
-                  {day}
-                </WallText>
-  
-                {eventType ? (
-                  <mesh
-                    position={[0.032, 0.002, 0.026]}
-                    rotation={[-Math.PI / 2, 0, 0]}
-                  >
-                    <circleGeometry args={[0.014, 18]} />
-                    <meshStandardMaterial
-                      color={eventColor}
-                      emissive={eventColor}
-                      emissiveIntensity={hovered ? 0.32 : 0.12}
-                      roughness={0.45}
-                    />
-                  </mesh>
-                ) : null}
-              </group>
-            );
-          })
-        )}
-  
-        <group
-          position={[0.29, 0.09, 0.34]}
-          rotation={[-Math.PI / 2, 0, -0.08]}
+                  <planeGeometry args={[0.03, 0.026]} />
+                  <meshBasicMaterial
+                    color="#3a5040"
+                    transparent
+                    opacity={hovered ? 0.8 : 0.45}
+                  />
+                </mesh>
+              ) : null}
+            </group>
+          );
+        })}
+
+        {/* Today marker — a puck sitting on the rail */}
+        <mesh
+          position={[-0.28 + nowIndex * 0.0933, 0.052, 0.06]}
+          raycast={() => null}
         >
-          <mesh>
-            <planeGeometry args={[0.28, 0.2]} />
-            <meshStandardMaterial
-              color={hovered ? "#ffe985" : "#f5d86d"}
-              roughness={0.75}
-              side={THREE.DoubleSide}
-            />
-          </mesh>
-  
-          <WallText position={[0, 0.035, 0.004]} size={0.021} color="#241b0f">
-            NEXT GAME
-          </WallText>
-  
-          <WallText
-            position={[0, -0.025, 0.004]}
-            size={0.017}
-            color="#39291a"
-            maxWidth={0.24}
-          >
-            {safeText(nextGame, "No game listed")}
-          </WallText>
-        </group>
+          <cylinderGeometry args={[0.026, 0.026, 0.016, 20]} />
+          <meshStandardMaterial
+            color="#14100c"
+            emissive="#e8c07a"
+            emissiveIntensity={hovered ? 0.35 : 0.12}
+            roughness={0.5}
+          />
+        </mesh>
+
+        <mesh
+          position={[-0.055, 0.041, 0.06]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          raycast={() => null}
+        >
+          <planeGeometry args={[0.45, 0.02]} />
+          <meshBasicMaterial
+            color="#e8c07a"
+            transparent
+            opacity={hovered ? 0.22 : 0.08}
+            depthWrite={false}
+          />
+        </mesh>
+        <WallText
+          position={[0, 0.045, 0.36]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          size={0.02}
+          color="#2a241c"
+          maxWidth={0.7}
+        >
+          {`NEXT · ${safeText(nextGame, "Open")}`}
+        </WallText>
       </group>
     );
   }
 
   function NewspaperObject({ hovered, activeStorylines }) {
     return (
-      <group rotation={[0, -0.36, 0]}>
-        {[0, 1, 2].map((i) => (
-          <mesh key={i} position={[i * 0.025, i * 0.02, i * -0.025]} raycast={() => null}>
-            <boxGeometry args={[0.82, 0.025, 0.56]} />
-            <meshStandardMaterial
-              color={hovered ? "#f1ead9" : "#d7cfbf"}
-              roughness={0.88}
-            />
-          </mesh>
-        ))}
+      <group rotation={[0, -0.28, 0]}>
+        <mesh position={[0, 0.01, 0]} raycast={() => null}>
+          <boxGeometry args={[0.62, 0.012, 0.42]} />
+          <PaperMaterial color={hovered ? "#d4cbb8" : "#c4baa6"} />
+        </mesh>
   
         <WallText
-          position={[0.04, 0.085, -0.16]}
+          position={[0, 0.028, -0.08]}
           rotation={[-Math.PI / 2, 0, 0]}
-          size={0.055}
-          color="#151515"
+          size={0.038}
+          color="#2a241c"
         >
-          LEAGUE DAILY
+          DOSSIER
         </WallText>
   
         <WallText
-          position={[0.04, 0.087, 0.1]}
+          position={[0, 0.03, 0.08]}
           rotation={[-Math.PI / 2, 0, 0]}
-          size={0.04}
-          color="#303030"
+          size={0.028}
+          color="#4a4034"
         >
-          {Number(activeStorylines || 0)} active storylines
+          {Number(activeStorylines || 0)} storylines
         </WallText>
       </group>
     );
@@ -3486,7 +4206,7 @@ import React, {
   
   function CoffeeAndPuck() {
     return (
-      <group position={[1.58, 1.058, 0.22]} raycast={() => null}>
+      <group position={[1.62, 0.91, 0.12]} raycast={() => null}>
         <mesh castShadow receiveShadow>
           <cylinderGeometry args={[0.13, 0.13, 0.045, 32]} />
           <meshStandardMaterial color="#060606" roughness={0.38} metalness={0.12} />
@@ -3502,81 +4222,95 @@ import React, {
   function Desk({ children, teamName, teamLogo }) {
     return (
       <group>
-        {[[-1.55, 0.36, 1.05], [1.55, 0.36, 1.05], [-1.55, 0.36, 0.48], [1.55, 0.36, 0.48]].map(
+        {[[-1.62, 0.28, 1.12], [1.62, 0.28, 1.12], [-1.62, 0.28, 0.38], [1.62, 0.28, 0.38]].map(
           ([x, y, z], i) => (
-            <mesh key={`leg-${i}`} position={[x, y, z]} castShadow receiveShadow raycast={() => null}>
-              <boxGeometry args={[0.1, 0.72, 0.1]} />
-              <MetalMaterial color="#14161c" roughness={0.42} metalness={0.78} />
-            </mesh>
+            <RoundedBox
+              key={`leg-${i}`}
+              position={[x, y, z]}
+              args={[0.16, 0.56, 0.16]}
+              radius={0.03}
+              smoothness={5}
+              castShadow
+              receiveShadow
+              raycast={() => null}
+            >
+              <MetalMaterial color="#12151c" roughness={0.48} metalness={0.72} />
+            </RoundedBox>
           )
         )}
 
         <RoundedBox
-          position={[0, 0.72, 0.92]}
-          args={[4.2, 0.32, 1.42]}
-          radius={0.05}
-          smoothness={8}
+          position={[0, 0.52, 0.78]}
+          args={[3.85, 0.58, 1.38]}
+          radius={0.07}
+          smoothness={7}
           castShadow
           receiveShadow
           raycast={() => null}
         >
-          <WoodMaterial color={OFFICE_PALETTE.walnut} roughness={0.52} />
+          <meshStandardMaterial color="#161920" roughness={0.78} metalness={0.08} />
         </RoundedBox>
-
-        <mesh position={[0, 0.84, 1.68]} castShadow raycast={() => null}>
-          <boxGeometry args={[3.9, 0.22, 0.05]} />
-          <WoodMaterial color="#18120e" roughness={0.54} />
-        </mesh>
-
-        <DeskDrawerFaces />
 
         <RoundedBox
-          position={[0, 0.94, 0.92]}
-          args={[4.38, 0.08, 1.55]}
-          radius={0.04}
+          position={[-1.92, 0.48, 0.72]}
+          args={[0.62, 0.5, 1.18]}
+          radius={0.06}
+          smoothness={6}
+          castShadow
+          raycast={() => null}
+        >
+          <meshStandardMaterial color="#14181f" roughness={0.8} metalness={0.06} />
+        </RoundedBox>
+
+        <RoundedBox
+          position={[0, 0.84, 0.74]}
+          args={[4.12, 0.08, 1.58]}
+          radius={0.055}
           smoothness={8}
           castShadow
           receiveShadow
           raycast={() => null}
         >
-          <WoodMaterial color="#241810" roughness={0.42} metalness={0.06} />
+          <WoodMaterial color="#4a3222" roughness={0.58} metalness={0.04} />
         </RoundedBox>
 
-        {[-2.12, 2.12].map((x) => (
-          <mesh key={`edge-${x}`} position={[x, 0.978, 0.92]} raycast={() => null}>
-            <boxGeometry args={[0.008, 0.014, 1.48]} />
-            <meshStandardMaterial color={OFFICE_PALETTE.goldDim} roughness={0.22} metalness={0.72} />
-          </mesh>
-        ))}
-
-        <mesh position={[0, 0.976, 0.92]} receiveShadow raycast={() => null}>
-          <boxGeometry args={[1.85, 0.01, 0.88]} />
-          <LeatherMaterial color="#121010" roughness={0.82} />
+        <mesh position={[0, 0.76, 1.46]} castShadow raycast={() => null}>
+          <boxGeometry args={[3.35, 0.16, 0.22]} />
+          <meshStandardMaterial color="#101318" roughness={0.72} metalness={0.1} />
         </mesh>
+        <mesh position={[0, 0.685, 1.52]} raycast={() => null}>
+          <boxGeometry args={[3.2, 0.012, 0.04]} />
+          <meshStandardMaterial
+            color={OFFICE_PALETTE.goldDim}
+            emissive={OFFICE_PALETTE.goldDim}
+            emissiveIntensity={0.22}
+            roughness={0.4}
+            metalness={0.7}
+          />
+        </mesh>
+
+        <RoundedBox
+          position={[0.28, 0.89, 0.62]}
+          args={[1.55, 0.02, 0.72]}
+          radius={0.02}
+          smoothness={4}
+          receiveShadow
+          raycast={() => null}
+        >
+          <meshStandardMaterial color="#0e1218" roughness={0.7} metalness={0.12} />
+        </RoundedBox>
 
         <TeamLogoDecal
           teamLogo={teamLogo}
           teamName={teamName}
-          position={[0, 0.982, 0.92]}
+          position={[-1.35, 0.892, 0.35]}
           rotation={[-Math.PI / 2, 0, 0]}
-          width={0.28}
-          height={0.28}
-          opacity={0.08}
+          width={0.18}
+          height={0.18}
+          opacity={0.22}
         />
 
-        <RoundedBox
-          position={[0, 0.87, 1.72]}
-          args={[0.95, 0.1, 0.05]}
-          radius={0.015}
-          smoothness={5}
-          raycast={() => null}
-        >
-          <MetalMaterial color="#0a0c10" roughness={0.38} metalness={0.55} />
-        </RoundedBox>
-
-        <DeskPen position={[1.12, 0.982, 0.78]} />
-        <DeskClutter />
-
+        <DeskLamp position={[-2.08, 0.89, 0.08]} />
         {children}
       </group>
     );
@@ -3597,10 +4331,6 @@ import React, {
     return [...players].sort((a, b) => rating(b) - rating(a))[0];
   }
 
-  function getPlayerHeadshot(player) {
-    return player?.headshot || player?.headshotUrl || player?.image || player?.portrait || player?.faceUrl || player?.picture || "";
-  }
-
   function getPlayerName(player) {
     return (
       player?.name ||
@@ -3610,31 +4340,8 @@ import React, {
     );
   }
 
-  function WallPlayerPortrait({ player, imageUrl }) {
+  function WallPlayerPortrait({ player }) {
     const resolvedPlayer = useMemo(() => ensurePlayerHeadshotFields(player || {}), [player]);
-
-    const pictureTexture = useMemo(() => {
-      if (!imageUrl) return null;
-      const loader = new THREE.TextureLoader();
-      const tex = loader.load(imageUrl);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      return tex;
-    }, [imageUrl]);
-
-    useEffect(() => {
-      return () => {
-        pictureTexture?.dispose();
-      };
-    }, [pictureTexture]);
-
-    if (pictureTexture) {
-      return (
-        <mesh position={[0, 0, 0.045]} raycast={() => null}>
-          <boxGeometry args={[2.02, 1.02, 0.02]} />
-          <meshBasicMaterial map={pictureTexture} toneMapped={false} />
-        </mesh>
-      );
-    }
 
     if (!player) {
       return (
@@ -3665,53 +4372,215 @@ import React, {
     );
   }
 
+  function OfficeFurniture({ teamLogo, teamName, mood = {}, championshipCount = 0 }) {
+    return (
+      <group raycast={() => null}>
+        {/* Filing cabinet directly beneath the Contracts station, so the deal
+            sheet reads as paperwork belonging to a real piece of furniture */}
+        <RoundedBox position={[-3.38, 0.21, -3.02]} args={[0.74, 0.42, 0.42]} radius={0.03} smoothness={4} castShadow>
+          <meshStandardMaterial color="#1b2028" roughness={0.62} metalness={0.16} />
+        </RoundedBox>
+        {[0.12, 0.3].map((y) => (
+          <mesh key={`cab-pull-${y}`} position={[-3.38, y, -2.79]} raycast={() => null}>
+            <boxGeometry args={[0.2, 0.016, 0.02]} />
+            <MetalMaterial color="#6a5a42" roughness={0.4} metalness={0.7} />
+          </mesh>
+        ))}
+        {/* Credenza carrying the trophy plinth */}
+        <RoundedBox position={[-2.08, 0.21, -3.04]} args={[1.05, 0.42, 0.44]} radius={0.04} smoothness={4} castShadow>
+          <WoodMaterial color="#33231a" roughness={0.6} />
+        </RoundedBox>
+        <mesh position={[-2.08, 0.43, -3.04]} raycast={() => null}>
+          <boxGeometry args={[1.1, 0.02, 0.48]} />
+          <WoodMaterial color="#4a3222" roughness={0.5} />
+        </mesh>
+        {/* Warm shrine light for the trophy */}
+        <pointLight position={[-2.08, 1.0, -2.75]} intensity={0.4} color="#e8c07a" distance={2.4} />
+        {/* Draft table tucked near the war-room entrance */}
+        <RoundedBox position={[-3.55, 0.52, 0.45]} args={[0.95, 0.07, 0.55]} radius={0.03} smoothness={3} castShadow>
+          <WoodMaterial color="#2a1c14" />
+        </RoundedBox>
+        <pointLight position={[-4.1, 1.9, 0.45]} intensity={mood.isDraftWeek ? 0.45 : 0.16} color="#c4a46a" distance={2.8} />
+        <pointLight position={[-4.05, 2.0, -1.55]} intensity={0.14} color="#e8d8b8" distance={2.2} />
+        {mood.isTradeDeadline ? (
+          <pointLight position={[-1.5, 1.2, 0.7]} intensity={0.32} color="#c47848" distance={2.0} />
+        ) : null}
+        {championshipCount > 0 ? (
+          <group position={[-2.62, 0.55, -3.04]}>
+            <mesh>
+              <cylinderGeometry args={[0.05, 0.07, 0.18, 12]} />
+              <meshStandardMaterial color="#c4a46a" metalness={0.55} roughness={0.35} />
+            </mesh>
+          </group>
+        ) : null}
+      </group>
+    );
+  }
+
+  function CityWeatherWindow({ currentDate, weather }) {
+    const planeRef = useRef();
+    const precipRefs = useRef([]);
+    const wx = weather || deriveSeasonalWeather(currentDate);
+
+    useFrame((state) => {
+      const t = state.clock.elapsedTime;
+      if (planeRef.current) {
+        planeRef.current.position.x = -0.55 + ((t * 0.12) % 1.4);
+        planeRef.current.position.y = 0.42 + Math.sin(t * 0.7) * 0.04;
+      }
+      precipRefs.current.forEach((mesh, i) => {
+        if (!mesh) return;
+        mesh.position.y -= wx.precip === "snow" ? 0.004 : 0.012;
+        if (mesh.position.y < -0.55) {
+          mesh.position.y = 0.55;
+          mesh.position.x = -0.7 + (i % 8) * 0.18 + (Math.random() * 0.05);
+        }
+      });
+    });
+
+    const buildings = [
+      [-0.62, 0.05, 0.22, 0.55],
+      [-0.38, -0.05, 0.18, 0.42],
+      [-0.12, 0.12, 0.28, 0.68],
+      [0.18, 0.0, 0.2, 0.5],
+      [0.42, 0.08, 0.24, 0.6],
+      [0.65, -0.02, 0.16, 0.38],
+    ];
+
+    return (
+      <group position={[4.28, 2.05, 0.35]} rotation={[0, -Math.PI / 2, 0]}>
+        <RoundedBox args={[2.05, 1.55, 0.08]} radius={0.03} smoothness={3} position={[0, 0, -0.06]}>
+          <meshStandardMaterial color="#0c1018" roughness={0.7} metalness={0.15} />
+        </RoundedBox>
+        {/* Sky */}
+        <mesh position={[0, 0.1, -0.02]} raycast={() => null}>
+          <planeGeometry args={[1.85, 1.28]} />
+          <meshBasicMaterial color={wx.sky} />
+        </mesh>
+        {/* Haze / sun wash */}
+        <mesh position={[0.35, 0.35, -0.01]} raycast={() => null}>
+          <circleGeometry args={[0.22, 24]} />
+          <meshBasicMaterial color={wx.light} transparent opacity={wx.condition === "clear" ? 0.55 : 0.18} />
+        </mesh>
+        {/* City silhouette */}
+        {buildings.map(([x, y, w, h], i) => (
+          <mesh key={`bldg-${i}`} position={[x, -0.45 + h / 2, 0]} raycast={() => null}>
+            <boxGeometry args={[w, h, 0.04]} />
+            <meshStandardMaterial color="#0a1220" roughness={0.9} />
+          </mesh>
+        ))}
+        {/* Distant windows */}
+        {buildings.map(([x, y, w, h], i) =>
+          [0, 1, 2].map((row) => (
+            <mesh
+              key={`win-${i}-${row}`}
+              position={[x, -0.35 + row * 0.14, 0.03]}
+              raycast={() => null}
+            >
+              <boxGeometry args={[w * 0.35, 0.035, 0.01]} />
+              <meshBasicMaterial color="#c4a46a" transparent opacity={0.35} />
+            </mesh>
+          ))
+        )}
+        {/* Aircraft */}
+        <group ref={planeRef} position={[-0.4, 0.42, 0.02]}>
+          <mesh raycast={() => null}>
+            <boxGeometry args={[0.12, 0.018, 0.02]} />
+            <meshBasicMaterial color="#e8eef4" />
+          </mesh>
+          <mesh position={[0, 0, 0]} raycast={() => null}>
+            <boxGeometry args={[0.04, 0.004, 0.08]} />
+            <meshBasicMaterial color="#d0d8e0" />
+          </mesh>
+        </group>
+        {/* Precipitation */}
+        {wx.precip !== "none"
+          ? Array.from({ length: 14 }).map((_, i) => (
+              <mesh
+                key={`precip-${i}`}
+                ref={(el) => {
+                  precipRefs.current[i] = el;
+                }}
+                position={[-0.65 + (i % 7) * 0.2, 0.4 - (i % 5) * 0.12, 0.04]}
+                raycast={() => null}
+              >
+                <boxGeometry
+                  args={
+                    wx.precip === "snow"
+                      ? [0.03, 0.03, 0.01]
+                      : [0.012, 0.08, 0.01]
+                  }
+                />
+                <meshBasicMaterial
+                  color={wx.precip === "snow" ? "#f0f4f8" : "#9ab0c4"}
+                  transparent
+                  opacity={0.55}
+                />
+              </mesh>
+            ))
+          : null}
+        {/* Glass */}
+        <mesh position={[0, 0.05, 0.06]} raycast={() => null}>
+          <planeGeometry args={[1.9, 1.35]} />
+          <meshPhysicalMaterial
+            color="#8aa0b8"
+            transparent
+            opacity={0.12}
+            roughness={0.15}
+            metalness={0.05}
+            transmission={0.4}
+          />
+        </mesh>
+        <WallText position={[0, -0.72, 0.08]} size={0.028} color="#c4a46a">
+          {safeText(wx.label, "Outside")}
+        </WallText>
+        <pointLight position={[-0.2, 0.2, 0.35]} intensity={0.35} color={wx.light} distance={2.2} />
+      </group>
+    );
+  }
+
   function RoomShell() {
     return (
       <group>
         <mesh position={[0, 0, -1.1]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow raycast={() => null}>
           <planeGeometry args={[9, 8]} />
-          <meshStandardMaterial color="#1e1a16" roughness={0.72} metalness={0.04} />
+          <meshStandardMaterial color="#3a342c" roughness={0.88} metalness={0.02} envMapIntensity={0.16} />
         </mesh>
 
         <mesh position={[0, 0.008, -1.1]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow raycast={() => null}>
           <planeGeometry args={[8.6, 7.6]} />
-          <meshStandardMaterial color="#26221e" roughness={0.68} />
+          <meshStandardMaterial color="#4a4238" roughness={0.72} />
         </mesh>
 
         <FloorPlanks />
         <OfficeRug />
         <Baseboards />
-  
-        <mesh position={[0, 2.1, -3.55]} receiveShadow castShadow raycast={() => null}>
-          <boxGeometry args={[8.8, 4.2, 0.12]} />
-          <meshStandardMaterial color={OFFICE_PALETTE.wall} roughness={0.82} metalness={0.06} />
-        </mesh>
+
+        <ExecutiveWallSurface
+          position={[0, 2.1, -3.55]}
+          size={[8.8, 4.2, 0.12]}
+          repeat={[3.6, 1.65]}
+        />
 
         <WallPanelStrips />
-  
-        <mesh
+
+        <ExecutiveWallSurface
           position={[-4.43, 2.1, -0.15]}
           rotation={[0, Math.PI / 2, 0]}
-          receiveShadow
-          raycast={() => null}
-        >
-          <boxGeometry args={[6.9, 4.2, 0.12]} />
-          <meshStandardMaterial color="#222830" roughness={0.84} metalness={0.05} />
-        </mesh>
-  
-        <mesh
+          size={[6.9, 4.2, 0.12]}
+          repeat={[2.8, 1.65]}
+        />
+
+        <ExecutiveWallSurface
           position={[4.43, 2.1, -0.15]}
           rotation={[0, Math.PI / 2, 0]}
-          receiveShadow
-          raycast={() => null}
-        >
-          <boxGeometry args={[6.9, 4.2, 0.12]} />
-          <meshStandardMaterial color="#20242c" roughness={0.84} metalness={0.05} />
-        </mesh>
-  
+          size={[6.9, 4.2, 0.12]}
+          repeat={[2.8, 1.65]}
+        />
+
         <mesh position={[0, 4.15, -0.2]} rotation={[Math.PI / 2, 0, 0]} receiveShadow raycast={() => null}>
           <planeGeometry args={[8.8, 7]} />
-          <meshStandardMaterial color="#1a1c24" roughness={0.9} />
+          <meshStandardMaterial color="#0e1820" roughness={0.92} metalness={0.02} />
         </mesh>
 
         <mesh position={[0, 4.08, -0.15]} raycast={() => null}>
@@ -3720,6 +4589,46 @@ import React, {
         </mesh>
 
         <CeilingLightStrip />
+
+        {/* Crest recess — a turned walnut disc behind the franchise crest, so the
+            centre of the wall reads as an installation rather than a poster */}
+        <mesh
+          position={[0, 2.938, -3.46]}
+          rotation={[Math.PI / 2, 0, 0]}
+          raycast={() => null}
+        >
+          <cylinderGeometry args={[0.36, 0.36, 0.07, 56]} />
+          <WoodMaterial color="#241a12" roughness={0.6} />
+        </mesh>
+        <mesh position={[0, 2.938, -3.43]} raycast={() => null}>
+          <circleGeometry args={[0.35, 56]} />
+          <meshStandardMaterial color="#0a0f14" roughness={0.9} metalness={0.04} />
+        </mesh>
+
+        {/* Left wall architecture for Draft Class + War Room */}
+        <mesh position={[-4.28, 1.35, 1.55]} rotation={[0, Math.PI / 2, 0]} raycast={() => null}>
+          <boxGeometry args={[1.15, 2.35, 0.06]} />
+          <meshStandardMaterial color={OFFICE_PALETTE.wallDeep} roughness={0.88} metalness={0.03} />
+        </mesh>
+        <RoundedBox position={[-4.34, 1.85, -1.65]} rotation={[0, Math.PI / 2, 0]} args={[2.15, 1.85, 0.1]} radius={0.04} smoothness={4} raycast={() => null}>
+          <WoodMaterial color="#1c1410" roughness={0.7} />
+        </RoundedBox>
+        <mesh position={[-4.2, 2.85, 0.45]} rotation={[0, Math.PI / 2, 0]} raycast={() => null}>
+          <boxGeometry args={[2.2, 0.08, 0.12]} />
+          <meshStandardMaterial
+            color={OFFICE_PALETTE.goldDim}
+            emissive={OFFICE_PALETTE.goldDim}
+            emissiveIntensity={0.2}
+            metalness={0.5}
+            roughness={0.4}
+          />
+        </mesh>
+
+        {/* Window opening cut on right wall */}
+        <mesh position={[4.28, 2.05, 0.35]} rotation={[0, -Math.PI / 2, 0]} raycast={() => null}>
+          <boxGeometry args={[2.15, 1.65, 0.05]} />
+          <meshStandardMaterial color={OFFICE_PALETTE.wallDeep} roughness={0.85} />
+        </mesh>
 
         {[-4.38, 4.38].map((x) => (
           <group key={`side-trim-${x}`} position={[x, 2.05, -0.15]}>
@@ -3798,27 +4707,40 @@ import React, {
     );
   }
 
-  /** Restrained franchise crest — smoked-glass wall emblem, not a giant pasted logo */
-  function WallHeroLogo({ teamLogo, teamName, hovered = false }) {
+  /**
+   * Restrained franchise crest — smoked-glass wall emblem. It is the physical
+   * centre of the Franchise Identity landmark, so it takes its placement from
+   * that landmark's standardized footprint.
+   */
+  function WallHeroLogo({
+    teamLogo,
+    teamName,
+    hovered = false,
+    position = [0, 2.52, -3.32],
+    scale = 0.82,
+  }) {
     return (
-      <group position={[0, 3.02, -3.44]} scale={[0.68, 0.68, 0.68]} raycast={() => null}>
-        <mesh position={[0, 0, -0.04]}>
-          <boxGeometry args={[1.35, 1.35, 0.045]} />
-          <MetalMaterial color="#12141a" roughness={0.48} metalness={0.62} />
+      <group position={position} scale={[scale, scale, scale]} raycast={() => null}>
+        {/* Turned medallion, not a framed picture — the crest is set into the
+            wall inside a brass bezel so nothing rectangular sits behind it. */}
+        <mesh position={[0, 0, -0.05]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.72, 0.72, 0.05, 56]} />
+          <MetalMaterial color="#11141a" roughness={0.5} metalness={0.58} />
         </mesh>
 
-        <mesh position={[0, 0, -0.022]}>
-          <boxGeometry args={[1.18, 1.18, 0.028]} />
-          <SmokedGlassMaterial opacity={0.22} hovered={hovered} />
+        <mesh position={[0, 0, -0.026]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.63, 0.63, 0.03, 56]} />
+          <SmokedGlassMaterial opacity={0.2} hovered={hovered} />
         </mesh>
 
-        <mesh position={[0, 0, -0.016]}>
-          <planeGeometry args={[1.28, 1.28]} />
-          <meshBasicMaterial
-            color={hovered ? "#d4b878" : "#8a7348"}
-            transparent
-            opacity={hovered ? 0.1 : 0.05}
-            depthWrite={false}
+        <mesh position={[0, 0, -0.014]}>
+          <ringGeometry args={[0.6, 0.66, 56]} />
+          <meshStandardMaterial
+            color={OFFICE_PALETTE.gold}
+            emissive={OFFICE_PALETTE.gold}
+            emissiveIntensity={hovered ? 0.34 : 0.16}
+            roughness={0.38}
+            metalness={0.72}
           />
         </mesh>
 
@@ -3826,12 +4748,10 @@ import React, {
           teamLogo={teamLogo}
           teamName={teamName}
           hovered={hovered}
-          width={0.72}
-          height={0.72}
-          opacity={hovered ? 0.88 : 0.72}
+          width={0.78}
+          height={0.78}
+          opacity={hovered ? 0.92 : 0.74}
         />
-
-        <SmallRivets radius={0.48} count={4} />
 
         <pointLight
           position={[0, 0, 0.28]}
@@ -3843,79 +4763,6 @@ import React, {
     );
   }
   
-  function TrophyShelf({ hovered, championshipCount = 0 }) {
-    const legacyLabel =
-      championshipCount > 0
-        ? `${championshipCount} BANNERS`
-        : "LEGACY WALL";
-
-    return (
-      <group>
-        <mesh position={[0, -0.42, -0.02]} castShadow raycast={() => null}>
-          <boxGeometry args={[1.42, 0.55, 0.04]} />
-          <WoodMaterial color="#2a1810" roughness={0.55} />
-        </mesh>
-
-        {[-0.62, 0.62].map((x) => (
-          <mesh key={`bracket-${x}`} position={[x, -0.22, -0.04]} raycast={() => null}>
-            <boxGeometry args={[0.06, 0.28, 0.05]} />
-            <MetalMaterial color="#5a4a38" roughness={0.35} metalness={0.65} />
-          </mesh>
-        ))}
-
-        <mesh position={[0, -0.36, 0]}>
-          <boxGeometry args={[1.35, 0.08, 0.28]} />
-          <WoodMaterial color="#3b2317" roughness={0.48} />
-        </mesh>
-
-        {[0, 1, 2].map((i) => (
-          <group key={i} position={[-0.42 + i * 0.42, -0.08, 0]}>
-            <mesh position={[0, -0.2, 0]} castShadow>
-              <cylinderGeometry args={[0.09, 0.13, 0.08, 24]} />
-              <MetalMaterial color="#6b481c" roughness={0.38} metalness={0.45} />
-            </mesh>
-
-            <mesh position={[0, 0.02, 0]} castShadow>
-              <cylinderGeometry args={[0.08, 0.12, 0.28, 24]} />
-              <meshStandardMaterial
-                color={hovered ? "#d4b05a" : "#b89230"}
-                metalness={0.48}
-                roughness={0.32}
-                emissive={hovered ? "#6e5200" : "#000000"}
-                emissiveIntensity={hovered ? 0.08 : 0}
-              />
-            </mesh>
-
-            <mesh position={[0, 0.2, 0]} castShadow>
-              <sphereGeometry args={[0.13, 20, 18]} />
-              <meshStandardMaterial
-                color={hovered ? "#d4b05a" : "#c99837"}
-                metalness={0.42}
-                roughness={0.28}
-              />
-            </mesh>
-          </group>
-        ))}
-
-        <WallText position={[0, 0.46, 0.02]} size={0.062} color="#c9a86a">
-          {legacyLabel}
-        </WallText>
-
-        {[0, 1].map((i) => (
-          <group key={`plaque-${i}`} position={[-0.35 + i * 0.7, 0.18, 0.03]}>
-            <mesh raycast={() => null}>
-              <boxGeometry args={[0.28, 0.16, 0.012]} />
-              <MetalMaterial color="#5a4a38" roughness={0.35} metalness={0.62} />
-            </mesh>
-            <WallText position={[0, 0, 0.012]} size={0.022} color="#e8dcc0">
-              {i === 0 ? "HISTORY" : "RECORDS"}
-            </WallText>
-          </group>
-        ))}
-      </group>
-    );
-  }
-
   function HockeySticks() {
     return (
       <group position={[-3.75, 0.75, -2.88]} rotation={[0, 0, -0.15]}>
@@ -3940,295 +4787,1615 @@ import React, {
     );
   }
 
-  function RinkWhiteboard({ hovered }) {
-    return (
-      <WallDisplayFrame width={1.78} height={1.02} accent="#5a8aaa">
-        <RoundedBox
-          position={[0, 0, 0.02]}
-          args={[1.62, 0.88, 0.04]}
-          radius={0.02}
-          smoothness={6}
-          raycast={() => null}
-        >
-          <meshStandardMaterial
-            color={hovered ? "#0c1824" : "#081420"}
-            emissive={hovered ? "#143048" : "#0a2030"}
-            emissiveIntensity={hovered ? 0.28 : 0.14}
-            roughness={0.48}
-            metalness={0.08}
-          />
-        </RoundedBox>
-
-        <mesh position={[0, 0, 0.048]} raycast={() => null}>
-          <planeGeometry args={[1.48, 0.74]} />
-          <GlassMaterial opacity={0.06} />
-        </mesh>
-
-        <WallText position={[0, 0.36, 0.055]} size={0.042} color="#8aaaba">
-          STRATEGY BOARD
-        </WallText>
-
-        <WallText position={[0, 0.28, 0.055]} size={0.022} color="#5a7a88">
-          LINES • SPECIAL TEAMS • DEPTH
-        </WallText>
-
-        {[
-          ["1LW", -0.42, 0.08, "#6a8a9a"],
-          ["1C", 0, 0.02, "#8a7348"],
-          ["1RW", 0.42, 0.08, "#6a8a9a"],
-          ["LD", -0.22, -0.14, "#4a6a7a"],
-          ["RD", 0.22, -0.14, "#4a6a7a"],
-        ].map(([label, x, y, color]) => (
-          <group key={label} position={[x, y, 0.056]}>
-            <mesh raycast={() => null}>
-              <circleGeometry args={[0.048, 20]} />
-              <meshStandardMaterial
-                color={color}
-                emissive={color}
-                emissiveIntensity={hovered ? 0.35 : 0.18}
-                roughness={0.42}
-              />
-            </mesh>
-            <WallText position={[0, 0, 0.012]} size={0.022} color="#d8e8f0">
-              {label}
-            </WallText>
-          </group>
-        ))}
-
-        {["PP1", "PK1", "SCRATCHES"].map((label, i) => (
-          <WallText
-            key={label}
-            position={[-0.5 + i * 0.5, -0.34, 0.056]}
-            size={0.024}
-            color={i === 2 ? "#8a5a54" : "#5a8aaa"}
-          >
-            {label}
-          </WallText>
-        ))}
-      </WallDisplayFrame>
-    );
-  }
-  
-  function PhysicalDraftBoard({ hovered, draftWeek = false }) {
-    const teams = ["TEAM 1", "TEAM 2", "TEAM 3", "TEAM 4", "TEAM 5", "TEAM 6"];
-    const names = [
-      "PROSPECT 1",
-      "PROSPECT 2",
-      "PROSPECT 3",
-      "PROSPECT 4",
-      "PROSPECT 5",
-      "PROSPECT 6",
-      "PROSPECT 7",
-      "PROSPECT 8",
-      "PROSPECT 9",
-      "PROSPECT 10",
-      "PROSPECT 11",
-      "PROSPECT 12",
-    ];
-  
-    const colors = ["#f0d75e", "#8fd2ba", "#89c8e7", "#d7879b"];
-  
+  function ScoutingStation({ hovered }) {
     return (
       <group>
-        <mesh position={[0, 0, -0.025]} castShadow raycast={() => null}>
-          <boxGeometry args={[1.92, 1.35, 0.05]} />
-          <WoodMaterial color="#2a2418" roughness={0.58} />
-        </mesh>
-
-        <RoundedBox args={[1.85, 1.28, 0.08]} radius={0.035} smoothness={6} raycast={() => null}>
-          <meshStandardMaterial
-            color={hovered ? "#ebe8dc" : "#d4cfc2"}
-            roughness={0.72}
-            metalness={0.02}
-          />
+        <RoundedBox args={[1.72, 1.22, 0.1]} radius={0.04} smoothness={4} position={[0, 0, -0.05]} castShadow>
+          <meshStandardMaterial color="#1a1814" roughness={0.72} />
         </RoundedBox>
-  
-        <mesh position={[-0.83, 0.49, 0.055]} raycast={() => null}>
-          <boxGeometry args={[0.18, 0.17, 0.018]} />
-          <meshStandardMaterial color="#27304a" />
-        </mesh>
-  
-        <WallText position={[-0.83, 0.49, 0.074]} size={0.027} color="#f9e7a6">
-          DRAFT
-        </WallText>
-  
-        <WallText position={[0.12, 0.56, 0.075]} size={0.058} color="#111111">
-          FRANCHISE DRAFT BOARD
-        </WallText>
-  
-        {teams.map((team, col) => (
-          <group key={team} position={[-0.62 + col * 0.25, 0.41, 0.075]}>
-            <WallText position={[0, 0, 0]} size={0.027} color="#111111">
-              {team}
-            </WallText>
-          </group>
-        ))}
-  
-        {Array.from({ length: 12 }).map((_, row) => (
-          <group key={row} position={[0, 0.31 - row * 0.065, 0.077]}>
-            <WallText position={[-0.85, 0, 0]} size={0.025} color="#111111">
-              {row + 1}
-            </WallText>
-  
-            {teams.map((team, col) => {
-              const color = colors[(row + col) % colors.length];
-              const name = names[(row + col) % names.length];
-  
-              return (
-                <group key={`${team}-${row}`} position={[-0.62 + col * 0.25, 0, 0]}>
-                  <mesh position={[0, 0, 0.004]} raycast={() => null}>
-                    <cylinderGeometry args={[0.012, 0.012, 0.018, 8]} />
-                    <meshStandardMaterial color="#c94a44" roughness={0.5} />
-                  </mesh>
-                  <mesh position={[0, 0, 0.012]} raycast={() => null}>
-                    <boxGeometry args={[0.23, 0.052, 0.009]} />
-                    <meshBasicMaterial color={color} />
-                  </mesh>
-  
-                  <WallText position={[0, 0.003, 0.012]} size={0.016} color="#0b0b0b">
-                    {name}
-                  </WallText>
-                </group>
-              );
-            })}
-          </group>
-        ))}
-  
-        <WallText position={[0, -0.52, 0.075]} size={0.032} color="#3b3b3b">
-          LOTTERY • NEEDS • TIERS • WATCHLIST
-        </WallText>
-
-        {["TIER 1", "RISERS", "WATCH"].map((label, i) => (
-          <WallText
-            key={label}
-            position={[-0.45 + i * 0.45, 0.62, 0.076]}
-            size={0.024}
-            color="#6a5528"
-          >
-            {label}
-          </WallText>
-        ))}
-
-        {draftWeek ? (
-          <mesh position={[0, 0, 0.08]} raycast={() => null}>
-            <planeGeometry args={[1.7, 1.15]} />
-            <meshBasicMaterial color="#c9a86a" transparent opacity={0.07} depthWrite={false} />
+        {/* Regional map */}
+        <RoundedBox args={[0.85, 0.72, 0.03]} radius={0.02} smoothness={3} position={[-0.35, 0.12, 0.02]}>
+          <meshStandardMaterial color={hovered ? "#2a4a3a" : "#1e3830"} roughness={0.65} emissive="#143028" emissiveIntensity={0.12} />
+        </RoundedBox>
+        {[[-0.55, 0.28], [-0.28, 0.05], [-0.42, -0.12], [-0.18, 0.22]].map(([x, y], i) => (
+          <mesh key={`pin-${i}`} position={[x, y, 0.05]} raycast={() => null}>
+            <sphereGeometry args={[0.028, 10, 10]} />
+            <meshStandardMaterial color="#c4a46a" emissive="#c4a46a" emissiveIntensity={0.3} />
           </mesh>
-        ) : null}
-      </group>
-    );
-  }
-  
-  function StandingsWallBoard({ hovered, standingsRank }) {
-    const teams = ["ATL", "MET", "CEN", "PAC", "WC1", "WC2"];
-  
-    return (
-      <group>
-        <mesh position={[0, 0, -0.02]} castShadow raycast={() => null}>
-          <boxGeometry args={[1.54, 1.02, 0.04]} />
-          <WoodMaterial color="#151820" roughness={0.55} />
-        </mesh>
-
-        <RoundedBox args={[1.46, 0.95, 0.06]} radius={0.035} smoothness={6} raycast={() => null}>
-          <meshStandardMaterial
-            color={hovered ? "#1a2230" : "#111821"}
-            emissive={hovered ? "#1e3a52" : "#000000"}
-            emissiveIntensity={hovered ? 0.12 : 0}
-            roughness={0.55}
-            metalness={0.08}
-          />
-        </RoundedBox>
-  
-        <WallText position={[0, 0.35, 0.05]} size={0.058} color="#b8d4e8">
-          STANDINGS
-        </WallText>
-  
-        {teams.map((team, i) => (
-          <group key={team} position={[0, 0.2 - i * 0.105, 0.06]}>
-            <mesh raycast={() => null}>
-              <boxGeometry args={[1.15, 0.075, 0.012]} />
-              <meshBasicMaterial color={i % 2 ? "#1a2432" : "#141c28"} />
+        ))}
+        {/* Prospect cards */}
+        {[0, 1, 2].map((i) => (
+          <group key={`card-${i}`} position={[0.42, 0.28 - i * 0.28, 0.04]} rotation={[0, -0.08, 0.04 * (i - 1)]}>
+            <RoundedBox args={[0.42, 0.24, 0.02]} radius={0.015} smoothness={3}>
+              <PaperMaterial color={hovered ? "#d8d0c0" : "#c8bfae"} />
+            </RoundedBox>
+            <mesh position={[-0.12, 0.02, 0.015]} raycast={() => null}>
+              <boxGeometry args={[0.12, 0.14, 0.008]} />
+              <meshStandardMaterial color="#2a3038" roughness={0.7} />
             </mesh>
-
-            <mesh position={[0, 0, 0.018]} raycast={() => null}>
-              <boxGeometry args={[1.12, 0.002, 0.004]} />
-              <meshBasicMaterial color="#2a3848" transparent opacity={0.5} />
-            </mesh>
-  
-            <WallText position={[-0.42, 0, 0.016]} size={0.032} color="#dff5ff">
-              {team}
-            </WallText>
-  
-            <WallText position={[0.32, 0, 0.016]} size={0.027} color="#f7d98f">
-              {i === 0 ? safeText(standingsRank, "Race") : `${92 - i * 5} PTS`}
+            <WallText position={[0.08, 0.04, 0.016]} size={0.028} color="#2a241c">
+              {`#${i + 1}`}
             </WallText>
           </group>
         ))}
+        <RoundedBox args={[0.55, 0.12, 0.08]} radius={0.02} smoothness={3} position={[0.35, -0.42, 0.06]}>
+          <meshStandardMaterial color="#3a2a18" roughness={0.6} />
+        </RoundedBox>
+        <WallText position={[0, 0.52, 0.04]} size={0.048} color="#c4a46a">
+          SCOUTING
+        </WallText>
+        <pointLight position={[0.2, 0.3, 0.5]} intensity={hovered ? 0.28 : 0.14} color="#e8d8b8" distance={1.4} />
       </group>
     );
   }
-  
-  // League Operations 3D wall — chart-style economics icon.
-  function LeagueEconomyChart({ hovered }) {
-    const bars = [
-      { x: -0.52, h: 0.22, color: "#52df94" },
-      { x: -0.18, h: 0.34, color: "#13d8e7" },
-      { x: 0.16, h: 0.28, color: "#8ab4ff" },
-      { x: 0.5, h: 0.42, color: "#e9a83c" },
-    ];
 
+  function DraftWarRoomEntrance({ hovered, draftWeek = false }) {
     return (
-      <WallDisplayFrame width={1.78} height={1.02} accent={OFFICE_PALETTE.gold}>
-        <RoundedBox
-          position={[0, 0, 0.02]}
-          args={[1.62, 0.88, 0.04]}
-          radius={0.02}
-          smoothness={6}
-          raycast={() => null}
-        >
+      <group>
+        {/* Doorway frame */}
+        <RoundedBox args={[2.35, 2.55, 0.18]} radius={0.03} smoothness={3} position={[0, 0.1, -0.35]} castShadow>
+          <meshStandardMaterial color="#12151a" roughness={0.75} />
+        </RoundedBox>
+        <mesh position={[0, 0.15, -0.22]} raycast={() => null}>
+          <boxGeometry args={[1.55, 2.05, 0.08]} />
+          <meshStandardMaterial color="#06080c" roughness={0.9} />
+        </mesh>
+        {/* Light spill from room */}
+        <mesh position={[0, 0.2, -0.18]} raycast={() => null}>
+          <planeGeometry args={[1.4, 1.85]} />
+          <meshBasicMaterial color="#c4a46a" transparent opacity={hovered || draftWeek ? 0.14 : 0.07} depthWrite={false} />
+        </mesh>
+        {/* Draft board silhouette inside */}
+        <group position={[0, 0.35, -0.28]}>
+          <mesh raycast={() => null}>
+            <boxGeometry args={[1.05, 0.85, 0.04]} />
+            <meshStandardMaterial color="#1a1612" roughness={0.6} />
+          </mesh>
+          {[0, 1, 2, 3, 4].map((r) =>
+            [0, 1, 2].map((c) => (
+              <mesh key={`cell-${r}-${c}`} position={[-0.32 + c * 0.32, 0.28 - r * 0.14, 0.03]} raycast={() => null}>
+                <boxGeometry args={[0.26, 0.1, 0.01]} />
+                <meshBasicMaterial color={r === 0 ? "#c4a46a" : "#2a3038"} />
+              </mesh>
+            ))
+          )}
+        </group>
+        {/* Pick clock */}
+        <group position={[0.72, 0.85, -0.12]}>
+          <mesh raycast={() => null}>
+            <cylinderGeometry args={[0.14, 0.14, 0.05, 24]} />
+            <meshStandardMaterial color="#1a1814" roughness={0.45} metalness={0.3} />
+          </mesh>
+          <WallText position={[0, 0, 0.04]} size={0.045} color="#c4a46a" rotation={[Math.PI / 2, 0, 0]}>
+            :45
+          </WallText>
+        </group>
+        {/* Overhead sign */}
+        <RoundedBox args={[1.85, 0.28, 0.1]} radius={0.02} smoothness={3} position={[0, 1.28, 0.02]}>
           <meshStandardMaterial
-            color="#060810"
-            emissive={hovered ? "#142838" : "#0a1828"}
-            emissiveIntensity={hovered ? 0.32 : 0.16}
-            roughness={0.44}
-            metalness={0.1}
+            color="#0c0e12"
+            emissive={hovered || draftWeek ? "#3a3020" : "#1a1810"}
+            emissiveIntensity={hovered || draftWeek ? 0.45 : 0.2}
+            roughness={0.4}
+            metalness={0.25}
           />
         </RoundedBox>
-
-        <WallText position={[0, 0.36, 0.055]} size={0.038} color="#c9a86a">
-          LEAGUE OPS
+        <WallText position={[0, 1.28, 0.08]} size={0.065} color="#f0e4c8">
+          DRAFT WAR ROOM
         </WallText>
+        <pointLight position={[0, 0.6, 0.2]} intensity={hovered || draftWeek ? 0.55 : 0.28} color="#e8c898" distance={2.4} />
+      </group>
+    );
+  }
 
-        <WallText position={[0, 0.28, 0.055]} size={0.02} color="#6a8a9a">
-          CBA • CAP • REVENUE
-        </WallText>
+  function LeagueOpsSilhouette({ hovered = false, prefersReducedMotion = false }) {
+    const hoverT = useRef(0);
+    const iconRef = useRef(null);
+    const vignetteTex = useMemo(() => getLeagueOpsVignetteTexture(), []);
 
-        {bars.map((bar) => (
-          <mesh
-            key={bar.x}
-            position={[bar.x, -0.02 + bar.h / 2 - 0.12, 0.055]}
-            raycast={() => null}
-          >
-            <boxGeometry args={[0.18, bar.h, 0.02]} />
-            <meshStandardMaterial
-              color={bar.color}
-              emissive={bar.color}
-              emissiveIntensity={hovered ? 0.55 : 0.28}
-              roughness={0.35}
+    useFrame((_, delta) => {
+      const step = prefersReducedMotion ? 1 : Math.min(delta / 0.32, 1);
+      const target = hovered ? 1 : 0;
+      hoverT.current += (target - hoverT.current) * step * 4.2;
+      const ease = hoverT.current * hoverT.current * (3 - 2 * hoverT.current);
+
+      if (iconRef.current) {
+        iconRef.current.style.setProperty("--league-ops-hover", String(ease));
+      }
+    });
+
+    const seam = {
+      fill: "none",
+      stroke: "#9eb4c4",
+      strokeWidth: 1.15,
+      strokeLinecap: "round",
+      opacity: 0.14,
+    };
+
+    return (
+      <group>
+        {vignetteTex ? (
+          <mesh position={[0, 0.04, -0.04]} raycast={() => null}>
+            <planeGeometry args={MENU_LANDMARK.vignette} />
+            <meshBasicMaterial
+              map={vignetteTex}
+              transparent
+              depthWrite={false}
+              toneMapped={false}
             />
           </mesh>
+        ) : null}
+
+        <Html
+          center
+          transform
+          distanceFactor={1.92}
+          position={[0, 0.02, 0.018]}
+          zIndexRange={[35, 0]}
+          wrapperClass="league-ops-html-layer"
+          style={{ pointerEvents: "none" }}
+        >
+          <div
+            ref={iconRef}
+            className={`league-ops-icon${hovered ? " league-ops-icon--hover" : ""}`}
+            style={{ "--league-ops-hover": 0 }}
+          >
+            <span className="league-ops-icon__corner league-ops-icon__corner--tl" />
+            <span className="league-ops-icon__corner league-ops-icon__corner--tr" />
+            <span className="league-ops-icon__corner league-ops-icon__corner--bl" />
+            <span className="league-ops-icon__corner league-ops-icon__corner--br" />
+
+            <svg
+              viewBox="0 0 500 640"
+              className="league-ops-icon__scene"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <defs>
+                <linearGradient id="loPanelL" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor="#05080c" stopOpacity="0" />
+                  <stop offset="35%" stopColor="#0a1218" stopOpacity="0.82" />
+                  <stop offset="100%" stopColor="#060a10" stopOpacity="0.55" />
+                </linearGradient>
+                <linearGradient id="loPanelR" x1="100%" y1="0%" x2="0%" y2="0%">
+                  <stop offset="0%" stopColor="#05080c" stopOpacity="0" />
+                  <stop offset="35%" stopColor="#0a1218" stopOpacity="0.82" />
+                  <stop offset="100%" stopColor="#060a10" stopOpacity="0.55" />
+                </linearGradient>
+                <linearGradient id="loDoor" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#d8edf8" stopOpacity="0.16" />
+                  <stop offset="18%" stopColor="#e8f4fc" stopOpacity="0.68" />
+                  <stop offset="44%" stopColor="#9fc4d8" stopOpacity="0.34" />
+                  <stop offset="78%" stopColor="#6a8aa0" stopOpacity="0.08" />
+                  <stop offset="100%" stopColor="#6a8aa0" stopOpacity="0" />
+                </linearGradient>
+                <linearGradient id="loDoorWide" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor="#7ca2b8" stopOpacity="0" />
+                  <stop offset="28%" stopColor="#9fcce2" stopOpacity="0.12" />
+                  <stop offset="50%" stopColor="#e7f5fc" stopOpacity="0.58" />
+                  <stop offset="72%" stopColor="#9fcce2" stopOpacity="0.12" />
+                  <stop offset="100%" stopColor="#7ca2b8" stopOpacity="0" />
+                </linearGradient>
+                <radialGradient id="loDoorBloom" cx="50%" cy="28%" r="62%">
+                  <stop offset="0%" stopColor="#f4fbff" stopOpacity="0.95" />
+                  <stop offset="38%" stopColor="#9ec8de" stopOpacity="0.38" />
+                  <stop offset="100%" stopColor="#9ec8de" stopOpacity="0" />
+                </radialGradient>
+                {/* userSpaceOnUse: these strokes run down a zero-width path, and
+                    an objectBoundingBox gradient on a degenerate box does not
+                    paint at all. */}
+                <linearGradient
+                  id="loTrim"
+                  gradientUnits="userSpaceOnUse"
+                  x1="0"
+                  y1="50"
+                  x2="0"
+                  y2="530"
+                >
+                  <stop offset="0%" stopColor="#6a5a3a" stopOpacity="0.15" />
+                  <stop offset="45%" stopColor="#c4a46a" stopOpacity="0.42" />
+                  <stop offset="100%" stopColor="#6a5a3a" stopOpacity="0.08" />
+                </linearGradient>
+                <linearGradient id="loJacket" x1="50%" y1="0%" x2="50%" y2="100%">
+                  <stop offset="0%" stopColor="#2a3944" />
+                  <stop offset="42%" stopColor="#17232d" />
+                  <stop offset="100%" stopColor="#0a1118" />
+                </linearGradient>
+                <linearGradient id="loSleeveL" x1="100%" y1="10%" x2="0%" y2="80%">
+                  <stop offset="0%" stopColor="#22303a" />
+                  <stop offset="55%" stopColor="#111b24" />
+                  <stop offset="100%" stopColor="#05090d" />
+                </linearGradient>
+                <linearGradient id="loSleeveR" x1="0%" y1="10%" x2="100%" y2="80%">
+                  <stop offset="0%" stopColor="#1e2b35" />
+                  <stop offset="55%" stopColor="#101922" />
+                  <stop offset="100%" stopColor="#05090d" />
+                </linearGradient>
+                <linearGradient id="loShoulder" x1="50%" y1="0%" x2="50%" y2="100%">
+                  <stop offset="0%" stopColor="#354652" />
+                  <stop offset="100%" stopColor="#16222c" />
+                </linearGradient>
+                <linearGradient id="loHair" x1="40%" y1="0%" x2="70%" y2="100%">
+                  <stop offset="0%" stopColor="#161a1e" />
+                  <stop offset="100%" stopColor="#08090b" />
+                </linearGradient>
+                <pattern id="loSuitWeave" width="5" height="5" patternUnits="userSpaceOnUse">
+                  <path d="M 0 1 L 5 1" stroke="#8fa5b4" strokeWidth="0.35" opacity="0.16" />
+                  <path d="M 1 0 L 1 5" stroke="#020407" strokeWidth="0.35" opacity="0.3" />
+                </pattern>
+                <filter id="loRimBlur" x="-18%" y="-8%" width="136%" height="116%">
+                  <feGaussianBlur stdDeviation="2.7" />
+                </filter>
+                <filter id="loGlowBlur" x="-40%" y="-20%" width="180%" height="140%">
+                  <feGaussianBlur stdDeviation="15" />
+                </filter>
+              </defs>
+
+              <rect x="28" y="36" width="132" height="510" fill="url(#loPanelL)" />
+              <rect x="340" y="36" width="132" height="510" fill="url(#loPanelR)" />
+              <path d="M 154 50 L 154 530" stroke="url(#loTrim)" strokeWidth="2" opacity="0.48" />
+              <path d="M 346 50 L 346 530" stroke="url(#loTrim)" strokeWidth="2" opacity="0.48" />
+              <path d="M 170 76 L 170 520" stroke="#7b93a2" strokeWidth="1" opacity="0.12" />
+              <path d="M 330 76 L 330 520" stroke="#7b93a2" strokeWidth="1" opacity="0.12" />
+
+              <path
+                d="M 146 34 C 180 104 194 196 184 320 C 178 414 194 500 220 570
+                   L 280 570 C 306 500 322 414 316 320 C 306 196 320 104 354 34 Z"
+                fill="url(#loDoorWide)"
+                filter="url(#loGlowBlur)"
+                opacity="0.72"
+              />
+              <ellipse
+                cx="250"
+                cy="198"
+                rx="112"
+                ry="236"
+                fill="url(#loDoorBloom)"
+                filter="url(#loGlowBlur)"
+                opacity="0.48"
+              />
+              <path
+                d="M 206 38 C 216 144 214 280 204 536 L 296 536
+                   C 286 280 284 144 294 38 Z"
+                fill="url(#loDoor)"
+                opacity="0.72"
+              />
+
+              <path d={LO_SHIELD} fill="none" stroke="#8a9aaa" strokeWidth="1.4" opacity="0.16" />
+              <path d={LO_TROPHY} fill="#8a9aaa" opacity="0.12" />
+
+              <g className="league-ops-icon__figure-layer league-ops-icon__rim">
+                <path
+                  d={LO_RIM_HEAD}
+                  fill="none"
+                  stroke="#d9f1fc"
+                  strokeWidth="6"
+                  filter="url(#loRimBlur)"
+                  opacity="0.78"
+                />
+                <path
+                  d={LO_RIM_SHOULDERS}
+                  fill="none"
+                  stroke="#c7e6f5"
+                  strokeWidth="6"
+                  filter="url(#loRimBlur)"
+                  opacity="0.7"
+                />
+                <path
+                  d={LO_RIM_ARM_L}
+                  fill="none"
+                  stroke="#98c5da"
+                  strokeWidth="4"
+                  filter="url(#loRimBlur)"
+                  opacity="0.34"
+                />
+                <path
+                  d={LO_RIM_ARM_R}
+                  fill="none"
+                  stroke="#b6d7e7"
+                  strokeWidth="3"
+                  filter="url(#loRimBlur)"
+                  opacity="0.22"
+                />
+              </g>
+
+              <g className="league-ops-icon__figure-layer league-ops-icon__man">
+                <path d={LO_JACKET} fill="url(#loJacket)" />
+                <path d={LO_TORSO_PANEL} fill="#15212a" opacity="0.38" />
+                <path d={LO_SHOULDER_PLANE} fill="url(#loShoulder)" opacity="0.7" />
+                <path d={LO_JACKET} fill="url(#loSuitWeave)" opacity="0.1" />
+                <path d={LO_SLEEVE_L} fill="url(#loSleeveL)" />
+                <path d={LO_SLEEVE_R} fill="url(#loSleeveR)" />
+                <path d={LO_HAND_L} fill="#030507" />
+                <path d={LO_HAND_R} fill="#030507" />
+                <path d={LO_NECK} fill="#1a1412" />
+                <path d={LO_COLLAR_SHIRT} fill="#cbd8df" opacity="0.78" />
+                <path d={LO_COLLAR_SUIT} fill="#0a1016" />
+                <path d={LO_HEAD} fill="url(#loHair)" />
+                <path d={LO_HAIR_CROWN} fill="#050608" opacity="0.55" />
+                <path d={LO_HAIR_SIDES} fill="#0a0c0e" opacity="0.4" />
+                <path d={LO_NAPE} fill="#121418" opacity="0.45" />
+                <path d={LO_SEAM_CENTER} {...seam} />
+                <path d={LO_SEAM_SHOULDER_L} {...seam} />
+                <path d={LO_SEAM_SHOULDER_R} {...seam} />
+                <path d={LO_SEAM_SIDE_L} {...seam} />
+                <path d={LO_SEAM_SIDE_R} {...seam} />
+                <path d={LO_SEAM_SLEEVE_L} {...seam} opacity="0.1" />
+                <path d={LO_SEAM_SLEEVE_R} {...seam} opacity="0.1" />
+                <path d={LO_HEM} fill="none" stroke="#121820" strokeWidth="1.6" opacity="0.35" />
+              </g>
+            </svg>
+
+            <div className="league-ops-icon__title">
+              <span className="league-ops-icon__kicker">Executive</span>
+              <span className="league-ops-icon__name">League Operations</span>
+            </div>
+          </div>
+        </Html>
+      </group>
+    );
+  }
+
+  /* ---------------------------------------------------------------
+     Shared menu-diorama engine.
+
+     Every wall destination is authored entirely in code (inline SVG +
+     CSS) and framed by the same vignette / label / hover grammar that
+     made League Operations read as a landmark instead of a UI tile.
+     The hover value is eased on the render loop and published as the
+     `--menu-hover` custom property so each scene can drive its own
+     animation from one number.
+     --------------------------------------------------------------- */
+  /** Fit any scene aspect inside the standardized square art box. */
+  function fitLandmarkArt(viewBox) {
+    const parts = String(viewBox || "")
+      .trim()
+      .split(/\s+/)
+      .map(Number);
+    const vw = parts[2] > 0 ? parts[2] : 1;
+    const vh = parts[3] > 0 ? parts[3] : 1;
+    const box = MENU_LANDMARK.artPx;
+    return vw >= vh
+      ? { width: box, height: Math.round((box * vh) / vw) }
+      : { width: Math.round((box * vw) / vh), height: box };
+  }
+
+  /**
+   * Physical mounts. These are the only backing geometry a landmark gets — a plinth,
+   * a rail or a shallow recess — so the artwork itself defines the silhouette
+   * instead of sitting on a coloured backing plate.
+   */
+  function LandmarkMount({ kind, accent = "#c4a46a" }) {
+    if (kind === "plinth") {
+      return (
+        <group position={[0, -0.7, 0.14]} raycast={() => null}>
+          <mesh>
+            <boxGeometry args={[0.66, 0.07, 0.24]} />
+            <meshStandardMaterial color="#15181c" roughness={0.6} metalness={0.24} />
+          </mesh>
+          <mesh position={[0, 0.042, 0.006]}>
+            <boxGeometry args={[0.62, 0.008, 0.21]} />
+            <meshStandardMaterial
+              color={accent}
+              emissive={accent}
+              emissiveIntensity={0.18}
+              roughness={0.4}
+              metalness={0.55}
+            />
+          </mesh>
+        </group>
+      );
+    }
+
+    /* Suspension wires up to the wall's picture rail. Reads as a hung panel of
+       glass rather than a sticker on the plaster. */
+    if (kind === "wire") {
+      return (
+        <group raycast={() => null}>
+          {[-0.26, 0.26].map((x) => (
+            <mesh key={`wire-${x}`} position={[x, 0.69, 0.03]}>
+              <boxGeometry args={[0.007, 0.18, 0.007]} />
+              <meshStandardMaterial
+                color={accent}
+                emissive={accent}
+                emissiveIntensity={0.14}
+                roughness={0.38}
+                metalness={0.68}
+              />
+            </mesh>
+          ))}
+        </group>
+      );
+    }
+
+    /* Two slim brackets at the sides, the way a glass sign is stood off a
+       wall. Deliberately not a frame — nothing crosses behind the artwork. */
+    if (kind === "standoff") {
+      return (
+        <group raycast={() => null}>
+          {[-0.42, 0.42].map((x) => (
+            <group key={`standoff-${x}`} position={[x, 0, 0.035]}>
+              <mesh>
+                <cylinderGeometry args={[0.014, 0.014, 0.5, 10]} />
+                <meshStandardMaterial
+                  color="#2a2620"
+                  emissive={accent}
+                  emissiveIntensity={0.1}
+                  roughness={0.4}
+                  metalness={0.6}
+                />
+              </mesh>
+            </group>
+          ))}
+        </group>
+      );
+    }
+
+    if (kind === "ledge") {
+      return (
+        <group position={[0, -0.72, 0.18]} raycast={() => null}>
+          <mesh>
+            <boxGeometry args={[0.94, 0.06, 0.32]} />
+            <WoodMaterial color="#2a1d14" roughness={0.6} />
+          </mesh>
+          <mesh position={[0, 0.036, 0.0]}>
+            <boxGeometry args={[0.9, 0.008, 0.3]} />
+            <meshStandardMaterial
+              color={accent}
+              emissive={accent}
+              emissiveIntensity={0.12}
+              roughness={0.42}
+              metalness={0.5}
+            />
+          </mesh>
+          {[-0.34, 0.34].map((x) => (
+            <mesh key={`corbel-${x}`} position={[x, -0.06, -0.04]}>
+              <boxGeometry args={[0.05, 0.09, 0.16]} />
+              <WoodMaterial color="#1c130d" roughness={0.66} />
+            </mesh>
+          ))}
+        </group>
+      );
+    }
+
+    return null;
+  }
+
+  function MenuDiorama({
+    hovered = false,
+    prefersReducedMotion = false,
+    kicker = "",
+    name,
+    viewBox = "0 0 440 440",
+    accent = "#9fd6ea",
+    mount = null,
+    mountAccent,
+    children,
+  }) {
+    const rootRef = useRef(null);
+    const hoverT = useRef(0);
+    const vignetteTex = useMemo(() => getLeagueOpsVignetteTexture(), []);
+    const art = useMemo(() => fitLandmarkArt(viewBox), [viewBox]);
+
+    useFrame((_, delta) => {
+      const step = prefersReducedMotion ? 1 : Math.min(delta / 0.32, 1);
+      hoverT.current += ((hovered ? 1 : 0) - hoverT.current) * step * 4.2;
+      const ease =
+        hoverT.current * hoverT.current * (3 - 2 * hoverT.current);
+      if (rootRef.current) {
+        rootRef.current.style.setProperty("--menu-hover", ease.toFixed(3));
+      }
+    });
+
+    return (
+      <group>
+        {vignetteTex ? (
+          <mesh position={[0, 0.08, -0.035]} raycast={() => null}>
+            <planeGeometry args={MENU_LANDMARK.vignette} />
+            <meshBasicMaterial
+              map={vignetteTex}
+              transparent
+              depthWrite={false}
+              toneMapped={false}
+            />
+          </mesh>
+        ) : null}
+
+        <LandmarkMount kind={mount} accent={mountAccent || accent} />
+
+        <Html
+          center
+          transform
+          distanceFactor={MENU_LANDMARK.distanceFactor}
+          position={[0, 0, 0.02]}
+          zIndexRange={[30, 0]}
+          wrapperClass="office-menu-html"
+          style={{ pointerEvents: "none" }}
+        >
+          <div
+            ref={rootRef}
+            className={`office-menu-icon${
+              hovered ? " office-menu-icon--hover" : ""
+            }`}
+            style={{
+              "--menu-accent": accent,
+              width: `${MENU_LANDMARK.artPx + MENU_LANDMARK.padPx * 2}px`,
+            }}
+          >
+            <span className="office-menu-icon__corner office-menu-icon__corner--tl" />
+            <span className="office-menu-icon__corner office-menu-icon__corner--tr" />
+            <span className="office-menu-icon__corner office-menu-icon__corner--bl" />
+            <span className="office-menu-icon__corner office-menu-icon__corner--br" />
+
+            <div
+              className="office-menu-icon__frame"
+              style={{ height: `${MENU_LANDMARK.artPx}px` }}
+            >
+              <svg
+                viewBox={viewBox}
+                className="office-menu-icon__scene"
+                width={art.width}
+                height={art.height}
+                aria-hidden="true"
+                focusable="false"
+              >
+                {children}
+              </svg>
+            </div>
+
+            <div className="office-menu-icon__title">
+              {kicker ? (
+                <span className="office-menu-icon__kicker">{kicker}</span>
+              ) : null}
+              <span className="office-menu-icon__name">{name}</span>
+            </div>
+          </div>
+        </Html>
+      </group>
+    );
+  }
+
+  /**
+   * Title-only landmark plate for the desk destinations, so the physical props
+   * carry exactly the same label system as the wall scenes.
+   */
+  function LandmarkLabel({
+    hovered = false,
+    prefersReducedMotion = false,
+    kicker = "",
+    name,
+    accent = "#c4a46a",
+    position = [0, 0, 0],
+    /* Desk props sit roughly half as far from the camera as the wall, so their
+       titles need half the world scale to read at the same size on screen. */
+    distanceFactor = MENU_LANDMARK.distanceFactor * 0.5,
+  }) {
+    const rootRef = useRef(null);
+    const hoverT = useRef(0);
+
+    useFrame((_, delta) => {
+      const step = prefersReducedMotion ? 1 : Math.min(delta / 0.32, 1);
+      hoverT.current += ((hovered ? 1 : 0) - hoverT.current) * step * 4.2;
+      const ease =
+        hoverT.current * hoverT.current * (3 - 2 * hoverT.current);
+      if (rootRef.current) {
+        rootRef.current.style.setProperty("--menu-hover", ease.toFixed(3));
+      }
+    });
+
+    return (
+      <Html
+        center
+        transform
+        distanceFactor={distanceFactor}
+        position={position}
+        zIndexRange={[30, 0]}
+        wrapperClass="office-menu-html"
+        style={{ pointerEvents: "none" }}
+      >
+        <div
+          ref={rootRef}
+          className={`office-menu-icon office-menu-icon--label-only${
+            hovered ? " office-menu-icon--hover" : ""
+          }`}
+          style={{ "--menu-accent": accent }}
+        >
+          <div className="office-menu-icon__title">
+            {kicker ? (
+              <span className="office-menu-icon__kicker">{kicker}</span>
+            ) : null}
+            <span className="office-menu-icon__name">{name}</span>
+          </div>
+        </div>
+      </Html>
+    );
+  }
+
+  /** Strategy Board — wide tactical rink with a coach leaning in. */
+  function StrategyDiorama({ hovered, prefersReducedMotion }) {
+    return (
+      <MenuDiorama
+        hovered={hovered}
+        prefersReducedMotion={prefersReducedMotion}
+        kicker="Tactics"
+        name="Strategy Board"
+        accent="#8fd8f0"
+        mount="standoff"
+        mountAccent="#5f8ea6"
+      >
+        <defs>
+          <radialGradient id="stIce" cx="50%" cy="44%" r="62%">
+            <stop offset="0%" stopColor="#71c4e2" stopOpacity="0.34" />
+            <stop offset="55%" stopColor="#2b6c88" stopOpacity="0.16" />
+            <stop offset="100%" stopColor="#0a1a24" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+
+        {/* Rink: light held by the ice, edge described by a thin board line */}
+        <g className="menu-glow">
+          <rect x="24" y="96" width="412" height="212" rx="106" fill="url(#stIce)" />
+        </g>
+        <rect
+          x="24"
+          y="96"
+          width="412"
+          height="212"
+          rx="106"
+          fill="none"
+          stroke="#8fd8f0"
+          strokeWidth="2.4"
+          strokeOpacity="0.38"
+        />
+
+        <path d="M 230 100 L 230 304" stroke="#c0554d" strokeWidth="3" opacity="0.42" />
+        <path d="M 148 106 L 148 298" stroke="#5f95c9" strokeWidth="2.4" opacity="0.3" />
+        <path d="M 312 106 L 312 298" stroke="#5f95c9" strokeWidth="2.4" opacity="0.3" />
+        <circle cx="230" cy="202" r="40" fill="none" stroke="#8fc4dc" strokeWidth="2" opacity="0.3" />
+        <circle cx="86" cy="202" r="20" fill="none" stroke="#c0554d" strokeWidth="1.8" opacity="0.22" />
+        <circle cx="374" cy="202" r="20" fill="none" stroke="#c0554d" strokeWidth="1.8" opacity="0.22" />
+
+        {/* One attacking route, drawn on hover */}
+        <path
+          className="menu-route"
+          d="M 96 258 C 168 240 190 168 264 154 C 330 142 372 178 398 226"
+          fill="none"
+          stroke="#eaf9ff"
+          strokeWidth="3.6"
+          strokeLinecap="round"
+          strokeDasharray="360"
+        />
+        <circle className="menu-dot menu-dot--a" cx="96" cy="258" r="9" fill="#f4fcff" />
+        <circle className="menu-dot menu-dot--b" cx="264" cy="154" r="7.5" fill="#9fd6ea" opacity="0.72" />
+        <circle className="menu-dot menu-dot--c" cx="398" cy="226" r="7.5" fill="#9fd6ea" opacity="0.46" />
+        <circle cx="170" cy="228" r="6" fill="#c0554d" opacity="0.5" />
+        <circle cx="300" cy="252" r="6" fill="#c0554d" opacity="0.5" />
+
+        {/* Coach leaning over the board, foreground */}
+        <g className="menu-hero">
+          <path
+            d="M 152 440 c -6 -74 14 -122 56 -142 c -21 -16 -28 -46 -14 -70 c 13 -23 44 -31 66 -18 c 23 13 31 45 17 68 c -5 9 -13 16 -21 20 c 44 19 63 68 57 142 z"
+            fill="#04080c"
+          />
+          <path
+            d="M 208 298 c 26 -12 52 -12 78 0"
+            fill="none"
+            stroke="#8fd8f0"
+            strokeWidth="2.6"
+            strokeOpacity="0.28"
+            strokeLinecap="round"
+          />
+          <path
+            d="M 158 400 c 8 -50 26 -82 50 -96"
+            fill="none"
+            stroke="#8fd8f0"
+            strokeWidth="2.2"
+            strokeOpacity="0.14"
+            strokeLinecap="round"
+          />
+        </g>
+      </MenuDiorama>
+    );
+  }
+
+  /** Roster Board — three skaters on a bench rail, centre one stepping forward. */
+  function RosterDiorama({ hovered, prefersReducedMotion }) {
+    const skater =
+      "M 0 -128 c 15 0 27 12 27 27 c 0 11 -6 20 -14 25 c 22 6 36 20 42 42 l 16 60 l -26 8 l -16 -50 l -6 132 l -20 0 l -6 -96 l -6 96 l -20 0 l -6 -132 l -16 50 l -26 -8 l 16 -60 c 6 -22 20 -36 42 -42 c -8 -5 -14 -14 -14 -25 c 0 -15 12 -27 27 -27 z";
+    return (
+      <MenuDiorama
+        hovered={hovered}
+        prefersReducedMotion={prefersReducedMotion}
+        kicker="Lineup"
+        name="Roster Board"
+        accent="#dbe7ef"
+        mount="wire"
+        mountAccent="#6f7d86"
+      >
+        <defs>
+          <linearGradient id="roHero" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#2d3f4a" />
+            <stop offset="100%" stopColor="#05090d" />
+          </linearGradient>
+          <linearGradient id="roBack" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#141f27" />
+            <stop offset="100%" stopColor="#04070a" />
+          </linearGradient>
+          <linearGradient id="roFloor" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#c9dbe6" stopOpacity="0.16" />
+            <stop offset="100%" stopColor="#c9dbe6" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        {/* Arena floor wash so the group stands on something */}
+        <ellipse cx="220" cy="386" rx="182" ry="28" fill="url(#roFloor)" />
+
+        {/* Two support skaters set back and outboard: further away, dimmer, and
+            edge-lit only, so the trio reads as depth rather than a pattern. */}
+        <g className="menu-wing menu-wing--l">
+          <g transform="translate(92 312) scale(0.54)">
+            <path
+              d={skater}
+              fill="url(#roBack)"
+              stroke="#9dbccd"
+              strokeWidth="3.4"
+              strokeOpacity="0.4"
+            />
+          </g>
+        </g>
+        <g className="menu-wing menu-wing--r">
+          <g transform="translate(348 312) scale(0.54)">
+            <path
+              d={skater}
+              fill="url(#roBack)"
+              stroke="#9dbccd"
+              strokeWidth="3.4"
+              strokeOpacity="0.4"
+            />
+          </g>
+        </g>
+
+        {/* Front skater, closer and taller, catching the arena light */}
+        <g className="menu-hero">
+          <g transform="translate(220 272) scale(0.98)">
+            <path
+              d={skater}
+              fill="url(#roHero)"
+              stroke="#e8f2f8"
+              strokeWidth="2"
+              strokeOpacity="0.34"
+            />
+            <path
+              d="M -22 -74 c 14 -7 30 -7 44 0"
+              fill="none"
+              stroke="#e8f2f8"
+              strokeWidth="3"
+              strokeOpacity="0.4"
+              strokeLinecap="round"
+            />
+          </g>
+        </g>
+
+        {/* Depth chart rungs rather than a nameplate card */}
+        {[0, 1, 2].map((i) => (
+          <path
+            key={`ro-rung-${i}`}
+            className="menu-bar"
+            style={{ "--i": i }}
+            d={`M ${152 + i * 8} ${400 + i * 15} L ${288 - i * 8} ${400 + i * 15}`}
+            stroke="#c9dbe6"
+            strokeWidth="4"
+            strokeLinecap="round"
+            opacity={0.32 - i * 0.09}
+          />
+        ))}
+      </MenuDiorama>
+    );
+  }
+
+  /** Trade Hub — two asset dossiers with a live transaction beam. */
+  function TradeHubDiorama({ hovered, prefersReducedMotion }) {
+    return (
+      <MenuDiorama
+        hovered={hovered}
+        prefersReducedMotion={prefersReducedMotion}
+        kicker="Deadline"
+        name="Trade Hub"
+        accent="#e0a06a"
+      >
+        <defs>
+          <linearGradient id="trBodyL" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#263946" />
+            <stop offset="100%" stopColor="#05090d" />
+          </linearGradient>
+          <linearGradient id="trBodyR" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#3a2e22" />
+            <stop offset="100%" stopColor="#07080a" />
+          </linearGradient>
+          <linearGradient id="trBeam" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#7fd4ea" stopOpacity="0" />
+            <stop offset="50%" stopColor="#f6fbff" stopOpacity="0.9" />
+            <stop offset="100%" stopColor="#e0a06a" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        {/* Two opposing asset groups: a player bust plus his paperwork on each
+            side, edge-lit in opposite colours so the exchange reads instantly */}
+        <g className="menu-mass menu-mass--l">
+          <path
+            d="M 44 262 c 0 -50 22 -82 62 -94 c -19 -13 -28 -38 -21 -60 c 7 -23 32 -36 55 -30 c 24 6 38 30 32 54 c -4 16 -14 27 -27 34 c 41 12 62 46 62 96 z"
+            fill="url(#trBodyL)"
+            stroke="#9fd6ea"
+            strokeWidth="2.6"
+            strokeOpacity="0.4"
+          />
+          <path
+            d="M 32 288 L 168 262 L 184 356 L 48 382 Z"
+            fill="#0b1319"
+            stroke="#7fa8bd"
+            strokeWidth="2.2"
+            strokeOpacity="0.44"
+          />
+          <path d="M 54 306 L 152 288" stroke="#9fd6ea" strokeWidth="7" strokeOpacity="0.5" strokeLinecap="round" />
+          <path d="M 58 332 L 128 319" stroke="#9fd6ea" strokeWidth="6" strokeOpacity="0.28" strokeLinecap="round" />
+        </g>
+
+        <g className="menu-mass menu-mass--r">
+          <path
+            d="M 396 262 c 0 -50 -22 -82 -62 -94 c 19 -13 28 -38 21 -60 c -7 -23 -32 -36 -55 -30 c -24 6 -38 30 -32 54 c 4 16 14 27 27 34 c -41 12 -62 46 -62 96 z"
+            fill="url(#trBodyR)"
+            stroke="#e8c090"
+            strokeWidth="2.6"
+            strokeOpacity="0.4"
+          />
+          <path
+            d="M 408 288 L 272 262 L 256 356 L 392 382 Z"
+            fill="#100d0a"
+            stroke="#c49a6a"
+            strokeWidth="2.2"
+            strokeOpacity="0.44"
+          />
+          <path d="M 386 306 L 288 288" stroke="#e8c090" strokeWidth="7" strokeOpacity="0.46" strokeLinecap="round" />
+          <path d="M 382 332 L 312 319" stroke="#e8c090" strokeWidth="6" strokeOpacity="0.26" strokeLinecap="round" />
+        </g>
+
+        {/* Transaction path with the pick travelling along it */}
+        <path
+          className="menu-path"
+          d="M 148 148 C 186 76 254 76 292 148"
+          fill="none"
+          stroke="#8fa8b8"
+          strokeWidth="2.2"
+          strokeOpacity="0.34"
+          strokeDasharray="7 9"
+        />
+        <rect className="menu-beam" x="130" y="238" width="180" height="3.5" fill="url(#trBeam)" />
+
+        <g className="menu-token">
+          <path
+            d="M 220 62 l 32 18 l 0 36 l -32 18 l -32 -18 l 0 -36 z"
+            fill="#100e0b"
+            stroke="#e0a06a"
+            strokeWidth="2.6"
+            strokeOpacity="0.85"
+          />
+          <circle cx="220" cy="98" r="6" fill="#f0d0a8" opacity="0.9" />
+        </g>
+        <circle className="menu-alert" cx="296" cy="74" r="7" fill="#e0705f" opacity="0.8" />
+      </MenuDiorama>
+    );
+  }
+
+  /** Contracts — lit deal sheet, signature line, cap figure. */
+  function ContractsDiorama({
+    hovered,
+    prefersReducedMotion,
+    capSpace,
+    capPressure = false,
+  }) {
+    const capText = formatMoney(capSpace);
+    return (
+      <MenuDiorama
+        hovered={hovered}
+        prefersReducedMotion={prefersReducedMotion}
+        kicker="Cap Space"
+        name="Contracts"
+        accent={capPressure ? "#e0705f" : "#c4a46a"}
+        mount="ledge"
+        mountAccent="#8a7048"
+      >
+        <defs>
+          <linearGradient id="ctPage" x1="16%" y1="0%" x2="84%" y2="100%">
+            <stop offset="0%" stopColor="#8e8878" stopOpacity="0.5" />
+            <stop offset="100%" stopColor="#26262a" stopOpacity="0.46" />
+          </linearGradient>
+          <linearGradient id="ctPen" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#31261a" />
+            <stop offset="100%" stopColor="#0a0906" />
+          </linearGradient>
+        </defs>
+
+        {/* Deal sheet resting on the ledge, lit only along the brass edge */}
+        <path d="M 104 152 L 330 118 L 352 356 L 126 390 Z" fill="#04070a" opacity="0.6" />
+        <path
+          d="M 96 144 L 322 110 L 344 348 L 118 382 Z"
+          fill="url(#ctPage)"
+          stroke="#c4a46a"
+          strokeWidth="2"
+          strokeOpacity="0.45"
+        />
+        <path d="M 96 144 L 322 110 L 324 128 L 98 162 Z" fill="#e8dcc0" opacity="0.14" />
+
+        {[0, 1, 2].map((i) => (
+          <path
+            key={`ct-rule-${i}`}
+            d={`M 120 ${196 + i * 26} L ${286 - i * 34} ${171 + i * 26}`}
+            stroke="#1c211f"
+            strokeWidth="7"
+            strokeOpacity={0.24 - i * 0.05}
+            strokeLinecap="round"
+          />
         ))}
 
-        <mesh position={[0, -0.22, 0.054]} raycast={() => null}>
-          <boxGeometry args={[1.1, 0.02, 0.01]} />
-          <meshStandardMaterial color="#1a3040" emissive="#1a3040" emissiveIntensity={0.2} />
-        </mesh>
+        <g transform="rotate(-8.5 130 288)">
+          <text
+            x="130"
+            y="288"
+            fontSize="36"
+            fontWeight="800"
+            fill={capPressure ? "#7c231c" : "#171c1a"}
+            opacity="0.82"
+          >
+            {capText}
+          </text>
+          <text
+            x="132"
+            y="312"
+            fontSize="16"
+            fontWeight="700"
+            fill="#2e332f"
+            opacity="0.55"
+            letterSpacing="2.4"
+          >
+            CAP SPACE
+          </text>
+        </g>
 
-        <WallText position={[0, -0.32, 0.062]} size={0.02} color="#7a9aaa">
-          CAP FORECAST • TEAM MONEY
-        </WallText>
-      </WallDisplayFrame>
+        <path
+          className="menu-sign"
+          d="M 126 350 C 160 330 178 360 204 342 C 230 324 250 354 296 330"
+          fill="none"
+          stroke="#0d1116"
+          strokeWidth="4.5"
+          strokeLinecap="round"
+          strokeDasharray="240"
+        />
+
+        <path d="M 290 190 L 372 102 L 396 124 L 314 212 L 282 224 Z" fill="url(#ctPen)" />
+        <path d="M 282 224 L 314 212 L 292 234 Z" fill="#c4a46a" />
+        <path d="M 360 114 L 384 136" stroke="#c4a46a" strokeWidth="4" opacity="0.4" />
+      </MenuDiorama>
     );
+  }
+
+  /** Standings — vertical division ladder, user rung lit. */
+  function StandingsDiorama({
+    hovered,
+    prefersReducedMotion,
+    standingsRank,
+    record,
+  }) {
+    const parsedRank = parseInt(String(standingsRank || "").trim(), 10);
+    const activeRow = Number.isFinite(parsedRank)
+      ? Math.min(Math.max(parsedRank - 1, 0), 4)
+      : 1;
+    const footer = safeText(record, "") || safeText(standingsRank, "");
+    return (
+      <MenuDiorama
+        hovered={hovered}
+        prefersReducedMotion={prefersReducedMotion}
+        kicker="Division Race"
+        name="Standings"
+        accent="#8fd8f0"
+      >
+        <defs>
+          {/* The rungs are flat horizontal strokes, so their bounding box has
+              no height and an objectBoundingBox gradient paints nothing. */}
+          <linearGradient
+            id="sdRung"
+            gradientUnits="userSpaceOnUse"
+            x1="96"
+            y1="0"
+            x2="338"
+            y2="0"
+          >
+            <stop offset="0%" stopColor="#8fb6cb" />
+            <stop offset="100%" stopColor="#1b2f3c" />
+          </linearGradient>
+          <linearGradient
+            id="sdRungLive"
+            gradientUnits="userSpaceOnUse"
+            x1="96"
+            y1="0"
+            x2="338"
+            y2="0"
+          >
+            <stop offset="0%" stopColor="#b6ecff" />
+            <stop offset="100%" stopColor="#2e708c" />
+          </linearGradient>
+        </defs>
+
+        {/* Ladder: rungs only, no plate behind them */}
+        <path d="M 84 56 L 84 372" stroke="#3c4c57" strokeWidth="2.5" opacity="0.5" />
+
+        {[0, 1, 2, 3, 4].map((i) => {
+          const live = i === activeRow;
+          return (
+            <g key={`sd-${i}`} className="menu-bar" style={{ "--i": i }}>
+              <path
+                d={`M 96 ${72 + i * 66} L ${338 - i * 44} ${72 + i * 66}`}
+                stroke={live ? "url(#sdRungLive)" : "url(#sdRung)"}
+                strokeWidth={live ? 22 : 16}
+                strokeLinecap="round"
+                opacity={live ? 1 : 0.82}
+              />
+              <text
+                x="52"
+                y={82 + i * 66}
+                fontSize="28"
+                fontWeight="800"
+                fill={live ? "#dff4ff" : "#6e879a"}
+              >
+                {i + 1}
+              </text>
+              {live ? (
+                <circle
+                  className="menu-alert"
+                  cx={356 - i * 44}
+                  cy={72 + i * 66}
+                  r="8"
+                  fill="#e9f8ff"
+                />
+              ) : null}
+            </g>
+          );
+        })}
+
+        {footer ? (
+          <text
+            x="96"
+            y="412"
+            fontSize="26"
+            fontWeight="800"
+            fill="#9fc0d1"
+            opacity="0.8"
+            letterSpacing="2"
+          >
+            {footer}
+          </text>
+        ) : null}
+      </MenuDiorama>
+    );
+  }
+
+  /** Storylines — newswire strips surfacing out of the dark. */
+  function StorylinesDiorama({
+    hovered,
+    prefersReducedMotion,
+    activeStorylines,
+  }) {
+    const count = Number(activeStorylines || 0);
+    return (
+      <MenuDiorama
+        hovered={hovered}
+        prefersReducedMotion={prefersReducedMotion}
+        kicker="Newswire"
+        name="Storylines"
+        accent="#dfe8f0"
+      >
+        {/* Three headline slips hanging at different depths and angles — the
+            nearest is bright and square-on, the ones behind fall away. Drawn
+            back-to-front so the top slip overlaps the others. */}
+        {[2, 1, 0].map((i) => {
+          const y = 108 + i * 112;
+          const x = 54 + i * 30;
+          const fade = [1, 0.58, 0.36][i];
+          const tilt = [-1.6, 2.2, -3][i];
+          const size = [1, 0.9, 0.8][i];
+          return (
+            <g
+              key={`sl-${i}`}
+              transform={`rotate(${tilt} ${x} ${y}) scale(${size}) translate(${
+                (x * (1 - size)) / size
+              } ${(y * (1 - size)) / size})`}
+            >
+              {/* Inner group carries the hover class: a CSS transform would
+                  otherwise replace the static tilt above. */}
+              <g className="menu-strip" style={{ "--i": i }}>
+                <path
+                  d={`M ${x} ${y - 24} L ${x} ${y + 44}`}
+                  stroke="#e07a5f"
+                  strokeWidth="4"
+                  strokeOpacity={0.62 * fade}
+                  strokeLinecap="round"
+                />
+                <path
+                  d={`M ${x + 18} ${y - 26} L ${x + 18 + 66} ${y - 26}`}
+                  stroke="#8fb4c8"
+                  strokeWidth="5"
+                  strokeOpacity={0.4 * fade}
+                  strokeLinecap="round"
+                />
+                <path
+                  d={`M ${x + 18} ${y} L ${x + 18 + (258 - i * 54)} ${y}`}
+                  stroke="#f6fafd"
+                  strokeWidth="16"
+                  strokeOpacity={0.82 * fade}
+                  strokeLinecap="round"
+                />
+                <path
+                  d={`M ${x + 18} ${y + 26} L ${x + 18 + (196 - i * 46)} ${y + 26}`}
+                  stroke="#c3d4e0"
+                  strokeWidth="7"
+                  strokeOpacity={0.46 * fade}
+                  strokeLinecap="round"
+                />
+              </g>
+            </g>
+          );
+        })}
+
+        <circle className="menu-alert" cx="356" cy="76" r="9" fill="#e0705f" />
+
+        {count > 0 ? (
+          <text
+            x="392"
+            y="404"
+            textAnchor="end"
+            fontSize="26"
+            fontWeight="800"
+            fill="#c3d4e0"
+            opacity="0.6"
+            letterSpacing="1.5"
+          >
+            {`${count} ACTIVE`}
+          </text>
+        ) : null}
+      </MenuDiorama>
+    );
+  }
+
+  /** Draft Class — prospect walking into the stage spotlight. */
+  function DraftClassDiorama({
+    hovered,
+    prefersReducedMotion,
+    seasonYear,
+    currentDate,
+  }) {
+    const yearNum = Number(seasonYear);
+    const fallbackYear = parseFranchiseDateParts(currentDate).year;
+    const yearLabel =
+      Number.isFinite(yearNum) && yearNum > 1900
+        ? String(yearNum)
+        : fallbackYear > 1900
+        ? String(fallbackYear)
+        : "";
+    return (
+      <MenuDiorama
+        hovered={hovered}
+        prefersReducedMotion={prefersReducedMotion}
+        kicker={yearLabel ? `${yearLabel} Class` : "Prospects"}
+        name="Draft Class"
+        viewBox="0 0 440 460"
+        accent="#e8c890"
+      >
+        <defs>
+          <linearGradient id="dcSpot" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#fff4de" stopOpacity="0.34" />
+            <stop offset="55%" stopColor="#e8c890" stopOpacity="0.1" />
+            <stop offset="100%" stopColor="#e8c890" stopOpacity="0" />
+          </linearGradient>
+          <linearGradient id="dcPool" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#f4e0b8" stopOpacity="0.22" />
+            <stop offset="100%" stopColor="#f4e0b8" stopOpacity="0" />
+          </linearGradient>
+          <linearGradient id="dcArch" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#c9a468" stopOpacity="0.55" />
+            <stop offset="100%" stopColor="#c9a468" stopOpacity="0.06" />
+          </linearGradient>
+          <linearGradient id="dcSuit" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#0f1922" />
+            <stop offset="100%" stopColor="#010305" />
+          </linearGradient>
+        </defs>
+
+        <path
+          d="M 66 400 L 66 176 A 154 154 0 0 1 374 176 L 374 400"
+          fill="none"
+          stroke="url(#dcArch)"
+          strokeWidth="9"
+        />
+        <path
+          d="M 96 400 L 96 182 A 124 124 0 0 1 344 182 L 344 400"
+          fill="none"
+          stroke="#c9a468"
+          strokeWidth="2"
+          strokeOpacity="0.16"
+        />
+
+        <path className="menu-spot" d="M 220 60 L 142 398 L 298 398 Z" fill="url(#dcSpot)" />
+        <ellipse className="menu-spot" cx="220" cy="398" rx="86" ry="15" fill="url(#dcPool)" />
+
+        {/* The prospect is nearly black against the spotlight and carries a
+            warm rim on the stage side, so the silhouette does the reading. */}
+        <g className="menu-hero">
+          <path
+            d="M 220 152 c 18 0 32 15 32 34 c 0 14 -7 25 -17 30 c 28 10 43 36 46 76 l 12 106 l -38 0 l -8 -80 l -6 80 l -38 0 l -6 -80 l -8 80 l -38 0 l 12 -106 c 3 -40 18 -66 46 -76 c -10 -5 -17 -16 -17 -30 c 0 -19 14 -34 32 -34 z"
+            fill="url(#dcSuit)"
+            stroke="#f0dcb0"
+            strokeWidth="2"
+            strokeOpacity="0.26"
+          />
+          {/* Suit lapel notch keeps it reading as tailored rather than a cone */}
+          <path
+            d="M 220 224 l -13 22 l 13 16 l 13 -16 z"
+            fill="#f0e4c4"
+            opacity="0.16"
+          />
+          <path
+            d="M 252 236 l 40 14 l -9 52 l -38 -13 z"
+            fill="#e8dcc0"
+            opacity="0.7"
+          />
+          <path d="M 252 236 l 40 14" stroke="#8a7a58" strokeWidth="2" opacity="0.45" />
+        </g>
+
+        {[0, 1, 2].map((i) => (
+          <g key={`dc-${i}`} className="menu-card" style={{ "--i": i }}>
+            <rect
+              x={62 + i * 116}
+              y="410"
+              width="60"
+              height="40"
+              rx="4"
+              fill="#0d1218"
+              stroke="#c9a468"
+              strokeWidth="1.5"
+              strokeOpacity={i === 0 ? 0.7 : 0.28}
+            />
+            <text
+              x={92 + i * 116}
+              y="438"
+              textAnchor="middle"
+              fontSize="21"
+              fontWeight="800"
+              fill={i === 0 ? "#f0dcb0" : "#6f7d88"}
+            >
+              {i + 1}
+            </text>
+          </g>
+        ))}
+      </MenuDiorama>
+    );
+  }
+
+  /**
+   * Franchise Identity — brass crest ring around the real club crest (that plate
+   * is 3D geometry showing through the transparent middle of this scene) with a
+   * hanging home sweater below it.
+   */
+  function IdentityDiorama({ hovered, prefersReducedMotion }) {
+    return (
+      <MenuDiorama
+        hovered={hovered}
+        prefersReducedMotion={prefersReducedMotion}
+        kicker="The Club"
+        name="Franchise Identity"
+        accent="#c4a46a"
+      >
+        <defs>
+          <linearGradient id="idSweater" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#24384a" />
+            <stop offset="100%" stopColor="#060b11" />
+          </linearGradient>
+          <linearGradient id="idSweep" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#ffffff" stopOpacity="0" />
+            <stop offset="50%" stopColor="#ffffff" stopOpacity="0.42" />
+            <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+          </linearGradient>
+          <clipPath id="idSweaterClip">
+            <path d="M 176 272 C 188 262 204 256 214 256 C 219 265 221 265 226 256 C 236 256 252 262 264 272 L 300 300 L 284 340 L 266 332 L 261 424 L 179 424 L 174 332 L 156 340 L 140 300 Z" />
+          </clipPath>
+        </defs>
+
+        {/* The crest medallion itself is 3D geometry showing through here, so
+            this scene only adds the hanging sweater and its rod. */}
+        <path d="M 116 250 L 324 250" stroke="#c4a46a" strokeWidth="2.4" strokeOpacity="0.32" strokeLinecap="round" />
+        <path d="M 214 236 C 214 226 226 226 226 236 L 220 252" fill="none" stroke="#c4a46a" strokeWidth="2.6" strokeOpacity="0.42" strokeLinecap="round" />
+
+        <g className="menu-hero">
+          <path
+            d="M 176 272 C 188 262 204 256 214 256 C 219 265 221 265 226 256 C 236 256 252 262 264 272 L 300 300 L 284 340 L 266 332 L 261 424 L 179 424 L 174 332 L 156 340 L 140 300 Z"
+            fill="url(#idSweater)"
+            stroke="#c4a46a"
+            strokeWidth="1.8"
+            strokeOpacity="0.34"
+          />
+          <g clipPath="url(#idSweaterClip)">
+            <path d="M 140 392 L 300 392" stroke="#c4a46a" strokeWidth="7" strokeOpacity="0.28" />
+            <path d="M 140 406 L 300 406" stroke="#dbe7ef" strokeWidth="4" strokeOpacity="0.14" />
+            <path d="M 144 306 L 296 306" stroke="#c4a46a" strokeWidth="5" strokeOpacity="0.2" />
+            {/* Sleeve cuffs and shoulder yoke — the cues that separate a
+                sweater on a hanger from a plain trapezoid */}
+            <path d="M 140 296 L 178 316" stroke="#c4a46a" strokeWidth="6" strokeOpacity="0.24" />
+            <path d="M 262 316 L 300 296" stroke="#c4a46a" strokeWidth="6" strokeOpacity="0.24" />
+            <path
+              d="M 178 278 C 200 292 240 292 262 278"
+              fill="none"
+              stroke="#dbe7ef"
+              strokeWidth="2.4"
+              strokeOpacity="0.22"
+            />
+            <rect className="menu-sweep" x="-160" y="250" width="70" height="184" fill="url(#idSweep)" />
+          </g>
+          {/* Collar opening */}
+          <path
+            d="M 206 258 C 212 270 228 270 234 258"
+            fill="none"
+            stroke="#c4a46a"
+            strokeWidth="2.6"
+            strokeOpacity="0.4"
+            strokeLinecap="round"
+          />
+        </g>
+      </MenuDiorama>
+    );
+  }
+
+  /**
+   * Stats — performance hologram: skater inside an analytics ring, live team
+   * record as the headline figure, shot map dots and a rising trend line.
+   */
+  function StatsDiorama({ hovered, prefersReducedMotion, record }) {
+    const recordText = safeText(record, "");
+    return (
+      <MenuDiorama
+        hovered={hovered}
+        prefersReducedMotion={prefersReducedMotion}
+        kicker="Performance"
+        name="Stats"
+        accent="#7fe4f0"
+      >
+        <defs>
+          <linearGradient id="saSkater" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#123240" />
+            <stop offset="100%" stopColor="#02070a" />
+          </linearGradient>
+          <radialGradient id="saHalo" cx="50%" cy="52%" r="52%">
+            <stop offset="0%" stopColor="#7fe4f0" stopOpacity="0.26" />
+            <stop offset="100%" stopColor="#7fe4f0" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+
+        <circle className="menu-glow" cx="220" cy="238" r="150" fill="url(#saHalo)" />
+
+        {/* Analytics ring — completes itself on hover */}
+        <circle
+          className="menu-ring"
+          cx="220"
+          cy="238"
+          r="132"
+          fill="none"
+          stroke="#7fe4f0"
+          strokeWidth="3"
+          strokeOpacity="0.5"
+          strokeDasharray="830"
+          strokeLinecap="round"
+          transform="rotate(-90 220 238)"
+        />
+        <circle cx="220" cy="238" r="146" fill="none" stroke="#7fe4f0" strokeWidth="1" strokeOpacity="0.14" />
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <path
+            key={`sa-tick-${i}`}
+            d="M 220 96 L 220 108"
+            stroke="#7fe4f0"
+            strokeWidth="2"
+            strokeOpacity="0.22"
+            transform={`rotate(${i * 60} 220 238)`}
+          />
+        ))}
+
+        {/* Skater mid-stride, built from separate masses so the pose stays
+            legible at hub distance: head ahead of the hips, trailing leg
+            extended, stick reaching down into the shooting lane. */}
+        <g className="menu-hero">
+          {[
+            "M 196 272 L 216 290 L 138 332 L 122 310 Z",
+            "M 210 206 L 172 232 L 162 216 L 202 190 Z",
+            "M 234 182 C 262 192 270 214 258 240 L 222 290 L 184 268 L 208 204 C 214 188 222 178 234 182 Z",
+            "M 222 284 L 252 302 L 264 356 L 234 362 Z",
+            "M 250 214 L 288 244 L 276 260 L 240 232 Z",
+          ].map((d, i) => (
+            <path
+              key={`sa-mass-${i}`}
+              d={d}
+              fill="url(#saSkater)"
+              stroke="#a8ecf8"
+              strokeWidth="2"
+              strokeOpacity="0.34"
+            />
+          ))}
+          <circle
+            cx="252"
+            cy="166"
+            r="25"
+            fill="url(#saSkater)"
+            stroke="#a8ecf8"
+            strokeWidth="2"
+            strokeOpacity="0.34"
+          />
+          {/* Blades and stick — the only bright hardware in the scene */}
+          <path d="M 228 366 L 272 360" stroke="#dff6ff" strokeWidth="3" strokeOpacity="0.5" strokeLinecap="round" />
+          <path d="M 114 316 L 142 336" stroke="#dff6ff" strokeWidth="3" strokeOpacity="0.4" strokeLinecap="round" />
+          <path d="M 286 248 L 364 302" stroke="#c9dbe6" strokeWidth="6" strokeOpacity="0.58" strokeLinecap="round" />
+          <path d="M 364 302 L 392 308" stroke="#c9dbe6" strokeWidth="8" strokeOpacity="0.58" strokeLinecap="round" />
+        </g>
+
+        {/* Shot-location dots */}
+        {[
+          [110, 196, 0.5],
+          [92, 258, 0.32],
+          [136, 320, 0.42],
+          [340, 196, 0.28],
+          [356, 244, 0.36],
+          [318, 340, 0.24],
+        ].map(([cx, cy, o], i) => (
+          <circle
+            key={`sa-dot-${i}`}
+            className="menu-dot"
+            style={{ "--i": i }}
+            cx={cx}
+            cy={cy}
+            r="6"
+            fill="#7fe4f0"
+            opacity={o}
+          />
+        ))}
+
+        {/* Rising trend line */}
+        <path
+          className="menu-graph"
+          d="M 96 386 L 148 366 L 192 376 L 244 340 L 296 348 L 348 306"
+          fill="none"
+          stroke="#e8fbff"
+          strokeWidth="3.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+
+        {recordText ? (
+          <g className="menu-figure">
+            <text
+              x="220"
+              y="72"
+              textAnchor="middle"
+              fontSize="38"
+              fontWeight="800"
+              fill="#d8f4fa"
+              opacity="0.9"
+              letterSpacing="1"
+            >
+              {recordText}
+            </text>
+            <text
+              x="220"
+              y="92"
+              textAnchor="middle"
+              fontSize="14"
+              fontWeight="700"
+              fill="#7fe4f0"
+              opacity="0.5"
+              letterSpacing="4"
+            >
+              RECORD
+            </text>
+          </g>
+        ) : null}
+      </MenuDiorama>
+    );
+  }
+
+  /** Legacy Wall — trophy shrine under warm brass light. */
+  function LegacyDiorama({ hovered, prefersReducedMotion }) {
+    return (
+      <MenuDiorama
+        hovered={hovered}
+        prefersReducedMotion={prefersReducedMotion}
+        kicker="Honours"
+        name="Legacy Wall"
+        accent="#e6c878"
+        mount="plinth"
+        mountAccent="#c9a468"
+      >
+        <defs>
+          <linearGradient id="lgCup" x1="20%" y1="0%" x2="80%" y2="100%">
+            <stop offset="0%" stopColor="#f0d79a" />
+            <stop offset="42%" stopColor="#b08c4c" />
+            <stop offset="100%" stopColor="#3a2c15" />
+          </linearGradient>
+          <linearGradient id="lgBanner" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#1a1610" />
+            <stop offset="100%" stopColor="#070604" />
+          </linearGradient>
+          <linearGradient id="lgSweep" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#fff4d8" stopOpacity="0" />
+            <stop offset="50%" stopColor="#fff4d8" stopOpacity="0.5" />
+            <stop offset="100%" stopColor="#fff4d8" stopOpacity="0" />
+          </linearGradient>
+          <radialGradient id="lgWarm" cx="50%" cy="34%" r="56%">
+            <stop offset="0%" stopColor="#e6c878" stopOpacity="0.24" />
+            <stop offset="100%" stopColor="#e6c878" stopOpacity="0" />
+          </radialGradient>
+          <clipPath id="lgCupClip">
+            <path d="M 176 96 L 264 96 L 258 158 C 254 190 240 208 220 214 C 200 208 186 190 182 158 Z" />
+          </clipPath>
+        </defs>
+
+        <ellipse className="menu-glow" cx="220" cy="180" rx="170" ry="160" fill="url(#lgWarm)" />
+
+        {/* Retired-number banners hanging behind the cup */}
+        {[
+          [104, 0],
+          [336, 1],
+        ].map(([x, i]) => (
+          <g key={`lg-banner-${i}`} className="menu-wing" style={{ "--i": i }}>
+            <path
+              d={`M ${x - 30} 54 L ${x + 30} 54 L ${x + 30} 232 L ${x} 262 L ${x - 30} 232 Z`}
+              fill="url(#lgBanner)"
+              stroke="#c9a468"
+              strokeWidth="1.6"
+              strokeOpacity="0.3"
+            />
+            <path d={`M ${x - 14} 108 L ${x + 14} 108`} stroke="#e6c878" strokeWidth="6" strokeOpacity="0.34" strokeLinecap="round" />
+            <path d={`M ${x - 14} 136 L ${x + 14} 136`} stroke="#e6c878" strokeWidth="6" strokeOpacity="0.22" strokeLinecap="round" />
+            <path d={`M ${x - 14} 164 L ${x + 14} 164`} stroke="#e6c878" strokeWidth="6" strokeOpacity="0.14" strokeLinecap="round" />
+          </g>
+        ))}
+
+        {/* The cup */}
+        <g className="menu-hero">
+          <path
+            d="M 176 96 L 264 96 L 258 158 C 254 190 240 208 220 214 C 200 208 186 190 182 158 Z"
+            fill="url(#lgCup)"
+          />
+          <g clipPath="url(#lgCupClip)">
+            <path className="menu-sweep" d="M -60 90 L 10 90 L -20 220 L -90 220 Z" fill="url(#lgSweep)" />
+          </g>
+          <path
+            d="M 176 106 C 152 108 146 132 156 148 C 162 158 172 162 180 162"
+            fill="none"
+            stroke="#b08c4c"
+            strokeWidth="9"
+            strokeLinecap="round"
+          />
+          <path
+            d="M 264 106 C 288 108 294 132 284 148 C 278 158 268 162 260 162"
+            fill="none"
+            stroke="#b08c4c"
+            strokeWidth="9"
+            strokeLinecap="round"
+          />
+          <path d="M 172 84 L 268 84 L 264 98 L 176 98 Z" fill="#f2dda6" opacity="0.9" />
+          <path d="M 212 214 L 228 214 L 232 254 L 208 254 Z" fill="#8f7338" />
+          <path d="M 186 254 L 254 254 L 262 282 L 178 282 Z" fill="#6d5729" />
+          <path d="M 170 282 L 270 282 L 280 312 L 160 312 Z" fill="#4a3a1c" />
+          <path d="M 160 312 L 280 312 L 280 322 L 160 322 Z" fill="#e6c878" opacity="0.32" />
+        </g>
+      </MenuDiorama>
+    );
+  }
+
+  function PhysicalDraftBoard({ hovered, draftWeek = false }) {
+    return <DraftWarRoomEntrance hovered={hovered} draftWeek={draftWeek} />;
   }
 
   function BroadcastScoreboard({ hovered, record, nextGame }) {
@@ -4291,13 +6458,13 @@ import React, {
   function ArenaWindowObject({ hovered, nextGame, seasonYear }) {
     return (
       <group>
-        <mesh position={[0, 0, -0.05]} castShadow raycast={() => null}>
-          <boxGeometry args={[2.32, 1.46, 0.08]} />
+        <mesh position={[0, 0, -0.04]} castShadow raycast={() => null}>
+          <boxGeometry args={[1.35, 0.72, 0.06]} />
           <WoodMaterial color="#2a2418" roughness={0.58} />
         </mesh>
 
         <mesh raycast={() => null}>
-          <boxGeometry args={[2.18, 1.32, 0.035]} />
+          <boxGeometry args={[1.22, 0.58, 0.03]} />
           <meshStandardMaterial
             color={hovered ? "#1a4a6a" : "#122838"}
             emissive="#143850"
@@ -4308,50 +6475,16 @@ import React, {
           />
         </mesh>
 
-        <mesh position={[0, 0, 0.022]} raycast={() => null}>
-          <planeGeometry args={[2.05, 1.18]} />
-          <GlassMaterial opacity={0.14} />
-        </mesh>
-
-        {[-0.72, 0, 0.72].map((x) => (
-          <mesh key={`mullion-${x}`} position={[x, 0, 0.028]} raycast={() => null}>
-            <boxGeometry args={[0.04, 1.28, 0.02]} />
-            <WoodMaterial color="#1a1612" roughness={0.62} />
-          </mesh>
-        ))}
-
-        <mesh position={[0, 0.62, 0.028]} raycast={() => null}>
-          <boxGeometry args={[2.12, 0.04, 0.02]} />
-          <WoodMaterial color="#1a1612" roughness={0.62} />
-        </mesh>
-  
-        <mesh position={[0, -0.48, 0.04]} castShadow raycast={() => null}>
-          <boxGeometry args={[2.1, 0.12, 0.14]} />
-          <WoodMaterial color="#2a2018" roughness={0.55} />
-        </mesh>
-  
-        {[-0.55, 0, 0.55].map((x) => (
-          <mesh key={x} position={[x, 0.38, 0.045]} raycast={() => null}>
-            <circleGeometry args={[0.06, 16]} />
-            <meshBasicMaterial
-              color="#e8dcc0"
-              transparent
-              opacity={hovered ? 0.75 : 0.4}
-            />
-          </mesh>
-        ))}
-  
-        <WallText position={[0, 0.22, 0.05]} size={0.068} color="#b8dce8">
+        <WallText position={[0, 0.18, 0.04]} size={0.04} color="#c4a46a">
           GAME DAY
         </WallText>
-  
-        <WallText position={[0, 0.02, 0.05]} size={0.042} color="#8ec0d8">
-          {safeText(nextGame, "Next matchup")}
+        <WallText position={[0, 0.02, 0.04]} size={0.028} color="#d8e0e8" maxWidth={1.1}>
+          {safeText(nextGame, "No game listed")}
         </WallText>
-  
-        <WallText position={[0, -0.17, 0.05]} size={0.04} color="#f3d895">
-          {safeText(seasonYear, "Season")}
+        <WallText position={[0, -0.18, 0.04]} size={0.022} color="#6a8898">
+          {Number(seasonYear) > 0 ? String(seasonYear) : "PREVIEW"}
         </WallText>
+        <pointLight position={[0, 0.1, 0.35]} intensity={hovered ? 0.25 : 0.1} color="#6a9aba" distance={1.2} />
       </group>
     );
   }
@@ -4455,77 +6588,46 @@ import React, {
     prefersReducedMotion = false,
     championshipCount = 0,
     capPressure = false,
+    officeWeather = null,
   }) {
     const mood = officeMood || {};
+    const [leagueOpsClickToken, setLeagueOpsClickToken] = useState(0);
+
+    const handleLeagueOpsOpen = useCallback(() => {
+      setLeagueOpsClickToken((token) => token + 1);
+      handleOpenPanel(OFFICE_PANEL_IDS.LEAGUE_CENTRAL);
+    }, [handleOpenPanel]);
+
     const tradeActivity =
       mood.isTradeDeadline ||
       Number(unreadMessages || 0) > 0 ||
       mood.hasUrgentDecisions;
+    const weather = officeWeather || deriveSeasonalWeather(currentDate);
 
     return (
       <>
         <color attach="background" args={[OFFICE_PALETTE.void]} />
-        <fog attach="fog" args={[OFFICE_PALETTE.void, 11, 20]} />
+        <fog attach="fog" args={[OFFICE_PALETTE.void, 16, 34]} />
   
         <CameraRig
           resetToken={resetToken}
           activePanel={activePanel}
           lowPowerMode={lowPowerMode}
           prefersReducedMotion={prefersReducedMotion}
+          hoveredId={hoveredId}
+          leagueOpsClickToken={leagueOpsClickToken}
         />
-        {!lowPowerMode ? <SoftShadows size={20} samples={12} focus={0.48} /> : null}
-        <Environment preset="apartment" environmentIntensity={0.58} />
+        {!lowPowerMode ? <SoftShadows size={18} samples={10} focus={0.55} /> : null}
+        <Environment preset="city" environmentIntensity={0.34} />
   
-        <hemisphereLight intensity={0.38} color="#dce8f4" groundColor="#3a342c" />
-        <ambientLight intensity={0.34} color="#c8d0dc" />
-  
-        <directionalLight
-          position={[1.8, 4.8, 1.6]}
-          intensity={0.82}
-          color={mood.isPlayoffs ? "#a8c8dc" : "#e8d4a8"}
-          castShadow={!lowPowerMode}
-          shadow-mapSize-width={lowPowerMode ? 1024 : 2048}
-          shadow-mapSize-height={lowPowerMode ? 1024 : 2048}
-          shadow-bias={-0.00025}
+        <hemisphereLight intensity={0.55} color="#b8dce8" groundColor="#1a3840" />
+        <ambientLight intensity={0.4} color="#88a8b0" />
+        <PracticalLights
+          lowPowerMode={lowPowerMode}
+          prefersReducedMotion={prefersReducedMotion}
         />
-  
-        <pointLight
-          position={[0, 1.55, 0.15]}
-          intensity={0.92}
-          color="#6aa8d8"
-          distance={3.4}
-        />
-  
-        <pointLight
-          position={[0, 3.05, -3.2]}
-          intensity={0.62}
-          color="#e8d0a0"
-          distance={4.2}
-        />
-  
-        <pointLight
-          position={[-2.4, 2.1, -2.8]}
-          intensity={0.38}
-          color="#6a9ac0"
-          distance={5.2}
-        />
-  
-        <pointLight
-          position={[2.4, 2.1, -2.8]}
-          intensity={0.38}
-          color="#6a9ac0"
-          distance={5.2}
-        />
-
-        <spotLight
-          position={[0, 3.6, 0.8]}
-          angle={0.42}
-          penumbra={0.65}
-          intensity={0.48}
-          color="#f0ddb0"
-          distance={7}
-          castShadow={false}
-        />
+        {/* Window daylight spill */}
+        <pointLight position={[3.6, 2.1, 0.4]} intensity={0.55} color={weather.light} distance={5.5} />
   
         {!lowPowerMode ? (
           <AccumulativeShadows
@@ -4533,7 +6635,7 @@ import React, {
             frames={48}
             color="#1a1814"
             colorBlend={0.85}
-            opacity={0.34}
+            opacity={0.18}
             scale={8}
             position={[0, 0.018, 0]}
           >
@@ -4551,252 +6653,404 @@ import React, {
         {USE_RETRO_OFFICE_PACK ? <RetroOfficeModel lowPowerMode={lowPowerMode} /> : null}
 
         <RoomShell />
+        <OfficeFurniture
+          teamLogo={teamLogo}
+          teamName={teamName}
+          mood={mood}
+          championshipCount={championshipCount}
+        />
 
-        <WallHeroLogo teamLogo={teamLogo} teamName={teamName} hovered={hoveredId === "dashboard"} />
+        <CityWeatherWindow currentDate={currentDate} weather={weather} />
 
         <Desk teamName={teamName} teamLogo={teamLogo}>
           <InteractiveGroup
             id="dashboard"
-            label="Command Interface"
-            description="Franchise overview, roster status, owner goals, cap pressure, and executive reports"
-            position={[0, 1.02, 0.38]}
+            label=""
+            position={[0.08, 0.885, 0.18]}
             hoveredId={hoveredId}
             setHoveredId={setHoveredId}
             onOpen={handleOpenPanel}
+            hoverScale={1}
+            hoverLift={0}
             hitBoxArgs={OFFICE_HITBOXES.dashboard}
-            hitBoxPosition={[0, 0.18, 0.04]}
+            hitBoxPosition={[0, 0.3, 0.02]}
+            activateOnPointerDown
+            hideHoverLabel
+            showHoverCorners={false}
           >
             {(hovered) => (
-              <LaptopObject
-                hovered={hovered}
-                teamName={teamName}
-                teamLogo={teamLogo}
-              />
+              <>
+                <LaptopObject
+                  hovered={hovered}
+                  focused={activePanel === OFFICE_PANEL_IDS.DASHBOARD}
+                  teamName={teamName}
+                  teamLogo={teamLogo}
+                  currentDate={currentDate}
+                  nextGame={nextGame}
+                  record={record}
+                  priorityCount={Number(activeStorylines || 0)}
+                  seasonPhase={mood.seasonPhase || mood.officeMode || ""}
+                />
+                <LandmarkLabel
+                  hovered={hovered}
+                  prefersReducedMotion={prefersReducedMotion}
+                  kicker="Command"
+                  name="Franchise Command"
+                  accent="#9fd6ea"
+                  position={[0, 0.66, 0.12]}
+                />
+              </>
             )}
           </InteractiveGroup>
 
-          <InteractiveGroup
-            id="messages"
-            label="GM Phone"
-            description="Trade calls, owner messages, and staff inbox"
-            badge={Number(unreadMessages || 0) > 0 ? `${unreadMessages} unread` : ""}
-            position={[-1.32, 1.0, 0.62]}
-            hoveredId={hoveredId}
-            setHoveredId={setHoveredId}
-            onOpen={handleOpenPanel}
-            hitBoxArgs={OFFICE_HITBOXES.messages}
-            hitBoxPosition={[0, 0.09, 0]}
-            lowPowerMode={lowPowerMode}
-          >
-            {(hovered) => (
-              <PhoneObject
-                hovered={hovered}
-                unreadMessages={unreadMessages}
-                hasTradeActivity={tradeActivity}
-                callerLabel={mood.isTradeDeadline ? "TRADE DESK" : "LEAGUE GM"}
-              />
-            )}
-          </InteractiveGroup>
+          {/* Desk dressing — the interactive Trade Hub lives on the wall */}
+          <group position={[-1.52, 0.885, 0.62]}>
+            <PhoneObject
+              hovered={hoveredId === "messages"}
+              unreadMessages={unreadMessages}
+              hasTradeActivity={tradeActivity}
+              callerLabel="TRADE DESK"
+            />
+          </group>
 
           <InteractiveGroup
             id="calendar"
-            label="Desk Calendar"
-            description="Open schedule and simulation dates"
-            position={[1.28, 1.0, 0.62]}
+            label=""
+            position={[1.48, 0.885, 0.62]}
             hoveredId={hoveredId}
             setHoveredId={setHoveredId}
             onOpen={handleOpenPanel}
+            hoverScale={1}
+            hoverLift={0}
             hitBoxArgs={OFFICE_HITBOXES.calendar}
-            hitBoxPosition={[0, 0.075, 0]}
+            hitBoxPosition={[0, 0.24, 0]}
+            activateOnPointerDown
+            hideHoverLabel
+            showHoverCorners={false}
           >
             {(hovered) => (
-              <CalendarObject
-                hovered={hovered}
-                currentDate={currentDate}
-                nextGame={nextGame}
-                teamLogo={teamLogo}
-                teamName={teamName}
-              />
+              <>
+                <CalendarObject
+                  hovered={hovered}
+                  currentDate={currentDate}
+                  nextGame={nextGame}
+                  teamLogo={teamLogo}
+                  teamName={teamName}
+                />
+                <LandmarkLabel
+                  hovered={hovered}
+                  prefersReducedMotion={prefersReducedMotion}
+                  kicker="Season Timeline"
+                  name="Calendar"
+                  accent="#dbe7ef"
+                  position={[0, 0.26, 0.06]}
+                />
+              </>
             )}
           </InteractiveGroup>
 
-          <InteractiveGroup
-            id="scouting"
-            label="Scouting Kit"
-            description="Draft class, reports, watchlist, and scouts"
-            position={[-0.78, 1.0, 0.08]}
-            hoveredId={hoveredId}
-            setHoveredId={setHoveredId}
-            onOpen={handleOpenPanel}
-            hitBoxArgs={OFFICE_HITBOXES.scouting}
-            hitBoxPosition={[0, 0.07, 0]}
-          >
-            {(hovered) => (
-              <ScoutingKitObject
-                hovered={hovered}
-                teamLogo={teamLogo}
-                teamName={teamName}
-                draftWeek={mood.isDraftWeek}
-              />
-            )}
-          </InteractiveGroup>
+          {/* Desk dressing — the interactive Storylines wall carries the panel */}
+          <group position={[-0.72, 0.885, 0.78]}>
+            <NewspaperObject
+              hovered={hoveredId === "news"}
+              activeStorylines={activeStorylines}
+            />
+          </group>
 
-          <InteractiveGroup
-            id="contracts"
-            label="Contract Office"
-            description="Contracts, free agency, and salary cap"
-            badge={`Cap: ${formatMoney(capSpace)}`}
-            position={[0.82, 1.0, 0.08]}
-            hoveredId={hoveredId}
-            setHoveredId={setHoveredId}
-            onOpen={handleOpenPanel}
-            hitBoxArgs={OFFICE_HITBOXES.contracts}
-            hitBoxPosition={[0, 0.07, 0]}
-          >
-            {(hovered) => (
-              <ContractLedgerObject
-                hovered={hovered}
-                capSpace={capSpace}
-                capPressure={capPressure}
-              />
-            )}
-          </InteractiveGroup>
-
-          <InteractiveGroup
-            id="stats"
-            label="Analytics Room"
-            description="Skater stats, goalie stats, xGF%, CF%, PDO"
-            position={[0.55, 1.0, 0.48]}
-            hoveredId={hoveredId}
-            setHoveredId={setHoveredId}
-            onOpen={handleOpenPanel}
-            hitBoxArgs={OFFICE_HITBOXES.stats}
-            hitBoxPosition={[0, 0.075, 0]}
-          >
-            {(hovered) => <TabletObject hovered={hovered} />}
-          </InteractiveGroup>
-
-          <InteractiveGroup
-            id="news"
-            label="League Storylines"
-            description="Storylines, rumors, headlines, and recaps"
-            badge={`${Number(activeStorylines || 0)} stories`}
-            position={[-0.42, 1.0, 0.42]}
-            hoveredId={hoveredId}
-            setHoveredId={setHoveredId}
-            onOpen={handleOpenPanel}
-            hitBoxArgs={OFFICE_HITBOXES.news}
-            hitBoxPosition={[0, 0.075, 0]}
-          >
-            {(hovered) => (
-              <NewspaperObject
-                hovered={hovered}
-                activeStorylines={activeStorylines}
-              />
-            )}
-          </InteractiveGroup>
-
-          <InteractiveGroup
-            id="tasks"
-            label="Decision Desk"
-            description="Tasks, objectives, reminders, and urgent decisions"
-            badge={`${Number(pendingTasks || 0)} tasks`}
-            position={[0.42, 1.0, 0.42]}
-            hoveredId={hoveredId}
-            setHoveredId={setHoveredId}
-            onOpen={handleOpenPanel}
-            hitBoxArgs={OFFICE_HITBOXES.tasks}
-            hitBoxPosition={[0, 0.075, 0]}
-          >
-            {(hovered) => (
-              <ClipboardObject hovered={hovered} pendingTasks={pendingTasks} />
-            )}
-          </InteractiveGroup>
-
+          {mood.isTradeDeadline || mood.isDraftWeek ? <DeskClutter /> : null}
           <CoffeeAndPuck />
         </Desk>
 
+        {/* ---- Back wall. Three clustered installations rather than one even
+                row: team building on the left, the club in the middle, league
+                intelligence on the right. Every landmark uses the same
+                footprint, hitbox and label system; only the mount, depth and
+                accent change. ---- */}
+
         <InteractiveGroup
-          id="teamIdentity"
-          label="Franchise Culture Wall"
-          description="Team identity, fanbase, morale, ownership"
-          position={[1.55, 2.48, -3.46]}
+          id="draftClass"
+          label=""
+          position={[MENU_COLUMNS.farLeft, MENU_LANDMARK.upperBandY, -3.36]}
           hoveredId={hoveredId}
           setHoveredId={setHoveredId}
           onOpen={handleOpenPanel}
-          hitBoxArgs={OFFICE_HITBOXES.teamIdentity}
-          hitBoxPosition={[0, 0, 0]}
+          hoverScale={1}
+          hoverLift={0}
+          hitBoxArgs={MENU_LANDMARK.hitBox}
+          hitBoxPosition={MENU_LANDMARK.hitBoxOffset}
+          activateOnPointerDown
+          hideHoverLabel
+          showHoverCorners={false}
         >
           {(hovered) => (
-            <WallLogo
+            <DraftClassDiorama
               hovered={hovered}
-              teamLogo={teamLogo}
-              teamName={teamName}
-              scale={0.88}
+              prefersReducedMotion={prefersReducedMotion}
+              seasonYear={seasonYear}
+              currentDate={currentDate}
             />
           )}
         </InteractiveGroup>
 
         <InteractiveGroup
           id="lines"
-          label="Line Strategy Board"
-          description="Edit lines, special teams, depth chart, and strategy"
-          position={[-2.55, 2.12, -3.46]}
+          label=""
+          position={[MENU_COLUMNS.innerRight, MENU_LANDMARK.upperBandY, -3.34]}
           hoveredId={hoveredId}
           setHoveredId={setHoveredId}
           onOpen={handleOpenPanel}
-          hitBoxArgs={OFFICE_HITBOXES.lines}
-          hitBoxPosition={[0, 0, 0]}
+          hoverScale={1}
+          hoverLift={0}
+          hitBoxArgs={MENU_LANDMARK.hitBox}
+          hitBoxPosition={MENU_LANDMARK.hitBoxOffset}
+          activateOnPointerDown
+          hideHoverLabel
+          showHoverCorners={false}
         >
-          {(hovered) => <RinkWhiteboard hovered={hovered} />}
+          {(hovered) => (
+            <StrategyDiorama
+              hovered={hovered}
+              prefersReducedMotion={prefersReducedMotion}
+            />
+          )}
         </InteractiveGroup>
 
         <InteractiveGroup
-          id="standings"
-          label="League Standings"
-          description="Division race, playoff odds, power rankings"
-          position={[-2.75, 0.95, -3.45]}
+          id="contracts"
+          label=""
+          position={[MENU_COLUMNS.lowLeftOuter, MENU_LANDMARK.lowerBandY, -3.3]}
           hoveredId={hoveredId}
           setHoveredId={setHoveredId}
           onOpen={handleOpenPanel}
-          hitBoxArgs={OFFICE_HITBOXES.standings}
-          hitBoxPosition={[0, 0.44, 0]}
+          hoverScale={1}
+          hoverLift={0}
+          hitBoxArgs={MENU_LANDMARK.hitBox}
+          hitBoxPosition={MENU_LANDMARK.hitBoxOffset}
+          activateOnPointerDown
+          hideHoverLabel
+          showHoverCorners={false}
         >
           {(hovered) => (
-            <StandingsWallBoard
+            <ContractsDiorama
               hovered={hovered}
-              standingsRank={standingsRank}
+              prefersReducedMotion={prefersReducedMotion}
+              capSpace={capSpace}
+              capPressure={capPressure}
+            />
+          )}
+        </InteractiveGroup>
+
+        <InteractiveGroup
+          id="messages"
+          label=""
+          position={[MENU_COLUMNS.left, MENU_LANDMARK.upperBandY, -3.3]}
+          hoveredId={hoveredId}
+          setHoveredId={setHoveredId}
+          onOpen={handleOpenPanel}
+          hoverScale={1}
+          hoverLift={0}
+          hitBoxArgs={MENU_LANDMARK.hitBox}
+          hitBoxPosition={MENU_LANDMARK.hitBoxOffset}
+          activateOnPointerDown
+          hideHoverLabel
+          showHoverCorners={false}
+          lowPowerMode={lowPowerMode}
+        >
+          {(hovered) => (
+            <TradeHubDiorama
+              hovered={hovered}
+              prefersReducedMotion={prefersReducedMotion}
+            />
+          )}
+        </InteractiveGroup>
+
+        <InteractiveGroup
+          id="teamIdentity"
+          label=""
+          position={[MENU_COLUMNS.center, MENU_LANDMARK.crestY, -3.4]}
+          hoveredId={hoveredId}
+          setHoveredId={setHoveredId}
+          onOpen={handleOpenPanel}
+          hoverScale={1}
+          hoverLift={0}
+          hitBoxArgs={MENU_LANDMARK.hitBox}
+          hitBoxPosition={MENU_LANDMARK.hitBoxOffset}
+          activateOnPointerDown
+          hideHoverLabel
+          showHoverCorners={false}
+        >
+          {(hovered) => (
+            <>
+              <WallHeroLogo
+                teamLogo={teamLogo}
+                teamName={teamName}
+                hovered={hovered}
+                position={[0, 0.278, 0.07]}
+                scale={0.42}
+              />
+              <IdentityDiorama
+                hovered={hovered}
+                prefersReducedMotion={prefersReducedMotion}
+              />
+            </>
+          )}
+        </InteractiveGroup>
+
+        <InteractiveGroup
+          id="roster"
+          label=""
+          position={[MENU_COLUMNS.innerLeft, MENU_LANDMARK.upperBandY, -3.34]}
+          hoveredId={hoveredId}
+          setHoveredId={setHoveredId}
+          onOpen={handleOpenPanel}
+          hoverScale={1}
+          hoverLift={0}
+          hitBoxArgs={MENU_LANDMARK.hitBox}
+          hitBoxPosition={MENU_LANDMARK.hitBoxOffset}
+          activateOnPointerDown
+          hideHoverLabel
+          showHoverCorners={false}
+        >
+          {(hovered) => (
+            <RosterDiorama
+              hovered={hovered}
+              prefersReducedMotion={prefersReducedMotion}
             />
           )}
         </InteractiveGroup>
 
         <InteractiveGroup
           id="leagueCentral"
-          label="League Operations"
-          description="CBA desk, cap forecast, and team revenue"
-          position={[2.55, 2.12, -3.45]}
+          label=""
+          position={[MENU_COLUMNS.farRight, MENU_LANDMARK.upperBandY, -3.36]}
+          hoveredId={hoveredId}
+          setHoveredId={setHoveredId}
+          onOpen={handleLeagueOpsOpen}
+          openId={OFFICE_PANEL_IDS.LEAGUE_CENTRAL}
+          hoverScale={1}
+          hoverLift={0}
+          hitBoxArgs={MENU_LANDMARK.hitBox}
+          hitBoxPosition={MENU_LANDMARK.hitBoxOffset}
+          activateOnPointerDown
+          hideHoverLabel
+          showHoverCorners={false}
+        >
+          {(hovered) => (
+            <LeagueOpsSilhouette
+              hovered={hovered}
+              prefersReducedMotion={prefersReducedMotion}
+            />
+          )}
+        </InteractiveGroup>
+
+        <InteractiveGroup
+          id="news"
+          label=""
+          position={[MENU_COLUMNS.lowRightInner, MENU_LANDMARK.lowerBandY, -3.28]}
           hoveredId={hoveredId}
           setHoveredId={setHoveredId}
           onOpen={handleOpenPanel}
-          hitBoxArgs={OFFICE_HITBOXES.leagueCentral}
-          hitBoxPosition={[0, 0, 0]}
+          hoverScale={1}
+          hoverLift={0}
+          hitBoxArgs={MENU_LANDMARK.hitBox}
+          hitBoxPosition={MENU_LANDMARK.hitBoxOffset}
+          activateOnPointerDown
+          hideHoverLabel
+          showHoverCorners={false}
         >
           {(hovered) => (
-            <LeagueEconomyChart hovered={hovered} />
+            <StorylinesDiorama
+              hovered={hovered}
+              prefersReducedMotion={prefersReducedMotion}
+              activeStorylines={activeStorylines}
+            />
+          )}
+        </InteractiveGroup>
+
+        <InteractiveGroup
+          id="standings"
+          label=""
+          position={[MENU_COLUMNS.lowRightOuter, MENU_LANDMARK.lowerBandY, -3.32]}
+          hoveredId={hoveredId}
+          setHoveredId={setHoveredId}
+          onOpen={handleOpenPanel}
+          hoverScale={1}
+          hoverLift={0}
+          hitBoxArgs={MENU_LANDMARK.hitBox}
+          hitBoxPosition={MENU_LANDMARK.hitBoxOffset}
+          activateOnPointerDown
+          hideHoverLabel
+          showHoverCorners={false}
+        >
+          {(hovered) => (
+            <StandingsDiorama
+              hovered={hovered}
+              prefersReducedMotion={prefersReducedMotion}
+              standingsRank={standingsRank}
+              record={record}
+            />
+          )}
+        </InteractiveGroup>
+
+        <InteractiveGroup
+          id="stats"
+          label=""
+          position={[MENU_COLUMNS.right, MENU_LANDMARK.upperBandY, -3.3]}
+          hoveredId={hoveredId}
+          setHoveredId={setHoveredId}
+          onOpen={handleOpenPanel}
+          hoverScale={1}
+          hoverLift={0}
+          hitBoxArgs={MENU_LANDMARK.hitBox}
+          hitBoxPosition={MENU_LANDMARK.hitBoxOffset}
+          activateOnPointerDown
+          hideHoverLabel
+          showHoverCorners={false}
+        >
+          {(hovered) => (
+            <StatsDiorama
+              hovered={hovered}
+              prefersReducedMotion={prefersReducedMotion}
+              record={record}
+            />
+          )}
+        </InteractiveGroup>
+
+        {/* Trophy shrine at credenza height — a lit plinth the player can walk
+            their eye down to, rather than a plaque lost on the side wall. */}
+        <InteractiveGroup
+          id="awards"
+          label=""
+          position={[MENU_COLUMNS.lowLeftInner, MENU_LANDMARK.lowerBandY, -3.26]}
+          hoveredId={hoveredId}
+          setHoveredId={setHoveredId}
+          onOpen={handleOpenPanel}
+          hoverScale={1}
+          hoverLift={0}
+          hitBoxArgs={MENU_LANDMARK.hitBox}
+          hitBoxPosition={MENU_LANDMARK.hitBoxOffset}
+          activateOnPointerDown
+          hideHoverLabel
+          showHoverCorners={false}
+        >
+          {(hovered) => (
+            <LegacyDiorama
+              hovered={hovered}
+              prefersReducedMotion={prefersReducedMotion}
+            />
           )}
         </InteractiveGroup>
 
         <InteractiveGroup
           id="draft"
           label="Draft War Room"
-          description="Prospects, rankings, watchlist, lottery, and team needs"
-          position={[-4.34, 1.82, -1.45]}
+          description="Enter the draft floor"
+          position={[-4.28, 1.55, 0.45]}
           rotation={[0, Math.PI / 2, 0]}
           hoveredId={hoveredId}
           setHoveredId={setHoveredId}
           onOpen={handleOpenPanel}
           hitBoxArgs={OFFICE_HITBOXES.draft}
-          hitBoxPosition={[0, 0, 0]}
         >
           {(hovered) => (
             <PhysicalDraftBoard hovered={hovered} draftWeek={mood.isDraftWeek} />
@@ -4804,36 +7058,30 @@ import React, {
         </InteractiveGroup>
 
         <InteractiveGroup
-          id="awards"
-          label="Legacy Wall"
-          description="Awards, records, banners, and franchise history"
-          position={[4.34, 1.55, -1.65]}
-          rotation={[0, -Math.PI / 2, 0]}
+          id="scouting"
+          label="Scouting Station"
+          description="Prospects · reports · watchlist"
+          position={[-4.24, 1.62, -2.35]}
+          rotation={[0, Math.PI / 2 - 0.42, 0]}
           hoveredId={hoveredId}
           setHoveredId={setHoveredId}
           onOpen={handleOpenPanel}
-          hitBoxArgs={OFFICE_HITBOXES.awards}
-          hitBoxPosition={[0, 0.1, 0]}
+          hitBoxArgs={OFFICE_HITBOXES.scouting}
         >
-          {(hovered) => (
-            <TrophyShelf
-              hovered={hovered}
-              championshipCount={championshipCount}
-            />
-          )}
+          {(hovered) => <ScoutingStation hovered={hovered} />}
         </InteractiveGroup>
 
         <InteractiveGroup
           id="gameDay"
-          label="Arena Window"
-          description="Game preview, simulation, broadcast, and matchup report"
-          position={[3.76, 1.65, -0.85]}
-          rotation={[0, -Math.PI / 2, 0]}
+          label="Game Day"
+          description="Preview · simulate · matchup"
+          position={[4.02, 0.95, 1.45]}
+          rotation={[0, -Math.PI / 2 + 0.26, 0]}
           hoveredId={hoveredId}
           setHoveredId={setHoveredId}
           onOpen={handleOpenPanel}
-          hitBoxArgs={OFFICE_HITBOXES.arenaWindow}
-          hitBoxPosition={[0, 0, 0]}
+          hitBoxArgs={[1.35, 0.72, 0.32]}
+          hitBoxPosition={[0, 0, 0.1]}
         >
           {(hovered) => (
             <ArenaWindowObject
@@ -4846,11 +7094,11 @@ import React, {
   
         <ContactShadows
           position={[0, 0.012, 0]}
-          opacity={0.68}
-          scale={7.5}
+          opacity={0.48}
+          scale={8}
           blur={3.2}
-          far={4.5}
-          color="#000000"
+          far={4.2}
+          color="#1a1612"
         />
       </>
     );
@@ -4859,134 +7107,132 @@ import React, {
   function OfficeHud({
     teamName,
     teamLogo,
-    seasonYear,
     currentDate,
     record,
     capSpace,
     nextGame,
-    standingsRank,
     officeMood,
-    franchisePulse = null,
     urgentItems = [],
     onUrgentSelect,
     onReset,
     onQuickMenu,
     onExitOffice,
+    onOpenStation,
     lowPowerMode = false,
     onToggleLowPower,
-    prefersReducedMotion = false,
   }) {
     const mood = officeMood || {};
     const urgent = officeSafeArray(urgentItems);
-    const pulse = franchisePulse && typeof franchisePulse === "object" ? franchisePulse : {};
+    const [briefingOpen, setBriefingOpen] = useState(false);
+    const [tourOpen, setTourOpen] = useState(() => {
+      try {
+        return localStorage.getItem("nhl-office-tour-v1") !== "1";
+      } catch (err) {
+        return true;
+      }
+    });
+    const phaseLabel = safeText(
+      mood.seasonPhase || mood.officeMode || "",
+      ""
+    ).replace(/_/g, " ");
+    const topStory = urgent[0];
+
+    const dismissTour = () => {
+      setTourOpen(false);
+      try {
+        localStorage.setItem("nhl-office-tour-v1", "1");
+      } catch (err) {
+        /* ignore */
+      }
+    };
 
     return (
-      <div className="office-hud">
-        <div className="office-hud-card office-hud-card--left">
-          <div className="office-hud-card__brand">
-            <TeamLogoBadge
-              teamLogo={teamLogo}
-              teamName={teamName}
-              size={52}
-              variant="badge"
-            />
-            <div className="office-hud-card__copy">
-              <span>EXECUTIVE SUITE</span>
-              <strong>{teamName}</strong>
-              <small>
-                {safeText(seasonYear, "Season")} · {safeText(currentDate, "Today")}
-              </small>
-            </div>
-          </div>
+      <div className="office-hud office-hud--cinematic">
+        <div className="office-reticle" aria-hidden="true" />
+
+        <div className="office-broadcast">
+          <span className="office-broadcast__where">GM office</span>
+          <TeamLogoBadge teamLogo={teamLogo} teamName={teamName} size={28} variant="badge" />
+          <strong>{teamName}</strong>
+          <span>{safeText(currentDate, "Today")}</span>
+          {phaseLabel ? <em>{phaseLabel}</em> : null}
+          <span>Record {safeText(record, "0-0-0")}</span>
+          <span>{formatMoney(capSpace)} available</span>
+          {nextGame ? <span>Next {safeText(nextGame, "")}</span> : null}
         </div>
 
-        <div className="office-hud-card office-hud-card--right">
-          <div className="office-hud-card__brand">
-            <TeamLogoBadge
-              teamLogo={teamLogo}
-              teamName={teamName}
-              size={44}
-              variant="circle"
-            />
-            <div className="office-hud-card__copy">
-              <span>FRANCHISE PULSE</span>
-              <strong>{safeText(record, "0-0-0")}</strong>
-              <small>
-                {safeText(standingsRank, "Standings")} · Cap {formatMoney(capSpace)}
-              </small>
-              {pulse.revenue_label ? (
-                <em>
-                  Rev {safeText(pulse.revenue_label, "—")} · Fans {safeText(pulse.fan_label, "—")}
-                </em>
-              ) : null}
-              {pulse.cap_pull_label ? (
-                <em>
-                  Cap Pull {safeText(pulse.cap_pull_label, "—")} · Boycott {safeText(pulse.boycott_risk, "Low")}
-                </em>
-              ) : null}
-              <em>Next · {safeText(nextGame, "No game listed")}</em>
-              {mood.officeMode ? (
-                <em className="office-hud-mode">
-                  Mode: {safeText(mood.officeMode, "regular").replace(/_/g, " ")}
-                </em>
-              ) : null}
-            </div>
-          </div>
-        </div>
-
-        <div className="office-urgent-desk">
-          <span>Priority Briefing</span>
-          {urgent.length ? (
-            <ul className="office-urgent-desk__list">
-              {urgent.slice(0, 5).map((item) => (
-                <li
-                  key={item.id}
-                  className={`office-urgent-desk__item office-urgent-desk__item--${item.severity || "low"}`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => onUrgentSelect?.(item.target, item)}
-                  >
-                    <strong>{item.title}</strong>
-                    <small>{item.detail}</small>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="office-urgent-desk__empty">
-              No urgent fires on the desk. That either means you are doing well, or
-              the league is waiting to ruin your week.
+        {tourOpen ? (
+          <div className="office-tour">
+            <p>
+              Hover a brass corner to see what a station does. Click to enter.
+              Drag to look around. R returns home. M opens the directory.
             </p>
-          )}
-        </div>
+            <button type="button" onClick={dismissTour}>
+              Got it
+            </button>
+          </div>
+        ) : null}
+
+        {/* Only the war room keeps a screen-edge shortcut: it is a doorway on
+            the side wall. Draft Class and Legacy Wall are now readable
+            landmarks in the room, so duplicating them here just put floating
+            menu chips back over the composition. */}
+        <button
+          type="button"
+          className="office-edge office-edge--left"
+          onClick={() => onOpenStation?.(OFFICE_PANEL_IDS.DRAFT)}
+        >
+          Draft war room
+        </button>
+
+        <button
+          type="button"
+          className={`office-urgent-desk office-urgent-desk--compact${briefingOpen ? " is-open" : ""}`}
+          onClick={() => setBriefingOpen((open) => !open)}
+        >
+          <span>
+            {topStory
+              ? topStory.title
+              : urgent.length
+              ? `${urgent.length} open items`
+              : "Desk is clear"}
+          </span>
+          {briefingOpen ? (
+            urgent.length ? (
+              <ul className="office-urgent-desk__list">
+                {urgent.slice(0, 3).map((item) => (
+                  <li
+                    key={item.id}
+                    className={`office-urgent-desk__item office-urgent-desk__item--${item.severity || "low"}`}
+                  >
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onUrgentSelect?.(item.target, item);
+                      }}
+                    >
+                      <strong>{item.title}</strong>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="office-urgent-desk__empty">No open storylines.</p>
+            )
+          ) : null}
+        </button>
 
         <div className="office-control-bar">
-          <div className="office-control-bar__utilities">
-            <button type="button" className="office-control-bar__utility" onClick={onReset}>
-              Reset View
-            </button>
-
-            {onToggleLowPower ? (
-              <button type="button" className="office-control-bar__utility" onClick={onToggleLowPower}>
-                {lowPowerMode ? "Full Detail" : "Performance"}
-              </button>
-            ) : null}
-
-            {onExitOffice ? (
-              <button type="button" className="office-control-bar__utility" onClick={onExitOffice}>
-                Exit
-              </button>
-            ) : null}
-          </div>
-
+          <p className="office-control-bar__hint">Drag to look · Esc back · R home · M directory</p>
           <button type="button" className="office-control-bar__primary" onClick={onQuickMenu}>
-            Open Command Terminal
+            Directory
           </button>
-        </div>
-
-        <div className="office-instructions">
-          <span>Look · Zoom · Select office systems</span>
+          {onExitOffice ? (
+            <button type="button" className="office-control-bar__utility" onClick={onExitOffice}>
+              Leave office
+            </button>
+          ) : null}
         </div>
       </div>
     );
@@ -5412,6 +7658,7 @@ import React, {
     currentDate = "Today",
     record = "0-0-0",
     capSpace = "—",
+    capSpaceMillions = null,
     nextGame = "No game listed",
     standingsRank = "Standings",
     unreadMessages = 0,
@@ -5446,11 +7693,55 @@ import React, {
       }
     });
     const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+    const [officeWeather, setOfficeWeather] = useState(() =>
+      deriveSeasonalWeather(currentDate)
+    );
 
     const bestPlayer = useMemo(() => getBestPlayer(players), [players]);
   
     const officePictures = useMemo(() => getOfficePictures(), []);
     const normalizedRecord = useMemo(() => formatRecord(record), [record]);
+
+    useEffect(() => {
+      const seasonal = deriveSeasonalWeather(currentDate);
+      setOfficeWeather(seasonal);
+
+      if (!GOOGLE_WEATHER_API_KEY) return undefined;
+
+      const { year, month, day } = parseFranchiseDateParts(currentDate);
+      const simStamp = year > 0 ? Date.UTC(year, month - 1, day) : NaN;
+      const now = Date.now();
+      const nearLive =
+        Number.isFinite(simStamp) && Math.abs(now - simStamp) < 1000 * 60 * 60 * 24 * 12;
+
+      if (!nearLive) return undefined;
+
+      let cancelled = false;
+      const lat = Number(team?.latitude || team?.lat || 45.4215);
+      const lon = Number(team?.longitude || team?.lng || -75.6972);
+      const url =
+        `https://weather.googleapis.com/v1/currentConditions:lookup` +
+        `?key=${encodeURIComponent(GOOGLE_WEATHER_API_KEY)}` +
+        `&location.latitude=${lat}&location.longitude=${lon}`;
+
+      fetch(url)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((payload) => {
+          if (cancelled || !payload) return;
+          setOfficeWeather({
+            ...seasonal,
+            ...mapGoogleWeatherCondition(payload),
+            source: "google",
+          });
+        })
+        .catch(() => {
+          /* keep seasonal */
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }, [currentDate, team]);
     const effectiveTeamLogo = useMemo(() => {
       const fromName = resolveFranchiseTeamLogo(
         { name: teamName, team_name: teamName },
@@ -5462,17 +7753,25 @@ import React, {
 
     const summary = useMemo(
       () => ({
+        ...(officeSummary || {}),
         unreadMessages,
         pendingTasks,
         activeStorylines,
         nextGame,
         record: normalizedRecord,
         capSpace,
+        capSpaceMillions:
+          Number.isFinite(Number(capSpaceMillions))
+            ? Number(capSpaceMillions)
+            : Number.isFinite(Number(officeSummary?.capSpaceMillions))
+              ? Number(officeSummary.capSpaceMillions)
+              : null,
         capSpaceRaw:
-          team?.cap_space ??
-          team?.capSpace ??
-          franchiseState?.cap_space,
-        ...(officeSummary || {}),
+          Number.isFinite(Number(capSpaceMillions))
+            ? Number(capSpaceMillions)
+            : team?.cap_space ??
+              team?.capSpace ??
+              franchiseState?.cap_space,
       }),
       [
         unreadMessages,
@@ -5481,6 +7780,7 @@ import React, {
         nextGame,
         normalizedRecord,
         capSpace,
+        capSpaceMillions,
         team,
         franchiseState,
         officeSummary,
@@ -5514,9 +7814,10 @@ import React, {
         franchiseState,
         team,
         officeMood,
-        urgentItems
+        urgentItems,
+        summary
       );
-    }, [activePanel, franchiseState, team, officeMood, urgentItems]);
+    }, [activePanel, franchiseState, team, officeMood, urgentItems, summary]);
 
     const championshipCount = useMemo(() => {
       const cups =
@@ -5535,6 +7836,7 @@ import React, {
 
     const capPressure = useMemo(() => {
       const raw =
+        summary.capSpaceMillions ??
         team?.cap_space ??
         team?.capSpace ??
         franchiseState?.cap_space ??
@@ -5760,7 +8062,7 @@ import React, {
               }}
               onCreated={({ gl }) => {
                 gl.toneMapping = THREE.ACESFilmicToneMapping;
-                gl.toneMappingExposure = 1.28;
+                gl.toneMappingExposure = 1.14;
                 gl.outputColorSpace = THREE.SRGBColorSpace;
               }}
             >
@@ -5789,23 +8091,21 @@ import React, {
                   prefersReducedMotion={prefersReducedMotion}
                   championshipCount={championshipCount}
                   capPressure={capPressure}
+                  officeWeather={officeWeather}
                 />
   
                 {!effectiveLowPower ? (
-                  <EffectComposer multisampling={4}>
+                  <EffectComposer enableNormalPass={false} multisampling={2}>
                     <Bloom
-                      intensity={0.16}
-                      luminanceThreshold={0.52}
-                      luminanceSmoothing={0.9}
+                      intensity={0.06}
+                      luminanceThreshold={0.78}
+                      luminanceSmoothing={0.88}
                     />
-
-                    <Vignette eskil={false} offset={0.32} darkness={0.12} />
-
-                    <Noise opacity={0.003} />
+                    <Vignette eskil={false} offset={0.42} darkness={0.18} />
                   </EffectComposer>
                 ) : (
                   <EffectComposer multisampling={0}>
-                    <Vignette eskil={false} offset={0.32} darkness={0.12} />
+                    <Vignette eskil={false} offset={0.42} darkness={0.14} />
                   </EffectComposer>
                 )}
               </Suspense>
@@ -5834,6 +8134,7 @@ import React, {
           onToggleLowPower={handleToggleLowPower}
           onReset={() => setResetToken((v) => v + 1)}
           onQuickMenu={() => setShowQuickMenu(true)}
+          onOpenStation={handleOpenPanel}
           onExitOffice={onExitOffice}
         />
 

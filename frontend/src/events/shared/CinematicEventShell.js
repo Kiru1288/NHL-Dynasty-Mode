@@ -26,11 +26,11 @@ export default function CinematicEventShell({
   ctaLabel = "Continue",
   onContinue,
   onBack,
-  revealDelayMs = 1200,
+  revealDelayMs = 0,
   revealKey,
   persistRevealKey = null,
   showSkip = true,
-  hubLabel = "Hub World",
+  hubLabel = "Hub",
   footerAlign = "center",
   rootClassName = "",
   register = "ops",
@@ -44,7 +44,8 @@ export default function CinematicEventShell({
     }
   };
 
-  const [introDone, setIntroDone] = useState(() => readPersisted());
+  const skipCeremony = Number(revealDelayMs) <= 0;
+  const [introDone, setIntroDone] = useState(() => skipCeremony || readPersisted());
   const css = buildCinematicCss(prefix);
   const p = prefix;
   const revealId = revealKey ?? title;
@@ -62,14 +63,14 @@ export default function CinematicEventShell({
   const skipReveal = useCallback(() => markRevealed(), [markRevealed]);
 
   useEffect(() => {
-    if (persistRevealKey && readPersisted()) {
+    if (skipCeremony || (persistRevealKey && readPersisted())) {
       setIntroDone(true);
       return undefined;
     }
     setIntroDone(false);
     const t = window.setTimeout(() => markRevealed(), revealDelayMs);
     return () => window.clearTimeout(t);
-  }, [revealId, revealDelayMs, persistRevealKey, markRevealed]);
+  }, [revealId, revealDelayMs, persistRevealKey, markRevealed, skipCeremony]);
 
   const items = tickerItems.length ? tickerItems : ["FRANCHISE MODE"];
   const registerClass =
@@ -148,14 +149,9 @@ export default function CinematicEventShell({
           </div>
         ) : null}
         <div className={`${p}-footer-actions ${footerAlign === "split" ? "is-split" : ""}`}>
-          {typeof onBack === "function" ? (
-            <button type="button" className={`${p}-ghost-btn ${p}-leave-btn`} onClick={onBack}>
-              Leave to Hub
-            </button>
-          ) : null}
-          {showSkip && !introDone ? (
+          {showSkip && !introDone && !skipCeremony ? (
             <button type="button" className={`${p}-skip-btn`} onClick={skipReveal}>
-              Skip Reveal
+              Skip cinematic
             </button>
           ) : null}
           <button

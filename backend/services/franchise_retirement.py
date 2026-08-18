@@ -557,6 +557,12 @@ def _serialize_retirement_row(
         "news_headline": _news_headline(_player_name(player), team_name, retirement_type, legacy),
         "confirmed": confirmed,
     }
+    try:
+        from app.sim_engine.generation.player_headshots import merge_headshot_into_row
+
+        row = merge_headshot_into_row(row, player)
+    except Exception:
+        pass
     return row
 
 

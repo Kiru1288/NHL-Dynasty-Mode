@@ -36,6 +36,7 @@ function gameStatusLabel(game) {
 export function wjcPlayerHeadshot(row) {
   const code = row?.wjc_country || "";
   return ensurePlayerHeadshotFields({
+    ...(row || {}),
     id: row?.player_id,
     name: row?.name,
     position: row?.position,

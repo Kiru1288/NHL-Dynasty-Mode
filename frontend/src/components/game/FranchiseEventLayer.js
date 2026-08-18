@@ -60,9 +60,10 @@ export function FranchiseEventLayer() {
   const phaseAllowsAuto =
     ["playoff_ready", "post_cup", "offseason", "playoffs"].includes(phase) ||
     (phase === "complete" && playoffsAreComplete(franchiseState));
+  const inSeasonCinematic = ["opening_night", "trade_deadline"].includes(eventKey);
 
   const shouldShow =
-    Boolean(event) && !dismissed && (pinnedOpen || phaseAllowsAuto);
+    Boolean(event) && !dismissed && (pinnedOpen || phaseAllowsAuto || inSeasonCinematic);
 
   const handleLeaveToHub = () => {
     setDismissed(true);

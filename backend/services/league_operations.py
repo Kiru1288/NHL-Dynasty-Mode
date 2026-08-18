@@ -78,22 +78,58 @@ def _revenue_status_label(profit: float, revenue: float, win_pct: float, relocat
     return "Flat"
 
 
-def _revenue_yoy_delta(team_id: str, season_year: int, revenue: float, win_pct: float) -> Dict[str, Any]:
-    import hashlib
+def _revenue_yoy_delta(
+    session: FranchiseSession,
+    team_id: str,
+    season_year: int,
+    revenue: float,
+    win_pct: float,
+) -> Dict[str, Any]:
+    """Prefer persisted prior-season revenue; seed history when missing."""
+    history = getattr(session, "market_revenue_history", None)
+    if not isinstance(history, dict):
+        history = {}
+        try:
+            session.market_revenue_history = history
+        except Exception:
+            pass
 
-    h = int(hashlib.md5(f"{team_id}:{season_year - 1}".encode()).hexdigest()[:8], 16)
-    drift = (h % 120) / 1000.0 - 0.04
-    perf_shift = (win_pct - 0.5) * 0.14
-    prior = revenue * (0.93 + drift - perf_shift * 0.35)
-    prior = max(revenue * 0.78, prior)
-    delta = round(revenue - prior, 1)
+    tid = str(team_id)
+    team_hist = history.get(tid)
+    if not isinstance(team_hist, dict):
+        team_hist = {}
+        history[tid] = team_hist
+
+    prior_key = str(int(season_year) - 1)
+    cur_key = str(int(season_year))
+    prior = team_hist.get(prior_key)
+    if prior is None:
+        # First observation: invent a soft prior once, then persist both years so
+        # subsequent reads are stable (no MD5 churn every request).
+        import hashlib
+
+        h = int(hashlib.md5(f"{tid}:{prior_key}".encode()).hexdigest()[:8], 16)
+        drift = (h % 120) / 1000.0 - 0.04
+        perf_shift = (win_pct - 0.5) * 0.14
+        prior = revenue * (0.93 + drift - perf_shift * 0.35)
+        prior = max(revenue * 0.78, prior)
+        team_hist[prior_key] = round(float(prior), 1)
+    else:
+        prior = float(prior)
+
+    team_hist[cur_key] = round(float(revenue), 1)
+    delta = round(float(revenue) - float(prior), 1)
     if delta >= 4:
         direction = "up"
     elif delta <= -4:
         direction = "down"
     else:
         direction = "flat"
-    return {"revenue_yoy_delta": delta, "revenue_yoy_direction": direction}
+    return {
+        "revenue_yoy_delta": delta,
+        "revenue_yoy_direction": direction,
+        "revenue_prior_m": round(float(prior), 1),
+    }
 
 
 def _market_pressure_reason(team_row: Dict[str, Any], team: Any) -> str:
@@ -728,16 +764,27 @@ def calculate_team_revenue(
         for tag in list(global_draw.get("global_draw_tags") or []):
             if tag not in summer_tags:
                 summer_tags.insert(0, tag)
-        return {
-            "team_id": team_id,
-            "team_name": _display_team(team) if team is not None else team_id,
-            "abbr": _franchise_team_abbrev(team) if team is not None else "",
+        relocation_risk = calculate_relocation_risk(team, revenue, profit, fan_sent, win_pct, tier_key)
+        revenue_status = _revenue_status_label(profit, revenue, win_pct, relocation_risk)
+        sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
+        yoy = _revenue_yoy_delta(session, team_id, sy, revenue, win_pct)
+        abbr = _franchise_team_abbrev(team) if team is not None else ""
+        name = _display_team(team) if team is not None else team_id
+        row = {
+            "id": str(team_id),
+            "team_id": str(team_id),
+            "name": name,
+            "team_name": name,
+            "abbreviation": abbr,
+            "abbr": abbr,
+            "logo": abbr,
+            "market_size": tier_key,
             "market_tier": tier_label,
             "market_tier_key": tier_key,
-            "revenue": round(revenue, 2),
-            "revenue_m": round(revenue, 2),
-            "expenses": round(expenses, 2),
-            "profit": round(profit, 2),
+            "revenue": round(revenue, 1),
+            "revenue_m": round(revenue, 1),
+            "expenses": round(expenses, 1),
+            "profit": round(profit, 1),
             "win_pct": round(win_pct, 3),
             "fan_sentiment": round(fan_sent, 1),
             "trade_heat": round(trade_heat, 1),
@@ -746,13 +793,29 @@ def calculate_team_revenue(
                 _clamp(0.70 + (fan_sent / 100.0) * 0.18 + min(0.08, global_draw_m * 0.002), 0.55, 0.98),
                 3,
             ),
-            "reason_tags": summer_tags[:2],
+            "star_power": stars.get("star_power", 0),
+            "superstar_count": stars.get("superstar_count", 0),
+            "top_player_overall": stars.get("top_player_overall", 0),
+            "top_player_name": stars.get("top_player_name", ""),
+            "superstar_revenue_boost": 0.0,
             "superstar_tags": [],
             "global_draw_revenue_boost": round(global_draw_m * 0.62, 1),
             "global_draw_players": list(global_draw.get("global_draw_players") or []),
+            "global_draw_tags": list(global_draw.get("global_draw_tags") or []),
+            "playoff_revenue": 0.0,
+            "relocation_risk": round(relocation_risk, 3),
+            "relocation_risk_label": _relocation_label(relocation_risk),
+            "revenue_status": revenue_status,
+            "reason_tags": summer_tags[:2],
+            "revenue_yoy_delta": yoy["revenue_yoy_delta"],
+            "revenue_yoy_direction": yoy["revenue_yoy_direction"],
+            "revenue_prior_m": yoy.get("revenue_prior_m"),
+            "conduct_revenue_modifier": 1.0,
             "is_user": bool(is_user),
             "revenue_profile": "summer_season_tickets",
         }
+        row["market_pressure"] = _market_pressure_reason(row, team)
+        return row
 
     perf_mult = 0.82 + win_pct * 0.38
     fan_mult = 0.70 + (fan_sent / 100.0) * 0.45
@@ -845,19 +908,24 @@ def calculate_team_revenue(
     relocation_risk = calculate_relocation_risk(team, revenue, profit, fan_sent, win_pct, tier_key)
     revenue_status = _revenue_status_label(profit, revenue, win_pct, relocation_risk)
     sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
-    yoy = _revenue_yoy_delta(team_id, sy, revenue, win_pct)
+    yoy = _revenue_yoy_delta(session, team_id, sy, revenue, win_pct)
 
     abbr = _franchise_team_abbrev(team)
     name = _display_team(team)
 
     row: Dict[str, Any] = {
-        "id": team_id,
+        "id": str(team_id),
+        "team_id": str(team_id),
         "name": name,
+        "team_name": name,
         "abbreviation": abbr,
+        "abbr": abbr,
         "logo": abbr,
         "market_size": tier_key,
         "market_tier": tier_label,
+        "market_tier_key": tier_key,
         "revenue": round(revenue, 1),
+        "revenue_m": round(revenue, 1),
         "expenses": round(expenses, 1),
         "profit": round(profit, 1),
         "attendance_rate": round(attendance_rate, 3),
@@ -879,7 +947,12 @@ def calculate_team_revenue(
         "trade_heat": round(trade_heat, 1),
         "revenue_yoy_delta": yoy["revenue_yoy_delta"],
         "revenue_yoy_direction": yoy["revenue_yoy_direction"],
+        "revenue_prior_m": yoy.get("revenue_prior_m"),
         "conduct_revenue_modifier": round(conduct_rev_mult, 3),
+        "is_user": bool(is_user),
+        "revenue_profile": "in_season",
+        "win_pct": round(win_pct, 3),
+        "arena_quality": round(arena, 3),
     }
     row["market_pressure"] = _market_pressure_reason(row, team)
     return row
@@ -936,14 +1009,62 @@ def calculate_league_revenue(teams: List[Dict[str, Any]]) -> float:
     return round(sum(_safe_float(t.get("revenue", 0)) for t in teams), 1)
 
 
-def calculate_escrow_progress(league_revenue: float, league_health: float) -> Dict[str, float]:
+def calculate_escrow_progress(
+    league_revenue: float,
+    league_health: float,
+    session: Optional[FranchiseSession] = None,
+) -> Dict[str, float]:
+    """Track a lightweight escrow ledger on the session; formula remains the target."""
     target = round(league_revenue * 0.115, 1)
-    collected = round(target * _clamp(0.82 + league_health * 0.28, 0.65, 1.12), 1)
+    collected_formula = round(target * _clamp(0.82 + league_health * 0.28, 0.65, 1.12), 1)
+
+    ledger: Dict[str, Any] = {}
+    if session is not None:
+        raw = getattr(session, "escrow_ledger", None)
+        if isinstance(raw, dict):
+            ledger = raw
+        else:
+            ledger = {}
+            try:
+                session.escrow_ledger = ledger
+            except Exception:
+                pass
+        sy = str(int(getattr(session, "season_calendar_year", 2025) or 2025))
+        season_row = ledger.get(sy)
+        if not isinstance(season_row, dict):
+            season_row = {
+                "target_m": target,
+                "collected_m": collected_formula,
+                "entries": [],
+            }
+            ledger[sy] = season_row
+        else:
+            # Blend toward current formula so health shifts move the ledger without wiping history.
+            prev = _safe_float(season_row.get("collected_m"), collected_formula)
+            season_row["target_m"] = target
+            season_row["collected_m"] = round(prev * 0.65 + collected_formula * 0.35, 1)
+            entries = season_row.get("entries")
+            if not isinstance(entries, list):
+                entries = []
+                season_row["entries"] = entries
+            if len(entries) < 48:
+                entries.append(
+                    {
+                        "day": int(getattr(session, "calendar_cursor", 0) or 0),
+                        "collected_m": season_row["collected_m"],
+                        "target_m": target,
+                    }
+                )
+        collected = round(_safe_float(season_row.get("collected_m"), collected_formula), 1)
+    else:
+        collected = collected_formula
+
     progress = collected / max(target, 1.0)
     return {
         "escrow_target": target,
         "escrow_collected": collected,
         "escrow_progress": round(progress, 3),
+        "escrow_ledger_active": bool(session is not None),
     }
 
 
@@ -951,11 +1072,9 @@ def calculate_salary_cap_projection(
     session: FranchiseSession,
     league_state: Dict[str, Any],
 ) -> Dict[str, Any]:
-    from services.franchise_sim import _resolve_league_salary_cap_m  # noqa: WPS433
+    from services.franchise_sim import ensure_session_nhl_salary_cap  # noqa: WPS433
 
-    sim = session.sim
-    league = getattr(sim, "league", None)
-    current_cap = _resolve_league_salary_cap_m(league)
+    current_cap = float(ensure_session_nhl_salary_cap(session))
 
     escrow_progress = _safe_float(league_state.get("escrow_progress", 1.0), 1.0)
     losing_teams = _safe_int(league_state.get("losing_teams_count", 0), 0)
@@ -998,6 +1117,48 @@ def calculate_salary_cap_projection(
     }
 
 
+def build_cap_forecast_series(session: FranchiseSession, cap: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Authoritative multi-year sketch from current + next scalars (not a full HRR model)."""
+    from app.sim_engine.economy.cap_engine import nhl_upper_limit_millions  # noqa: WPS433
+
+    sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    current = _safe_float(cap.get("salary_cap"), nhl_upper_limit_millions(sy))
+    projected = _safe_float(cap.get("projected_salary_cap"), current)
+    growth = projected - current
+    if abs(growth) < 0.05:
+        growth = current * 0.025
+    uncertainty = max(0.8, abs(growth) * 0.35 + 1.2)
+    series: List[Dict[str, Any]] = []
+    for i in range(5):
+        year = sy + i
+        if i == 0:
+            value = current
+            source = "current"
+        elif i == 1:
+            value = projected
+            source = "projected_next"
+        else:
+            # Blend model growth with published NHL table when available.
+            table = nhl_upper_limit_millions(year)
+            extrapolated = current + growth * i * (0.85 + (0.92 ** i) * 0.2)
+            value = round((table * 0.55 + extrapolated * 0.45), 1)
+            source = "extrapolated"
+        band = uncertainty * (0.7 + i * 0.35)
+        series.append(
+            {
+                "year": year,
+                "season": f"{year}-{year + 1}",
+                "label": str(year),
+                "cap": round(float(value), 1),
+                "salary_cap": round(float(value), 1),
+                "low": round(float(value) - band, 1),
+                "high": round(float(value) + band, 1),
+                "source": source,
+            }
+        )
+    return series
+
+
 def calculate_cba_pressure(league_state: Dict[str, Any]) -> float:
     losing = _safe_int(league_state.get("losing_teams_count", 0), 0)
     health = _safe_float(league_state.get("revenue_health", 0.55), 0.55)
@@ -1032,6 +1193,12 @@ def _build_cba_block(session: FranchiseSession, pressure: float) -> Dict[str, An
         "pressure": round(pressure, 3),
         "key_rules": list(_CBA_KEY_RULES),
         "potential_changes": _build_rule_changes(pressure, session),
+        "display_only": True,
+        "interactive": False,
+        "brief": (
+            "Intelligence display only — negotiations are pressure estimates. "
+            "They do not change cap rules, LTIR, lottery, or contract limits in-sim."
+        ),
     }
 
 
@@ -1179,6 +1346,17 @@ def build_league_operations_payload(session: FranchiseSession) -> Dict[str, Any]
 
 
 def _build_league_operations_payload_impl(session: FranchiseSession) -> Dict[str, Any]:
+    from services.franchise_sim import (  # noqa: WPS433
+        _sync_session_phase_from_calendar,
+        ensure_session_nhl_salary_cap,
+    )
+
+    try:
+        _sync_session_phase_from_calendar(session)
+    except Exception:
+        pass
+    ensure_session_nhl_salary_cap(session)
+
     uid = str(session.user_team_id or "")
     sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
     season_label = f"{sy}–{sy + 1}"
@@ -1228,29 +1406,37 @@ def _build_league_operations_payload_impl(session: FranchiseSession) -> Dict[str
         "small_market_break_even": round(small_market_break_even, 3),
         "revenue_health": round(revenue_health, 3),
     }
-    escrow = calculate_escrow_progress(league_revenue, revenue_health)
+    escrow = calculate_escrow_progress(league_revenue, revenue_health, session=session)
     league_state.update(escrow)
     league_state["cba_pressure"] = calculate_cba_pressure(league_state)
 
     cap = calculate_salary_cap_projection(session, league_state)
+    cap_forecast = build_cap_forecast_series(session, cap)
     cba = _build_cba_block(session, league_state["cba_pressure"])
+
+    def _team_id(t: Dict[str, Any]) -> str:
+        return str(t.get("id") or t.get("team_id") or "")
+
+    def _team_abbr(t: Dict[str, Any]) -> str:
+        return str(t.get("abbreviation") or t.get("abbr") or "")
 
     watchlist = sorted(team_rows, key=lambda r: -_safe_float(r.get("relocation_risk", 0)))[:5]
     relocation = {
         "watchlist": [
             {
-                "id": t["id"],
-                "abbreviation": t["abbreviation"],
+                "id": _team_id(t),
+                "abbreviation": _team_abbr(t),
                 "risk": t.get("relocation_risk_label", "Low"),
                 "risk_score": t.get("relocation_risk", 0),
                 "risk_bar_pct": t.get("relocation_bar_pct", 0),
-                "reason": _relocation_reason_tag(t, session.team_by_id.get(t["id"])),
+                "reason": _relocation_reason_tag(t, session.team_by_id.get(_team_id(t))),
                 "pressure": t.get("market_pressure", "Stable"),
-                "label": f"{t['abbreviation']} | {t.get('relocation_risk_label', 'Low')} | {t.get('market_pressure', 'Stable')}",
+                "label": f"{_team_abbr(t)} | {t.get('relocation_risk_label', 'Low')} | {t.get('market_pressure', 'Stable')}",
             }
             for t in watchlist
+            if _team_id(t)
         ],
-        "highest_risk_team": watchlist[0]["abbreviation"] if watchlist else "",
+        "highest_risk_team": _team_abbr(watchlist[0]) if watchlist else "",
         "league_stability": "Stable" if revenue_health >= 0.55 and losing_teams <= 12 else ("Shaky" if losing_teams <= 20 else "Weak"),
     }
 
@@ -1259,7 +1445,7 @@ def _build_league_operations_payload_impl(session: FranchiseSession) -> Dict[str
     league_pulse = _build_league_pulse(league_state, cap, relocation)
     health_label = _league_health_label(revenue_health, losing_teams)
 
-    user_row = next((t for t in team_rows if str(t.get("id")) == uid), team_rows[0] if team_rows else {})
+    user_row = next((t for t in team_rows if str(t.get("id")) == uid or str(t.get("team_id")) == uid), team_rows[0] if team_rows else {})
     user_impact = _build_user_impact(user_row, _safe_float(cap.get("cap_change", 0)), league_revenue)
     user_team = {**user_row, **user_impact}
 
@@ -1273,10 +1459,13 @@ def _build_league_operations_payload_impl(session: FranchiseSession) -> Dict[str
         "cap_change": cap["cap_change"],
         "cap_change_type": cap["cap_change_type"],
         "cap_tags": cap.get("cap_tags", []),
+        "cap_forecast": cap_forecast,
+        "cap_forecast_note": "Projection sketch from current ceiling + next-year model (not full HRR accounting).",
         "league_revenue": league_revenue,
         "escrow_target": escrow["escrow_target"],
         "escrow_collected": escrow["escrow_collected"],
         "escrow_progress": escrow["escrow_progress"],
+        "escrow_ledger_active": escrow.get("escrow_ledger_active", False),
         "large_market_revenue": round(large_rev, 1),
         "small_market_break_even": round(small_market_break_even, 3),
         "small_market_gap": round(max(0.0, 0.75 - small_market_break_even), 3),
@@ -1295,4 +1484,5 @@ def _build_league_operations_payload_impl(session: FranchiseSession) -> Dict[str
         "league_health_label": health_label,
         "league_revenue_b": round(league_revenue / 1000.0, 2),
         "total_superstar_revenue_boost": total_superstar_boost,
+        "phase": str(getattr(session, "phase", "") or ""),
     }

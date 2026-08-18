@@ -63,6 +63,7 @@ from services.franchise_session import FranchiseSession
 from services.nhl_season_calendar import (
     build_season_calendar,
     calendar_day_to_dict,
+    current_nhl_season_start_year,
     last_regular_season_index,
     map_abstract_schedule_to_calendar,
     season_anchor_event_markers,
@@ -2015,7 +2016,11 @@ def start_franchise(
         raise RuntimeError("League has no teams after initialization.")
     _franchise_startup_stage(f"team resolution: {len(teams)} clubs in league")
 
-    season_y = int(season_start_year) if season_start_year is not None else 2025
+    season_y = (
+        int(season_start_year)
+        if season_start_year is not None
+        else current_nhl_season_start_year()
+    )
     try:
         from app.sim_engine.economy.cap_engine import apply_nhl_salary_cap_for_season
 
@@ -2161,6 +2166,8 @@ def start_franchise(
         injuries_enabled=bool(injuries_enabled),
         player_universe=universe,
         preseason_applied=True,
+        phase="preseason",
+        season_phase="preseason",
     )
     try:
         from services.franchise_store import live_code_revision  # noqa: WPS433
@@ -2174,6 +2181,8 @@ def start_franchise(
     session.pending_ui_popups = getattr(session, "pending_ui_popups", None) or []
     session.calendar_events = getattr(session, "calendar_events", None) or []
     session.pending_decisions = getattr(session, "pending_decisions", None) or []
+    _sync_session_phase_from_calendar(session)
+    ensure_session_nhl_salary_cap(session)
     start_iso = _calendar_iso_for_day(session, 0)
 
     session.notifications.append(
@@ -2334,9 +2343,19 @@ def _name_str(p: Any) -> str:
 
 
 def _pos_str(p: Any) -> str:
+    """Normalize position the same way SimEngine does (identity, then player.position)."""
     ident = getattr(p, "identity", None)
     pos = getattr(ident, "position", None) if ident else None
-    return str(getattr(pos, "value", pos) or "?")
+    if pos is None or str(getattr(pos, "value", pos) or "").strip() in ("", "?"):
+        pos = getattr(p, "position", None)
+    raw = str(getattr(pos, "value", pos) or "?").strip().upper()
+    if "." in raw:
+        raw = raw.split(".")[-1]
+    return raw or "?"
+
+
+def _is_goalie_player(p: Any) -> bool:
+    return _pos_str(p).upper() == "G"
 
 
 def _player_cap_hit_millions(player: Any) -> float:
@@ -2373,13 +2392,30 @@ BOOTSTRAP_CAP_HEADROOM_MIN_M = 2.5
 BOOTSTRAP_CAP_HEADROOM_MAX_M = 9.0
 
 
-def _resolve_league_salary_cap_m(league: Any) -> float:
+def _resolve_league_salary_cap_m(league: Any, season_year: int | None = None) -> float:
     """Single source for league upper limit in millions."""
+    sy = season_year
+    if sy is None and league is not None:
+        try:
+            sy = int(getattr(league, "season_year", None) or getattr(league, "season_start_year", None) or 0) or None
+        except Exception:
+            sy = None
+    if sy is not None:
+        try:
+            from app.sim_engine.economy.cap_engine import apply_nhl_salary_cap_for_season, nhl_upper_limit_millions
+
+            if league is not None:
+                apply_nhl_salary_cap_for_season(league, int(sy))
+            # Session/calendar season → published NHL table wins over any stale
+            # league.salary_cap_m (commonly still $88 on 2025+ saves).
+            return float(nhl_upper_limit_millions(int(sy)))
+        except Exception:
+            pass
     if league is not None:
         try:
             from app.sim_engine.economy.cap_engine import _league_cap_bounds_millions
 
-            bounds = _league_cap_bounds_millions(league, None)
+            bounds = _league_cap_bounds_millions(league, None, season_start_year=sy)
             upper = float(bounds.get("upper") or 0.0)
             if upper > 0:
                 return upper
@@ -2393,15 +2429,57 @@ def _resolve_league_salary_cap_m(league: Any) -> float:
                 return raw / 1_000_000.0 if raw > 250 else raw
         except Exception:
             pass
-    raw = float(getattr(league, "salary_cap_m", 0) or getattr(league, "salary_cap", 0) or 0)
+    raw = float(getattr(league, "salary_cap_m", 0) or getattr(league, "salary_cap", 0) or 0) if league is not None else 0.0
     if raw <= 0:
         try:
             from app.sim_engine.economy.cap_engine import nhl_upper_limit_millions
 
-            return float(nhl_upper_limit_millions(getattr(league, "season_year", 2025)))
+            return float(nhl_upper_limit_millions(sy if sy is not None else getattr(league, "season_year", 2025)))
         except Exception:
             return 95.5
     return raw / 1_000_000.0 if raw > 250 else raw
+
+
+def _sync_session_phase_from_calendar(session: FranchiseSession) -> None:
+    """Keep session.phase aligned with the NHL calendar segment (preseason/regular)."""
+    phase = str(getattr(session, "phase", "") or "").lower()
+    if phase in ("playoffs", "playoff_ready", "post_cup", "complete"):
+        return
+    if phase == "offseason" and getattr(session, "offseason_stage", None):
+        return
+    cal = list(getattr(session, "nhl_calendar", None) or [])
+    if not cal:
+        return
+    cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    cur = max(0, min(cur, len(cal) - 1))
+    row = cal[cur] if isinstance(cal[cur], dict) else {}
+    seg = str(row.get("segment") or row.get("season_segment") or "").lower()
+    if seg == "preseason":
+        session.phase = "preseason"
+        session.season_phase = "preseason"
+    elif seg == "regular":
+        if phase in ("", "preseason", "regular"):
+            session.phase = "regular"
+            session.season_phase = "regular"
+    elif seg == "offseason" and phase in ("", "preseason", "regular", "offseason"):
+        # Calendar offseason days before an explicit offseason pipeline starts.
+        if not getattr(session, "offseason_stage", None):
+            session.phase = "offseason"
+            session.season_phase = "offseason"
+
+
+def ensure_session_nhl_salary_cap(session: FranchiseSession) -> float:
+    """Always stamp the live NHL upper limit for the session season onto the league."""
+    sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    league = getattr(getattr(session, "sim", None), "league", None)
+    try:
+        from app.sim_engine.economy.cap_engine import apply_nhl_salary_cap_for_season, nhl_upper_limit_millions
+
+        if league is not None:
+            apply_nhl_salary_cap_for_season(league, sy)
+        return float(nhl_upper_limit_millions(sy))
+    except Exception:
+        return float(_resolve_league_salary_cap_m(league, season_year=sy))
 
 
 def _team_nhl_payroll_m(team: Any) -> float:
@@ -3089,21 +3167,158 @@ def _skaters(team: Any) -> List[Any]:
 
 
 def _goalies(team: Any) -> List[Any]:
-    return [p for p in _active_roster(team) if _pos_str(p).upper() == "G"]
+    return [p for p in _active_roster(team) if _is_goalie_player(p)]
 
 
 def _available_goalies(team: Any) -> List[Any]:
     return [g for g in _goalies(team) if not _is_player_live_injured(g)]
 
 
+def _goalies_on_nhl_roster_list(team: Any) -> List[Any]:
+    """Any non-retired goalie still attached to the NHL roster list (IR / misflagged minors)."""
+    out: List[Any] = []
+    for p in list(getattr(team, "roster", None) or []):
+        if getattr(p, "retired", False):
+            continue
+        if _is_goalie_player(p):
+            out.append(p)
+    return out
+
+
+def _goalies_in_affiliates(team: Any) -> List[Any]:
+    out: List[Any] = []
+    for attr in ("ahl_roster", "echl_roster"):
+        for p in list(getattr(team, attr, None) or []):
+            if getattr(p, "retired", False):
+                continue
+            if _is_goalie_player(p):
+                out.append(p)
+    return out
+
+
+def _emergency_call_up_goalie(team: Any) -> Optional[Any]:
+    """Promote the best affiliate goalie onto the NHL roster so a game can be played."""
+    if team is None:
+        return None
+    candidates = _goalies_in_affiliates(team)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: -_player_ovr99(p))
+    pick = candidates[0]
+
+    nhl = list(getattr(team, "roster", None) or [])
+    ahl = list(getattr(team, "ahl_roster", None) or [])
+    echl = list(getattr(team, "echl_roster", None) or [])
+    demoted = None
+
+    # Keep under 23 by demoting a weak non-NMC skater when needed.
+    if len([p for p in nhl if not getattr(p, "retired", False) and not getattr(p, "in_minors", False)]) >= 23:
+        demote_idx = None
+        demote_score = 999.0
+        for i, p in enumerate(nhl):
+            if _is_goalie_player(p):
+                continue
+            c = getattr(p, "contract", None)
+            if bool(getattr(c, "nmc", False) or getattr(c, "no_move_clause", False)):
+                continue
+            if getattr(p, "in_minors", False) or getattr(p, "is_buried", False):
+                continue
+            score = float(_player_ovr99(p))
+            if score < demote_score:
+                demote_score = score
+                demote_idx = i
+        if demote_idx is not None:
+            demoted = nhl.pop(demote_idx)
+            demoted.in_minors = True
+            demoted.roster_location = "ahl"
+            ahl.append(demoted)
+
+    pid = str(getattr(pick, "id", "") or "")
+    ahl = [p for p in ahl if str(getattr(p, "id", "")) != pid]
+    echl = [p for p in echl if str(getattr(p, "id", "")) != pid]
+    if not any(str(getattr(p, "id", "")) == pid for p in nhl):
+        nhl.append(pick)
+    pick.in_minors = False
+    pick.is_buried = False
+    if hasattr(pick, "buried"):
+        pick.buried = False
+    pick.roster_location = "nhl"
+    setattr(team, "roster", nhl)
+    setattr(team, "ahl_roster", ahl)
+    setattr(team, "echl_roster", echl)
+    return pick
+
+
+def _reactivate_misflagged_nhl_goalie(team: Any) -> Optional[Any]:
+    """Clear accidental minors/buried flags on a goalie who is already on the NHL list."""
+    listed = _goalies_on_nhl_roster_list(team)
+    if not listed:
+        return None
+    # Prefer a non-IR goalie when possible.
+    prefer = [
+        g for g in listed
+        if not bool(getattr(g, "on_ir", False) or getattr(g, "is_ir", False) or getattr(g, "on_ltir", False))
+    ]
+    pool = prefer or listed
+    pick = max(pool, key=_player_ovr99)
+    for attr, val in (("in_minors", False), ("is_buried", False), ("buried", False), ("roster_location", "nhl")):
+        try:
+            setattr(pick, attr, val)
+        except Exception:
+            pass
+    return pick
+
+
 def _goalie_availability_status(team: Any) -> Dict[str, Any]:
     all_goalies = _goalies(team)
     healthy = _available_goalies(team)
+    if all_goalies:
+        return {
+            "total": int(len(all_goalies)),
+            "healthy": int(len(healthy)),
+            "forced_injured_start": bool(all_goalies and not healthy),
+        }
+
+    # Engine dresses anyone on team.roster; franchise active-roster filters are stricter.
+    listed = _goalies_on_nhl_roster_list(team)
+    if listed:
+        healthy_listed = [g for g in listed if not _is_player_live_injured(g)]
+        return {
+            "total": int(len(listed)),
+            "healthy": int(len(healthy_listed)),
+            "forced_injured_start": bool(not healthy_listed),
+        }
+
     return {
-        "total": int(len(all_goalies)),
-        "healthy": int(len(healthy)),
-        "forced_injured_start": bool(all_goalies and not healthy),
+        "total": 0,
+        "healthy": 0,
+        "forced_injured_start": False,
     }
+
+
+def _ensure_goalie_for_game(team: Any) -> Dict[str, Any]:
+    """Self-heal empty NHL goalie slots before a scheduled game."""
+    if _goalies(team):
+        return _goalie_availability_status(team)
+
+    revived = _reactivate_misflagged_nhl_goalie(team)
+    if _goalies(team):
+        if revived is not None:
+            _fr_dbg(
+                f"reactivated misflagged NHL goalie {_name_str(revived)} "
+                f"for {_display_team(team)}"
+            )
+        return _goalie_availability_status(team)
+
+    called = _emergency_call_up_goalie(team)
+    status = _goalie_availability_status(team)
+    if called is not None and int(status.get("total") or 0) > 0:
+        _fr_dbg(
+            f"emergency goalie call-up {_name_str(called)} "
+            f"for {_display_team(team)}"
+        )
+        return status
+    return status
 
 
 def _ovr_weight(p: Any) -> float:
@@ -4382,6 +4597,7 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
 
         uid = str(getattr(session, "user_team_id", "") or "")
         team_by_player_id: Dict[str, str] = {}
+        player_by_id: Dict[str, Any] = {}
         ovr_by_player_id: Dict[str, float] = {}
         try:
             from app.sim_engine.engine import career_ovr_0_100
@@ -4396,6 +4612,7 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
                 if not pid:
                     continue
                 team_by_player_id[pid] = tid
+                player_by_id[pid] = pl
                 if career_ovr_0_100 is not None:
                     try:
                         ovr_by_player_id[pid] = float(career_ovr_0_100(pl))
@@ -4421,6 +4638,14 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
             # Copy — never mutate live ledger team_id (broke team GF vs standings after trades).
             row = dict(src)
             pid = str(row.get("player_id") or row.get("id") or "")
+            player = player_by_id.get(pid)
+            if player is not None:
+                try:
+                    from app.sim_engine.generation.player_headshots import merge_headshot_into_row
+
+                    row = merge_headshot_into_row(row, player)
+                except Exception:
+                    pass
             live_tid = team_by_player_id.get(pid)
             if live_tid:
                 row["current_team_id"] = live_tid
@@ -5795,6 +6020,14 @@ def _serialize_player_row(
             "cap_hit": cap_hit_m,
         },
     }
+    try:
+        from app.sim_engine.generation.player_headshots import merge_headshot_into_row
+
+        # One serialization seam for NHL photography and deterministic fallback
+        # metadata. Optional fields keep older saves and API consumers valid.
+        row = merge_headshot_into_row(row, p)
+    except Exception:
+        pass
     if name_tags:
         row["name_tags"] = list(name_tags)
         row["locker_room_cancer"] = True
@@ -9455,14 +9688,22 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
                 user_line = f"{'W' if won else 'L'} vs {_display_team(opp)} ({gs}) - calendar day {d}"
             return user_line, league_line
 
-    h_goal = _goalie_availability_status(home)
-    a_goal = _goalie_availability_status(away)
+    h_goal = _ensure_goalie_for_game(home)
+    a_goal = _ensure_goalie_for_game(away)
     if int(h_goal["total"]) <= 0 or int(a_goal["total"]) <= 0:
         _fr_dbg(f"goalie availability failure on day {d}: {hid} total={h_goal['total']} {aid} total={a_goal['total']}")
+        missing = []
+        if int(h_goal["total"]) <= 0:
+            missing.append(_display_team(home) or hid)
+        if int(a_goal["total"]) <= 0:
+            missing.append(_display_team(away) or aid)
         _franchise_enqueue_critical_notice(
             session,
             title="Roster integrity issue",
-            description="A scheduled game has no listed goalie on one side. Resolve roster integrity before advancing.",
+            description=(
+                "A scheduled game has no listed goalie on one side "
+                f"({', '.join(missing)}). Resolve roster integrity before advancing."
+            ),
             source=f"goalie-missing:{hid}:{aid}:{d}",
         )
         raise RuntimeError("Cannot simulate game without at least one goalie on each roster.")
@@ -12701,6 +12942,8 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
     - Move cursor exactly once after successful simulation.
     """
     _ensure_session_event_lists(session)
+    _sync_session_phase_from_calendar(session)
+    ensure_session_nhl_salary_cap(session)
 
     if getattr(session, "pending_decisions", None):
         return _advance_blocked_result(
@@ -16767,6 +17010,8 @@ def build_state_payload(session: FranchiseSession, *, include_heavy: bool = Fals
 
 def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool = False) -> Dict[str, Any]:
     _sync_nhl_calendar_bounds(session)
+    _sync_session_phase_from_calendar(session)
+    ensure_session_nhl_salary_cap(session)
     # Schedule cadence is smoothed in start_franchise only. Re-running _smooth_league_schedule
     # here made every GET /api/franchise/state take minutes (full league re-optimization).
     sim = session.sim
@@ -16824,20 +17069,44 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
                 )
         standings_rows.sort(key=lambda x: (-x["pts"], -(x["w"] - x["l"])))
 
-    cap_info = _team_cap_snapshot(user_team, sim) if user_team is not None else {"salary_cap": 92.0, "cap_hit": 0.0, "cap_space": 92.0}
-    cap_snapshot_full = {}
+    ensure_session_nhl_salary_cap(session)
+    sy_cap = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    league_for_cap = getattr(sim, "league", None)
+    cap_snapshot_full: Dict[str, Any] = {}
     if user_team is not None:
         try:
-            from services.contract_economy import get_team_cap_snapshot_full
-            league = getattr(sim, "league", None)
-            cap_snapshot_full = get_team_cap_snapshot_full(
-                user_team, league, sim,
-                season_year=int(session.season_calendar_year),
+            from services.contract_economy import get_team_cap_snapshot_full, sync_team_cap_fields
+
+            cap_snapshot_full = sync_team_cap_fields(
+                user_team,
+                league_for_cap,
+                sim,
+                season_year=sy_cap,
                 calendar_cursor=int(getattr(session, "calendar_cursor", 0) or 0),
                 regular_season_last_index=int(getattr(session, "nhl_regular_season_last_index", 192) or 192),
             )
+            if not cap_snapshot_full:
+                cap_snapshot_full = get_team_cap_snapshot_full(
+                    user_team,
+                    league_for_cap,
+                    sim,
+                    season_year=sy_cap,
+                    calendar_cursor=int(getattr(session, "calendar_cursor", 0) or 0),
+                    regular_season_last_index=int(getattr(session, "nhl_regular_season_last_index", 192) or 192),
+                )
         except Exception:
             cap_snapshot_full = {}
+
+    if cap_snapshot_full:
+        cap_info = {
+            "salary_cap": float(cap_snapshot_full.get("upper_limit_m") or 95.5),
+            "cap_hit": float(cap_snapshot_full.get("total_cap_hit_m") or 0.0),
+            "cap_space": float(cap_snapshot_full.get("usable_cap_space_m") or 0.0),
+        }
+    elif user_team is not None:
+        cap_info = _team_cap_snapshot(user_team, sim, season_year=sy_cap)
+    else:
+        cap_info = {"salary_cap": 95.5, "cap_hit": 0.0, "cap_space": 95.5}
     cap_hint = str(getattr(user_team, "cap_pressure", "moderate") if user_team else "?")
     strat = str(getattr(user_team, "strategy", "balanced") if user_team else "?")
 
@@ -18527,6 +18796,12 @@ def _build_free_agent_row(p: Any, season_year: int, session: Any = None, *, deta
         "availability_to_sign": True,
         "nhl_transfer_eligible": True,
     }
+    try:
+        from app.sim_engine.generation.player_headshots import merge_headshot_into_row
+
+        row = merge_headshot_into_row(row, p)
+    except Exception:
+        pass
 
     if session is None:
         # Legacy path (no session): deterministic asking terms only.

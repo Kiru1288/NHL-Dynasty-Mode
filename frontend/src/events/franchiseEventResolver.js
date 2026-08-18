@@ -6,6 +6,8 @@ import { userMadePlayoffs } from "./playoffs/playoffUtils";
 import { AwardsNightEvent } from "./awardsNight";
 import { EntryDraftMenu } from "./entryDraft";
 import { DraftCombineEvent } from "./draftCombine";
+import { OpeningNightMenu } from "./openingNight";
+import { TradeDeadlineMenu } from "./tradeDeadline";
 import {
   RetirementsEventMenu,
   DraftLotteryEventMenu,
@@ -121,6 +123,20 @@ const EVENT_MAP = {
     ctaLabel: "Enter Preseason",
     getEventData: (fs) => ({ next_season: fs?.next_season }),
   },
+  opening_night: {
+    key: "opening_night",
+    title: "Opening Night",
+    component: wrapMenu(OpeningNightMenu),
+    ctaLabel: "Return to Hub",
+    getEventData: (fs) => ({ opening_night: fs?.opening_night }),
+  },
+  trade_deadline: {
+    key: "trade_deadline",
+    title: "Trade Deadline",
+    component: wrapMenu(TradeDeadlineMenu),
+    ctaLabel: "Return to Hub",
+    getEventData: (fs) => ({ trade_deadline: fs?.trade_deadline }),
+  },
 };
 
 function wrapMenu(Menu) {
@@ -161,11 +177,6 @@ function resolveEventKey(franchiseState) {
     return "playoffs_start";
   }
   if (next && EVENT_MAP[next]) return next;
-
-  const popup = (franchiseState.pending_ui_popups || franchiseState.pendingUiPopups || [])[0];
-  const kind = String(popup?.kind || "").toLowerCase();
-  if (kind === "playoff_start") return "playoffs_start";
-  if (kind && EVENT_MAP[kind]) return kind;
 
   return null;
 }

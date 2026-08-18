@@ -10,6 +10,7 @@ import React, {
   import { SCREENS } from "../game/constants";
   import { baseURL as API_BASE, SESSION_STORAGE_KEY } from "../services/api";
   import { formatProspectLeague, formatProspectTeam } from "../events/prospectDevelopment/prospectDevelopmentHelpers";
+  import PlayerHeadshot from "../components/PlayerHeadshot";
   
   /**
    * Scouting.js
@@ -1762,10 +1763,17 @@ import React, {
     );
   }
   
-  function PersonAvatar({ src, name, label, size = "md" }) {
+  function PersonAvatar({ src, name, label, size = "md", player = null }) {
+    const portraitSize = size === "xl" ? "90px" : size === "lg" ? "62px" : "39px";
     return (
       <div className={cx("scout-avatar", `scout-avatar--${size}`)}>
-        {src ? (
+        {player ? (
+          <PlayerHeadshot
+            player={{ ...(player.raw || {}), ...player }}
+            size={size === "xl" ? "xl" : size === "lg" ? "lg" : "md"}
+            style={{ "--size": portraitSize }}
+          />
+        ) : src ? (
           <img src={src} alt={name || label || "Avatar"} />
         ) : (
           <span>{stringOr(label || name).slice(0, 2).toUpperCase()}</span>
@@ -3044,6 +3052,7 @@ function OverviewView({
           name={prospect.name}
           label={prospect.position}
           size="lg"
+          player={prospect}
         />
   
         <div className="prospect-tile__body">
@@ -3478,6 +3487,7 @@ function OverviewView({
                         src={prospect.headshotUrl}
                         name={prospect.name}
                         label={prospect.position}
+                        player={prospect}
                       />
                       <div>
                         <strong>{prospect.name}</strong>
@@ -3568,6 +3578,7 @@ function OverviewView({
                     name={prospect.name}
                     label={prospect.position}
                     size="lg"
+                    player={prospect}
                   />
   
                   <div>
@@ -3940,6 +3951,7 @@ function OverviewView({
               name={prospect.name}
               label={prospect.position}
               size="xl"
+              player={prospect}
             />
   
             <div>

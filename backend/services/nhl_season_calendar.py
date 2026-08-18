@@ -49,6 +49,16 @@ def _daterange(start: date, end: date) -> Iterable[date]:
         cur += timedelta(days=1)
 
 
+def current_nhl_season_start_year(today: Optional[date] = None) -> int:
+    """September year of the NHL season that is currently in camp / FA / play.
+
+    July 1 begins the next campaign's free agency, so August 2026 is 2026–27.
+    January–June still belong to the season that started the previous September.
+    """
+    d = today or date.today()
+    return int(d.year) if int(d.month) >= 7 else int(d.year) - 1
+
+
 def _season_end_year(season_start_year: int) -> int:
     return int(season_start_year) + 1
 

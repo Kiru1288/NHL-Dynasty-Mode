@@ -22,6 +22,7 @@ import {
   getFranchiseSessionId,
   isExpiredFranchiseSessionError,
   resetFranchiseServerSessions,
+  resolveApiBaseUrl,
   setFranchiseSessionId,
   syncFranchiseSessionWithBackend,
 } from "../services/api";
@@ -69,7 +70,7 @@ export function GameUIProvider({ children }) {
   const [hubMenuIndex, setHubMenuIndex] = useState(1);
   const [rosterRowIndex, setRosterRowIndex] = useState(0);
   const [settingsRowIndex, setSettingsRowIndex] = useState(0);
-  const [setupTeamIndex, setSetupTeamIndex] = useState(0);
+  const [setupTeamIndex, setSetupTeamIndex] = useState(-1);
   const [setupGamesPerTeam, setSetupGamesPerTeam] = useState(82);
   const [capLedgerTab, setCapLedgerTab] = useState("contracts");
   const [statsCentralTab, setStatsCentralTab] = useState("overview");
@@ -77,7 +78,7 @@ export function GameUIProvider({ children }) {
 
   const [teams, setTeams] = useState([]);
   const [teamsLoading, setTeamsLoading] = useState(false);
-  const [gmName, setGmName] = useState("Pat Quinn");
+  const [gmName, setGmName] = useState("");
   const [playerUniverse, setPlayerUniverse] = useState("generated");
   const [injuriesEnabled, setInjuriesEnabledState] = useState(readInjuriesPref);
   const [franchiseState, setFranchiseState] = useState(null);
@@ -236,15 +237,23 @@ export function GameUIProvider({ children }) {
   const loadTeams = useCallback(async () => {
     const fallback = buildDefaultFranchiseTeamList();
     setTeams(fallback);
-    setSetupTeamIndex((i) => Math.min(i, Math.max(0, fallback.length - 1)));
+    setSetupTeamIndex((i) =>
+      i < 0 ? -1 : Math.min(i, Math.max(0, fallback.length - 1))
+    );
     setTeamsLoading(true);
     try {
+      await resolveApiBaseUrl();
       const t = await listTeams();
       const list = Array.isArray(t) && t.length > 0 ? t : fallback;
       setTeams(list);
-      setSetupTeamIndex((i) => Math.min(i, Math.max(0, list.length - 1)));
+      setSetupTeamIndex((i) =>
+        i < 0 ? -1 : Math.min(i, Math.max(0, list.length - 1))
+      );
     } catch (e) {
-      setError(formatFranchiseApiError(e));
+      console.warn(
+        "Franchise teams API unavailable; using local 32-club list.",
+        e
+      );
     } finally {
       setTeamsLoading(false);
     }
@@ -262,17 +271,25 @@ export function GameUIProvider({ children }) {
 
   const beginFranchise = useCallback(async () => {
     if (!teams.length) {
-      setError("No team selected. Check that the API is running, then try again.");
-      return;
+      const message = "No team selected. Check that the API is running, then try again.";
+      setError(message);
+      return { ok: false, error: message };
+    }
+    const selectedTeam = teams[setupTeamIndex];
+    if (!selectedTeam) {
+      const message = "Choose a club before opening hockey operations.";
+      setError(message);
+      return { ok: false, error: message };
     }
     setError(null);
     setLoading(true);
     try {
+      await resolveApiBaseUrl({ force: true });
       clearFranchiseSession();
       resetFranchiseStateCache();
       setFranchiseState(null);
       await resetFranchiseServerSessions();
-      const t = teams[setupTeamIndex];
+      const t = selectedTeam;
       const teamQuery = String(
         t?.team_id ??
           t?.teamId ??
@@ -321,9 +338,12 @@ export function GameUIProvider({ children }) {
       setFranchiseState(nextState);
       setHubMenuIndex(1);
       setScreen(SCREENS.HUB);
+      return { ok: true };
     } catch (e) {
       console.error("[beginFranchise]", e);
-      setError(formatFranchiseApiError(e));
+      const message = formatFranchiseApiError(e);
+      setError(message);
+      return { ok: false, error: message };
     } finally {
       setLoading(false);
     }

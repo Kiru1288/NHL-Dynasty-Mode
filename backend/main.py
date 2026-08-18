@@ -140,7 +140,7 @@ class FranchiseStartBody(BaseModel):
         default=None,
         ge=2005,
         le=2040,
-        description="September year for NHL calendar (e.g. 2025 for 2025–26); default 2025",
+        description="September year for NHL calendar (e.g. 2026 for 2026–27). Defaults to the current NHL season.",
     )
     injuries_enabled: bool = Field(
         default=True,

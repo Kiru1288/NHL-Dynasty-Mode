@@ -1,7 +1,79 @@
 import axios from "axios";
 import { record as perfRecord } from "./perfProfiler";
 
-export const baseURL = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000";
+const API_CANDIDATES = [
+  process.env.REACT_APP_API_URL,
+  "http://127.0.0.1:8000",
+  "http://127.0.0.1:8001",
+  "http://localhost:8000",
+  "http://localhost:8001",
+].filter(Boolean);
+
+function uniqueOrigins(urls) {
+  const seen = new Set();
+  return urls
+    .map((url) => String(url).replace(/\/$/, ""))
+    .filter((url) => {
+      if (seen.has(url)) return false;
+      seen.add(url);
+      return true;
+    });
+}
+
+export let baseURL = uniqueOrigins(API_CANDIDATES)[0];
+
+let resolveInFlight = null;
+let apiResolved = false;
+
+export function getApiBaseUrl() {
+  return baseURL;
+}
+
+export async function resolveApiBaseUrl({ force = false } = {}) {
+  if (force) {
+    apiResolved = false;
+    resolveInFlight = null;
+  }
+  if (!force && apiResolved) {
+    return baseURL;
+  }
+  if (!force && resolveInFlight) {
+    return resolveInFlight;
+  }
+
+  resolveInFlight = (async () => {
+    for (const origin of uniqueOrigins(API_CANDIDATES)) {
+      try {
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), 1600);
+        const res = await fetch(`${origin}/api/health`, {
+          method: "GET",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        window.clearTimeout(timer);
+        if (res.ok) {
+          baseURL = origin;
+          api.defaults.baseURL = origin;
+          apiResolved = true;
+          return origin;
+        }
+      } catch {
+        /* try the next local port */
+      }
+    }
+    apiResolved = false;
+    return baseURL;
+  })();
+
+  try {
+    return await resolveInFlight;
+  } finally {
+    if (!apiResolved) {
+      resolveInFlight = null;
+    }
+  }
+}
 
 export const SESSION_STORAGE_KEY = "nhl_franchise_session_id";
 export const API_INSTANCE_STORAGE_KEY = "nhl_franchise_api_instance_id";
@@ -146,6 +218,7 @@ function rememberBackendIdentity(instanceId, codeRevision) {
  */
 export async function syncFranchiseSessionWithBackend() {
   try {
+    await resolveApiBaseUrl();
     const { data } = await api.get("/api/health", { timeout: 8000 });
     const instanceId = String(data?.instance_id || "").trim();
     const codeRevision = String(data?.code_revision || data?.code?.revision || "").trim();

@@ -53,8 +53,10 @@ const OFFICE_PANEL_TO_SCREEN = {
   [OFFICE_PANEL_IDS.LINES]: ROUTE_SCREENS.EDIT_LINES,
   [OFFICE_PANEL_IDS.NEWS]: ROUTE_SCREENS.STORYLINES,
   [OFFICE_PANEL_IDS.DRAFT]: ROUTE_SCREENS.DRAFT_CLASS,
+  [OFFICE_PANEL_IDS.DRAFT_CLASS]: ROUTE_SCREENS.DRAFT_CLASS,
+  [OFFICE_PANEL_IDS.ROSTER]: ROUTE_SCREENS.ROSTER,
   [OFFICE_PANEL_IDS.STANDINGS]: ROUTE_SCREENS.STATS,
-  [OFFICE_PANEL_IDS.MESSAGES]: ROUTE_SCREENS.PLACEHOLDER,
+  [OFFICE_PANEL_IDS.MESSAGES]: ROUTE_SCREENS.TRADE,
   [OFFICE_PANEL_IDS.AWARDS]: ROUTE_SCREENS.STATS,
   [OFFICE_PANEL_IDS.GAME_DAY]: ROUTE_SCREENS.PLACEHOLDER,
   [OFFICE_PANEL_IDS.TEAM_IDENTITY]: ROUTE_SCREENS.PLACEHOLDER,
@@ -237,28 +239,67 @@ function getNextLeagueDay(franchiseState) {
 }
 
 function getCapSpace(team, franchiseState) {
-  const explicit =
-    team?.cap_space ??
-    team?.capSpace ??
-    franchiseState?.cap_space ??
-    franchiseState?.team_cap_space ??
-    franchiseState?.cap?.space;
+  const snap =
+    team?.cap_snapshot
+    || franchiseState?.team?.cap_snapshot
+    || franchiseState?.cap_snapshot
+    || null;
 
-  if (explicit != null) return explicit;
+  const seasonYear = safeNumber(
+    franchiseState?.season_year ?? franchiseState?.season_calendar_year,
+    2025
+  );
 
-  const limit = safeNumber(
-    team?.cap_limit ?? team?.salary_cap ?? franchiseState?.salary_cap,
+  let limit = safeNumber(
+    snap?.upper_limit_m
+      ?? team?.cap_limit
+      ?? team?.salary_cap
+      ?? franchiseState?.salary_cap,
     NaN
   );
   const hit = safeNumber(
-    team?.cap_hit ?? team?.payroll ?? franchiseState?.cap_hit,
+    snap?.total_cap_hit_m ?? team?.cap_hit ?? team?.payroll ?? franchiseState?.cap_hit,
+    NaN
+  );
+
+  // Stale 2024–25 $88M ceiling on a 2025+ franchise — never trust usable space
+  // that was computed under $88 (that early-return was the Pulse/briefing split).
+  const stale88 =
+    Number.isFinite(limit) && Math.abs(limit - 88) < 0.05 && seasonYear >= 2025;
+  if (stale88) {
+    limit = 95.5;
+  }
+
+  const snapSpace = safeNumber(
+    snap?.usable_cap_space_m ?? snap?.usableCapSpace ?? snap?._raw?.usableCapSpace,
+    NaN
+  );
+  if (Number.isFinite(snapSpace) && !stale88) {
+    return snapSpace;
+  }
+
+  const explicit = safeNumber(
+    team?.cap_space ?? team?.capSpace ?? franchiseState?.cap_space ?? franchiseState?.team_cap_space,
     NaN
   );
 
   if (Number.isFinite(limit) && Number.isFinite(hit)) {
-    return limit - hit;
+    const recomputed = limit - hit;
+    // If explicit space looks like it was computed under $88 (within ~0.1 of
+    // 88-hit) while we corrected the ceiling, prefer the recomputed room.
+    if (
+      Number.isFinite(explicit)
+      && seasonYear >= 2025
+      && Math.abs(explicit - (88 - hit)) < 0.15
+      && Math.abs(recomputed - explicit) > 0.2
+    ) {
+      return recomputed;
+    }
+    if (!Number.isFinite(explicit) || stale88) return recomputed;
   }
 
+  if (Number.isFinite(explicit) && !stale88) return explicit;
+  if (Number.isFinite(limit) && Number.isFinite(hit)) return limit - hit;
   return null;
 }
 
@@ -544,6 +585,7 @@ export function HubScreen() {
         currentDate={currentDate || "Today"}
         record={rec || "0-0-0"}
         capSpace={fmtMoney(capSpace)}
+        capSpaceMillions={Number.isFinite(capSpace) ? capSpace : null}
         nextGame={nextGame || "No game listed"}
         standingsRank={standingsLine || "Standings"}
         unreadMessages={unreadMessages}
@@ -620,7 +662,7 @@ export function HubScreen() {
         style={{
           position: "absolute",
           right: 22,
-          bottom: 92,
+          bottom: 54,
           zIndex: 5,
           display: "flex",
           flexDirection: "column",
@@ -648,7 +690,7 @@ export function HubScreen() {
               cursor: advancing ? "not-allowed" : "pointer",
             }}
           >
-            {advancing ? "ADVANCING..." : "ADVANCE DAY"}
+            {advancing ? "ADVANCING..." : "Advance one day"}
           </button>
 
           {(franchiseState?.flags?.can_enter_playoffs || phaseCta) && phaseCta !== "Advance Day" ? (
@@ -688,7 +730,7 @@ export function HubScreen() {
               letterSpacing: "0.1em",
             }}
           >
-            ROOM PULSE
+            Team chemistry
           </button>
         </div>
 
@@ -713,7 +755,7 @@ export function HubScreen() {
               letterSpacing: "0.16em",
             }}
           >
-            SIM
+            SIM DAYS
           </span>
 
           <button
@@ -737,7 +779,7 @@ export function HubScreen() {
               opacity: canSimRegularSeason ? 1 : 0.4,
             }}
           >
-            {advancing ? "SIMMING..." : "REG SEASON"}
+            {advancing ? "SIMMING..." : "Rest of season"}
           </button>
 
           {[7, 15, 30].map((days) => (
@@ -763,7 +805,7 @@ export function HubScreen() {
                 opacity: blockBulkSim || advancing ? 0.4 : 1,
               }}
             >
-              {days}D
+              {days} days
             </button>
           ))}
         </div>

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { useGameUI } from "../../game/GameUIContext";
 import { SCREENS } from "../../game/constants";
 import { getTeamLogoSrc } from "../../utils/teamLogos";
+import PlayerHeadshot from "../../components/PlayerHeadshot";
 import { pickFranchiseData } from "../eventUtils";
 import {
   extractDevelopmentPlayers,
@@ -51,17 +52,15 @@ function TeamLogo({ team, size = "large" }) {
   );
 }
 
-function PlayerAvatar({ name, size = 52 }) {
-  const initials = String(name || "?")
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((p) => p[0]?.toUpperCase() || "")
-    .join("") || "?";
+function PlayerAvatar({ player, size = 52 }) {
   return (
-    <span className="nhldev-avatar" style={{ width: size, height: size, fontSize: size * 0.34 }} aria-hidden>
-      {initials}
-    </span>
+    <div className="nhldev-avatar" style={{ width: size, height: size }} aria-hidden>
+      <PlayerHeadshot
+        player={player}
+        size={size >= 70 ? "lg" : "sm"}
+        style={{ "--size": `${Math.round(size / 1.22)}px` }}
+      />
+    </div>
   );
 }
 
@@ -73,7 +72,7 @@ function CompactRow({ player, selected, onSelect }) {
       className={`nhldev-prospect-row${selected ? " is-selected" : ""}`}
       onClick={() => onSelect(player)}
     >
-      <PlayerAvatar name={player.name} size={56} />
+      <PlayerAvatar player={player} size={56} />
       <div className="nhldev-row-main">
         <div className="nhldev-row-head">
           <strong>{player.name}</strong>
@@ -129,7 +128,7 @@ function DetailPanel({ player, franchiseTeam }) {
   return (
     <section className="nhlcal-card nhldev-detail">
       <header className="nhlcal-card-header nhldev-detail-head">
-        <PlayerAvatar name={player.name} size={72} />
+        <PlayerAvatar player={player} size={72} />
         <div>
           <p>{player.league} · {teamLabel}</p>
           <h3>{player.name}</h3>

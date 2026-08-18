@@ -5,6 +5,7 @@ import { SCREENS } from "../../game/constants";
 import { getTeamLogoSrc } from "../../utils/teamLogos";
 import { getDraftCombineState, submitCombineMeeting } from "../../services/franchiseService";
 import { safeArray } from "../shared/eventHelpers";
+import PlayerHeadshot from "../../components/PlayerHeadshot";
 import "../../styles/nhlcalShell.css";
 import "./DraftCombine.css";
 
@@ -167,16 +168,6 @@ function scoreGrade(score) {
   return "D";
 }
 
-function initials(name) {
-  return String(name || "P")
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0])
-    .join("")
-    .toUpperCase();
-}
-
 function EmptyText({ children = "—" }) {
   return <p className="dcb-empty">{children}</p>;
 }
@@ -234,7 +225,7 @@ function ProspectAvatar({ p }) {
 
   return (
     <div className="dcb-avatar" title={name}>
-      <strong>{initials(name)}</strong>
+      <PlayerHeadshot player={p} size="sm" style={{ "--size": "34px" }} />
       <span className="dcb-avatar-pos">{position}</span>
     </div>
   );

@@ -356,10 +356,41 @@ def team_ltir_pool_millions(team: Any) -> float:
     return 0.0
 
 
-def _league_cap_bounds_millions(league: Any, sim: Any) -> Dict[str, float]:
-    season_y = _season_start_year_from_label(None, league)
+def _league_cap_bounds_millions(
+    league: Any,
+    sim: Any,
+    season_start_year: Optional[int] = None,
+) -> Dict[str, float]:
+    """Resolve upper/lower limits for a season.
+
+    When ``season_start_year`` is provided (session calendar / season label), the
+    published NHL table is authoritative — league attrs often lag at $88M on
+    2025+ franchises and must not win the read path.
+    """
+    inferred_y = _season_start_year_from_label(None, league)
+    season_y: Optional[int] = None
+    if season_start_year is not None:
+        try:
+            season_y = int(season_start_year)
+        except (TypeError, ValueError):
+            season_y = None
+    if season_y is None:
+        season_y = inferred_y
+
     default_upper = nhl_upper_limit_millions(season_y)
     default_lower = nhl_lower_limit_millions(season_y)
+
+    # Explicit session/label season → table is source of truth (and re-stamp).
+    if season_start_year is not None and season_y is not None:
+        if league is not None:
+            try:
+                apply_nhl_salary_cap_for_season(league, int(season_y))
+            except Exception:
+                pass
+        return {"upper": float(default_upper), "lower": float(default_lower)}
+
+    upper = 0.0
+    floor = 0.0
 
     # First choice: explicit league attrs.
     if league is not None:
@@ -369,33 +400,38 @@ def _league_cap_bounds_millions(league: Any, sim: Any) -> Dict[str, float]:
         floor = normalize_money_to_millions(
             _get(league, "cap_floor_m", _get(league, "cap_floor", _get(league, "lower_limit_m", 0)))
         )
-        if upper > 0:
-            if floor <= 0:
-                floor = max(0.0, upper - NHL_CAP_FLOOR_GAP_M)
-            return {"upper": upper, "lower": floor}
-
-        econ = _get(league, "economics", None)
-        upper = normalize_money_to_millions(_get(econ, "salary_cap", 0))
-        floor = normalize_money_to_millions(_get(econ, "cap_floor", 0))
-        if upper > 0:
-            if floor <= 0:
-                floor = max(0.0, upper - NHL_CAP_FLOOR_GAP_M)
-            return {"upper": upper, "lower": floor}
+        if upper <= 0:
+            econ = _get(league, "economics", None)
+            upper = normalize_money_to_millions(_get(econ, "salary_cap", 0))
+            floor = normalize_money_to_millions(_get(econ, "cap_floor", 0))
 
     # Fallback: sim context economics payload.
-    econ = {}
-    if sim is not None:
+    if upper <= 0 and sim is not None:
+        econ = {}
         try:
             econ = (_get(_get(sim, "league", None), "get_league_context", lambda: {})() or {}).get("economics") or {}
         except Exception:
             econ = {}
-    upper = normalize_money_to_millions(econ.get("salary_cap", default_upper))
-    lower = normalize_money_to_millions(econ.get("cap_floor", default_lower))
+        upper = normalize_money_to_millions(econ.get("salary_cap", default_upper))
+        floor = normalize_money_to_millions(econ.get("cap_floor", default_lower))
+
     if upper <= 0:
         upper = default_upper
-    if lower <= 0:
-        lower = max(0.0, upper - NHL_CAP_FLOOR_GAP_M)
-    return {"upper": upper, "lower": lower}
+    if floor <= 0:
+        floor = max(0.0, upper - NHL_CAP_FLOOR_GAP_M)
+
+    # Correct stale 2024–25 $88M ceiling when the season table says otherwise
+    # (common on older saves / defaults that never re-stamped for 2025–26).
+    if season_y is not None and int(season_y) >= 2025 and abs(upper - 88.0) < 1e-6:
+        upper = float(default_upper)
+        floor = float(default_lower)
+        if league is not None:
+            try:
+                apply_nhl_salary_cap_for_season(league, int(season_y))
+            except Exception:
+                pass
+
+    return {"upper": upper, "lower": floor}
 
 
 def _retained_record_active(item: Any) -> bool:
@@ -487,10 +523,12 @@ def calculate_team_cap_snapshot(
     calendar_cursor: int = 0,
     regular_season_last_index: int = 192,
 ) -> Dict[str, Any]:
-    bounds = _league_cap_bounds_millions(league, sim)
+    season_y = _season_start_year_from_label(season_label, league)
+    # Pass the resolved season so a stale league.salary_cap_m=$88 (or a lagging
+    # league.season_year) cannot understate the ceiling for this snapshot.
+    bounds = _league_cap_bounds_millions(league, sim, season_start_year=season_y)
     upper_limit_m = max(0.0, bounds["upper"])
     lower_limit_m = max(0.0, bounds["lower"])
-    season_y = _season_start_year_from_label(season_label, league)
 
     active_m = team_active_roster_cap_hit_millions(team)
     # Do NOT fall back to team.total_cap_hit when active is 0 — that mirror is the

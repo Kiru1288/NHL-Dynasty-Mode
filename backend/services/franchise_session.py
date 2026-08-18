@@ -45,9 +45,12 @@ class FranchiseSession:
     player_universe: str = "generated"  # generated | real_nhl
     preseason_applied: bool = False
 
-    phase: str = "regular"  # regular | playoff_ready | playoffs | post_cup | offseason | preseason
-    season_phase: str = "regular"  # mirrors phase; legacy compat
+    phase: str = "preseason"  # regular | playoff_ready | playoffs | post_cup | offseason | preseason
+    season_phase: str = "preseason"  # mirrors phase; legacy compat
     offseason_stage: Optional[str] = None  # awards | retirements | salary_cap | ...
+    # League Operations persistence (YoY revenue + escrow ledger).
+    market_revenue_history: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    escrow_ledger: Dict[str, Any] = field(default_factory=dict)
     regular_season_complete: bool = False
     playoffs_generated: bool = False
     playoff_payload: Dict[str, Any] = field(default_factory=dict)

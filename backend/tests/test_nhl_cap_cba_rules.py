@@ -74,6 +74,22 @@ def test_apply_season_cap_and_snapshot_upper():
     assert snap["usableCapSpace"] > 0
 
 
+def test_season_label_overrides_stale_88_even_if_league_year_lags():
+    """Session season must win: league attrs stuck on 2024/$88 must not leak into space."""
+    league = SimpleNamespace(
+        season_year=2024,
+        salary_cap_m=88.0,
+        salary_cap=88.0,
+        economics=SimpleNamespace(salary_cap=88.0, cap_floor=72.0),
+    )
+    roster = [_p(aav=4.0) for _ in range(20)]
+    team = SimpleNamespace(roster=roster, ahl_roster=[], echl_roster=[], total_cap_hit=0)
+    snap = calculate_team_cap_snapshot(team, league, season_label="2025-26")
+    assert snap["upperLimit"] == 95.5
+    assert abs(snap["usableCapSpace"] - (95.5 - 80.0)) < 1e-6
+    assert float(league.salary_cap_m) == 95.5
+
+
 def test_sens_style_overage_was_wrong_cap_not_payroll():
     """Reproduce 8.4 over on $88 cap with ~$96.4 payroll → fine on $95.5."""
     # 23 * ~4.19 ≈ 96.4
@@ -81,7 +97,9 @@ def test_sens_style_overage_was_wrong_cap_not_payroll():
     team = SimpleNamespace(roster=roster, ahl_roster=[], echl_roster=[], total_cap_hit=0)
     bad = SimpleNamespace(salary_cap_m=88.0, economics=SimpleNamespace(salary_cap=88.0, cap_floor=65.0))
     snap_bad = calculate_team_cap_snapshot(team, bad, season_label="2025-26")
-    assert snap_bad["usableCapSpace"] < -8.0
+    # With season_label, bounds are corrected to 95.5 — space is near-zero, not ~-8.4 under $88.
+    assert snap_bad["upperLimit"] == 95.5
+    assert snap_bad["usableCapSpace"] > -2.0
 
     good = SimpleNamespace()
     apply_nhl_salary_cap_for_season(good, 2025)

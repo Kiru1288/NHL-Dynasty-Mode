@@ -609,6 +609,25 @@ function ShowcaseGameBody({ pop }) {
   );
 }
 
+function LeagueNoticeBody({ pop }) {
+  const kindLabel = String(pop?.kind || pop?.type || "league notice")
+    .replace(/_/g, " ")
+    .trim();
+  const message =
+    pop?.message ||
+    pop?.body ||
+    pop?.detail ||
+    pop?.summary ||
+    pop?.text ||
+    "This league update is ready. Continue to return to the hub.";
+  return (
+    <div className="showcase-popup__notice">
+      <p className="showcase-popup__notice-kicker">{kindLabel}</p>
+      <p className="showcase-popup__notice-copy">{String(message)}</p>
+    </div>
+  );
+}
+
 function WjcBody({ pop }) {
   const [openRr, setOpenRr] = useState(false);
   const standings = pop.standings || [];
@@ -779,6 +798,24 @@ function ShowcasePopupStyles() {
         min-height: 0;
         overflow: auto;
         padding: 12px 14px;
+      }
+      .showcase-popup__notice {
+        display: grid;
+        gap: 8px;
+      }
+      .showcase-popup__notice-kicker {
+        margin: 0;
+        font-size: 0.68rem;
+        font-weight: 900;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--ops-cyan, #13d8e7);
+      }
+      .showcase-popup__notice-copy {
+        margin: 0;
+        color: var(--ops-text, #e9f7fb);
+        font-size: 0.9rem;
+        line-height: 1.45;
       }
       .showcase-popup__foot {
         padding: 10px 14px;
@@ -1080,7 +1117,7 @@ export function ShowcasePopupLayer() {
           {!["wjc_tournament", "showcase_game", "allstar_game", "injury", "storyline", "legal_trouble"].includes(
             kind
           ) ? (
-            <pre className="showcase-popup__raw">{JSON.stringify(first, null, 2)}</pre>
+            <LeagueNoticeBody pop={first} />
           ) : null}
         </div>
         {!isMediaAlert ? (

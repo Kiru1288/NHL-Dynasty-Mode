@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 HEADSHOT_MIN = 1
 HEADSHOT_MAX = 60
@@ -84,6 +85,13 @@ GOALIE_HEADSHOTS = (10, 21, 22, 36, 37, 38, 52, 55)
 VETERAN_HEADSHOTS = (8, 9, 15, 17, 18, 29, 33, 41, 48)
 ROOKIE_HEADSHOTS = (2, 3, 16, 19, 23, 27, 31, 44, 49)
 PROSPECT_HEADSHOTS = (16, 27, 31, 44, 49, 50)
+
+NHL_HEADSHOT_HOSTS = frozenset(
+    {
+        "assets.nhle.com",
+        "cms.nhl.bamgrid.com",
+    }
+)
 
 
 def _pick(options: tuple, seed: int, salt: str = "") -> str:
@@ -267,6 +275,53 @@ def generate_player_headshot_metadata(
     }
 
 
+def valid_nhl_headshot_url(value: Any) -> str:
+    """Return a safe NHL-hosted HTTPS headshot URL, or an empty string."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return ""
+    host = str(parsed.hostname or "").lower()
+    if parsed.scheme != "https" or host not in NHL_HEADSHOT_HOSTS:
+        return ""
+    return raw
+
+
+def nhl_headshot_fields_from_player(player: Any) -> Dict[str, Any]:
+    """Optional real-NHL identity fields layered above generated metadata."""
+    nhl_id = (
+        getattr(player, "nhl_player_id", None)
+        or getattr(player, "nhl_id", None)
+        or getattr(player, "external_player_id", None)
+    )
+    try:
+        nhl_id = int(nhl_id) if nhl_id else None
+    except (TypeError, ValueError):
+        nhl_id = None
+
+    out: Dict[str, Any] = {}
+    if nhl_id:
+        out["nhl_player_id"] = nhl_id
+
+    url = valid_nhl_headshot_url(
+        getattr(player, "nhl_headshot_url", None)
+        or getattr(player, "portrait_url", None)
+        or getattr(player, "headshot_url", None)
+    )
+    if url and nhl_id:
+        out.update(
+            {
+                "nhl_headshot_url": url,
+                "portrait_url": url,
+                "portrait_source": "nhl",
+            }
+        )
+    return out
+
+
 def _player_identity_fields(player: Any) -> Dict[str, Any]:
     ident = getattr(player, "identity", None)
     if ident is None:
@@ -306,7 +361,7 @@ def _player_identity_fields(player: Any) -> Dict[str, Any]:
 
 
 def headshot_fields_from_player(player: Any) -> Dict[str, Any]:
-    return {
+    fields = {
         "avatar_seed": int(getattr(player, "avatar_seed", 0) or 0),
         "headshot_id": int(getattr(player, "headshot_id", 0) or getattr(player, "face_variant", 0) or 0),
         "face_variant": int(getattr(player, "face_variant", 0) or getattr(player, "headshot_id", 0) or 0),
@@ -318,6 +373,8 @@ def headshot_fields_from_player(player: Any) -> Dict[str, Any]:
         "age_bucket": str(getattr(player, "age_bucket", "") or ""),
         "nationality_code": str(getattr(player, "nationality_code", "") or ""),
     }
+    fields.update(nhl_headshot_fields_from_player(player))
+    return fields
 
 
 def apply_headshot_to_player(player: Any, meta: Dict[str, Any]) -> None:

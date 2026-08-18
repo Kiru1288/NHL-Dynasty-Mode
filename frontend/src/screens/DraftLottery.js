@@ -1,17 +1,13 @@
 ﻿import React, { useEffect, useMemo, useState } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
+import { getApiBaseUrl } from "../services/api";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 
 const LOTTERY_ODDS = [
   18.5, 13.5, 11.5, 9.5, 8.5, 7.5, 6.5, 6.0,
   5.0, 3.5, 3.0, 2.5, 2.0, 1.5, 0.5, 0.5,
 ];
-
-const API_BASE =
-  process.env.REACT_APP_API_BASE_URL ||
-  process.env.REACT_APP_API_URL ||
-  "http://localhost:8000";
 
 function safeNumber(value, fallback = 0) {
   const number = Number(value);
@@ -252,7 +248,7 @@ async function fetchFirstWorkingEndpoint() {
 
   for (const endpoint of endpoints) {
     try {
-      const response = await fetch(`${API_BASE}${endpoint}`);
+      const response = await fetch(`${getApiBaseUrl()}${endpoint}`);
 
       if (!response.ok) continue;
 

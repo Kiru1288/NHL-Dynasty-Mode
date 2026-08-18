@@ -761,7 +761,10 @@ def sync_team_cap_fields(team: Any, league: Any, sim: Any = None, **kwargs) -> D
     snap = get_team_cap_snapshot_full(team, league, sim, **kwargs)
     try:
         team.salary_cap_m = snap["upper_limit_m"]
+        team.salary_cap = snap["upper_limit_m"]
+        team.cap_limit = snap["upper_limit_m"]
         team.total_cap_hit = snap["total_cap_hit_m"]
+        team.cap_hit = snap["total_cap_hit_m"]
         team.total_salary = snap["total_cap_hit_m"]
         team.cap_space = snap["usable_cap_space_m"]
         team.cap_space_m = snap["usable_cap_space_m"]
@@ -6845,6 +6848,12 @@ def build_own_ufa_resign_row(player: Any, team: Any, season_year: int, league: A
             or ""
         ),
     }
+    try:
+        from app.sim_engine.generation.player_headshots import merge_headshot_into_row
+
+        row = merge_headshot_into_row(row, player)
+    except Exception:
+        pass
     row["available_actions"] = contract_row_available_actions(row)
     # Own UFAs negotiate a new deal (not a mid-contract extension).
     for act in row["available_actions"]:
@@ -6969,6 +6978,12 @@ def build_contract_row(player: Any, team: Any, season_year: int, league: Any = N
         "can_release_rights": False,
         "contract": c,
     }
+    try:
+        from app.sim_engine.generation.player_headshots import merge_headshot_into_row
+
+        row = merge_headshot_into_row(row, player)
+    except Exception:
+        pass
     row["available_actions"] = contract_row_available_actions(row)
     return row
 

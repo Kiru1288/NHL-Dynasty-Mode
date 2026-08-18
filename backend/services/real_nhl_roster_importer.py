@@ -32,6 +32,7 @@ WEB_API = "https://api-web.nhle.com/v1"
 STATS_API = "https://api.nhle.com/stats/rest/en"
 HTTP_TIMEOUT_S = 45
 R4_OVERRIDES_PATH = Path(__file__).resolve().parent.parent / "data" / "real_nhl_r4_overrides.json"
+_PLAYER_LANDING_CACHE: Dict[int, Dict[str, Any]] = {}
 
 
 class RealNhlImportError(Exception):
@@ -739,15 +740,24 @@ def fetch_landings_by_id(
     max_workers: int = 16,
 ) -> Dict[int, Dict[str, Any]]:
     out: Dict[int, Dict[str, Any]] = {}
-    ids = [int(i) for i in player_ids if i]
+    # Preserve order while de-duplicating merged/current/prior roster IDs.
+    ids = list(dict.fromkeys(int(i) for i in player_ids if i))
     if not ids:
+        return out
+
+    for pid in ids:
+        cached = _PLAYER_LANDING_CACHE.get(pid)
+        if cached:
+            out[pid] = cached
+    missing_ids = [pid for pid in ids if pid not in out]
+    if not missing_ids:
         return out
 
     def _one(pid: int) -> Tuple[int, Optional[Dict[str, Any]]]:
         return pid, _fetch_player_landing(pid)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futs = [pool.submit(_one, pid) for pid in ids]
+        futs = [pool.submit(_one, pid) for pid in missing_ids]
         for fut in as_completed(futs):
             try:
                 pid, payload = fut.result()
@@ -755,6 +765,7 @@ def fetch_landings_by_id(
                 continue
             if payload:
                 out[pid] = payload
+                _PLAYER_LANDING_CACHE[pid] = payload
     return out
 
 
@@ -1349,10 +1360,17 @@ def _build_player_from_roster_row(
             pass
     if r4:
         setattr(player, "real_nhl_r4", True)
-    headshot = str(row.get("headshot") or (landing or {}).get("headshot") or "")
+    from app.sim_engine.generation.player_headshots import valid_nhl_headshot_url
+
+    # The landing endpoint is the canonical source. Roster data remains a
+    # compatibility fallback for seasons where NHL also includes the field.
+    headshot = valid_nhl_headshot_url(
+        (landing or {}).get("headshot") or row.get("headshot")
+    )
     if headshot:
         setattr(player, "nhl_headshot_url", headshot)
         setattr(player, "portrait_url", headshot)
+        setattr(player, "portrait_source", "nhl")
     sweater = row.get("sweaterNumber")
     if sweater is None and isinstance(landing, dict):
         sweater = landing.get("sweaterNumber")
@@ -1420,8 +1438,9 @@ def _build_player_from_roster_row(
     return player
 
 
-def _fetch_team_roster(abbr: str, season_id: int) -> Dict[str, Any]:
-    url = f"{WEB_API}/roster/{abbr}/{season_id}"
+def _fetch_team_roster(abbr: str, season_key: Any) -> Dict[str, Any]:
+    token = "current" if str(season_key).lower() == "current" else str(int(season_key))
+    url = f"{WEB_API}/roster/{abbr}/{token}"
     return _http_get_json(url)
 
 
@@ -1473,16 +1492,41 @@ def _merge_roster_rows(
 
 
 def _fetch_merged_team_roster(abbr: str, roster_season: int, prior_season: int) -> Tuple[Dict[str, Any], List[Dict[str, Any]], str]:
-    """Fetch current roster and merge prior-season rows when the current list is thin."""
-    note = "current"
-    primary_payload: Dict[str, Any] = {}
-    primary_rows: List[Dict[str, Any]] = []
+    """Prefer live /current when importing this year's opening roster (July UFA signings)."""
+    note = "season"
+    current_payload: Dict[str, Any] = {}
+    current_rows: List[Dict[str, Any]] = []
     try:
-        primary_payload = _fetch_team_roster(abbr, roster_season)
-        primary_rows = _roster_rows(primary_payload)
+        from services.nhl_season_calendar import current_nhl_season_start_year
+
+        live_season = _season_id(current_nhl_season_start_year())
+    except Exception:
+        live_season = 0
+    if live_season and int(roster_season) == int(live_season):
+        try:
+            current_payload = _fetch_team_roster(abbr, "current")
+            current_rows = _roster_rows(current_payload)
+        except RealNhlImportError:
+            current_payload = {}
+            current_rows = []
+
+    season_payload: Dict[str, Any] = {}
+    season_rows: List[Dict[str, Any]] = []
+    try:
+        season_payload = _fetch_team_roster(abbr, roster_season)
+        season_rows = _roster_rows(season_payload)
     except RealNhlImportError:
-        primary_payload = {}
-        primary_rows = []
+        season_payload = {}
+        season_rows = []
+
+    primary_payload = current_payload or season_payload
+    primary_rows = _merge_roster_rows(current_rows, season_rows) if (current_rows and season_rows) else (current_rows or season_rows)
+    if current_rows and season_rows and current_rows != season_rows:
+        note = f"merged_live_{len(current_rows)}_season_{len(season_rows)}"
+    elif current_rows:
+        note = "current"
+    elif season_rows:
+        note = "season"
 
     prior_rows: List[Dict[str, Any]] = []
     prior_payload: Dict[str, Any] = {}
@@ -1557,6 +1601,16 @@ def select_opening_nhl_roster(
     if len(pool) <= int(limit):
         return pool, []
 
+    # House-rule Brady is forced to 55 OVR — still keep him on the NHL club so
+    # Ottawa's real $8.2M hit (and roster identity) are not deleted by trim.
+    protected: List[Any] = []
+    try:
+        from services.brady_tkachuk_chaos import is_brady_tkachuk
+
+        protected = [p for p in pool if is_brady_tkachuk(p)]
+    except Exception:
+        protected = []
+
     by_bucket: Dict[str, List[Any]] = {"F": [], "D": [], "G": [], "OTHER": []}
     for p in pool:
         by_bucket.setdefault(_player_pos_bucket(p), []).append(p)
@@ -1580,6 +1634,14 @@ def select_opening_nhl_roster(
             n -= 1
             if n <= 0:
                 return
+
+    for p in protected:
+        if len(selected) >= int(limit):
+            break
+        if id(p) in selected_ids:
+            continue
+        selected.append(p)
+        selected_ids.add(id(p))
 
     _take("G", int(min_goalies))
     _take("D", int(min_defense))
@@ -1669,6 +1731,13 @@ def trim_team_roster_to_nhl_limit(
 
 
 def _player_has_nmc(player: Any) -> bool:
+    try:
+        from services.brady_tkachuk_chaos import is_brady_tkachuk
+
+        if is_brady_tkachuk(player):
+            return True
+    except Exception:
+        pass
     c = getattr(player, "contract", None)
     if isinstance(c, dict):
         return bool(c.get("no_move_clause") or c.get("nmc") or c.get("no_movement_clause"))
@@ -1891,7 +1960,7 @@ def build_real_nhl_league_players(
     )
 
     team_abbrs = list(roster_payloads.keys())
-    contracts_by_team, contract_failures = fetch_league_contracts_by_team(
+    contracts_by_team, contract_failures, dead_cap_by_team = fetch_league_contracts_by_team(
         team_abbrs, sy
     )
 
@@ -1977,6 +2046,17 @@ def build_real_nhl_league_players(
         trim_info = trim_team_roster_to_nhl_limit(team)
         per_team[abbr] = int(trim_info.get("nhl") or len(team.roster))
         sent_to_ahl += int(trim_info.get("sent_to_ahl") or 0)
+
+        # Spotrac dead money (buyouts / retained) — previously never imported, so
+        # clubs looked ~$5M too loose vs CapFriendly/Spotrac once AAVs were fixed.
+        dead = dead_cap_by_team.get(abbr) or {}
+        try:
+            team.buyout_cap_hits = list(dead.get("buyouts") or [])
+            team.buyouts = list(dead.get("buyouts") or [])
+            team.retained_salary_records = list(dead.get("retained") or [])
+            team.retained_salary = list(dead.get("retained") or [])
+        except Exception:
+            pass
 
         # Competitive score for AI / standings priors
         try:

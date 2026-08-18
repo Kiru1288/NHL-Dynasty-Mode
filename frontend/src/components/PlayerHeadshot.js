@@ -1,6 +1,6 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import "./PlayerHeadshot.css";
-import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
+import { resolvePlayerHeadshot } from "../utils/playerHeadshots";
 import { resolveCountryCode, flagApiUrl } from "../utils/countryFlags";
 
 function clampHeadshotId(value, seed = 0) {
@@ -37,8 +37,8 @@ function roleClass(player = {}) {
 }
 
 /**
- * CSS-only NHL franchise headshot renderer.
- * Expects backend fields: headshot_id, avatar_seed, expression, age_bucket, nationality_code.
+ * Shared player portrait renderer. NHL photography is layered above the
+ * deterministic CSS portrait, which remains mounted as the failure fallback.
  */
 export default function PlayerHeadshot({
   player = {},
@@ -64,7 +64,10 @@ export default function PlayerHeadshot({
   style = {},
   ...rest
 }) {
-  const resolved = useMemo(() => ensurePlayerHeadshotFields(player), [player]);
+  const portrait = useMemo(() => resolvePlayerHeadshot(player), [player]);
+  const resolved = portrait.player;
+  const [failedNhlSrc, setFailedNhlSrc] = useState("");
+  const showNhlPhoto = Boolean(portrait.src && failedNhlSrc !== portrait.src);
 
   const headshotId = useMemo(
     () => clampHeadshotId(resolved.headshot_id || resolved.face_variant, resolved.avatar_seed),
@@ -119,6 +122,7 @@ export default function PlayerHeadshot({
     draftState ? `draft-${draftState}` : "",
     animate ? `animate-${animate}` : "",
     teamColors ? "team-branded" : "",
+    showNhlPhoto ? "has-nhl-headshot" : "",
     className,
   ]
     .filter(Boolean)
@@ -143,6 +147,20 @@ export default function PlayerHeadshot({
       aria-label={resolved.name ? `${resolved.name} headshot` : "Player headshot"}
       {...rest}
     >
+      {showNhlPhoto ? (
+        <img
+          className="ph-nhl-image"
+          src={portrait.src}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+            setFailedNhlSrc(portrait.src);
+          }}
+        />
+      ) : null}
       <span className="ph-hair" aria-hidden="true" />
       <span className="ph-face" aria-hidden="true" />
       <span className="ph-eyes" aria-hidden="true" />

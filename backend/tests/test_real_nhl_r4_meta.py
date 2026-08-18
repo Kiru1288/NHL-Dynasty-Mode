@@ -15,6 +15,11 @@ from services.real_nhl_roster_importer import (
     load_r4_overrides,
     _apply_draft_and_body,
 )
+from app.sim_engine.generation.player_headshots import (
+    headshot_fields_from_player,
+    merge_headshot_into_row,
+    valid_nhl_headshot_url,
+)
 
 
 def test_r4_pack_loads_and_pins_mcdavid():
@@ -184,3 +189,111 @@ def test_pick_stats_prefers_full_season_over_injury_sample():
     secondary = {1: {"gamesPlayed": 77, "points": 63}}
     row = pick_stats_row(1, is_goalie=False, primary=primary, secondary=secondary)
     assert row is secondary[1]
+
+
+def test_current_nhl_season_start_year_uses_july_cutoff():
+    from datetime import date
+
+    from services.nhl_season_calendar import current_nhl_season_start_year
+
+    assert current_nhl_season_start_year(date(2026, 8, 15)) == 2026
+    assert current_nhl_season_start_year(date(2026, 6, 15)) == 2025
+    assert current_nhl_season_start_year(date(2027, 1, 10)) == 2026
+
+
+def test_real_nhl_headshot_fields_layer_over_generated_fallback():
+    player = SimpleNamespace(
+        id="NHL_8478402",
+        nhl_player_id=8478402,
+        nhl_headshot_url="https://assets.nhle.com/mugs/nhl/20252026/EDM/8478402.png",
+        avatar_seed=123,
+        headshot_id=7,
+        face_variant=7,
+    )
+    fields = headshot_fields_from_player(player)
+    assert fields["nhl_player_id"] == 8478402
+    assert fields["portrait_source"] == "nhl"
+    assert fields["nhl_headshot_url"].startswith("https://assets.nhle.com/")
+    assert fields["headshot_id"] == 7
+    assert fields["avatar_seed"] == 123
+
+
+def test_invalid_nhl_headshot_url_keeps_generated_metadata_only():
+    player = SimpleNamespace(
+        id="NHL_1",
+        nhl_player_id=1,
+        nhl_headshot_url="https://example.invalid/player.png",
+        avatar_seed=456,
+        headshot_id=8,
+        face_variant=8,
+    )
+    row = merge_headshot_into_row({"player_id": "NHL_1"}, player)
+    assert valid_nhl_headshot_url(player.nhl_headshot_url) == ""
+    assert "nhl_headshot_url" not in row
+    assert "portrait_source" not in row
+    assert row["headshot_id"] == 8
+
+
+def test_old_save_without_nhl_fields_still_gets_generated_headshot():
+    player = SimpleNamespace(
+        id="legacy-player",
+        name="Legacy Player",
+        age=27,
+        position="C",
+    )
+    row = merge_headshot_into_row({"player_id": "legacy-player"}, player)
+    assert 1 <= int(row["headshot_id"]) <= 60
+    assert int(row["avatar_seed"]) > 0
+    assert "nhl_headshot_url" not in row
+
+
+def test_roster_serializer_exposes_nhl_headshot_metadata():
+    from services.franchise_sim import _serialize_player_row
+
+    identity = SimpleNamespace(
+        name="Imported Player",
+        position="C",
+        shoots="L",
+        age=26,
+        birth_year=2000,
+        birth_month=1,
+        birth_day=1,
+        birth_country="Canada",
+        height_cm=183,
+        weight_kg=86,
+    )
+    player = SimpleNamespace(
+        id="NHL_8478402",
+        identity=identity,
+        ovr=lambda: 0.9,
+        contract={},
+        nhl_player_id=8478402,
+        nhl_headshot_url="https://assets.nhle.com/mugs/nhl/20252026/EDM/8478402.png",
+        avatar_seed=123,
+        headshot_id=7,
+        face_variant=7,
+    )
+    row = _serialize_player_row(player)
+    assert row["nhl_player_id"] == 8478402
+    assert row["portrait_source"] == "nhl"
+    assert row["nhl_headshot_url"].endswith("/8478402.png")
+    assert row["headshot_id"] == 7
+
+
+def test_landing_fetches_are_deduplicated_and_cached(monkeypatch):
+    import services.real_nhl_roster_importer as importer
+
+    calls = []
+    importer._PLAYER_LANDING_CACHE.clear()
+
+    def fake_fetch(player_id):
+        calls.append(player_id)
+        return {"playerId": player_id, "headshot": f"https://assets.nhle.com/{player_id}.png"}
+
+    monkeypatch.setattr(importer, "_fetch_player_landing", fake_fetch)
+    first = importer.fetch_landings_by_id([7, 7, 8], max_workers=1)
+    second = importer.fetch_landings_by_id([7, 8], max_workers=1)
+
+    assert set(first) == {7, 8}
+    assert set(second) == {7, 8}
+    assert calls == [7, 8]

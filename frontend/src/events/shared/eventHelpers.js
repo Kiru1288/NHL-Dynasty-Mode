@@ -2462,6 +2462,8 @@ export function buildCinematicCss(prefix) {
 .${p}-footer-actions.is-split { justify-content: space-between; width: 100%; }
 .${p}-skip-btn { background: rgba(12, 31, 47, 0.72); border: 1px solid var(--line); color: var(--muted); padding: 0.7rem 1.15rem; border-radius: 2px; cursor: pointer; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; font-size: 0.72rem; transition: border-color 0.2s ease, color 0.2s ease; }
 .${p}-skip-btn:hover { border-color: rgba(73, 231, 240, 0.5); color: var(--text); }
+.${p}-skip-btn:focus-visible,
+.${p}-cta-btn:focus-visible { outline: 2px solid var(--cyan, #13d8e7); outline-offset: 2px; }
 /* Broadcast action: the event's committing control. Rink-cut corner, flat
    deadline gold, no gloss and no lift. */
 .${p}-cta-btn { position: relative; border: 0; border-radius: 0; clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%); padding: 0.8rem 2rem; min-width: 200px; background: #e9a83c; color: #1b1002; cursor: pointer; font-weight: 1000; letter-spacing: 0.14em; text-transform: uppercase; box-shadow: none; transition: background 0.2s ease, transform 0.11s ease; }

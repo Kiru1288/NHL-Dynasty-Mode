@@ -32,6 +32,19 @@
     isolation: isolate;
     filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.45));
   }
+
+  .player-headshot .ph-nhl-image {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: contain;
+    object-position: center bottom;
+    pointer-events: none;
+    user-select: none;
+    z-index: 10;
+  }
   
   /* -------------------------------
      Jersey / shoulders

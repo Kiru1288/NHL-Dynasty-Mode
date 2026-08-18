@@ -64,18 +64,6 @@ function useSetupSoundtrack(screen) {
       }
     };
 
-    const tryPlay = () => {
-      audio.play().catch(() => {
-        const resume = () => {
-          audio.play().catch(() => {});
-          window.removeEventListener("pointerdown", resume);
-          window.removeEventListener("keydown", resume);
-        };
-        window.addEventListener("pointerdown", resume, { once: true });
-        window.addEventListener("keydown", resume, { once: true });
-      });
-    };
-
     const fadeOutAndStop = () => {
       cancelFade();
       const startVolume = audio.volume;
@@ -98,11 +86,6 @@ function useSetupSoundtrack(screen) {
     };
 
     if (screen === SCREENS.SETUP) {
-      cancelFade();
-      audio.volume = SETUP_MUSIC_VOLUME;
-      if (audio.paused) {
-        tryPlay();
-      }
       return cancelFade;
     }
 

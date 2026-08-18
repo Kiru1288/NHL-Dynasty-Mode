@@ -16,6 +16,7 @@ import {
   getPlayerTeamLogoSrc,
   getTeamLogoSrc,
 } from "../utils/teamLogos";
+import PlayerHeadshot from "../components/PlayerHeadshot";
 
 /*
 ===========================================================
@@ -4606,20 +4607,6 @@ function Pill({ children, tone = "" }) {
   );
 }
 
-function getPlayerHeadshotSrc(player) {
-  return pickString(
-    player?.headshot,
-    player?.headshot_url,
-    player?.headshotUrl,
-    player?.portrait,
-    player?.portrait_url,
-    player?.image,
-    player?.image_url,
-    player?.photo,
-    player?.photo_url
-  );
-}
-
 function PlayerAvatar({
   player,
   small = false,
@@ -4631,14 +4618,19 @@ function PlayerAvatar({
   const logoSrc =
     player?.team_logo_src ||
     getPlayerTeamLogoSrc(player, teams, franchiseState || undefined);
-  const headshotSrc = getPlayerHeadshotSrc(player);
+  const portraitSize = large ? "64px" : small ? "38px" : "39px";
 
   return (
     <div
-      className={`sc-avatar ${headshotSrc ? "sc-avatar--headshot" : "sc-avatar--fallback"} ${small ? "is-small" : ""} ${large ? "is-large" : ""}`}
+      className={`sc-avatar sc-avatar--headshot ${small ? "is-small" : ""} ${large ? "is-large" : ""}`}
       title={playerName(player)}
     >
-      {headshotSrc ? <img src={headshotSrc} alt="" /> : <span>{pos}</span>}
+      <PlayerHeadshot
+        player={{ ...player, position: player?.position || player?.pos || pos }}
+        size={small ? "sm" : large ? "lg" : "md"}
+        className="sc-avatar-player-headshot"
+        style={{ "--size": portraitSize }}
+      />
       {logoSrc ? (
         <i className="sc-avatar-team-logo" title={String(player?.team_name || player?.team_id || player?.team || "")}>
           <img src={logoSrc} alt="" />
@@ -16957,6 +16949,14 @@ function StatsCentralStyles() {
       .sc-avatar.is-small {
         width: 46px;
         height: 46px;
+      }
+
+      .sc-avatar > .sc-avatar-player-headshot {
+        position: absolute;
+        left: 50%;
+        bottom: 0;
+        transform: translateX(-50%);
+        margin: 0;
       }
 
       .sc-avatar--headshot > img,

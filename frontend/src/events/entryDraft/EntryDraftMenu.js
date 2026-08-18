@@ -13,6 +13,7 @@ import {
 import { getTeamAbbreviation, getTeamLogoSrc } from "../../utils/teamLogos";
 import { flagApiUrl, resolveCountryCode } from "../../utils/countryFlags";
 import FanReactionFeed from "../../components/franchise/social/FanReactionFeed";
+import PlayerHeadshot from "../../components/PlayerHeadshot";
 import { buildDraftFanTweets, buildDraftPickReactionTweet } from "../awardsNight/awardHelpers";
 import {
   buildCinematicCss,
@@ -992,7 +993,11 @@ function ProspectDossier({
         <header className={`${PREFIX}-dossier-head`}>
           <div className={`${PREFIX}-dossier-identity`}>
             <div className={`${PREFIX}-dossier-avatar`} aria-hidden="true">
-              {(getPlayerName(prospect) || "?").slice(0, 1)}
+              <PlayerHeadshot
+                player={prospect}
+                size="sm"
+                style={{ "--size": "45px" }}
+              />
             </div>
             <div>
               <h2>{getPlayerName(prospect)}</h2>

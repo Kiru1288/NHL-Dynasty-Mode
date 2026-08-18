@@ -26,26 +26,32 @@ const CALM_MOODS = new Set(["calm", "quiet", "stable"]);
 const LO_STYLES = `
 .lo-screen {
   --lo-panel: var(--ops-panel, rgba(9, 25, 38, 0.94));
+  --lo-panel-2: var(--ops-panel-2, rgba(7, 20, 32, 0.92));
   --lo-line: var(--ops-grid, rgba(156, 218, 236, 0.14));
+  --lo-line-strong: var(--ops-grid-strong, rgba(156, 218, 236, 0.28));
   --lo-text: var(--ops-text, #e9f7fb);
-  --lo-muted: var(--ops-text-secondary, #8096a8);
+  --lo-muted: var(--ops-text-secondary, #93a8b8);
   --lo-cyan: var(--ops-cyan, #13d8e7);
   --lo-gold: var(--ops-gold, #e9a83c);
   --lo-green: var(--ops-success, #52df94);
   --lo-red: var(--ops-injury, #ff606d);
   --lo-yellow: var(--ops-gold, #e9a83c);
   --lo-orange: #ff8c3c;
+  --lo-ink: #0a1622;
   flex: 1;
   height: 100%;
   max-height: 100%;
   min-height: 0;
   overflow: hidden;
-  padding: 8px 14px 10px !important;
+  padding: 10px 16px 12px !important;
   color: var(--lo-text);
   background:
-    radial-gradient(ellipse at 14% 0%, rgba(19, 216, 231, 0.06), transparent 42%),
-    radial-gradient(ellipse at 86% 4%, rgba(233, 168, 60, 0.05), transparent 36%),
+    linear-gradient(rgba(156, 218, 236, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(156, 218, 236, 0.03) 1px, transparent 1px),
+    radial-gradient(ellipse at 12% 0%, rgba(19, 216, 231, 0.07), transparent 44%),
+    radial-gradient(ellipse at 88% 6%, rgba(233, 168, 60, 0.05), transparent 38%),
     linear-gradient(180deg, var(--ops-black, #061522) 0%, var(--ops-navy-deep, #020a11) 100%);
+  background-size: 100% 28px, 28px 100%, auto, auto, auto;
   font-family: var(--font-ops-ui, Inter, ui-sans-serif, system-ui, sans-serif);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -53,7 +59,27 @@ const LO_STYLES = `
   scrollbar-width: thin;
   scrollbar-color: rgba(156, 218, 236, 0.28) rgba(4, 14, 22, 0.95);
 }
-.lo-screen * { box-sizing: border-box; }
+.lo-screen,
+.lo-screen * {
+  box-sizing: border-box;
+  color: inherit;
+}
+.lo-screen h1,
+.lo-screen h2,
+.lo-screen h3,
+.lo-screen h4,
+.lo-screen p,
+.lo-screen span,
+.lo-screen strong,
+.lo-screen b,
+.lo-screen em,
+.lo-screen small,
+.lo-screen label,
+.lo-screen td,
+.lo-screen th,
+.lo-screen button {
+  color: inherit;
+}
 .lo-screen *::-webkit-scrollbar { width: 8px; height: 8px; }
 .lo-screen *::-webkit-scrollbar-track {
   background: rgba(4, 14, 22, 0.95);
@@ -316,26 +342,38 @@ const LO_STYLES = `
 .lo-chart {
   position: relative;
   height: 100%;
-  min-height: 160px;
+  min-height: 140px;
+  max-height: 220px;
   min-width: 0;
 }
 .lo-chart svg { width: 100%; height: 100%; display: block; overflow: visible; }
 .lo-chart-band { fill: rgba(233, 168, 60, 0.12); }
 .lo-chart-line { fill: none; stroke: var(--lo-gold); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.lo-chart-line.is-proj { stroke-dasharray: 5 4; stroke-opacity: 0.85; }
 .lo-chart-dot { fill: var(--lo-gold); }
-.lo-chart-grid { stroke: rgba(156, 218, 236, 0.08); stroke-width: 1; }
-.lo-chart-label {
-  fill: var(--lo-muted);
-  font-size: 11px;
+.lo-chart-dot.is-now { fill: var(--lo-cyan); stroke: var(--lo-cyan); }
+.lo-chart-grid { stroke: rgba(156, 218, 236, 0.1); stroke-width: 1; }
+.lo-chart text,
+.lo-chart-label,
+.lo-chart-value,
+.lo-chart-tick,
+.lo-chart-xlabel {
+  fill: var(--lo-muted) !important;
+  color: var(--lo-muted);
+  font-size: 10px;
   font-weight: 700;
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-ops-ui, Inter, ui-sans-serif, system-ui, sans-serif);
 }
 .lo-chart-value {
-  fill: var(--lo-text);
+  fill: var(--lo-text) !important;
+  color: var(--lo-text);
   font-size: 11px;
   font-weight: 800;
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
 }
+.lo-chart-value.is-now { fill: var(--lo-cyan) !important; }
+.lo-chart-value.is-next { fill: var(--lo-gold) !important; }
+.lo-chart-tick { fill: var(--lo-muted) !important; font-size: 10px; }
+.lo-chart-xlabel { fill: var(--lo-muted) !important; font-size: 10px; }
 
 .lo-confidence-text {
   font-size: 0.74rem;
@@ -495,7 +533,43 @@ const LO_STYLES = `
   overflow: hidden;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 14px;
+}
+
+.lo-cba-banner {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: baseline;
+  padding: 10px 14px;
+  border: 1px solid rgba(212, 168, 83, 0.35);
+  background: rgba(212, 168, 83, 0.08);
+  color: #e8d9b5;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.lo-cba-banner strong {
+  color: var(--lo-gold, #d4a853);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+.lo-forecast-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: rgba(232, 217, 181, 0.72);
+  line-height: 1.35;
+}
+.lo-chart-wrap {
+  width: 100%;
+  height: 100%;
+}
+.lo-chart-wrap .lo-chart {
+  width: 100%;
+  height: auto;
+  display: block;
 }
 
 .lo-cba-left {
@@ -785,7 +859,7 @@ const LO_STYLES = `
   height: 100%;
   overflow: hidden;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.55fr);
   gap: 12px;
 }
 
@@ -1004,12 +1078,374 @@ const LO_STYLES = `
   overflow: hidden;
 }
 
+/* —— Redesign: pulse, chart legend, CBA rail, empty panels, motion —— */
+.lo-ov {
+  grid-template-rows: auto minmax(0, 1.15fr) minmax(0, 0.85fr) !important;
+  gap: 12px !important;
+}
+.lo-pulse {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0;
+  border: 1px solid var(--lo-line);
+  background: linear-gradient(180deg, rgba(12, 32, 48, 0.92), rgba(6, 18, 28, 0.9));
+  min-width: 0;
+}
+.lo-pulse-cell {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-right: 1px solid var(--lo-line);
+  min-width: 0;
+}
+.lo-pulse-cell:last-child { border-right: 0; }
+.lo-pulse-cell span {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lo-muted);
+}
+.lo-pulse-cell b {
+  font-size: 1.15rem;
+  font-weight: 900;
+  color: var(--lo-text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.lo-pulse-cell.dominant b { color: var(--lo-cyan); font-size: 1.28rem; }
+.lo-pulse-cell b.gold { color: var(--lo-gold); }
+.lo-pulse-cell b.pos { color: var(--lo-green); }
+.lo-pulse-cell b.neg { color: var(--lo-red); }
+.lo-pulse-cell em {
+  font-style: normal;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--lo-muted);
+}
+.lo-pulse-moods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+.lo-pulse-moods em { font-style: normal; color: var(--lo-muted); font-size: 0.72rem; font-weight: 700; }
+.lo-pulse-moods b { font-size: 0.78rem; color: var(--lo-text); }
+.lo-pulse-moods b.pos { color: var(--lo-green); }
+
+.lo-forecast {
+  border: 1px solid var(--lo-line);
+  background: rgba(6, 18, 28, 0.72);
+  padding: 10px 12px 8px;
+  min-height: 0;
+}
+.lo-chart-wrap { width: 100%; min-height: 0; }
+.lo-chart-wrap .lo-chart { width: 100%; height: auto; max-height: 180px; display: block; }
+.lo-forecast-note {
+  margin: 6px 0 0;
+  font-size: 0.72rem;
+  color: var(--lo-muted);
+  line-height: 1.35;
+}
+.lo-chart-legend {
+  display: flex;
+  gap: 14px;
+  margin-top: 6px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--lo-muted);
+}
+.lo-chart-legend .now::before,
+.lo-chart-legend .next::before,
+.lo-chart-legend .long::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.lo-chart-legend .now::before { background: var(--lo-cyan); }
+.lo-chart-legend .next::before { background: var(--lo-gold); }
+.lo-chart-legend .long::before { background: var(--lo-muted); }
+
+.lo-priority-card {
+  grid-template-columns: minmax(120px, 168px) minmax(120px, 1fr) minmax(0, 1.4fr) auto !important;
+  position: relative;
+}
+.lo-priority-balance {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  height: 3px;
+  margin-top: 2px;
+}
+.lo-priority-balance i {
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  background: var(--lo-gold);
+}
+.lo-priority-balance i.players { background: var(--lo-cyan); justify-self: end; }
+
+.lo-cba-banner { display: none !important; }
+.lo-cba-notice {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  padding: 7px 10px;
+  border: 1px solid rgba(233, 168, 60, 0.28);
+  background: rgba(233, 168, 60, 0.06);
+  font-size: 0.74rem;
+  color: var(--lo-muted);
+}
+.lo-cba-notice-mark {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--lo-gold);
+  box-shadow: 0 0 0 3px rgba(233, 168, 60, 0.18);
+  flex: 0 0 auto;
+  align-self: center;
+}
+.lo-cba-notice strong {
+  color: var(--lo-gold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 0.68rem;
+}
+.lo-cba-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.lo-cba-pressure {
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: var(--lo-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.lo-timeline-rail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  padding: 8px 2px 4px;
+  min-height: 0;
+  overflow: auto;
+}
+.lo-timeline-step {
+  position: relative;
+  display: grid;
+  gap: 3px;
+  padding: 8px 8px 8px 18px;
+  border: 1px solid var(--lo-line);
+  background: rgba(255, 255, 255, 0.02);
+  min-width: 0;
+}
+.lo-timeline-dot {
+  position: absolute;
+  left: 6px;
+  top: 12px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--lo-muted);
+}
+.lo-timeline-step.current .lo-timeline-dot,
+.lo-timeline-step.active .lo-timeline-dot { background: var(--lo-cyan); box-shadow: 0 0 0 3px rgba(19, 216, 231, 0.2); }
+.lo-timeline-step.negotiating .lo-timeline-dot,
+.lo-timeline-step.gold .lo-timeline-dot,
+.lo-timeline-step.warn .lo-timeline-dot { background: var(--lo-gold); }
+.lo-timeline-step.danger .lo-timeline-dot,
+.lo-timeline-step.expiry .lo-timeline-dot { background: var(--lo-red); }
+.lo-timeline-when {
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--lo-muted);
+}
+.lo-timeline-step b {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--lo-text);
+}
+.lo-timeline-step em {
+  font-style: normal;
+  font-size: 0.72rem;
+  color: var(--lo-muted);
+  line-height: 1.3;
+}
+.lo-issue {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1.2fr) auto;
+  grid-template-areas:
+    "title state"
+    "scale scale"
+    "balance balance";
+  gap: 4px 10px;
+  align-items: center;
+}
+.lo-issue-title { grid-area: title; color: var(--lo-text); }
+.lo-issue-state { grid-area: state; justify-self: end; }
+.lo-issue-scale { grid-area: scale; color: var(--lo-muted); }
+.lo-issue-balance {
+  grid-area: balance;
+  display: flex;
+  width: 100%;
+  height: 18px;
+  overflow: hidden;
+  border: 1px solid var(--lo-line);
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+.lo-issue-balance .owners,
+.lo-issue-balance .players {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 0 4px;
+}
+.lo-issue-balance .owners {
+  background: rgba(233, 168, 60, 0.22);
+  color: var(--lo-gold);
+}
+.lo-issue-balance .players {
+  background: rgba(19, 216, 231, 0.18);
+  color: var(--lo-cyan);
+}
+
+.lo-filters button em {
+  margin-left: 6px;
+  color: var(--lo-muted);
+  font-style: normal;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.lo-filters button.active em { color: var(--lo-cyan); }
+
+.lo-empty-panel {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  position: relative;
+  padding: 16px 14px !important;
+}
+.lo-empty-panel-frame {
+  position: absolute;
+  inset: 10px;
+  border: 1px dashed rgba(156, 218, 236, 0.18);
+  pointer-events: none;
+}
+.lo-empty-panel h4 {
+  margin: 0;
+  position: relative;
+  color: var(--lo-text);
+  font-size: 0.95rem;
+}
+.lo-dossier-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.lo-dossier-head h4 {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--lo-text);
+}
+.lo-dossier-head h4 em {
+  font-style: normal;
+  font-size: 0.72rem;
+  color: var(--lo-muted);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.lo-dossier-hero {
+  display: grid;
+  gap: 2px;
+  padding: 10px 0;
+  margin-bottom: 6px;
+  border-top: 1px solid var(--lo-line);
+  border-bottom: 1px solid var(--lo-line);
+}
+.lo-dossier-hero span {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lo-muted);
+}
+.lo-dossier-hero b {
+  font-size: 1.45rem;
+  font-weight: 900;
+  color: var(--lo-gold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.lo-inspector-row b.gold { color: var(--lo-gold); }
+.lo-inspector h4 { color: var(--lo-text); }
+.lo-inspector-empty,
+.lo-empty {
+  color: var(--lo-muted) !important;
+}
+
+.lo-tabs button:focus-visible,
+.lo-back:focus-visible,
+.lo-priority-card:focus-visible,
+.lo-issue:focus-visible,
+.lo-filters button:focus-visible,
+.lo-risk-card:focus-visible,
+.lo-table tbody tr:focus-visible {
+  outline: 2px solid var(--lo-cyan);
+  outline-offset: 2px;
+}
+
+@keyframes loFadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.lo-enter { animation: loFadeUp 0.28s cubic-bezier(0.22, 1, 0.36, 1); }
+.lo-enter-soft { animation: loFadeUp 0.2s cubic-bezier(0.22, 1, 0.36, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .lo-enter,
+  .lo-enter-soft,
+  .lo-support-track i,
+  .lo-priority-balance i {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@media (max-width: 1500px) {
+  .lo-pulse { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .lo-pulse-cell:nth-child(4n) { border-right: 0; }
+}
 @media (max-width: 1100px) {
   .lo-cba { grid-template-columns: 1fr; }
   .lo-markets-body { grid-template-columns: 1fr; }
   .lo-risk { grid-template-columns: 1fr; }
   .lo-priority-list { grid-template-columns: 1fr; }
   .lo-summary-row { grid-template-columns: 1fr; }
+  .lo-pulse { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-height: 820px) {
+  .lo-pulse-cell { padding: 8px 10px; }
+  .lo-pulse-cell b { font-size: 1.02rem; }
+  .lo-chart-wrap .lo-chart { max-height: 140px; }
+  .lo-ov { gap: 8px !important; }
 }
 `;
 
@@ -1475,6 +1911,9 @@ function normalizeLeagueOps(raw) {
       || data.cap_change_type
       || "Stable",
     cap_forecast,
+    cap_forecast_note:
+      data.cap_forecast_note
+      || "Projection sketch from current ceiling + next-year model (not full HRR accounting).",
     confidence,
     active_issues: deriveActiveIssues(data),
     cba_timeline: deriveCbaTimeline(data),
@@ -1489,24 +1928,26 @@ function TeamLogo({ team, abbr, size = 22 }) {
 
 function chartAxisLabel(points, i) {
   if (!points.length) return "";
-  if (i === 0) return "Current";
-  if (i === 1) return "Next Season";
-  if (i === points.length - 1) return "Long-Term";
-  return "";
+  if (i === 0) return "Now";
+  if (i === 1) return "Next";
+  if (i === points.length - 1) return "Long";
+  return String(points[i]?.year || "").slice(2);
 }
 
-function CapForecastChart({ series }) {
+function CapForecastChart({ series, note }) {
   const points = asArray(series);
   if (!points.length) return <div className="lo-empty">No forecast</div>;
 
-  const padL = 44;
-  // Reserve room for the final season's value label so it is not cut off at
-  // the right edge of the forecast frame.
-  const padR = 44;
-  const padT = 22;
-  const padB = 30;
+  const padL = 52;
+  const padR = 18;
+  const padT = 18;
+  const padB = 26;
   const w = 720;
-  const h = 220;
+  const h = 168;
+  const fillMuted = "#93a8b8";
+  const fillText = "#e9f7fb";
+  const fillCyan = "#13d8e7";
+  const fillGold = "#e9a83c";
   const caps = points.flatMap((p) => [p.low, p.high, p.cap]);
   const minY = Math.min(...caps) - 1;
   const maxY = Math.max(...caps) + 1;
@@ -1525,36 +1966,79 @@ function CapForecastChart({ series }) {
     "Z",
   ].join(" ");
 
-  const ticks = [minY + span * 0.25, minY + span * 0.5, minY + span * 0.75];
+  const ticks = [minY + span * 0.2, minY + span * 0.5, minY + span * 0.8];
 
   return (
-    <div className="lo-chart" aria-label="Projected salary cap by season">
-      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: "100%", height: "100%" }}>
+    <div className="lo-chart-wrap">
+      <svg
+        className="lo-chart"
+        viewBox={`0 0 ${w} ${h}`}
+        role="img"
+        aria-label="Salary cap forecast"
+        style={{ color: fillMuted }}
+      >
+        <path d={band} className="lo-chart-band" />
+        <path d={line} className="lo-chart-line" fill="none" />
         {ticks.map((t) => (
-          <line key={t} className="lo-chart-grid" x1={padL} x2={w - padR} y1={yAt(t)} y2={yAt(t)} />
+          <g key={`tick-${t}`}>
+            <line x1={padL} x2={w - padR} y1={yAt(t)} y2={yAt(t)} className="lo-chart-grid" />
+            <text
+              x={padL - 8}
+              y={yAt(t) + 3}
+              textAnchor="end"
+              className="lo-chart-tick"
+              fill={fillMuted}
+              style={{ fill: fillMuted }}
+            >
+              {fmtCap(t)}
+            </text>
+          </g>
         ))}
-        <path className="lo-chart-band" d={band} />
-        <path className="lo-chart-line" d={line} />
         {points.map((p, i) => {
-          const axis = chartAxisLabel(points, i);
-          const anchor = i === 0 ? "start" : i === points.length - 1 ? "end" : "middle";
+          const isNow = i === 0;
+          const isNext = i === 1;
+          const valueFill = isNow ? fillCyan : isNext ? fillGold : fillText;
           return (
-            <g key={p.year}>
-              <circle className="lo-chart-dot" cx={xAt(i)} cy={yAt(p.cap)} r={axis ? 4 : 2.6} />
-              {axis ? (
-                <>
-                  <text className="lo-chart-label" x={xAt(i)} y={h - 8} textAnchor={anchor}>
-                    {axis}
-                  </text>
-                  <text className="lo-chart-value" x={xAt(i)} y={yAt(p.cap) - 10} textAnchor={anchor}>
-                    {fmtCap(p.cap)}
-                  </text>
-                </>
+            <g key={p.year || i}>
+              <circle
+                cx={xAt(i)}
+                cy={yAt(p.cap)}
+                r={isNow || isNext ? 4 : 3}
+                className={`lo-chart-dot${isNow ? " is-now" : ""}`}
+                fill={isNow ? fillCyan : fillGold}
+              />
+              <text
+                x={xAt(i)}
+                y={h - 8}
+                textAnchor="middle"
+                className="lo-chart-xlabel"
+                fill={fillMuted}
+                style={{ fill: fillMuted }}
+              >
+                {chartAxisLabel(points, i)}
+              </text>
+              {(isNow || isNext || i === points.length - 1) ? (
+                <text
+                  x={xAt(i)}
+                  y={Math.max(12, yAt(p.cap) - 10)}
+                  textAnchor="middle"
+                  className={`lo-chart-value${isNow ? " is-now" : isNext ? " is-next" : ""}`}
+                  fill={valueFill}
+                  style={{ fill: valueFill }}
+                >
+                  {fmtCap(p.cap)}
+                </text>
               ) : null}
             </g>
           );
         })}
       </svg>
+      {note ? <p className="lo-forecast-note">{note}</p> : null}
+      <div className="lo-chart-legend" aria-hidden="true">
+        <span className="now">Current</span>
+        <span className="next">Next season</span>
+        <span className="long">Long-term estimate</span>
+      </div>
     </div>
   );
 }
@@ -1614,8 +2098,13 @@ function TeamDossier({ team }) {
   const t = asObject(team);
   if (!Object.keys(t).length) {
     return (
-      <div className="lo-inspector lo-dossier">
-        <div className="lo-inspector-empty">Select a team for market detail</div>
+      <div className="lo-inspector lo-dossier lo-empty-panel">
+        <div className="lo-empty-panel-frame" aria-hidden="true" />
+        <span className="lo-inspector-kicker">Market Intelligence</span>
+        <h4>Select a franchise</h4>
+        <p className="lo-inspector-note">
+          Choose a club from the board to open revenue, market size, and relocation pressure.
+        </p>
       </div>
     );
   }
@@ -1636,27 +2125,30 @@ function TeamDossier({ team }) {
   const arena = t.reloc_reason || t.market_pressure || t.pressure || "Stable";
 
   return (
-    <div className="lo-inspector lo-dossier">
-      <span className="lo-inspector-kicker">Market Dossier</span>
-      <h4>
-        {t.abbreviation || t.name} · {t.market_tier || "Market"}
-      </h4>
+    <div className="lo-inspector lo-dossier lo-enter-soft" key={t.id || t.abbreviation}>
+      <div className="lo-dossier-head">
+        <TeamLogo team={t} abbr={t.abbreviation || t.name} size={28} />
+        <div>
+          <span className="lo-inspector-kicker">Market Dossier</span>
+          <h4>
+            {t.abbreviation || t.name}
+            <em>{t.market_tier || "Market"}</em>
+          </h4>
+        </div>
+      </div>
+      <div className="lo-dossier-hero">
+        <span>Revenue</span>
+        <b>{fmtMoneyM(t.revenue)}</b>
+        <em className={`lo-trend ${yoyDir === "up" || yoy > 0 ? "up" : yoyDir === "down" || yoy < 0 ? "down" : "flat"}`}>
+          {yoyDir === "flat" && Math.abs(yoy) < 1
+            ? "Flat YoY"
+            : `${yoy >= 0 ? "+" : ""}${Math.round(yoy)}M YoY`}
+        </em>
+      </div>
       <div className="lo-inspector-rows">
         <div className="lo-inspector-row">
           <span>Prior revenue</span>
-          <b style={{ color: "var(--lo-gold)" }}>{fmtMoneyM(prior)}</b>
-        </div>
-        <div className="lo-inspector-row">
-          <span>Current revenue</span>
-          <b style={{ color: "var(--lo-gold)" }}>{fmtMoneyM(t.revenue)}</b>
-        </div>
-        <div className="lo-inspector-row">
-          <span>YoY change</span>
-          <b className={`lo-trend ${yoyDir === "up" || yoy > 0 ? "up" : yoyDir === "down" || yoy < 0 ? "down" : "flat"}`}>
-            {yoyDir === "flat" && Math.abs(yoy) < 1
-              ? "Flat"
-              : `${yoy >= 0 ? "+" : ""}${Math.round(yoy)}M`}
-          </b>
+          <b className="gold">{fmtMoneyM(prior)}</b>
         </div>
         <div className="lo-inspector-row">
           <span>Profit</span>
@@ -1694,8 +2186,13 @@ function IssueInspector({ issue }) {
   const row = asObject(issue);
   if (!Object.keys(row).length) {
     return (
-      <div className="lo-inspector">
-        <div className="lo-inspector-empty">Select an issue for detail</div>
+      <div className="lo-inspector lo-empty-panel">
+        <div className="lo-empty-panel-frame" aria-hidden="true" />
+        <span className="lo-inspector-kicker">Policy Brief</span>
+        <h4>Select a negotiation issue</h4>
+        <p className="lo-inspector-note">
+          Open an issue to review status, deadline, likelihood, and owner vs player positions.
+        </p>
       </div>
     );
   }
@@ -1703,9 +2200,12 @@ function IssueInspector({ issue }) {
   const owners = num(row.owner_support, 0);
   const players = num(row.player_support, 0);
   const hasPair = owners > 0 || players > 0;
+  const gap = Math.abs(owners - players);
+  const leader =
+    !hasPair ? "—" : owners === players ? "Even" : owners > players ? "Owners" : "Players";
 
   return (
-    <div className="lo-inspector">
+    <div className="lo-inspector lo-enter-soft" key={row.id || row.name}>
       <span className="lo-inspector-mark">Policy Brief · Display Only</span>
       <span className="lo-inspector-kicker">{row.source || "Issue"} · {row.action_state}</span>
       <h4>{row.name}</h4>
@@ -1713,6 +2213,7 @@ function IssueInspector({ issue }) {
         <div className="lo-inspector-row"><span>Status</span><b>{row.status || row.action_state}</b></div>
         <div className="lo-inspector-row"><span>Deadline</span><b>{issueDeadline(row)}</b></div>
         <div className="lo-inspector-row"><span>Likelihood</span><b>{num(row.likelihood, 0)}%</b></div>
+        <div className="lo-inspector-row"><span>Current lead</span><b>{leader}{hasPair ? ` · ${gap}pt gap` : ""}</b></div>
       </div>
       {hasPair ? (
         <div className="lo-support-bars">
@@ -1750,56 +2251,61 @@ function OverviewWorkspace({ data, onOpenIssue }) {
       : fmtMoneyM(data.league_revenue);
   const moods = unusualMoods(data.owner_mood);
   const topIssues = asArray(data.active_issues).slice(0, 3);
+  const ownerMood = asObject(data.owner_mood);
 
   return (
-    <div className="lo-ov">
-      <div className="lo-forecast">
-        <div className="lo-forecast-head">
-          <h2>Cap Forecast</h2>
-          <div className="lo-forecast-meta">
-            <span className="now">{fmtCap(data.salary_cap)}</span>
-            <span className="arrow">→</span>
-            <span className="next">{fmtCap(data.projected_salary_cap)}</span>
-            <span className={`delta${capChange < 0 ? " neg" : ""}`}>
-              {capChange >= 0 ? "+" : ""}
-              {fmtCap(capChange)} · {data.cap_change_type || "Flat Cap"}
-            </span>
-          </div>
+    <div className="lo-ov lo-enter">
+      <section className="lo-pulse" aria-label="League pulse">
+        <div className="lo-pulse-cell dominant">
+          <span>Current Cap</span>
+          <b>{fmtCap(data.salary_cap)}</b>
         </div>
-        <CapForecastChart series={data.cap_forecast} />
-        <div className="lo-confidence-text">{confidence.rangeLabel || "—"}</div>
-      </div>
-
-      <div className="lo-summary-row">
-        <div className="lo-summary">
-          <span>Escrow %</span>
-          <b>{escrowPct}%</b>
+        <div className="lo-pulse-cell">
+          <span>Next Season</span>
+          <b className="gold">{fmtCap(data.projected_salary_cap)}</b>
         </div>
-        <div className="lo-summary">
+        <div className="lo-pulse-cell">
+          <span>Change</span>
+          <b className={capChange < 0 ? "neg" : "pos"}>
+            {capChange >= 0 ? "+" : ""}
+            {fmtCap(capChange)}
+          </b>
+          <em>{data.cap_change_type || "Flat Cap"}</em>
+        </div>
+        <div className="lo-pulse-cell">
           <span>League Revenue</span>
           <b className="gold">{revenueLabel}</b>
         </div>
-        <div className="lo-summary">
-          <span>Cap Drivers</span>
-          <b>{plusCount}/{Math.max(drivers.length, 1)} lifting</b>
+        <div className="lo-pulse-cell">
+          <span>Escrow</span>
+          <b>{escrowPct}%</b>
         </div>
-      </div>
+        <div className="lo-pulse-cell">
+          <span>Cap Drivers</span>
+          <b>{plusCount}/{Math.max(drivers.length, 1)}</b>
+          <em>lifting</em>
+        </div>
+        <div className="lo-pulse-cell sentiment">
+          <span>Sentiment</span>
+          <div className="lo-pulse-moods">
+            {ownerMood.players ? <em>Players <b>{ownerMood.players}</b></em> : null}
+            {ownerMood.fans ? <em>Fans <b className="pos">{ownerMood.fans}</b></em> : null}
+            {!ownerMood.players && !ownerMood.fans && moods.length === 0 ? (
+              <em>Stable</em>
+            ) : null}
+          </div>
+        </div>
+      </section>
 
-      <div className="lo-sentiment">
-        <span className="lo-sentiment-label">League Sentiment</span>
-        {moods.length ? (
-          moods.map(([label, value]) => {
-            const meter = moodMeterValue(value);
-            return (
-              <span key={label} className="lo-sentiment-item">
-                <em>{label}</em>
-                <b style={{ color: moodMeterColor(meter) }}>{value}</b>
-              </span>
-            );
-          })
-        ) : (
-          <span className="lo-sentiment-empty">No unusual mood signals</span>
-        )}
+      <div className="lo-forecast">
+        <div className="lo-forecast-head">
+          <h2>Cap Forecast</h2>
+          <div className="lo-confidence-text">{confidence.rangeLabel || "—"}</div>
+        </div>
+        <CapForecastChart
+          series={data.cap_forecast}
+          note={data.cap_forecast_note || "Projection sketch — current + next-year model, not full HRR accounting."}
+        />
       </div>
 
       <div className="lo-priority">
@@ -1808,6 +2314,14 @@ function OverviewWorkspace({ data, onOpenIssue }) {
           {topIssues.length ? (
             topIssues.map((issue) => {
               const id = issue.id || issue.name;
+              const owners = num(issue.owner_support, 0);
+              const players = num(issue.player_support, 0);
+              const leader =
+                owners === players
+                  ? "Even"
+                  : owners > players
+                    ? "Owners lead"
+                    : "Players lead";
               const consequence = issueConsequence(issue);
               const prefix = `${issue.name}: `;
               const detail = consequence.startsWith(prefix)
@@ -1823,9 +2337,16 @@ function OverviewWorkspace({ data, onOpenIssue }) {
                   <strong>{issue.name}</strong>
                   <div className="lo-priority-meta">
                     <span>{issueDeadline(issue)}</span>
+                    <span>{leader}</span>
                   </div>
                   <p>{detail}</p>
                   <span className={`state ${stateClass(issue.action_state)}`}>{issue.action_state}</span>
+                  {(owners > 0 || players > 0) ? (
+                    <div className="lo-priority-balance" aria-hidden="true">
+                      <i className="owners" style={{ width: `${Math.min(100, owners)}%` }} />
+                      <i className="players" style={{ width: `${Math.min(100, players)}%` }} />
+                    </div>
+                  ) : null}
                 </button>
               );
             })
@@ -1842,26 +2363,46 @@ function CbaWorkspace({ data, selectedIssueId, onSelectIssue }) {
   const issues = asArray(data.active_issues);
   const timeline = asArray(data.cba_timeline);
   const selected = issues.find((i) => (i.id || i.name) === selectedIssueId) || null;
+  const cba = asObject(data.cba);
+  const brief =
+    cba.brief
+    || "Intelligence display only — negotiations are pressure estimates and do not change in-sim rules.";
 
   return (
-    <div className="lo-cba">
+    <div className="lo-cba lo-enter">
+      <div className="lo-cba-notice" role="note">
+        <span className="lo-cba-notice-mark" aria-hidden="true" />
+        <strong>Display only</strong>
+        <span>{brief}</span>
+      </div>
+
       <div className="lo-cba-left">
-        <div className="lo-cba-panel">
-          <h3 className="lo-section-title">CBA Timeline</h3>
-          <div className="lo-timeline-scroll">
-            <div className="lo-timeline">
-              {timeline.length ? (
-                timeline.map((item) => (
-                  <div key={item.id} className={`lo-timeline-item ${item.tone || ""}`.trim()}>
-                    <span>{item.when}</span>
-                    <b>{item.title}</b>
-                    <em>{item.detail}</em>
-                  </div>
-                ))
-              ) : (
-                <div className="lo-inspector-empty">No CBA milestones</div>
-              )}
-            </div>
+        <div className="lo-cba-panel lo-cba-timeline-panel">
+          <div className="lo-cba-panel-head">
+            <h3 className="lo-section-title">CBA Timeline</h3>
+            <span className="lo-cba-pressure">
+              Pressure {cba.pressure_level || "—"}
+              {cba.years_remaining != null ? ` · ${cba.years_remaining}y left` : ""}
+            </span>
+          </div>
+          <div className="lo-timeline-rail" role="list">
+            {timeline.length ? (
+              timeline.map((item, idx) => (
+                <div
+                  key={item.id}
+                  role="listitem"
+                  className={`lo-timeline-step ${item.tone || ""}`.trim()}
+                >
+                  <span className="lo-timeline-dot" aria-hidden="true" />
+                  {idx < timeline.length - 1 ? <span className="lo-timeline-wire" aria-hidden="true" /> : null}
+                  <span className="lo-timeline-when">{item.when}</span>
+                  <b>{item.title}</b>
+                  <em>{item.detail}</em>
+                </div>
+              ))
+            ) : (
+              <div className="lo-inspector-empty">No CBA milestones</div>
+            )}
           </div>
         </div>
 
@@ -1872,16 +2413,25 @@ function CbaWorkspace({ data, selectedIssueId, onSelectIssue }) {
               issues.map((issue) => {
                 const id = issue.id || issue.name;
                 const selectedCls = selectedIssueId === id ? " selected" : "";
+                const owners = num(issue.owner_support, 0);
+                const players = num(issue.player_support, 0);
                 return (
                   <button
                     key={id}
                     type="button"
                     className={`lo-issue${selectedCls}`}
+                    aria-selected={selectedIssueId === id}
                     onClick={() => onSelectIssue(issue)}
                   >
                     <span className="lo-issue-title">{issue.name}</span>
-                    <span className="lo-issue-scale">{issue.scale_label}</span>
+                    <span className="lo-issue-scale">{issue.scale_label || issueDeadline(issue)}</span>
                     <span className={`lo-issue-state ${stateClass(issue.action_state)}`}>{issue.action_state}</span>
+                    {(owners > 0 || players > 0) ? (
+                      <span className="lo-issue-balance" aria-label={`Owners ${owners}%, Players ${players}%`}>
+                        <span className="owners" style={{ flexGrow: Math.max(owners, 1) }}>{owners}%</span>
+                        <span className="players" style={{ flexGrow: Math.max(players, 1) }}>{players}%</span>
+                      </span>
+                    ) : null}
                   </button>
                 );
               })
@@ -1930,8 +2480,15 @@ function MarketsWorkspace({
   selectedTeamId,
   onSelectTeam,
 }) {
+  const allTeams = asArray(teams);
   const filtered = filterTeams(teams, filterId);
-  const selected = filtered.find((t) => t.id === selectedTeamId) || asArray(teams).find((t) => t.id === selectedTeamId) || null;
+  const selected = filtered.find((t) => t.id === selectedTeamId) || allTeams.find((t) => t.id === selectedTeamId) || null;
+  const filterCounts = {
+    all: allTeams.length,
+    growing: filterTeams(allTeams, "growing").length,
+    losing: filterTeams(allTeams, "losing").length,
+    reloc: filterTeams(allTeams, "reloc").length,
+  };
 
   const trendText = (t) => {
     const yoy = num(t.revenue_yoy_delta, 0);
@@ -1951,17 +2508,20 @@ function MarketsWorkspace({
   );
 
   return (
-    <div className="lo-markets">
+    <div className="lo-markets lo-enter">
       <div className="lo-markets-toolbar">
         <div className="lo-filters" role="tablist" aria-label="Market filters">
           {MARKET_FILTERS.map((f) => (
             <button
               key={f.id}
               type="button"
+              role="tab"
+              aria-selected={filterId === f.id}
               className={filterId === f.id ? "active" : ""}
               onClick={() => onFilter(f.id)}
             >
               {f.label}
+              <em>{filterCounts[f.id] ?? 0}</em>
             </button>
           ))}
         </div>
@@ -1989,6 +2549,7 @@ function MarketsWorkspace({
                     <tr
                       key={t.id}
                       tabIndex={0}
+                      aria-selected={selectedCls}
                       className={[
                         t.threatened ? "threatened" : "",
                         selectedCls ? "selected" : "",
@@ -2060,8 +2621,32 @@ function riskBucket(team) {
   return "stable";
 }
 
-function FranchiseRiskWorkspace({ teams, selectedTeamId, onSelectTeam }) {
-  const pressured = asArray(teams).filter(hasMeaningfulPressure);
+function FranchiseRiskWorkspace({ teams, selectedTeamId, onSelectTeam, watchlist }) {
+  let pressured = asArray(teams).filter(hasMeaningfulPressure);
+
+  // Seed from backend relocation.watchlist when the hard filter would leave every column empty.
+  if (!pressured.length) {
+    const watchedIds = new Set(
+      asArray(watchlist)
+        .map((w) => String(w.id || w.abbreviation || ""))
+        .filter(Boolean)
+    );
+    if (watchedIds.size) {
+      pressured = asArray(teams).filter((t) => {
+        const id = String(t.id || "");
+        const abbr = String(t.abbreviation || "");
+        return watchedIds.has(id) || watchedIds.has(abbr) || num(t.relocation_risk, 0) >= 0.35;
+      });
+    }
+    if (!pressured.length) {
+      pressured = asArray(teams)
+        .slice()
+        .sort((a, b) => num(b.relocation_risk, 0) - num(a.relocation_risk, 0))
+        .slice(0, 5)
+        .filter((t) => num(t.relocation_risk, 0) >= 0.28);
+    }
+  }
+
   const immediate = pressured.filter((t) => riskBucket(t) === "immediate");
   const monitor = pressured.filter((t) => riskBucket(t) === "monitor");
   const stable = pressured.filter((t) => riskBucket(t) === "stable");
@@ -2069,6 +2654,8 @@ function FranchiseRiskWorkspace({ teams, selectedTeamId, onSelectTeam }) {
     pressured.find((t) => t.id === selectedTeamId)
     || asArray(teams).find((t) => t.id === selectedTeamId)
     || null;
+
+  const emptyLabel = "No elevated risk";
 
   const renderCards = (list) => (
     list.length ? (
@@ -2094,12 +2681,12 @@ function FranchiseRiskWorkspace({ teams, selectedTeamId, onSelectTeam }) {
         </button>
       ))
     ) : (
-      <div className="lo-inspector-empty">None</div>
+      <div className="lo-inspector-empty">{emptyLabel}</div>
     )
   );
 
   return (
-    <div className={`lo-risk${selected ? " has-detail" : ""}`}>
+    <div className={`lo-risk lo-enter${selected ? " has-detail" : ""}`}>
       <div className="lo-risk-col immediate">
         <h3>Immediate</h3>
         <div className="lo-risk-list">{renderCards(immediate)}</div>
@@ -2112,11 +2699,16 @@ function FranchiseRiskWorkspace({ teams, selectedTeamId, onSelectTeam }) {
         <h3>Stable</h3>
         <div className="lo-risk-list">{renderCards(stable)}</div>
       </div>
-      {selected ? (
-        <div className="lo-risk-detail">
-          <TeamDossier team={selected} />
+      {selected ? <TeamDossier team={selected} /> : (
+        <div className="lo-inspector lo-empty-panel">
+          <div className="lo-empty-panel-frame" aria-hidden="true" />
+          <span className="lo-inspector-kicker">Risk Detail</span>
+          <h4>Select a club</h4>
+          <p className="lo-inspector-note">
+            Choose a franchise from the watch board to review revenue pressure and relocation risk.
+          </p>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -2255,6 +2847,7 @@ export default function LeagueOperations() {
             key={tab.id}
             type="button"
             className={workspace === tab.id ? "active" : ""}
+            aria-current={workspace === tab.id ? "page" : undefined}
             onClick={() => setWorkspace(tab.id)}
           >
             {tab.label}
@@ -2298,6 +2891,7 @@ export default function LeagueOperations() {
           {workspace === "risk" ? (
             <FranchiseRiskWorkspace
               teams={sortedTeams}
+              watchlist={asArray(asObject(data.relocation).watchlist)}
               selectedTeamId={selectedTeamId}
               onSelectTeam={(t) => setSelectedTeamId(t.id)}
             />
