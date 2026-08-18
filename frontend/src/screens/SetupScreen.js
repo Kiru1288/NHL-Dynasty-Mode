@@ -6,7 +6,11 @@ import React, {
   useState,
 } from "react";
 
-import { useGameUI } from "../game/GameUIContext";
+import {
+  useGameUI,
+  HUB_WARMUP_STAGES,
+  HUB_WARMUP_LABELS,
+} from "../game/GameUIContext";
 import {
   buildDefaultFranchiseTeamList,
   teamNameToNhlAbbr,
@@ -39,6 +43,7 @@ import {
   TransformNode,
   UniversalCamera,
   Vector3,
+  VertexBuffer,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 
@@ -56,10 +61,7 @@ import "@babylonjs/loaders/glTF";
 */
 
 import darkOfficeGlb
-  from "../pictures/office_pics/dark_office.glb?url";
-
-import officeHallwayGlb
-  from "../pictures/office_pics/office_hallway.glb?url";
+  from "../pictures/modern_office.glb?url";
 
 import executiveDeskGlb
   from "../pictures/office_pics/ambani_executive_office_desk_with_walnut_finish.glb?url";
@@ -217,6 +219,141 @@ const CINEMATIC_STAGE_COPY = {
 
 
 /* ============================================================================
+   PUCKCEPTION OPENING HALLWAY
+   ==========================================================================
+
+   The corridor the player physically walks before the office. It is built
+   procedurally so the first frame costs almost nothing: geometry, collision,
+   camera and the two hero jerseys are ready immediately while the heavier
+   office GLBs stream in behind the player.
+
+   Corridor runs along -Z (entrance) to +Z (office door).
+*/
+
+const HALL = Object.freeze({
+  width: 3.5,
+  height: 3.15,
+  startZ: -22,
+  doorZ: 1.15,
+  eyeHeight: 1.68,
+  runnerWidth: 1.9,
+});
+
+const HALL_PHASE = Object.freeze({
+  BOOTING: "booting",
+  EXPLORING: "exploring",
+  DOOR: "door",
+  OFFICE: "office",
+  SETTLED: "settled",
+});
+
+/*
+  Memorabilia copy. Small elegant cards only — never a dashboard.
+*/
+const EXHIBIT_CARDS = Object.freeze({
+  karlsson: {
+    kicker: "Game-worn / authenticated",
+    title: "Erik Karlsson",
+    subtitle: "Ottawa Senators · No. 65 · Defence",
+    lines: [
+      "Game 1, Eastern Conference Second Round, 2017 Stanley Cup Playoffs. Ottawa hosts the New York Rangers to open the series.",
+      "Karlsson captained the Senators through that spring on a fractured foot, logging close to thirty minutes a night and running the power play from the point.",
+      "Signed on the front numbers in silver. The sweater still carries the shoulder crests, twill nameplate and fight-strap stitching from the 2016-17 season.",
+    ],
+    footer: "Round 2 · Game 1 · 2017",
+  },
+  ovechkin: {
+    kicker: "Rookie era / Koho",
+    title: "Alex Ovechkin",
+    subtitle: "Washington Capitals · No. 8 · Left Wing",
+    lines: [
+      "The black screaming-eagle Capitals sweater from Ovechkin's first NHL seasons, cut and stitched in the old Koho pattern before the league changed suppliers.",
+      "Fifty-two goals and one hundred and six points as a rookie, and the Calder Trophy in a class nobody expected to be that good.",
+      "Hung back-out on purpose. In this building the nameplate and the number are the whole point.",
+    ],
+    footer: "Rookie season · Washington",
+  },
+  cup: {
+    kicker: "Championship hardware",
+    title: "The Cup",
+    subtitle: "On loan · travel case open",
+    lines: [
+      "Silver and nickel over a barrel base, engraved band after engraved band. It goes back in the case tonight.",
+      "The polishing cloth beside it is not decorative. Fingerprints show on this thing within seconds.",
+    ],
+    footer: "Do not lift by the bowl",
+  },
+  masks: {
+    kicker: "Goaltending",
+    title: "Three Eras Of Nerve",
+    subtitle: "Fibreglass · cage · modern shell",
+    lines: [
+      "A moulded fibreglass face piece from the era when a goaltender's whole protection was four millimetres of resin.",
+      "Beside it, a bare wire cage, and a modern painted shell with a certified cat-eye.",
+      "They are hung by the office door on purpose. Everyone who walks in has to look at them first.",
+    ],
+    footer: "Hung, not stored",
+  },
+  photos: {
+    kicker: "Archive wall",
+    title: "Forty Years Of Rooms Like This",
+    subtitle: "Photographs · credentials · stubs",
+    lines: [
+      "Playoff credentials, ticket stubs and press photographs, most of them from buildings that no longer exist.",
+      "Nothing here is arranged chronologically. It was hung whenever it arrived.",
+    ],
+    footer: "Unsorted, deliberately",
+  },
+  whiteboard: {
+    kicker: "Coaching staff",
+    title: "The Breakout",
+    subtitle: "Do not erase",
+    lines: [
+      "Nine arrows, four hash marks, two question marks and a circled area labelled only \"NO\".",
+      "Somebody added a fifth option in red marker. Nobody has admitted to it.",
+    ],
+    footer: "It has never been run in a game",
+  },
+  equipment: {
+    kicker: "Equipment room",
+    title: "Sticks, Pads And One Bad Night",
+    subtitle: "Wood · composite · taped",
+    lines: [
+      "An old one-piece wooden stick, two modern composites, and one snapped shaft with the tape still wrapped around the blade.",
+      "The pads have been leaned in that corner long enough to leave a mark on the panelling.",
+    ],
+    footer: "Nothing here is for sale",
+  },
+  tkachuk: {
+    kicker: "Editorial position",
+    title: "House Rules",
+    subtitle: "Right wall · unframed on purpose",
+    lines: [
+      "This is the only object in the corridor that was not professionally mounted.",
+      "There is a dart tray underneath it. Management considers that a feature.",
+    ],
+    footer: "Press the interact key to throw",
+  },
+  door: {
+    kicker: "Hockey operations",
+    title: "The Office",
+    subtitle: "Executive suite",
+    lines: [
+      "Walnut, brass, and warm light leaking under the sill.",
+      "Whoever is behind that door is already expecting you.",
+    ],
+    footer: "Interact to enter",
+  },
+});
+
+const HALL_FUN_LABELS = Object.freeze({
+  doNotTouch: "DO NOT TOUCH",
+  tradeRequest: "0 DAYS WITHOUT A TRADE REQUEST",
+  officeSign: "HOCKEY OPERATIONS",
+});
+
+
+/* ============================================================================
    PHYSICAL SCALE
    ==========================================================================
 
@@ -231,13 +368,6 @@ const CINEMATIC_STAGE_COPY = {
 */
 
 const ASSET_CALIBRATION = Object.freeze({
-  hallway: {
-    measure: "depth",
-    target: 14.0,
-    position: new Vector3(0, 0, -8.4),
-    yaw: 0,
-  },
-
   office: {
     measure: "width",
     target: 8.4,
@@ -320,26 +450,70 @@ const ASSET_CALIBRATION = Object.freeze({
 
 const CAMERA_SHOTS = Object.freeze({
   hallwayStart: {
-    kind: "ROOM",
-    asset: "hallway",
-    coverage: "wide",
-    cameraDepth: 0.04,
-    lookDepth: 0.62,
-    eyeHeight: 1.62,
-    lookHeight: 1.38,
-    side: 0.28,
-    fov: 0.92,
+    kind: "FIXED",
+    position: new Vector3(0, HALL.eyeHeight, HALL.startZ + 0.9),
+    target: new Vector3(0, HALL.eyeHeight - 0.16, HALL.startZ + 6.4),
+    fov: 0.9,
+    skipSafety: true,
   },
   hallwayMid: {
-    kind: "ROOM",
-    asset: "hallway",
-    coverage: "medium",
-    cameraDepth: 0.34,
-    lookDepth: 0.92,
-    eyeHeight: 1.58,
-    lookHeight: 1.36,
-    side: 0.18,
+    kind: "FIXED",
+    position: new Vector3(-0.18, HALL.eyeHeight, -8.4),
+    target: new Vector3(0.1, HALL.eyeHeight - 0.14, 1.2),
+    fov: 0.84,
+    skipSafety: true,
+  },
+  doorApproach: {
+    kind: "FIXED",
+    position: new Vector3(0, HALL.eyeHeight - 0.02, HALL.doorZ - 2.05),
+    target: new Vector3(0, HALL.eyeHeight - 0.2, HALL.doorZ + 0.6),
+    fov: 0.8,
+    skipSafety: true,
+  },
+  doorThreshold: {
+    kind: "FIXED",
+    position: new Vector3(0, HALL.eyeHeight - 0.05, HALL.doorZ + 0.35),
+    target: new Vector3(0, HALL.eyeHeight - 0.26, HALL.doorZ + 5.2),
+    fov: 0.86,
+    skipSafety: true,
+  },
+
+  /*
+    The office beats are authored rather than derived.
+
+    The room GLB is normalized around its own centre at z = 3.35, which puts its
+    near wall behind the corridor doorway — an automatically fitted wide shot
+    would reverse the camera back through that wall. These coordinates keep the
+    camera inside the room and on the player's side of the desk, which is where
+    the document is.
+  */
+  officeReveal: {
+    kind: "FIXED",
+    position: new Vector3(0.72, 1.72, 1.34),
+    target: new Vector3(0.05, 1.14, 3.5),
+    fov: 0.92,
+    skipSafety: true,
+  },
+  officeAddress: {
+    kind: "FIXED",
+    position: new Vector3(-0.62, 1.68, 1.86),
+    target: new Vector3(0.38, 1.22, 3.78),
     fov: 0.82,
+    skipSafety: true,
+  },
+  deskApproach: {
+    kind: "FIXED",
+    position: new Vector3(0.3, 1.5, 2.02),
+    target: new Vector3(0.2, 0.82, 3.02),
+    fov: 0.74,
+    skipSafety: true,
+  },
+  contractReveal: {
+    kind: "FIXED",
+    position: new Vector3(0.23, 1.08, 2.44),
+    target: new Vector3(0.22, 0.78, 2.95),
+    fov: 0.62,
+    skipSafety: true,
   },
   officeWide: {
     kind: "ROOM",
@@ -1014,6 +1188,21 @@ function composeEntityShot({
 
   let position;
   let target;
+
+  if (shot.kind === "FIXED") {
+    /*
+      Authored corridor framing. The hallway is procedural and its own walls
+      would otherwise trip the occlusion search below.
+    */
+    return {
+      shot,
+      profile: null,
+      asset: null,
+      target: shot.target.clone(),
+      position: shot.position.clone(),
+      fov,
+    };
+  }
 
   if ((shot.kind === "ROOM" || shot.kind === "WALK") && profile) {
     const bounds = profile.bounds;
@@ -1908,8 +2097,17 @@ function TeamLogo({
    APPOINTMENT DEED AND 3D CLUB BALLS
    ========================================================================== */
 
-function useSetupStageMusic() {
+/*
+  The opening hallway synthesises its own lounge bed, HVAC and room tone, so
+  the pre-rendered menu theme stays out of the way for the whole of this
+  screen. It remains available as a fallback bed if the 3D floor cannot run.
+*/
+function useSetupStageMusic(enabled) {
   useEffect(() => {
+    if (!enabled) {
+      return undefined;
+    }
+
     const audio = new Audio(setupTheme);
     audio.loop = true;
     audio.volume = 0.28;
@@ -1929,7 +2127,7 @@ function useSetupStageMusic() {
       audio.pause();
       audio.src = "";
     };
-  }, []);
+  }, [enabled]);
 }
 
 function getSvgPathFromStroke(points) {
@@ -3134,6 +3332,6391 @@ function createDustParticles(
    LIGHTING / RENDERING
    ========================================================================== */
 
+/* ============================================================================
+   HALLWAY MATERIAL LIBRARY
+   ==========================================================================
+
+   Every corridor surface is generated at runtime from a 2D canvas. That keeps
+   the first frame almost free, and because the same painter feeds both the
+   albedo and the bump map the surfaces actually respond to the practical
+   lights instead of reading as flat primitives.
+
+   Materials are created once and shared through the cache below, so a hundred
+   props still only cost a handful of GPU materials.
+*/
+
+const HALL_GOLD = "#c9a86a";
+
+function hashRandom(seed) {
+  const value = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+  return value - Math.floor(value);
+}
+
+function paintGrain(ctx, width, height, alpha, count = 5200, size = 2) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  for (let i = 0; i < count; i += 1) {
+    const tone = Math.floor(hashRandom(i * 1.7) * 255);
+    ctx.fillStyle = `rgb(${tone},${tone},${tone})`;
+    ctx.fillRect(
+      hashRandom(i * 3.1) * width,
+      hashRandom(i * 5.9) * height,
+      size,
+      size
+    );
+  }
+  ctx.restore();
+}
+
+function paintVignette(ctx, width, height, strength = 0.4) {
+  const gradient = ctx.createRadialGradient(
+    width / 2,
+    height / 2,
+    Math.min(width, height) * 0.18,
+    width / 2,
+    height / 2,
+    Math.max(width, height) * 0.72
+  );
+  gradient.addColorStop(0, "rgba(0,0,0,0)");
+  gradient.addColorStop(1, `rgba(0,0,0,${strength})`);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+}
+
+function paintPlaster(ctx, width, height) {
+  ctx.fillStyle = "#22242a";
+  ctx.fillRect(0, 0, width, height);
+
+  for (let i = 0; i < 220; i += 1) {
+    const x = hashRandom(i * 2.3) * width;
+    const y = hashRandom(i * 4.7) * height;
+    const r = 24 + hashRandom(i * 7.1) * 130;
+    const light = hashRandom(i * 9.3) > 0.5;
+    const blob = ctx.createRadialGradient(x, y, 0, x, y, r);
+    blob.addColorStop(
+      0,
+      light ? "rgba(255,252,244,0.045)" : "rgba(0,0,0,0.07)"
+    );
+    blob.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = blob;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+
+  // trowel direction
+  ctx.globalAlpha = 0.05;
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 90; i += 1) {
+    const y = hashRandom(i * 11.1) * height;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.bezierCurveTo(
+      width * 0.3,
+      y + (hashRandom(i * 2.9) - 0.5) * 26,
+      width * 0.7,
+      y + (hashRandom(i * 6.3) - 0.5) * 26,
+      width,
+      y
+    );
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  paintGrain(ctx, width, height, 0.05);
+}
+
+function paintWalnut(ctx, width, height) {
+  ctx.fillStyle = "#2b1d15";
+  ctx.fillRect(0, 0, width, height);
+
+  const bands = 5;
+  for (let b = 0; b < bands; b += 1) {
+    const y0 = (b / bands) * height;
+    const bandHeight = height / bands;
+    const shade = 0.86 + hashRandom(b * 3.7) * 0.3;
+    const gradient = ctx.createLinearGradient(0, y0, 0, y0 + bandHeight);
+    gradient.addColorStop(0, `rgba(64,40,25,${0.55 * shade})`);
+    gradient.addColorStop(0.5, `rgba(46,29,19,${0.72 * shade})`);
+    gradient.addColorStop(1, `rgba(28,17,11,${0.68 * shade})`);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, y0, width, bandHeight);
+
+    // grain lines follow the band
+    for (let g = 0; g < 46; g += 1) {
+      const y = y0 + hashRandom(b * 31 + g * 1.9) * bandHeight;
+      const dark = hashRandom(b * 17 + g * 5.3) > 0.35;
+      ctx.strokeStyle = dark
+        ? "rgba(22,12,7,0.42)"
+        : "rgba(139,98,58,0.20)";
+      ctx.lineWidth = 0.6 + hashRandom(g * 7.7) * 1.9;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.bezierCurveTo(
+        width * 0.28,
+        y + (hashRandom(g * 2.1) - 0.5) * 20,
+        width * 0.66,
+        y + (hashRandom(g * 4.3) - 0.5) * 20,
+        width,
+        y + (hashRandom(g * 8.9) - 0.5) * 8
+      );
+      ctx.stroke();
+    }
+
+    // seam between boards
+    ctx.strokeStyle = "rgba(8,4,2,0.75)";
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.moveTo(0, y0);
+    ctx.lineTo(width, y0);
+    ctx.stroke();
+  }
+
+  // ray flecks
+  ctx.globalAlpha = 0.16;
+  for (let i = 0; i < 320; i += 1) {
+    ctx.fillStyle = hashRandom(i * 1.3) > 0.5 ? "#8a5f37" : "#160b05";
+    ctx.fillRect(
+      hashRandom(i * 3.3) * width,
+      hashRandom(i * 6.7) * height,
+      2 + hashRandom(i * 9.1) * 12,
+      1
+    );
+  }
+  ctx.globalAlpha = 1;
+
+  paintGrain(ctx, width, height, 0.04);
+}
+
+function paintExecutiveRunner(ctx, width, height) {
+  ctx.fillStyle = "#4d1522";
+  ctx.fillRect(0, 0, width, height);
+
+  // deep pile weave
+  for (let y = 0; y < height; y += 3) {
+    const tone = 0.5 + hashRandom(y * 2.7) * 0.5;
+    ctx.fillStyle = `rgba(${Math.floor(24 * tone)},${Math.floor(
+      6 * tone
+    )},${Math.floor(12 * tone)},0.34)`;
+    ctx.fillRect(0, y, width, 1.6);
+  }
+  for (let x = 0; x < width; x += 3) {
+    ctx.fillStyle =
+      hashRandom(x * 5.1) > 0.5
+        ? "rgba(122,32,49,0.20)"
+        : "rgba(38,8,15,0.24)";
+    ctx.fillRect(x, 0, 1.4, height);
+  }
+
+  // woven border bands
+  const border = width * 0.055;
+  ctx.fillStyle = "rgba(24,6,11,0.6)";
+  ctx.fillRect(0, 0, border, height);
+  ctx.fillRect(width - border, 0, border, height);
+  ctx.fillStyle = "rgba(168,132,74,0.24)";
+  ctx.fillRect(border * 0.86, 0, border * 0.16, height);
+  ctx.fillRect(width - border * 1.02, 0, border * 0.16, height);
+
+  // worn centre track from decades of the same walk
+  const wear = ctx.createLinearGradient(width * 0.3, 0, width * 0.7, 0);
+  wear.addColorStop(0, "rgba(0,0,0,0)");
+  wear.addColorStop(0.5, "rgba(196,168,140,0.11)");
+  wear.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = wear;
+  ctx.fillRect(0, 0, width, height);
+
+  // scuffed edges
+  ctx.globalAlpha = 0.3;
+  for (let i = 0; i < 260; i += 1) {
+    const edge = hashRandom(i * 1.9) > 0.5;
+    ctx.fillStyle = "rgba(20,5,9,0.8)";
+    ctx.fillRect(
+      edge ? hashRandom(i * 3.7) * border : width - hashRandom(i * 4.1) * border,
+      hashRandom(i * 8.3) * height,
+      3,
+      2 + hashRandom(i * 2.2) * 9
+    );
+  }
+  ctx.globalAlpha = 1;
+
+  paintGrain(ctx, width, height, 0.06);
+}
+
+function paintDarkStoneFloor(ctx, width, height) {
+  ctx.fillStyle = "#15161a";
+  ctx.fillRect(0, 0, width, height);
+
+  for (let i = 0; i < 60; i += 1) {
+    ctx.strokeStyle = `rgba(150,150,158,${0.03 + hashRandom(i) * 0.05})`;
+    ctx.lineWidth = 0.7 + hashRandom(i * 3.3) * 1.6;
+    ctx.beginPath();
+    const y = hashRandom(i * 5.1) * height;
+    ctx.moveTo(0, y);
+    ctx.bezierCurveTo(
+      width * 0.25,
+      y + (hashRandom(i * 2.1) - 0.5) * 180,
+      width * 0.7,
+      y + (hashRandom(i * 7.7) - 0.5) * 180,
+      width,
+      y + (hashRandom(i * 9.9) - 0.5) * 90
+    );
+    ctx.stroke();
+  }
+
+  // stone joints
+  ctx.strokeStyle = "rgba(0,0,0,0.5)";
+  ctx.lineWidth = 3;
+  for (let i = 1; i < 4; i += 1) {
+    ctx.beginPath();
+    ctx.moveTo((i / 4) * width, 0);
+    ctx.lineTo((i / 4) * width, height);
+    ctx.stroke();
+  }
+
+  paintGrain(ctx, width, height, 0.05);
+}
+
+function paintBrushedBrass(ctx, width, height) {
+  const base = ctx.createLinearGradient(0, 0, 0, height);
+  base.addColorStop(0, "#8a6d3a");
+  base.addColorStop(0.36, "#d5b276");
+  base.addColorStop(0.58, "#a98a51");
+  base.addColorStop(1, "#6d5228");
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.globalAlpha = 0.22;
+  for (let i = 0; i < 900; i += 1) {
+    ctx.fillStyle = hashRandom(i * 1.1) > 0.5 ? "#ffe6b8" : "#4a3818";
+    ctx.fillRect(
+      hashRandom(i * 3.9) * width,
+      hashRandom(i * 6.1) * height,
+      10 + hashRandom(i * 2.7) * 70,
+      1
+    );
+  }
+  ctx.globalAlpha = 1;
+}
+
+function paintPolishedSilver(ctx, width, height) {
+  const base = ctx.createLinearGradient(0, 0, 0, height);
+  base.addColorStop(0, "#3c4049");
+  base.addColorStop(0.22, "#e6e9ef");
+  base.addColorStop(0.4, "#9aa0ab");
+  base.addColorStop(0.62, "#f2f4f8");
+  base.addColorStop(0.8, "#6d737e");
+  base.addColorStop(1, "#c8ccd4");
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, width, height);
+
+  // faint hand marks — this thing gets touched constantly
+  ctx.globalAlpha = 0.09;
+  for (let i = 0; i < 40; i += 1) {
+    const x = hashRandom(i * 2.9) * width;
+    const y = hashRandom(i * 4.3) * height;
+    const r = 12 + hashRandom(i * 6.7) * 34;
+    const smudge = ctx.createRadialGradient(x, y, 0, x, y, r);
+    smudge.addColorStop(0, "rgba(120,120,130,0.9)");
+    smudge.addColorStop(1, "rgba(120,120,130,0)");
+    ctx.fillStyle = smudge;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function paintCorridorEnvironment(ctx, width, height) {
+  /*
+    Cheap spherical environment used only as a reflection source for brass and
+    the championship trophy. Dark room, warm ceiling pools, one cool spill.
+  */
+  const base = ctx.createLinearGradient(0, 0, 0, height);
+  base.addColorStop(0, "#1b1a19");
+  base.addColorStop(0.44, "#3a332a");
+  base.addColorStop(0.52, "#171719");
+  base.addColorStop(1, "#07070a");
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, width, height);
+
+  const pools = [
+    [0.12, 0.2, "rgba(255,214,150,0.85)"],
+    [0.34, 0.16, "rgba(255,204,138,0.7)"],
+    [0.58, 0.22, "rgba(255,226,176,0.8)"],
+    [0.79, 0.17, "rgba(255,198,128,0.65)"],
+    [0.46, 0.62, "rgba(150,176,214,0.32)"],
+  ];
+
+  pools.forEach(([u, v, colour], index) => {
+    const x = u * width;
+    const y = v * height;
+    const r = (0.05 + hashRandom(index * 3.1) * 0.07) * width;
+    const glow = ctx.createRadialGradient(x, y, 0, x, y, r);
+    glow.addColorStop(0, colour);
+    glow.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  });
+
+  // horizon band so metal picks up a believable break
+  ctx.fillStyle = "rgba(0,0,0,0.42)";
+  ctx.fillRect(0, height * 0.5, width, 3);
+}
+
+function makeHallTexture(scene, name, width, height, paint, options = {}) {
+  const texture = new DynamicTexture(
+    name,
+    { width, height },
+    scene,
+    options.mip !== false
+  );
+  const ctx = texture.getContext();
+  ctx.clearRect(0, 0, width, height);
+  paint(ctx, width, height);
+  texture.update(false);
+
+  const wrap =
+    options.clamp === true ? Texture.CLAMP_ADDRESSMODE : Texture.WRAP_ADDRESSMODE;
+  texture.wrapU = wrap;
+  texture.wrapV = wrap;
+  texture.uScale = options.uScale ?? 1;
+  texture.vScale = options.vScale ?? 1;
+  texture.hasAlpha = Boolean(options.hasAlpha);
+  texture.anisotropicFilteringLevel = options.anisotropy ?? 4;
+  return texture;
+}
+
+/*
+  Convert an albedo canvas into a matching height field so a single painter can
+  drive both colour and relief.
+*/
+function makeBumpFromPaint(scene, name, width, height, paint, options = {}) {
+  return makeHallTexture(
+    scene,
+    name,
+    width,
+    height,
+    (ctx, w, h) => {
+      paint(ctx, w, h);
+      ctx.globalCompositeOperation = "saturation";
+      ctx.fillStyle = "#808080";
+      ctx.fillRect(0, 0, w, h);
+      ctx.globalCompositeOperation = "source-over";
+    },
+    options
+  );
+}
+
+function createHallMaterials(scene) {
+  const materials = new Map();
+  const textures = new Map();
+
+  function texture(key, factory) {
+    if (!textures.has(key)) {
+      textures.set(key, factory());
+    }
+    return textures.get(key);
+  }
+
+  const environment = texture("environment", () =>
+    makeHallTexture(scene, "hall-env", 1024, 512, paintCorridorEnvironment, {
+      clamp: true,
+      anisotropy: 2,
+    })
+  );
+  environment.coordinatesMode = Texture.SPHERICAL_MODE;
+
+  function pbr(key, configure) {
+    if (materials.has(key)) {
+      return materials.get(key);
+    }
+    const material = new PBRMaterial(`hall-${key}`, scene);
+    material.environmentTexture = environment;
+    material.environmentIntensity = 0.32;
+    material.directIntensity = 1.35;
+    material.specularIntensity = 0.9;
+    material.maxSimultaneousLights = 8;
+    material.metallic = 0;
+    material.roughness = 0.72;
+    configure(material);
+    materials.set(key, material);
+    return material;
+  }
+
+  function flat(key, hex, options = {}) {
+    return pbr(key, (material) => {
+      material.albedoColor = colorFromHex(hex, "#888888");
+      material.metallic = options.metallic ?? 0;
+      material.roughness = options.roughness ?? 0.7;
+      if (options.emissive) {
+        material.emissiveColor = colorFromHex(options.emissive, "#000000");
+        material.emissiveIntensity = options.emissiveIntensity ?? 1;
+      }
+      if (options.alpha != null) {
+        material.alpha = options.alpha;
+      }
+      if (options.environmentIntensity != null) {
+        material.environmentIntensity = options.environmentIntensity;
+      }
+    });
+  }
+
+  const api = {
+    environment,
+
+    plaster: () =>
+      pbr("plaster", (material) => {
+        material.albedoTexture = texture("plaster", () =>
+          makeHallTexture(scene, "tex-plaster", 1024, 1024, paintPlaster, {
+            uScale: 5,
+            vScale: 1.6,
+          })
+        );
+        material.bumpTexture = texture("plaster-bump", () =>
+          makeBumpFromPaint(
+            scene,
+            "tex-plaster-bump",
+            512,
+            512,
+            paintPlaster,
+            { uScale: 5, vScale: 1.6 }
+          )
+        );
+        material.bumpTexture.level = 0.35;
+        material.roughness = 0.88;
+        material.environmentIntensity = 0.12;
+      }),
+
+    walnut: () =>
+      pbr("walnut", (material) => {
+        material.albedoTexture = texture("walnut", () =>
+          makeHallTexture(scene, "tex-walnut", 1024, 1024, paintWalnut, {
+            uScale: 3.2,
+            vScale: 1,
+          })
+        );
+        material.bumpTexture = texture("walnut-bump", () =>
+          makeBumpFromPaint(scene, "tex-walnut-bump", 512, 512, paintWalnut, {
+            uScale: 3.2,
+            vScale: 1,
+          })
+        );
+        material.bumpTexture.level = 0.42;
+        material.roughness = 0.44;
+        material.metallic = 0.04;
+        material.environmentIntensity = 0.4;
+      }),
+
+    walnutDark: () =>
+      pbr("walnut-dark", (material) => {
+        material.albedoTexture = texture("walnut", () =>
+          makeHallTexture(scene, "tex-walnut", 1024, 1024, paintWalnut, {
+            uScale: 3.2,
+            vScale: 1,
+          })
+        );
+        material.albedoColor = new Color3(0.62, 0.6, 0.58);
+        material.roughness = 0.34;
+        material.metallic = 0.06;
+        material.environmentIntensity = 0.46;
+      }),
+
+    runner: () =>
+      pbr("runner", (material) => {
+        material.albedoTexture = texture("runner", () =>
+          makeHallTexture(
+            scene,
+            "tex-runner",
+            512,
+            1024,
+            paintExecutiveRunner,
+            { uScale: 1, vScale: 9 }
+          )
+        );
+        material.bumpTexture = texture("runner-bump", () =>
+          makeBumpFromPaint(
+            scene,
+            "tex-runner-bump",
+            256,
+            512,
+            paintExecutiveRunner,
+            { uScale: 1, vScale: 9 }
+          )
+        );
+        material.bumpTexture.level = 0.9;
+        material.roughness = 0.97;
+        material.environmentIntensity = 0.04;
+      }),
+
+    stone: () =>
+      pbr("stone", (material) => {
+        material.albedoTexture = texture("stone", () =>
+          makeHallTexture(
+            scene,
+            "tex-stone",
+            1024,
+            1024,
+            paintDarkStoneFloor,
+            { uScale: 2, vScale: 8 }
+          )
+        );
+        material.roughness = 0.3;
+        material.metallic = 0.1;
+        material.environmentIntensity = 0.34;
+      }),
+
+    brass: () =>
+      pbr("brass", (material) => {
+        material.albedoTexture = texture("brass", () =>
+          makeHallTexture(scene, "tex-brass", 512, 512, paintBrushedBrass)
+        );
+        material.metallic = 0.92;
+        material.roughness = 0.28;
+        material.environmentIntensity = 0.95;
+      }),
+
+    silver: () =>
+      pbr("silver", (material) => {
+        material.albedoTexture = texture("silver", () =>
+          makeHallTexture(scene, "tex-silver", 512, 512, paintPolishedSilver)
+        );
+        material.metallic = 1;
+        material.roughness = 0.14;
+        material.environmentIntensity = 1.5;
+      }),
+
+    steel: () => flat("steel", "#8f939a", { metallic: 0.85, roughness: 0.36 }),
+    blackMetal: () =>
+      flat("black-metal", "#191b1f", { metallic: 0.6, roughness: 0.45 }),
+    charcoal: () => flat("charcoal", "#20222a", { roughness: 0.82 }),
+    rubber: () => flat("rubber", "#0d0e10", { roughness: 0.94 }),
+    leather: () => flat("leather", "#31241c", { roughness: 0.6 }),
+    tape: () => flat("tape", "#1c1c1e", { roughness: 0.86 }),
+    whiteTape: () => flat("white-tape", "#d8d3c6", { roughness: 0.88 }),
+    paper: () => flat("paper", "#cfc7b4", { roughness: 0.9 }),
+    matBoard: () => flat("mat-board", "#0e0f12", { roughness: 0.9 }),
+    canvasCream: () => flat("canvas-cream", "#b9b2a0", { roughness: 0.85 }),
+
+    glass: () =>
+      pbr("glass", (material) => {
+        material.albedoColor = new Color3(0.02, 0.024, 0.03);
+        material.alpha = 0.16;
+        material.metallic = 0.24;
+        material.roughness = 0.05;
+        material.environmentIntensity = 1.35;
+        material.backFaceCulling = false;
+      }),
+
+    acrylic: () =>
+      pbr("acrylic", (material) => {
+        material.albedoColor = new Color3(0.05, 0.055, 0.06);
+        material.alpha = 0.2;
+        material.metallic = 0.1;
+        material.roughness = 0.08;
+        material.environmentIntensity = 1.1;
+        material.backFaceCulling = false;
+      }),
+
+    warmLeak: () =>
+      flat("warm-leak", "#2a1d0e", {
+        emissive: "#ffbe6a",
+        emissiveIntensity: 2.6,
+        roughness: 0.6,
+      }),
+
+    lampLens: () =>
+      flat("lamp-lens", "#3a3327", {
+        emissive: "#ffd9a0",
+        emissiveIntensity: 2.1,
+        roughness: 0.4,
+      }),
+
+    coldLens: () =>
+      flat("cold-lens", "#26292f", {
+        emissive: "#cfe0ff",
+        emissiveIntensity: 1.2,
+        roughness: 0.4,
+      }),
+
+    /*
+      Painted surfaces (photographs, posters, plaques, jerseys) each need their
+      own texture, but they all share this factory so the PBR setup and the
+      texture cache stay in one place.
+    */
+    art(key, width, height, paint, options = {}) {
+      const cacheKey = `art:${key}`;
+      if (materials.has(cacheKey)) {
+        return materials.get(cacheKey);
+      }
+      const material = new PBRMaterial(`hall-art-${key}`, scene);
+      material.environmentTexture = environment;
+      material.environmentIntensity = options.environmentIntensity ?? 0.16;
+      material.directIntensity = 1.5;
+      material.metallic = options.metallic ?? 0;
+      material.roughness = options.roughness ?? 0.78;
+      material.maxSimultaneousLights = 8;
+      material.albedoTexture = makeHallTexture(
+        scene,
+        `tex-art-${key}`,
+        width,
+        height,
+        paint,
+        { clamp: true, ...options.texture }
+      );
+      if (options.bump) {
+        material.bumpTexture = makeBumpFromPaint(
+          scene,
+          `tex-art-${key}-bump`,
+          Math.min(width, 512),
+          Math.min(height, 512),
+          paint,
+          { clamp: true }
+        );
+        material.bumpTexture.level = options.bump;
+      }
+      if (options.emissive) {
+        material.emissiveTexture = material.albedoTexture;
+        material.emissiveIntensity = options.emissive;
+      }
+      materials.set(cacheKey, material);
+      return material;
+    },
+
+    flat,
+  };
+
+  return api;
+}
+
+/* ============================================================================
+   HALLWAY ART PAINTERS
+   ==========================================================================
+
+   Each memorabilia surface gets a real illustration rather than a coloured
+   rectangle: woven cloth, layered twill numbers, stitching, newsprint columns,
+   etched brass. Everything is drawn once at load and cached.
+*/
+
+function paintClothWeave(ctx, width, height, alpha = 0.14) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  for (let x = 0; x < width; x += 3) {
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.fillRect(x, 0, 1, height);
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.fillRect(x + 1.5, 0, 1, height);
+  }
+  for (let y = 0; y < height; y += 3) {
+    ctx.fillStyle = "rgba(0,0,0,0.4)";
+    ctx.fillRect(0, y, width, 1);
+  }
+  ctx.restore();
+  paintGrain(ctx, width, height, 0.035, 4200, 3);
+}
+
+function drawStitchRun(ctx, points, colour, dash = [7, 6], lineWidth = 2.4) {
+  if (points.length < 2) return;
+  ctx.save();
+  ctx.strokeStyle = colour;
+  ctx.lineWidth = lineWidth;
+  ctx.setLineDash(dash);
+  ctx.beginPath();
+  ctx.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i += 1) {
+    ctx.lineTo(points[i][0], points[i][1]);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/*
+  Layered twill: an applique number is several stacked fabric layers, so it is
+  drawn as progressively tighter outlines with stitching on the boundary.
+*/
+function drawTwill(ctx, text, x, y, size, layers, options = {}) {
+  ctx.save();
+  ctx.font = `900 ${size}px "Arial Black", "Haettenschweiler", Impact, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineJoin = "round";
+  ctx.miterLimit = 2;
+
+  layers.forEach(({ colour, width }) => {
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = width;
+    ctx.strokeText(text, x, y);
+  });
+
+  ctx.fillStyle = options.fill || "#ffffff";
+  ctx.fillText(text, x, y);
+
+  if (options.stitch !== false) {
+    ctx.strokeStyle = "rgba(0,0,0,0.32)";
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash([5, 5]);
+    ctx.strokeText(text, x, y);
+    ctx.setLineDash([]);
+  }
+
+  // twill nap
+  ctx.globalAlpha = 0.16;
+  ctx.strokeStyle = "#000000";
+  ctx.lineWidth = 1;
+  for (let i = -size; i < size; i += 4) {
+    ctx.beginPath();
+    ctx.moveTo(x + i, y - size * 0.62);
+    ctx.lineTo(x + i + size * 0.4, y + size * 0.62);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function drawJerseyLaces(ctx, x, y, width, height) {
+  ctx.save();
+  ctx.fillStyle = "rgba(18,14,10,0.5)";
+  ctx.fillRect(x - width / 2, y, width, height);
+  ctx.strokeStyle = "#d8cdb2";
+  ctx.lineWidth = 6;
+  ctx.lineCap = "round";
+  for (let i = 0; i < 4; i += 1) {
+    const t = y + (i / 4) * height + height * 0.08;
+    ctx.beginPath();
+    ctx.moveTo(x - width / 2, t);
+    ctx.lineTo(x + width / 2, t + height * 0.14);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x + width / 2, t);
+    ctx.lineTo(x - width / 2, t + height * 0.14);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/*
+  Ottawa Senators 2016-17 home sweater, front, as it hung in the frame:
+  red body, black-and-white sleeve and hem stripes, centurion roundel on the
+  chest, shoulder crests, sleeve numbers, and a silver signature across it.
+*/
+function paintKarlssonJersey(ctx, width, height) {
+  const red = "#b31939";
+  const black = "#0b0b0d";
+  const cream = "#efe9dc";
+
+  ctx.clearRect(0, 0, width, height);
+
+  const cx = width / 2;
+  const shoulderY = height * 0.14;
+  const hemY = height * 0.9;
+
+  // silhouette
+  ctx.beginPath();
+  ctx.moveTo(cx - width * 0.19, shoulderY);
+  ctx.quadraticCurveTo(cx, height * 0.09, cx + width * 0.19, shoulderY);
+  ctx.lineTo(cx + width * 0.42, height * 0.29);
+  ctx.lineTo(cx + width * 0.4, height * 0.62);
+  ctx.lineTo(cx + width * 0.26, height * 0.6);
+  ctx.lineTo(cx + width * 0.27, hemY);
+  ctx.quadraticCurveTo(cx, hemY + height * 0.03, cx - width * 0.27, hemY);
+  ctx.lineTo(cx - width * 0.26, height * 0.6);
+  ctx.lineTo(cx - width * 0.4, height * 0.62);
+  ctx.lineTo(cx - width * 0.42, height * 0.29);
+  ctx.closePath();
+  ctx.save();
+  ctx.clip();
+
+  ctx.fillStyle = red;
+  ctx.fillRect(0, 0, width, height);
+
+  // shoulder yoke
+  const yoke = ctx.createLinearGradient(0, shoulderY, 0, height * 0.28);
+  yoke.addColorStop(0, black);
+  yoke.addColorStop(1, "#141418");
+  ctx.fillStyle = yoke;
+  ctx.beginPath();
+  ctx.moveTo(0, shoulderY - 10);
+  ctx.lineTo(width, shoulderY - 10);
+  ctx.lineTo(width, height * 0.25);
+  ctx.quadraticCurveTo(cx, height * 0.31, 0, height * 0.25);
+  ctx.closePath();
+  ctx.fill();
+
+  // yoke piping
+  ctx.strokeStyle = cream;
+  ctx.lineWidth = 7;
+  ctx.beginPath();
+  ctx.moveTo(0, height * 0.252);
+  ctx.quadraticCurveTo(cx, height * 0.312, width, height * 0.252);
+  ctx.stroke();
+
+  // sleeve stripes
+  [
+    [height * 0.47, 34, black],
+    [height * 0.508, 12, cream],
+    [height * 0.527, 26, black],
+  ].forEach(([y, thickness, colour]) => {
+    ctx.fillStyle = colour;
+    ctx.fillRect(0, y, width * 0.16, thickness);
+    ctx.fillRect(width * 0.84, y, width * 0.16, thickness);
+  });
+
+  // hem stripes
+  [
+    [height * 0.79, 30, black],
+    [height * 0.825, 11, cream],
+    [height * 0.843, 22, black],
+  ].forEach(([y, thickness, colour]) => {
+    ctx.fillStyle = colour;
+    ctx.fillRect(0, y, width, thickness);
+  });
+
+  // chest roundel
+  const crestY = height * 0.44;
+  ctx.fillStyle = black;
+  ctx.beginPath();
+  ctx.arc(cx, crestY, width * 0.135, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#c9a86a";
+  ctx.lineWidth = 8;
+  ctx.stroke();
+  ctx.strokeStyle = cream;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(cx, crestY, width * 0.108, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // legionary profile inside the roundel
+  ctx.save();
+  ctx.translate(cx, crestY);
+  ctx.fillStyle = "#d9c48a";
+  ctx.beginPath();
+  ctx.moveTo(-width * 0.055, width * 0.062);
+  ctx.quadraticCurveTo(-width * 0.075, -width * 0.02, -width * 0.03, -width * 0.055);
+  ctx.quadraticCurveTo(width * 0.02, -width * 0.086, width * 0.052, -width * 0.038);
+  ctx.lineTo(width * 0.03, -width * 0.012);
+  ctx.quadraticCurveTo(width * 0.052, width * 0.008, width * 0.028, width * 0.03);
+  ctx.quadraticCurveTo(width * 0.03, width * 0.058, width * 0.006, width * 0.062);
+  ctx.closePath();
+  ctx.fill();
+  // crest of the helmet
+  ctx.fillStyle = red;
+  ctx.beginPath();
+  ctx.moveTo(-width * 0.03, -width * 0.055);
+  ctx.quadraticCurveTo(width * 0.004, -width * 0.098, width * 0.05, -width * 0.086);
+  ctx.quadraticCurveTo(width * 0.018, -width * 0.062, width * 0.008, -width * 0.05);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // shoulder crests
+  [-1, 1].forEach((side) => {
+    const sx = cx + side * width * 0.3;
+    const sy = height * 0.2;
+    ctx.fillStyle = "#111114";
+    ctx.beginPath();
+    ctx.arc(sx, sy, width * 0.052, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#c9a86a";
+    ctx.lineWidth = 3.5;
+    ctx.stroke();
+    ctx.fillStyle = "#d9c48a";
+    ctx.font = `900 ${Math.round(width * 0.042)}px "Arial Black", sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("O", sx, sy + 2);
+  });
+
+  // sleeve numbers
+  [-1, 1].forEach((side) => {
+    drawTwill(
+      ctx,
+      "65",
+      cx + side * width * 0.335,
+      height * 0.395,
+      Math.round(width * 0.085),
+      [
+        { colour: black, width: 14 },
+        { colour: cream, width: 7 },
+      ],
+      { fill: cream }
+    );
+  });
+
+  drawJerseyLaces(ctx, cx, height * 0.155, width * 0.075, height * 0.085);
+
+  paintClothWeave(ctx, width, height, 0.15);
+
+  // seams
+  drawStitchRun(
+    ctx,
+    [
+      [cx - width * 0.19, shoulderY + 6],
+      [cx - width * 0.26, height * 0.6],
+      [cx - width * 0.27, hemY],
+    ],
+    "rgba(0,0,0,0.42)"
+  );
+  drawStitchRun(
+    ctx,
+    [
+      [cx + width * 0.19, shoulderY + 6],
+      [cx + width * 0.26, height * 0.6],
+      [cx + width * 0.27, hemY],
+    ],
+    "rgba(0,0,0,0.42)"
+  );
+
+  // fold shading — the sweater is mounted over a form, not pressed flat
+  const fold = ctx.createLinearGradient(0, 0, width, 0);
+  fold.addColorStop(0, "rgba(0,0,0,0.42)");
+  fold.addColorStop(0.2, "rgba(0,0,0,0.06)");
+  fold.addColorStop(0.42, "rgba(255,255,255,0.07)");
+  fold.addColorStop(0.62, "rgba(0,0,0,0.1)");
+  fold.addColorStop(0.82, "rgba(255,255,255,0.04)");
+  fold.addColorStop(1, "rgba(0,0,0,0.44)");
+  ctx.fillStyle = fold;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.restore();
+
+  // silver signature laid across the chest
+  ctx.save();
+  ctx.translate(cx - width * 0.02, height * 0.6);
+  ctx.rotate(-0.12);
+  ctx.strokeStyle = "rgba(232,236,242,0.92)";
+  ctx.lineWidth = 7;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(-width * 0.19, width * 0.03);
+  ctx.bezierCurveTo(
+    -width * 0.16,
+    -width * 0.07,
+    -width * 0.09,
+    -width * 0.08,
+    -width * 0.1,
+    width * 0.015
+  );
+  ctx.bezierCurveTo(
+    -width * 0.105,
+    width * 0.05,
+    -width * 0.03,
+    -width * 0.05,
+    0.0,
+    width * 0.01
+  );
+  ctx.bezierCurveTo(
+    width * 0.03,
+    width * 0.06,
+    width * 0.06,
+    -width * 0.06,
+    width * 0.1,
+    width * 0.005
+  );
+  ctx.bezierCurveTo(
+    width * 0.13,
+    width * 0.05,
+    width * 0.16,
+    -width * 0.02,
+    width * 0.2,
+    -width * 0.005
+  );
+  ctx.stroke();
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(width * 0.02, width * 0.055);
+  ctx.lineTo(width * 0.15, width * 0.045);
+  ctx.stroke();
+  ctx.restore();
+
+  // fight strap still hanging off the hem
+  ctx.save();
+  ctx.fillStyle = "#16161a";
+  ctx.fillRect(cx + width * 0.11, hemY - height * 0.012, width * 0.09, height * 0.04);
+  ctx.fillStyle = "#0b0b0d";
+  ctx.fillRect(cx + width * 0.125, hemY + height * 0.012, width * 0.06, height * 0.016);
+  ctx.strokeStyle = "rgba(232,236,242,0.35)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(cx + width * 0.11, hemY - height * 0.012, width * 0.09, height * 0.04);
+  ctx.restore();
+}
+
+/*
+  Washington Capitals rookie-era sweater, reverse. Black body with the copper
+  and blue banding of that period, Koho-cut shoulders, twill nameplate.
+*/
+function paintOvechkinJerseyBack(ctx, width, height) {
+  const body = "#0a0a0c";
+  const copper = "#a3641e";
+  const blue = "#1f3f8f";
+  const cream = "#e8e3d6";
+
+  ctx.clearRect(0, 0, width, height);
+
+  const cx = width / 2;
+  const shoulderY = height * 0.13;
+  const hemY = height * 0.91;
+
+  ctx.beginPath();
+  ctx.moveTo(cx - width * 0.2, shoulderY);
+  ctx.quadraticCurveTo(cx, height * 0.085, cx + width * 0.2, shoulderY);
+  ctx.lineTo(cx + width * 0.43, height * 0.3);
+  ctx.lineTo(cx + width * 0.41, height * 0.64);
+  ctx.lineTo(cx + width * 0.27, height * 0.61);
+  ctx.lineTo(cx + width * 0.285, hemY);
+  ctx.quadraticCurveTo(cx, hemY + height * 0.028, cx - width * 0.285, hemY);
+  ctx.lineTo(cx - width * 0.27, height * 0.61);
+  ctx.lineTo(cx - width * 0.41, height * 0.64);
+  ctx.lineTo(cx - width * 0.43, height * 0.3);
+  ctx.closePath();
+  ctx.save();
+  ctx.clip();
+
+  const bodyFill = ctx.createLinearGradient(0, 0, 0, height);
+  bodyFill.addColorStop(0, "#131316");
+  bodyFill.addColorStop(0.5, body);
+  bodyFill.addColorStop(1, "#08080a");
+  ctx.fillStyle = bodyFill;
+  ctx.fillRect(0, 0, width, height);
+
+  // shoulder yoke in the old cut
+  ctx.fillStyle = "#16161a";
+  ctx.beginPath();
+  ctx.moveTo(0, shoulderY - 12);
+  ctx.lineTo(width, shoulderY - 12);
+  ctx.lineTo(width, height * 0.235);
+  ctx.quadraticCurveTo(cx, height * 0.285, 0, height * 0.235);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = copper;
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(0, height * 0.237);
+  ctx.quadraticCurveTo(cx, height * 0.287, width, height * 0.237);
+  ctx.stroke();
+
+  // sleeve banding
+  [
+    [height * 0.485, 30, copper],
+    [height * 0.52, 10, cream],
+    [height * 0.537, 26, blue],
+  ].forEach(([y, thickness, colour]) => {
+    ctx.fillStyle = colour;
+    ctx.fillRect(0, y, width * 0.17, thickness);
+    ctx.fillRect(width * 0.83, y, width * 0.17, thickness);
+  });
+
+  // hem banding
+  [
+    [height * 0.8, 26, copper],
+    [height * 0.832, 10, cream],
+    [height * 0.848, 24, blue],
+  ].forEach(([y, thickness, colour]) => {
+    ctx.fillStyle = colour;
+    ctx.fillRect(0, y, width, thickness);
+  });
+
+  // nameplate strip
+  const plateY = height * 0.285;
+  const plateH = height * 0.075;
+  ctx.fillStyle = "#121216";
+  ctx.fillRect(cx - width * 0.235, plateY, width * 0.47, plateH);
+  drawStitchRun(
+    ctx,
+    [
+      [cx - width * 0.235, plateY],
+      [cx + width * 0.235, plateY],
+      [cx + width * 0.235, plateY + plateH],
+      [cx - width * 0.235, plateY + plateH],
+      [cx - width * 0.235, plateY],
+    ],
+    "rgba(214,180,120,0.55)",
+    [6, 5],
+    2
+  );
+
+  ctx.save();
+  ctx.font = `900 ${Math.round(height * 0.052)}px "Arial Black", Impact, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.letterSpacing = "6px";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = copper;
+  ctx.lineWidth = 9;
+  ctx.strokeText("OVECHKIN", cx, plateY + plateH * 0.54);
+  ctx.fillStyle = cream;
+  ctx.fillText("OVECHKIN", cx, plateY + plateH * 0.54);
+  ctx.restore();
+
+  // back number
+  drawTwill(
+    ctx,
+    "8",
+    cx,
+    height * 0.52,
+    Math.round(height * 0.29),
+    [
+      { colour: copper, width: 30 },
+      { colour: cream, width: 17 },
+    ],
+    { fill: blue }
+  );
+
+  // sleeve numbers
+  [-1, 1].forEach((side) => {
+    drawTwill(
+      ctx,
+      "8",
+      cx + side * width * 0.345,
+      height * 0.4,
+      Math.round(width * 0.085),
+      [
+        { colour: copper, width: 12 },
+        { colour: cream, width: 6 },
+      ],
+      { fill: blue }
+    );
+  });
+
+  // supplier mark on the hem
+  ctx.save();
+  ctx.font = `800 ${Math.round(height * 0.022)}px "Arial Black", sans-serif`;
+  ctx.textAlign = "center";
+  ctx.fillStyle = "rgba(232,227,214,0.72)";
+  ctx.letterSpacing = "4px";
+  ctx.fillText("KOHO", cx, height * 0.877);
+  ctx.restore();
+
+  paintClothWeave(ctx, width, height, 0.17);
+
+  drawStitchRun(
+    ctx,
+    [
+      [cx - width * 0.2, shoulderY + 8],
+      [cx - width * 0.27, height * 0.61],
+      [cx - width * 0.285, hemY],
+    ],
+    "rgba(180,150,100,0.28)"
+  );
+  drawStitchRun(
+    ctx,
+    [
+      [cx + width * 0.2, shoulderY + 8],
+      [cx + width * 0.27, height * 0.61],
+      [cx + width * 0.285, hemY],
+    ],
+    "rgba(180,150,100,0.28)"
+  );
+
+  // hanging folds
+  const fold = ctx.createLinearGradient(0, 0, width, 0);
+  fold.addColorStop(0, "rgba(0,0,0,0.5)");
+  fold.addColorStop(0.16, "rgba(255,255,255,0.05)");
+  fold.addColorStop(0.34, "rgba(0,0,0,0.24)");
+  fold.addColorStop(0.5, "rgba(255,255,255,0.09)");
+  fold.addColorStop(0.68, "rgba(0,0,0,0.2)");
+  fold.addColorStop(0.86, "rgba(255,255,255,0.04)");
+  fold.addColorStop(1, "rgba(0,0,0,0.52)");
+  ctx.fillStyle = fold;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.restore();
+}
+
+function paintEtchedBrassPlate(ctx, width, height, lines) {
+  paintBrushedBrass(ctx, width, height);
+
+  ctx.fillStyle = "rgba(0,0,0,0.16)";
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = "rgba(60,44,18,0.6)";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(9, 9, width - 18, height - 18);
+
+  const total = lines.length;
+  lines.forEach((line, index) => {
+    const text = typeof line === "string" ? line : line.text;
+    const scale = typeof line === "string" ? 1 : line.scale || 1;
+    const size = Math.round((height / (total + 1.1)) * 0.62 * scale);
+    const y = height * ((index + 0.85) / (total + 0.7));
+    ctx.save();
+    ctx.font = `${scale > 1 ? 900 : 700} ${size}px "Georgia", "Times New Roman", serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.letterSpacing = `${Math.max(1, size * 0.08)}px`;
+    // engraved: dark cut with a light lip below it
+    ctx.fillStyle = "rgba(255,240,205,0.34)";
+    ctx.fillText(text, width / 2, y + 2);
+    ctx.fillStyle = "rgba(38,26,8,0.92)";
+    ctx.fillText(text, width / 2, y);
+    ctx.restore();
+  });
+}
+
+function paintVintageHockeyPhoto(ctx, width, height, seed, caption) {
+  const warm = hashRandom(seed) > 0.45;
+
+  // paper border
+  ctx.fillStyle = warm ? "#cabfa4" : "#c3bdb0";
+  ctx.fillRect(0, 0, width, height);
+
+  const bx = width * 0.055;
+  const by = height * 0.05;
+  const bw = width - bx * 2;
+  const bh = height * (caption ? 0.79 : 0.9);
+
+  // ice
+  const ice = ctx.createLinearGradient(0, by, 0, by + bh);
+  ice.addColorStop(0, warm ? "#7d6a4e" : "#6f6f72");
+  ice.addColorStop(0.42, warm ? "#c6b48d" : "#b9bcc0");
+  ctx.fillStyle = ice;
+  ctx.fillRect(bx, by, bw, bh);
+
+  // boards + crowd
+  ctx.fillStyle = warm ? "#4a3d28" : "#3d3f45";
+  ctx.fillRect(bx, by, bw, bh * 0.3);
+  for (let i = 0; i < 420; i += 1) {
+    const tone = 40 + hashRandom(seed * 13 + i) * 90;
+    ctx.fillStyle = `rgba(${tone},${tone * 0.93},${tone * 0.82},0.6)`;
+    ctx.fillRect(
+      bx + hashRandom(seed * 7 + i * 1.7) * bw,
+      by + hashRandom(seed * 3 + i * 2.3) * bh * 0.27,
+      3,
+      3
+    );
+  }
+  ctx.fillStyle = warm ? "#ddd2b4" : "#d6d8dc";
+  ctx.fillRect(bx, by + bh * 0.3, bw, bh * 0.02);
+
+  // rink markings
+  ctx.strokeStyle = "rgba(90,70,70,0.36)";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(bx, by + bh * 0.66);
+  ctx.lineTo(bx + bw, by + bh * 0.62);
+  ctx.stroke();
+
+  // skaters
+  const count = 3 + Math.floor(hashRandom(seed * 5) * 3);
+  for (let i = 0; i < count; i += 1) {
+    const px = bx + bw * (0.14 + hashRandom(seed * 11 + i * 3.1) * 0.7);
+    const py = by + bh * (0.44 + hashRandom(seed * 17 + i * 5.3) * 0.34);
+    const scale = bh * (0.2 + hashRandom(seed * 19 + i) * 0.13);
+    const dark = hashRandom(seed * 23 + i) > 0.5;
+    ctx.fillStyle = dark ? "rgba(28,22,16,0.9)" : "rgba(236,230,214,0.9)";
+    // torso
+    ctx.beginPath();
+    ctx.ellipse(px, py, scale * 0.2, scale * 0.3, hashRandom(i) * 0.4 - 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    // head
+    ctx.beginPath();
+    ctx.arc(px + scale * 0.05, py - scale * 0.38, scale * 0.11, 0, Math.PI * 2);
+    ctx.fill();
+    // legs
+    ctx.strokeStyle = ctx.fillStyle;
+    ctx.lineWidth = scale * 0.09;
+    ctx.beginPath();
+    ctx.moveTo(px, py + scale * 0.24);
+    ctx.lineTo(px - scale * 0.16, py + scale * 0.58);
+    ctx.moveTo(px, py + scale * 0.24);
+    ctx.lineTo(px + scale * 0.2, py + scale * 0.52);
+    ctx.stroke();
+    // stick
+    ctx.lineWidth = scale * 0.05;
+    ctx.beginPath();
+    ctx.moveTo(px + scale * 0.16, py - scale * 0.02);
+    ctx.lineTo(px + scale * 0.6, py + scale * 0.5);
+    ctx.stroke();
+  }
+
+  // period grain, sepia wash and vignette
+  paintGrain(ctx, width, height, 0.09, 3400, 2);
+  ctx.fillStyle = warm ? "rgba(120,86,40,0.22)" : "rgba(60,66,80,0.18)";
+  ctx.fillRect(bx, by, bw, bh);
+  paintVignette(ctx, width, height, 0.34);
+
+  if (caption) {
+    ctx.fillStyle = "rgba(38,30,20,0.78)";
+    ctx.font = `italic 600 ${Math.round(height * 0.048)}px "Georgia", serif`;
+    ctx.textAlign = "center";
+    ctx.fillText(caption, width / 2, height * 0.93);
+  }
+}
+
+function paintChampionshipFrontPage(ctx, width, height) {
+  ctx.fillStyle = "#d9d2bd";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "rgba(150,128,88,0.16)";
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.fillStyle = "#22201b";
+  ctx.font = `900 ${Math.round(height * 0.045)}px "Georgia", serif`;
+  ctx.textAlign = "center";
+  ctx.fillText("THE MORNING LEDGER", width / 2, height * 0.07);
+  ctx.strokeStyle = "#22201b";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(width * 0.05, height * 0.09);
+  ctx.lineTo(width * 0.95, height * 0.09);
+  ctx.stroke();
+
+  ctx.font = `900 ${Math.round(height * 0.135)}px "Arial Black", Impact, sans-serif`;
+  ctx.fillText("CHAMPIONS", width / 2, height * 0.235);
+  ctx.font = `700 ${Math.round(height * 0.036)}px "Georgia", serif`;
+  ctx.fillText(
+    "City spills into the streets as the Cup finally comes home",
+    width / 2,
+    height * 0.29
+  );
+
+  // hero photo block
+  const px = width * 0.08;
+  const py = height * 0.33;
+  const pw = width * 0.84;
+  const ph = height * 0.34;
+  const photo = ctx.createLinearGradient(0, py, 0, py + ph);
+  photo.addColorStop(0, "#5c5346");
+  photo.addColorStop(1, "#221f1b");
+  ctx.fillStyle = photo;
+  ctx.fillRect(px, py, pw, ph);
+  // raised cup silhouette
+  ctx.fillStyle = "rgba(240,236,226,0.9)";
+  ctx.beginPath();
+  ctx.moveTo(width / 2 - pw * 0.06, py + ph * 0.18);
+  ctx.lineTo(width / 2 + pw * 0.06, py + ph * 0.18);
+  ctx.lineTo(width / 2 + pw * 0.035, py + ph * 0.42);
+  ctx.lineTo(width / 2 + pw * 0.018, py + ph * 0.78);
+  ctx.lineTo(width / 2 - pw * 0.018, py + ph * 0.78);
+  ctx.lineTo(width / 2 - pw * 0.035, py + ph * 0.42);
+  ctx.closePath();
+  ctx.fill();
+  for (let i = 0; i < 300; i += 1) {
+    ctx.fillStyle = `rgba(255,255,255,${0.05 + hashRandom(i) * 0.14})`;
+    ctx.fillRect(
+      px + hashRandom(i * 3.1) * pw,
+      py + ph * 0.5 + hashRandom(i * 5.7) * ph * 0.5,
+      2,
+      2
+    );
+  }
+  paintGrain(ctx, width, height, 0.06, 2600, 2);
+
+  // body columns
+  ctx.fillStyle = "rgba(34,32,27,0.62)";
+  const cols = 3;
+  for (let c = 0; c < cols; c += 1) {
+    const colX = width * 0.08 + c * (width * 0.84 / cols) + 6;
+    const colW = width * 0.84 / cols - 16;
+    for (let line = 0; line < 22; line += 1) {
+      const y = height * 0.71 + line * (height * 0.011);
+      const w = colW * (0.72 + hashRandom(c * 31 + line) * 0.28);
+      ctx.fillRect(colX, y, w, 2.4);
+    }
+  }
+  paintVignette(ctx, width, height, 0.2);
+}
+
+function paintCredentialBoard(ctx, width, height) {
+  // dark mat with stubs and laminates pinned to it
+  ctx.fillStyle = "#0d0e11";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "rgba(255,255,255,0.03)";
+  ctx.fillRect(0, 0, width, height);
+
+  const stubs = [
+    [0.05, 0.06, 0.4, 0.15, "#cdbfa0", "STANLEY CUP FINAL"],
+    [0.53, 0.05, 0.42, 0.14, "#c2ccd6", "SEMI-FINAL · GAME 7"],
+    [0.06, 0.26, 0.42, 0.15, "#d3c3a2", "ROUND 2 · GAME 1"],
+    [0.55, 0.24, 0.39, 0.16, "#bcae92", "OPENING NIGHT"],
+  ];
+
+  stubs.forEach(([x, y, w, h, tone, label], index) => {
+    const px = x * width;
+    const py = y * height;
+    const pw = w * width;
+    const ph = h * height;
+    ctx.save();
+    ctx.translate(px + pw / 2, py + ph / 2);
+    ctx.rotate((hashRandom(index * 4.7) - 0.5) * 0.12);
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(-pw / 2 + 4, -ph / 2 + 5, pw, ph);
+    ctx.fillStyle = tone;
+    ctx.fillRect(-pw / 2, -ph / 2, pw, ph);
+    // perforation
+    ctx.fillStyle = "rgba(0,0,0,0.28)";
+    for (let d = 0; d < 24; d += 1) {
+      ctx.fillRect(-pw / 2 + pw * 0.72, -ph / 2 + (d / 24) * ph, 2, ph / 40);
+    }
+    ctx.fillStyle = "rgba(30,24,16,0.86)";
+    ctx.font = `800 ${Math.round(ph * 0.19)}px "Georgia", serif`;
+    ctx.textAlign = "left";
+    ctx.fillText(label, -pw / 2 + pw * 0.06, -ph / 2 + ph * 0.32);
+    ctx.font = `600 ${Math.round(ph * 0.14)}px "Courier New", monospace`;
+    ctx.fillText("SEC 12 · ROW C · SEAT 4", -pw / 2 + pw * 0.06, -ph / 2 + ph * 0.58);
+    ctx.fillText("ADMIT ONE", -pw / 2 + pw * 0.06, -ph / 2 + ph * 0.82);
+    ctx.restore();
+  });
+
+  // hanging laminate credentials
+  const creds = [
+    [0.12, 0.52, "#8f2230", "MEDIA"],
+    [0.4, 0.55, "#1d3a6b", "ALL ACCESS"],
+    [0.68, 0.52, "#2c4a2a", "ICE LEVEL"],
+  ];
+  creds.forEach(([x, y, tone, label], index) => {
+    const px = x * width;
+    const py = y * height;
+    const pw = width * 0.2;
+    const ph = height * 0.33;
+    ctx.save();
+    ctx.translate(px + pw / 2, py);
+    ctx.rotate((hashRandom(index * 9.1) - 0.5) * 0.14);
+    // lanyard
+    ctx.strokeStyle = "rgba(210,200,180,0.5)";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(-pw * 0.2, -height * 0.1);
+    ctx.lineTo(0, 0);
+    ctx.lineTo(pw * 0.2, -height * 0.1);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(-pw / 2 + 4, 5, pw, ph);
+    ctx.fillStyle = "#e6e0d0";
+    ctx.fillRect(-pw / 2, 0, pw, ph);
+    ctx.fillStyle = tone;
+    ctx.fillRect(-pw / 2, 0, pw, ph * 0.3);
+    ctx.fillStyle = "#f2ede0";
+    ctx.font = `900 ${Math.round(ph * 0.13)}px "Arial Black", sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillText(label, 0, ph * 0.2);
+    ctx.fillStyle = "rgba(30,26,20,0.6)";
+    ctx.fillRect(-pw * 0.34, ph * 0.4, pw * 0.68, ph * 0.34);
+    ctx.font = `700 ${Math.round(ph * 0.09)}px "Courier New", monospace`;
+    ctx.fillStyle = "rgba(40,34,26,0.8)";
+    ctx.fillText("PLAYOFFS", 0, ph * 0.88);
+    ctx.restore();
+  });
+
+  paintGrain(ctx, width, height, 0.05);
+  paintVignette(ctx, width, height, 0.36);
+}
+
+function paintRinkDiagram(ctx, width, height) {
+  ctx.fillStyle = "#e8e4d8";
+  ctx.fillRect(0, 0, width, height);
+
+  const m = width * 0.06;
+  const w = width - m * 2;
+  const h = height - m * 2;
+  const r = h * 0.24;
+
+  ctx.strokeStyle = "#2a2a2e";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(m + r, m);
+  ctx.lineTo(m + w - r, m);
+  ctx.quadraticCurveTo(m + w, m, m + w, m + r);
+  ctx.lineTo(m + w, m + h - r);
+  ctx.quadraticCurveTo(m + w, m + h, m + w - r, m + h);
+  ctx.lineTo(m + r, m + h);
+  ctx.quadraticCurveTo(m, m + h, m, m + h - r);
+  ctx.lineTo(m, m + r);
+  ctx.quadraticCurveTo(m, m, m + r, m);
+  ctx.stroke();
+
+  // blue lines and centre
+  ctx.strokeStyle = "#2a49a8";
+  ctx.lineWidth = 7;
+  [0.34, 0.66].forEach((t) => {
+    ctx.beginPath();
+    ctx.moveTo(m + w * t, m);
+    ctx.lineTo(m + w * t, m + h);
+    ctx.stroke();
+  });
+  ctx.strokeStyle = "#b32036";
+  ctx.lineWidth = 7;
+  ctx.beginPath();
+  ctx.moveTo(m + w * 0.5, m);
+  ctx.lineTo(m + w * 0.5, m + h);
+  ctx.stroke();
+  ctx.lineWidth = 4;
+  [0.09, 0.91].forEach((t) => {
+    ctx.beginPath();
+    ctx.moveTo(m + w * t, m);
+    ctx.lineTo(m + w * t, m + h);
+    ctx.stroke();
+  });
+
+  // circles
+  ctx.strokeStyle = "#b32036";
+  ctx.lineWidth = 3;
+  [
+    [0.2, 0.25],
+    [0.2, 0.75],
+    [0.8, 0.25],
+    [0.8, 0.75],
+    [0.5, 0.5],
+  ].forEach(([u, v]) => {
+    ctx.beginPath();
+    ctx.arc(m + w * u, m + h * v, h * 0.11, 0, Math.PI * 2);
+    ctx.stroke();
+  });
+
+  // handwritten coaching markings in grease pencil
+  ctx.strokeStyle = "rgba(24,26,32,0.82)";
+  ctx.lineWidth = 5;
+  ctx.lineCap = "round";
+  const arrows = [
+    [0.16, 0.78, 0.32, 0.56],
+    [0.32, 0.56, 0.5, 0.68],
+    [0.5, 0.68, 0.72, 0.36],
+    [0.2, 0.28, 0.42, 0.34],
+  ];
+  arrows.forEach(([x0, y0, x1, y1]) => {
+    const ax = m + w * x0;
+    const ay = m + h * y0;
+    const bx = m + w * x1;
+    const by = m + h * y1;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.quadraticCurveTo((ax + bx) / 2, ay - h * 0.1, bx, by);
+    ctx.stroke();
+    const angle = Math.atan2(by - ay + h * 0.05, bx - ax);
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx - Math.cos(angle - 0.5) * 22, by - Math.sin(angle - 0.5) * 22);
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx - Math.cos(angle + 0.5) * 22, by - Math.sin(angle + 0.5) * 22);
+    ctx.stroke();
+  });
+
+  ctx.font = `700 ${Math.round(height * 0.07)}px "Bradley Hand", "Segoe Script", cursive`;
+  ctx.fillStyle = "rgba(150,26,38,0.85)";
+  ctx.fillText("D TO D — QUICK", m + w * 0.12, m + h * 0.16);
+  ctx.fillText("NO", m + w * 0.62, m + h * 0.84);
+  ctx.beginPath();
+  ctx.arc(m + w * 0.645, m + h * 0.81, h * 0.07, 0, Math.PI * 2);
+  ctx.stroke();
+
+  paintGrain(ctx, width, height, 0.05);
+}
+
+function paintWhiteboardBreakout(ctx, width, height) {
+  ctx.fillStyle = "#f2f2ef";
+  ctx.fillRect(0, 0, width, height);
+  // ghosting from years of erasing
+  ctx.globalAlpha = 0.08;
+  for (let i = 0; i < 90; i += 1) {
+    ctx.fillStyle = hashRandom(i) > 0.5 ? "#2b3a6b" : "#8c1e2a";
+    ctx.fillRect(
+      hashRandom(i * 2.3) * width,
+      hashRandom(i * 4.9) * height,
+      40 + hashRandom(i * 7.1) * 200,
+      6 + hashRandom(i * 3.3) * 22
+    );
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.strokeStyle = "#1f2b52";
+  ctx.lineWidth = 5;
+  ctx.strokeRect(width * 0.05, height * 0.12, width * 0.9, height * 0.74);
+
+  ctx.font = `900 ${Math.round(height * 0.085)}px "Arial Black", sans-serif`;
+  ctx.fillStyle = "#1f2b52";
+  ctx.textAlign = "left";
+  ctx.fillText("BREAKOUT — OPTION 7B", width * 0.06, height * 0.09);
+
+  const markers = ["#1f2b52", "#8c1e2a", "#1b6b3a", "#6b3a8c"];
+  ctx.lineCap = "round";
+  for (let i = 0; i < 16; i += 1) {
+    ctx.strokeStyle = markers[i % markers.length];
+    ctx.lineWidth = 4 + hashRandom(i * 5.1) * 3;
+    const x0 = width * (0.1 + hashRandom(i * 2.1) * 0.75);
+    const y0 = height * (0.2 + hashRandom(i * 3.7) * 0.6);
+    const x1 = width * (0.1 + hashRandom(i * 6.3) * 0.78);
+    const y1 = height * (0.2 + hashRandom(i * 8.9) * 0.6);
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.bezierCurveTo(
+      x0 + (hashRandom(i * 11.3) - 0.5) * width * 0.3,
+      y0 + (hashRandom(i * 13.7) - 0.5) * height * 0.4,
+      x1 + (hashRandom(i * 17.1) - 0.5) * width * 0.3,
+      y1 + (hashRandom(i * 19.3) - 0.5) * height * 0.4,
+      x1,
+      y1
+    );
+    ctx.stroke();
+    const angle = Math.atan2(y1 - y0, x1 - x0);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x1 - Math.cos(angle - 0.6) * 18, y1 - Math.sin(angle - 0.6) * 18);
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x1 - Math.cos(angle + 0.6) * 18, y1 - Math.sin(angle + 0.6) * 18);
+    ctx.stroke();
+  }
+
+  ["X", "O", "X", "O", "X", "O", "?", "?"].forEach((glyph, i) => {
+    ctx.fillStyle = glyph === "?" ? "#8c1e2a" : markers[i % markers.length];
+    ctx.font = `900 ${Math.round(height * 0.11)}px "Arial Black", sans-serif`;
+    ctx.fillText(
+      glyph,
+      width * (0.12 + hashRandom(i * 23.1) * 0.74),
+      height * (0.24 + hashRandom(i * 29.7) * 0.58)
+    );
+  });
+
+  ctx.strokeStyle = "#8c1e2a";
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.arc(width * 0.72, height * 0.66, height * 0.11, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.font = `900 ${Math.round(height * 0.075)}px "Arial Black", sans-serif`;
+  ctx.fillStyle = "#8c1e2a";
+  ctx.textAlign = "center";
+  ctx.fillText("NO", width * 0.72, height * 0.69);
+
+  ctx.textAlign = "left";
+  ctx.font = `800 ${Math.round(height * 0.05)}px "Segoe Script", cursive`;
+  ctx.fillStyle = "#1b6b3a";
+  ctx.fillText("IF THIS FAILS SEE OPTION 7C", width * 0.08, height * 0.94);
+}
+
+function paintTkachukProtestPoster(ctx, width, height) {
+  ctx.fillStyle = "#0b0b0d";
+  ctx.fillRect(0, 0, width, height);
+
+  // cheap screen-printed stock
+  const wash = ctx.createLinearGradient(0, 0, width, height);
+  wash.addColorStop(0, "rgba(178,25,57,0.42)");
+  wash.addColorStop(1, "rgba(0,0,0,0.2)");
+  ctx.fillStyle = wash;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.save();
+  ctx.translate(width / 2, height / 2);
+  ctx.rotate(-0.02);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  ctx.font = `900 ${Math.round(height * 0.22)}px "Arial Black", Impact, sans-serif`;
+  ctx.lineWidth = 12;
+  ctx.strokeStyle = "rgba(0,0,0,0.75)";
+  ctx.strokeText("F*CK", 0, -height * 0.24);
+  ctx.fillStyle = "#f4f1e8";
+  ctx.fillText("F*CK", 0, -height * 0.24);
+
+  ctx.font = `900 ${Math.round(height * 0.17)}px "Arial Black", Impact, sans-serif`;
+  ctx.strokeText("BRADY", 0, -height * 0.02);
+  ctx.fillStyle = "#f4f1e8";
+  ctx.fillText("BRADY", 0, -height * 0.02);
+
+  ctx.font = `900 ${Math.round(height * 0.19)}px "Arial Black", Impact, sans-serif`;
+  ctx.lineWidth = 14;
+  ctx.strokeText("TKACHUK", 0, height * 0.18);
+  ctx.fillStyle = "#ff2d4b";
+  ctx.fillText("TKACHUK", 0, height * 0.18);
+
+  ctx.font = `800 ${Math.round(height * 0.048)}px "Arial", sans-serif`;
+  ctx.fillStyle = "rgba(244,241,232,0.6)";
+  ctx.letterSpacing = "6px";
+  ctx.fillText("MANAGEMENT REGRETS NOTHING", 0, height * 0.38);
+  ctx.restore();
+
+  // ink flaws and tape
+  paintGrain(ctx, width, height, 0.1, 4200, 3);
+  ctx.fillStyle = "rgba(226,220,198,0.34)";
+  [
+    [0.02, 0.02, 0.16, 0.05, -0.5],
+    [0.82, 0.01, 0.16, 0.05, 0.5],
+    [0.03, 0.93, 0.15, 0.05, 0.42],
+    [0.83, 0.94, 0.15, 0.05, -0.4],
+  ].forEach(([x, y, w, h, rot]) => {
+    ctx.save();
+    ctx.translate(width * (x + w / 2), height * (y + h / 2));
+    ctx.rotate(rot);
+    ctx.fillRect(-width * w * 0.5, -height * h * 0.5, width * w, height * h);
+    ctx.restore();
+  });
+  paintVignette(ctx, width, height, 0.28);
+}
+
+function paintDartTargetPoster(ctx, width, height) {
+  ctx.fillStyle = "#141414";
+  ctx.fillRect(0, 0, width, height);
+
+  // washed-out photo of a rival in full flight
+  const shot = ctx.createLinearGradient(0, 0, 0, height);
+  shot.addColorStop(0, "#3a4756");
+  shot.addColorStop(1, "#12161c");
+  ctx.fillStyle = shot;
+  ctx.fillRect(width * 0.05, height * 0.05, width * 0.9, height * 0.9);
+
+  ctx.fillStyle = "rgba(226,222,210,0.82)";
+  const cx = width * 0.5;
+  const cy = height * 0.48;
+  // body
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + height * 0.02, width * 0.13, height * 0.19, 0.08, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx + width * 0.02, cy - height * 0.24, width * 0.075, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(226,222,210,0.82)";
+  ctx.lineWidth = width * 0.045;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(cx - width * 0.05, cy + height * 0.16);
+  ctx.lineTo(cx - width * 0.16, cy + height * 0.36);
+  ctx.moveTo(cx + width * 0.05, cy + height * 0.16);
+  ctx.lineTo(cx + width * 0.15, cy + height * 0.34);
+  ctx.stroke();
+
+  // concentric rings
+  const rings = [0.42, 0.32, 0.22, 0.12, 0.05];
+  rings.forEach((r, index) => {
+    ctx.strokeStyle =
+      index % 2 === 0 ? "rgba(255,45,75,0.9)" : "rgba(244,241,232,0.85)";
+    ctx.lineWidth = width * 0.014;
+    ctx.beginPath();
+    ctx.arc(cx, cy, width * r, 0, Math.PI * 2);
+    ctx.stroke();
+  });
+  ctx.fillStyle = "rgba(255,45,75,0.95)";
+  ctx.beginPath();
+  ctx.arc(cx, cy, width * 0.025, 0, Math.PI * 2);
+  ctx.fill();
+
+  // crosshair
+  ctx.strokeStyle = "rgba(244,241,232,0.5)";
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - width * 0.46, cy);
+  ctx.lineTo(cx + width * 0.46, cy);
+  ctx.moveTo(cx, cy - width * 0.46);
+  ctx.lineTo(cx, cy + width * 0.46);
+  ctx.stroke();
+
+  ctx.font = `900 ${Math.round(height * 0.055)}px "Arial Black", sans-serif`;
+  ctx.fillStyle = "#f4f1e8";
+  ctx.textAlign = "center";
+  ctx.fillText("PRACTICE TARGET", cx, height * 0.115);
+  ctx.font = `700 ${Math.round(height * 0.035)}px "Arial", sans-serif`;
+  ctx.fillStyle = "rgba(244,241,232,0.6)";
+  ctx.fillText("PROVIDED BY HOCKEY OPERATIONS", cx, height * 0.94);
+
+  // existing dart scars
+  ctx.fillStyle = "rgba(0,0,0,0.7)";
+  for (let i = 0; i < 26; i += 1) {
+    ctx.beginPath();
+    ctx.arc(
+      cx + (hashRandom(i * 3.7) - 0.5) * width * 0.7,
+      cy + (hashRandom(i * 5.1) - 0.5) * height * 0.6,
+      1.6 + hashRandom(i * 7.3) * 2.2,
+      0,
+      Math.PI * 2
+    );
+    ctx.fill();
+  }
+  paintGrain(ctx, width, height, 0.07);
+}
+
+function paintPennant(ctx, width, height, label, tone) {
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = tone;
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "rgba(0,0,0,0.28)";
+  ctx.fillRect(0, 0, width * 0.06, height);
+  ctx.fillStyle = "rgba(240,234,218,0.9)";
+  ctx.fillRect(width * 0.06, height * 0.1, width * 0.02, height * 0.8);
+
+  ctx.save();
+  ctx.translate(width * 0.55, height * 0.5);
+  ctx.font = `900 ${Math.round(height * 0.3)}px "Arial Black", sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "rgba(240,234,218,0.95)";
+  ctx.letterSpacing = "4px";
+  ctx.fillText(label, 0, 0);
+  ctx.restore();
+
+  // felt fuzz
+  paintGrain(ctx, width, height, 0.1, 3000, 3);
+  paintVignette(ctx, width, height, 0.3);
+}
+
+function paintProgramCover(ctx, width, height) {
+  ctx.fillStyle = "#a8261f";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "rgba(0,0,0,0.22)";
+  ctx.fillRect(0, 0, width, height * 0.18);
+
+  ctx.fillStyle = "#f0e8d4";
+  ctx.font = `900 ${Math.round(height * 0.075)}px "Georgia", serif`;
+  ctx.textAlign = "center";
+  ctx.fillText("OFFICIAL PROGRAM", width / 2, height * 0.12);
+
+  ctx.fillStyle = "rgba(20,16,12,0.55)";
+  ctx.fillRect(width * 0.1, height * 0.24, width * 0.8, height * 0.44);
+  ctx.fillStyle = "rgba(240,232,212,0.85)";
+  ctx.beginPath();
+  ctx.arc(width * 0.5, height * 0.44, width * 0.14, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#a8261f";
+  ctx.font = `900 ${Math.round(height * 0.09)}px "Arial Black", sans-serif`;
+  ctx.fillText("NHL", width * 0.5, height * 0.47);
+
+  ctx.fillStyle = "#f0e8d4";
+  ctx.font = `800 ${Math.round(height * 0.05)}px "Georgia", serif`;
+  ctx.fillText("TONIGHT'S LINEUPS", width / 2, height * 0.76);
+  ctx.font = `700 ${Math.round(height * 0.04)}px "Georgia", serif`;
+  ctx.fillText("FIFTY CENTS", width / 2, height * 0.86);
+  paintGrain(ctx, width, height, 0.09);
+  paintVignette(ctx, width, height, 0.34);
+}
+
+function paintPinBoard(ctx, width, height) {
+  ctx.fillStyle = "#111216";
+  ctx.fillRect(0, 0, width, height);
+  const tones = ["#b32036", "#1f3f8f", "#c9a86a", "#1b6b3a", "#e8e3d6", "#6b3a8c"];
+  for (let row = 0; row < 4; row += 1) {
+    for (let col = 0; col < 7; col += 1) {
+      const cx = width * ((col + 0.7) / 7.4);
+      const cy = height * ((row + 0.7) / 4.4);
+      const r = Math.min(width / 7.4, height / 4.4) * 0.32;
+      const tone = tones[(row * 7 + col) % tones.length];
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.beginPath();
+      ctx.arc(cx + 2, cy + 3, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = tone;
+      ctx.beginPath();
+      if ((row + col) % 3 === 0) {
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      } else if ((row + col) % 3 === 1) {
+        ctx.rect(cx - r * 0.8, cy - r * 0.9, r * 1.6, r * 1.8);
+      } else {
+        ctx.moveTo(cx, cy - r);
+        ctx.lineTo(cx + r, cy);
+        ctx.lineTo(cx, cy + r);
+        ctx.lineTo(cx - r, cy);
+        ctx.closePath();
+      }
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,240,210,0.5)";
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      // enamel highlight
+      const gloss = ctx.createRadialGradient(
+        cx - r * 0.3,
+        cy - r * 0.4,
+        0,
+        cx - r * 0.3,
+        cy - r * 0.4,
+        r
+      );
+      gloss.addColorStop(0, "rgba(255,255,255,0.5)");
+      gloss.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = gloss;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  paintVignette(ctx, width, height, 0.4);
+}
+
+function paintScratchedNote(ctx, width, height) {
+  ctx.fillStyle = "#d8d0ba";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "rgba(150,130,90,0.12)";
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = "rgba(60,80,140,0.18)";
+  ctx.lineWidth = 1.6;
+  for (let y = height * 0.16; y < height * 0.95; y += height * 0.09) {
+    ctx.beginPath();
+    ctx.moveTo(width * 0.06, y);
+    ctx.lineTo(width * 0.94, y);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = "rgba(30,26,20,0.82)";
+  ctx.font = `700 ${Math.round(height * 0.085)}px "Segoe Script", cursive`;
+  ctx.textAlign = "left";
+  ctx.fillText("CALL BACK LIST", width * 0.08, height * 0.14);
+  ctx.font = `600 ${Math.round(height * 0.07)}px "Segoe Script", cursive`;
+  ctx.fillText("1. winger, left side", width * 0.08, height * 0.25);
+  ctx.fillText("2. 3rd pair D", width * 0.08, height * 0.34);
+  ctx.fillText("3. goalie coach", width * 0.08, height * 0.43);
+
+  // a rival crest scribbled into oblivion
+  ctx.save();
+  ctx.translate(width * 0.62, height * 0.68);
+  ctx.fillStyle = "rgba(40,60,120,0.6)";
+  ctx.beginPath();
+  ctx.arc(0, 0, height * 0.16, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(20,18,14,0.92)";
+  ctx.lineWidth = 5;
+  ctx.lineCap = "round";
+  for (let i = 0; i < 22; i += 1) {
+    ctx.beginPath();
+    ctx.moveTo(
+      (hashRandom(i * 2.7) - 0.5) * height * 0.46,
+      (hashRandom(i * 5.3) - 0.5) * height * 0.46
+    );
+    ctx.lineTo(
+      (hashRandom(i * 7.9) - 0.5) * height * 0.46,
+      (hashRandom(i * 9.1) - 0.5) * height * 0.46
+    );
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.fillStyle = "rgba(150,26,38,0.8)";
+  ctx.font = `800 ${Math.round(height * 0.075)}px "Segoe Script", cursive`;
+  ctx.fillText("NOT THEM", width * 0.1, height * 0.86);
+
+  // coffee ring
+  ctx.strokeStyle = "rgba(110,74,40,0.28)";
+  ctx.lineWidth = 7;
+  ctx.beginPath();
+  ctx.arc(width * 0.22, height * 0.63, height * 0.14, 0, Math.PI * 2);
+  ctx.stroke();
+  paintGrain(ctx, width, height, 0.05);
+}
+
+function paintMiniBanner(ctx, width, height, top, bottom, tone) {
+  ctx.fillStyle = tone;
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = "rgba(201,168,106,0.85)";
+  ctx.lineWidth = width * 0.045;
+  ctx.strokeRect(width * 0.05, height * 0.04, width * 0.9, height * 0.92);
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = "rgba(240,234,218,0.94)";
+  ctx.font = `900 ${Math.round(height * 0.11)}px "Arial Black", sans-serif`;
+  ctx.fillText(top, width / 2, height * 0.24);
+  ctx.font = `900 ${Math.round(height * 0.2)}px "Arial Black", sans-serif`;
+  ctx.fillText(bottom, width / 2, height * 0.52);
+  ctx.font = `800 ${Math.round(height * 0.075)}px "Georgia", serif`;
+  ctx.fillStyle = "rgba(201,168,106,0.9)";
+  ctx.fillText("CHAMPIONS", width / 2, height * 0.72);
+
+  // felt + hanging fringe
+  paintGrain(ctx, width, height, 0.1, 2600, 3);
+  ctx.fillStyle = "rgba(201,168,106,0.8)";
+  for (let i = 0; i < 14; i += 1) {
+    ctx.fillRect(
+      width * (0.06 + (i / 14) * 0.88),
+      height * 0.95,
+      width * 0.02,
+      height * 0.05
+    );
+  }
+  paintVignette(ctx, width, height, 0.34);
+}
+
+/* ============================================================================
+   HALLWAY GEOMETRY
+   ==========================================================================
+
+   Helpers first. Every art surface uses createFacePanel so the texture
+   orientation, UVs and facing direction are explicit rather than inherited
+   from a primitive's default winding.
+*/
+
+function createFacePanel(
+  scene,
+  name,
+  { width, height, columns = 1, rows = 1, relief = 0, reliefShape }
+) {
+  const positions = [];
+  const uvs = [];
+  const indices = [];
+
+  for (let r = 0; r <= rows; r += 1) {
+    const v = r / rows;
+    for (let c = 0; c <= columns; c += 1) {
+      const u = c / columns;
+      const z = relief ? relief * (reliefShape ? reliefShape(u, v) : 1) : 0;
+      positions.push((u - 0.5) * width, (0.5 - v) * height, z);
+      uvs.push(u, 1 - v);
+    }
+  }
+
+  for (let r = 0; r < rows; r += 1) {
+    for (let c = 0; c < columns; c += 1) {
+      const a = r * (columns + 1) + c;
+      const b = a + 1;
+      const d = a + columns + 1;
+      const e = d + 1;
+      indices.push(a, d, b, b, d, e);
+    }
+  }
+
+  const normals = [];
+  VertexData.ComputeNormals(positions, indices, normals);
+
+  // The panel is authored to face +Z; keep the shading consistent with that.
+  let facing = 0;
+  for (let i = 2; i < normals.length; i += 3) {
+    facing += normals[i];
+  }
+  if (facing < 0) {
+    for (let i = 0; i < normals.length; i += 1) {
+      normals[i] = -normals[i];
+    }
+  }
+
+  const mesh = new Mesh(name, scene);
+  const data = new VertexData();
+  data.positions = positions;
+  data.indices = indices;
+  data.uvs = uvs;
+  data.normals = normals;
+  data.applyToMesh(mesh);
+  mesh.isPickable = false;
+  mesh.receiveShadows = true;
+  return mesh;
+}
+
+function place(mesh, parent, options = {}) {
+  if (parent) {
+    mesh.parent = parent;
+  }
+  const [x = 0, y = 0, z = 0] = options.at || [];
+  mesh.position.set(x, y, z);
+  if (options.turn) {
+    const [rx = 0, ry = 0, rz = 0] = options.turn;
+    mesh.rotation.set(rx, ry, rz);
+  }
+  if (options.material) {
+    mesh.material = options.material;
+  }
+  mesh.checkCollisions = Boolean(options.collide);
+  mesh.isPickable = Boolean(options.pickable);
+  mesh.receiveShadows = options.receiveShadows !== false;
+  return mesh;
+}
+
+function solid(scene, name, parent, options) {
+  const mesh = MeshBuilder.CreateBox(
+    name,
+    {
+      width: options.width ?? 0.1,
+      height: options.height ?? 0.1,
+      depth: options.depth ?? 0.1,
+    },
+    scene
+  );
+  return place(mesh, parent, options);
+}
+
+function rod(scene, name, parent, options) {
+  const mesh = MeshBuilder.CreateCylinder(
+    name,
+    {
+      height: options.height ?? 0.1,
+      diameterTop: options.top ?? options.diameter ?? 0.02,
+      diameterBottom: options.bottom ?? options.diameter ?? 0.02,
+      tessellation: options.sides ?? 12,
+    },
+    scene
+  );
+  return place(mesh, parent, options);
+}
+
+function orb(scene, name, parent, options) {
+  const mesh = MeshBuilder.CreateSphere(
+    name,
+    {
+      diameter: options.diameter ?? 0.1,
+      segments: options.segments ?? 12,
+      slice: options.slice ?? 1,
+    },
+    scene
+  );
+  if (options.squash) {
+    mesh.scaling.set(...options.squash);
+  }
+  return place(mesh, parent, options);
+}
+
+function artPanel(scene, name, parent, options) {
+  const mesh = createFacePanel(scene, name, {
+    width: options.width,
+    height: options.height,
+    columns: options.columns ?? 1,
+    rows: options.rows ?? 1,
+    relief: options.relief ?? 0,
+    reliefShape: options.reliefShape,
+  });
+  return place(mesh, parent, options);
+}
+
+/*
+  Anchor whose local +Z points away from the wall and into the corridor.
+*/
+function wallMount(scene, parent, side, z, y = 0) {
+  const node = new TransformNode(`hall-mount${side}-${z.toFixed(2)}`, scene);
+  node.parent = parent;
+  node.position.set(side * (HALL.width / 2 - 0.004), y, z);
+  node.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+  return node;
+}
+
+function contactShadowTexture(scene, cache) {
+  if (!cache.contactShadow) {
+    cache.contactShadow = makeHallTexture(
+      scene,
+      "hall-contact-shadow",
+      128,
+      128,
+      (ctx, w, h) => {
+        ctx.clearRect(0, 0, w, h);
+        const gradient = ctx.createRadialGradient(
+          w / 2,
+          h / 2,
+          0,
+          w / 2,
+          h / 2,
+          w / 2
+        );
+        gradient.addColorStop(0, "rgba(0,0,0,0.82)");
+        gradient.addColorStop(0.45, "rgba(0,0,0,0.5)");
+        gradient.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, w, h);
+      },
+      { clamp: true, hasAlpha: true }
+    );
+  }
+  return cache.contactShadow;
+}
+
+/*
+  Soft grounding pool under floor props. Cheap, and it does more for the sense
+  of physical weight than a shadow map at this corridor length would.
+*/
+function contactShadow(scene, cache, parent, { x = 0, z = 0, radius = 0.3, strength = 1 }) {
+  if (!cache.contactShadowMaterial) {
+    const material = new StandardMaterial("hall-contact-shadow-mat", scene);
+    material.diffuseTexture = contactShadowTexture(scene, cache);
+    material.diffuseTexture.hasAlpha = true;
+    material.opacityTexture = material.diffuseTexture;
+    material.diffuseColor = Color3.Black();
+    material.specularColor = Color3.Black();
+    material.emissiveColor = Color3.Black();
+    material.disableLighting = true;
+    material.backFaceCulling = false;
+    material.alpha = 0.85;
+    cache.contactShadowMaterial = material;
+  }
+
+  const mesh = MeshBuilder.CreateGround(
+    `hall-shadow-${x.toFixed(2)}-${z.toFixed(2)}`,
+    { width: radius * 2, height: radius * 2 },
+    scene
+  );
+  mesh.parent = parent;
+  mesh.position.set(x, 0.004, z);
+  mesh.material = cache.contactShadowMaterial;
+  mesh.isPickable = false;
+  mesh.receiveShadows = false;
+  mesh.visibility = clamp(strength, 0.1, 1);
+  return mesh;
+}
+
+/*
+  Museum-grade frame: mitred outer moulding, gilt fillet, recessed mat, art,
+  and a glass sheet that catches the practical lights.
+*/
+function buildFramedPiece(
+  scene,
+  materials,
+  parent,
+  {
+    name,
+    width,
+    height,
+    art,
+    depth = 0.055,
+    moulding = 0.038,
+    mat = 0.03,
+    tilt = 0,
+    glass = true,
+    frameMaterial,
+  }
+) {
+  const group = new TransformNode(`frame-${name}`, scene);
+  group.parent = parent;
+  group.rotation.z = tilt;
+
+  const wood = frameMaterial || materials.walnutDark();
+  const outerW = width + moulding * 2;
+  const outerH = height + moulding * 2;
+
+  // backing box gives the piece real thickness against the wall
+  solid(scene, `frame-${name}-back`, group, {
+    width: outerW,
+    height: outerH,
+    depth,
+    at: [0, 0, depth / 2],
+    material: materials.matBoard(),
+  });
+
+  // moulding rails
+  const rails = [
+    [outerW, moulding, 0, (outerH - moulding) / 2],
+    [outerW, moulding, 0, -(outerH - moulding) / 2],
+    [moulding, outerH - moulding * 2, (outerW - moulding) / 2, 0],
+    [moulding, outerH - moulding * 2, -(outerW - moulding) / 2, 0],
+  ];
+  rails.forEach(([w, h, x, y], index) => {
+    solid(scene, `frame-${name}-rail${index}`, group, {
+      width: w,
+      height: h,
+      depth: depth + 0.012,
+      at: [x, y, depth / 2 + 0.006],
+      material: wood,
+    });
+  });
+
+  // gilt fillet just inside the moulding
+  const fillet = 0.006;
+  [
+    [width + fillet * 2, fillet, 0, (height + fillet) / 2],
+    [width + fillet * 2, fillet, 0, -(height + fillet) / 2],
+    [fillet, height, (width + fillet) / 2, 0],
+    [fillet, height, -(width + fillet) / 2, 0],
+  ].forEach(([w, h, x, y], index) => {
+    solid(scene, `frame-${name}-fillet${index}`, group, {
+      width: w,
+      height: h,
+      depth: 0.014,
+      at: [x, y, depth + 0.004],
+      material: materials.brass(),
+    });
+  });
+
+  if (mat > 0) {
+    artPanel(scene, `frame-${name}-mat`, group, {
+      width,
+      height,
+      at: [0, 0, depth - 0.004],
+      material: materials.matBoard(),
+    });
+  }
+
+  const artMesh = artPanel(scene, `frame-${name}-art`, group, {
+    width: width - mat * 2,
+    height: height - mat * 2,
+    at: [0, 0, depth - 0.002],
+    material: art,
+  });
+
+  if (glass) {
+    const pane = artPanel(scene, `frame-${name}-glass`, group, {
+      width,
+      height,
+      at: [0, 0, depth + 0.002],
+      material: materials.glass(),
+    });
+    pane.isPickable = false;
+  }
+
+  return { group, artMesh, outerW, outerH };
+}
+
+function buildBrassPlaque(scene, materials, parent, { name, width, height, lines, at }) {
+  const plate = materials.art(
+    `plaque-${name}`,
+    Math.round(width * 900),
+    Math.round(height * 900),
+    (ctx, w, h) => paintEtchedBrassPlate(ctx, w, h, lines),
+    { metallic: 0.7, roughness: 0.3, environmentIntensity: 0.7, bump: 0.3 }
+  );
+
+  const group = new TransformNode(`plaque-${name}`, scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+
+  solid(scene, `plaque-${name}-body`, group, {
+    width: width + 0.012,
+    height: height + 0.012,
+    depth: 0.014,
+    at: [0, 0, 0.007],
+    material: materials.walnutDark(),
+  });
+  artPanel(scene, `plaque-${name}-face`, group, {
+    width,
+    height,
+    at: [0, 0, 0.0155],
+    material: plate,
+  });
+  // standoff screws
+  [-1, 1].forEach((side) => {
+    rod(scene, `plaque-${name}-screw${side}`, group, {
+      diameter: 0.008,
+      height: 0.006,
+      sides: 8,
+      at: [side * (width / 2 - 0.014), -height / 2 + 0.012, 0.018],
+      turn: [Math.PI / 2, 0, 0],
+      material: materials.brass(),
+    });
+  });
+
+  return group;
+}
+
+/* --------------------------------------------------------------------------
+   HERO EXHIBIT ONE — framed, authenticated, museum lit
+   -------------------------------------------------------------------------- */
+
+function buildKarlssonExhibit(scene, materials, parent, cache) {
+  const mount = wallMount(scene, parent, -1, -19.6, 0);
+  const group = new TransformNode("karlsson-exhibit", scene);
+  group.parent = mount;
+  group.position.set(0, 1.62, 0);
+
+  const jerseyMaterial = materials.art(
+    "karlsson-jersey",
+    900,
+    1200,
+    paintKarlssonJersey,
+    { roughness: 0.86, bump: 0.55, environmentIntensity: 0.08 }
+  );
+  jerseyMaterial.albedoTexture.hasAlpha = true;
+  jerseyMaterial.useAlphaFromAlbedoTexture = true;
+  jerseyMaterial.transparencyMode = 1;
+  jerseyMaterial.backFaceCulling = false;
+
+  const boxWidth = 0.98;
+  const boxHeight = 1.28;
+  const depth = 0.14;
+
+  // deep shadow box
+  solid(scene, "karlsson-case-back", group, {
+    width: boxWidth,
+    height: boxHeight,
+    depth,
+    at: [0, 0, depth / 2],
+    material: materials.charcoal(),
+  });
+
+  const rails = [
+    [boxWidth + 0.09, 0.045, 0, (boxHeight + 0.045) / 2],
+    [boxWidth + 0.09, 0.045, 0, -(boxHeight + 0.045) / 2],
+    [0.045, boxHeight + 0.09, (boxWidth + 0.045) / 2, 0],
+    [0.045, boxHeight + 0.09, -(boxWidth + 0.045) / 2, 0],
+  ];
+  rails.forEach(([w, h, x, y], index) => {
+    solid(scene, `karlsson-rail${index}`, group, {
+      width: w,
+      height: h,
+      depth: depth + 0.03,
+      at: [x, y, depth / 2 + 0.015],
+      material: materials.walnutDark(),
+    });
+  });
+
+  [
+    [boxWidth + 0.008, 0.008, 0, (boxHeight + 0.008) / 2],
+    [boxWidth + 0.008, 0.008, 0, -(boxHeight + 0.008) / 2],
+    [0.008, boxHeight, (boxWidth + 0.008) / 2, 0],
+    [0.008, boxHeight, -(boxWidth + 0.008) / 2, 0],
+  ].forEach(([w, h, x, y], index) => {
+    solid(scene, `karlsson-fillet${index}`, group, {
+      width: w,
+      height: h,
+      depth: 0.018,
+      at: [x, y, depth + 0.012],
+      material: materials.brass(),
+    });
+  });
+
+  // the sweater itself, mounted over a form so it keeps cloth depth
+  const jersey = createFacePanel(scene, "karlsson-jersey", {
+    width: 0.86,
+    height: 1.14,
+    columns: 26,
+    rows: 32,
+    relief: 0.055,
+    reliefShape: (u, v) =>
+      (0.34 +
+        0.66 * Math.pow(Math.sin(Math.max(v, 0.02) * Math.PI), 0.6)) *
+      (0.5 +
+        0.28 * Math.sin(u * Math.PI * 5.2) +
+        0.22 * Math.sin(u * Math.PI * 2.1 + 1.2)),
+  });
+  jersey.parent = group;
+  jersey.position.set(0, 0.02, depth - 0.028);
+  jersey.material = jerseyMaterial;
+
+  // authentication hologram in the corner
+  solid(scene, "karlsson-hologram", group, {
+    width: 0.05,
+    height: 0.05,
+    depth: 0.003,
+    at: [boxWidth / 2 - 0.07, -boxHeight / 2 + 0.07, depth - 0.02],
+    material: materials.silver(),
+  });
+
+  const pane = artPanel(scene, "karlsson-glass", group, {
+    width: boxWidth,
+    height: boxHeight,
+    at: [0, 0, depth + 0.014],
+    material: materials.glass(),
+  });
+  pane.isPickable = false;
+
+  buildBrassPlaque(scene, materials, group, {
+    name: "karlsson",
+    width: 0.56,
+    height: 0.15,
+    at: [0, -boxHeight / 2 - 0.16, 0.03],
+    lines: [
+      { text: "ERIK KARLSSON — No. 65", scale: 1.18 },
+      "Ottawa Senators · Game-Worn",
+      "Round 2, Game 1 · vs. New York Rangers · 2017",
+    ],
+  });
+
+  // museum picture light above the case
+  const lightArm = new TransformNode("karlsson-light-arm", scene);
+  lightArm.parent = group;
+  lightArm.position.set(0, boxHeight / 2 + 0.12, 0.06);
+  rod(scene, "karlsson-light-stem", lightArm, {
+    diameter: 0.016,
+    height: 0.14,
+    sides: 10,
+    at: [0, 0, 0.07],
+    turn: [Math.PI / 2.4, 0, 0],
+    material: materials.brass(),
+  });
+  const hood = rod(scene, "karlsson-light-hood", lightArm, {
+    top: 0.062,
+    bottom: 0.062,
+    height: 0.44,
+    sides: 16,
+    at: [0, 0.05, 0.15],
+    turn: [0, 0, Math.PI / 2],
+    material: materials.brass(),
+  });
+  hood.scaling.set(1, 1, 0.55);
+  rod(scene, "karlsson-light-lens", lightArm, {
+    diameter: 0.05,
+    height: 0.4,
+    sides: 14,
+    at: [0, 0.015, 0.16],
+    turn: [0, 0, Math.PI / 2],
+    material: materials.lampLens(),
+  });
+
+  const groupMeshes = group.getChildMeshes();
+  const spot = new SpotLight(
+    "karlsson-museum-spot",
+    new Vector3(0, 0, 0),
+    new Vector3(0, -1, 0),
+    Math.PI / 2.6,
+    6,
+    scene
+  );
+  group.computeWorldMatrix(true);
+  const worldAnchor = group.getAbsolutePosition().clone();
+  spot.position = new Vector3(
+    worldAnchor.x + 0.42,
+    worldAnchor.y + boxHeight / 2 + 0.2,
+    worldAnchor.z
+  );
+  spot.setDirectionToTarget(worldAnchor);
+  spot.diffuse = new Color3(1, 0.9, 0.72);
+  spot.intensity = 9;
+  spot.range = 3.4;
+  spot.includedOnlyMeshes = groupMeshes;
+
+  cache.lights.push(spot);
+
+  return {
+    group,
+    mount,
+    meshes: groupMeshes,
+    focus: new Vector3(worldAnchor.x, worldAnchor.y, worldAnchor.z),
+  };
+}
+
+/* --------------------------------------------------------------------------
+   HERO EXHIBIT TWO — hanging, back out, man-cave rather than museum
+   -------------------------------------------------------------------------- */
+
+function buildOvechkinExhibit(scene, materials, parent, cache) {
+  const mount = wallMount(scene, parent, 1, -18.7, 0);
+  const group = new TransformNode("ovechkin-exhibit", scene);
+  group.parent = mount;
+  group.position.set(0, 1.74, 0);
+
+  const jerseyMaterial = materials.art(
+    "ovechkin-jersey",
+    900,
+    1200,
+    paintOvechkinJerseyBack,
+    { roughness: 0.9, bump: 0.6, environmentIntensity: 0.07 }
+  );
+  jerseyMaterial.albedoTexture.hasAlpha = true;
+  jerseyMaterial.useAlphaFromAlbedoTexture = true;
+  jerseyMaterial.transparencyMode = 1;
+  jerseyMaterial.backFaceCulling = false;
+
+  // walnut backer board, so the sweater is not floating on plaster
+  solid(scene, "ovechkin-backer", group, {
+    width: 1.06,
+    height: 1.42,
+    depth: 0.028,
+    at: [0, -0.02, 0.014],
+    material: materials.walnut(),
+  });
+  [
+    [1.1, 0.024, 0, 0.71],
+    [1.1, 0.024, 0, -0.75],
+  ].forEach(([w, h, x, y], index) => {
+    solid(scene, `ovechkin-backer-trim${index}`, group, {
+      width: w,
+      height: h,
+      depth: 0.04,
+      at: [x, y, 0.02],
+      material: materials.walnutDark(),
+    });
+  });
+
+  // brass hanging rail on standoffs
+  [-1, 1].forEach((side) => {
+    rod(scene, `ovechkin-standoff${side}`, group, {
+      diameter: 0.022,
+      height: 0.1,
+      sides: 10,
+      at: [side * 0.45, 0.62, 0.06],
+      turn: [Math.PI / 2, 0, 0],
+      material: materials.brass(),
+    });
+  });
+  const rail = rod(scene, "ovechkin-rail", group, {
+    diameter: 0.026,
+    height: 1.02,
+    sides: 12,
+    at: [0, 0.62, 0.11],
+    turn: [0, 0, Math.PI / 2],
+    material: materials.brass(),
+  });
+  void rail;
+
+  // wooden hanger under the rail
+  solid(scene, "ovechkin-hanger-bar", group, {
+    width: 0.5,
+    height: 0.016,
+    depth: 0.026,
+    at: [0, 0.56, 0.11],
+    material: materials.walnutDark(),
+  });
+  [-1, 1].forEach((side) => {
+    solid(scene, `ovechkin-hanger-arm${side}`, group, {
+      width: 0.26,
+      height: 0.014,
+      depth: 0.024,
+      at: [side * 0.13, 0.585, 0.11],
+      turn: [0, 0, side * -0.2],
+      material: materials.walnutDark(),
+    });
+  });
+  rod(scene, "ovechkin-hanger-hook", group, {
+    diameter: 0.008,
+    height: 0.08,
+    sides: 8,
+    at: [0, 0.615, 0.11],
+    material: materials.steel(),
+  });
+
+  const jersey = createFacePanel(scene, "ovechkin-jersey", {
+    width: 0.94,
+    height: 1.24,
+    columns: 28,
+    rows: 34,
+    relief: 0.09,
+    reliefShape: (u, v) =>
+      (0.3 + 0.7 * Math.pow(Math.sin(Math.max(v, 0.03) * Math.PI), 0.5)) *
+      (0.46 +
+        0.3 * Math.sin(u * Math.PI * 4.1 + 0.6) +
+        0.24 * Math.sin(u * Math.PI * 7.3)),
+  });
+  jersey.parent = group;
+  jersey.position.set(0, -0.06, 0.14);
+  jersey.material = jerseyMaterial;
+
+  buildBrassPlaque(scene, materials, group, {
+    name: "ovechkin",
+    width: 0.48,
+    height: 0.13,
+    at: [0, -0.88, 0.03],
+    lines: [
+      { text: "ALEX OVECHKIN — No. 8", scale: 1.16 },
+      "Washington Capitals · Koho · Rookie Era",
+    ],
+  });
+
+  const groupMeshes = group.getChildMeshes();
+  group.computeWorldMatrix(true);
+  const worldAnchor = group.getAbsolutePosition().clone();
+  const spot = new SpotLight(
+    "ovechkin-spot",
+    new Vector3(worldAnchor.x - 0.5, worldAnchor.y + 0.86, worldAnchor.z - 0.1),
+    new Vector3(0, -1, 0),
+    Math.PI / 2.4,
+    5,
+    scene
+  );
+  spot.setDirectionToTarget(worldAnchor);
+  spot.diffuse = new Color3(1, 0.86, 0.66);
+  spot.intensity = 8.5;
+  spot.range = 3.6;
+  spot.includedOnlyMeshes = groupMeshes;
+  cache.lights.push(spot);
+
+  return {
+    group,
+    mount,
+    meshes: groupMeshes,
+    focus: new Vector3(worldAnchor.x, worldAnchor.y, worldAnchor.z),
+  };
+}
+
+/* --------------------------------------------------------------------------
+   EQUIPMENT AND CLUTTER
+   -------------------------------------------------------------------------- */
+
+function buildPuck(scene, materials, parent, { at, turn, name }) {
+  const puck = rod(scene, `puck-${name}`, parent, {
+    diameter: 0.076,
+    height: 0.026,
+    sides: 20,
+    at,
+    turn,
+    material: materials.rubber(),
+  });
+  // faint sidewall lettering ring
+  rod(scene, `puck-${name}-band`, puck, {
+    diameter: 0.0765,
+    height: 0.008,
+    sides: 20,
+    at: [0, 0, 0],
+    material: materials.blackMetal(),
+  });
+  return puck;
+}
+
+function buildStick(
+  scene,
+  materials,
+  parent,
+  { name, at, turn, length = 1.62, wooden = false, broken = false, taped = true }
+) {
+  const group = new TransformNode(`stick-${name}`, scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+  if (turn) {
+    group.rotation.set(turn[0], turn[1], turn[2]);
+  }
+
+  const shaftMaterial = wooden ? materials.leather() : materials.blackMetal();
+  const shaftLength = broken ? length * 0.52 : length * 0.78;
+
+  const shaft = solid(scene, `stick-${name}-shaft`, group, {
+    width: wooden ? 0.03 : 0.026,
+    height: shaftLength,
+    depth: wooden ? 0.022 : 0.019,
+    at: [0, shaftLength / 2 + length * 0.2, 0],
+    material: shaftMaterial,
+  });
+  void shaft;
+
+  if (broken) {
+    // splintered break, angled so the fracture reads from a distance
+    solid(scene, `stick-${name}-splinter`, group, {
+      width: 0.024,
+      height: 0.07,
+      depth: 0.015,
+      at: [0.008, shaftLength + length * 0.22, 0],
+      turn: [0.12, 0, 0.26],
+      material: materials.canvasCream(),
+    });
+  }
+
+  // grip tape at the butt end
+  if (taped) {
+    solid(scene, `stick-${name}-grip`, group, {
+      width: wooden ? 0.034 : 0.03,
+      height: 0.2,
+      depth: wooden ? 0.026 : 0.023,
+      at: [0, shaftLength + length * 0.11, 0],
+      material: materials.tape(),
+    });
+  }
+
+  // heel and blade
+  const heel = solid(scene, `stick-${name}-heel`, group, {
+    width: 0.03,
+    height: 0.13,
+    depth: 0.021,
+    at: [0, length * 0.14, 0.02],
+    turn: [0.5, 0, 0],
+    material: shaftMaterial,
+  });
+  void heel;
+
+  const blade = solid(scene, `stick-${name}-blade`, group, {
+    width: 0.028,
+    height: 0.075,
+    depth: 0.31,
+    at: [0, length * 0.045, 0.15],
+    turn: [0, 0, 0],
+    material: broken ? materials.whiteTape() : shaftMaterial,
+  });
+  blade.rotation.y = 0.12;
+
+  // blade tape, still wrapped
+  solid(scene, `stick-${name}-blade-tape`, group, {
+    width: 0.031,
+    height: 0.078,
+    depth: 0.2,
+    at: [0, length * 0.045, 0.19],
+    turn: [0, 0.12, 0],
+    material: broken ? materials.tape() : materials.whiteTape(),
+  });
+
+  return group;
+}
+
+function buildGoaliePads(scene, materials, parent, { at, turn }) {
+  const group = new TransformNode("goalie-pads", scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+  if (turn) group.rotation.set(turn[0], turn[1], turn[2]);
+
+  [-1, 1].forEach((side) => {
+    const pad = new TransformNode(`goalie-pad${side}`, scene);
+    pad.parent = group;
+    pad.position.set(side * 0.17, 0, side * 0.02);
+    pad.rotation.z = side * 0.05;
+
+    // three stacked rolls, thigh rise, knee break — the classic silhouette
+    solid(scene, `goalie-pad${side}-face`, pad, {
+      width: 0.28,
+      height: 0.9,
+      depth: 0.1,
+      at: [0, 0.45, 0],
+      material: materials.canvasCream(),
+    });
+    [0.14, 0.45, 0.72].forEach((h, index) => {
+      rod(scene, `goalie-pad${side}-roll${index}`, pad, {
+        diameter: 0.085,
+        height: 0.28,
+        sides: 12,
+        at: [0, h, -0.055],
+        turn: [0, 0, Math.PI / 2],
+        material: index === 1 ? materials.leather() : materials.canvasCream(),
+      });
+    });
+    solid(scene, `goalie-pad${side}-thigh`, pad, {
+      width: 0.26,
+      height: 0.24,
+      depth: 0.09,
+      at: [0, 1.0, 0.02],
+      turn: [-0.18, 0, 0],
+      material: materials.canvasCream(),
+    });
+    solid(scene, `goalie-pad${side}-knee`, pad, {
+      width: 0.2,
+      height: 0.14,
+      depth: 0.11,
+      at: [side * 0.04, 0.58, 0.07],
+      material: materials.leather(),
+    });
+    // straps
+    [0.2, 0.5, 0.8].forEach((h, index) => {
+      solid(scene, `goalie-pad${side}-strap${index}`, pad, {
+        width: 0.3,
+        height: 0.024,
+        depth: 0.13,
+        at: [0, h, -0.01],
+        material: materials.tape(),
+      });
+    });
+  });
+
+  return group;
+}
+
+function buildHockeyGlove(scene, materials, parent, { name, at, turn, tone }) {
+  const group = new TransformNode(`glove-${name}`, scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+  if (turn) group.rotation.set(turn[0], turn[1], turn[2]);
+
+  const shell = tone || materials.leather();
+
+  solid(scene, `glove-${name}-back`, group, {
+    width: 0.14,
+    height: 0.19,
+    depth: 0.1,
+    at: [0, 0.095, 0],
+    material: shell,
+  });
+  // cuff roll
+  rod(scene, `glove-${name}-cuff`, group, {
+    diameter: 0.115,
+    height: 0.13,
+    sides: 14,
+    at: [0, 0.235, 0],
+    turn: [Math.PI / 2, 0, 0],
+    material: shell,
+  });
+  // fingers
+  for (let i = 0; i < 4; i += 1) {
+    solid(scene, `glove-${name}-finger${i}`, group, {
+      width: 0.032,
+      height: 0.09,
+      depth: 0.038,
+      at: [-0.05 + i * 0.034, 0.012, 0.026],
+      turn: [0.2, 0, 0],
+      material: shell,
+    });
+  }
+  // thumb
+  solid(scene, `glove-${name}-thumb`, group, {
+    width: 0.045,
+    height: 0.1,
+    depth: 0.048,
+    at: [0.075, 0.075, 0.02],
+    turn: [0.1, 0, -0.5],
+    material: shell,
+  });
+  // palm
+  solid(scene, `glove-${name}-palm`, group, {
+    width: 0.13,
+    height: 0.16,
+    depth: 0.02,
+    at: [0, 0.09, -0.052],
+    material: materials.tape(),
+  });
+
+  return group;
+}
+
+function buildDisplayCase(
+  scene,
+  materials,
+  parent,
+  { name, at, width = 0.34, height = 0.24, depth = 0.22, pucks = 2 }
+) {
+  const group = new TransformNode(`case-${name}`, scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+
+  // walnut plinth
+  solid(scene, `case-${name}-base`, group, {
+    width,
+    height: 0.032,
+    depth,
+    at: [0, 0.016, 0],
+    material: materials.walnutDark(),
+  });
+  solid(scene, `case-${name}-reveal`, group, {
+    width: width - 0.03,
+    height: 0.008,
+    depth: depth - 0.03,
+    at: [0, 0.036, 0],
+    material: materials.brass(),
+  });
+
+  // pucks on small posts
+  for (let i = 0; i < pucks; i += 1) {
+    const x = pucks === 1 ? 0 : -width * 0.26 + i * ((width * 0.52) / Math.max(1, pucks - 1));
+    rod(scene, `case-${name}-post${i}`, group, {
+      diameter: 0.018,
+      height: 0.05,
+      sides: 10,
+      at: [x, 0.065, 0],
+      material: materials.brass(),
+    });
+    const puck = buildPuck(scene, materials, group, {
+      name: `${name}-${i}`,
+      at: [x, 0.1, 0],
+      turn: [Math.PI / 2, 0.3 + i * 0.5, 0],
+    });
+    // silver signature stroke across the face
+    artPanel(scene, `case-${name}-sig${i}`, puck, {
+      width: 0.055,
+      height: 0.03,
+      at: [0, -0.014, 0],
+      turn: [Math.PI / 2, 0, 0],
+      material: materials.silver(),
+    });
+  }
+
+  // acrylic hood
+  const hood = solid(scene, `case-${name}-hood`, group, {
+    width,
+    height,
+    depth,
+    at: [0, height / 2 + 0.04, 0],
+    material: materials.acrylic(),
+  });
+  hood.isPickable = false;
+
+  return group;
+}
+
+function buildPuckBucket(scene, materials, parent, { at }) {
+  const group = new TransformNode("puck-bucket", scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+
+  const pail = rod(scene, "puck-bucket-body", group, {
+    top: 0.3,
+    bottom: 0.24,
+    height: 0.32,
+    sides: 20,
+    at: [0, 0.16, 0],
+    material: materials.blackMetal(),
+  });
+  void pail;
+  rod(scene, "puck-bucket-lip", group, {
+    diameter: 0.31,
+    height: 0.02,
+    sides: 20,
+    at: [0, 0.32, 0],
+    material: materials.steel(),
+  });
+  // handle
+  const handle = MeshBuilder.CreateTorus(
+    "puck-bucket-handle",
+    { diameter: 0.3, thickness: 0.012, tessellation: 18 },
+    scene
+  );
+  place(handle, group, {
+    at: [0, 0.36, 0],
+    turn: [0, 0, Math.PI / 2],
+    material: materials.steel(),
+  });
+
+  // pucks stacked and spilling
+  for (let i = 0; i < 9; i += 1) {
+    buildPuck(scene, materials, group, {
+      name: `bucket-${i}`,
+      at: [
+        (hashRandom(i * 2.3) - 0.5) * 0.16,
+        0.05 + i * 0.027,
+        (hashRandom(i * 5.7) - 0.5) * 0.16,
+      ],
+      turn: [Math.PI / 2, hashRandom(i * 3.1) * 3, hashRandom(i * 7.7) * 0.2],
+    });
+  }
+
+  return group;
+}
+
+function buildEquipmentBag(scene, materials, parent, { at, turn }) {
+  const group = new TransformNode("equipment-bag", scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+  if (turn) group.rotation.set(turn[0], turn[1], turn[2]);
+
+  const body = orb(scene, "equipment-bag-body", group, {
+    diameter: 0.5,
+    segments: 14,
+    at: [0, 0.22, 0],
+    material: materials.tape(),
+    squash: [1.55, 0.82, 1],
+  });
+  void body;
+  // end caps read as a duffel rather than a boulder
+  [-1, 1].forEach((side) => {
+    rod(scene, `equipment-bag-end${side}`, group, {
+      diameter: 0.38,
+      height: 0.03,
+      sides: 16,
+      at: [side * 0.38, 0.22, 0],
+      turn: [0, 0, Math.PI / 2],
+      material: materials.blackMetal(),
+    });
+  });
+  // zip and strap
+  solid(scene, "equipment-bag-zip", group, {
+    width: 0.72,
+    height: 0.012,
+    depth: 0.02,
+    at: [0, 0.4, 0],
+    material: materials.steel(),
+  });
+  solid(scene, "equipment-bag-strap", group, {
+    width: 0.5,
+    height: 0.035,
+    depth: 0.02,
+    at: [0, 0.42, 0.1],
+    turn: [0.4, 0, 0],
+    material: materials.leather(),
+  });
+
+  return group;
+}
+
+function buildTrashCan(scene, materials, parent, { at }) {
+  const group = new TransformNode("dented-bin", scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+
+  const body = rod(scene, "dented-bin-body", group, {
+    top: 0.31,
+    bottom: 0.26,
+    height: 0.56,
+    sides: 22,
+    at: [0, 0.28, 0],
+    material: materials.steel(),
+  });
+  // the dent, which is the joke
+  body.scaling.x = 0.9;
+  solid(scene, "dented-bin-dent", group, {
+    width: 0.2,
+    height: 0.18,
+    depth: 0.1,
+    at: [0.11, 0.33, 0.1],
+    turn: [0.2, 0.6, 0.3],
+    material: materials.blackMetal(),
+  });
+  rod(scene, "dented-bin-lip", group, {
+    diameter: 0.32,
+    height: 0.022,
+    sides: 22,
+    at: [0, 0.57, 0],
+    material: materials.blackMetal(),
+  });
+  for (let i = 0; i < 3; i += 1) {
+    rod(scene, `dented-bin-band${i}`, group, {
+      diameter: 0.3 - i * 0.012,
+      height: 0.014,
+      sides: 22,
+      at: [0, 0.1 + i * 0.18, 0],
+      material: materials.blackMetal(),
+    });
+  }
+  // crumpled paper spilling over the rim
+  for (let i = 0; i < 3; i += 1) {
+    orb(scene, `dented-bin-paper${i}`, group, {
+      diameter: 0.1,
+      segments: 6,
+      at: [
+        (hashRandom(i * 3.7) - 0.5) * 0.18,
+        0.58 + hashRandom(i * 5.1) * 0.04,
+        (hashRandom(i * 9.1) - 0.5) * 0.18,
+      ],
+      material: materials.paper(),
+    });
+  }
+
+  return group;
+}
+
+function buildTapeRolls(scene, materials, parent, { at }) {
+  const group = new TransformNode("tape-rolls", scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+
+  const stack = [
+    [0, 0.021, 0, materials.whiteTape()],
+    [0, 0.063, 0, materials.tape()],
+    [0.085, 0.021, 0.03, materials.whiteTape()],
+  ];
+  stack.forEach(([x, y, z, mat], index) => {
+    const roll = rod(scene, `tape-roll${index}`, group, {
+      diameter: 0.1,
+      height: 0.038,
+      sides: 18,
+      at: [x, y, z],
+      material: mat,
+    });
+    rod(scene, `tape-core${index}`, roll, {
+      diameter: 0.042,
+      height: 0.04,
+      sides: 14,
+      at: [0, 0, 0],
+      material: materials.leather(),
+    });
+  });
+
+  return group;
+}
+
+function buildSkateGuards(scene, materials, parent, { at, turn }) {
+  const group = new TransformNode("skate-guards", scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+  if (turn) group.rotation.set(turn[0], turn[1], turn[2]);
+
+  [-1, 1].forEach((side) => {
+    const guard = new TransformNode(`skate-guard${side}`, scene);
+    guard.parent = group;
+    guard.position.set(side * 0.055, 0, 0);
+    guard.rotation.y = side * 0.1;
+
+    solid(scene, `skate-guard${side}-body`, guard, {
+      width: 0.026,
+      height: 0.05,
+      depth: 0.3,
+      at: [0, 0.025, 0],
+      material: materials.blackMetal(),
+    });
+    [-1, 1].forEach((end) => {
+      rod(scene, `skate-guard${side}-cap${end}`, guard, {
+        diameter: 0.05,
+        height: 0.026,
+        sides: 10,
+        at: [0, 0.026, end * 0.15],
+        turn: [0, 0, Math.PI / 2],
+        material: materials.blackMetal(),
+      });
+    });
+    // coiled spring between the halves
+    for (let i = 0; i < 5; i += 1) {
+      rod(scene, `skate-guard${side}-coil${i}`, guard, {
+        diameter: 0.03,
+        height: 0.006,
+        sides: 8,
+        at: [0, 0.05 + i * 0.007, 0],
+        material: materials.steel(),
+      });
+    }
+  });
+
+  return group;
+}
+
+function buildCoffeeCup(scene, materials, parent, { at }) {
+  const group = new TransformNode("forgotten-coffee", scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+
+  rod(scene, "forgotten-coffee-cup", group, {
+    top: 0.085,
+    bottom: 0.062,
+    height: 0.115,
+    sides: 18,
+    at: [0, 0.057, 0],
+    material: materials.paper(),
+  });
+  rod(scene, "forgotten-coffee-lid", group, {
+    top: 0.09,
+    bottom: 0.088,
+    height: 0.016,
+    sides: 18,
+    at: [0, 0.121, 0],
+    material: materials.blackMetal(),
+  });
+  rod(scene, "forgotten-coffee-tab", group, {
+    diameter: 0.022,
+    height: 0.008,
+    sides: 8,
+    at: [0.03, 0.13, 0],
+    material: materials.blackMetal(),
+  });
+  rod(scene, "forgotten-coffee-sleeve", group, {
+    top: 0.079,
+    bottom: 0.07,
+    height: 0.045,
+    sides: 18,
+    at: [0, 0.055, 0],
+    material: materials.leather(),
+  });
+
+  return group;
+}
+
+function buildClipboard(scene, materials, parent, { at, turn }) {
+  const group = new TransformNode("equipment-clipboard", scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+  if (turn) group.rotation.set(turn[0], turn[1], turn[2]);
+
+  solid(scene, "equipment-clipboard-board", group, {
+    width: 0.23,
+    height: 0.006,
+    depth: 0.31,
+    at: [0, 0.003, 0],
+    material: materials.leather(),
+  });
+  solid(scene, "equipment-clipboard-paper", group, {
+    width: 0.2,
+    height: 0.004,
+    depth: 0.27,
+    at: [0, 0.008, -0.008],
+    material: materials.paper(),
+  });
+  solid(scene, "equipment-clipboard-clip", group, {
+    width: 0.09,
+    height: 0.014,
+    depth: 0.045,
+    at: [0, 0.014, 0.13],
+    material: materials.steel(),
+  });
+  rod(scene, "equipment-clipboard-pencil", group, {
+    diameter: 0.008,
+    height: 0.17,
+    sides: 6,
+    at: [0.06, 0.014, -0.02],
+    turn: [0, 0.4, Math.PI / 2],
+    material: materials.brass(),
+  });
+
+  return group;
+}
+
+function buildStopwatchAndWhistle(scene, materials, parent, { at }) {
+  const group = new TransformNode("timing-kit", scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+
+  // stopwatch
+  const watch = rod(scene, "stopwatch-body", group, {
+    diameter: 0.075,
+    height: 0.022,
+    sides: 22,
+    at: [0, 0.011, 0],
+    material: materials.steel(),
+  });
+  rod(scene, "stopwatch-face", watch, {
+    diameter: 0.062,
+    height: 0.024,
+    sides: 22,
+    at: [0, 0, 0],
+    material: materials.canvasCream(),
+  });
+  rod(scene, "stopwatch-crown", group, {
+    diameter: 0.016,
+    height: 0.016,
+    sides: 10,
+    at: [0, 0.011, 0.044],
+    turn: [Math.PI / 2, 0, 0],
+    material: materials.brass(),
+  });
+  const ring = MeshBuilder.CreateTorus(
+    "stopwatch-ring",
+    { diameter: 0.03, thickness: 0.005, tessellation: 14 },
+    scene
+  );
+  place(ring, group, {
+    at: [0, 0.011, 0.062],
+    turn: [Math.PI / 2, 0, 0],
+    material: materials.brass(),
+  });
+
+  // whistle
+  const whistle = new TransformNode("whistle", scene);
+  whistle.parent = group;
+  whistle.position.set(0.11, 0.012, -0.03);
+  whistle.rotation.y = 0.7;
+  solid(scene, "whistle-body", whistle, {
+    width: 0.055,
+    height: 0.022,
+    depth: 0.024,
+    at: [0, 0.011, 0],
+    material: materials.steel(),
+  });
+  rod(scene, "whistle-chamber", whistle, {
+    diameter: 0.03,
+    height: 0.024,
+    sides: 14,
+    at: [0.022, 0.013, 0],
+    turn: [Math.PI / 2, 0, 0],
+    material: materials.steel(),
+  });
+  rod(scene, "whistle-lanyard-loop", whistle, {
+    diameter: 0.01,
+    height: 0.012,
+    sides: 8,
+    at: [-0.03, 0.012, 0],
+    turn: [0, 0, Math.PI / 2],
+    material: materials.brass(),
+  });
+  // cord coiled beside it
+  for (let i = 0; i < 14; i += 1) {
+    const angle = (i / 14) * Math.PI * 2;
+    rod(scene, `whistle-cord${i}`, group, {
+      diameter: 0.006,
+      height: 0.03,
+      sides: 6,
+      at: [0.11 + Math.cos(angle) * 0.05, 0.004, -0.03 + Math.sin(angle) * 0.05],
+      turn: [Math.PI / 2, angle, 0],
+      material: materials.tape(),
+    });
+  }
+
+  return group;
+}
+
+/* --------------------------------------------------------------------------
+   GOALTENDING MASKS — three unmistakable silhouettes
+   -------------------------------------------------------------------------- */
+
+function buildFibreglassMask(scene, materials, parent, { at, turn }) {
+  const group = new TransformNode("mask-fibreglass", scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+  if (turn) group.rotation.set(turn[0], turn[1], turn[2]);
+
+  const shellMaterial = materials.flat("mask-resin", "#cfc6ae", {
+    roughness: 0.42,
+    environmentIntensity: 0.5,
+  });
+
+  const shell = orb(scene, "mask-fibreglass-shell", group, {
+    diameter: 0.24,
+    segments: 20,
+    at: [0, 0, 0],
+    material: shellMaterial,
+    squash: [0.92, 1.16, 0.72],
+  });
+
+  // brow ridge and cheekbones so it is a face, not an egg
+  solid(scene, "mask-fibreglass-brow", group, {
+    width: 0.18,
+    height: 0.022,
+    depth: 0.03,
+    at: [0, 0.05, 0.082],
+    turn: [0.2, 0, 0],
+    material: shellMaterial,
+  });
+  [-1, 1].forEach((side) => {
+    orb(scene, `mask-fibreglass-cheek${side}`, group, {
+      diameter: 0.07,
+      segments: 10,
+      at: [side * 0.06, -0.03, 0.07],
+      material: shellMaterial,
+      squash: [1, 1.1, 0.6],
+    });
+  });
+
+  // eye slots and mouth cut
+  const voidMaterial = materials.flat("mask-void", "#08080a", {
+    roughness: 0.95,
+  });
+  [-1, 1].forEach((side) => {
+    solid(scene, `mask-fibreglass-eye${side}`, group, {
+      width: 0.05,
+      height: 0.026,
+      depth: 0.016,
+      at: [side * 0.045, 0.028, 0.086],
+      turn: [0, side * -0.2, side * 0.08],
+      material: voidMaterial,
+    });
+  });
+  solid(scene, "mask-fibreglass-mouth", group, {
+    width: 0.085,
+    height: 0.018,
+    depth: 0.016,
+    at: [0, -0.058, 0.075],
+    material: voidMaterial,
+  });
+  // breathing holes
+  for (let i = 0; i < 8; i += 1) {
+    rod(scene, `mask-fibreglass-hole${i}`, group, {
+      diameter: 0.011,
+      height: 0.014,
+      sides: 8,
+      at: [-0.035 + (i % 4) * 0.023, -0.026 - Math.floor(i / 4) * 0.016, 0.083],
+      turn: [Math.PI / 2, 0, 0],
+      material: voidMaterial,
+    });
+  }
+  // nose bridge
+  solid(scene, "mask-fibreglass-nose", group, {
+    width: 0.02,
+    height: 0.05,
+    depth: 0.026,
+    at: [0, -0.012, 0.09],
+    material: shellMaterial,
+  });
+
+  // strap and hanging hook
+  solid(scene, "mask-fibreglass-strap", group, {
+    width: 0.24,
+    height: 0.016,
+    depth: 0.014,
+    at: [0, -0.03, -0.075],
+    material: materials.leather(),
+  });
+
+  shell.isPickable = false;
+  return group;
+}
+
+function buildCageMask(scene, materials, parent, { at, turn }) {
+  const group = new TransformNode("mask-cage", scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+  if (turn) group.rotation.set(turn[0], turn[1], turn[2]);
+
+  const helmetMaterial = materials.flat("mask-helmet", "#16181c", {
+    roughness: 0.48,
+    environmentIntensity: 0.4,
+  });
+
+  const helmet = orb(scene, "mask-cage-helmet", group, {
+    diameter: 0.24,
+    segments: 18,
+    slice: 0.56,
+    at: [0, 0.02, 0],
+    material: helmetMaterial,
+    squash: [0.94, 1, 0.9],
+  });
+  helmet.rotation.x = 0.2;
+
+  solid(scene, "mask-cage-brim", group, {
+    width: 0.21,
+    height: 0.014,
+    depth: 0.05,
+    at: [0, 0.035, 0.075],
+    turn: [0.3, 0, 0],
+    material: helmetMaterial,
+  });
+
+  // welded wire cage — vertical bars plus horizontal runs on an arc
+  const wire = materials.steel();
+  for (let i = 0; i < 7; i += 1) {
+    const t = (i / 6 - 0.5) * 2;
+    rod(scene, `mask-cage-vbar${i}`, group, {
+      diameter: 0.007,
+      height: 0.15,
+      sides: 6,
+      at: [t * 0.085, -0.045, 0.09 - Math.abs(t) * 0.028],
+      turn: [0.12, 0, 0],
+      material: wire,
+    });
+  }
+  for (let i = 0; i < 4; i += 1) {
+    rod(scene, `mask-cage-hbar${i}`, group, {
+      diameter: 0.007,
+      height: 0.185,
+      sides: 6,
+      at: [0, 0.012 - i * 0.037, 0.088 - i * 0.006],
+      turn: [0, 0, Math.PI / 2],
+      material: wire,
+    });
+  }
+  // chin cup
+  orb(scene, "mask-cage-chin", group, {
+    diameter: 0.1,
+    segments: 10,
+    at: [0, -0.1, 0.05],
+    material: materials.leather(),
+    squash: [1, 0.55, 0.8],
+  });
+  solid(scene, "mask-cage-strap", group, {
+    width: 0.22,
+    height: 0.014,
+    depth: 0.012,
+    at: [0, -0.03, -0.07],
+    material: materials.leather(),
+  });
+
+  return group;
+}
+
+function buildModernMask(scene, materials, parent, { at, turn }) {
+  const group = new TransformNode("mask-modern", scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+  if (turn) group.rotation.set(turn[0], turn[1], turn[2]);
+
+  const paintedShell = materials.art(
+    "mask-paint",
+    512,
+    512,
+    (ctx, w, h) => {
+      ctx.fillStyle = "#0e1016";
+      ctx.fillRect(0, 0, w, h);
+      // airbrushed flames and a crest, kept abstract
+      const flame = ctx.createLinearGradient(0, h, w, 0);
+      flame.addColorStop(0, "rgba(178,25,57,0.9)");
+      flame.addColorStop(0.5, "rgba(230,120,40,0.8)");
+      flame.addColorStop(1, "rgba(20,22,30,0)");
+      ctx.fillStyle = flame;
+      for (let i = 0; i < 9; i += 1) {
+        ctx.beginPath();
+        const x = (i / 9) * w;
+        ctx.moveTo(x, h);
+        ctx.bezierCurveTo(
+          x + w * 0.06,
+          h * 0.6,
+          x - w * 0.04,
+          h * 0.45,
+          x + w * 0.09,
+          h * 0.18
+        );
+        ctx.bezierCurveTo(
+          x + w * 0.02,
+          h * 0.5,
+          x + w * 0.12,
+          h * 0.62,
+          x + w * 0.1,
+          h
+        );
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.strokeStyle = "rgba(201,168,106,0.9)";
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.arc(w * 0.5, h * 0.4, w * 0.12, 0, Math.PI * 2);
+      ctx.stroke();
+      // clearcoat sheen
+      const gloss = ctx.createLinearGradient(0, 0, w, h);
+      gloss.addColorStop(0, "rgba(255,255,255,0.18)");
+      gloss.addColorStop(0.4, "rgba(255,255,255,0)");
+      ctx.fillStyle = gloss;
+      ctx.fillRect(0, 0, w, h);
+    },
+    { roughness: 0.2, metallic: 0.15, environmentIntensity: 0.85 }
+  );
+
+  const shell = orb(scene, "mask-modern-shell", group, {
+    diameter: 0.25,
+    segments: 22,
+    at: [0, 0, 0],
+    material: paintedShell,
+    squash: [0.96, 1.08, 0.94],
+  });
+  void shell;
+
+  // dome vents
+  for (let i = 0; i < 3; i += 1) {
+    solid(scene, `mask-modern-vent${i}`, group, {
+      width: 0.05,
+      height: 0.008,
+      depth: 0.02,
+      at: [(i - 1) * 0.045, 0.1, 0.05],
+      turn: [0.5, 0, 0],
+      material: materials.blackMetal(),
+    });
+  }
+
+  // cat-eye cage
+  const wire = materials.flat("mask-modern-cage", "#c9ccd2", {
+    metallic: 0.9,
+    roughness: 0.24,
+  });
+  const eyeBars = [
+    [0.024, 0.03],
+    [0.052, -0.006],
+    [0.052, -0.042],
+    [0.024, -0.072],
+  ];
+  eyeBars.forEach(([halfWidth, y], index) => {
+    rod(scene, `mask-modern-hbar${index}`, group, {
+      diameter: 0.008,
+      height: halfWidth * 2 + 0.14,
+      sides: 6,
+      at: [0, y, 0.113],
+      turn: [0, 0, Math.PI / 2],
+      material: wire,
+    });
+  });
+  for (let i = 0; i < 5; i += 1) {
+    const x = (i / 4 - 0.5) * 0.16;
+    rod(scene, `mask-modern-vbar${i}`, group, {
+      diameter: 0.008,
+      height: 0.12,
+      sides: 6,
+      at: [x, -0.02, 0.112 - Math.abs(x) * 0.12],
+      material: wire,
+    });
+  }
+  // cage surround
+  const surround = MeshBuilder.CreateTorus(
+    "mask-modern-surround",
+    { diameter: 0.2, thickness: 0.011, tessellation: 22 },
+    scene
+  );
+  place(surround, group, {
+    at: [0, -0.02, 0.105],
+    turn: [Math.PI / 2, 0, 0],
+    material: wire,
+  });
+  surround.scaling.set(1, 1, 1.2);
+
+  // backplate
+  orb(scene, "mask-modern-backplate", group, {
+    diameter: 0.2,
+    segments: 14,
+    slice: 0.5,
+    at: [0, -0.05, -0.07],
+    turn: [Math.PI, 0, 0],
+    material: materials.blackMetal(),
+    squash: [1, 0.8, 0.6],
+  });
+  solid(scene, "mask-modern-strap", group, {
+    width: 0.2,
+    height: 0.016,
+    depth: 0.012,
+    at: [0, 0.02, -0.1],
+    material: materials.leather(),
+  });
+
+  return group;
+}
+
+/* --------------------------------------------------------------------------
+   CHAMPIONSHIP TROPHY DISPLAY
+   -------------------------------------------------------------------------- */
+
+function buildChampionshipCup(scene, materials, parent, cache, { at }) {
+  const group = new TransformNode("championship-display", scene);
+  group.parent = parent;
+  group.position.set(at[0], at[1], at[2]);
+
+  // low walnut pedestal, deliberately not centred in the corridor
+  solid(scene, "cup-pedestal", group, {
+    width: 0.62,
+    height: 0.28,
+    depth: 0.62,
+    at: [0, 0.14, 0],
+    material: materials.walnut(),
+    collide: true,
+  });
+  solid(scene, "cup-pedestal-cap", group, {
+    width: 0.68,
+    height: 0.03,
+    depth: 0.68,
+    at: [0, 0.295, 0],
+    material: materials.walnutDark(),
+  });
+  solid(scene, "cup-pedestal-reveal", group, {
+    width: 0.64,
+    height: 0.008,
+    depth: 0.64,
+    at: [0, 0.315, 0],
+    material: materials.brass(),
+  });
+
+  const cup = new TransformNode("championship-cup", scene);
+  cup.parent = group;
+  cup.position.set(0, 0.32, 0);
+
+  const silver = materials.silver();
+
+  // barrel of engraved bands
+  for (let i = 0; i < 5; i += 1) {
+    const band = rod(scene, `cup-band${i}`, cup, {
+      top: 0.147 - i * 0.001,
+      bottom: 0.149 - i * 0.001,
+      height: 0.096,
+      sides: 34,
+      at: [0, 0.05 + i * 0.098, 0],
+      material: silver,
+    });
+    // engraved seam between bands
+    rod(scene, `cup-band-seam${i}`, cup, {
+      diameter: 0.152,
+      height: 0.006,
+      sides: 34,
+      at: [0, 0.098 + i * 0.098, 0],
+      material: materials.blackMetal(),
+    });
+    band.receiveShadows = true;
+  }
+
+  // plinth under the barrel
+  rod(scene, "cup-plinth", cup, {
+    top: 0.152,
+    bottom: 0.168,
+    height: 0.03,
+    sides: 34,
+    at: [0, 0.015, 0],
+    material: silver,
+  });
+
+  // collar taper into the bowl
+  rod(scene, "cup-collar", cup, {
+    top: 0.084,
+    bottom: 0.146,
+    height: 0.075,
+    sides: 30,
+    at: [0, 0.578, 0],
+    material: silver,
+  });
+
+  // the bowl
+  const bowlProfile = [
+    new Vector3(0.0, 0.0, 0),
+    new Vector3(0.076, 0.006, 0),
+    new Vector3(0.104, 0.05, 0),
+    new Vector3(0.128, 0.12, 0),
+    new Vector3(0.142, 0.185, 0),
+    new Vector3(0.147, 0.212, 0),
+    new Vector3(0.138, 0.214, 0),
+    new Vector3(0.128, 0.17, 0),
+    new Vector3(0.1, 0.09, 0),
+    new Vector3(0.062, 0.03, 0),
+    new Vector3(0.0, 0.02, 0),
+  ];
+  const bowl = MeshBuilder.CreateLathe(
+    "cup-bowl",
+    {
+      shape: bowlProfile,
+      tessellation: 40,
+      sideOrientation: Mesh.DOUBLESIDE,
+    },
+    scene
+  );
+  bowl.parent = cup;
+  bowl.position.set(0, 0.62, 0);
+  bowl.material = silver;
+  bowl.isPickable = false;
+  bowl.receiveShadows = true;
+
+  // lip ring, the sharpest highlight in an otherwise restrained corridor
+  const lip = MeshBuilder.CreateTorus(
+    "cup-lip",
+    { diameter: 0.292, thickness: 0.012, tessellation: 40 },
+    scene
+  );
+  place(lip, cup, { at: [0, 0.832, 0], material: silver });
+
+  const cupMeshes = [];
+  cup.getChildMeshes().forEach((mesh) => cupMeshes.push(mesh));
+
+  // travel case, hinged open behind the pedestal
+  const travelCase = new TransformNode("cup-travel-case", scene);
+  travelCase.parent = group;
+  travelCase.position.set(-0.62, 0, -0.16);
+  travelCase.rotation.y = 0.32;
+
+  solid(scene, "cup-case-body", travelCase, {
+    width: 0.52,
+    height: 0.34,
+    depth: 0.46,
+    at: [0, 0.17, 0],
+    material: materials.blackMetal(),
+    collide: true,
+  });
+  solid(scene, "cup-case-lid", travelCase, {
+    width: 0.52,
+    height: 0.06,
+    depth: 0.46,
+    at: [0, 0.5, -0.28],
+    turn: [-1.05, 0, 0],
+    material: materials.blackMetal(),
+  });
+  solid(scene, "cup-case-liner", travelCase, {
+    width: 0.46,
+    height: 0.02,
+    depth: 0.4,
+    at: [0, 0.35, 0],
+    material: materials.leather(),
+  });
+  [-1, 1].forEach((side) => {
+    solid(scene, `cup-case-latch${side}`, travelCase, {
+      width: 0.06,
+      height: 0.05,
+      depth: 0.02,
+      at: [side * 0.17, 0.3, 0.235],
+      material: materials.steel(),
+    });
+    solid(scene, `cup-case-corner${side}`, travelCase, {
+      width: 0.05,
+      height: 0.05,
+      depth: 0.05,
+      at: [side * 0.235, 0.03, 0.21],
+      material: materials.steel(),
+    });
+  });
+  // stencilled routing label
+  artPanel(scene, "cup-case-label", travelCase, {
+    width: 0.24,
+    height: 0.1,
+    at: [0, 0.2, 0.232],
+    material: materials.art(
+      "cup-case-label",
+      512,
+      220,
+      (ctx, w, h) => {
+        ctx.fillStyle = "#151517";
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = "rgba(226,220,198,0.8)";
+        ctx.lineWidth = 6;
+        ctx.strokeRect(12, 12, w - 24, h - 24);
+        ctx.fillStyle = "rgba(226,220,198,0.9)";
+        ctx.font = `900 ${Math.round(h * 0.22)}px "Arial Black", sans-serif`;
+        ctx.textAlign = "center";
+        ctx.fillText("FRAGILE", w / 2, h * 0.4);
+        ctx.font = `700 ${Math.round(h * 0.15)}px "Courier New", monospace`;
+        ctx.fillText("HOCKEY OPERATIONS", w / 2, h * 0.66);
+        ctx.fillText("HAND CARRY ONLY", w / 2, h * 0.85);
+        paintGrain(ctx, w, h, 0.08, 1200, 2);
+      },
+      { roughness: 0.85 }
+    ),
+  });
+
+  // polishing cloth draped over the pedestal edge
+  const cloth = artPanel(scene, "cup-polish-cloth", group, {
+    width: 0.28,
+    height: 0.3,
+    columns: 8,
+    rows: 8,
+    relief: 0.02,
+    reliefShape: (u, v) => Math.sin(u * Math.PI * 3) * Math.sin(v * Math.PI),
+    at: [0.29, 0.305, 0.1],
+    turn: [Math.PI / 2.1, 0.3, 0],
+    material: materials.flat("polish-cloth", "#b9c2cc", { roughness: 0.92 }),
+  });
+  cloth.isPickable = false;
+
+  // championship photograph leaning against the pedestal
+  const photo = buildFramedPiece(scene, materials, group, {
+    name: "cup-photo",
+    width: 0.34,
+    height: 0.26,
+    depth: 0.03,
+    moulding: 0.024,
+    mat: 0.02,
+    art: materials.art(
+      "cup-photo",
+      680,
+      520,
+      (ctx, w, h) => paintVintageHockeyPhoto(ctx, w, h, 41, "The night it came home"),
+      { roughness: 0.5 }
+    ),
+  });
+  photo.group.parent = group;
+  photo.group.position.set(0.5, 0.16, 0.24);
+  photo.group.rotation.set(-0.22, 0.7, 0);
+
+  buildBrassPlaque(scene, materials, group, {
+    name: "cup",
+    width: 0.3,
+    height: 0.09,
+    at: [0, 0.2, 0.315],
+    lines: ["CHAMPIONS", "DO NOT LIFT BY THE BOWL"],
+  });
+
+  contactShadow(scene, cache, group, { x: 0, z: 0, radius: 0.55, strength: 1 });
+  contactShadow(scene, cache, group, {
+    x: -0.62,
+    z: -0.16,
+    radius: 0.42,
+    strength: 0.8,
+  });
+
+  const worldAnchor = new Vector3(at[0], at[1] + 0.95, at[2]);
+  const spot = new SpotLight(
+    "cup-spot",
+    new Vector3(at[0] - 0.3, at[1] + 2.5, at[2] - 0.5),
+    new Vector3(0, -1, 0),
+    Math.PI / 3.4,
+    8,
+    scene
+  );
+  spot.setDirectionToTarget(worldAnchor);
+  spot.diffuse = new Color3(1, 0.95, 0.86);
+  spot.intensity = 14;
+  spot.range = 5;
+  spot.includedOnlyMeshes = group.getChildMeshes();
+  cache.lights.push(spot);
+
+  return { group, cup, focus: worldAnchor, meshes: cupMeshes };
+}
+
+/* --------------------------------------------------------------------------
+   THE OFFICE DOOR
+   -------------------------------------------------------------------------- */
+
+function buildOfficeDoor(scene, materials, parent, cache) {
+  const group = new TransformNode("office-door", scene);
+  group.parent = parent;
+  group.position.set(0, 0, HALL.doorZ);
+
+  const doorWidth = 1.16;
+  const doorHeight = 2.32;
+  const casing = 0.1;
+
+  // wall the door is set into, built as two returns and a header
+  const sideWidth = (HALL.width - doorWidth - casing * 2) / 2;
+  [-1, 1].forEach((side) => {
+    solid(scene, `office-door-return${side}`, group, {
+      width: sideWidth,
+      height: HALL.height,
+      depth: 0.22,
+      at: [side * (doorWidth / 2 + casing + sideWidth / 2), HALL.height / 2, 0.11],
+      material: materials.plaster(),
+      collide: true,
+    });
+  });
+  solid(scene, "office-door-header", group, {
+    width: HALL.width,
+    height: HALL.height - doorHeight - casing,
+    depth: 0.22,
+    at: [0, doorHeight + casing + (HALL.height - doorHeight - casing) / 2, 0.11],
+    material: materials.plaster(),
+    collide: true,
+  });
+
+  // walnut casing with a moulded profile
+  [
+    [casing, doorHeight + casing, -(doorWidth / 2 + casing / 2), (doorHeight + casing) / 2],
+    [casing, doorHeight + casing, doorWidth / 2 + casing / 2, (doorHeight + casing) / 2],
+    [doorWidth + casing * 2, casing, 0, doorHeight + casing / 2],
+  ].forEach(([w, h, x, y], index) => {
+    solid(scene, `office-door-casing${index}`, group, {
+      width: w,
+      height: h,
+      depth: 0.06,
+      at: [x, y, 0.03],
+      material: materials.walnutDark(),
+    });
+    // inner bead
+    solid(scene, `office-door-bead${index}`, group, {
+      width: w * 0.32,
+      height: h * (index === 2 ? 0.3 : 1),
+      depth: 0.024,
+      at: [x * 0.86, y, 0.072],
+      material: materials.brass(),
+    });
+  });
+
+  // pediment over the casing
+  solid(scene, "office-door-pediment", group, {
+    width: doorWidth + casing * 3.2,
+    height: 0.06,
+    depth: 0.1,
+    at: [0, doorHeight + casing * 1.6, 0.05],
+    material: materials.walnutDark(),
+  });
+
+  // the leaf itself, on a hinge node so it can swing
+  const hinge = new TransformNode("office-door-hinge", scene);
+  hinge.parent = group;
+  hinge.position.set(-doorWidth / 2, 0, 0);
+
+  const leaf = solid(scene, "office-door-leaf", hinge, {
+    width: doorWidth,
+    height: doorHeight,
+    depth: 0.055,
+    at: [doorWidth / 2, doorHeight / 2, 0],
+    material: materials.walnut(),
+    collide: true,
+  });
+
+  // raised panels and stiles
+  const panels = [
+    [0.4, 0.78, -0.22, 0.62],
+    [0.4, 0.78, 0.22, 0.62],
+    [0.4, 0.66, -0.22, 1.6],
+    [0.4, 0.66, 0.22, 1.6],
+  ];
+  panels.forEach(([w, h, x, y], index) => {
+    solid(scene, `office-door-panel${index}`, hinge, {
+      width: w,
+      height: h,
+      depth: 0.016,
+      at: [doorWidth / 2 + x, y, -0.032],
+      material: materials.walnutDark(),
+    });
+    solid(scene, `office-door-panel-bead${index}`, hinge, {
+      width: w + 0.03,
+      height: 0.012,
+      depth: 0.02,
+      at: [doorWidth / 2 + x, y + h / 2 + 0.012, -0.03],
+      material: materials.walnutDark(),
+    });
+  });
+
+  // brass hardware
+  const lever = new TransformNode("office-door-lever", scene);
+  lever.parent = hinge;
+  lever.position.set(doorWidth - 0.11, 1.05, -0.04);
+  rod(scene, "office-door-rose", lever, {
+    diameter: 0.075,
+    height: 0.014,
+    sides: 18,
+    at: [0, 0, 0],
+    turn: [Math.PI / 2, 0, 0],
+    material: materials.brass(),
+  });
+  rod(scene, "office-door-lever-arm", lever, {
+    diameter: 0.019,
+    height: 0.125,
+    sides: 12,
+    at: [-0.05, 0, -0.03],
+    turn: [0, 0, Math.PI / 2],
+    material: materials.brass(),
+  });
+  rod(scene, "office-door-lever-return", lever, {
+    diameter: 0.019,
+    height: 0.04,
+    sides: 12,
+    at: [-0.105, 0, -0.048],
+    turn: [Math.PI / 2, 0, 0],
+    material: materials.brass(),
+  });
+  rod(scene, "office-door-escutcheon", lever, {
+    diameter: 0.032,
+    height: 0.012,
+    sides: 14,
+    at: [0, -0.11, 0],
+    turn: [Math.PI / 2, 0, 0],
+    material: materials.brass(),
+  });
+
+  // kickplate and hinges
+  solid(scene, "office-door-kickplate", hinge, {
+    width: doorWidth - 0.08,
+    height: 0.19,
+    depth: 0.012,
+    at: [doorWidth / 2, 0.12, -0.034],
+    material: materials.brass(),
+  });
+  [0.34, 1.16, 1.98].forEach((y, index) => {
+    solid(scene, `office-door-hinge-leaf${index}`, hinge, {
+      width: 0.03,
+      height: 0.11,
+      depth: 0.062,
+      at: [0.014, y, 0],
+      material: materials.brass(),
+    });
+  });
+
+  // understated signage
+  const sign = materials.art(
+    "office-door-sign",
+    620,
+    170,
+    (ctx, w, h) =>
+      paintEtchedBrassPlate(ctx, w, h, [
+        { text: HALL_FUN_LABELS.officeSign, scale: 1.05 },
+        "Executive Suite",
+      ]),
+    { metallic: 0.72, roughness: 0.28, environmentIntensity: 0.75, bump: 0.3 }
+  );
+  solid(scene, "office-door-sign-body", hinge, {
+    width: 0.34,
+    height: 0.095,
+    depth: 0.01,
+    at: [doorWidth / 2, 1.72, -0.032],
+    material: materials.brass(),
+  });
+  artPanel(scene, "office-door-sign-face", hinge, {
+    width: 0.32,
+    height: 0.085,
+    at: [doorWidth / 2, 1.72, -0.038],
+    turn: [0, Math.PI, 0],
+    material: sign,
+  });
+
+  // warm light leaking around the edges — this is the transition point
+  const leakMaterial = materials.warmLeak();
+  const leaks = [
+    [doorWidth - 0.02, 0.014, doorWidth / 2, 0.007],
+    [0.012, doorHeight - 0.04, doorWidth - 0.005, doorHeight / 2],
+    [0.012, doorHeight - 0.04, 0.005, doorHeight / 2],
+    [doorWidth - 0.02, 0.01, doorWidth / 2, doorHeight - 0.005],
+  ];
+  const leakMeshes = leaks.map(([w, h, x, y], index) =>
+    solid(scene, `office-door-leak${index}`, hinge, {
+      width: w,
+      height: h,
+      depth: 0.006,
+      at: [x, y, 0.026],
+      material: leakMaterial,
+      receiveShadows: false,
+    })
+  );
+
+  // spill on the runner in front of the sill
+  const spill = artPanel(scene, "office-door-spill", group, {
+    width: HALL.runnerWidth * 0.94,
+    height: 1.1,
+    at: [0, 0.012, -0.56],
+    turn: [-Math.PI / 2, 0, 0],
+    material: materials.art(
+      "door-spill",
+      256,
+      256,
+      (ctx, w, h) => {
+        ctx.clearRect(0, 0, w, h);
+        const gradient = ctx.createLinearGradient(0, 0, 0, h);
+        gradient.addColorStop(0, "rgba(255,196,120,0.5)");
+        gradient.addColorStop(0.55, "rgba(255,180,100,0.16)");
+        gradient.addColorStop(1, "rgba(255,170,90,0)");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, w, h);
+        const fade = ctx.createLinearGradient(0, 0, w, 0);
+        fade.addColorStop(0, "rgba(0,0,0,1)");
+        fade.addColorStop(0.16, "rgba(0,0,0,0)");
+        fade.addColorStop(0.84, "rgba(0,0,0,0)");
+        fade.addColorStop(1, "rgba(0,0,0,1)");
+        ctx.globalCompositeOperation = "destination-out";
+        ctx.fillStyle = fade;
+        ctx.fillRect(0, 0, w, h);
+        ctx.globalCompositeOperation = "source-over";
+      },
+      { clamp: true, hasAlpha: true }
+    ),
+  });
+  spill.material.albedoTexture.hasAlpha = true;
+  spill.material.useAlphaFromAlbedoTexture = true;
+  spill.material.transparencyMode = 2;
+  spill.material.emissiveTexture = spill.material.albedoTexture;
+  spill.material.emissiveIntensity = 1.1;
+  spill.isPickable = false;
+
+  const doorLight = new PointLight(
+    "office-door-glow",
+    new Vector3(0, 1.1, HALL.doorZ - 0.5),
+    scene
+  );
+  doorLight.diffuse = new Color3(1, 0.78, 0.52);
+  doorLight.intensity = 2.4;
+  doorLight.range = 4.4;
+  doorLight.includedOnlyMeshes = [
+    ...group.getChildMeshes(),
+  ];
+  cache.lights.push(doorLight);
+
+  return {
+    group,
+    hinge,
+    leaf,
+    leakMeshes,
+    light: doorLight,
+    open(t) {
+      hinge.rotation.y = lerp(0, -1.46, t);
+    },
+  };
+}
+
+/* --------------------------------------------------------------------------
+   THE JOKE, TAKEN SERIOUSLY
+   -------------------------------------------------------------------------- */
+
+function buildDartStation(scene, materials, parent, cache) {
+  const mount = wallMount(scene, parent, 1, -3.1, 0);
+  const group = new TransformNode("dart-station", scene);
+  group.parent = mount;
+
+  // the protest poster, unframed and slightly crooked on purpose
+  const posterMaterial = materials.art(
+    "tkachuk-poster",
+    768,
+    1024,
+    paintTkachukProtestPoster,
+    { roughness: 0.88 }
+  );
+  const poster = artPanel(scene, "tkachuk-poster", group, {
+    width: 0.98,
+    height: 1.28,
+    at: [0.02, 1.92, 0.012],
+    turn: [0, 0, -0.035],
+    material: posterMaterial,
+  });
+  poster.isPickable = true;
+  // it is taped, not mounted — a thin curl at the bottom corner
+  solid(scene, "tkachuk-poster-curl", group, {
+    width: 0.14,
+    height: 0.1,
+    depth: 0.004,
+    at: [0.4, 1.28, 0.03],
+    turn: [0.4, 0, -0.5],
+    material: posterMaterial,
+  });
+
+  // target board below it
+  const boardGroup = new TransformNode("dart-board", scene);
+  boardGroup.parent = group;
+  boardGroup.position.set(0, 1.02, 0);
+
+  solid(scene, "dart-board-backer", boardGroup, {
+    width: 0.66,
+    height: 0.66,
+    depth: 0.05,
+    at: [0, 0, 0.025],
+    material: materials.leather(),
+  });
+  [
+    [0.7, 0.03, 0, 0.345],
+    [0.7, 0.03, 0, -0.345],
+    [0.03, 0.66, 0.345, 0],
+    [0.03, 0.66, -0.345, 0],
+  ].forEach(([w, h, x, y], index) => {
+    solid(scene, `dart-board-trim${index}`, boardGroup, {
+      width: w,
+      height: h,
+      depth: 0.06,
+      at: [x, y, 0.03],
+      material: materials.walnutDark(),
+    });
+  });
+
+  const targetFace = artPanel(scene, "dart-board-face", boardGroup, {
+    width: 0.62,
+    height: 0.62,
+    at: [0, 0, 0.052],
+    material: materials.art(
+      "dart-target",
+      768,
+      768,
+      paintDartTargetPoster,
+      { roughness: 0.8 }
+    ),
+  });
+  targetFace.isPickable = true;
+
+  // dart tray on a small walnut shelf
+  const shelf = solid(scene, "dart-tray-shelf", group, {
+    width: 0.44,
+    height: 0.03,
+    depth: 0.16,
+    at: [0, 0.62, 0.08],
+    material: materials.walnutDark(),
+  });
+  void shelf;
+  [-1, 1].forEach((side) => {
+    solid(scene, `dart-tray-bracket${side}`, group, {
+      width: 0.028,
+      height: 0.12,
+      depth: 0.1,
+      at: [side * 0.19, 0.56, 0.05],
+      turn: [-0.5, 0, 0],
+      material: materials.brass(),
+    });
+  });
+  const tray = solid(scene, "dart-tray", group, {
+    width: 0.34,
+    height: 0.035,
+    depth: 0.11,
+    at: [0, 0.652, 0.08],
+    material: materials.blackMetal(),
+  });
+  void tray;
+  solid(scene, "dart-tray-felt", group, {
+    width: 0.31,
+    height: 0.006,
+    depth: 0.09,
+    at: [0, 0.671, 0.08],
+    material: materials.runner(),
+  });
+
+  buildBrassPlaque(scene, materials, group, {
+    name: "dart",
+    width: 0.28,
+    height: 0.062,
+    at: [0, 0.5, 0.02],
+    lines: ["HOUSE RULES — THREE PER VISIT"],
+  });
+
+  /*
+    Dart pool. Darts are recycled so repeated throws never grow the scene, and
+    each landing gets a small offset and roll so the board never looks stamped.
+  */
+  const dartMaterialBody = materials.flat("dart-body", "#1b1d22", {
+    metallic: 0.7,
+    roughness: 0.34,
+  });
+  const dartMaterialFlight = materials.flat("dart-flight", "#b32036", {
+    roughness: 0.7,
+  });
+  const dartTip = materials.steel();
+
+  const darts = [];
+  const DART_POOL = 18;
+  for (let i = 0; i < DART_POOL; i += 1) {
+    const dart = new TransformNode(`dart-${i}`, scene);
+    dart.parent = parent;
+    dart.setEnabled(false);
+
+    rod(scene, `dart-${i}-tip`, dart, {
+      top: 0.001,
+      bottom: 0.006,
+      height: 0.048,
+      sides: 8,
+      at: [0, 0, 0.024],
+      turn: [Math.PI / 2, 0, 0],
+      material: dartTip,
+    });
+    rod(scene, `dart-${i}-barrel`, dart, {
+      top: 0.009,
+      bottom: 0.007,
+      height: 0.062,
+      sides: 10,
+      at: [0, 0, -0.031],
+      turn: [Math.PI / 2, 0, 0],
+      material: dartMaterialBody,
+    });
+    rod(scene, `dart-${i}-shaft`, dart, {
+      diameter: 0.005,
+      height: 0.04,
+      sides: 6,
+      at: [0, 0, -0.082],
+      turn: [Math.PI / 2, 0, 0],
+      material: dartTip,
+    });
+    [0, Math.PI / 2].forEach((roll, index) => {
+      artPanel(scene, `dart-${i}-flight${index}`, dart, {
+        width: 0.036,
+        height: 0.05,
+        at: [0, 0, -0.115],
+        turn: [0, Math.PI / 2, roll],
+        material: dartMaterialFlight,
+      });
+    });
+
+    darts.push(dart);
+  }
+
+  cache.darts = {
+    pool: darts,
+    next: 0,
+    board: targetFace,
+    poster,
+    thrown: 0,
+  };
+
+  const boardLight = new PointLight(
+    "dart-board-light",
+    new Vector3(HALL.width / 2 - 0.6, 1.9, -3.1),
+    scene
+  );
+  boardLight.diffuse = new Color3(1, 0.72, 0.6);
+  boardLight.intensity = 1.5;
+  boardLight.range = 3;
+  boardLight.includedOnlyMeshes = [
+    ...group.getChildMeshes(),
+    ...darts.flatMap((dart) => dart.getChildMeshes()),
+  ];
+  cache.lights.push(boardLight);
+
+  return { group, mount, board: targetFace, darts: cache.darts };
+}
+
+function throwDart(scene, cache, camera) {
+  const store = cache.darts;
+  if (!store) return false;
+
+  const origin = camera.position.clone();
+  const forward = camera.getForwardRay(1).direction.clone();
+  // a little human inaccuracy, and a little more of it every throw
+  const drift = Math.min(0.05, 0.012 + store.thrown * 0.004);
+  forward.x += (Math.random() - 0.5) * drift;
+  forward.y += (Math.random() - 0.5) * drift;
+  forward.normalize();
+
+  const ray = new Ray(origin, forward, 14);
+  const hit = scene.pickWithRay(ray, (mesh) => mesh?.isPickable === true);
+
+  const dart = store.pool[store.next % store.pool.length];
+  store.next += 1;
+  store.thrown += 1;
+
+  const landing = hit?.hit
+    ? hit.pickedPoint.clone()
+    : origin.add(forward.scale(6));
+
+  // stand off the surface so the barrel is not buried
+  landing.subtractInPlace(forward.scale(0.03));
+
+  const start = origin.add(forward.scale(0.5)).add(new Vector3(0, -0.08, 0));
+  dart.setEnabled(true);
+  dart.position.copyFrom(start);
+  dart.rotation.set(0, Math.atan2(forward.x, forward.z), 0);
+
+  const flightTime = 200 + Math.random() * 90;
+  const startedAt = performance.now();
+  const spin = (Math.random() - 0.5) * 1.4;
+
+  const observer = scene.onBeforeRenderObservable.add(() => {
+    const t = clamp((performance.now() - startedAt) / flightTime, 0, 1);
+    const eased = easeOutCubic(t);
+    dart.position.set(
+      lerp(start.x, landing.x, eased),
+      lerp(start.y, landing.y, eased) - Math.sin(t * Math.PI) * 0.035,
+      lerp(start.z, landing.z, eased)
+    );
+    dart.rotation.z = lerp(spin, spin * 0.15, eased);
+    if (t >= 1) {
+      scene.onBeforeRenderObservable.remove(observer);
+      dart.rotation.x = (Math.random() - 0.5) * 0.22;
+      dart.rotation.z = (Math.random() - 0.5) * 0.5;
+    }
+  });
+
+  return Boolean(
+    hit?.hit &&
+      (hit.pickedMesh === store.board || hit.pickedMesh === store.poster)
+  );
+}
+
+/* --------------------------------------------------------------------------
+   CORRIDOR SHELL
+   -------------------------------------------------------------------------- */
+
+function buildCorridorShell(scene, materials, parent, cache) {
+  const shell = new TransformNode("corridor-shell", scene);
+  shell.parent = parent;
+
+  const length = HALL.doorZ - HALL.startZ;
+  const centreZ = (HALL.doorZ + HALL.startZ) / 2;
+  const wainscot = 1.06;
+  const rail = 0.06;
+  const base = 0.16;
+  const crown = 0.14;
+
+  // floor
+  const floor = MeshBuilder.CreateGround(
+    "corridor-floor",
+    { width: HALL.width, height: length + 1.4 },
+    scene
+  );
+  place(floor, shell, {
+    at: [0, 0, centreZ - 0.4],
+    material: materials.stone(),
+    collide: true,
+    pickable: true,
+  });
+
+  // the runner that pulls the eye toward the office
+  const runner = MeshBuilder.CreateGround(
+    "corridor-runner",
+    { width: HALL.runnerWidth, height: length + 0.2 },
+    scene
+  );
+  place(runner, shell, {
+    at: [0, 0.012, centreZ - 0.1],
+    material: materials.runner(),
+  });
+  // bound edge, slightly raised
+  [-1, 1].forEach((side) => {
+    solid(scene, `corridor-runner-edge${side}`, shell, {
+      width: 0.035,
+      height: 0.014,
+      depth: length + 0.2,
+      at: [side * (HALL.runnerWidth / 2 - 0.014), 0.012, centreZ - 0.1],
+      material: materials.walnutDark(),
+    });
+  });
+
+  // ceiling
+  const ceiling = solid(scene, "corridor-ceiling", shell, {
+    width: HALL.width,
+    height: 0.14,
+    depth: length + 1.4,
+    at: [0, HALL.height + 0.07, centreZ - 0.4],
+    material: materials.plaster(),
+    collide: true,
+  });
+  void ceiling;
+
+  // walls in segments: better texel density and better culling
+  const segments = 7;
+  const segmentLength = (length + 1.4) / segments;
+  for (let i = 0; i < segments; i += 1) {
+    const z = HALL.startZ - 1.4 + segmentLength * (i + 0.5);
+    [-1, 1].forEach((side) => {
+      const x = side * (HALL.width / 2 + 0.06);
+
+      solid(scene, `corridor-wall${side}-${i}`, shell, {
+        width: 0.12,
+        height: HALL.height,
+        depth: segmentLength,
+        at: [x, HALL.height / 2, z],
+        material: materials.plaster(),
+        collide: true,
+        // pickable so stray darts find plaster instead of hanging in the air
+        pickable: true,
+      });
+
+      // walnut wainscot panelling
+      solid(scene, `corridor-wainscot${side}-${i}`, shell, {
+        width: 0.05,
+        height: wainscot,
+        depth: segmentLength,
+        at: [side * (HALL.width / 2 - 0.024), wainscot / 2, z],
+        material: materials.walnut(),
+      });
+
+      // recessed panels within the wainscot
+      const panelCount = 2;
+      for (let p = 0; p < panelCount; p += 1) {
+        const pz = z - segmentLength / 2 + segmentLength * ((p + 0.5) / panelCount);
+        solid(scene, `corridor-panel${side}-${i}-${p}`, shell, {
+          width: 0.02,
+          height: wainscot - 0.34,
+          depth: segmentLength / panelCount - 0.16,
+          at: [side * (HALL.width / 2 - 0.052), wainscot / 2 - 0.03, pz],
+          material: materials.walnutDark(),
+        });
+      }
+
+      // chair rail
+      solid(scene, `corridor-rail${side}-${i}`, shell, {
+        width: 0.07,
+        height: rail,
+        depth: segmentLength,
+        at: [side * (HALL.width / 2 - 0.032), wainscot + rail / 2, z],
+        material: materials.walnutDark(),
+      });
+
+      // baseboard
+      solid(scene, `corridor-base${side}-${i}`, shell, {
+        width: 0.075,
+        height: base,
+        depth: segmentLength,
+        at: [side * (HALL.width / 2 - 0.034), base / 2, z],
+        material: materials.walnutDark(),
+      });
+      solid(scene, `corridor-base-cap${side}-${i}`, shell, {
+        width: 0.09,
+        height: 0.014,
+        depth: segmentLength,
+        at: [side * (HALL.width / 2 - 0.04), base, z],
+        material: materials.walnutDark(),
+      });
+
+      // crown moulding
+      solid(scene, `corridor-crown${side}-${i}`, shell, {
+        width: 0.09,
+        height: crown,
+        depth: segmentLength,
+        at: [side * (HALL.width / 2 - 0.04), HALL.height - crown / 2, z],
+        material: materials.walnutDark(),
+      });
+      solid(scene, `corridor-crown-bead${side}-${i}`, shell, {
+        width: 0.11,
+        height: 0.014,
+        depth: segmentLength,
+        at: [side * (HALL.width / 2 - 0.05), HALL.height - crown, z],
+        material: materials.brass(),
+      });
+    });
+
+    // coffered ceiling beams
+    solid(scene, `corridor-beam-${i}`, shell, {
+      width: HALL.width,
+      height: 0.09,
+      depth: 0.13,
+      at: [0, HALL.height - 0.045, z - segmentLength / 2],
+      material: materials.walnutDark(),
+    });
+  }
+
+  // end wall behind the player, so turning round is not a void
+  solid(scene, "corridor-end-wall", shell, {
+    width: HALL.width + 0.24,
+    height: HALL.height,
+    depth: 0.14,
+    at: [0, HALL.height / 2, HALL.startZ - 1.4],
+    material: materials.plaster(),
+    collide: true,
+    pickable: true,
+  });
+  solid(scene, "corridor-end-wainscot", shell, {
+    width: HALL.width,
+    height: wainscot,
+    depth: 0.04,
+    at: [0, wainscot / 2, HALL.startZ - 1.34],
+    material: materials.walnut(),
+  });
+  solid(scene, "corridor-end-rail", shell, {
+    width: HALL.width,
+    height: rail,
+    depth: 0.06,
+    at: [0, wainscot + rail / 2, HALL.startZ - 1.33],
+    material: materials.walnutDark(),
+  });
+  // brushed steel lift doors on the back wall
+  [-1, 1].forEach((side) => {
+    solid(scene, `corridor-lift-door${side}`, shell, {
+      width: 0.62,
+      height: 2.16,
+      depth: 0.04,
+      at: [side * 0.32, 1.08, HALL.startZ - 1.32],
+      material: materials.steel(),
+    });
+  });
+  solid(scene, "corridor-lift-surround", shell, {
+    width: 1.42,
+    height: 0.07,
+    depth: 0.07,
+    at: [0, 2.2, HALL.startZ - 1.31],
+    material: materials.brass(),
+  });
+
+  // ceiling services: recessed housings, vents, sprinkler heads
+  const lights = [];
+  const recessedZ = [];
+  for (let i = 0; i < 8; i += 1) {
+    const z = HALL.startZ - 0.4 + i * ((length + 0.2) / 8);
+    recessedZ.push(z);
+
+    solid(scene, `corridor-recess-housing-${i}`, shell, {
+      width: 0.34,
+      height: 0.05,
+      depth: 0.34,
+      at: [0, HALL.height - 0.03, z],
+      material: materials.blackMetal(),
+    });
+    const lens = artPanel(scene, `corridor-recess-lens-${i}`, shell, {
+      width: 0.26,
+      height: 0.26,
+      at: [0, HALL.height - 0.056, z],
+      turn: [Math.PI / 2, 0, 0],
+      material: materials.lampLens(),
+    });
+    lens.isPickable = false;
+
+    // sprinkler head and a small vent, offset so the ceiling is not a pattern
+    rod(scene, `corridor-sprinkler-${i}`, shell, {
+      diameter: 0.02,
+      height: 0.05,
+      sides: 8,
+      at: [0.62, HALL.height - 0.04, z + 0.5],
+      material: materials.brass(),
+    });
+  }
+
+  // practical ceiling lights spaced along the run
+  [0.1, 0.28, 0.46, 0.64, 0.82].forEach((t, index) => {
+    const light = new PointLight(
+      `corridor-practical-${index}`,
+      new Vector3(0, HALL.height - 0.2, HALL.startZ + length * t),
+      scene
+    );
+    light.diffuse = new Color3(1, 0.85, 0.66);
+    light.specular = new Color3(1, 0.94, 0.82);
+    light.intensity = 2.5;
+    light.range = 8.5;
+    lights.push(light);
+    cache.lights.push(light);
+  });
+
+  // HVAC grilles, louvres modelled rather than painted
+  [-1, 1].forEach((side) => {
+    [-16.8, -9.9, -2.4].forEach((z, index) => {
+      const vent = new TransformNode(`corridor-vent${side}-${index}`, scene);
+      vent.parent = shell;
+      vent.position.set(side * (HALL.width / 2 - 0.03), HALL.height - 0.36, z);
+      vent.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+      solid(scene, `corridor-vent${side}-${index}-frame`, vent, {
+        width: 0.42,
+        height: 0.22,
+        depth: 0.02,
+        at: [0, 0, 0.01],
+        material: materials.blackMetal(),
+      });
+      for (let l = 0; l < 6; l += 1) {
+        solid(scene, `corridor-vent${side}-${index}-louvre${l}`, vent, {
+          width: 0.38,
+          height: 0.018,
+          depth: 0.026,
+          at: [0, 0.085 - l * 0.032, 0.022],
+          turn: [-0.5, 0, 0],
+          material: materials.steel(),
+        });
+      }
+    });
+  });
+
+  // wall sconces between the exhibits
+  [-18.6, -12.8, -7.0, -1.4].forEach((z, index) => {
+    [-1, 1].forEach((side) => {
+      const sconce = new TransformNode(`corridor-sconce${side}-${index}`, scene);
+      sconce.parent = shell;
+      sconce.position.set(side * (HALL.width / 2 - 0.03), 2.12, z);
+      sconce.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+
+      solid(scene, `corridor-sconce${side}-${index}-plate`, sconce, {
+        width: 0.1,
+        height: 0.26,
+        depth: 0.02,
+        at: [0, 0, 0.01],
+        material: materials.brass(),
+      });
+      rod(scene, `corridor-sconce${side}-${index}-arm`, sconce, {
+        diameter: 0.018,
+        height: 0.14,
+        sides: 10,
+        at: [0, -0.02, 0.07],
+        turn: [Math.PI / 2.6, 0, 0],
+        material: materials.brass(),
+      });
+      const shade = rod(scene, `corridor-sconce${side}-${index}-shade`, sconce, {
+        top: 0.11,
+        bottom: 0.075,
+        height: 0.16,
+        sides: 16,
+        at: [0, 0.11, 0.13],
+        material: materials.flat("sconce-shade", "#d8cbaa", {
+          roughness: 0.8,
+          emissive: "#ffcf94",
+          emissiveIntensity: 0.85,
+        }),
+      });
+      shade.isPickable = false;
+    });
+  });
+
+  cache.recessedZ = recessedZ;
+  return { shell, lights };
+}
+
+/* --------------------------------------------------------------------------
+   ASSEMBLY
+   -------------------------------------------------------------------------- */
+
+function buildMemorabiliaHall(scene, materials) {
+  const root = new TransformNode("puckception-hall", scene);
+  const cache = { lights: [], interactables: [] };
+
+  buildCorridorShell(scene, materials, root, cache);
+
+  const register = (entry) => {
+    cache.interactables.push(entry);
+    return entry;
+  };
+
+  /* Hero exhibits -------------------------------------------------------- */
+
+  const karlsson = buildKarlssonExhibit(scene, materials, root, cache);
+  register({
+    id: "karlsson",
+    label: "Autographed game-worn sweater",
+    card: EXHIBIT_CARDS.karlsson,
+    point: karlsson.focus,
+    radius: 2.5,
+  });
+
+  const ovechkin = buildOvechkinExhibit(scene, materials, root, cache);
+  register({
+    id: "ovechkin",
+    label: "Rookie-era Capitals sweater",
+    card: EXHIBIT_CARDS.ovechkin,
+    point: ovechkin.focus,
+    radius: 2.5,
+  });
+
+  /* Ticket stubs on a narrow entrance ledge ----------------------------- */
+
+  const stubLedge = new TransformNode("ticket-ledge", scene);
+  stubLedge.parent = root;
+  stubLedge.position.set(-HALL.width / 2 + 0.22, 0, HALL.startZ + 1.55);
+  solid(scene, "ticket-ledge-board", stubLedge, {
+    width: 0.18,
+    height: 0.028,
+    depth: 0.62,
+    at: [0, 1.08, 0],
+    material: materials.walnutDark(),
+  });
+  [-1, 1].forEach((side) => {
+    solid(scene, `ticket-ledge-bracket${side}`, stubLedge, {
+      width: 0.02,
+      height: 0.12,
+      depth: 0.08,
+      at: [0.02, 1.02, side * 0.22],
+      turn: [0, 0, 0.55],
+      material: materials.brass(),
+    });
+  });
+  [-0.2, 0.0, 0.2].forEach((z, index) => {
+    const stub = artPanel(scene, `ticket-stub-${index}`, stubLedge, {
+      width: 0.14,
+      height: 0.08,
+      at: [0.01, 1.118, z],
+      turn: [-Math.PI / 2, 0, (hashRandom(index * 9.1) - 0.5) * 0.4],
+      material: materials.art(
+        `ticket-stub-${index}`,
+        420,
+        240,
+        (ctx, w, h) =>
+          paintVintageHockeyPhoto(
+            ctx,
+            w,
+            h,
+            70 + index * 11,
+            ["SEC 12", "PRESS", "GAME 1"][index]
+          ),
+        { roughness: 0.86 }
+      ),
+    });
+    void stub;
+  });
+
+  /* Archive wall of framed pieces ---------------------------------------- */
+
+  const photoCaptions = [
+    "Overtime, 1971",
+    "The old barn",
+    "Morning skate",
+    "Third period",
+    "Warm-up, away sweaters",
+    "Outdoor game",
+    "Game 7 stub",
+    "Press door",
+    "Sec 112 · Row C",
+  ];
+
+  const framedPlan = [
+    { side: -1, z: -21.45, y: 1.7, w: 0.38, h: 0.48, kind: "photo", seed: 41 },
+    { side: -1, z: -20.75, y: 1.34, w: 0.26, h: 0.2, kind: "photo", seed: 43 },
+    { side: -1, z: -16.85, y: 1.78, w: 0.5, h: 0.36, kind: "program" },
+    { side: -1, z: -15.55, y: 1.5, w: 0.34, h: 0.42, kind: "photo", seed: 47 },
+    { side: -1, z: -14.35, y: 1.86, w: 0.46, h: 0.3, kind: "credentials" },
+    { side: 1, z: -21.2, y: 1.68, w: 0.42, h: 0.52, kind: "photo", seed: 53 },
+    { side: 1, z: -20.4, y: 1.32, w: 0.24, h: 0.18, kind: "photo", seed: 59, tilt: 0.09 },
+    { side: 1, z: -16.35, y: 1.82, w: 0.52, h: 0.4, kind: "newspaper" },
+    { side: 1, z: -15.1, y: 1.46, w: 0.36, h: 0.44, kind: "photo", seed: 61 },
+    { side: 1, z: -13.85, y: 1.74, w: 0.4, h: 0.28, kind: "banner" },
+    { side: -1, z: -12.6, y: 1.72, w: 0.42, h: 0.52, kind: "photo", seed: 3 },
+    { side: -1, z: -12.0, y: 1.42, w: 0.34, h: 0.28, kind: "photo", seed: 7 },
+    { side: -1, z: -8.6, y: 1.9, w: 0.56, h: 0.42, kind: "credentials" },
+    { side: -1, z: -7.7, y: 1.5, w: 0.4, h: 0.5, kind: "photo", seed: 11 },
+    { side: -1, z: -6.2, y: 1.78, w: 0.6, h: 0.78, kind: "newspaper" },
+    { side: -1, z: -5.1, y: 1.44, w: 0.3, h: 0.24, kind: "photo", seed: 19, tilt: 0.11 },
+    { side: -1, z: -4.2, y: 1.82, w: 0.68, h: 0.44, kind: "rink" },
+    { side: -1, z: -2.6, y: 1.6, w: 0.44, h: 0.3, kind: "pins" },
+    { side: -1, z: -1.7, y: 1.86, w: 0.38, h: 0.48, kind: "photo", seed: 23 },
+    { side: 1, z: -12.9, y: 1.66, w: 0.46, h: 0.34, kind: "photo", seed: 29 },
+    { side: 1, z: -12.2, y: 2.02, w: 0.32, h: 0.4, kind: "photo", seed: 31 },
+    { side: 1, z: -11.1, y: 1.5, w: 0.5, h: 0.62, kind: "program" },
+    { side: 1, z: -7.6, y: 1.88, w: 0.62, h: 0.44, kind: "banner" },
+    { side: 1, z: -6.5, y: 1.42, w: 0.36, h: 0.44, kind: "photo", seed: 37 },
+    { side: 1, z: -5.4, y: 1.78, w: 0.52, h: 0.36, kind: "credentials" },
+    { side: 1, z: -1.9, y: 1.52, w: 0.34, h: 0.42, kind: "note" },
+  ];
+
+  framedPlan.forEach((item, index) => {
+    const mount = wallMount(scene, root, item.side, item.z, 0);
+    let art;
+
+    if (item.kind === "photo") {
+      art = materials.art(
+        `photo-${index}`,
+        Math.round(item.w * 900),
+        Math.round(item.h * 900),
+        (ctx, w, h) =>
+          paintVintageHockeyPhoto(
+            ctx,
+            w,
+            h,
+            item.seed,
+            photoCaptions[index % photoCaptions.length]
+          ),
+        { roughness: 0.52, environmentIntensity: 0.1 }
+      );
+    } else if (item.kind === "credentials") {
+      art = materials.art(
+        `credentials-${index}`,
+        900,
+        640,
+        paintCredentialBoard,
+        { roughness: 0.7 }
+      );
+    } else if (item.kind === "newspaper") {
+      art = materials.art(
+        `frontpage-${index}`,
+        820,
+        1080,
+        paintChampionshipFrontPage,
+        { roughness: 0.82 }
+      );
+    } else if (item.kind === "rink") {
+      art = materials.art(`rink-${index}`, 1024, 660, paintRinkDiagram, {
+        roughness: 0.72,
+      });
+    } else if (item.kind === "pins") {
+      art = materials.art(`pins-${index}`, 900, 620, paintPinBoard, {
+        roughness: 0.3,
+        metallic: 0.4,
+        environmentIntensity: 0.5,
+      });
+    } else if (item.kind === "program") {
+      art = materials.art(`program-${index}`, 720, 900, paintProgramCover, {
+        roughness: 0.8,
+      });
+    } else if (item.kind === "banner") {
+      art = materials.art(
+        `banner-${index}`,
+        900,
+        640,
+        (ctx, w, h) => paintMiniBanner(ctx, w, h, "LEAGUE", "TITLE", "#1a1f2e"),
+        { roughness: 0.9 }
+      );
+    } else {
+      art = materials.art(`note-${index}`, 720, 900, paintScratchedNote, {
+        roughness: 0.88,
+      });
+    }
+
+    const piece = buildFramedPiece(scene, materials, mount, {
+      name: `archive-${index}`,
+      width: item.w,
+      height: item.h,
+      art,
+      tilt: item.tilt || (hashRandom(index * 5.3) - 0.5) * 0.012,
+      depth: item.kind === "pins" ? 0.05 : 0.038,
+      moulding: item.kind === "newspaper" ? 0.03 : 0.034,
+    });
+    piece.group.position.y = item.y;
+  });
+
+  register({
+    id: "photos",
+    label: "Archive wall",
+    card: EXHIBIT_CARDS.photos,
+    point: new Vector3(-HALL.width / 2 + 0.2, 1.7, -6.2),
+    radius: 2.1,
+  });
+
+  /* Pennants on the right, hung from a brass rail ------------------------ */
+
+  const pennantMount = wallMount(scene, root, 1, -10.3, 0);
+  const pennantRail = rod(scene, "pennant-rail", pennantMount, {
+    diameter: 0.02,
+    height: 1.5,
+    sides: 12,
+    at: [0, 2.42, 0.07],
+    turn: [0, 0, Math.PI / 2],
+    material: materials.brass(),
+  });
+  void pennantRail;
+  ["OTT", "1967", "CUP"].forEach((label, index) => {
+    const tone = ["#7a1626", "#1a2b52", "#204028"][index];
+    const pennantMaterial = materials.art(
+      `pennant-${index}`,
+      640,
+      240,
+      (ctx, w, h) => paintPennant(ctx, w, h, label, tone),
+      { roughness: 0.92 }
+    );
+    const pennant = createFacePanel(scene, `pennant-${index}`, {
+      width: 0.44,
+      height: 0.18,
+      columns: 10,
+      rows: 4,
+      relief: 0.02,
+      reliefShape: (u) => Math.sin(u * Math.PI * 2.4),
+    });
+    pennant.parent = pennantMount;
+    pennant.position.set(-0.5 + index * 0.5, 2.3, 0.075);
+    pennant.rotation.z = (hashRandom(index * 7.1) - 0.5) * 0.09;
+    pennant.material = pennantMaterial;
+  });
+
+  /* Signed pucks in cases on a walnut console --------------------------- */
+
+  const consoleGroup = new TransformNode("hall-console", scene);
+  consoleGroup.parent = root;
+  consoleGroup.position.set(-HALL.width / 2 + 0.3, 0, -8.5);
+
+  solid(scene, "hall-console-top", consoleGroup, {
+    width: 0.5,
+    height: 0.04,
+    depth: 1.5,
+    at: [0, 0.86, 0],
+    material: materials.walnut(),
+    collide: true,
+  });
+  solid(scene, "hall-console-apron", consoleGroup, {
+    width: 0.44,
+    height: 0.09,
+    depth: 1.42,
+    at: [0, 0.79, 0],
+    material: materials.walnutDark(),
+  });
+  [[-0.6], [0.6]].forEach(([z], index) => {
+    [-1, 1].forEach((side) => {
+      rod(scene, `hall-console-leg-${index}-${side}`, consoleGroup, {
+        top: 0.03,
+        bottom: 0.04,
+        height: 0.76,
+        sides: 10,
+        at: [side * 0.18, 0.38, z],
+        material: materials.walnutDark(),
+      });
+    });
+  });
+  contactShadow(scene, cache, consoleGroup, { x: 0, z: 0, radius: 0.9, strength: 0.7 });
+
+  buildDisplayCase(scene, materials, consoleGroup, {
+    name: "pucks-a",
+    at: [0, 0.9, -0.42],
+    width: 0.36,
+    height: 0.2,
+    depth: 0.22,
+    pucks: 2,
+  });
+  buildDisplayCase(scene, materials, consoleGroup, {
+    name: "pucks-b",
+    at: [0, 0.9, 0.28],
+    width: 0.24,
+    height: 0.18,
+    depth: 0.2,
+    pucks: 1,
+  });
+  buildStopwatchAndWhistle(scene, materials, consoleGroup, { at: [0.02, 0.9, 0.62] });
+  buildTapeRolls(scene, materials, consoleGroup, { at: [-0.02, 0.9, -0.66] });
+
+  // the plaque that lies about the console being untouchable
+  buildBrassPlaque(scene, materials, wallMount(scene, root, -1, -8.5, 0), {
+    name: "do-not-touch",
+    width: 0.24,
+    height: 0.062,
+    at: [0, 1.14, 0.02],
+    lines: [HALL_FUN_LABELS.doNotTouch],
+  });
+
+  register({
+    id: "equipment",
+    label: "Signed pucks and timing kit",
+    card: EXHIBIT_CARDS.equipment,
+    point: new Vector3(-HALL.width / 2 + 0.5, 1.0, -8.5),
+    radius: 1.9,
+  });
+
+  /* Sticks, pads and gloves leaning in the corner ----------------------- */
+
+  const equipmentCorner = new TransformNode("equipment-corner", scene);
+  equipmentCorner.parent = root;
+  equipmentCorner.position.set(HALL.width / 2 - 0.34, 0, -6.0);
+
+  buildGoaliePads(scene, materials, equipmentCorner, {
+    at: [0.06, 0.04, 0.5],
+    turn: [-0.14, 0.24, 0],
+  });
+  buildStick(scene, materials, equipmentCorner, {
+    name: "wood",
+    at: [-0.04, 0, -0.1],
+    turn: [-0.1, 0.3, 0.16],
+    length: 1.66,
+    wooden: true,
+  });
+  buildStick(scene, materials, equipmentCorner, {
+    name: "composite-a",
+    at: [0.04, 0, -0.24],
+    turn: [-0.09, -0.2, 0.11],
+    length: 1.7,
+  });
+  buildStick(scene, materials, equipmentCorner, {
+    name: "composite-b",
+    at: [0.12, 0, -0.38],
+    turn: [-0.12, 0.12, 0.2],
+    length: 1.68,
+  });
+  buildStick(scene, materials, equipmentCorner, {
+    name: "broken",
+    at: [-0.1, 0.02, -0.62],
+    turn: [-0.34, 0.6, 0.5],
+    length: 1.6,
+    broken: true,
+  });
+  buildSkateGuards(scene, materials, equipmentCorner, {
+    at: [-0.12, 0.02, 0.92],
+    turn: [0, 0.4, 0],
+  });
+  buildHockeyGlove(scene, materials, equipmentCorner, {
+    name: "left",
+    at: [-0.18, 0.9, 0.18],
+    turn: [0.1, 0.5, 0.06],
+  });
+  buildHockeyGlove(scene, materials, equipmentCorner, {
+    name: "right",
+    at: [-0.18, 0.9, -0.06],
+    turn: [0.1, -0.4, -0.06],
+    tone: materials.tape(),
+  });
+  // small shelf holding the gloves off the floor
+  solid(scene, "glove-shelf", equipmentCorner, {
+    width: 0.34,
+    height: 0.032,
+    depth: 0.62,
+    at: [-0.16, 0.88, 0.06],
+    material: materials.walnutDark(),
+  });
+  [-1, 1].forEach((side) => {
+    solid(scene, `glove-shelf-bracket${side}`, equipmentCorner, {
+      width: 0.028,
+      height: 0.16,
+      depth: 0.14,
+      at: [-0.02, 0.8, side * 0.24],
+      turn: [0, 0, 0.5],
+      material: materials.brass(),
+    });
+  });
+  contactShadow(scene, cache, equipmentCorner, {
+    x: 0,
+    z: 0.2,
+    radius: 1.0,
+    strength: 0.8,
+  });
+
+  // an invisible blocker so the player cannot walk through the pile
+  const equipmentBlocker = solid(scene, "equipment-blocker", equipmentCorner, {
+    width: 0.62,
+    height: 1.3,
+    depth: 1.9,
+    at: [0, 0.65, 0.2],
+    collide: true,
+  });
+  equipmentBlocker.isVisible = false;
+
+  buildEquipmentBag(scene, materials, root, {
+    at: [HALL.width / 2 - 0.46, 0, -4.5],
+    turn: [0, 0.34, 0],
+  });
+  contactShadow(scene, cache, root, {
+    x: HALL.width / 2 - 0.46,
+    z: -4.5,
+    radius: 0.7,
+    strength: 0.9,
+  });
+  buildPuckBucket(scene, materials, root, {
+    at: [-HALL.width / 2 + 0.36, 0, -3.5],
+  });
+  contactShadow(scene, cache, root, {
+    x: -HALL.width / 2 + 0.36,
+    z: -3.5,
+    radius: 0.45,
+    strength: 0.95,
+  });
+  buildTrashCan(scene, materials, root, {
+    at: [-HALL.width / 2 + 0.4, 0, -11.4],
+  });
+  contactShadow(scene, cache, root, {
+    x: -HALL.width / 2 + 0.4,
+    z: -11.4,
+    radius: 0.42,
+    strength: 0.95,
+  });
+  // the stick that explains the dent
+  buildStick(scene, materials, root, {
+    name: "bin-witness",
+    at: [-HALL.width / 2 + 0.62, 0, -11.7],
+    turn: [-0.16, 0.5, 0.2],
+    length: 1.58,
+  });
+  // wooden stick left by the lift, as if someone just walked in
+  buildStick(scene, materials, root, {
+    name: "lift-rest",
+    at: [HALL.width / 2 - 0.4, 0, HALL.startZ + 0.9],
+    turn: [-0.14, -0.42, 0.18],
+    length: 1.62,
+    wooden: true,
+  });
+
+  buildClipboard(scene, materials, root, {
+    at: [-HALL.width / 2 + 0.3, 0.902, -8.02],
+    turn: [0, 0.3, 0],
+  });
+  buildCoffeeCup(scene, materials, root, {
+    at: [-HALL.width / 2 + 0.42, 0.9, -7.86],
+  });
+
+  // pucks that have quietly migrated across the floor
+  const strayPucks = [
+    [-0.72, -20.8],
+    [0.84, -19.15],
+    [-1.08, -16.35],
+    [0.58, -14.7],
+    [-0.86, -12.2],
+    [0.74, -10.6],
+    [-1.2, -6.8],
+    [0.98, -8.2],
+    [0.2, -2.2],
+    [-0.62, -0.4],
+  ];
+  strayPucks.forEach(([x, z], index) => {
+    buildPuck(scene, materials, root, {
+      name: `stray-${index}`,
+      at: [x, 0.013, z],
+      turn: [0, hashRandom(index * 3.1) * 3, 0],
+    });
+    contactShadow(scene, cache, root, { x, z, radius: 0.09, strength: 0.8 });
+  });
+
+  // one puck lodged where a puck cannot possibly have reached
+  const lodged = buildPuck(scene, materials, root, {
+    name: "lodged",
+    at: [0.9, HALL.height - 0.12, -9.2],
+    turn: [0.4, 0.7, 1.35],
+  });
+  void lodged;
+  solid(scene, "lodged-puck-crack", root, {
+    width: 0.16,
+    height: 0.012,
+    depth: 0.16,
+    at: [0.9, HALL.height - 0.02, -9.2],
+    material: materials.blackMetal(),
+  });
+
+  /* The whiteboard nobody is allowed to erase --------------------------- */
+
+  const whiteboardMount = wallMount(scene, root, -1, -3.4, 0);
+  const whiteboard = buildFramedPiece(scene, materials, whiteboardMount, {
+    name: "whiteboard",
+    width: 1.02,
+    height: 0.62,
+    depth: 0.042,
+    moulding: 0.028,
+    mat: 0,
+    glass: false,
+    art: materials.art(
+      "whiteboard",
+      1280,
+      780,
+      paintWhiteboardBreakout,
+      { roughness: 0.28, environmentIntensity: 0.24 }
+    ),
+    frameMaterial: materials.steel(),
+  });
+  whiteboard.group.position.y = 1.62;
+  // marker tray
+  solid(scene, "whiteboard-tray", whiteboardMount, {
+    width: 0.7,
+    height: 0.02,
+    depth: 0.06,
+    at: [0, 1.27, 0.05],
+    material: materials.steel(),
+  });
+  ["#1f2b52", "#8c1e2a", "#1b6b3a"].forEach((tone, index) => {
+    rod(scene, `whiteboard-marker${index}`, whiteboardMount, {
+      diameter: 0.016,
+      height: 0.11,
+      sides: 8,
+      at: [-0.2 + index * 0.14, 1.29, 0.05],
+      turn: [0, 0, Math.PI / 2],
+      material: materials.flat(`marker-${index}`, tone, { roughness: 0.5 }),
+    });
+  });
+  register({
+    id: "whiteboard",
+    label: "Coaching whiteboard",
+    card: EXHIBIT_CARDS.whiteboard,
+    point: new Vector3(-HALL.width / 2 + 0.2, 1.62, -3.4),
+    radius: 2.0,
+  });
+
+  /* The gag, and the darts --------------------------------------------- */
+
+  const dartStation = buildDartStation(scene, materials, root, cache);
+  register({
+    id: "tkachuk",
+    label: "Throw a dart",
+    hint: "Throw",
+    card: EXHIBIT_CARDS.tkachuk,
+    point: new Vector3(HALL.width / 2 - 0.3, 1.4, -3.1),
+    radius: 3.0,
+    action: "dart",
+  });
+  void dartStation;
+
+  /* Championship display, tucked beside the door ----------------------- */
+
+  const cupDisplay = buildChampionshipCup(scene, materials, root, cache, {
+    at: [-HALL.width / 2 + 0.68, 0, -0.5],
+  });
+  register({
+    id: "cup",
+    label: "Championship trophy",
+    card: EXHIBIT_CARDS.cup,
+    point: cupDisplay.focus,
+    radius: 2.4,
+  });
+  const cupBlocker = solid(scene, "cup-blocker", root, {
+    width: 1.5,
+    height: 1.5,
+    depth: 1.3,
+    at: [-HALL.width / 2 + 0.6, 0.75, -0.55],
+    collide: true,
+  });
+  cupBlocker.isVisible = false;
+
+  /* Masks by the door -------------------------------------------------- */
+
+  const maskWall = wallMount(scene, root, 1, 0.1, 0);
+  // walnut mounting board with brass hooks
+  solid(scene, "mask-board", maskWall, {
+    width: 1.24,
+    height: 0.66,
+    depth: 0.03,
+    at: [0, 1.82, 0.015],
+    material: materials.walnut(),
+  });
+  [
+    [1.28, 0.026, 0, 2.16],
+    [1.28, 0.026, 0, 1.48],
+  ].forEach(([w, h, x, y], index) => {
+    solid(scene, `mask-board-trim${index}`, maskWall, {
+      width: w,
+      height: h,
+      depth: 0.044,
+      at: [x, y, 0.022],
+      material: materials.walnutDark(),
+    });
+  });
+  [-0.42, 0.0, 0.42].forEach((x, index) => {
+    rod(scene, `mask-hook${index}`, maskWall, {
+      diameter: 0.014,
+      height: 0.09,
+      sides: 10,
+      at: [x, 2.02, 0.05],
+      turn: [Math.PI / 2.2, 0, 0],
+      material: materials.brass(),
+    });
+  });
+
+  buildFibreglassMask(scene, materials, maskWall, {
+    at: [-0.42, 1.86, 0.16],
+    turn: [0.16, 0, 0.04],
+  });
+  buildCageMask(scene, materials, maskWall, {
+    at: [0.0, 1.88, 0.16],
+    turn: [0.12, 0, -0.03],
+  });
+  buildModernMask(scene, materials, maskWall, {
+    at: [0.42, 1.85, 0.17],
+    turn: [0.14, 0, 0.05],
+  });
+
+  buildBrassPlaque(scene, materials, maskWall, {
+    name: "masks",
+    width: 0.52,
+    height: 0.09,
+    at: [0, 1.42, 0.03],
+    lines: ["FIBREGLASS · CAGE · MODERN SHELL"],
+  });
+  register({
+    id: "masks",
+    label: "Goaltending masks",
+    card: EXHIBIT_CARDS.masks,
+    point: new Vector3(HALL.width / 2 - 0.35, 1.86, 0.1),
+    radius: 2.2,
+  });
+
+  // the employee plaque
+  buildBrassPlaque(scene, materials, wallMount(scene, root, 1, -1.6, 0), {
+    name: "trade-request",
+    width: 0.42,
+    height: 0.1,
+    at: [0, 1.22, 0.02],
+    lines: [HALL_FUN_LABELS.tradeRequest],
+  });
+
+  // a tiny framed photograph left deliberately crooked
+  const crookedMount = wallMount(scene, root, -1, -1.15, 0);
+  const crooked = buildFramedPiece(scene, materials, crookedMount, {
+    name: "crooked",
+    width: 0.16,
+    height: 0.2,
+    depth: 0.03,
+    moulding: 0.02,
+    mat: 0.016,
+    art: materials.art(
+      "crooked-photo",
+      340,
+      420,
+      (ctx, w, h) => paintVintageHockeyPhoto(ctx, w, h, 53, ""),
+      { roughness: 0.5 }
+    ),
+    tilt: 0.14,
+  });
+  crooked.group.position.y = 1.34;
+
+  /* The door ------------------------------------------------------------ */
+
+  const door = buildOfficeDoor(scene, materials, root, cache);
+  register({
+    id: "door",
+    label: "Enter hockey operations",
+    hint: "Enter",
+    card: EXHIBIT_CARDS.door,
+    point: new Vector3(0, 1.2, HALL.doorZ - 0.1),
+    radius: 2.4,
+    action: "door",
+  });
+
+  return {
+    root,
+    cache,
+    door,
+    interactables: cache.interactables,
+    lights: cache.lights,
+    exhibits: { karlsson, ovechkin, cup: cupDisplay },
+    setEnabled(enabled) {
+      root.setEnabled(enabled);
+      cache.lights.forEach((light) => light.setEnabled(enabled));
+    },
+    /*
+      Called once the office has taken over. Geometry, the corridor's own
+      lights and its textures all go, which is the point — that budget is
+      wanted for the hub.
+    */
+    dispose() {
+      cache.lights.forEach((light) => light.dispose());
+      cache.lights.length = 0;
+      root.dispose(false, true);
+    },
+  };
+}
+
+/* ============================================================================
+   FIRST-PERSON CONTROLLER
+   ==========================================================================
+
+   Collision is solved analytically against the corridor box and a short list
+   of prop volumes rather than through the physics engine. The corridor is a
+   known shape, so this is both cheaper and completely predictable — no
+   clipping through displays and no camera drift.
+*/
+
+const HALL_BLOCKERS = Object.freeze([
+  { x: 1.35, z: -21.1, hw: 0.28, hd: 0.22 },
+  { x: -1.45, z: -8.5, hw: 0.36, hd: 0.82 },
+  { x: 1.4, z: -5.85, hw: 0.44, hd: 1.15 },
+  { x: 1.29, z: -4.5, hw: 0.46, hd: 0.34 },
+  { x: -1.39, z: -3.5, hw: 0.26, hd: 0.26 },
+  { x: -1.35, z: -11.4, hw: 0.3, hd: 0.3 },
+  { x: -1.07, z: -0.55, hw: 0.76, hd: 0.8 },
+]);
+
+function resolveHallCollision(x, z, radius, doorOpen) {
+  const limitX = HALL.width / 2 - radius - 0.06;
+  let nextX = clamp(x, -limitX, limitX);
+  let nextZ = clamp(
+    z,
+    HALL.startZ - 1.4 + radius + 0.12,
+    doorOpen ? HALL.doorZ + 4 : HALL.doorZ - radius - 0.1
+  );
+
+  for (let i = 0; i < HALL_BLOCKERS.length; i += 1) {
+    const blocker = HALL_BLOCKERS[i];
+    const dx = nextX - blocker.x;
+    const dz = nextZ - blocker.z;
+    const overlapX = blocker.hw + radius - Math.abs(dx);
+    const overlapZ = blocker.hd + radius - Math.abs(dz);
+    if (overlapX > 0 && overlapZ > 0) {
+      // push out along the shallower axis so sliding feels natural
+      if (overlapX < overlapZ) {
+        nextX += Math.sign(dx || 1) * overlapX;
+      } else {
+        nextZ += Math.sign(dz || 1) * overlapZ;
+      }
+      nextX = clamp(nextX, -limitX, limitX);
+    }
+  }
+
+  return { x: nextX, z: nextZ };
+}
+
+function createHallController({
+  scene,
+  camera,
+  canvas,
+  interactables,
+  onPromptChange,
+  onActivate,
+  onFirstMove,
+  audio,
+  reducedMotion,
+}) {
+  const state = {
+    enabled: true,
+    lookScale: 1,
+    yaw: 0,
+    pitch: 0.04,
+    velocity: { x: 0, z: 0 },
+    bobPhase: 0,
+    bobHeight: 0,
+    stepPhase: 0,
+    doorOpen: false,
+    prompt: null,
+    moved: false,
+    pointerLocked: false,
+    dragging: false,
+  };
+
+  const keys = new Set();
+  const RADIUS = 0.34;
+  const WALK = reducedMotion ? 1.85 : 2.55;
+  const RUN = reducedMotion ? 2.4 : 3.7;
+  const ACCEL = 14;
+  const DAMP = 11;
+  const LOOK = 0.0021;
+
+  camera.position.set(0, HALL.eyeHeight, HALL.startZ + 0.35);
+  camera.rotation.set(state.pitch, 0, 0);
+  camera.fov = 0.94;
+  camera.minZ = 0.08;
+  camera.maxZ = 90;
+  camera.inertia = 0;
+  camera.inputs?.clear?.();
+
+  const isMoveKey = (code) =>
+    [
+      "KeyW",
+      "KeyA",
+      "KeyS",
+      "KeyD",
+      "ArrowUp",
+      "ArrowDown",
+      "ArrowLeft",
+      "ArrowRight",
+    ].includes(code);
+
+  const onKeyDown = (event) => {
+    if (event.code === "Escape") return;
+    if (isMoveKey(event.code) || event.code === "ShiftLeft" || event.code === "ShiftRight") {
+      keys.add(event.code);
+      if (isMoveKey(event.code)) {
+        event.preventDefault();
+        if (!state.moved) {
+          state.moved = true;
+          onFirstMove?.();
+        }
+      }
+    }
+    if (event.code === "KeyE" || event.code === "Enter" || event.code === "Space") {
+      event.preventDefault();
+      if (state.prompt) {
+        onActivate?.(state.prompt);
+      }
+    }
+  };
+
+  const onKeyUp = (event) => {
+    keys.delete(event.code);
+  };
+
+  const applyLook = (dx, dy) => {
+    const scale = LOOK * state.lookScale;
+    state.yaw += dx * scale;
+    state.pitch = clamp(state.pitch + dy * scale, -1.24, 1.24);
+  };
+
+  const onPointerMove = (event) => {
+    if (state.pointerLocked) {
+      applyLook(event.movementX || 0, event.movementY || 0);
+      return;
+    }
+    if (state.dragging) {
+      applyLook(event.movementX || 0, event.movementY || 0);
+    }
+  };
+
+  const onPointerDown = (event) => {
+    if (event.button !== 0) return;
+    if (!state.pointerLocked) {
+      // Pointer lock is the good path; drag-look is the fallback if it is denied.
+      const request = canvas.requestPointerLock?.();
+      if (request && typeof request.catch === "function") {
+        request.catch(() => {
+          state.dragging = true;
+        });
+      }
+      state.dragging = !document.pointerLockElement;
+      return;
+    }
+    if (state.prompt) {
+      onActivate?.(state.prompt);
+    }
+  };
+
+  const onPointerUp = () => {
+    state.dragging = false;
+  };
+
+  const onPointerLockChange = () => {
+    state.pointerLocked = document.pointerLockElement === canvas;
+    if (state.pointerLocked) {
+      state.dragging = false;
+    }
+  };
+
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
+  canvas.addEventListener("pointerdown", onPointerDown);
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointermove", onPointerMove);
+  document.addEventListener("pointerlockchange", onPointerLockChange);
+
+  const forward = new Vector3();
+  const right = new Vector3();
+
+  const tick = () => {
+    const dt = Math.min(0.05, scene.getEngine().getDeltaTime() / 1000);
+    if (dt <= 0) return;
+
+    camera.rotation.set(state.pitch, state.yaw, 0);
+
+    const sin = Math.sin(state.yaw);
+    const cos = Math.cos(state.yaw);
+    forward.set(sin, 0, cos);
+    right.set(cos, 0, -sin);
+
+    let inputX = 0;
+    let inputZ = 0;
+    if (state.enabled) {
+      if (keys.has("KeyW") || keys.has("ArrowUp")) inputZ += 1;
+      if (keys.has("KeyS") || keys.has("ArrowDown")) inputZ -= 1;
+      if (keys.has("KeyD") || keys.has("ArrowRight")) inputX += 1;
+      if (keys.has("KeyA") || keys.has("ArrowLeft")) inputX -= 1;
+    }
+
+    const magnitude = Math.hypot(inputX, inputZ);
+    const speed = keys.has("ShiftLeft") || keys.has("ShiftRight") ? RUN : WALK;
+
+    let desiredX = 0;
+    let desiredZ = 0;
+    if (magnitude > 0) {
+      const nx = inputX / magnitude;
+      const nz = inputZ / magnitude;
+      desiredX = (forward.x * nz + right.x * nx) * speed;
+      desiredZ = (forward.z * nz + right.z * nx) * speed;
+    }
+
+    const blend = 1 - Math.exp(-(magnitude > 0 ? ACCEL : DAMP) * dt);
+    state.velocity.x += (desiredX - state.velocity.x) * blend;
+    state.velocity.z += (desiredZ - state.velocity.z) * blend;
+
+    const travelled = Math.hypot(state.velocity.x, state.velocity.z);
+    if (travelled < 0.02) {
+      state.velocity.x = 0;
+      state.velocity.z = 0;
+    }
+
+    const resolved = resolveHallCollision(
+      camera.position.x + state.velocity.x * dt,
+      camera.position.z + state.velocity.z * dt,
+      RADIUS,
+      state.doorOpen
+    );
+
+    // head bob and footsteps scale with actual travel, not with key state
+    if (travelled > 0.08 && !reducedMotion) {
+      state.bobPhase += dt * (4.4 + travelled * 1.25);
+      state.stepPhase += dt * (1.55 + travelled * 0.42);
+      if (state.stepPhase >= 1) {
+        state.stepPhase -= 1;
+        const onRunner = Math.abs(resolved.x) < HALL.runnerWidth / 2;
+        audio?.footstep(onRunner ? "carpet" : "stone", clamp(travelled / RUN, 0.4, 1));
+      }
+    } else {
+      state.bobPhase += dt * 1.05;
+    }
+
+    const bobTarget =
+      reducedMotion
+        ? 0
+        : Math.sin(state.bobPhase * 2) * 0.016 * clamp(travelled / WALK, 0, 1) +
+          Math.sin(state.bobPhase * 0.6) * 0.004;
+    state.bobHeight += (bobTarget - state.bobHeight) * (1 - Math.exp(-9 * dt));
+
+    const sway = reducedMotion
+      ? 0
+      : Math.sin(state.bobPhase) * 0.006 * clamp(travelled / WALK, 0, 1);
+
+    camera.position.set(
+      resolved.x,
+      HALL.eyeHeight + state.bobHeight,
+      resolved.z
+    );
+    camera.rotation.set(state.pitch + sway * 0.35, state.yaw + sway * 0.4, 0);
+
+    audio?.setDoorProximity(
+      clamp(1 - (HALL.doorZ - resolved.z) / 9.4, 0, 1)
+    );
+
+    // interaction prompt: nearest thing in range and roughly in front
+    let best = null;
+    let bestScore = Infinity;
+    for (let i = 0; i < interactables.length; i += 1) {
+      const entry = interactables[i];
+      const dx = entry.point.x - camera.position.x;
+      const dy = entry.point.y - camera.position.y;
+      const dz = entry.point.z - camera.position.z;
+      const distance = Math.hypot(dx, dy, dz);
+      if (distance > entry.radius) continue;
+      const facing = (dx * forward.x + dz * forward.z) / Math.max(distance, 0.001);
+      if (facing < 0.42) continue;
+      const score = distance * (1.6 - facing);
+      if (score < bestScore) {
+        bestScore = score;
+        best = entry;
+      }
+    }
+
+    const nextId = best?.id || null;
+    if (nextId !== (state.prompt?.id || null)) {
+      state.prompt = best;
+      onPromptChange?.(best);
+    }
+  };
+
+  let observer = scene.onBeforeRenderObservable.add(tick);
+
+  const detach = () => {
+    if (observer) {
+      scene.onBeforeRenderObservable.remove(observer);
+      observer = null;
+    }
+  };
+
+  return {
+    state,
+    setEnabled(enabled) {
+      state.enabled = enabled;
+      state.lookScale = enabled ? 1 : 0.22;
+      if (!enabled) {
+        state.velocity.x = 0;
+        state.velocity.z = 0;
+        keys.clear();
+      }
+    },
+    setDoorOpen(open) {
+      state.doorOpen = open;
+    },
+    /*
+      Hands the camera back. The cinematic drives position and target directly,
+      so the walk loop has to stop writing to it entirely.
+    */
+    suspend() {
+      state.enabled = false;
+      keys.clear();
+      state.velocity.x = 0;
+      state.velocity.z = 0;
+      detach();
+    },
+    releasePointer() {
+      if (document.pointerLockElement === canvas) {
+        document.exitPointerLock?.();
+      }
+    },
+    getPrompt() {
+      return state.prompt;
+    },
+    dispose() {
+      detach();
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerlockchange", onPointerLockChange);
+      if (document.pointerLockElement === canvas) {
+        document.exitPointerLock?.();
+      }
+    },
+  };
+}
+
+/* ============================================================================
+   HALLWAY SOUND
+   ==========================================================================
+
+   All of it is synthesised, so nothing new has to be downloaded before the
+   corridor can be entered: a slightly-too-comfortable lounge loop, HVAC and
+   electrical room tone beneath it, footsteps that know what they are walking
+   on, and a convolution room the introduction can sit inside.
+*/
+
+function createHallAudio() {
+  const AudioContextClass =
+    typeof window !== "undefined"
+      ? window.AudioContext || window.webkitAudioContext
+      : null;
+
+  if (!AudioContextClass) {
+    return {
+      unlock() {},
+      start() {},
+      stop() {},
+      footstep() {},
+      setDoorProximity() {},
+      duck() {},
+      doorSwing() {},
+      roomBloom() {},
+      dispose() {},
+    };
+  }
+
+  const ctx = new AudioContextClass();
+
+  const master = ctx.createGain();
+  master.gain.value = 0.0001;
+  master.connect(ctx.destination);
+
+  const musicBus = ctx.createGain();
+  musicBus.gain.value = 0.34;
+  const musicDuck = ctx.createGain();
+  musicDuck.gain.value = 1;
+  musicBus.connect(musicDuck);
+  musicDuck.connect(master);
+
+  const ambienceBus = ctx.createGain();
+  ambienceBus.gain.value = 0.5;
+  ambienceBus.connect(master);
+
+  const sfxBus = ctx.createGain();
+  sfxBus.gain.value = 0.6;
+  sfxBus.connect(master);
+
+  // small-corridor impulse response
+  const reverb = ctx.createConvolver();
+  const irLength = Math.floor(ctx.sampleRate * 1.5);
+  const ir = ctx.createBuffer(2, irLength, ctx.sampleRate);
+  for (let channel = 0; channel < 2; channel += 1) {
+    const data = ir.getChannelData(channel);
+    for (let i = 0; i < irLength; i += 1) {
+      const t = i / irLength;
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, 3.1) * 0.6;
+    }
+    // early reflections off a narrow hard-floored hallway
+    [0.009, 0.017, 0.026, 0.041, 0.062].forEach((delay, index) => {
+      const sample = Math.floor(delay * ctx.sampleRate);
+      if (sample < irLength) {
+        data[sample] += (index % 2 === 0 ? 0.55 : -0.42) / (index + 1);
+      }
+    });
+  }
+  reverb.buffer = ir;
+  const reverbReturn = ctx.createGain();
+  reverbReturn.gain.value = 0.42;
+  reverb.connect(reverbReturn);
+  reverbReturn.connect(master);
+
+  function noiseBuffer(seconds) {
+    const length = Math.floor(ctx.sampleRate * seconds);
+    const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < length; i += 1) {
+      const white = Math.random() * 2 - 1;
+      last = (last + 0.02 * white) / 1.02;
+      data[i] = last * 3.2;
+    }
+    return buffer;
+  }
+
+  const brown = noiseBuffer(4);
+
+  /* HVAC ---------------------------------------------------------------- */
+  const hvac = ctx.createBufferSource();
+  hvac.buffer = brown;
+  hvac.loop = true;
+  const hvacFilter = ctx.createBiquadFilter();
+  hvacFilter.type = "lowpass";
+  hvacFilter.frequency.value = 170;
+  hvacFilter.Q.value = 0.6;
+  const hvacGain = ctx.createGain();
+  hvacGain.gain.value = 0.5;
+  hvac.connect(hvacFilter);
+  hvacFilter.connect(hvacGain);
+  hvacGain.connect(ambienceBus);
+
+  const hvacBody = ctx.createOscillator();
+  hvacBody.type = "sine";
+  hvacBody.frequency.value = 51;
+  const hvacBodyGain = ctx.createGain();
+  hvacBodyGain.gain.value = 0.05;
+  hvacBody.connect(hvacBodyGain);
+  hvacBodyGain.connect(ambienceBus);
+
+  /* Electrical / fluorescent room tone ---------------------------------- */
+  const roomTone = ctx.createBufferSource();
+  roomTone.buffer = brown;
+  roomTone.loop = true;
+  const roomToneFilter = ctx.createBiquadFilter();
+  roomToneFilter.type = "bandpass";
+  roomToneFilter.frequency.value = 2100;
+  roomToneFilter.Q.value = 1.1;
+  const roomToneGain = ctx.createGain();
+  roomToneGain.gain.value = 0.05;
+  roomTone.connect(roomToneFilter);
+  roomToneFilter.connect(roomToneGain);
+  roomToneGain.connect(ambienceBus);
+
+  const ballast = ctx.createOscillator();
+  ballast.type = "sawtooth";
+  ballast.frequency.value = 120;
+  const ballastFilter = ctx.createBiquadFilter();
+  ballastFilter.type = "lowpass";
+  ballastFilter.frequency.value = 480;
+  const ballastGain = ctx.createGain();
+  ballastGain.gain.value = 0.012;
+  ballast.connect(ballastFilter);
+  ballastFilter.connect(ballastGain);
+  ballastGain.connect(ambienceBus);
+
+  /* Distant building noise ---------------------------------------------- */
+  const distant = ctx.createBufferSource();
+  distant.buffer = brown;
+  distant.loop = true;
+  const distantFilter = ctx.createBiquadFilter();
+  distantFilter.type = "lowpass";
+  distantFilter.frequency.value = 620;
+  const distantGain = ctx.createGain();
+  distantGain.gain.value = 0.06;
+  const distantLfo = ctx.createOscillator();
+  distantLfo.frequency.value = 0.06;
+  const distantLfoGain = ctx.createGain();
+  distantLfoGain.gain.value = 0.035;
+  distantLfo.connect(distantLfoGain);
+  distantLfoGain.connect(distantGain.gain);
+  distant.connect(distantFilter);
+  distantFilter.connect(distantGain);
+  distantGain.connect(reverb);
+  distantGain.connect(ambienceBus);
+
+  /* Lounge music ---------------------------------------------------------
+     Rhodes-ish electric piano over a lazy walking bass. Comfortable, and
+     just slightly wrong for a corridor full of hockey relics.
+  */
+  const chords = [
+    { root: 87.31, voices: [349.23, 440.0, 523.25, 659.26] },
+    { root: 73.42, voices: [293.66, 349.23, 440.0, 587.33] },
+    { root: 116.54, voices: [349.23, 466.16, 554.37, 698.46] },
+    { root: 98.0, voices: [392.0, 493.88, 587.33, 739.99] },
+  ];
+  const melody = [659.26, 587.33, 523.25, 493.88, 440.0, 523.25, 587.33, 440.0];
+
+  const musicTremolo = ctx.createGain();
+  musicTremolo.gain.value = 1;
+  musicTremolo.connect(musicBus);
+  const tremoloLfo = ctx.createOscillator();
+  tremoloLfo.frequency.value = 0.18;
+  const tremoloDepth = ctx.createGain();
+  tremoloDepth.gain.value = 0.11;
+  tremoloLfo.connect(tremoloDepth);
+  tremoloDepth.connect(musicTremolo.gain);
+
+  const musicSend = ctx.createGain();
+  musicSend.gain.value = 0.2;
+  musicTremolo.connect(musicSend);
+  musicSend.connect(reverb);
+
+  function voice(frequency, at, duration, level, type = "triangle") {
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.value = frequency;
+    const bell = ctx.createOscillator();
+    bell.type = "sine";
+    bell.frequency.value = frequency * 2.004;
+    const gain = ctx.createGain();
+    const bellGain = ctx.createGain();
+    const tone = ctx.createBiquadFilter();
+    tone.type = "lowpass";
+    tone.frequency.value = 1900;
+
+    gain.gain.setValueAtTime(0.0001, at);
+    gain.gain.exponentialRampToValueAtTime(level, at + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+    bellGain.gain.setValueAtTime(0.0001, at);
+    bellGain.gain.exponentialRampToValueAtTime(level * 0.28, at + 0.02);
+    bellGain.gain.exponentialRampToValueAtTime(0.0001, at + duration * 0.42);
+
+    osc.connect(gain);
+    bell.connect(bellGain);
+    gain.connect(tone);
+    bellGain.connect(tone);
+    tone.connect(musicTremolo);
+
+    osc.start(at);
+    bell.start(at);
+    osc.stop(at + duration + 0.1);
+    bell.stop(at + duration + 0.1);
+  }
+
+  function brush(at, level) {
+    const source = ctx.createBufferSource();
+    source.buffer = brown;
+    source.playbackRate.value = 3.4;
+    const filter = ctx.createBiquadFilter();
+    filter.type = "highpass";
+    filter.frequency.value = 5200;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(level, at);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.16);
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(musicTremolo);
+    source.start(at, Math.random() * 2, 0.2);
+    source.stop(at + 0.22);
+  }
+
+  const BEAT = 60 / 62;
+  let musicCursor = 0;
+  let musicBar = 0;
+  let scheduler = null;
+
+  function scheduleMusic() {
+    const horizon = ctx.currentTime + 2.5;
+    while (musicCursor < horizon) {
+      const chord = chords[musicBar % chords.length];
+      const barLength = BEAT * 4;
+
+      chord.voices.forEach((frequency, index) => {
+        voice(
+          frequency,
+          musicCursor + index * 0.035,
+          barLength * 0.94,
+          0.045
+        );
+      });
+      voice(chord.root, musicCursor, barLength * 0.9, 0.07, "sine");
+      voice(chord.root * 1.5, musicCursor + BEAT * 2.5, BEAT * 1.2, 0.045, "sine");
+
+      voice(
+        melody[musicBar % melody.length],
+        musicCursor + BEAT * 1.5,
+        BEAT * 1.6,
+        0.03
+      );
+
+      for (let beat = 0; beat < 4; beat += 1) {
+        brush(musicCursor + beat * BEAT, beat % 2 === 0 ? 0.012 : 0.02);
+      }
+
+      musicCursor += barLength;
+      musicBar += 1;
+    }
+  }
+
+  /* Door proximity bed -------------------------------------------------- */
+  const doorPad = ctx.createGain();
+  doorPad.gain.value = 0.0001;
+  doorPad.connect(master);
+  const doorPadFilter = ctx.createBiquadFilter();
+  doorPadFilter.type = "lowpass";
+  doorPadFilter.frequency.value = 420;
+  doorPadFilter.connect(doorPad);
+  [58.27, 87.31, 130.81].forEach((frequency, index) => {
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.value = frequency;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.12 / (index + 1);
+    osc.connect(gain);
+    gain.connect(doorPadFilter);
+    osc.start();
+  });
+
+  let started = false;
+  let proximity = 0;
+  let gestureHooked = false;
+
+  const api = {
+    unlock() {
+      if (ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
+    },
+
+    start() {
+      if (started) return;
+      started = true;
+      api.unlock();
+
+      /*
+        Browsers will not let audio begin without a gesture. Rather than nag,
+        the corridor simply comes alive the moment the player touches anything.
+      */
+      if (!gestureHooked && ctx.state === "suspended") {
+        gestureHooked = true;
+        const onGesture = () => {
+          api.unlock();
+          if (ctx.state !== "suspended") {
+            window.removeEventListener("pointerdown", onGesture);
+            window.removeEventListener("keydown", onGesture);
+          }
+        };
+        window.addEventListener("pointerdown", onGesture);
+        window.addEventListener("keydown", onGesture);
+      }
+      const now = ctx.currentTime;
+      [hvac, roomTone, distant].forEach((source) => {
+        try {
+          source.start(now, Math.random() * 2);
+        } catch (_error) {
+          /* already started */
+        }
+      });
+      [hvacBody, ballast, tremoloLfo, distantLfo].forEach((osc) => {
+        try {
+          osc.start(now);
+        } catch (_error) {
+          /* already started */
+        }
+      });
+      master.gain.cancelScheduledValues(now);
+      master.gain.setValueAtTime(0.0001, now);
+      master.gain.exponentialRampToValueAtTime(0.85, now + 2.6);
+      musicCursor = now + 0.4;
+      scheduleMusic();
+      scheduler = window.setInterval(scheduleMusic, 700);
+    },
+
+    stop(fadeSeconds = 1.4) {
+      if (!started) return;
+      const now = ctx.currentTime;
+      master.gain.cancelScheduledValues(now);
+      master.gain.setValueAtTime(Math.max(master.gain.value, 0.0002), now);
+      master.gain.exponentialRampToValueAtTime(0.0001, now + fadeSeconds);
+      if (scheduler != null) {
+        window.clearInterval(scheduler);
+        scheduler = null;
+      }
+    },
+
+    footstep(surface, force = 1) {
+      if (!started) return;
+      const now = ctx.currentTime;
+      const source = ctx.createBufferSource();
+      source.buffer = brown;
+      source.playbackRate.value = surface === "carpet" ? 1.5 : 2.6;
+      const filter = ctx.createBiquadFilter();
+      const gain = ctx.createGain();
+
+      if (surface === "carpet") {
+        filter.type = "lowpass";
+        filter.frequency.value = 900;
+        gain.gain.setValueAtTime(0.16 * force, now);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.13);
+      } else {
+        filter.type = "bandpass";
+        filter.frequency.value = 1500 + Math.random() * 500;
+        filter.Q.value = 0.9;
+        gain.gain.setValueAtTime(0.2 * force, now);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
+      }
+
+      const send = ctx.createGain();
+      send.gain.value = surface === "carpet" ? 0.1 : 0.4;
+
+      source.connect(filter);
+      filter.connect(gain);
+      gain.connect(sfxBus);
+      gain.connect(send);
+      send.connect(reverb);
+      source.start(now, Math.random() * 2, 0.3);
+      source.stop(now + 0.32);
+    },
+
+    setDoorProximity(value) {
+      if (!started) return;
+      const next = clamp(value, 0, 1);
+      if (Math.abs(next - proximity) < 0.02) return;
+      proximity = next;
+      const now = ctx.currentTime;
+      // the lounge loop steps back and the room warms as the office nears
+      musicBus.gain.setTargetAtTime(0.34 - next * 0.19, now, 0.6);
+      doorPad.gain.setTargetAtTime(0.0001 + next * 0.19, now, 0.7);
+      hvacGain.gain.setTargetAtTime(0.5 - next * 0.2, now, 0.8);
+      reverbReturn.gain.setTargetAtTime(0.42 - next * 0.16, now, 0.8);
+    },
+
+    duck(amount, seconds = 0.4) {
+      const now = ctx.currentTime;
+      musicDuck.gain.cancelScheduledValues(now);
+      musicDuck.gain.setTargetAtTime(clamp(amount, 0.04, 1), now, seconds);
+    },
+
+    doorSwing() {
+      if (!started) return;
+      const now = ctx.currentTime;
+      // latch
+      const click = ctx.createOscillator();
+      click.type = "square";
+      click.frequency.setValueAtTime(1500, now);
+      click.frequency.exponentialRampToValueAtTime(220, now + 0.05);
+      const clickGain = ctx.createGain();
+      clickGain.gain.setValueAtTime(0.16, now);
+      clickGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.09);
+      click.connect(clickGain);
+      clickGain.connect(sfxBus);
+      clickGain.connect(reverb);
+      click.start(now);
+      click.stop(now + 0.12);
+
+      // sweep of the leaf through the air
+      const sweep = ctx.createBufferSource();
+      sweep.buffer = brown;
+      sweep.playbackRate.value = 0.8;
+      const sweepFilter = ctx.createBiquadFilter();
+      sweepFilter.type = "lowpass";
+      sweepFilter.frequency.setValueAtTime(300, now + 0.06);
+      sweepFilter.frequency.linearRampToValueAtTime(1200, now + 0.9);
+      const sweepGain = ctx.createGain();
+      sweepGain.gain.setValueAtTime(0.0001, now + 0.06);
+      sweepGain.gain.linearRampToValueAtTime(0.1, now + 0.4);
+      sweepGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.3);
+      sweep.connect(sweepFilter);
+      sweepFilter.connect(sweepGain);
+      sweepGain.connect(sfxBus);
+      sweepGain.connect(reverb);
+      sweep.start(now + 0.06, 0, 1.4);
+      sweep.stop(now + 1.5);
+    },
+
+    /*
+      A short breath of the room, played alongside the spoken introduction so
+      the line belongs to the office instead of to the browser.
+    */
+    roomBloom(level = 0.14, seconds = 1.1) {
+      const now = ctx.currentTime;
+      const source = ctx.createBufferSource();
+      source.buffer = brown;
+      source.playbackRate.value = 1.1;
+      const filter = ctx.createBiquadFilter();
+      filter.type = "bandpass";
+      filter.frequency.value = 700;
+      filter.Q.value = 0.5;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(level, now + 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + seconds);
+      source.connect(filter);
+      filter.connect(gain);
+      gain.connect(reverb);
+      source.start(now, Math.random() * 2, seconds + 0.2);
+      source.stop(now + seconds + 0.3);
+
+      const sub = ctx.createOscillator();
+      sub.type = "sine";
+      sub.frequency.value = 62;
+      const subGain = ctx.createGain();
+      subGain.gain.setValueAtTime(0.0001, now);
+      subGain.gain.exponentialRampToValueAtTime(level * 0.9, now + 0.2);
+      subGain.gain.exponentialRampToValueAtTime(0.0001, now + seconds * 1.4);
+      sub.connect(subGain);
+      subGain.connect(master);
+      sub.start(now);
+      sub.stop(now + seconds * 1.5);
+    },
+
+    dispose() {
+      if (scheduler != null) {
+        window.clearInterval(scheduler);
+        scheduler = null;
+      }
+      try {
+        ctx.close();
+      } catch (_error) {
+        /* already closed */
+      }
+    },
+  };
+
+  return api;
+}
+
+/*
+  Broadcast-style delivery for the arrival line. Voice selection prefers a
+  measured English narration voice and never targets a specific person.
+*/
+function speakBroadcastLine(text, audio) {
+  if (typeof window === "undefined" || !window.speechSynthesis) {
+    audio?.roomBloom(0.16, 1.4);
+    return Promise.resolve(false);
+  }
+
+  const synth = window.speechSynthesis;
+
+  const pickVoice = () => {
+    const voices = synth.getVoices() || [];
+    if (!voices.length) return null;
+    const english = voices.filter((voice) =>
+      /^en(-|_|$)/i.test(voice.lang || "")
+    );
+    const pool = english.length ? english : voices;
+    const preferred = [
+      /guy/i,
+      /david/i,
+      /mark/i,
+      /daniel/i,
+      /alex/i,
+      /google (uk|us) english/i,
+    ];
+    for (let i = 0; i < preferred.length; i += 1) {
+      const match = pool.find((voice) => preferred[i].test(voice.name || ""));
+      if (match) return match;
+    }
+    return pool[0];
+  };
+
+  return new Promise((resolve) => {
+    const speak = () => {
+      try {
+        synth.cancel();
+      } catch (_error) {
+        /* ignore */
+      }
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voice = pickVoice();
+      if (voice) {
+        utterance.voice = voice;
+        utterance.lang = voice.lang || "en-US";
+      }
+      // measured, authoritative, unhurried — the pacing of a broadcast open
+      utterance.rate = 0.84;
+      utterance.pitch = 0.78;
+      utterance.volume = 1;
+
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(guard);
+        audio?.duck(1, 1.4);
+        resolve(true);
+      };
+
+      utterance.onstart = () => {
+        audio?.duck(0.18, 0.35);
+        audio?.roomBloom(0.15, 1.3);
+      };
+      utterance.onboundary = () => {
+        audio?.roomBloom(0.05, 0.5);
+      };
+      utterance.onend = finish;
+      utterance.onerror = finish;
+
+      // never let a silent speech engine stall the cinematic
+      const guard = window.setTimeout(finish, 6500);
+
+      audio?.duck(0.18, 0.3);
+      audio?.roomBloom(0.15, 1.3);
+      synth.speak(utterance);
+    };
+
+    if (!(synth.getVoices() || []).length) {
+      let handled = false;
+      const onVoices = () => {
+        if (handled) return;
+        handled = true;
+        synth.removeEventListener?.("voiceschanged", onVoices);
+        speak();
+      };
+      synth.addEventListener?.("voiceschanged", onVoices);
+      window.setTimeout(onVoices, 700);
+      return;
+    }
+
+    speak();
+  });
+}
+
 function configureRendering({
   scene,
   camera,
@@ -3368,11 +9951,24 @@ function registerShadowCasters(
    SCENE ASSEMBLY
    ========================================================================== */
 
+/*
+  Office assets load in two tiers.
+
+  The corridor is procedural, so nothing here has to finish before the player
+  can walk. Tier one is what the office reveal genuinely cannot be staged
+  without — the room, the desk and the document. Tier two is the dressing, and
+  it resolves quietly while the player is still in the hallway.
+
+  `assets` is a live object: the camera director and the light placement both
+  read it lazily, so a shot that needs the trophy simply becomes available the
+  moment the trophy lands.
+*/
 async function loadOfficeAssets({
   scene,
   mode,
   team,
   accentPrimary,
+  onTier,
 }) {
   const assets = {};
   const errors = [];
@@ -3404,12 +10000,8 @@ async function loadOfficeAssets({
     }
   }
 
+  /* Tier one — the office reveal cannot be staged without these. */
   await Promise.all([
-    safeLoad("hallway", {
-      name: "office-hallway",
-      url: officeHallwayGlb,
-      calibration: ASSET_CALIBRATION.hallway,
-    }),
     safeLoad("office", {
       name: "dark-office",
       url: darkOfficeGlb,
@@ -3423,42 +10015,6 @@ async function loadOfficeAssets({
         roughnessFloor: 0.24,
         roughnessCeiling: 0.84,
       },
-    }),
-    safeLoad("chair", {
-      name: "executive-chair",
-      url: leatherChairGlb,
-      calibration: ASSET_CALIBRATION.chair,
-    }),
-    safeLoad("seatedExecutive", {
-      name: "seated-executive",
-      url: manSittingGlb,
-      calibration: ASSET_CALIBRATION.seatedExecutive,
-    }),
-    safeLoad("standingExecutive", {
-      name: "standing-executive",
-      url: manDressedInSuitGlb,
-      calibration: ASSET_CALIBRATION.standingExecutive,
-      enabled: false,
-    }),
-    safeLoad("hockeyStick", {
-      name: "hockey-stick",
-      url: hockeyStickGlb,
-      calibration: ASSET_CALIBRATION.hockeyStick,
-    }),
-    safeLoad("trophy", {
-      name: "trophy-cup",
-      url: trophyCupGlb,
-      calibration: ASSET_CALIBRATION.trophy,
-    }),
-    safeLoad("props", {
-      name: "office-props",
-      url: officePropsGlb,
-      calibration: ASSET_CALIBRATION.props,
-    }),
-    safeLoad("clipboard", {
-      name: "clipboard",
-      url: clipboardGlb,
-      calibration: ASSET_CALIBRATION.clipboard,
     }),
     safeLoad("contract", {
       name: "physical-contract",
@@ -3481,34 +10037,54 @@ async function loadOfficeAssets({
     ]);
   }
 
-  const doors = createEntranceDoors(scene, assets.hallway);
+  onTier?.("officeEssentials");
 
   /*
-    Play authored animations when they exist.
-    The code never assumes the GLB is rigged.
+    Tier two — everything that dresses the room. Awaited by the caller only at
+    the point the cinematic actually needs it.
   */
-  playBestAnimation(
-    assets.seatedExecutive,
-    [
-      "sit",
-      "seated",
-      "idle",
-      "breath",
-    ],
-    {
-      loop: true,
-      speedRatio: 0.9,
-    }
-  );
-
-  if (
-    assets.standingExecutive
-  ) {
+  const dressing = Promise.all([
+    safeLoad("chair", {
+      name: "executive-chair",
+      url: leatherChairGlb,
+      calibration: ASSET_CALIBRATION.chair,
+    }),
+    safeLoad("seatedExecutive", {
+      name: "seated-executive",
+      url: manSittingGlb,
+      calibration: ASSET_CALIBRATION.seatedExecutive,
+    }),
+    safeLoad("trophy", {
+      name: "trophy-cup",
+      url: trophyCupGlb,
+      calibration: ASSET_CALIBRATION.trophy,
+    }),
+    safeLoad("hockeyStick", {
+      name: "hockey-stick",
+      url: hockeyStickGlb,
+      calibration: ASSET_CALIBRATION.hockeyStick,
+    }),
+    safeLoad("props", {
+      name: "office-props",
+      url: officePropsGlb,
+      calibration: ASSET_CALIBRATION.props,
+    }),
+    safeLoad("clipboard", {
+      name: "clipboard",
+      url: clipboardGlb,
+      calibration: ASSET_CALIBRATION.clipboard,
+    }),
+  ]).then(() => {
+    /*
+      Play authored animations when they exist.
+      The code never assumes the GLB is rigged.
+    */
     playBestAnimation(
-      assets.standingExecutive,
+      assets.seatedExecutive,
       [
+        "sit",
+        "seated",
         "idle",
-        "stand",
         "breath",
       ],
       {
@@ -3516,7 +10092,16 @@ async function loadOfficeAssets({
         speedRatio: 0.9,
       }
     );
-  }
+
+    onTier?.("officeDressing");
+    return assets;
+  });
+
+  // referenced by an optional shot only; never fetched during the intro
+  void manDressedInSuitGlb;
+  void ASSET_CALIBRATION.standingExecutive;
+
+  const doors = createEntranceDoors(scene, assets.hallway);
 
   let logoPlane = null;
 
@@ -3552,6 +10137,7 @@ async function loadOfficeAssets({
     logoPlane,
     particles,
     doors,
+    dressing,
   };
 }
 
@@ -3684,6 +10270,10 @@ function ExecutiveCinematic({
   contractDate,
   onComplete,
   onSkipIntro,
+  onAssetTier,
+  onFloorFailure,
+  sceneControlRef,
+  overlayActive,
 }) {
   const canvasRef =
     useRef(null);
@@ -3697,12 +10287,48 @@ function ExecutiveCinematic({
   const signatureReadyRef =
     useRef(false);
 
+  const controlRef =
+    useRef(null);
+
   const [
     stage,
     setStage,
   ] = useState(
     CINEMATIC_STAGE.LOADING
   );
+
+  /* Hallway HUD state. Deliberately small — a reticle, a prompt, a card. */
+  const [
+    hallPhase,
+    setHallPhase,
+  ] = useState(
+    HALL_PHASE.BOOTING
+  );
+
+  const [
+    prompt,
+    setPrompt,
+  ] = useState(null);
+
+  const [
+    card,
+    setCard,
+  ] = useState(null);
+
+  const [
+    hintVisible,
+    setHintVisible,
+  ] = useState(false);
+
+  const [
+    narration,
+    setNarration,
+  ] = useState("");
+
+  const [
+    dartTally,
+    setDartTally,
+  ] = useState(0);
 
   const [
     blackout,
@@ -3784,6 +10410,11 @@ function ExecutiveCinematic({
     let cameraDirector = null;
     let postSequenceStarted = false;
 
+    let hall = null;
+    let hallController = null;
+    let hallAudio = null;
+    let lowPower = false;
+
     const reducedMotion =
       window.matchMedia?.(
         "(prefers-reduced-motion: reduce)"
@@ -3834,8 +10465,8 @@ function ExecutiveCinematic({
             "franchise-office-camera",
             new Vector3(
               0,
-              1.62,
-              -12.4
+              HALL.eyeHeight,
+              HALL.startZ + 0.35
             ),
             scene
           );
@@ -3865,33 +10496,475 @@ function ExecutiveCinematic({
             accentSecondary,
           });
 
+        const tagAssets = (build) => {
+          Object.entries(
+            build.assets
+          ).forEach(([key, asset]) => {
+            if (!asset) {
+              return;
+            }
+
+            (asset.meshes || []).forEach((mesh) => {
+              if (!mesh) {
+                return;
+              }
+
+              mesh.metadata = {
+                ...(mesh.metadata || {}),
+                setupAssetKey: key,
+              };
+
+              mesh.isPickable = true;
+            });
+          });
+        };
+
+        const setOfficeVisible = (build, visible) => {
+          Object.values(build.assets).forEach((asset) => {
+            asset?.root?.setEnabled(visible);
+          });
+          build.doors?.left?.setEnabled?.(visible);
+          build.doors?.right?.setEnabled?.(visible);
+          if (build.particles) {
+            if (visible) {
+              build.particles.start?.();
+            } else {
+              build.particles.stop?.();
+            }
+          }
+        };
+
+        const OFFICE_LIGHT_KEYS = [
+          "ambient",
+          "key",
+          "fill",
+          "coolRim",
+          "deskWarm",
+          "deskKey",
+          "hallCool",
+          "teamFill",
+        ];
+
+        const setOfficeLightsEnabled = (enabled) => {
+          OFFICE_LIGHT_KEYS.forEach((name) => {
+            lighting?.[name]?.setEnabled?.(enabled);
+          });
+        };
+
+        /*
+          ==========================================================
+          OPENING HALLWAY
+          ==========================================================
+
+          The corridor is procedural, so it is standing and walkable in the
+          time it takes to build geometry — no download gates the first frame.
+          Every office GLB is fetched behind the player's back while they walk.
+        */
+        if (!appointment) {
+          setOfficeLightsEnabled(false);
+
+          // corridor grade: dark, warm practicals, real reflections on metal
+          scene.environmentIntensity = 1;
+          scene.clearColor = new Color4(0.017, 0.019, 0.024, 1);
+          scene.ambientColor = new Color3(0.1, 0.1, 0.12);
+          scene.imageProcessingConfiguration.exposure = 1.04;
+          scene.imageProcessingConfiguration.contrast = 1.18;
+          scene.imageProcessingConfiguration.vignetteEnabled = true;
+          scene.imageProcessingConfiguration.vignetteWeight = 2.6;
+          scene.imageProcessingConfiguration.vignetteColor = new Color4(
+            0,
+            0,
+            0,
+            0
+          );
+
+          const hallMaterials = createHallMaterials(scene);
+          hall = buildMemorabiliaHall(scene, hallMaterials);
+          hallAudio = createHallAudio();
+
+          let requestDoor = null;
+          const doorRequested = new Promise((resolve) => {
+            requestDoor = resolve;
+          });
+
+          const closeCard = () => {
+            setCard(null);
+            hallController?.setEnabled(true);
+          };
+
+          hallController = createHallController({
+            scene,
+            camera,
+            canvas,
+            interactables: hall.interactables,
+            reducedMotion,
+            audio: hallAudio,
+            onFirstMove: () => setHintVisible(false),
+            onPromptChange: (entry) => {
+              setPrompt(
+                entry
+                  ? {
+                      id: entry.id,
+                      label: entry.label,
+                      hint: entry.hint || "Inspect",
+                    }
+                  : null
+              );
+            },
+            onActivate: (entry) => {
+              hallAudio?.unlock();
+
+              if (entry.action === "door") {
+                requestDoor?.();
+                return;
+              }
+
+              if (entry.action === "dart") {
+                const onTarget = throwDart(scene, hall.cache, camera);
+                setDartTally((count) => count + (onTarget ? 1 : 0));
+                hallAudio?.footstep("stone", 0.5);
+                return;
+              }
+
+              if (!entry.card) {
+                return;
+              }
+
+              // soft-lock rather than hard-stop: the player closes and walks on
+              hallController?.setEnabled(false);
+              setCard({ ...entry.card, id: entry.id });
+            },
+          });
+
+          controlRef.current = {
+            closeCard,
+            unlockAudio: () => hallAudio?.unlock(),
+            setLowPower: (enabled) => {
+              if (lowPower === enabled) return;
+              lowPower = enabled;
+              engine?.setHardwareScalingLevel(enabled ? 1.7 : 1);
+            },
+            duckAudio: (amount) => hallAudio?.duck(amount, 0.5),
+            stopAudio: () => hallAudio?.stop(1.6),
+          };
+
+          /*
+            The corridor shots are authored coordinates, so a director exists
+            from the first frame — the door approach never has to wait for a
+            download to be able to move the camera.
+          */
+          cameraDirector = createCameraDirector({
+            scene,
+            camera,
+            assets: {},
+            logoPlane: null,
+            cancelledRef,
+          });
+
+          scene.metadata = {
+            purpose: "puckception-opening-hallway",
+            glbFirst: false,
+            physicalUnits: "meters",
+          };
+
+          engine.runRenderLoop(() => {
+            if (scene && !scene.isDisposed) {
+              scene.render();
+            }
+          });
+
+          resizeHandler = () => engine?.resize();
+          window.addEventListener("resize", resizeHandler);
+          window.requestAnimationFrame(() => engine?.resize());
+
+          // one frame of geometry on screen before the curtain lifts
+          await scene.whenReadyAsync();
+
+          if (cancelledRef.current) {
+            return;
+          }
+
+          setSceneReady(true);
+          setStage(CINEMATIC_STAGE.HALLWAY);
+          setHallPhase(HALL_PHASE.EXPLORING);
+          onAssetTier?.("hallway");
+
+          await sleep(ms(120), cancelledRef);
+          setBlackout(false);
+          setHintVisible(true);
+          hallAudio.start();
+
+          // the hint retires on its own if the player just stands still
+          window.setTimeout(() => setHintVisible(false), 9000);
+
+          /*
+            Everything the office needs, fetched during the walk. Nothing here
+            is awaited until the player actually asks for the door.
+          */
+          const officeLoad = loadOfficeAssets({
+            scene,
+            mode,
+            team,
+            accentPrimary,
+            onTier: onAssetTier,
+          })
+            .then((build) => {
+              if (cancelledRef.current) {
+                return null;
+              }
+
+              officeBuild = build;
+              tagAssets(build);
+              setOfficeVisible(build, false);
+
+              cameraDirector = createCameraDirector({
+                scene,
+                camera,
+                assets: build.assets,
+                logoPlane: build.logoPlane,
+                cancelledRef,
+              });
+
+              build.dressing.then(() => {
+                if (cancelledRef.current || scene.isDisposed) {
+                  return;
+                }
+                tagAssets(build);
+                setOfficeVisible(build, false);
+                placePracticalLights(lighting, build.assets);
+                registerShadowCasters(lighting, build.assets);
+                if (build.errors.length) {
+                  setAssetIssue(
+                    build.errors.map(({ key }) => key).join(", ")
+                  );
+                }
+              });
+
+              return build;
+            })
+            .catch((loadError) => {
+              console.error("Office assets failed", loadError);
+              setAssetIssue("Parts of the office could not load.");
+              return null;
+            });
+
+          await doorRequested;
+
+          if (cancelledRef.current) {
+            return;
+          }
+
+          /*
+            ------------------------------------------------------------
+            DOOR → OFFICE CINEMATIC
+            ------------------------------------------------------------
+          */
+          setHallPhase(HALL_PHASE.DOOR);
+          setPrompt(null);
+          setCard(null);
+          setHintVisible(false);
+          hallController.suspend();
+          hallController.releasePointer();
+          setStage(CINEMATIC_STAGE.OFFICE_ENTRY);
+
+          hallAudio.doorSwing();
+          hallAudio.duck(0.4, 0.8);
+
+          // the leaf swings and the camera steps up to the threshold together
+          await Promise.all([
+            tween({
+              duration: ms(1150),
+              cancelledRef,
+              easing: easeOutCubic,
+              onUpdate: (t) => {
+                hall.door.open(t);
+                hall.door.light.intensity = lerp(2.4, 5.6, t);
+              },
+            }),
+            (async () => {
+              await sleep(ms(120), cancelledRef);
+              await cameraDirector.focus("doorApproach", {
+                duration: ms(1000),
+                walking: true,
+              });
+            })(),
+          ]);
+
+          if (cancelledRef.current) {
+            return;
+          }
+
+          // if the player sprinted here, the wait happens now, behind a door
+          const build = await officeLoad;
+          await build?.dressing;
+
+          if (cancelledRef.current) {
+            return;
+          }
+
+          if (!build) {
+            /*
+              The office could not be assembled. The corridor is real and
+              already standing, so it becomes the backdrop and the agreement
+              opens against the open doorway instead of a black screen.
+            */
+            hallController.dispose();
+            hallController = null;
+            setHallPhase(HALL_PHASE.SETTLED);
+            hallAudio.duck(0.6, 1.2);
+            await cameraDirector.focus("doorThreshold", {
+              duration: ms(1400),
+              walking: true,
+            });
+            onComplete?.();
+            return;
+          }
+
+          // cross the threshold, then hand the room over to the office grade
+          await cameraDirector.focus("doorThreshold", {
+            duration: ms(1500),
+            walking: true,
+          });
+
+          if (cancelledRef.current) {
+            return;
+          }
+
+          setHallPhase(HALL_PHASE.OFFICE);
+          setStage(CINEMATIC_STAGE.MEETING);
+
+          setOfficeVisible(build, true);
+          setOfficeLightsEnabled(true);
+          placePracticalLights(lighting, build.assets);
+          registerShadowCasters(lighting, build.assets);
+          hall.setEnabled(false);
+
+          await tween({
+            duration: ms(700),
+            cancelledRef,
+            easing: easeInOutCubic,
+            onUpdate: (t) => {
+              scene.imageProcessingConfiguration.exposure = lerp(1.04, 1.62, t);
+              scene.imageProcessingConfiguration.contrast = lerp(1.18, 1.09, t);
+              scene.imageProcessingConfiguration.vignetteWeight = lerp(
+                2.6,
+                1.4,
+                t
+              );
+              scene.clearColor = new Color4(
+                lerp(0.017, 0.06, t),
+                lerp(0.019, 0.056, t),
+                lerp(0.024, 0.05, t),
+                1
+              );
+            },
+          });
+
+          if (cancelledRef.current) {
+            return;
+          }
+
+          hallAudio.setDoorProximity(1);
+          hallAudio.duck(0.5, 0.8);
+
+          // establish the room
+          await cameraDirector.focus("officeReveal", {
+            duration: ms(2200),
+            walking: true,
+          });
+
+          if (cancelledRef.current) {
+            return;
+          }
+
+          /*
+            The arrival line, played against the room rather than over it.
+          */
+          setNarration("Welcome to Puckception.");
+          const spoken = speakBroadcastLine(
+            "Welcome to Puckception.",
+            hallAudio
+          );
+
+          await Promise.all([
+            spoken,
+            cameraDirector.focus("officeAddress", {
+              duration: ms(2600),
+              breathing: true,
+            }),
+          ]);
+
+          if (cancelledRef.current) {
+            return;
+          }
+
+          await sleep(ms(500), cancelledRef);
+          setNarration("");
+          hallAudio.duck(0.72, 1.2);
+
+          if (cancelledRef.current) {
+            return;
+          }
+
+          /*
+            ------------------------------------------------------------
+            THE CONTRACT ON THE DESK
+            ------------------------------------------------------------
+          */
+          setStage(CINEMATIC_STAGE.CONTRACT);
+
+          await cameraDirector.focus("deskApproach", {
+            duration: ms(1700),
+          });
+
+          if (cancelledRef.current) {
+            return;
+          }
+
+          await cameraDirector.focus("contractReveal", {
+            duration: ms(1600),
+            breathing: true,
+          });
+
+          if (cancelledRef.current) {
+            return;
+          }
+
+          setHallPhase(HALL_PHASE.SETTLED);
+
+          // the corridor is finished with; free its GPU budget for the hub
+          hallController.dispose();
+          hallController = null;
+          hall.dispose();
+          hall = null;
+
+          controlRef.current = {
+            ...(controlRef.current || {}),
+            closeCard: () => {},
+            setLowPower: (enabled) => {
+              if (lowPower === enabled) return;
+              lowPower = enabled;
+              engine?.setHardwareScalingLevel(enabled ? 1.7 : 1);
+            },
+          };
+
+          // the setup interface now takes over the document
+          onComplete?.();
+          return;
+        }
+
         officeBuild =
           await loadOfficeAssets({
             scene,
             mode,
             team,
             accentPrimary,
+            onTier: onAssetTier,
           });
-        Object.entries(
-          officeBuild.assets
-        ).forEach(([key, asset]) => {
-          if (!asset) {
-            return;
-          }
 
-          (asset.meshes || []).forEach((mesh) => {
-            if (!mesh) {
-              return;
-            }
+        await officeBuild.dressing;
 
-            mesh.metadata = {
-              ...(mesh.metadata || {}),
-              setupAssetKey: key,
-            };
-
-            mesh.isPickable = true;
-          });
-        });
+        tagAssets(officeBuild);
 
         cameraDirector = createCameraDirector({
           scene,
@@ -4249,98 +11322,6 @@ function ExecutiveCinematic({
         if (
           cancelledRef.current
         ) {
-          return;
-        }
-
-        /*
-          ------------------------------------------------------------
-          INTRO CINEMATIC
-          ------------------------------------------------------------
-        */
-        if (!appointment) {
-          setStage(CINEMATIC_STAGE.HALLWAY);
-
-          await openEntranceDoors(
-            officeBuild.doors,
-            cancelledRef,
-            ms(900)
-          );
-
-          if (cancelledRef.current) {
-            return;
-          }
-
-          await cameraDirector.focus("hallwayMid", {
-            duration: ms(2600),
-            walking: true,
-          });
-
-          if (cancelledRef.current) {
-            return;
-          }
-
-          setStage(CINEMATIC_STAGE.OFFICE_ENTRY);
-
-          await cameraDirector.focus("officeWide", {
-            duration: ms(2400),
-            walking: true,
-          });
-
-          if (cancelledRef.current) {
-            return;
-          }
-
-          await cameraDirector.focus("deskThreeQuarter", {
-            duration: ms(1800),
-          });
-
-          if (cancelledRef.current) {
-            return;
-          }
-
-          setStage(CINEMATIC_STAGE.MEETING);
-
-          await cameraDirector.focus("gmHero", {
-            duration: ms(1700),
-          });
-
-          if (cancelledRef.current) {
-            return;
-          }
-
-          await cameraDirector.focus("stickProp", {
-            duration: ms(1100),
-          });
-
-          if (cancelledRef.current) {
-            return;
-          }
-
-          await cameraDirector.focus("trophyProp", {
-            duration: ms(1000),
-          });
-
-          if (cancelledRef.current) {
-            return;
-          }
-
-          await cameraDirector.focus("officeHero", {
-            duration: ms(2100),
-          });
-
-          if (cancelledRef.current) {
-            return;
-          }
-
-          await sleep(ms(900), cancelledRef);
-
-          if (cancelledRef.current) {
-            return;
-          }
-
-          setBlackout(true);
-          await sleep(ms(420), cancelledRef);
-          onComplete?.();
           return;
         }
 
@@ -4845,6 +11826,8 @@ function ExecutiveCinematic({
           return;
         }
 
+        // no walkable floor: fall back to the flat setup, with the menu bed
+        onFloorFailure?.();
         onComplete?.();
       }
     };
@@ -4857,6 +11840,26 @@ function ExecutiveCinematic({
 
       executeRef.current =
         null;
+
+      controlRef.current = null;
+
+      if (hallController) {
+        hallController.dispose();
+        hallController = null;
+      }
+
+      if (hallAudio) {
+        hallAudio.dispose();
+        hallAudio = null;
+      }
+
+      if (typeof window !== "undefined") {
+        try {
+          window.speechSynthesis?.cancel();
+        } catch (_speechError) {
+          /* nothing to cancel */
+        }
+      }
 
       if (
         scene &&
@@ -4898,7 +11901,62 @@ function ExecutiveCinematic({
     accentSecondary,
     contractDate,
     onComplete,
+    onAssetTier,
+    onFloorFailure,
   ]);
+
+  useEffect(() => {
+    if (!sceneControlRef) {
+      return undefined;
+    }
+
+    sceneControlRef.current = controlRef;
+
+    return () => {
+      sceneControlRef.current = null;
+    };
+  }, [sceneControlRef]);
+
+  /*
+    While the agreement is on screen the room only has to sit there. Dropping
+    the render resolution hands that budget to the hub warm-up instead.
+  */
+  useEffect(() => {
+    controlRef.current?.setLowPower?.(Boolean(overlayActive));
+
+    if (overlayActive) {
+      controlRef.current?.duckAudio?.(0.5);
+    }
+  }, [overlayActive]);
+
+  const closeCard = useCallback(() => {
+    controlRef.current?.closeCard?.();
+    setCard(null);
+  }, []);
+
+  useEffect(() => {
+    if (!card) {
+      return undefined;
+    }
+
+    const onKeyDown = (event) => {
+      if (
+        event.key === "Escape" ||
+        event.code === "KeyE" ||
+        event.code === "Enter" ||
+        event.code === "Space"
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeCard();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+
+    return () =>
+      window.removeEventListener("keydown", onKeyDown, true);
+  }, [card, closeCard]);
 
   const executeAppointment =
     useCallback(() => {
@@ -4928,8 +11986,16 @@ function ExecutiveCinematic({
       onComplete,
     ]);
 
+  /*
+    Escape releases the mouse while exploring — it must not throw the player
+    out of the hallway. It only skips once the cinematic has taken over.
+  */
   useEffect(() => {
-    if (appointment) {
+    if (
+      appointment ||
+      hallPhase === HALL_PHASE.EXPLORING ||
+      hallPhase === HALL_PHASE.SETTLED
+    ) {
       return undefined;
     }
 
@@ -4952,17 +12018,26 @@ function ExecutiveCinematic({
       );
   }, [
     appointment,
+    hallPhase,
     onComplete,
     onSkipIntro,
   ]);
 
   return (
     <section
-      className="setup-cinematic"
+      className={`setup-cinematic ${
+        hallPhase === HALL_PHASE.EXPLORING
+          ? "setup-cinematic--free"
+          : ""
+      } ${
+        hallPhase === HALL_PHASE.EXPLORING && !card
+          ? "setup-cinematic--roaming"
+          : ""
+      }`}
       aria-label={
         appointment
           ? `${team?.name || "NHL"} executive appointment`
-          : "NHL executive floor introduction"
+          : "Puckception executive floor"
       }
     >
       <canvas
@@ -4989,7 +12064,9 @@ function ExecutiveCinematic({
         aria-hidden="true"
       />
 
-      {!officeFailed ? (
+      {!officeFailed &&
+      !overlayActive &&
+      hallPhase !== HALL_PHASE.EXPLORING ? (
       <div className="setup-cinematic-status">
         <span>
           NHL Executive Floor
@@ -4999,6 +12076,103 @@ function ExecutiveCinematic({
           {stageCopy}
         </strong>
       </div>
+      ) : null}
+
+      {/* ---------- opening hallway HUD ---------- */}
+
+      {hallPhase === HALL_PHASE.EXPLORING ? (
+        <>
+          <div
+            className={`hall-reticle ${
+              prompt ? "is-live" : ""
+            }`}
+            aria-hidden="true"
+          >
+            <span />
+          </div>
+
+          <div
+            className={`hall-prompt ${
+              prompt && !card ? "is-shown" : ""
+            }`}
+            aria-hidden={!prompt || Boolean(card)}
+          >
+            <kbd>E</kbd>
+            <em>{prompt?.hint || "Inspect"}</em>
+            <span>{prompt?.label || ""}</span>
+          </div>
+
+          <div
+            className={`hall-hint ${
+              hintVisible && !card ? "is-shown" : ""
+            }`}
+          >
+            <p>
+              <kbd>W</kbd>
+              <kbd>A</kbd>
+              <kbd>S</kbd>
+              <kbd>D</kbd>
+              <small>or arrows to walk</small>
+            </p>
+
+            <p>
+              <kbd>Mouse</kbd>
+              <small>to look — click once to hold the room</small>
+            </p>
+
+            <p>
+              <kbd>E</kbd>
+              <small>to inspect what the reticle finds</small>
+            </p>
+          </div>
+
+          {dartTally > 0 ? (
+            <div className="hall-dart-tally" aria-hidden="true">
+              <strong>{dartTally}</strong>
+              <span>on target</span>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+
+      {card ? (
+        <div className="hall-card-layer">
+          <article className="hall-card">
+            <header>
+              <small>{card.kicker}</small>
+
+              <h3>{card.title}</h3>
+
+              <p>{card.subtitle}</p>
+            </header>
+
+            <div className="hall-card-body">
+              {(card.lines || []).map((line, index) => (
+                <p key={index}>{line}</p>
+              ))}
+            </div>
+
+            <footer>
+              <span>{card.footer}</span>
+
+              <button
+                type="button"
+                onClick={closeCard}
+                autoFocus
+              >
+                Close
+              </button>
+            </footer>
+          </article>
+        </div>
+      ) : null}
+
+      {narration ? (
+        <div className="hall-narration">
+          <span aria-hidden="true" />
+
+          <p>{narration}</p>
+        </div>
       ) : null}
 
       {appointment && team ? (
@@ -5013,7 +12187,9 @@ function ExecutiveCinematic({
         </div>
       ) : null}
 
-      {!appointment ? (
+      {!appointment &&
+      !overlayActive &&
+      hallPhase !== HALL_PHASE.SETTLED ? (
         <button
           type="button"
           className="setup-skip-intro"
@@ -5022,7 +12198,9 @@ function ExecutiveCinematic({
             onComplete
           }
         >
-          Skip cinematic
+          {hallPhase === HALL_PHASE.EXPLORING
+            ? "Skip to setup"
+            : "Skip cinematic"}
         </button>
       ) : null}
 
@@ -5121,12 +12299,12 @@ function ExecutiveCinematic({
           <span />
 
           <strong>
-            Loading executive floor
+            Opening the executive floor
           </strong>
         </div>
       ) : null}
 
-      {assetIssue && !officeFailed ? (
+      {assetIssue && !officeFailed && !overlayActive ? (
         <div className="setup-asset-warning">
           <strong>
             Asset loading notice
@@ -5146,6 +12324,12 @@ function ExecutiveCinematic({
    FRANCHISE LOADING
    ========================================================================== */
 
+/*
+  The loading state is a translucent treatment over the office the player is
+  already standing in, not an opaque screen. There is no timer and no invented
+  percentage: each resource category simply reports what it is doing, in plain
+  language, and the facts keep turning for as long as the work honestly takes.
+*/
 function SetupLoadingScreen({
   selected,
   gmName,
@@ -5153,6 +12337,7 @@ function SetupLoadingScreen({
   playerUniverse,
   error,
   loading,
+  warmup,
   onRetry,
   onBack,
 }) {
@@ -5170,11 +12355,6 @@ function SetupLoadingScreen({
     setFactIndex,
   ] = useState(0);
 
-  const [
-    waitedTooLong,
-    setWaitedTooLong,
-  ] = useState(false);
-
   useEffect(() => {
     const id =
       window.setInterval(
@@ -5185,24 +12365,32 @@ function SetupLoadingScreen({
               facts.length
           );
         },
-        10000
+        8500
       );
 
     return () =>
       window.clearInterval(id);
   }, [facts.length]);
 
-  useEffect(() => {
-    const id = window.setTimeout(
-      () => setWaitedTooLong(true),
-      12000
+  const failed = Boolean(error);
+
+  const categories =
+    useMemo(
+      () =>
+        Object.entries(
+          HUB_WARMUP_LABELS
+        ).map(([key, label]) => ({
+          key,
+          label,
+          status: warmup?.[key] || "waiting",
+        })),
+      [warmup]
     );
 
-    return () =>
-      window.clearTimeout(id);
-  }, []);
-
-  const failed = Boolean(error);
+  const settled =
+    categories.filter(
+      ({ status }) => status === "ready"
+    ).length;
 
   return (
     <div
@@ -5211,10 +12399,6 @@ function SetupLoadingScreen({
       aria-live="polite"
     >
       <div className="setup-loading-panel">
-        {!failed ? (
-          <span className="setup-loading-ring" />
-        ) : null}
-
         <small>
           Franchise Mode
         </small>
@@ -5229,11 +12413,11 @@ function SetupLoadingScreen({
             ? error
             : playerUniverse ===
               "real_nhl"
-            ? "Preparing the real NHL player universe."
+            ? "Opening the real NHL player universe."
             : `${
                 gmName?.trim() ||
                 "General Manager"
-              } is entering hockey operations.`}
+              } is taking over hockey operations.`}
         </p>
 
         {!failed ? (
@@ -5253,13 +12437,45 @@ function SetupLoadingScreen({
           </div>
         ) : null}
 
-        {waitedTooLong && !failed ? (
-          <p className="setup-loading-slow">
-            This is taking longer than expected. You can wait, retry, or return to setup.
-          </p>
+        {!failed ? (
+          <>
+            <ul className="setup-loading-tasks">
+              {categories.map(
+                ({ key, label, status }) => (
+                  <li
+                    key={key}
+                    className={`is-${status}`}
+                  >
+                    <i aria-hidden="true" />
+
+                    <span>{label}</span>
+
+                    <em>
+                      {status === "ready"
+                        ? "Ready"
+                        : status === "loading"
+                        ? "Arriving"
+                        : "Queued"}
+                    </em>
+                  </li>
+                )
+              )}
+            </ul>
+
+            <div
+              className={`setup-loading-bar ${
+                settled === categories.length
+                  ? "is-complete"
+                  : ""
+              }`}
+              aria-hidden="true"
+            >
+              <span />
+            </div>
+          </>
         ) : null}
 
-        {failed || waitedTooLong ? (
+        {failed ? (
           <div className="setup-loading-actions">
             {typeof onRetry === "function" ? (
               <button
@@ -5315,9 +12531,15 @@ export function SetupScreen() {
     teamsLoading,
     error,
     setError,
+    hubWarmup,
+    primeHubAssets,
   } = useGameUI();
 
-  useSetupStageMusic();
+  /*
+    The corridor grows its own soundtrack, so the menu theme stays quiet for
+    the whole of this screen.
+  */
+  const sceneControlRef = useRef(null);
 
   const [
     appStage,
@@ -5338,6 +12560,13 @@ export function SetupScreen() {
     "Executive introduction."
   );
 
+  const [
+    floorFailed,
+    setFloorFailed,
+  ] = useState(false);
+
+  useSetupStageMusic(floorFailed);
+
   useEffect(() => {
     /*
       Team loading starts immediately but DOES NOT block the intro cinematic.
@@ -5345,6 +12574,41 @@ export function SetupScreen() {
     */
     loadTeams();
   }, [loadTeams]);
+
+  /*
+    Progressive priority. The corridor is on screen first; the hub's expensive
+    resources begin arriving the moment the player can walk, and the rest
+    follows as the cinematic and the agreement consume real time.
+  */
+  const handleAssetTier = useCallback(
+    (tier) => {
+      if (tier === "hallway") {
+        primeHubAssets(HUB_WARMUP_STAGES.ENVIRONMENT);
+        return;
+      }
+
+      if (tier === "officeEssentials") {
+        primeHubAssets(HUB_WARMUP_STAGES.CRESTS);
+        return;
+      }
+
+      if (tier === "officeDressing") {
+        primeHubAssets(HUB_WARMUP_STAGES.OPERATIONS);
+      }
+    },
+    [primeHubAssets]
+  );
+
+  useEffect(() => {
+    if (appStage === APP_STAGE.INTRO) {
+      return;
+    }
+
+    // the agreement is a long, quiet window; use all of it
+    primeHubAssets(HUB_WARMUP_STAGES.ENVIRONMENT);
+    primeHubAssets(HUB_WARMUP_STAGES.CRESTS);
+    primeHubAssets(HUB_WARMUP_STAGES.OPERATIONS);
+  }, [appStage, primeHubAssets]);
 
   const orderedTeams =
     useMemo(
@@ -5461,11 +12725,19 @@ export function SetupScreen() {
       );
     }, []);
 
+  const reportFloorFailure =
+    useCallback(() => {
+      setFloorFailed(true);
+    }, []);
+
   const finishAppointment =
     useCallback(async () => {
       setAppStage(
         APP_STAGE.STARTING
       );
+
+      // the room settles down while the franchise is assembled
+      sceneControlRef.current?.current?.duckAudio?.(0.28);
 
       setStatusText(
         `Appointment executed. Opening ${selected?.name || "franchise"} hockey operations.`
@@ -5522,40 +12794,54 @@ export function SetupScreen() {
           visualSecondary,
       }}
     >
-      {appStage ===
-      APP_STAGE.INTRO ? (
-        <ExecutiveCinematic
-          mode={
-            CINEMATIC_MODE.INTRO
-          }
-          team={null}
-          gmName=""
-          playerUniverse="generated"
-          injuriesEnabled={false}
-          accentPrimary="#c9a86a"
-          accentSecondary="#9aa5b1"
-          contractDate={
-            contractDate
-          }
-          onComplete={
-            finishIntro
-          }
-          onSkipIntro={
-            finishIntro
-          }
-        />
-      ) : null}
+      {/*
+        The floor stays mounted for the whole screen. The agreement is signed
+        on the desk it was revealed on, and the loading state that follows has
+        a real room behind it rather than a black rectangle.
+      */}
+      <ExecutiveCinematic
+        mode={
+          CINEMATIC_MODE.INTRO
+        }
+        team={null}
+        gmName=""
+        playerUniverse="generated"
+        injuriesEnabled={false}
+        accentPrimary="#c9a86a"
+        accentSecondary="#9aa5b1"
+        contractDate={
+          contractDate
+        }
+        onComplete={
+          finishIntro
+        }
+        onSkipIntro={
+          finishIntro
+        }
+        onAssetTier={
+          handleAssetTier
+        }
+        onFloorFailure={
+          reportFloorFailure
+        }
+        sceneControlRef={
+          sceneControlRef
+        }
+        overlayActive={
+          appStage !== APP_STAGE.INTRO
+        }
+      />
 
       {appStage ===
       APP_STAGE.CONFIGURE ? (
-        <main className="setup-config-layout">
+        <main className="setup-config-layout setup-config-layout--desk">
           <div className="setup-config-topline">
             <strong>
-              Executive Appointment
+              Franchise Agreement
             </strong>
 
             <small>
-              Choose club, name, and sign the deed
+              Complete the schedule, then sign and execute
             </small>
           </div>
 
@@ -5648,6 +12934,9 @@ export function SetupScreen() {
           loading={
             loading
           }
+          warmup={
+            hubWarmup
+          }
           onRetry={
             finishAppointment
           }
@@ -5718,22 +13007,7 @@ const SETUP_SCREEN_CSS = `
   color:
     var(--setup-text);
 
-  background:
-    radial-gradient(
-      circle at 50% -8%,
-      color-mix(
-        in srgb,
-        var(--team-accent, #c9a86a) 22%,
-        transparent
-      ),
-      transparent 42%
-    ),
-    linear-gradient(
-      180deg,
-      #14110c,
-      #080a0e 55%,
-      #050607
-    );
+  background: transparent;
 }
 
 .setup-root *,
@@ -7082,7 +14356,7 @@ const SETUP_SCREEN_CSS = `
   isolation: isolate;
 
   background:
-    #2a2c31;
+    #05060a;
 
   color:
     #f0ede7;
@@ -7108,7 +14382,12 @@ const SETUP_SCREEN_CSS = `
   touch-action: none;
 
   background:
-    #2a2c31;
+    #05060a;
+}
+
+/* first person: the reticle is the pointer */
+.setup-cinematic--roaming .setup-cinematic-canvas {
+  cursor: none;
 }
 
 .setup-blackout {
@@ -7159,6 +14438,16 @@ const SETUP_SCREEN_CSS = `
       0,
       0.35
     );
+
+  transition:
+    height
+    700ms
+    cubic-bezier(.2, .72, .2, 1);
+}
+
+/* free movement is gameplay, not a cinematic — the bars retract */
+.setup-cinematic--free .setup-letterbox {
+  height: 0;
 }
 
 .setup-letterbox--top {
@@ -7874,12 +15163,17 @@ const SETUP_SCREEN_CSS = `
       circle at 50% 30%,
       color-mix(
         in srgb,
-        var(--team-accent) 13%,
+        var(--team-accent) 10%,
         transparent
       ),
-      transparent 34%
+      transparent 38%
     ),
-    #05070a;
+    radial-gradient(
+      ellipse 90% 80% at 50% 55%,
+      rgba(5, 7, 10, 0.28),
+      rgba(5, 7, 10, 0.08) 70%,
+      transparent 100%
+    );
 }
 
 .setup-loading-panel {
@@ -7912,7 +15206,7 @@ const SETUP_SCREEN_CSS = `
       7,
       9,
       13,
-      0.84
+      0.62
     );
 
   text-align: center;
@@ -7920,6 +15214,8 @@ const SETUP_SCREEN_CSS = `
   box-shadow:
     0 28px 90px
     rgba(0,0,0,.58);
+
+  backdrop-filter: blur(4px);
 }
 
 .setup-loading-ring {
@@ -8363,6 +15659,936 @@ const SETUP_SCREEN_CSS = `
   }
 }
 
+/* --------------------------------------------------------------------------
+   OPENING HALLWAY HUD
+
+   Everything here is restrained on purpose: a reticle that only wakes up when
+   something is in range, one prompt line, a hint that retires itself, and a
+   small memorabilia card. No permanent instructions across the screen.
+   -------------------------------------------------------------------------- */
+
+.hall-reticle {
+  position: absolute;
+  z-index: 60;
+
+  top: 50%;
+  left: 50%;
+
+  width: 26px;
+  height: 26px;
+
+  margin: -13px 0 0 -13px;
+
+  display: grid;
+  place-items: center;
+
+  pointer-events: none;
+}
+
+.hall-reticle::before,
+.hall-reticle::after {
+  content: "";
+
+  position: absolute;
+
+  border-radius: 50%;
+
+  transition:
+    opacity 220ms ease,
+    transform 260ms cubic-bezier(.2,.72,.2,1),
+    border-color 220ms ease;
+}
+
+.hall-reticle::before {
+  width: 4px;
+  height: 4px;
+
+  background:
+    rgba(244, 238, 226, 0.62);
+
+  box-shadow:
+    0 0 4px rgba(0, 0, 0, 0.8);
+}
+
+.hall-reticle::after {
+  width: 22px;
+  height: 22px;
+
+  border:
+    1px solid
+    rgba(244, 238, 226, 0);
+
+  transform: scale(0.6);
+}
+
+.hall-reticle.is-live::before {
+  background:
+    rgba(255, 226, 168, 0.95);
+}
+
+.hall-reticle.is-live::after {
+  border-color:
+    rgba(255, 214, 140, 0.5);
+
+  transform: scale(1);
+}
+
+.hall-prompt {
+  position: absolute;
+  z-index: 62;
+
+  left: 50%;
+  bottom: 15%;
+
+  display: flex;
+  align-items: center;
+  gap: 9px;
+
+  padding: 8px 14px 8px 9px;
+
+  border:
+    1px solid
+    rgba(201, 168, 106, 0.22);
+
+  background:
+    linear-gradient(
+      180deg,
+      rgba(16, 15, 14, 0.82),
+      rgba(9, 9, 10, 0.9)
+    );
+
+  backdrop-filter: blur(6px);
+
+  box-shadow:
+    0 14px 40px rgba(0, 0, 0, 0.55);
+
+  opacity: 0;
+
+  transform:
+    translate(-50%, 10px);
+
+  pointer-events: none;
+
+  transition:
+    opacity 200ms ease,
+    transform 260ms cubic-bezier(.2,.72,.2,1);
+}
+
+.hall-prompt.is-shown {
+  opacity: 1;
+
+  transform:
+    translate(-50%, 0);
+}
+
+.hall-prompt kbd {
+  min-width: 24px;
+
+  padding: 4px 0;
+
+  border:
+    1px solid
+    rgba(255, 226, 168, 0.4);
+
+  border-radius: 3px;
+
+  background:
+    rgba(255, 226, 168, 0.09);
+
+  color: #ffe2a8;
+
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 900;
+
+  text-align: center;
+}
+
+.hall-prompt em {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 900;
+
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+
+  color: #ffe2a8;
+}
+
+.hall-prompt span {
+  font-size: 11px;
+
+  color:
+    rgba(240, 234, 222, 0.72);
+}
+
+.hall-hint {
+  position: absolute;
+  z-index: 61;
+
+  left: 50%;
+  bottom: 46px;
+
+  display: grid;
+  gap: 7px;
+
+  padding: 14px 20px;
+
+  border:
+    1px solid
+    rgba(255, 255, 255, 0.07);
+
+  background:
+    linear-gradient(
+      180deg,
+      rgba(14, 14, 16, 0.7),
+      rgba(8, 8, 10, 0.82)
+    );
+
+  backdrop-filter: blur(8px);
+
+  box-shadow:
+    0 20px 60px rgba(0, 0, 0, 0.5);
+
+  opacity: 0;
+
+  transform:
+    translate(-50%, 14px);
+
+  pointer-events: none;
+
+  transition:
+    opacity 900ms ease,
+    transform 900ms cubic-bezier(.2,.72,.2,1);
+}
+
+.hall-hint.is-shown {
+  opacity: 1;
+
+  transform:
+    translate(-50%, 0);
+}
+
+.hall-hint p {
+  margin: 0;
+
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.hall-hint kbd {
+  min-width: 22px;
+
+  padding: 3px 5px;
+
+  border:
+    1px solid
+    rgba(255, 255, 255, 0.16);
+
+  border-radius: 3px;
+
+  background:
+    rgba(255, 255, 255, 0.05);
+
+  color:
+    rgba(244, 239, 229, 0.92);
+
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 900;
+
+  text-align: center;
+}
+
+.hall-hint small {
+  margin-left: 4px;
+
+  font-size: 10px;
+
+  letter-spacing: 0.04em;
+
+  color:
+    rgba(236, 230, 218, 0.5);
+}
+
+.hall-dart-tally {
+  position: absolute;
+  z-index: 61;
+
+  right: 34px;
+  bottom: 46px;
+
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+
+  padding: 7px 12px;
+
+  border-left:
+    2px solid
+    rgba(179, 32, 54, 0.7);
+
+  background:
+    rgba(10, 10, 12, 0.6);
+
+  pointer-events: none;
+}
+
+.hall-dart-tally strong {
+  font-size: 17px;
+  font-weight: 950;
+
+  color: #ffd9a0;
+}
+
+.hall-dart-tally span {
+  font-size: 9px;
+  font-weight: 800;
+
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+
+  color:
+    rgba(236, 230, 218, 0.5);
+}
+
+/* Memorabilia card — deliberately small. */
+
+.hall-card-layer {
+  position: absolute;
+  z-index: 70;
+
+  inset: 0;
+
+  display: grid;
+  place-items: center;
+
+  padding: 24px;
+
+  background:
+    radial-gradient(
+      ellipse at center,
+      rgba(0, 0, 0, 0.18),
+      rgba(0, 0, 0, 0.62)
+    );
+
+  animation:
+    hallCardLayerIn
+    260ms ease
+    both;
+}
+
+.hall-card {
+  width:
+    min(430px, 100%);
+
+  display: grid;
+  gap: 12px;
+
+  padding: 22px 24px 18px;
+
+  border:
+    1px solid
+    rgba(201, 168, 106, 0.3);
+
+  background:
+    linear-gradient(
+      180deg,
+      rgba(24, 21, 18, 0.97),
+      rgba(13, 12, 12, 0.98)
+    );
+
+  box-shadow:
+    0 34px 90px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(255, 226, 168, 0.08);
+
+  animation:
+    hallCardIn
+    380ms cubic-bezier(.2,.72,.2,1)
+    both;
+}
+
+.hall-card header {
+  display: grid;
+  gap: 4px;
+
+  padding-bottom: 12px;
+
+  border-bottom:
+    1px solid
+    rgba(201, 168, 106, 0.18);
+}
+
+.hall-card header small {
+  font-size: 9px;
+  font-weight: 900;
+
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+
+  color: var(--setup-gold);
+}
+
+.hall-card header h3 {
+  margin: 0;
+
+  font-size: 22px;
+  font-weight: 950;
+
+  letter-spacing: 0.01em;
+
+  color: #f5f0e6;
+}
+
+.hall-card header p {
+  margin: 0;
+
+  font-size: 11px;
+  font-weight: 700;
+
+  letter-spacing: 0.05em;
+
+  color:
+    rgba(236, 230, 218, 0.6);
+}
+
+.hall-card-body {
+  display: grid;
+  gap: 9px;
+
+  max-height: 38vh;
+
+  overflow-y: auto;
+}
+
+.hall-card-body p {
+  margin: 0;
+
+  font-size: 12px;
+
+  line-height: 1.55;
+
+  color:
+    rgba(238, 232, 220, 0.82);
+}
+
+.hall-card footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+
+  padding-top: 12px;
+
+  border-top:
+    1px solid
+    rgba(255, 255, 255, 0.06);
+}
+
+.hall-card footer span {
+  font-size: 9px;
+  font-weight: 800;
+
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+
+  color:
+    rgba(236, 230, 218, 0.42);
+}
+
+.hall-card footer button {
+  min-height: 32px;
+
+  padding: 0 18px;
+
+  border:
+    1px solid
+    rgba(201, 168, 106, 0.45);
+
+  background:
+    rgba(201, 168, 106, 0.12);
+
+  color: #ffe2a8;
+
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 900;
+
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+
+  cursor: pointer;
+
+  transition:
+    background 200ms ease,
+    border-color 200ms ease;
+}
+
+.hall-card footer button:hover {
+  background:
+    rgba(201, 168, 106, 0.22);
+
+  border-color:
+    rgba(201, 168, 106, 0.7);
+}
+
+@keyframes hallCardLayerIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes hallCardIn {
+  from {
+    opacity: 0;
+    transform:
+      translateY(14px)
+      scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Arrival line caption, so the room speaks even with audio off. */
+
+.hall-narration {
+  position: absolute;
+  z-index: 68;
+
+  left: 50%;
+  bottom: 12%;
+
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  padding: 10px 20px 10px 16px;
+
+  border-left:
+    2px solid
+    var(--setup-gold);
+
+  background:
+    linear-gradient(
+      90deg,
+      rgba(12, 11, 10, 0.78),
+      rgba(12, 11, 10, 0)
+    );
+
+  transform: translateX(-50%);
+
+  pointer-events: none;
+
+  animation:
+    hallNarrationIn
+    620ms cubic-bezier(.2,.72,.2,1)
+    both;
+}
+
+.hall-narration span {
+  width: 7px;
+  height: 7px;
+
+  border-radius: 50%;
+
+  background: var(--setup-gold);
+
+  animation:
+    hallNarrationPulse
+    1.6s ease-in-out
+    infinite;
+}
+
+.hall-narration p {
+  margin: 0;
+
+  font-size:
+    clamp(13px, 1.4vw, 17px);
+
+  font-weight: 800;
+
+  letter-spacing: 0.05em;
+
+  color:
+    rgba(246, 241, 231, 0.94);
+
+  text-shadow:
+    0 2px 14px rgba(0, 0, 0, 0.8);
+}
+
+@keyframes hallNarrationIn {
+  from {
+    opacity: 0;
+    transform:
+      translateX(-50%)
+      translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes hallNarrationPulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+
+/* --------------------------------------------------------------------------
+   AGREEMENT ON THE DESK
+
+   The configuration layer sits above the office rather than replacing it. The
+   room stays visible around and behind the paper.
+   -------------------------------------------------------------------------- */
+
+.setup-config-layout--desk {
+  position: fixed;
+  z-index: 24500;
+
+  inset: 0;
+
+  height: auto;
+
+  padding:
+    clamp(14px, 3.2vh, 34px)
+    clamp(14px, 4vw, 64px)
+    clamp(14px, 3vh, 30px);
+
+  grid-template-rows:
+    auto
+    minmax(0, 1fr);
+
+  gap: clamp(8px, 1.4vh, 16px);
+
+  background:
+    radial-gradient(
+      ellipse 70% 55% at 50% 78%,
+      rgba(6, 6, 8, 0.42),
+      rgba(6, 6, 8, 0.12) 52%,
+      transparent 76%
+    );
+
+  animation:
+    setupDeskArrive
+    720ms cubic-bezier(.2,.72,.2,1)
+    both;
+}
+
+.setup-config-layout--desk::before {
+  opacity: 0;
+}
+
+.setup-config-layout--desk .setup-config-topline {
+  padding: 0 6px;
+}
+
+/*
+  The paper itself. Warm stock, a bound left edge, and just enough lift off the
+  desk that it reads as an object sitting on wood.
+*/
+.setup-config-layout--desk .setup-config-grid {
+  padding:
+    clamp(10px, 1.6vh, 20px)
+    clamp(12px, 1.6vw, 24px);
+
+  gap: clamp(10px, 1.4vw, 24px);
+
+  border:
+    1px solid
+    rgba(201, 168, 106, 0.24);
+
+  border-left:
+    3px solid
+    rgba(201, 168, 106, 0.5);
+
+  border-radius: 2px;
+
+  background:
+    linear-gradient(
+      178deg,
+      rgba(28, 24, 20, 0.78),
+      rgba(14, 12, 11, 0.82)
+    );
+
+  box-shadow:
+    0 40px 110px rgba(0, 0, 0, 0.5),
+    0 2px 0 rgba(255, 226, 168, 0.05) inset,
+    0 -18px 40px rgba(0, 0, 0, 0.32) inset;
+
+  backdrop-filter: blur(3px) saturate(0.96);
+}
+
+/* paper-clip and a stamp, so the sheet belongs to a physical file */
+.setup-config-layout--desk .setup-config-grid::before {
+  content: "";
+
+  position: absolute;
+  z-index: 3;
+
+  top: -9px;
+  left: 34px;
+
+  width: 15px;
+  height: 34px;
+
+  border:
+    2px solid
+    rgba(196, 199, 206, 0.5);
+
+  border-radius: 8px 8px 3px 3px;
+
+  border-bottom-color:
+    rgba(196, 199, 206, 0.16);
+
+  pointer-events: none;
+}
+
+@keyframes setupDeskArrive {
+  from {
+    opacity: 0;
+    transform:
+      perspective(1400px)
+      rotateX(5deg)
+      translateY(26px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+
+/* --------------------------------------------------------------------------
+   LOADING, REWORKED
+
+   Translucent over the office, no timers, no invented percentage. The
+   categories say what they are doing and the facts keep turning.
+   -------------------------------------------------------------------------- */
+
+.setup-loading-screen {
+  background:
+    radial-gradient(
+      circle at 50% 34%,
+      color-mix(
+        in srgb,
+        var(--team-accent) 10%,
+        transparent
+      ),
+      transparent 42%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(4, 5, 8, 0.18),
+      rgba(4, 5, 8, 0.32)
+    );
+
+  backdrop-filter: none;
+}
+
+.setup-loading-panel {
+  width:
+    min(560px, 100%);
+
+  gap: 7px;
+
+  border-color:
+    rgba(201, 168, 106, 0.22);
+
+  background:
+    linear-gradient(
+      180deg,
+      rgba(15, 14, 14, 0.7),
+      rgba(8, 8, 10, 0.74)
+    );
+
+  box-shadow:
+    0 36px 110px rgba(0, 0, 0, 0.5);
+
+  backdrop-filter: blur(4px);
+}
+
+.setup-loading-tasks {
+  width: 100%;
+
+  margin: 6px 0 2px;
+  padding: 0;
+
+  list-style: none;
+
+  display: grid;
+  gap: 1px;
+}
+
+.setup-loading-tasks li {
+  display: grid;
+
+  grid-template-columns:
+    14px
+    1fr
+    auto;
+
+  align-items: center;
+
+  gap: 10px;
+
+  padding: 8px 2px;
+
+  border-bottom:
+    1px solid
+    rgba(255, 255, 255, 0.04);
+
+  text-align: left;
+}
+
+.setup-loading-tasks li:last-child {
+  border-bottom: none;
+}
+
+.setup-loading-tasks i {
+  width: 7px;
+  height: 7px;
+
+  margin-left: 3px;
+
+  border-radius: 50%;
+
+  background:
+    rgba(255, 255, 255, 0.14);
+
+  transition:
+    background 400ms ease,
+    box-shadow 400ms ease;
+}
+
+.setup-loading-tasks li.is-loading i {
+  background: var(--team-accent);
+
+  animation:
+    setupTaskPulse
+    1.3s ease-in-out
+    infinite;
+}
+
+.setup-loading-tasks li.is-ready i {
+  background: #6fbf8a;
+
+  box-shadow:
+    0 0 10px rgba(111, 191, 138, 0.55);
+}
+
+.setup-loading-tasks span {
+  font-size: 11px;
+  font-weight: 700;
+
+  color:
+    rgba(238, 232, 220, 0.78);
+}
+
+.setup-loading-tasks em {
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 800;
+
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+
+  color:
+    rgba(236, 230, 218, 0.4);
+}
+
+.setup-loading-tasks li.is-ready em {
+  color:
+    rgba(111, 191, 138, 0.8);
+}
+
+.setup-loading-tasks li.is-loading em {
+  color: var(--setup-gold);
+}
+
+/*
+  Indeterminate on purpose. A sweep says work is happening without claiming a
+  number the application cannot honestly measure.
+*/
+.setup-loading-bar {
+  position: relative;
+
+  width: 100%;
+  height: 2px;
+
+  overflow: hidden;
+
+  background:
+    rgba(255, 255, 255, 0.06);
+}
+
+.setup-loading-bar span {
+  position: absolute;
+  inset: 0 auto 0 0;
+
+  width: 38%;
+
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      var(--team-accent),
+      var(--team-accent-2),
+      transparent
+    );
+
+  animation:
+    setupLoadingSweep
+    1.9s
+    cubic-bezier(.5, 0, .5, 1)
+    infinite;
+}
+
+.setup-loading-bar.is-complete span {
+  width: 100%;
+
+  animation: none;
+
+  background:
+    linear-gradient(
+      90deg,
+      var(--team-accent),
+      var(--team-accent-2)
+    );
+}
+
+@keyframes setupLoadingSweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+
+@keyframes setupTaskPulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+
+@media (max-width: 900px) {
+  .setup-config-layout--desk .setup-config-grid {
+    grid-template-columns: minmax(0, 1fr);
+
+    overflow-y: auto;
+  }
+
+  .hall-hint {
+    bottom: 30px;
+
+    padding: 11px 14px;
+  }
+
+  .hall-dart-tally {
+    right: 16px;
+    bottom: 30px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .setup-blackout,
   .setup-team-welcome,
@@ -8373,6 +16599,19 @@ const SETUP_SCREEN_CSS = `
 
     animation-duration:
       1ms !important;
+  }
+
+  .hall-card,
+  .hall-card-layer,
+  .hall-narration,
+  .setup-config-layout--desk {
+    animation-duration:
+      1ms !important;
+  }
+
+  .hall-narration span,
+  .setup-loading-tasks li.is-loading i {
+    animation: none !important;
   }
 }
 `;

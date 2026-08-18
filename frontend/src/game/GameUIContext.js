@@ -28,6 +28,9 @@ import {
 } from "../services/api";
 import { markNavigation, record as perfRecord } from "../services/perfProfiler";
 import { HUB_MENU, SCREENS, buildDefaultFranchiseTeamList } from "./constants";
+import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
+import hubWallTextureSrc from "../pictures/gray-abstract-texture-background.jpg";
+import officeFontBold from "../styles/ArchivoBlack-Regular.ttf";
 import { ShowcasePopupLayer } from "../components/game/ShowcasePopupLayer";
 import { FranchiseEventLayer } from "../components/game/FranchiseEventLayer";
 import WorldJuniorsEvent from "../events/worldJuniors/WorldJuniorsEvent";
@@ -51,6 +54,76 @@ export function useGameUI() {
   const ctx = useContext(GameUIContext);
   if (!ctx) throw new Error("useGameUI outside GameUIProvider");
   return ctx;
+}
+
+/* ---------------------------------------------------------------------------
+   HUB WARM-UP
+   ---------------------------------------------------------------------------
+   The opening hallway, office cinematic and franchise setup are all real
+   playable time. That time is used to pull the hub's expensive resources into
+   the browser cache so the final transition is not a cold start.
+
+   Each stage is tracked independently so the setup loading state can describe
+   what is still settling in plain language, and so the hub transition can be
+   held until the core scene is genuinely prepared.
+*/
+
+export const HUB_WARMUP_STAGES = Object.freeze({
+  ENVIRONMENT: "environment",
+  CRESTS: "crests",
+  OPERATIONS: "operations",
+});
+
+export const HUB_WARMUP_LABELS = Object.freeze({
+  environment: "Executive office",
+  crests: "League identity",
+  operations: "Hockey operations records",
+});
+
+function prefetchImage(src, timeoutMs = 25000) {
+  return new Promise((resolve) => {
+    if (!src || typeof window === "undefined") {
+      resolve(false);
+      return;
+    }
+
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      resolve(ok);
+    };
+
+    const timer = window.setTimeout(() => finish(false), timeoutMs);
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = () => finish(true);
+    img.onerror = () => finish(false);
+    img.src = src;
+  });
+}
+
+function prefetchResource(src, timeoutMs = 40000) {
+  return new Promise((resolve) => {
+    if (!src || typeof window === "undefined" || typeof fetch !== "function") {
+      resolve(false);
+      return;
+    }
+
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      resolve(ok);
+    };
+
+    const timer = window.setTimeout(() => finish(false), timeoutMs);
+    fetch(src, { mode: "cors", credentials: "same-origin" })
+      .then((res) => finish(Boolean(res && res.ok)))
+      .catch(() => finish(false));
+  });
 }
 
 export function GameUIProvider({ children }) {
@@ -89,6 +162,12 @@ export function GameUIProvider({ children }) {
   const [worldJuniorsOpen, setWorldJuniorsOpen] = useState(false);
   const [wjcEventSnapshot, setWjcEventSnapshot] = useState(null);
   const [pendingDraftProspectId, setPendingDraftProspectId] = useState(null);
+  const [hubWarmup, setHubWarmup] = useState(() => ({
+    [HUB_WARMUP_STAGES.ENVIRONMENT]: "waiting",
+    [HUB_WARMUP_STAGES.CRESTS]: "waiting",
+    [HUB_WARMUP_STAGES.OPERATIONS]: "waiting",
+  }));
+  const hubWarmupRef = useRef({ started: new Set(), promises: [] });
 
   const [ruleSliders, setRuleSliders] = useState({
     roughing: 50,
@@ -269,6 +348,75 @@ export function GameUIProvider({ children }) {
     }
   }, []);
 
+  const markHubWarmup = useCallback((stage, status) => {
+    setHubWarmup((current) =>
+      current[stage] === status ? current : { ...current, [stage]: status }
+    );
+  }, []);
+
+  const primeHubAssets = useCallback(
+    (stage) => {
+      const store = hubWarmupRef.current;
+      if (!stage || store.started.has(stage)) return;
+
+      let job = null;
+
+      if (stage === HUB_WARMUP_STAGES.ENVIRONMENT) {
+        job = Promise.all([
+          prefetchImage(hubWallTextureSrc),
+          prefetchResource(officeFontBold),
+        ]);
+      } else if (stage === HUB_WARMUP_STAGES.CRESTS) {
+        const roster = teams.length ? teams : buildDefaultFranchiseTeamList();
+        const crests = Array.from(
+          new Set(
+            roster
+              .map((club) => resolveFranchiseTeamLogo(club, club?.name))
+              .filter(Boolean)
+          )
+        );
+        job = Promise.all(crests.map((src) => prefetchImage(src)));
+      } else if (stage === HUB_WARMUP_STAGES.OPERATIONS) {
+        /*
+          Records can only be pulled once a session exists. Before that this
+          stage stays queued rather than reporting itself finished, so the
+          real hydration still happens when the franchise actually starts.
+        */
+        if (!getFranchiseSessionId()) {
+          return;
+        }
+        job = hydrateFranchiseHeavyState({ includeRosterBrowser: true });
+      }
+
+      if (!job) {
+        return;
+      }
+
+      store.started.add(stage);
+      markHubWarmup(stage, "loading");
+
+      store.promises.push(
+        Promise.resolve(job)
+          .catch(() => null)
+          .then(() => {
+            markHubWarmup(stage, "ready");
+          })
+      );
+    },
+    [markHubWarmup, teams, hydrateFranchiseHeavyState]
+  );
+
+  const awaitHubReady = useCallback(async () => {
+    const store = hubWarmupRef.current;
+    // Drain repeatedly: a warm-up stage may queue another while it settles.
+    for (let pass = 0; pass < 4; pass += 1) {
+      const pending = store.promises.slice();
+      if (!pending.length) break;
+      await Promise.allSettled(pending);
+      if (store.promises.length === pending.length) break;
+    }
+  }, []);
+
   const beginFranchise = useCallback(async () => {
     if (!teams.length) {
       const message = "No team selected. Check that the API is running, then try again.";
@@ -337,6 +485,12 @@ export function GameUIProvider({ children }) {
       }
       setFranchiseState(nextState);
       setHubMenuIndex(1);
+      // The hallway and the appointment already paid for most of this. Finish
+      // whatever the hub still needs before handing the player a live office.
+      primeHubAssets(HUB_WARMUP_STAGES.ENVIRONMENT);
+      primeHubAssets(HUB_WARMUP_STAGES.CRESTS);
+      primeHubAssets(HUB_WARMUP_STAGES.OPERATIONS);
+      await awaitHubReady();
       setScreen(SCREENS.HUB);
       return { ok: true };
     } catch (e) {
@@ -347,7 +501,16 @@ export function GameUIProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  }, [teams, setupTeamIndex, gmName, setupGamesPerTeam, injuriesEnabled, playerUniverse]);
+  }, [
+    teams,
+    setupTeamIndex,
+    gmName,
+    setupGamesPerTeam,
+    injuriesEnabled,
+    playerUniverse,
+    primeHubAssets,
+    awaitHubReady,
+  ]);
 
   const onAdvanceFranchise = useCallback(
     async ({ mode = "day", count = 1, auto_resolve: autoResolve } = {}) => {
@@ -737,6 +900,9 @@ export function GameUIProvider({ children }) {
       commandPlaceholder,
       setCommandPlaceholder,
       openCommandPlaceholder,
+      hubWarmup,
+      primeHubAssets,
+      awaitHubReady,
     }),
     [
       screen,
@@ -788,6 +954,9 @@ export function GameUIProvider({ children }) {
       statsCentralTab,
       commandPlaceholder,
       openCommandPlaceholder,
+      hubWarmup,
+      primeHubAssets,
+      awaitHubReady,
     ]
   );
 
