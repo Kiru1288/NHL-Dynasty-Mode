@@ -1889,7 +1889,7 @@ function emptySlots(n = SLOTS) {
 
 function padSlots(assets) {
   const list = safeArray(assets).slice(0, SLOTS);
-  while (list.length < SLOTS) list.push(null);
+  if (list.length < SLOTS) list.push(null);
   return list;
 }
 
@@ -2006,7 +2006,7 @@ function AssetCard({
 
   return (
     <div
-      className={`trade-asset-card trade-asset-card-player ${compact ? "compact" : ""}`}
+      className={`trade-asset-card trade-asset-card-player ${compact ? "compact" : ""} ${asset.type === "prospect" ? "is-prospect" : ""}`}
       draggable={draggable}
       onDragStart={onDragStart}
     >
@@ -5671,7 +5671,7 @@ function TradeReviewDrawer({
               <strong>{partnerTeam?.abbr || "THEM"}</strong>
             </div>
           </div>
-          <TradeLogo team={partnerTeam} size={40} />
+          <TradeLogo team={partnerTeam} size={72} />
         </header>
 
         <div className="trade-review-board-main">
@@ -7423,7 +7423,7 @@ export default function TradeHub() {
           ← HUB
         </button>
         <div className="trade-hub-top-center">
-          <div className="trade-hub-screen-title">TRADE CENTRE</div>
+          <div className="trade-hub-screen-title">GM NEGOTIATION TABLE</div>
         </div>
         <div className="trade-hub-top-right">
           <select
@@ -7471,7 +7471,7 @@ export default function TradeHub() {
             <div className="trade-construction-grid">
               <div className="trade-package-col">
                 <div className="trade-package-header">
-                  <TradeLogo team={userTeam} size={40} />
+                  <TradeLogo team={userTeam} size={72} />
                   <div className="trade-package-header-main">
                     <span>YOU SEND</span>
                     <PackageCapStrip
@@ -7503,7 +7503,7 @@ export default function TradeHub() {
 
               <div className="trade-package-col">
                 <div className="trade-package-header">
-                  <TradeLogo team={partnerTeam} size={40} />
+                  <TradeLogo team={partnerTeam} size={72} />
                   <div className="trade-package-header-main">
                     <span>{partnerTeam?.abbr || "PARTNER"} SENDS</span>
                     <PackageCapStrip

@@ -173,6 +173,17 @@ class FranchiseSession:
     # Cause-and-effect storyline system (decision log + active arcs)
     decision_event_log: List[Dict[str, Any]] = field(default_factory=list)
     active_cause_storylines: List[Dict[str, Any]] = field(default_factory=list)
+    # Narrative universe: persistent arcs, social feed, player reputation memory
+    story_arcs: List[Dict[str, Any]] = field(default_factory=list)
+    social_posts: List[Dict[str, Any]] = field(default_factory=list)
+    player_narrative_memory: Dict[str, Any] = field(default_factory=dict)
+    knowledge_graph: List[Dict[str, Any]] = field(default_factory=list)
+    press_conference_queue: List[Dict[str, Any]] = field(default_factory=list)
+    narrative_archive: List[Dict[str, Any]] = field(default_factory=list)
+    narrative_eras: List[Dict[str, Any]] = field(default_factory=list)
+    prospect_social_profiles: Dict[str, Any] = field(default_factory=dict)
+    agent_relationships: Dict[str, Any] = field(default_factory=dict)
+    _narrative_sealed_seasons: List[int] = field(default_factory=list)
     _storyline_blocked_log: List[Dict[str, Any]] = field(default_factory=list)
 
     @staticmethod

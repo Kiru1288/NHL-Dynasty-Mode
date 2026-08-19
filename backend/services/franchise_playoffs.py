@@ -14,6 +14,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from services.franchise_session import FranchiseSession
 from services.json_safe import json_safe
 
+try:
+    from app.sim_engine.league.playoffs import playoff_game_win_probability
+except Exception:  # pragma: no cover
+    playoff_game_win_probability = None  # type: ignore
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -59,6 +64,8 @@ def ensure_playoff_live(session: FranchiseSession) -> Dict[str, Any]:
     live = getattr(session, "playoff_live", None)
     if isinstance(live, dict) and live.get("started"):
         _ensure_calendar(live)
+        if not isinstance(live.get("playoff_strength_map"), dict):
+            _cache_playoff_strength_map(session, live)
         return live
     return start_live_playoffs(session)
 
@@ -429,6 +436,7 @@ def start_live_playoffs(session: FranchiseSession) -> Dict[str, Any]:
         "user_team_id": user_id,
         "updated_at": _now_iso(),
     }
+    _cache_playoff_strength_map(session, live)
     session.playoff_live = live
     session.phase = "playoffs"
     session.season_phase = "playoffs"
@@ -464,6 +472,99 @@ def _strength_for(session: FranchiseSession, team_id: str) -> float:
         return 0.5
 
 
+def _xg_share_for(session: FranchiseSession, team_id: str) -> Optional[float]:
+    """Season xGF share from regular-season box scores, if enough sample exists."""
+    tid = str(team_id or "")
+    if not tid:
+        return None
+    xgf = 0.0
+    xga = 0.0
+    n = 0
+    for game in list(getattr(session, "game_results", None) or []):
+        if not isinstance(game, dict):
+            continue
+        if str(game.get("stat_scope") or "regular_season") != "regular_season":
+            continue
+        hid = str(game.get("home_id") or game.get("home_team_id") or "")
+        aid = str(game.get("away_id") or game.get("away_team_id") or "")
+        try:
+            hx = float(game.get("home_xgf") or game.get("home_xg") or 0)
+            ax = float(game.get("away_xgf") or game.get("away_xg") or 0)
+        except (TypeError, ValueError):
+            continue
+        if hx <= 0 and ax <= 0:
+            continue
+        if hid == tid:
+            xgf += hx
+            xga += ax
+            n += 1
+        elif aid == tid:
+            xgf += ax
+            xga += hx
+            n += 1
+    tot = xgf + xga
+    if n < 10 or tot < 20.0:
+        return None
+    return xgf / tot
+
+
+def _effective_playoff_strength(
+    session: FranchiseSession,
+    team_id: str,
+    *,
+    use_cache: bool = True,
+) -> float:
+    """Roster strength + regular-season record + xG, cached on the live bracket."""
+    tid = str(team_id or "")
+    if use_cache:
+        live = getattr(session, "playoff_live", None)
+        if isinstance(live, dict):
+            cached = live.get("playoff_strength_map")
+            if isinstance(cached, dict) and tid in cached:
+                try:
+                    return float(cached[tid])
+                except (TypeError, ValueError):
+                    pass
+
+    base = _strength_for(session, tid)
+    standings = getattr(session, "standings", None)
+    rec = None
+    if standings is not None:
+        recs = getattr(standings, "records", None) or {}
+        rec = recs.get(tid) or recs.get(team_id)
+    if rec is not None:
+        gp = max(1, int(getattr(rec, "gp", 0) or 0))
+        pts = float(getattr(rec, "points", 0) or 0)
+        gf = float(getattr(rec, "gf", 0) or 0)
+        ga = float(getattr(rec, "ga", 0) or 0)
+        base += 0.62 * ((pts / (2.0 * gp)) - 0.5)
+        base += 0.038 * max(-2.0, min(2.0, (gf - ga) / gp))
+    xg = _xg_share_for(session, tid)
+    if xg is not None:
+        base += 0.90 * (xg - 0.5)
+    return max(0.05, min(0.99, base))
+
+
+def _cache_playoff_strength_map(session: FranchiseSession, live: Dict[str, Any]) -> None:
+    ids = []
+    for row in list(live.get("series") or []):
+        for key in ("team_high_id", "team_low_id"):
+            tid = str(row.get(key) or "")
+            if tid:
+                ids.append(tid)
+    smap = {tid: _effective_playoff_strength(session, tid, use_cache=False) for tid in ids}
+    live["playoff_strength_map"] = smap
+
+
+def _live_game_p_high(session: FranchiseSession, hi: str, lo: str) -> float:
+    s_hi = _effective_playoff_strength(session, hi)
+    s_lo = _effective_playoff_strength(session, lo)
+    if callable(playoff_game_win_probability):
+        return float(playoff_game_win_probability(s_hi, s_lo))
+    diff = max(-0.55, min(0.55, s_hi - s_lo))
+    return max(0.22, min(0.88, 0.5 + diff * 1.15))
+
+
 def _simulate_one_game(
     session: FranchiseSession,
     row: Dict[str, Any],
@@ -480,10 +581,10 @@ def _simulate_one_game(
     home_id = hi if home_high else lo
     away_id = lo if home_high else hi
 
-    p_high = 0.5 + (_strength_for(session, hi) - _strength_for(session, lo)) * 1.05
-    p_high = max(0.38, min(0.66, p_high))
+    p_high = _live_game_p_high(session, hi, lo)
     p_home = p_high if home_high else (1.0 - p_high)
-    p_home = max(0.36, min(0.68, p_home + 0.035))
+    p_home = p_home + 0.035 if home_high else p_home - 0.035
+    p_home = max(0.16, min(0.90, p_home))
 
     roll = _rng_float(
         session.session_id,

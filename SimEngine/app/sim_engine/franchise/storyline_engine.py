@@ -1117,6 +1117,26 @@ def migrate_session_storyline_state(session: Any) -> None:
         session.decision_event_log = []
     if getattr(session, "active_cause_storylines", None) is None:
         session.active_cause_storylines = []
+    if getattr(session, "story_arcs", None) is None:
+        session.story_arcs = []
+    if getattr(session, "social_posts", None) is None:
+        session.social_posts = []
+    if getattr(session, "player_narrative_memory", None) is None:
+        session.player_narrative_memory = {}
+    if getattr(session, "knowledge_graph", None) is None:
+        session.knowledge_graph = []
+    if getattr(session, "press_conference_queue", None) is None:
+        session.press_conference_queue = []
+    if getattr(session, "narrative_archive", None) is None:
+        session.narrative_archive = []
+    if getattr(session, "narrative_eras", None) is None:
+        session.narrative_eras = []
+    if getattr(session, "prospect_social_profiles", None) is None:
+        session.prospect_social_profiles = {}
+    if getattr(session, "agent_relationships", None) is None:
+        session.agent_relationships = {}
+    if getattr(session, "_narrative_sealed_seasons", None) is None:
+        session._narrative_sealed_seasons = []
     if getattr(session, "_storyline_blocked_log", None) is None:
         session._storyline_blocked_log = []
     pending = list(getattr(session, "pending_decisions", None) or [])
@@ -2408,7 +2428,8 @@ def franchise_cause_storyline_daily_pass(
     cur = int(calendar_idx)
     _maybe_record_losing_streak_event(session, utid, cur, iso)
     locker_spawned = _process_locker_room_triggers(session, r, cur, iso, utid)
-    return {"processed": True, "day": calendar_idx, "locker_room_spawned": locker_spawned}
+    nu = narrative_universe_daily_pass(session, cur, day_meta, r)
+    return {"processed": True, "day": calendar_idx, "locker_room_spawned": locker_spawned, **nu}
 
 
 def build_storyline_debug_payload(session: Any) -> Dict[str, Any]:
@@ -2438,4 +2459,955 @@ def build_storyline_debug_payload(session: Any) -> Dict[str, Any]:
         "recent_decision_events": events,
         "blocked_storylines": blocked,
         "active_modifiers": modifiers_sample,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Narrative Universe — World Event Ledger, Story Arcs, Media, Social
+# Facts vs claims, reporter entities, player narrative memory.
+# ---------------------------------------------------------------------------
+
+MEDIA_REPORTERS: List[Dict[str, Any]] = [
+    {"id": "ellison", "name": "Mark Ellison", "outlet": "NorthStar Hockey", "role": "national_insider", "credibility_base": 84, "specialty": "trades"},
+    {"id": "morin", "name": "Rachel Morin", "outlet": "Team Ledger", "role": "beat_reporter", "credibility_base": 76, "specialty": "local"},
+    {"id": "knox", "name": "Derek Knox", "outlet": "NBN", "role": "analyst", "credibility_base": 72, "specialty": "performance"},
+    {"id": "reid", "name": "Mason Reid", "outlet": "PuckFinance", "role": "cap_specialist", "credibility_base": 78, "specialty": "contracts"},
+    {"id": "petrov", "name": "Alex Petrov", "outlet": "Future Ice", "role": "prospect_analyst", "credibility_base": 70, "specialty": "draft"},
+    {"id": "lee", "name": "Jenna Lee", "outlet": "National Sports Desk", "role": "investigative", "credibility_base": 88, "specialty": "conduct"},
+    {"id": "hart", "name": "Chris Hart", "outlet": "Hot Take TV", "role": "hot_take", "credibility_base": 48, "specialty": "controversy"},
+]
+
+_REPORTER_BY_ID = {r["id"]: r for r in MEDIA_REPORTERS}
+
+_CLAIM_CAUSE_TYPES = frozenset({
+    "TRADE_DEMAND", "TRADE_RUMOR", "TRADE_HUB_REJECT", "TRADE_HUB_SOFT_BLOCK",
+    "LOCKER_ROOM_PULSE", "AGENT_DISSATISFACTION",
+})
+
+_FACT_CAUSE_TYPES = frozenset({
+    "PLAYER_TRADED", "LINEUP_SCRATCH", "LINEUP_PROMOTION", "INJURY", "PLAYER_LOW_PRODUCTION",
+    "GOALIE_BAD_FORM", "LOSING_STREAK", "WINNING_STREAK",
+})
+
+
+def _pick_reporter_for_storyline(sl: Dict[str, Any], session: Any) -> Dict[str, Any]:
+    cat = str(sl.get("category") or sl.get("type") or "").lower()
+    ctype = str(sl.get("cause_type") or "").upper()
+    if "draft" in cat or "prospect" in cat or ctype == "DRAFT_STOCK":
+        return _REPORTER_BY_ID["petrov"]
+    if "contract" in cat or "cap" in cat or ctype.startswith("CONTRACT"):
+        return _REPORTER_BY_ID["reid"]
+    if sl.get("information_status") or sl.get("legal_status") or "legal" in cat or "conduct" in cat:
+        return _REPORTER_BY_ID["lee"]
+    if "trade" in cat or "rumor" in cat or ctype.startswith("TRADE"):
+        return _REPORTER_BY_ID["ellison"]
+    if "injury" in cat or "goalie" in cat:
+        return _REPORTER_BY_ID["knox"]
+    utid = str(getattr(session, "user_team_id") or "")
+    if str(sl.get("team_id") or "") == utid:
+        return _REPORTER_BY_ID["morin"]
+    if int(sl.get("heat") or 0) >= 70 and sl.get("priority") != "CRITICAL":
+        return _REPORTER_BY_ID["hart"]
+    return _REPORTER_BY_ID["knox"]
+
+
+def _knowledge_type_for_storyline(sl: Dict[str, Any]) -> str:
+    ctype = str(sl.get("cause_type") or "").upper()
+    cat = str(sl.get("category") or sl.get("type") or "").lower()
+    if sl.get("information_status") or sl.get("legal_status"):
+        return "claim"
+    if ctype in _CLAIM_CAUSE_TYPES or "rumor" in cat:
+        cred = int(sl.get("credibility") or 0)
+        if cred >= 85:
+            return "corroborated_claim"
+        return "claim"
+    if ctype in _FACT_CAUSE_TYPES or sl.get("execution"):
+        return "fact"
+    if int(sl.get("credibility") or 0) < 40:
+        return "speculation"
+    return "report"
+
+
+def _narrative_angle(sl: Dict[str, Any]) -> str:
+    ctype = str(sl.get("cause_type") or "").upper()
+    cat = str(sl.get("category") or "").lower()
+    if "trade" in cat or "TRADE" in ctype:
+        return "trade_market"
+    if "injury" in cat:
+        return "injury_watch"
+    if "goalie" in cat:
+        return "goaltending"
+    if "draft" in cat or "prospect" in cat:
+        return "draft_board"
+    if "contract" in cat:
+        return "contract_battle"
+    if sl.get("information_status"):
+        return "conduct_desk"
+    if "performance" in cat or "underperform" in cat:
+        return "slump_watch"
+    return "league_wire"
+
+
+def _arc_phase_from_beat_index(beat_index: int, heat: int = 0) -> str:
+    if beat_index <= 0:
+        return "curiosity"
+    if beat_index == 1:
+        return "concern"
+    if beat_index <= 3:
+        return "pressure"
+    if beat_index <= 5:
+        return "conflict" if heat >= 55 else "developing"
+    return "resolution" if heat < 30 else "escalating"
+
+
+def narrative_director_score(session: Any, sl: Dict[str, Any]) -> int:
+    score = 18.0
+    ovr = int(sl.get("player_overall") or 0)
+    if ovr >= 92:
+        score += 38
+    elif ovr >= 86:
+        score += 24
+    elif ovr >= 80:
+        score += 12
+    priority = str(sl.get("priority") or "MEDIUM").upper()
+    if priority == "CRITICAL":
+        score += 42
+    elif priority == "HIGH":
+        score += 22
+    if sl.get("requires_action"):
+        score += 18
+    if str(sl.get("team_id") or "") == str(getattr(session, "user_team_id") or ""):
+        score += 10
+    cat = str(sl.get("category") or "").lower()
+    if "trade" in cat or "rumor" in cat:
+        score += 14
+    return int(_clamp(score, 5, 100))
+
+
+def _default_credibility(sl: Dict[str, Any], reporter: Dict[str, Any]) -> int:
+    base = int(reporter.get("credibility_base") or 70)
+    ktype = _knowledge_type_for_storyline(sl)
+    if ktype == "fact":
+        return min(95, base + 8)
+    if ktype == "speculation":
+        return max(18, base - 28)
+    if ktype == "corroborated_claim":
+        return min(92, base + 4)
+    return max(25, base - 10)
+
+
+def _arc_key_for_storyline(sl: Dict[str, Any]) -> str:
+    explicit = str(sl.get("arc_id") or sl.get("storyline_id") or "").strip()
+    if explicit and not explicit.startswith("story_"):
+        return explicit
+    sid = str(sl.get("storyline_id") or "").strip()
+    if sid:
+        return sid
+    pid = str(sl.get("player_id") or "")
+    ctype = str(sl.get("cause_type") or sl.get("category") or "general")
+    if pid:
+        return f"arc:{pid}:{ctype}"
+    stable = str(sl.get("stable_key") or "")
+    if stable:
+        return f"arc:{stable.split('|')[0]}"
+    return f"arc:{uuid.uuid4().hex[:12]}"
+
+
+def _append_story_arc_beat(session: Any, sl: Dict[str, Any]) -> Dict[str, Any]:
+    arcs = list(getattr(session, "story_arcs", None) or [])
+    arc_id = _arc_key_for_storyline(sl)
+    beat_id = f"beat_{uuid.uuid4().hex[:10]}"
+    heat = int(sl.get("heat") or 0)
+    beat = {
+        "beat_id": beat_id,
+        "headline": str(sl.get("headline") or ""),
+        "summary": str(sl.get("summary") or sl.get("short_summary") or ""),
+        "calendar_iso": str(sl.get("calendar_iso") or sl.get("date") or ""),
+        "calendar_day": sl.get("calendar_day"),
+        "knowledge_type": sl.get("knowledge_type"),
+        "reporter_id": sl.get("reporter_id"),
+        "world_event_id": sl.get("world_event_id"),
+        "heat": heat,
+        "credibility": sl.get("credibility"),
+    }
+    existing = next((a for a in arcs if str(a.get("arc_id") or "") == arc_id), None)
+    if existing:
+        beats = list(existing.get("beats") or [])
+        beat_index = len(beats)
+        beats.append(beat)
+        existing["beats"] = beats
+        existing["headline"] = beat["headline"] or existing.get("headline")
+        existing["heat"] = max(int(existing.get("heat") or 0), heat)
+        existing["updated_iso"] = beat["calendar_iso"]
+        existing["phase"] = _arc_phase_from_beat_index(beat_index, heat)
+        existing["beat_count"] = len(beats)
+        if str(sl.get("arc_status") or sl.get("status") or "").lower() == "resolved":
+            existing["status"] = "resolved"
+    else:
+        beat_index = 0
+        arcs.append(
+            {
+                "arc_id": arc_id,
+                "headline": beat["headline"],
+                "player_id": sl.get("player_id"),
+                "player_name": sl.get("player_name"),
+                "team_id": sl.get("team_id"),
+                "team_name": sl.get("team_name"),
+                "category": sl.get("category") or sl.get("type"),
+                "cause_type": sl.get("cause_type"),
+                "narrative_angle": sl.get("narrative_angle"),
+                "status": str(sl.get("arc_status") or sl.get("status") or "active"),
+                "phase": _arc_phase_from_beat_index(0, heat),
+                "heat": heat,
+                "beats": [beat],
+                "beat_count": 1,
+                "started_iso": beat["calendar_iso"],
+                "updated_iso": beat["calendar_iso"],
+            }
+        )
+    session.story_arcs = arcs[-80:]
+    sl["arc_id"] = arc_id
+    sl["beat_id"] = beat_id
+    sl["beat_index"] = beat_index
+    sl["arc_phase"] = _arc_phase_from_beat_index(beat_index, heat)
+    sl["repeat_count"] = max(int(sl.get("repeat_count") or 0), beat_index)
+    return sl
+
+
+def _spawn_social_posts(session: Any, sl: Dict[str, Any]) -> None:
+    heat = int(sl.get("heat") or 0)
+    if heat < 12 and str(sl.get("priority") or "") not in ("CRITICAL", "HIGH"):
+        return
+    posts = list(getattr(session, "social_posts", None) or [])
+    reporter = _REPORTER_BY_ID.get(str(sl.get("reporter_id") or "")) or _pick_reporter_for_storyline(sl, session)
+    iso = str(sl.get("calendar_iso") or sl.get("date") or "")
+    story_id = str(sl.get("storyline_id") or sl.get("id") or "")
+
+    posts.append(
+        {
+            "id": f"soc_{uuid.uuid4().hex[:10]}",
+            "arc_id": sl.get("arc_id"),
+            "beat_id": sl.get("beat_id"),
+            "storyline_id": story_id,
+            "author_type": "reporter",
+            "author_id": reporter["id"],
+            "author_name": reporter["name"],
+            "handle": f"@{reporter['name'].replace(' ', '')}",
+            "outlet": reporter["outlet"],
+            "verified": True,
+            "text": str(sl.get("summary") or sl.get("short_summary") or sl.get("headline") or "")[:280],
+            "related_headline": str(sl.get("headline") or ""),
+            "calendar_iso": iso,
+            "heat": heat,
+            "knowledge_type": sl.get("knowledge_type"),
+            "likes": int(heat * 140 + random.randint(80, 900)),
+            "reposts": int(heat * 35 + random.randint(10, 200)),
+            "replies": int(heat * 18 + random.randint(5, 120)),
+        }
+    )
+
+    pname = str(sl.get("player_name") or "")
+    if pname and heat >= 28:
+        posts.append(
+            {
+                "id": f"soc_{uuid.uuid4().hex[:10]}",
+                "arc_id": sl.get("arc_id"),
+                "storyline_id": story_id,
+                "author_type": "fan",
+                "author_name": f"{pname.split()[-1]} Sicko",
+                "handle": f"@Fan{abs(hash(pname)) % 9000 + 1000}",
+                "verified": False,
+                "text": f"{'NOT GREAT' if heat >= 55 else 'Interesting'} — {sl.get('headline') or pname}",
+                "related_headline": str(sl.get("headline") or ""),
+                "calendar_iso": iso,
+                "heat": max(10, heat - 15),
+                "likes": int(heat * 45 + random.randint(20, 400)),
+                "reposts": int(heat * 8),
+                "replies": int(heat * 5),
+            }
+        )
+
+    session.social_posts = posts[-200:]
+
+
+def _update_player_narrative_memory(session: Any, sl: Dict[str, Any]) -> None:
+    pid = str(sl.get("player_id") or "")
+    if not pid:
+        return
+    mem = dict(getattr(session, "player_narrative_memory", None) or {})
+    row = dict(mem.get(pid) or {})
+    tags = list(row.get("reputation_tags") or [])
+    angle = str(sl.get("narrative_angle") or "")
+    tag_map = {
+        "trade_market": "Trade speculation magnet",
+        "injury_watch": "Injury narrative",
+        "goaltending": "Goaltending storyline",
+        "draft_board": "Draft buzz",
+        "contract_battle": "Contract storyline",
+        "conduct_desk": "Off-ice scrutiny",
+        "slump_watch": "Performance storyline",
+    }
+    tag = tag_map.get(angle)
+    if tag and tag not in tags:
+        tags.append(tag)
+        tags = tags[-8:]
+    headlines = list(row.get("headlines") or [])
+    hl = str(sl.get("headline") or "")
+    if hl:
+        headlines.append({"headline": hl, "iso": sl.get("calendar_iso"), "arc_id": sl.get("arc_id")})
+        headlines = headlines[-24:]
+    row.update(
+        {
+            "player_id": pid,
+            "player_name": sl.get("player_name") or row.get("player_name"),
+            "reputation_tags": tags,
+            "headlines": headlines,
+            "active_arc_id": sl.get("arc_id"),
+            "media_heat": max(int(row.get("media_heat") or 0), int(sl.get("heat") or 0)),
+            "last_updated_iso": sl.get("calendar_iso"),
+        }
+    )
+    mem[pid] = row
+    session.player_narrative_memory = mem
+
+
+def enrich_storyline_for_narrative_universe(session: Any, event: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach arc beats, reporter, knowledge typing, social posts, and player memory."""
+    migrate_session_storyline_state(session)
+    sl = dict(event or {})
+    if not str(sl.get("headline") or sl.get("title") or "").strip():
+        return sl
+
+    if not sl.get("storyline_id"):
+        sl["storyline_id"] = str(sl.get("id") or f"story_{uuid.uuid4().hex[:12]}")
+
+    cur = int(sl.get("calendar_day") or getattr(session, "calendar_cursor", 0) or 0)
+    cal = getattr(session, "nhl_calendar", None) or []
+    if not sl.get("calendar_iso") and 0 <= cur < len(cal):
+        sl["calendar_iso"] = str(cal[cur].get("iso") or "")
+
+    if not sl.get("cause_event_id") and str(sl.get("cause_type") or ""):
+        eid = record_decision_event(
+            session,
+            {
+                "event_type": str(sl["cause_type"]),
+                "team_id": sl.get("team_id"),
+                "player_id": sl.get("player_id"),
+                "player_name": sl.get("player_name"),
+                "headline": sl.get("headline"),
+                "knowledge_type": "fact",
+                "calendar_iso": sl.get("calendar_iso"),
+                "calendar_day": cur,
+            },
+        )
+        sl["world_event_id"] = eid
+        sl.setdefault("cause_event_id", eid)
+    elif sl.get("cause_event_id"):
+        sl["world_event_id"] = str(sl["cause_event_id"])
+
+    reporter = _pick_reporter_for_storyline(sl, session)
+    sl["reporter_id"] = reporter["id"]
+    sl["reporter_name"] = reporter["name"]
+    sl["outlet_id"] = reporter["id"]
+    sl["outlet_name"] = reporter["outlet"]
+    sl.setdefault("source_label", f"{reporter['name']} · {reporter['outlet']}")
+
+    sl.setdefault("heat", narrative_director_score(session, sl))
+    sl.setdefault("credibility", _default_credibility(sl, reporter))
+    sl["knowledge_type"] = _knowledge_type_for_storyline(sl)
+    sl["narrative_angle"] = _narrative_angle(sl)
+
+    sl = _assign_knowledge_layers(session, sl)
+    sl = _apply_market_media_tone(session, sl)
+    sl = _append_story_arc_beat(session, sl)
+    _maybe_agent_leak(session, sl)
+    _spawn_social_posts(session, sl)
+    _update_player_narrative_memory(session, sl)
+    _archive_storyline_beat(session, sl)
+    _maybe_queue_press_conference(session, sl)
+    signal = _breaking_news_signal(sl)
+    if signal:
+        sl["breaking_level"] = signal
+    return sl
+
+
+def build_narrative_universe_payload(session: Any) -> Dict[str, Any]:
+    """API payload for Storylines UI + player dossier media tabs."""
+    migrate_session_storyline_state(session)
+    mem = getattr(session, "player_narrative_memory", None) or {}
+    eras = build_narrative_eras(session)
+    utid = str(getattr(session, "user_team_id") or "")
+    user_market = _market_profile_for_team(session, utid) if utid else MARKET_MEDIA_PROFILES["default"]
+    recent_breaking = [
+        s for s in (getattr(session, "storyline_events", None) or [])[-30:]
+        if isinstance(s, dict) and s.get("breaking_level") in ("breaking", "league_defining")
+    ][-3:]
+    return {
+        "reporters": list(MEDIA_REPORTERS),
+        "agents": list(PLAYER_AGENTS),
+        "story_arcs": list(getattr(session, "story_arcs", None) or [])[-40:],
+        "social_posts": list(getattr(session, "social_posts", None) or [])[-60:],
+        "world_events": list(getattr(session, "decision_event_log", None) or [])[-30:],
+        "knowledge_graph": list(getattr(session, "knowledge_graph", None) or [])[-40:],
+        "player_narrative_memory": dict(mem) if isinstance(mem, dict) else {},
+        "press_conference_queue": list(getattr(session, "press_conference_queue", None) or []),
+        "narrative_archive": list(getattr(session, "narrative_archive", None) or [])[-120:],
+        "narrative_eras": eras,
+        "prospect_social_profiles": dict(getattr(session, "prospect_social_profiles", None) or {}),
+        "agent_relationships": dict(getattr(session, "agent_relationships", None) or {}),
+        "user_market_profile": user_market,
+        "market_profiles": MARKET_MEDIA_PROFILES,
+        "active_arc_count": len(getattr(session, "story_arcs", None) or []),
+        "breaking_alerts": [
+            {
+                "headline": s.get("headline"),
+                "level": s.get("breaking_level"),
+                "storyline_id": s.get("storyline_id") or s.get("id"),
+                "calendar_iso": s.get("calendar_iso"),
+            }
+            for s in recent_breaking
+        ],
+    }
+
+
+def player_narrative_profile(session: Any, player_id: str) -> Dict[str, Any]:
+    """Single-player slice for roster/draft dossier media tab."""
+    migrate_session_storyline_state(session)
+    pid = str(player_id or "")
+    mem = dict(getattr(session, "player_narrative_memory", None) or {})
+    profile = dict(mem.get(pid) or {})
+    arcs = [
+        a for a in (getattr(session, "story_arcs", None) or [])
+        if str(a.get("player_id") or "") == pid
+    ]
+    posts = [
+        p for p in (getattr(session, "social_posts", None) or [])
+        if pid and pid in str(p.get("related_headline") or "") + str(p.get("text") or "")
+    ][-12:]
+    return {
+        "player_id": pid,
+        "reputation_tags": list(profile.get("reputation_tags") or []),
+        "headlines": list(profile.get("headlines") or []),
+        "active_arc_id": profile.get("active_arc_id"),
+        "media_heat": profile.get("media_heat"),
+        "story_arcs": arcs[-6:],
+        "social_posts": posts,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Extended Narrative Universe — knowledge graph, agents, press, markets,
+# historical archive, prospect social, breaking-news signals.
+# ---------------------------------------------------------------------------
+
+PLAYER_AGENTS: List[Dict[str, Any]] = [
+    {"id": "carter", "name": "Allan Carter", "agency": "Carter Hockey Group", "style": "leaker", "leak_tendency": 0.74, "negotiation": "aggressive"},
+    {"id": "walsh", "name": "Patricia Walsh", "agency": "Walsh Sports", "style": "discreet", "leak_tendency": 0.09, "negotiation": "patient"},
+    {"id": "kim", "name": "Daniel Kim", "agency": "Kim & Partners", "style": "leverage", "leak_tendency": 0.52, "negotiation": "competitive"},
+    {"id": "rossi", "name": "Marco Rossi", "agency": "Northline Athletes", "style": "media_savvy", "leak_tendency": 0.38, "negotiation": "stable"},
+    {"id": "blake", "name": "Jordan Blake", "agency": "Blake Advisory", "style": "disruptor", "leak_tendency": 0.61, "negotiation": "demanding"},
+]
+
+_AGENT_BY_ID = {a["id"]: a for a in PLAYER_AGENTS}
+
+# Market intensity shapes heat amplification and media tone copy.
+MARKET_MEDIA_PROFILES: Dict[str, Dict[str, Any]] = {
+    "montreal": {"label": "Montreal", "pressure_mult": 1.48, "tone": "intense", "descriptor": "Fishbowl scrutiny"},
+    "toronto": {"label": "Toronto", "pressure_mult": 1.42, "tone": "relentless", "descriptor": "National microscope"},
+    "vancouver": {"label": "Vancouver", "pressure_mult": 1.28, "tone": "volatile", "descriptor": "Passionate and unforgiving"},
+    "ottawa": {"label": "Ottawa", "pressure_mult": 1.18, "tone": "focused", "descriptor": "Capital-city pressure"},
+    "edmonton": {"label": "Edmonton", "pressure_mult": 1.22, "tone": "hungry", "descriptor": "Star-driven expectations"},
+    "calgary": {"label": "Calgary", "pressure_mult": 1.15, "tone": "traditional", "descriptor": "Old-school hockey town"},
+    "winnipeg": {"label": "Winnipeg", "pressure_mult": 1.12, "tone": "loyal", "descriptor": "Small market, loud arena"},
+    "boston": {"label": "Boston", "pressure_mult": 1.25, "tone": "demanding", "descriptor": "Championship standard"},
+    "new_york": {"label": "New York", "pressure_mult": 1.35, "tone": "tabloid", "descriptor": "Back-page obsession"},
+    "philadelphia": {"label": "Philadelphia", "pressure_mult": 1.20, "tone": "hostile", "descriptor": "Unfiltered fan base"},
+    "chicago": {"label": "Chicago", "pressure_mult": 1.14, "tone": "proud", "descriptor": "Original Six weight"},
+    "detroit": {"label": "Detroit", "pressure_mult": 1.10, "tone": "steady", "descriptor": "Hockeytown expectations"},
+    "tampa": {"label": "Tampa Bay", "pressure_mult": 0.88, "tone": "calm", "descriptor": "Winner's patience"},
+    "florida": {"label": "Florida", "pressure_mult": 0.78, "tone": "relaxed", "descriptor": "Sunbelt spotlight"},
+    "arizona": {"label": "Arizona", "pressure_mult": 0.72, "tone": "quiet", "descriptor": "Low daily volume"},
+    "default": {"label": "League", "pressure_mult": 1.0, "tone": "standard", "descriptor": "Standard NHL coverage"},
+}
+
+_CITY_TO_MARKET_KEY = {
+    "montreal": "montreal", "montréal": "montreal", "toronto": "toronto", "vancouver": "vancouver",
+    "ottawa": "ottawa", "edmonton": "edmonton", "calgary": "calgary", "winnipeg": "winnipeg",
+    "boston": "boston", "buffalo": "new_york", "new york": "new_york", "brooklyn": "new_york",
+    "philadelphia": "philadelphia", "chicago": "chicago", "detroit": "detroit",
+    "tampa": "tampa", "tampa bay": "tampa", "miami": "florida", "sunrise": "florida",
+    "fort lauderdale": "florida", "phoenix": "arizona", "utah": "default",
+}
+
+
+def _market_key_for_team(session: Any, team_id: str) -> str:
+    tm = (getattr(session, "team_by_id", None) or {}).get(str(team_id or ""))
+    if tm is None:
+        return "default"
+    city = str(getattr(tm, "city", "") or "").strip().lower()
+    for fragment, key in _CITY_TO_MARKET_KEY.items():
+        if fragment in city:
+            return key
+    name = str(getattr(tm, "name", "") or "").lower()
+    for fragment, key in _CITY_TO_MARKET_KEY.items():
+        if fragment in name:
+            return key
+    return "default"
+
+
+def _market_profile_for_team(session: Any, team_id: str) -> Dict[str, Any]:
+    key = _market_key_for_team(session, team_id)
+    prof = dict(MARKET_MEDIA_PROFILES.get(key) or MARKET_MEDIA_PROFILES["default"])
+    prof["market_key"] = key
+    return prof
+
+
+def _assign_knowledge_layers(session: Any, sl: Dict[str, Any]) -> Dict[str, Any]:
+    """Separate facts from claims and track who knows what."""
+    ktype = str(sl.get("knowledge_type") or "report")
+    utid = str(getattr(session, "user_team_id") or "")
+    tid = str(sl.get("team_id") or "")
+    is_user = tid == utid and bool(tid)
+    layers = {
+        "world_fact": bool(sl.get("world_event_id")),
+        "gm_private": is_user and ktype in ("fact", "report"),
+        "team_internal": is_user,
+        "league_office": bool(sl.get("legal_status") or sl.get("league_status")),
+        "public": ktype in ("fact", "report", "corroborated_claim"),
+        "media_claim": ktype in ("claim", "speculation", "corroborated_claim"),
+    }
+    if ktype == "fact":
+        public_level = "confirmed"
+    elif ktype == "corroborated_claim":
+        public_level = "widely_reported"
+    elif ktype == "claim":
+        public_level = "rumour"
+    elif ktype == "speculation":
+        public_level = "chatter"
+    else:
+        public_level = "reported"
+    gm_knows_more = is_user and ktype == "fact" and public_level != "confirmed"
+    sl["knowledge_layers"] = layers
+    sl["public_knowledge_level"] = public_level
+    sl["gm_knows_more"] = gm_knows_more
+    sl["visibility"] = "public" if layers["public"] else ("team_only" if is_user else "private")
+    graph = list(getattr(session, "knowledge_graph", None) or [])
+    graph.append(
+        {
+            "world_event_id": sl.get("world_event_id"),
+            "storyline_id": sl.get("storyline_id"),
+            "team_id": tid,
+            "player_id": sl.get("player_id"),
+            "knowledge_type": ktype,
+            "public_knowledge_level": public_level,
+            "gm_knows_more": gm_knows_more,
+            "calendar_iso": sl.get("calendar_iso"),
+        }
+    )
+    session.knowledge_graph = graph[-250:]
+    return sl
+
+
+def _apply_market_media_tone(session: Any, sl: Dict[str, Any]) -> Dict[str, Any]:
+    tid = str(sl.get("team_id") or getattr(session, "user_team_id") or "")
+    prof = _market_profile_for_team(session, tid)
+    mult = float(prof.get("pressure_mult") or 1.0)
+    base_heat = int(sl.get("heat") or 0)
+    sl["market_key"] = prof.get("market_key")
+    sl["market_tone"] = prof.get("tone")
+    sl["market_descriptor"] = prof.get("descriptor")
+    sl["heat"] = int(_clamp(base_heat * mult, 5, 100))
+    if mult >= 1.25 and not sl.get("short_summary"):
+        sl["short_summary"] = str(sl.get("summary") or sl.get("headline") or "")
+    return sl
+
+
+def _agent_for_player(session: Any, player_id: str, rng: Optional[random.Random] = None) -> Dict[str, Any]:
+    rel = dict(getattr(session, "agent_relationships", None) or {})
+    pid = str(player_id or "")
+    if pid and pid in rel:
+        aid = str(rel[pid].get("agent_id") or "")
+        if aid in _AGENT_BY_ID:
+            return _AGENT_BY_ID[aid]
+    r = rng or random.Random()
+    agent = r.choice(PLAYER_AGENTS)
+    if pid:
+        rel[pid] = {"agent_id": agent["id"], "trust": 0.55, "gm_trust": 0.5}
+        session.agent_relationships = rel
+    return agent
+
+
+def _maybe_agent_leak(session: Any, sl: Dict[str, Any], rng: Optional[random.Random] = None) -> None:
+    """Agents occasionally leak partial truths — separate fact from public claim."""
+    r = rng or random.Random()
+    pid = str(sl.get("player_id") or "")
+    if not pid:
+        return
+    agent = _agent_for_player(session, pid, r)
+    leak = float(agent.get("leak_tendency") or 0.3)
+    ctype = str(sl.get("cause_type") or "").upper()
+    if ctype not in _CLAIM_CAUSE_TYPES and "trade" not in str(sl.get("category") or "").lower():
+        return
+    if r.random() > leak * 0.35:
+        return
+    posts = list(getattr(session, "social_posts", None) or [])
+    reporter = _REPORTER_BY_ID.get("ellison", MEDIA_REPORTERS[0])
+    posts.append(
+        {
+            "id": f"soc_leak_{uuid.uuid4().hex[:10]}",
+            "arc_id": sl.get("arc_id"),
+            "storyline_id": sl.get("storyline_id"),
+            "author_type": "agent",
+            "author_id": agent["id"],
+            "author_name": agent["name"],
+            "handle": f"@{agent['agency'].replace(' ', '')}",
+            "verified": False,
+            "text": "My client wants to stay — but we will explore every option.",
+            "related_headline": str(sl.get("headline") or ""),
+            "calendar_iso": sl.get("calendar_iso"),
+            "heat": max(20, int(sl.get("heat") or 0) - 10),
+            "knowledge_type": "claim",
+            "leak_chain": [agent["id"], reporter["id"]],
+            "likes": int(r.randint(400, 2400)),
+            "reposts": int(r.randint(80, 600)),
+            "replies": int(r.randint(120, 900)),
+        }
+    )
+    session.social_posts = posts[-200:]
+
+
+def _build_press_questions(sl: Dict[str, Any], session: Any) -> List[Dict[str, Any]]:
+    headline = str(sl.get("headline") or "the situation")
+    pname = str(sl.get("player_name") or "the player")
+    reporter = _pick_reporter_for_storyline(sl, session)
+    return [
+        {
+            "id": "q_coach",
+            "reporter_id": reporter["id"],
+            "reporter_name": reporter["name"],
+            "outlet": reporter["outlet"],
+            "question": f"What's your message to fans concerned about {headline.lower()}?",
+            "responses": [
+                {"id": "deflect", "label": "Deflect", "description": "Keep internal matters internal.", "tone": "neutral"},
+                {"id": "support_staff", "label": "Back the staff", "description": "Reaffirm confidence in coaching decisions.", "tone": "firm"},
+                {"id": "support_player", "label": "Back the player", "description": "Publicly support {0}.".format(pname), "tone": "diplomatic"},
+                {"id": "no_comment", "label": "Decline comment", "description": "Silence — media will interpret.", "tone": "cold"},
+            ],
+        },
+        {
+            "id": "q_trade",
+            "reporter_id": "ellison",
+            "reporter_name": "Mark Ellison",
+            "outlet": "NorthStar Hockey",
+            "question": f"Can you deny trade rumours swirling around {pname}?",
+            "responses": [
+                {"id": "deny", "label": "Deny actively shopping", "description": "State he is not being shopped.", "tone": "firm"},
+                {"id": "neither_confirm", "label": "Neither confirm nor deny", "description": "Classic GM dodge — heat may rise.", "tone": "neutral"},
+                {"id": "listen", "label": "Acknowledge calls", "description": "Admit teams have inquired.", "tone": "honest"},
+            ],
+        },
+    ]
+
+
+def _maybe_queue_press_conference(session: Any, sl: Dict[str, Any]) -> None:
+    utid = str(getattr(session, "user_team_id") or "")
+    if str(sl.get("team_id") or "") != utid:
+        return
+    heat = int(sl.get("heat") or 0)
+    priority = str(sl.get("priority") or "")
+    if heat < 52 and priority not in ("CRITICAL", "HIGH"):
+        return
+    queue = list(getattr(session, "press_conference_queue", None) or [])
+    sid = str(sl.get("storyline_id") or "")
+    if any(str(p.get("storyline_id") or "") == sid for p in queue):
+        return
+    if len([p for p in queue if str(p.get("status") or "") == "pending"]) >= 3:
+        return
+    press_id = f"press_{uuid.uuid4().hex[:10]}"
+    queue.append(
+        {
+            "id": press_id,
+            "storyline_id": sid,
+            "arc_id": sl.get("arc_id"),
+            "headline": sl.get("headline"),
+            "summary": sl.get("summary") or sl.get("short_summary"),
+            "heat": heat,
+            "player_id": sl.get("player_id"),
+            "player_name": sl.get("player_name"),
+            "calendar_iso": sl.get("calendar_iso"),
+            "status": "pending",
+            "questions": _build_press_questions(sl, session),
+            "requires_action": True,
+        }
+    )
+    session.press_conference_queue = queue[-12:]
+    sl["press_conference_id"] = press_id
+    sl["requires_action"] = True
+    opts: List[Dict[str, Any]] = []
+    for q in queue[-1]["questions"]:
+        for resp in q.get("responses") or []:
+            opts.append(
+                {
+                    "id": f"{q['id']}:{resp['id']}",
+                    "label": f"{q['reporter_name']}: {resp['label']}",
+                    "effect_summary": resp.get("description"),
+                    "effects": {"press_tone": resp.get("tone"), "question_id": q["id"], "response_id": resp["id"]},
+                }
+            )
+    if opts:
+        sl["action_options"] = opts[:6]
+
+
+def apply_press_conference_response(session: Any, press_id: str, question_id: str, response_id: str) -> Dict[str, Any]:
+    """Resolve a press conference answer; returns headline for follow-up coverage."""
+    migrate_session_storyline_state(session)
+    pid = str(press_id or "")
+    qid = str(question_id or "")
+    rid = str(response_id or "")
+    queue = list(getattr(session, "press_conference_queue", None) or [])
+    entry = next((p for p in queue if str(p.get("id") or "") == pid), None)
+    if entry is None:
+        raise ValueError(f"Press conference not found: {pid}")
+    question = next((q for q in (entry.get("questions") or []) if str(q.get("id") or "") == qid), None)
+    if question is None:
+        raise ValueError(f"Question not found: {qid}")
+    response = next((r for r in (question.get("responses") or []) if str(r.get("id") or "") == rid), None)
+    if response is None:
+        raise ValueError(f"Response not found: {rid}")
+    entry["status"] = "answered"
+    entry["answered"] = {"question_id": qid, "response_id": rid, "tone": response.get("tone")}
+    session.press_conference_queue = queue
+    tone = str(response.get("tone") or "neutral")
+    headline_map = {
+        "deflect": "GM deflects questions amid growing media pressure",
+        "support_staff": "GM strongly backs coaching staff",
+        "support_player": f"GM publicly backs {entry.get('player_name') or 'player'}",
+        "no_comment": "GM declines comment — story gains traction",
+        "deny": "GM denies active trade talks",
+        "neither_confirm": "GM refuses to deny trade speculation",
+        "listen": "GM acknowledges trade interest",
+    }
+    headline = headline_map.get(rid, headline_map.get(tone, "GM addresses media"))
+    from app.sim_engine.franchise.state import _record_storyline  # noqa: WPS433
+
+    _record_storyline(
+        session,
+        {
+            "headline": headline,
+            "summary": str(response.get("description") or ""),
+            "team_id": getattr(session, "user_team_id", ""),
+            "player_id": entry.get("player_id"),
+            "player_name": entry.get("player_name"),
+            "storyline_id": entry.get("storyline_id"),
+            "category": "decision",
+            "type": "press_conference",
+            "cause_type": "GM_PRESS_RESPONSE",
+            "priority": "HIGH",
+            "heat": max(40, int(entry.get("heat") or 0) - 5),
+            "calendar_iso": entry.get("calendar_iso"),
+        },
+    )
+    rel = dict(getattr(session, "agent_relationships", None) or {})
+    plid = str(entry.get("player_id") or "")
+    if plid and plid in rel:
+        if tone in ("support_player", "diplomatic"):
+            rel[plid]["gm_trust"] = min(1.0, float(rel[plid].get("gm_trust") or 0.5) + 0.08)
+        elif tone in ("cold", "firm") and rid == "no_comment":
+            rel[plid]["gm_trust"] = max(0.0, float(rel[plid].get("gm_trust") or 0.5) - 0.05)
+        session.agent_relationships = rel
+    return {"headline": headline, "press_id": pid, "tone": tone}
+
+
+def _archive_storyline_beat(session: Any, sl: Dict[str, Any]) -> None:
+    archive = list(getattr(session, "narrative_archive", None) or [])
+    season = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    archive.append(
+        {
+            "season": season,
+            "season_label": f"{season}-{season + 1}",
+            "headline": sl.get("headline"),
+            "summary": sl.get("summary") or sl.get("short_summary"),
+            "arc_id": sl.get("arc_id"),
+            "storyline_id": sl.get("storyline_id"),
+            "player_id": sl.get("player_id"),
+            "player_name": sl.get("player_name"),
+            "team_id": sl.get("team_id"),
+            "heat": sl.get("heat"),
+            "category": sl.get("category"),
+            "calendar_iso": sl.get("calendar_iso"),
+            "reporter_name": sl.get("reporter_name"),
+        }
+    )
+    session.narrative_archive = archive[-600:]
+
+
+def build_narrative_eras(session: Any) -> List[Dict[str, Any]]:
+    archive = list(getattr(session, "narrative_archive", None) or [])
+    by_season: Dict[int, List[Dict[str, Any]]] = {}
+    for item in archive:
+        s = int(item.get("season") or 0)
+        if s <= 0:
+            continue
+        by_season.setdefault(s, []).append(item)
+    eras: List[Dict[str, Any]] = []
+    for season in sorted(by_season.keys()):
+        items = by_season[season]
+        top = sorted(items, key=lambda x: int(x.get("heat") or 0), reverse=True)[:8]
+        themes: List[str] = []
+        cats = [str(x.get("category") or "") for x in items]
+        if any("trade" in c for c in cats):
+            themes.append("Trade deadline chaos")
+        if any("injury" in c for c in cats):
+            themes.append("Injury cloud")
+        if any("draft" in c for c in cats):
+            themes.append("Draft obsession")
+        if any("legal" in c or "conduct" in c for c in cats):
+            themes.append("Off-ice storm")
+        eras.append(
+            {
+                "season": season,
+                "label": f"{season}-{season + 1} Era",
+                "story_count": len(items),
+                "top_stories": top,
+                "themes": themes[:4] or ["Season coverage"],
+            }
+        )
+    session.narrative_eras = eras[-20:]
+    return list(session.narrative_eras)
+
+
+def seal_narrative_season(session: Any, season: Optional[int] = None) -> None:
+    """Snapshot a completed season into the historical archive."""
+    migrate_session_storyline_state(session)
+    sy = int(season or getattr(session, "season_calendar_year", 2025) or 2025)
+    sealed = list(getattr(session, "_narrative_sealed_seasons", None) or [])
+    if sy in sealed:
+        return
+    build_narrative_eras(session)
+    sealed.append(sy)
+    session._narrative_sealed_seasons = sealed[-30:]
+
+
+def _ensure_prospect_social_profile(session: Any, prospect_key: str, prospect_name: str, rng: random.Random) -> Dict[str, Any]:
+    profiles = dict(getattr(session, "prospect_social_profiles", None) or {})
+    if prospect_key in profiles:
+        return profiles[prospect_key]
+    handle_base = prospect_name.replace(" ", "").lower()[:12] or "prospect"
+    personality = rng.choice(["polished", "awkward", "extremely_online", "private", "hype_beast"])
+    profile = {
+        "prospect_key": prospect_key,
+        "prospect_name": prospect_name,
+        "handle": f"@{handle_base}{rng.randint(10, 99)}",
+        "personality": personality,
+        "followers": rng.randint(1200, 85000) if personality != "private" else rng.randint(200, 3000),
+        "following": rng.randint(80, 400),
+        "bio": rng.choice([
+            "Chasing the dream.",
+            "Junior hockey · Draft eligible",
+            "God first · Hockey second",
+            "OHL · 🇨🇦",
+            "",
+        ]),
+        "posts": [],
+    }
+    profiles[prospect_key] = profile
+    session.prospect_social_profiles = profiles
+    return profile
+
+
+def generate_prospect_social_posts(session: Any, rng: Optional[random.Random] = None) -> int:
+    """Draft-season prospect Twitter — first-class social entities."""
+    r = rng or random.Random()
+    phase = str(getattr(session, "phase", "") or "").lower()
+    month = 0
+    cal = getattr(session, "nhl_calendar", None) or []
+    cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    if 0 <= cur < len(cal):
+        iso = str(cal[cur].get("iso") or "")
+        if len(iso) >= 7:
+            try:
+                month = int(iso[5:7])
+            except ValueError:
+                month = 0
+    if phase not in ("regular", "offseason", "preseason") and month not in (5, 6, 7, 8, 9, 10, 11):
+        return 0
+    ranks = dict(getattr(session, "draft_rank_prev", None) or {})
+    if not ranks:
+        return 0
+    created = 0
+    posts = list(getattr(session, "social_posts", None) or [])
+    for key in list(ranks.keys())[:40]:
+        if r.random() > 0.12:
+            continue
+        name = str(key).replace("_", " ").title()
+        prof = _ensure_prospect_social_profile(session, str(key), name, r)
+        templates = [
+            f"Proud of the guys tonight. Still work to do.",
+            f"Grateful for another opportunity to play in front of scouts.",
+            f"One shift at a time.",
+            f"Junior teammates know what's up 👀",
+        ]
+        if prof.get("personality") == "hype_beast":
+            templates.append("Draft day can't come soon enough.")
+        if prof.get("personality") == "extremely_online":
+            templates.append("Why follow 20 NHL teams before the draft? Because hockey Twitter is undefeated.")
+        text = r.choice(templates)
+        posts.append(
+            {
+                "id": f"soc_prosp_{uuid.uuid4().hex[:10]}",
+                "author_type": "prospect",
+                "author_id": str(key),
+                "author_name": name,
+                "handle": prof.get("handle"),
+                "verified": False,
+                "text": text,
+                "related_headline": f"Prospect watch: {name}",
+                "calendar_iso": cal[cur].get("iso") if 0 <= cur < len(cal) else "",
+                "heat": r.randint(8, 35),
+                "knowledge_type": "social",
+                "prospect_key": str(key),
+                "likes": r.randint(200, 12000),
+                "reposts": r.randint(20, 800),
+                "replies": r.randint(10, 400),
+            }
+        )
+        prof_posts = list(prof.get("posts") or [])
+        prof_posts.append({"text": text, "iso": cal[cur].get("iso") if 0 <= cur < len(cal) else ""})
+        prof["posts"] = prof_posts[-20:]
+        created += 1
+    session.social_posts = posts[-200:]
+    return created
+
+
+def _breaking_news_signal(sl: Dict[str, Any]) -> Optional[str]:
+    priority = str(sl.get("priority") or "").upper()
+    heat = int(sl.get("heat") or 0)
+    if priority == "CRITICAL" or heat >= 85:
+        return "league_defining"
+    if priority == "HIGH" or heat >= 72:
+        return "breaking"
+    if heat >= 55:
+        return "developing"
+    return None
+
+
+def narrative_universe_daily_pass(
+    session: Any,
+    calendar_idx: int,
+    day_meta: Dict[str, Any],
+    rng: Optional[random.Random] = None,
+) -> Dict[str, Any]:
+    """Daily tick: prospect social, season seal check, refresh eras."""
+    migrate_session_storyline_state(session)
+    r = rng or random.Random()
+    prospect_posts = generate_prospect_social_posts(session, r)
+    phase = str(getattr(session, "phase", "") or "").lower()
+    if phase == "offseason":
+        seal_narrative_season(session)
+    eras = build_narrative_eras(session)
+    pending_press = len([p for p in (getattr(session, "press_conference_queue", None) or []) if str(p.get("status") or "") == "pending"])
+    return {
+        "prospect_social_created": prospect_posts,
+        "narrative_eras": len(eras),
+        "pending_press_conferences": pending_press,
     }

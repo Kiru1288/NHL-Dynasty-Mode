@@ -496,20 +496,43 @@ def _enqueue_demand_surfaces(session: Any, row: Dict[str, Any], team: Any) -> No
         session.pending_ui_popups = pending[-80:]
 
     events = list(getattr(session, "storyline_events", None) or [])
-    events.append(
-        {
-            "id": row.get("demand_id"),
-            "type": "trade_demand",
-            "headline": row.get("headline"),
-            "body": row.get("body"),
-            "player_id": row.get("player_id"),
-            "team_id": tid,
-            "tone": "negative",
-            "cause_type": "TRADE_DEMAND",
-            "trade_demand": popup["trade_demand"],
-        }
-    )
-    session.storyline_events = events[-200:]
+    try:
+        from app.sim_engine.franchise.state import _record_storyline  # noqa: WPS433
+
+        _record_storyline(
+            session,
+            {
+                "id": row.get("demand_id"),
+                "storyline_id": str(row.get("demand_id") or ""),
+                "type": "trade_demand",
+                "category": "trade",
+                "headline": row.get("headline"),
+                "summary": row.get("body"),
+                "body": row.get("body"),
+                "player_id": row.get("player_id"),
+                "player_name": row.get("player_name"),
+                "team_id": tid,
+                "tone": "negative",
+                "cause_type": "TRADE_DEMAND",
+                "priority": "HIGH" if (is_user or row.get("disruptor")) else "MEDIUM",
+                "trade_demand": popup["trade_demand"],
+            },
+        )
+    except Exception:
+        events.append(
+            {
+                "id": row.get("demand_id"),
+                "type": "trade_demand",
+                "headline": row.get("headline"),
+                "body": row.get("body"),
+                "player_id": row.get("player_id"),
+                "team_id": tid,
+                "tone": "negative",
+                "cause_type": "TRADE_DEMAND",
+                "trade_demand": popup["trade_demand"],
+            }
+        )
+        session.storyline_events = events[-200:]
 
     notes = list(getattr(session, "notifications", None) or [])
     notes.insert(

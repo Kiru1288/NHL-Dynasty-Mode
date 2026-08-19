@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useEffect, useCallback } from "react";
 import "../styles/game-ui.css";
+import "../styles/draft-war-room.css";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
 import PlayerHeadshot from "../components/PlayerHeadshot";
@@ -9,6 +10,30 @@ import { formatProspectLeague, formatProspectTeam } from "../events/prospectDeve
 import { applyProspectLeagueTeamFix } from "../data/prospectLeagueTeams";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { flagApiUrl } from "../utils/countryFlags";
+import {
+  ProjectionRange,
+  StockTrajectory,
+  RankChange,
+  PerformanceStrip,
+  LeagueBadge,
+} from "../components/franchise/commandVisuals";
+import {
+  BOARD_SOURCES,
+  PUBLICATIONS,
+  WORKSPACE_TABS,
+  confMeaning,
+  enrichProspectsForWarRoom,
+  groupByPyramid,
+  overageStockNote,
+  projectionOutcomes,
+  rankProspectsForSource,
+  skillDevelopmentNotes,
+  sourceCaption,
+  strengthCopy,
+  weaknessCopy,
+  weeklyStockMovers,
+  weeklyTrajectoryPoints,
+} from "./draftWarRoom";
 
 let TRANSCENDENT_BOSS_AUDIO_URL = null;
 try {
@@ -582,7 +607,7 @@ function ScoutConfidenceMetric({ player }) {
   );
 }
 
-function ProspectBoardColumnHeader() {
+function ProspectBoardColumnHeader({ showConsensus }) {
   return (
     <div className="dc-prospect-board__columns" aria-hidden="true">
       <span className="dc-prospect-board__col dc-prospect-board__col--rank">#</span>
@@ -590,9 +615,12 @@ function ProspectBoardColumnHeader() {
       <span className="dc-prospect-board__col dc-prospect-board__col--pos">Pos</span>
       <span className="dc-prospect-board__col dc-prospect-board__col--league">League</span>
       <span className="dc-prospect-board__col dc-prospect-board__col--pot">Pot</span>
-      <span className="dc-prospect-board__col dc-prospect-board__col--proj">Proj</span>
-      <span className="dc-prospect-board__col dc-prospect-board__col--conf">Conf</span>
+      <span className="dc-prospect-board__col dc-prospect-board__col--proj">Window</span>
+      <span className="dc-prospect-board__col dc-prospect-board__col--conf">File</span>
       <span className="dc-prospect-board__col dc-prospect-board__col--stock">Stock</span>
+      {showConsensus ? (
+        <span className="dc-prospect-board__col dc-prospect-board__col--pub">Public</span>
+      ) : null}
     </div>
   );
 }
@@ -2480,12 +2508,23 @@ function scoutSummary(player, profile) {
 
 /** CSS-only fallback avatar — PlayerHeadshot.js → PlayerHeadshot.css (not styles/playerHeadshot.css). */
 function DraftClassHeadshot({ player, size = "md", board = false }) {
+  const seed = String(player?.id || player?.name || "");
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i += 1) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const roll = Math.abs(h >>> 0) % 100;
+  const rank = Number(player?.rank || player?.scoutRank || 99);
+  const bloom = Boolean(player?.isTranscendent) || rank <= 5 || roll < 28;
+  const zoom = !bloom && (rank <= 16 || roll < 58);
+  const fx = bloom ? "bloom" : zoom ? "zoom" : "crop";
   return (
     <PlayerHeadshot
       player={player}
       size={size}
       variant={board ? "circle" : "card"}
-      className={`dc-shared-headshot${board ? " dc-board-headshot" : ""}`}
+      className={`dc-shared-headshot${board ? " dc-board-headshot" : ""} dc-headshot--${fx}`}
       draftState="eligible"
     />
   );
@@ -2496,13 +2535,26 @@ function TopHeader({ onBack, dateContext, franchiseState }) {
   const initials = resolveTeamToken(franchiseState);
   const record = resolveRecord(franchiseState);
   const ownedPickCount = resolveOwnedPickCount(franchiseState, dateContext?.draftYear);
+  const hud = franchiseState?.draft_class_hud || {};
+  const draftValue =
+    hud?.events?.draft?.display ||
+    formatDaysUntil(hud?.events?.draft?.days_until) ||
+    inferEventDaysFallback(franchiseState, "draft");
+  const coverage = hud?.coverage_label || hud?.scouting_coverage || dateContext?.periodLabel;
   return (
-    <header className="dc-topbar dc-topbar--draft-hud">
+    <header className="dc-topbar dc-topbar--draft-hud dc-topbar--war">
       <div className="dc-topbar__left">
         <button type="button" className="dc-back-btn dc-back-btn--hud" onClick={onBack}>
           ← Back
         </button>
-        <small className="dc-record-mini">Record {record}</small>
+        <div>
+          <small className="dc-record-mini">Scouting War Room</small>
+          <div className="dc-war-meta">
+            <span>Class <strong>{dateContext?.draftYear || "—"}</strong></span>
+            <span>Picks <strong>{ownedPickCount ?? 0}</strong></span>
+            <span>Record {record}</span>
+          </div>
+        </div>
       </div>
 
       <div className="dc-topbar__center dc-topbar__center-logo">
@@ -2511,12 +2563,12 @@ function TopHeader({ onBack, dateContext, franchiseState }) {
         ) : (
           <div className="dc-team-logo-fallback" aria-label="Team logo">{initials}</div>
         )}
-        <small className="dc-date-mini">{dateContext?.statsThrough || "—"}</small>
+        <small className="dc-date-mini">{coverage || dateContext?.statsThrough || "—"}</small>
       </div>
 
-      <div className="dc-topbar__right dc-topbar__right-picks">
-        <strong className="dc-pick-count-mini">{ownedPickCount ?? 0}</strong>
-        <small>{dateContext?.draftYear || "—"} Picks</small>
+      <div className="dc-war-countdown" title="Days until the NHL Draft">
+        <b>{draftValue || "—"}</b>
+        <small>Until Draft</small>
       </div>
     </header>
   );
@@ -2722,10 +2774,9 @@ function ProspectIdentityBlock({ player }) {
   );
 }
 
-function ProspectBoardRow({ player, index, selected, onSelect, meta }) {
-  const rank = prospectRank(player, index);
+function ProspectBoardRow({ player, index, selected, expanded, onSelect, meta, showConsensus }) {
+  const rank = player.boardRank || prospectRank(player, index);
   const countryCode = normalizeCountryCode(player);
-  const movementCls = movementIndicator(player.draftStock).cls;
   const scoutPct = prospectScoutingPct(player);
   const fogClass = prospectConfidenceFogClass(scoutPct);
   const ceilingHidden = Boolean(player?.ceilingHidden);
@@ -2736,21 +2787,30 @@ function ProspectBoardRow({ player, index, selected, onSelect, meta }) {
   const pos = player.position || "—";
   const nationFull = player.country || player.nationality || countryCode || "";
   const rowFlagUrl = flagApiUrl(countryCode || nationFull, 32);
-  const stockText = movementDisplayText(player.draftStock);
-  const projection = player.projection || projectionForRank(rank);
-  const confText = scoutPct != null ? `${Math.round(scoutPct)}%` : "—";
+  const stock = player.draftStock || {};
+  const delta = Number(stock.deltaRank) || 0;
+  const topFive = rank <= 5;
+  const lo = pot.exact ? pot.value : (player?.potentialRange?.low ?? null);
+  const hi = pot.exact ? pot.value : (player?.potentialRange?.high ?? null);
+  const mid = pot.value;
+  const conf = confMeaning(scoutPct);
+  const tier = player.pyramidTier;
 
   return (
     <button
       type="button"
-      className={`dc-prospect-row${selected ? " is-selected" : ""}${meta.doNotDraft ? " is-dnd" : ""}${player?.isTranscendent ? " prospect-card--transcendent" : ""}${rank > 32 ? " is-late-round" : ""}`}
+      className={`dc-prospect-row${selected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${meta.doNotDraft ? " is-dnd" : ""}${player?.isTranscendent ? " prospect-card--transcendent" : ""}${rank > 32 ? " is-late-round" : ""}${topFive ? " is-top5" : ""}${player.overager ? " is-overager" : ""}`}
       onClick={onSelect}
+      style={tier ? { "--tier-color": tier.color } : undefined}
     >
       <div className="dc-prospect-row__rank" aria-label={`Rank ${rank}`}>
-        <span>{rank}</span>
+        <RankChange rank={rank} delta={delta} />
       </div>
 
       <div className="dc-prospect-row__player">
+        <div className="dc-prospect-row__shot">
+          <DraftClassHeadshot player={player} size={topFive ? "lg" : "md"} board />
+        </div>
         {rowFlagUrl ? (
           <img
             className="dc-prospect-row__flag"
@@ -2761,38 +2821,119 @@ function ProspectBoardRow({ player, index, selected, onSelect, meta }) {
             onError={(e) => { e.currentTarget.style.display = "none"; }}
           />
         ) : null}
-        <strong className="dc-prospect-row__name">{player.firstName} {player.lastName}</strong>
+        <span className="dc-prospect-row__identity">
+          <span className="dc-prospect-row__name-row">
+            <strong className="dc-prospect-row__name">{player.firstName} {player.lastName}</strong>
+            {topFive ? <b className="dc-prospect-row__ovr">{ovr.text !== "—" ? ovr.text : "—"}</b> : null}
+          </span>
+          <span className="dc-prospect-row__sub">
+            {player.teamDisplay || player.team || league} · {player.age || "—"} yrs
+            {player.overager ? <em className="dc-overage-pill">Overager</em> : null}
+            {player.characterFile?.flagged ? <em className="dc-char-pill">Character</em> : null}
+          </span>
+        </span>
       </div>
 
       <span className="dc-prospect-row__cell dc-prospect-row__pos">{pos}</span>
-      <span className="dc-prospect-row__cell dc-prospect-row__league" title={league}>{league}</span>
+      <span className="dc-prospect-row__cell dc-prospect-row__league" title={league}>
+        <LeagueBadge league={league} />
+      </span>
       <span
-        className={`dc-prospect-row__cell dc-prospect-row__pot${pot.tier ? ` is-pot-${pot.tier.key}` : ""}${pot.exact ? "" : " is-range"}`}
+        className={`dc-prospect-row__cell dc-prospect-row__pot${pot.tier ? ` is-pot-${pot.tier.key}` : ""}${pot.exact ? "" : " is-range"} ${fogClass}`}
         title={`${pot.tier ? `${pot.tier.label} · ` : ""}${pot.detail} · Now ${ovr.text}`}
       >
-        {pot.text}
+        <ProjectionRange low={lo} mid={mid} high={hi} confidence={scoutPct} />
       </span>
-      <span className="dc-prospect-row__cell dc-prospect-row__proj">{projection}</span>
-      <span className={`dc-prospect-row__cell dc-prospect-row__conf ${fogClass}`}>{confText}</span>
-      <span className={`dc-prospect-row__cell dc-prospect-row__stock ${movementCls}`}>{stockText}</span>
+      <span className="dc-prospect-row__cell dc-prospect-row__proj">{player.projection || projectionForRank(rank)}</span>
+      <span className={`dc-prospect-row__cell dc-prospect-row__conf ${fogClass}`} title={conf.detail}>
+        {scoutPct != null ? `${Math.round(scoutPct)}%` : "—"}
+      </span>
+      <span className="dc-prospect-row__cell dc-prospect-row__stock" title="Weekly stock">
+        <StockTrajectory delta={delta} direction={stock.direction} />
+      </span>
+      {showConsensus ? (
+        <span className="dc-prospect-row__cell dc-prospect-row__pub">#{player.publicRank || player.rank}</span>
+      ) : null}
+      {expanded ? (
+        <div className="dc-mini-dossier">
+          <PerformanceStrip player={player} />
+        </div>
+      ) : null}
     </button>
   );
 }
 
-function ProspectBoardPanel({ prospects, selectedProspectId, onOpenProspect, scoutingStore, activeBoardView }) {
+function ProspectBoardPanel({
+  prospects,
+  selectedProspectId,
+  onOpenProspect,
+  scoutingStore,
+  activeBoardView,
+  boardSource,
+  setBoardSource,
+  showConsensus,
+  setShowConsensus,
+  pyramidMode,
+  setPyramidMode,
+}) {
   const filterLabel = boardFilterLabel(activeBoardView);
+  const groups = pyramidMode ? groupByPyramid(prospects) : [{ key: "rank", prospects, color: null, label: null, rarity: null }];
+  const renderRow = (player, index) => (
+    <ProspectBoardRow
+      key={player.id}
+      player={player}
+      index={index}
+      selected={player.id === selectedProspectId}
+      expanded={player.id === selectedProspectId}
+      onSelect={() => onOpenProspect(player)}
+      meta={getScoutingMeta(scoutingStore, player.id)}
+      showConsensus={showConsensus}
+    />
+  );
 
   return (
-    <section className="dc-prospect-board">
+    <section className={`dc-prospect-board${showConsensus ? " is-consensus" : ""}`}>
       <header className="dc-prospect-board__head">
-        <h2>Prospect Board</h2>
+        <h2>{sourceCaption(boardSource)}</h2>
         <span>
           {prospects.length} prospect{prospects.length === 1 ? "" : "s"}
           {filterLabel ? ` · ${filterLabel}` : ""}
         </span>
       </header>
+      <div className="dc-board-toolbar">
+        <div className="dc-board-sources">
+          {BOARD_SOURCES.map((src) => (
+            <button
+              key={src.id}
+              type="button"
+              className={boardSource === src.id ? "is-active" : ""}
+              onClick={() => setBoardSource(src.id)}
+            >
+              {src.label}
+            </button>
+          ))}
+        </div>
+        <div className="dc-board-filters">
+          <button
+            type="button"
+            className={`dc-consensus-chip${pyramidMode ? " is-on" : ""}`}
+            onClick={() => setPyramidMode((v) => !v)}
+            title="Group the board into pyramid tiers. Off = strict rank order."
+          >
+            Pyramid {pyramidMode ? "on" : "off"}
+          </button>
+          <button
+            type="button"
+            className={`dc-consensus-chip${showConsensus ? " is-on" : ""}`}
+            onClick={() => setShowConsensus((v) => !v)}
+            title="Public consensus is a reference filter, not the GM board"
+          >
+            Consensus {showConsensus ? "on" : "ref"}
+          </button>
+        </div>
+      </div>
       <div className="dc-prospect-board__list dc-scroll-surface">
-        <ProspectBoardColumnHeader />
+        <ProspectBoardColumnHeader showConsensus={showConsensus} />
         {!prospects.length ? (
           <div className="dc-board-standby">
             <span className="dc-board-standby__label">
@@ -2804,17 +2945,18 @@ function ProspectBoardPanel({ prospects, selectedProspectId, onOpenProspect, sco
                 : "No prospects have been published to this draft class yet."}
             </p>
           </div>
-        ) : (
-          prospects.map((player, index) => (
-            <ProspectBoardRow
-              key={player.id}
-              player={player}
-              index={index}
-              selected={player.id === selectedProspectId}
-              onSelect={() => onOpenProspect(player)}
-              meta={getScoutingMeta(scoutingStore, player.id)}
-            />
+        ) : pyramidMode ? (
+          groups.map((group) => (
+            <div key={group.key} className="dc-tier-group">
+              <div className="dc-tier-band" style={{ "--tier-color": group.color }}>
+                <strong>{group.label}</strong>
+                <span>{group.rarity} · {group.prospects.length}</span>
+              </div>
+              {group.prospects.map((player, index) => renderRow(player, index))}
+            </div>
           ))
+        ) : (
+          prospects.map((player, index) => renderRow(player, index))
         )}
       </div>
     </section>
@@ -3026,89 +3168,9 @@ function compressTrajectoryPoints(points) {
   return kept;
 }
 
-/** Rank / stock history points for value trajectory — backend trail, else season checkpoints. */
+/** Weekly value trail — backend history when it actually moves, else a season+week skeleton. */
 function buildValueTrajectoryPoints(profile, player) {
-  const raw = profile?.rankHistory
-    || profile?.stock_history
-    || player?.rankHistory
-    || player?.stockHistory
-    || [];
-  const points = [];
-  const pushRank = (rank, label) => {
-    const r = Number(rank);
-    if (!Number.isFinite(r) || r <= 0) return;
-    points.push({ x: points.length, rank: r, label: String(label || `#${points.length + 1}`) });
-  };
-  if (Array.isArray(raw) && raw.length) {
-    raw.forEach((entry, i) => {
-      if (entry == null) return;
-      if (typeof entry === "number" && Number.isFinite(entry)) {
-        pushRank(entry, String(i + 1));
-        return;
-      }
-      if (typeof entry !== "object") return;
-      const rank = Number(
-        entry.rank ?? entry.public_rank ?? entry.board_rank ?? entry.central_rank ?? entry.value
-      );
-      const label = entry.date_label || entry.label || entry.event || entry.phase || entry.date || entry.event_source;
-      pushRank(rank, label);
-    });
-  }
-
-  // Always prefer a season-arc skeleton when the live trail is empty or a single sample.
-  if (points.length < 2) {
-    points.length = 0;
-    pushRank(profile?.preseasonRank ?? player?.preseasonRank, "Preseason");
-    pushRank(profile?.midseasonRank ?? player?.midseasonRank, "Midseason");
-    pushRank(profile?.currentRank ?? profile?.rank ?? player?.rank ?? prospectRank(player), "Current");
-  } else {
-    // Relabel ends so the axis always reads Preseason → Current across the season.
-    if (points[0]) points[0] = { ...points[0], label: "Preseason" };
-    if (points[points.length - 1]) {
-      points[points.length - 1] = { ...points[points.length - 1], label: "Current" };
-    }
-  }
-
-  const flatOrThin = points.length < 2 || points.every((p) => p.rank === points[0].rank);
-  if (flatOrThin) {
-    const current = Number(
-      points[points.length - 1]?.rank
-      ?? profile?.currentRank
-      ?? profile?.rank
-      ?? player?.rank
-      ?? prospectRank(player)
-    );
-    const pre = Number(profile?.preseasonRank ?? player?.preseasonRank);
-    const seasonMove = Number.isFinite(pre) && Number.isFinite(current) && pre > 0 && current > 0
-      ? pre - current
-      : 0;
-    const stock = player?.draftStock;
-    let delta = Number(stock?.deltaRank ?? player?.stock);
-    // Prefer full-season preseason→current movement over a single weekly tick.
-    if (Number.isFinite(seasonMove) && seasonMove !== 0) delta = seasonMove;
-    // Heat-mode +6 still means "rose"; convert to a board-rank shift for the chart.
-    if (!Number.isFinite(delta) || delta === 0) {
-      const heat = Number(stock?.stockHeat);
-      if (Number.isFinite(heat) && heat !== 0) delta = heat;
-    }
-    if (Number.isFinite(current) && current > 0 && Number.isFinite(delta) && delta !== 0) {
-      const earlier = Math.max(1, Math.round(current + delta));
-      const mid = Math.max(1, Math.round((earlier + current) / 2));
-      return [
-        { x: 0, rank: earlier, label: "Preseason" },
-        { x: 1, rank: mid, label: "Midseason" },
-        { x: 2, rank: Math.round(current), label: "Current" },
-      ];
-    }
-    // Flat board season: still draw a full-width line so the chart isn't a left stub.
-    if (Number.isFinite(current) && current > 0) {
-      return [
-        { x: 0, rank: Math.round(current), label: "Preseason" },
-        { x: 1, rank: Math.round(current), label: "Current" },
-      ];
-    }
-  }
-  return compressTrajectoryPoints(points).map((p, i) => ({ ...p, x: i }));
+  return weeklyTrajectoryPoints(profile, player);
 }
 
 function formatSignalPct(v) {
@@ -3173,8 +3235,8 @@ function ValueTrajectoryChart({ points, compact = false }) {
   const pad = Math.max(2, Math.round((maxR - minR) * 0.18) || 3);
   const yMin = Math.max(1, minR - pad);
   const yMax = Math.max(yMin + 4, maxR + pad);
-  const w = compact ? 220 : 320;
-  const h = compact ? 48 : 72;
+  const w = compact ? 280 : 520;
+  const h = compact ? 72 : 128;
   const left = 8;
   const right = 8;
   const top = 8;
@@ -3196,9 +3258,9 @@ function ValueTrajectoryChart({ points, compact = false }) {
   const gradId = compact ? "dcTrailGlowCompact" : "dcTrailGlow";
   const fillId = compact ? "dcTrailFillCompact" : "dcTrailFill";
   return (
-    <div className={`dc-signal-chart${compact ? " is-compact" : ""}`}>
+    <div className={`dc-signal-chart${compact ? " is-compact" : ""} dc-signal-chart--weekly`}>
       <div className="dc-signal-chart__head">
-        <span className="dc-profile-tags__label">Value trajectory</span>
+        <span className="dc-profile-tags__label">Weekly value trajectory</span>
         <strong className={rising ? "is-up" : falling ? "is-down" : ""}>
           {rising ? "RISING" : falling ? "FALLING" : "FLAT"}
         </strong>
@@ -3338,25 +3400,27 @@ function resolveToolRows(player, profile) {
     ["IQ", bump(pickAttr("hockeyIQ", "hockey_iq", "iq")), 6],
   ].map(([label, val, seed]) => {
     const display = attributeDisplay(val, completion, seed, { wideFog });
-    const mid = display.range
+      const mid = display.range
       ? (display.range[0] + display.range[1]) / 2
       : (display.locked ? null : Number(val));
+    const raw = Number.isFinite(Number(val)) ? Number(val) : (Number.isFinite(mid) ? mid : null);
     return {
       label,
       text: display.text,
       locked: display.locked,
-      mid: Number.isFinite(mid) ? mid : null,
+      raw,
+      mid: Number.isFinite(mid) ? mid : raw,
       low: display.range ? display.range[0] : null,
       high: display.range ? display.range[1] : null,
     };
   });
 }
 
-function SkillDnaRadar({ tools, compositeText }) {
-  const size = 240;
+function SkillDnaRadar({ tools, compositeText, developOdds, skatingWeak }) {
+  const size = 360;
   const cx = size / 2;
   const cy = size / 2;
-  const rMax = 72;
+  const rMax = 112;
   const n = 6;
   const angleAt = (i) => (-Math.PI / 2) + (i * 2 * Math.PI) / n;
   const pt = (i, radius) => {
@@ -3364,7 +3428,10 @@ function SkillDnaRadar({ tools, compositeText }) {
     return [cx + Math.cos(a) * radius, cy + Math.sin(a) * radius];
   };
   const rings = [0.35, 0.6, 0.85, 1];
-  const values = tools.map((t) => (t.mid != null ? Math.max(0, Math.min(99, t.mid)) / 99 : 0));
+  const values = tools.map((t) => {
+    const n = t.raw != null ? t.raw : t.mid;
+    return n != null ? Math.max(0, Math.min(99, n)) / 99 : 0;
+  });
   const hasSignal = tools.some((t) => t.mid != null && !t.locked);
   const poly = values
     .map((v, i) => {
@@ -3373,8 +3440,13 @@ function SkillDnaRadar({ tools, compositeText }) {
     })
     .join(" ");
   return (
-    <div className="dc-skill-dna">
+    <div className="dc-skill-dna dc-skill-dna--xl">
       <span className="dc-profile-tags__label">Skill DNA</span>
+      <p className="dc-skill-dna__dev">
+        {developOdds != null
+          ? `${developOdds}% likely to develop into the expected outcome${skatingWeak ? " — skating is the drag on the rest of the tools." : "."}`
+          : "Development odds still forming."}
+      </p>
       <div className="dc-skill-dna__stage">
         <svg viewBox={`0 0 ${size} ${size}`} className="dc-skill-dna__svg" aria-hidden="true">
           {rings.map((scale) => (
@@ -3400,9 +3472,10 @@ function SkillDnaRadar({ tools, compositeText }) {
             );
           })}
           {tools.map((t, i) => {
-            if (t.mid == null) return null;
-            const [x, y] = pt(i, rMax * (t.mid / 99));
-            return <circle key={`n-${t.label}`} cx={x} cy={y} r="3" className="dc-skill-dna__node" />;
+            const n = t.raw != null ? t.raw : t.mid;
+            if (n == null) return null;
+            const [x, y] = pt(i, rMax * (Math.max(0, Math.min(99, n)) / 99));
+            return <circle key={`n-${t.label}`} cx={x} cy={y} r="3.4" className="dc-skill-dna__node" />;
           })}
         </svg>
         <div className="dc-skill-dna__core">
@@ -3414,7 +3487,7 @@ function SkillDnaRadar({ tools, compositeText }) {
       </div>
       <div className="dc-skill-dna__ranges">
         {tools.map((t) => (
-          <div key={t.label} className={t.locked ? "is-locked" : ""}>
+          <div key={t.label} className={`${t.locked ? "is-locked" : ""}${t.weak ? " is-weak" : ""}${t.plus ? " is-plus" : ""}`}>
             <span>{t.label}</span>
             <strong>
               {t.locked
@@ -3423,7 +3496,7 @@ function SkillDnaRadar({ tools, compositeText }) {
                   ? `${t.low}-${t.high}`
                   : t.text)}
             </strong>
-            <em>OVR {t.locked || t.mid == null ? "—" : Math.round(t.mid)}</em>
+            <em>{t.reach || (t.locked || t.mid == null ? "OVR —" : `OVR ${Math.round(t.mid)}`)}</em>
           </div>
         ))}
       </div>
@@ -3633,10 +3706,341 @@ function competitionLens(competition) {
   return { text: band, dots, tone: "cyan", detail: label };
 }
 
+function prospectDisplayName(player) {
+  return `${player?.firstName || ""} ${player?.lastName || ""}`.trim();
+}
+
+function mediaHeatPhrase(heat) {
+  const n = Number(heat);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n < 20) return "Quiet coverage";
+  if (n < 45) return "Building buzz";
+  if (n < 75) return "Hot topic";
+  return "League-wide obsession";
+}
+
+function mediaCredPhrase(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n < 30) return "Speculation";
+  if (n < 50) return "Early chatter";
+  if (n < 75) return "Credible";
+  return "Strongly sourced";
+}
+
+function arcStagePhrase(story) {
+  const st = String(story?.arc_status || story?.status || "active").toLowerCase();
+  if (st === "resolved") return "Archived";
+  if (Number(story?.repeat_count) > 1 || story?.escalated_from) return "Escalating";
+  if (Number(story?.repeat_count) === 1) return "Developing";
+  return "Active";
+}
+
+function collectProspectStorylines(franchiseState, player) {
+  const rows = Array.isArray(franchiseState?.storyline_events) ? franchiseState.storyline_events : [];
+  const id = String(player?.id || "").toLowerCase();
+  const name = prospectDisplayName(player).toLowerCase();
+  const lastName = name.split(/\s+/).pop() || "";
+
+  return rows.filter((ev) => {
+    const pid = String(ev?.player_id || ev?.playerId || "").toLowerCase();
+    const pname = String(ev?.player_name || ev?.playerName || "").toLowerCase();
+    const related = Array.isArray(ev?.related_player_ids)
+      ? ev.related_player_ids.map((x) => String(x).toLowerCase())
+      : [];
+    const affected = Array.isArray(ev?.affected_player_ids)
+      ? ev.affected_player_ids.map((x) => String(x).toLowerCase())
+      : [];
+    const players = Array.isArray(ev?.players) ? ev.players.map((x) => String(x).toLowerCase()) : [];
+    const headline = String(ev?.headline || ev?.title || "").toLowerCase();
+    const cat = String(ev?.category || ev?.type || "").toLowerCase();
+    const isDraft = /draft|prospect/.test(cat) || /draft|prospect/.test(headline);
+
+    if (id && (pid === id || related.includes(id) || affected.includes(id))) return true;
+    if (name && (pname === name || players.includes(name))) return true;
+    if (lastName && lastName.length > 2 && headline.includes(lastName)) return isDraft || pid === id;
+    return false;
+  });
+}
+
+function groupProspectStoryArcs(events) {
+  const byArc = new Map();
+  events.forEach((ev, idx) => {
+    const arcId = String(ev?.storyline_id || ev?.storylineId || ev?.id || `beat-${idx}`);
+    if (!byArc.has(arcId)) byArc.set(arcId, []);
+    byArc.get(arcId).push(ev);
+  });
+  return [...byArc.entries()]
+    .map(([arcId, beats]) => {
+      const sorted = [...beats].sort((a, b) =>
+        String(a?.calendar_iso || a?.date || "").localeCompare(String(b?.calendar_iso || b?.date || ""))
+      );
+      const latest = sorted[sorted.length - 1] || {};
+      return {
+        arcId,
+        beats: sorted,
+        headline: latest.headline || latest.title || "Draft narrative",
+        heat: Math.max(...sorted.map((b) => Number(b?.heat) || 0)),
+        credibility: Math.max(...sorted.map((b) => Number(b?.credibility) || 0)),
+        stage: arcStagePhrase(latest),
+      };
+    })
+    .sort((a, b) => b.heat - a.heat || b.beats.length - a.beats.length);
+}
+
+function buildProspectPublicImage(player, profile, characterFile, stock) {
+  const labels = [];
+  const hype = String(profile?.draft_hype_tier || player?.draftHypeTier || "").toLowerCase();
+  if (player?.isTranscendent || profile?.transcendent_talent || hype === "mythic") {
+    labels.push("Generational draft obsession");
+  }
+  if (characterFile?.flagged) labels.push("Character questions circulating");
+  if (player?.pyramidTier?.key === "transcendent" || player?.pyramidTier?.key === "generational") {
+    labels.push("Lottery-night name");
+  }
+  const delta = Number(stock?.weeklyDelta ?? stock?.delta ?? stock?.movement);
+  if (Number.isFinite(delta)) {
+    if (delta >= 8) labels.push("Rising fast on boards");
+    else if (delta <= -8) labels.push("Sliding in draft conversation");
+  }
+  if (player?.isOverager) labels.push("Overager scrutiny");
+  if (!labels.length) {
+    if (Number(player?.rank) <= 5) labels.push("Top-tier prospect spotlight");
+    else if (Number(player?.rank) <= 15) labels.push("First-round buzz");
+    else labels.push("Under-the-radar file");
+  }
+  return labels.slice(0, 4);
+}
+
+function buildPublicationMentions(player, allProspects) {
+  if (!Array.isArray(allProspects) || !allProspects.length) return [];
+  const scoutRanked = rankProspectsForSource(allProspects, "scout");
+  const scoutIdx = scoutRanked.findIndex((p) => p.id === player.id);
+  const scoutRank = scoutIdx >= 0 ? scoutIdx + 1 : Number(player?.rank) || null;
+  const mentions = [];
+
+  PUBLICATIONS.forEach((pub) => {
+    const ranked = rankProspectsForSource(allProspects, pub.id);
+    const pubIdx = ranked.findIndex((p) => p.id === player.id);
+    if (pubIdx < 0) return;
+    const pubRank = pubIdx + 1;
+    const spread = scoutRank ? pubRank - scoutRank : 0;
+    let note = `${pub.label} lists him #${pubRank}`;
+    if (Math.abs(spread) >= 4) {
+      note = spread < 0
+        ? `${pub.author} has him ${Math.abs(spread)} spots higher than your scouts`
+        : `${pub.author} ${spread} spots lower — disagreement worth watching`;
+    }
+    mentions.push({ outlet: pub.label, author: pub.author, rank: pubRank, note, spread });
+  });
+
+  return mentions.sort((a, b) => Math.abs(b.spread) - Math.abs(a.spread)).slice(0, 4);
+}
+
+function buildProspectMediaBundle(franchiseState, player, profile, allProspects) {
+  const storylines = collectProspectStorylines(franchiseState, player);
+  const narrativeUniverse = franchiseState?.narrative_universe || {};
+  const playerMem = narrativeUniverse?.player_narrative_memory?.[player?.id] || null;
+  const backendArcs = Array.isArray(narrativeUniverse?.story_arcs)
+    ? narrativeUniverse.story_arcs.filter((a) => String(a?.player_id || "") === String(player?.id || ""))
+    : [];
+  const arcs = backendArcs.length
+    ? backendArcs.map((arc) => ({
+        arcId: arc.arc_id,
+        beats: Array.isArray(arc.beats) ? arc.beats : [],
+        headline: arc.headline || "Draft narrative",
+        heat: Number(arc.heat) || 0,
+        stage: arc.phase || arc.status || "Active",
+      }))
+    : groupProspectStoryArcs(storylines);
+  const stock = player?.draftStock || null;
+  const characterFile = player?.characterFile;
+  const memTags = Array.isArray(playerMem?.reputation_tags) ? playerMem.reputation_tags : [];
+  const publicImage = memTags.length
+    ? memTags
+    : buildProspectPublicImage(player, profile, characterFile, stock);
+  const publications = buildPublicationMentions(player, allProspects);
+  const maxHeat = Math.max(
+    storylines.reduce((m, s) => Math.max(m, Number(s?.heat) || 0), 0),
+    Number(playerMem?.media_heat) || 0
+  );
+  const stockNote = movementDisplayText(stock) || null;
+  const socialPosts = Array.isArray(narrativeUniverse?.social_posts)
+    ? narrativeUniverse.social_posts.filter((p) => {
+        const blob = `${p?.related_headline || ""} ${p?.text || ""}`.toLowerCase();
+        const name = prospectDisplayName(player).toLowerCase();
+        const last = name.split(/\s+/).pop() || "";
+        return last && blob.includes(last);
+      }).slice(0, 4)
+    : [];
+  const prospectProfiles = narrativeUniverse?.prospect_social_profiles || {};
+  const prospectKey = String(player?.id || player?.prospect_id || prospectDisplayName(player));
+  const socialProfile = prospectProfiles[prospectKey] || prospectProfiles[String(player?.id || "")] || null;
+
+  return {
+    storylines: storylines.slice(-12).reverse(),
+    arcs,
+    publicImage,
+    publications,
+    socialPosts,
+    socialProfile,
+    mediaPressure: mediaHeatPhrase(maxHeat),
+    stockNarrative: stockNote,
+    hasCoverage:
+      storylines.length > 0 ||
+      publications.length > 0 ||
+      characterFile?.flagged ||
+      memTags.length > 0 ||
+      Boolean(socialProfile),
+  };
+}
+
+function ProspectMediaUniverse({ bundle }) {
+  if (!bundle?.hasCoverage && !bundle?.publicImage?.length) {
+    return (
+      <section className="dc-brochure-media">
+        <header className="dc-media-head">
+          <span>Media universe</span>
+          <strong>Narrative file</strong>
+        </header>
+        <p className="dc-media-empty">No league coverage tied to this prospect yet. Draft chatter builds as stock moves and publications publish boards.</p>
+        {bundle?.publicImage?.length ? (
+          <div className="dc-media-tags">
+            {bundle.publicImage.map((tag) => (
+              <span key={tag} className="dc-media-tag">{tag}</span>
+            ))}
+          </div>
+        ) : null}
+      </section>
+    );
+  }
+
+  return (
+    <section className="dc-brochure-media">
+      <header className="dc-media-head">
+        <span>Media universe</span>
+        <strong>Narrative file</strong>
+        {bundle.mediaPressure ? <em>{bundle.mediaPressure}</em> : null}
+      </header>
+
+      <div className="dc-media-grid">
+        <article className="dc-media-card">
+          <h4>Public image</h4>
+          <div className="dc-media-tags">
+            {bundle.publicImage.map((tag) => (
+              <span key={tag} className="dc-media-tag">{tag}</span>
+            ))}
+          </div>
+          {bundle.stockNarrative ? <p className="dc-media-note">{bundle.stockNarrative}</p> : null}
+        </article>
+
+        {bundle.publications.length ? (
+          <article className="dc-media-card">
+            <h4>Publication boards</h4>
+            <ul className="dc-media-pubs">
+              {bundle.publications.map((pub) => (
+                <li key={pub.outlet}>
+                  <strong>{pub.outlet}</strong>
+                  <span>#{pub.rank}</span>
+                  <p>{pub.note}</p>
+                </li>
+              ))}
+            </ul>
+          </article>
+        ) : null}
+
+        {bundle.arcs.length ? (
+          <article className="dc-media-card dc-media-card--wide">
+            <h4>Story arcs</h4>
+            <div className="dc-media-arcs">
+              {bundle.arcs.slice(0, 3).map((arc) => (
+                <div key={arc.arcId} className="dc-media-arc">
+                  <div className="dc-media-arc__head">
+                    <strong>{arc.headline}</strong>
+                    <span>{arc.stage}{arc.beats.length > 1 ? ` · ${arc.beats.length} beats` : ""}</span>
+                  </div>
+                  <ol className="dc-media-timeline">
+                    {arc.beats.slice(-6).map((beat, i) => (
+                      <li key={beat.id || beat.storyline_id || i}>
+                        <time>{beat.calendar_iso || beat.date || "—"}</time>
+                        <span>{beat.headline || beat.title || beat.summary || "Update"}</span>
+                        {mediaCredPhrase(beat.credibility) ? (
+                          <em>{mediaCredPhrase(beat.credibility)}</em>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ))}
+            </div>
+          </article>
+        ) : bundle.storylines.length ? (
+          <article className="dc-media-card dc-media-card--wide">
+            <h4>League coverage</h4>
+            <ul className="dc-media-wire">
+              {bundle.storylines.slice(0, 6).map((ev, i) => (
+                <li key={ev.id || ev.storyline_id || i}>
+                  <time>{ev.calendar_iso || ev.date || "—"}</time>
+                  <strong>{ev.headline || ev.title || "Storyline"}</strong>
+                  {ev.summary || ev.short_summary ? <p>{ev.summary || ev.short_summary}</p> : null}
+                </li>
+              ))}
+            </ul>
+          </article>
+        ) : null}
+      </div>
+
+      {bundle.socialProfile ? (
+        <article className="dc-media-card dc-media-card--wide">
+          <h4>Prospect social</h4>
+          <div className="dc-media-social-profile">
+            <strong>{bundle.socialProfile.handle || "@prospect"}</strong>
+            <span>{Number(bundle.socialProfile.followers || 0).toLocaleString()} followers</span>
+            {bundle.socialProfile.bio ? <p>{bundle.socialProfile.bio}</p> : null}
+            {bundle.socialProfile.personality ? (
+              <em>{String(bundle.socialProfile.personality).replace(/_/g, " ")}</em>
+            ) : null}
+          </div>
+          {Array.isArray(bundle.socialProfile.posts) && bundle.socialProfile.posts.length ? (
+            <ul className="dc-media-wire">
+              {bundle.socialProfile.posts.slice(-6).reverse().map((post, i) => (
+                <li key={post.id || i}>
+                  <time>{post.calendar_iso || "—"}</time>
+                  <p>{post.text}</p>
+                  {post.likes != null ? (
+                    <em>{Number(post.likes || 0).toLocaleString()} likes</em>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </article>
+      ) : null}
+
+      {bundle.socialPosts?.length ? (
+        <article className="dc-media-card dc-media-card--wide">
+          <h4>Social pulse</h4>
+          <ul className="dc-media-wire">
+            {bundle.socialPosts.map((post, i) => (
+              <li key={post.id || i}>
+                <strong>{post.author_name}{post.verified ? " ✓" : ""}</strong>
+                <time>{post.calendar_iso || "—"}</time>
+                <p>{post.text}</p>
+              </li>
+            ))}
+          </ul>
+        </article>
+      ) : null}
+    </section>
+  );
+}
+
 function ProspectProfileModal({
   player,
   profile,
   meta,
+  franchiseState,
+  allProspects = [],
   onClose,
   compareIds = [],
   onToggleWatchlist,
@@ -3732,6 +4136,15 @@ function ProspectProfileModal({
   const trajectory = buildValueTrajectoryPoints(profile, player);
   const analytics = extractProspectAnalytics(player, profile);
   const tools = resolveToolRows(player, profile);
+  const skillNotes = skillDevelopmentNotes(tools, player);
+  const toolsWithNotes = skillNotes.rows;
+  const outcomes = projectionOutcomes(player, profile, skillNotes.developOdds);
+  const overageNote = overageStockNote(player);
+  const strengthLines = strengthCopy(player, toolsWithNotes);
+  const weaknessLines = weaknessCopy(player, toolsWithNotes, skillNotes.skatingWeak);
+  const characterFile = player.characterFile;
+  const pyramid = player.pyramidTier;
+  const mediaBundle = buildProspectMediaBundle(franchiseState, player, profile, allProspects);
   const ht = heightWithCm(badges.height || player.height);
   const wt = weightWithKg(badges.weight || player.weight);
   const handRaw = badges.handedness || formatHandedness(player.handedness);
@@ -3798,17 +4211,17 @@ function ProspectProfileModal({
 
   return (
     <div
-      className={`dc-profile-modal dc-profile-modal--prospect${isTranscendent ? " prospect-modal--transcendent" : ""}${rank > 32 || (confPct != null && confPct < 45) ? " dc-profile-modal--uncertain" : ""}`}
+      className={`dc-profile-modal dc-profile-modal--prospect dc-profile-modal--file-open${isTranscendent ? " prospect-modal--transcendent" : ""}${rank > 32 || (confPct != null && confPct < 45) ? " dc-profile-modal--uncertain" : ""}`}
       role="dialog"
       aria-modal="true"
       aria-label={`${player.firstName} ${player.lastName} scouting profile`}
     >
       <button type="button" className="dc-profile-modal__backdrop" onClick={onClose} aria-label="Close" />
-      <article className={`dc-signal-panel dc-signal-panel--premium${isTranscendent ? " aura-gold shake-on-open" : ""}`}>
+      <article className={`dc-signal-panel dc-signal-panel--premium dc-brochure${isTranscendent ? " aura-gold shake-on-open" : ""}`}>
         <ModalCloseButton onClick={onClose} label="Close prospect profile" />
         <header className="dc-signal-banner">
-          <span>Franchise Intelligence</span>
-          <strong>Prospect Scouting</strong>
+          <span>{pyramid ? pyramid.label : "Franchise Intelligence"}</span>
+          <strong>{player.firstName} {player.lastName} · scouting brochure</strong>
         </header>
 
         {!profile ? (
@@ -3827,7 +4240,7 @@ function ProspectProfileModal({
 
               <div className="dc-signal-identity__title">
                 <h2>{player.firstName} {player.lastName}</h2>
-                <p className="dc-signal-identity__pos">{posName}</p>
+                <p className="dc-signal-identity__pos">{posName}{pyramid ? ` · ${pyramid.label}` : ""}</p>
               </div>
 
               <ul className="dc-signal-bio">
@@ -3847,7 +4260,7 @@ function ProspectProfileModal({
                 <li>
                   <div>
                     <span>Age</span>
-                    <strong>{ageNum !== "—" ? `AGE ${ageNum}` : "—"}</strong>
+                    <strong>{ageNum !== "—" ? `AGE ${ageNum}` : "—"}{player.overager ? " · OVERAGER" : ""}</strong>
                   </div>
                 </li>
                 <li>
@@ -3866,8 +4279,8 @@ function ProspectProfileModal({
 
               <div className="dc-signal-board-card">
                 <strong>#{rank}</strong>
-                <span>{boardYear ? `${boardYear} Draft Board` : "Draft Board"}</span>
-                <em className={`is-${trendTone || "muted"}`}>Stock {trend}</em>
+                <span>{boardYear ? `${boardYear} Scout Board` : "Scout Board"}</span>
+                <em className={`is-${trendTone || "muted"}`}>{trend}</em>
               </div>
 
               <div className="dc-signal-club-card dc-signal-club-card--text">
@@ -3878,96 +4291,80 @@ function ProspectProfileModal({
               </div>
             </aside>
 
-            <main className="dc-signal-core">
-              <header className="dc-signal-core__head">
-                <div>
-                  <span className="dc-profile-tags__label">Scouting signal</span>
-                  <h3>Skill & projection</h3>
+            <section className="dc-brochure-dna">
+              <SkillDnaRadar
+                tools={toolsWithNotes}
+                compositeText={currentEstimate.text}
+                developOdds={skillNotes.developOdds}
+                skatingWeak={skillNotes.skatingWeak}
+              />
+              <div className="dc-proj-plain">
+                <span className="dc-profile-tags__label">Projection</span>
+                <div className="dc-proj-plain__row is-peak">
+                  <span>Peak overall</span>
+                  <strong>{outcomes.peak ?? "—"}</strong>
+                  <em>
+                    {outcomes.nhlOdds != null
+                      ? `${outcomes.nhlOdds}% NHL odds · backend ${outcomes.band || "ceiling"}`
+                      : (outcomes.note || "Backend ceiling")}
+                  </em>
                 </div>
-                {playStyle ? <ProfileChip tone="accent">{String(playStyle).toUpperCase()}</ProfileChip> : null}
-              </header>
-
-              <div className="dc-signal-core__grid">
-                <SkillDnaRadar
-                  tools={tools}
-                  compositeText={currentEstimate.text}
-                />
-
-                <section className="dc-proj-engine">
-                  <span className="dc-profile-tags__label">Projection engine</span>
-                  <ProjectionEngineBar
-                    label="Peak Forecast"
-                    value={peakVal}
-                    display={peakVal != null ? Math.round(peakVal) : "—"}
-                    tone="gold"
-                    max={99}
-                  />
-                  <ProjectionEngineBar
-                    label="Baseline Outcome"
-                    value={floorVal}
-                    display={floorVal != null ? Math.round(floorVal) : "—"}
-                    tone="cyan"
-                    max={99}
-                  />
-                  <div className="dc-proj-engine__meta">
-                    <div>
-                      <span>Draft Window</span>
-                      <strong>{draftWindow}</strong>
-                    </div>
-                    <div>
-                      <span>Projected Role</span>
-                      <strong>{roleLens.text !== "—" ? roleLens.text : (playStyle || "—")}</strong>
-                    </div>
-                    <div>
-                      <span>Arrival Window</span>
-                      <strong>{readinessLabel || "—"}</strong>
-                    </div>
-                    <div>
-                      <span>Volatility</span>
-                      <strong className={volatilityDisplay !== "—" ? "is-warn" : ""}>
-                        {volatilityDisplay}
-                      </strong>
-                    </div>
-                  </div>
-                </section>
+                <div className="dc-proj-plain__row">
+                  <span>Expected outcome</span>
+                  <strong>{outcomes.expected ?? "—"}</strong>
+                  <em>{outcomes.hitPeakPct != null ? `${outcomes.hitPeakPct}% to land near this grade` : "Most likely landing spot"}</em>
+                </div>
+                <div className="dc-proj-plain__row is-worst">
+                  <span>Worst case</span>
+                  <strong>{outcomes.worst ?? "—"}</strong>
+                  <em>Floor from the scouting file{outcomes.band ? ` · ${outcomes.band}` : ""}</em>
+                </div>
+                <div className="dc-proj-plain__row">
+                  <span>Shoots past peak</span>
+                  <strong>{outcomes.shootPastPct != null ? `${outcomes.shootPastPct}%` : "—"}</strong>
+                  <em>Odds he outruns the ceiling on this file</em>
+                </div>
               </div>
-            </main>
+            </section>
 
-            <aside className="dc-signal-decision">
-              <header className="dc-profile-zone-head">Decision lens</header>
-              <DecisionLensRow
-                label="Upside Impact"
-                value={upside.text}
-                dots={upside.dots}
-                tone={upside.tone || "gold"}
-              />
-              <DecisionLensRow
-                label="Projected Role"
-                value={roleLens.text}
-                dots={roleDots}
-                tone={roleLens.tone || "cyan"}
-              />
-              <DecisionLensRow
-                label="Risk Temperature"
-                value={riskTemp.text}
-                dots={riskTemp.dots}
-                tone={riskTemp.tone || "violet"}
-              />
-              <DecisionLensRow
-                label="Competition Level"
-                value={compLens.text}
-                dots={compLens.dots}
-                tone="cyan"
-              />
-              <DecisionLensRow
-                label="Scouting Confidence"
-                value={confBand}
-                dots={confDots}
-                tone="violet"
-              />
+            <aside className="dc-brochure-reports">
+              <div className="dc-report-stack">
+                <article className="dc-report-card">
+                  <h4>Strengths</h4>
+                  <ul>{(strengths.filter(Boolean).length ? strengths.filter(Boolean) : strengthLines).map((line) => <li key={line}>{line}</li>)}</ul>
+                </article>
+                <article className="dc-report-card">
+                  <h4>Weaknesses</h4>
+                  <ul>{weaknessLines.map((line) => <li key={line}>{line}</li>)}</ul>
+                </article>
+                {overageNote ? (
+                  <article className="dc-report-card is-overage">
+                    <h4>Overage file</h4>
+                    <p>{overageNote}</p>
+                  </article>
+                ) : null}
+                <article className={`dc-report-card${characterFile?.flagged ? " is-concern" : ""}`}>
+                  <h4>{characterFile?.flagged ? `Character · ${characterFile.title}` : "Character"}</h4>
+                  <p>{characterFile?.story || "No material character flags in the current report."}</p>
+                </article>
+                <div className="dc-signal-actionbar dc-signal-actionbar--icon">
+                  <button
+                    type="button"
+                    className={`dc-shortlist-icon${scoutMeta.watchlist ? " is-active" : ""}`}
+                    onClick={onToggleWatchlist}
+                    disabled={!onToggleWatchlist}
+                    aria-label={scoutMeta.watchlist ? "Remove from shortlist" : "Add to shortlist"}
+                    title={scoutMeta.watchlist ? "Remove from shortlist" : "Add to shortlist"}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M6 3.5h12a1 1 0 0 1 1 1V21l-7-4.2L5 21V4.5a1 1 0 0 1 1-1z" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
             </aside>
 
-            <footer className="dc-signal-footer dc-signal-footer--premium">
+            <section className="dc-brochure-analytics">
               <div className="dc-signal-footer__stock">
                 <ValueTrajectoryChart points={trajectory} />
               </div>
@@ -3975,28 +4372,17 @@ function ProspectProfileModal({
                 <div className="dc-signal-season__head">
                   <span className="dc-profile-tags__label">Season & analytics</span>
                   {sampleThin ? <span className="dc-signal-sample">Thin sample</span> : null}
+                  {playStyle ? <ProfileChip tone="accent">{String(playStyle).toUpperCase()}</ProfileChip> : null}
                 </div>
-                <div className="dc-signal-metrics">
+                <div className="dc-signal-metrics dc-signal-metrics--focus">
                   {analyticsTiles.map((tile) => (
                     <SignalMetricTile key={tile.label} label={tile.label} value={tile.value} tone={tile.tone} />
                   ))}
                 </div>
               </div>
-              <div className="dc-signal-actionbar dc-signal-actionbar--icon">
-                <button
-                  type="button"
-                  className={`dc-shortlist-icon${scoutMeta.watchlist ? " is-active" : ""}`}
-                  onClick={onToggleWatchlist}
-                  disabled={!onToggleWatchlist}
-                  aria-label={scoutMeta.watchlist ? "Remove from shortlist" : "Add to shortlist"}
-                  title={scoutMeta.watchlist ? "Remove from shortlist" : "Add to shortlist"}
-                >
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M6 3.5h12a1 1 0 0 1 1 1V21l-7-4.2L5 21V4.5a1 1 0 0 1 1-1z" />
-                  </svg>
-                </button>
-              </div>
-            </footer>
+            </section>
+
+            <ProspectMediaUniverse bundle={mediaBundle} />
           </>
         )}
       </article>
@@ -4112,7 +4498,28 @@ function StockExchangeRail({ boardMeta, prospects, onSelectPlayer, leadersProps 
     if (backend?.source === "backend") return backend;
     return movers;
   }, [prospects, boardMeta?.stock_market_summary, boardMeta?.stockMarketSummary]);
-  const hasSummary = Boolean(summary?.risers?.length || summary?.fallers?.length);
+  const breakouts = (prospects || []).filter((p) => {
+    const d = Number(p?.draftStock?.deltaRank) || 0;
+    return d >= 8;
+  }).slice(0, 5).map((p) => ({
+    key: p.id,
+    name: `${p.firstName || ""} ${p.lastName || ""}`.trim(),
+    rank: p.rank,
+    deltaRank: p.draftStock?.deltaRank,
+  }));
+  const injured = (prospects || []).filter((p) => p?.injured || p?.injury || p?.availability === "injured").slice(0, 5).map((p) => ({
+    key: p.id,
+    name: `${p.firstName || ""} ${p.lastName || ""}`.trim(),
+    rank: p.rank,
+    deltaRank: 0,
+  }));
+  const watched = (prospects || []).filter((p) => p?.watchlist || p?.target).slice(0, 6).map((p) => ({
+    key: p.id,
+    name: `${p.firstName || ""} ${p.lastName || ""}`.trim(),
+    rank: p.rank,
+    deltaRank: p.draftStock?.deltaRank,
+  }));
+  const hasSummary = Boolean(summary?.risers?.length || summary?.fallers?.length || breakouts.length || injured.length || watched.length);
 
   const renderList = (title, items, tone) => {
     if (!items?.length) return null;
@@ -4140,7 +4547,7 @@ function StockExchangeRail({ boardMeta, prospects, onSelectPlayer, leadersProps 
   return (
     <aside className="dc-stock-rail dc-scroll-surface">
       <header className="dc-stock-rail__head">
-        <h2>Stock Board</h2>
+        <h2>Scouting Ticker</h2>
       </header>
       <div className="dc-stock-rail__movement">
         {!hasSummary ? (
@@ -4149,6 +4556,9 @@ function StockExchangeRail({ boardMeta, prospects, onSelectPlayer, leadersProps 
           <>
             {renderList("Risers", summary.risers, "rise")}
             {renderList("Fallers", summary.fallers, "fall")}
+            {renderList("Breakouts", breakouts, "rise")}
+            {renderList("Injured", injured, "fall")}
+            {renderList("Watched", watched, "stable")}
           </>
         )}
       </div>
@@ -4159,41 +4569,142 @@ function StockExchangeRail({ boardMeta, prospects, onSelectPlayer, leadersProps 
   );
 }
 
-function IntelFeed({ boardMeta, prospects }) {
-  const summary = useMemo(() => {
-    const movers = buildStockMoversFromProspects(prospects);
-    if (movers.risers.length || movers.fallers.length) return movers;
-    const backend = boardMeta?.stock_market_summary || boardMeta?.stockMarketSummary;
-    if (backend?.source === "backend") return backend;
-    return movers;
-  }, [prospects, boardMeta?.stock_market_summary, boardMeta?.stockMarketSummary]);
-  const lines = [];
-  if (summary?.risers?.length) {
-    const top = summary.risers[0];
-    const deltaRaw = top.delta_rank ?? top.deltaRank;
-    const delta = Number.isFinite(Number(deltaRaw)) ? Number(deltaRaw) : 0;
-    lines.push(`${top.name} ${delta >= 0 ? "↑" : "→"} ${Math.abs(delta)}`);
-  }
-  const cleanTop5 = prospects.find((p) => p.franchiseTier?.key === "franchise_swing" && getStockTone(p.draftStock) === "stable");
-  if (cleanTop5) {
-    lines.push(`${cleanTop5.lastName} stable`);
-  }
-  if (summary?.no_movement_count > 0) {
-    lines.push(`${summary.no_movement_count} no history`);
-  }
-  // Honest standby: no movement to report yet, stated plainly on one line
-  // instead of an empty broadcast band.
-  const idle = !lines.length;
-  if (idle) {
-    lines.push("No rank movement reported yet");
-  }
+function IntelFeed({ prospects }) {
+  const movers = useMemo(() => weeklyStockMovers(prospects, { minAbs: 1, limit: 80 }), [prospects]);
+  const idle = !movers.length;
   return (
-    <footer className={`dc-intel-feed${idle ? " is-idle" : ""}`}>
-      <h3>Scouting Wire</h3>
+    <footer className={`dc-intel-feed dc-intel-feed--weekly${idle ? " is-idle" : ""}`}>
+      <h3>Weekly stock</h3>
       <ul>
-        {lines.map((line, i) => <li key={i}>{line}</li>)}
+        {idle ? (
+          <li>No weekly movement reported yet</li>
+        ) : (
+          movers.map((row) => (
+            <li key={row.key} className={row.delta > 0 ? "is-up" : "is-down"}>
+              #{row.rank} {row.name} {row.delta > 0 ? `+${row.delta}` : row.delta}
+            </li>
+          ))
+        )}
       </ul>
     </footer>
+  );
+}
+
+function StatsWorkspace({
+  prospects,
+  dateContext,
+  leaderMode,
+  setLeaderMode,
+  profilesById,
+  onSelectPlayer,
+}) {
+  const [metricSort, setMetricSort] = useState(null);
+  const [sortViewMode, setSortViewMode] = useState("production");
+
+  useEffect(() => {
+    setSortViewMode(resolveSortViewMode(leaderMode));
+    setMetricSort((prev) => {
+      if (prev?.mode === leaderMode) return prev;
+      return {
+        key: defaultSortForLeaderMode(leaderMode, prospects),
+        dir: "desc",
+        mode: leaderMode,
+      };
+    });
+  }, [leaderMode, prospects]);
+
+  const handleMetricSort = (metricKey) => {
+    setMetricSort((prev) => {
+      if (prev?.key === metricKey) {
+        return { key: metricKey, dir: prev.dir === "desc" ? "asc" : "desc", mode: leaderMode };
+      }
+      return { key: metricKey, dir: "desc", mode: leaderMode };
+    });
+  };
+
+  const leaders = useMemo(() => {
+    const base = sortProspectsForLeaderMode(prospects, leaderMode).map((p) =>
+      buildLeaderDisplayRow(p, profilesById)
+    );
+    if (metricSort?.key) {
+      return sortLeaderRowsByMetric(base, metricSort.key, metricSort.dir);
+    }
+    return base;
+  }, [prospects, leaderMode, profilesById, metricSort]);
+
+  const sectionMeta = LEADER_MODE_META[leaderMode] || LEADER_MODE_META.points;
+  const heroMetricKey = resolveHeroMetricKey(leaderMode, metricSort?.key);
+  const sortLabel = metricSort?.key ? (LEADER_METRICS[metricSort.key]?.label || metricSort.key) : null;
+
+  return (
+    <div className="dc-stats-workspace dc-scroll-surface dc-leaders-modal-sc">
+      <header className="dc-stats-workspace__head">
+        <div>
+          <p className="dc-lm-eyebrow">Draft class</p>
+          <h2>{sectionMeta.title}</h2>
+          {sortLabel ? (
+            <p className="dc-lm-sort-label">
+              Sorted by {sortLabel}
+              {metricSort?.dir === "asc" ? " (low to high)" : ""}
+            </p>
+          ) : null}
+          {dateContext?.statsThrough ? (
+            <p className="dc-leaders-modal__context">Through {dateContext.statsThrough}</p>
+          ) : null}
+        </div>
+      </header>
+      <div className="dc-leader-tabs dc-leader-tabs--modal">
+        {LEADER_MODE_OPTIONS.map((m) => (
+          <button
+            key={m.key}
+            type="button"
+            className={`dc-leader-tab ${leaderMode === m.key ? "is-active" : ""}`}
+            onClick={() => setLeaderMode(m.key)}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+      {leaderMode !== "goalies" ? (
+        <div className="dc-lm-view-toggle">
+          {LEADER_SORT_VIEW_MODES.map((mode) => (
+            <button
+              key={mode.key}
+              type="button"
+              className={`dc-lm-view-toggle__btn${sortViewMode === mode.key ? " is-active" : ""}`}
+              onClick={() => setSortViewMode(mode.key)}
+            >
+              {mode.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <LeadersSortBar
+        leaderMode={leaderMode}
+        sortViewMode={sortViewMode}
+        activeSortKey={metricSort?.key}
+        onSort={handleMetricSort}
+      />
+      <div className="dc-lm-row-stack">
+        {!leaders.length ? (
+          <p className="dc-empty-note">Not enough tracked data for this view yet.</p>
+        ) : (
+          leaders.map((row, index) => (
+            <LeaderModalRow
+              key={row.id}
+              row={row}
+              index={index}
+              leaderMode={leaderMode}
+              onSelect={(r) => r?.player && onSelectPlayer(r.player)}
+              heroMetricKey={heroMetricKey}
+              activeSortMetric={metricSort?.key}
+              onMetricSort={handleMetricSort}
+              sortViewMode={sortViewMode}
+            />
+          ))
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -4937,6 +5448,10 @@ export default function DraftClass() {
   } = useGameUI();
   const dateContext = useMemo(() => buildDateContext(franchiseState), [franchiseState]);
   const [activeBoardView, setActiveBoardView] = useState("rank");
+  const [boardSource, setBoardSource] = useState("scout");
+  const [showConsensus, setShowConsensus] = useState(false);
+  const [pyramidMode, setPyramidMode] = useState(false);
+  const [workspace, setWorkspace] = useState("board");
   const [leaderMode, setLeaderMode] = useState("points");
   const [leadersModalOpen, setLeadersModalOpen] = useState(false);
   const [scoutingStore, setScoutingStore] = useState({});
@@ -4995,7 +5510,8 @@ export default function DraftClass() {
   const rawProspects = useMemo(() => {
     const profiles = franchiseState?.draft_class_hud?.prospect_profiles_by_id || {};
     const mapped = mapBackendDraftBoard(franchiseState?.draft_class_rankings?.entries, dateContext);
-    return mapped.map((p) => ({ ...p, profile: profiles[p.id] || null }));
+    const withProfiles = mapped.map((p) => ({ ...p, profile: profiles[p.id] || null }));
+    return enrichProspectsForWarRoom(withProfiles, profiles);
   }, [franchiseState?.draft_class_rankings?.entries, franchiseState?.draft_class_hud?.prospect_profiles_by_id, dateContext]);
 
   useEffect(() => {
@@ -5033,10 +5549,9 @@ export default function DraftClass() {
       list = list.filter((p) => isGoaliePosition(p.position));
     }
 
-    list.sort((a, b) => a.rank - b.rank);
-
-    return list;
-  }, [rawProspects, activeBoardView]);
+    const source = showConsensus ? "consensus" : boardSource;
+    return rankProspectsForSource(list, source);
+  }, [rawProspects, activeBoardView, boardSource, showConsensus]);
 
   const selectedProspectId = selectedProspect?.id ?? null;
 
@@ -5133,42 +5648,53 @@ export default function DraftClass() {
             onOpenWjc={handleOpenWjc}
           />
 
-          <div className="dc-command-grid">
-            <aside className="dc-board-nav-rail">
-              <DraftBoardNavRail
+          <nav className="dc-workspace-tabs" aria-label="Draft workspace">
+            {WORKSPACE_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className={workspace === tab.id ? "is-active" : ""}
+                onClick={() => setWorkspace(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+
+          {workspace === "stats" ? (
+            <StatsWorkspace
+              prospects={filteredProspects}
+              dateContext={dateContext}
+              leaderMode={leaderMode}
+              setLeaderMode={setLeaderMode}
+              profilesById={franchiseState?.draft_class_hud?.prospect_profiles_by_id || {}}
+              onSelectPlayer={openProspect}
+            />
+          ) : (
+            <div className="dc-command-grid">
+              <aside className="dc-board-nav-rail">
+                <DraftBoardNavRail
+                  activeBoardView={activeBoardView}
+                  setActiveBoardView={setActiveBoardView}
+                />
+              </aside>
+              <ProspectBoardPanel
+                prospects={filteredProspects}
+                selectedProspectId={selectedProspectId}
+                onOpenProspect={openProspect}
+                scoutingStore={scoutingStore}
                 activeBoardView={activeBoardView}
-                setActiveBoardView={setActiveBoardView}
+                boardSource={boardSource}
+                setBoardSource={setBoardSource}
+                pyramidMode={pyramidMode}
+                setPyramidMode={setPyramidMode}
+                showConsensus={showConsensus}
+                setShowConsensus={setShowConsensus}
               />
-            </aside>
-            <ProspectBoardPanel
-              prospects={filteredProspects}
-              selectedProspectId={selectedProspectId}
-              onOpenProspect={openProspect}
-              scoutingStore={scoutingStore}
-              activeBoardView={activeBoardView}
-            />
+            </div>
+          )}
 
-            <StockExchangeRail
-              boardMeta={boardMeta}
-              prospects={filteredProspects}
-              onSelectPlayer={(id) => {
-                const p = filteredProspects.find((x) => x.id === id);
-                if (p) openProspect(p);
-              }}
-              leadersProps={{
-                prospects: filteredProspects,
-                dateContext,
-                leaderMode,
-                setLeaderMode,
-                onSelectPlayer: openProspect,
-                onOpenFullLeaders: () => setLeadersModalOpen(true),
-                regionFilter: "ALL PLAYERS",
-                leagueFilter: "ALL",
-              }}
-            />
-          </div>
-
-          <IntelFeed boardMeta={boardMeta} prospects={filteredProspects} />
+          <IntelFeed prospects={filteredProspects} />
         </main>
 
         {selectedProspect ? (
@@ -5176,6 +5702,8 @@ export default function DraftClass() {
             player={selectedProspect}
             profile={activeProfile}
             meta={getScoutingMeta(scoutingStore, selectedProspect.id)}
+            franchiseState={franchiseState}
+            allProspects={filteredProspects}
             compareIds={compareIds}
             onClose={() => setSelectedProspect(null)}
             onToggleWatchlist={() => toggleProspectWatchlist(selectedProspect.id)}
@@ -5232,9 +5760,9 @@ export default function DraftClass() {
             display: grid;
             /* Four children: header, stat strip, board, wire. The board owns the
                flexible track — a fifth declared track handed it to the wire. */
-            grid-template-rows: auto auto minmax(0, 1fr) auto;
-            gap: 10px;
-            padding: 12px;
+            grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+            gap: 8px;
+            padding: 8px;
             color: var(--dc-text);
             font-family: var(--dc-font-ui);
             background:
@@ -5604,8 +6132,8 @@ export default function DraftClass() {
           .dc-command-grid {
             min-height: 0;
             display: grid;
-            grid-template-columns: 84px minmax(0, 1fr) 360px;
-            gap: 10px;
+            grid-template-columns: 84px minmax(0, 1fr);
+            gap: 8px;
           }
           .dc-board-nav-rail { min-height: 0; display: flex; width: 84px; }
           .dc-prospect-board,
@@ -5668,10 +6196,14 @@ export default function DraftClass() {
           .dc-prospect-board__columns,
           .dc-prospect-row {
             display: grid;
-            grid-template-columns: 44px minmax(160px, 1.5fr) 42px minmax(68px, 0.8fr) 68px 66px 52px 56px;
+            grid-template-columns: 56px minmax(220px, 1.7fr) 42px minmax(72px, 0.7fr) 108px 72px 88px 78px;
             align-items: center;
-            gap: 10px;
-            padding: 0 12px;
+            gap: 8px;
+            padding: 0 10px;
+          }
+          .dc-prospect-board.is-consensus .dc-prospect-board__columns,
+          .dc-prospect-board.is-consensus .dc-prospect-row {
+            grid-template-columns: 56px minmax(200px, 1.6fr) 42px minmax(72px, 0.7fr) 108px 72px 88px 78px 52px;
           }
 
           .dc-prospect-board__columns {
@@ -5819,6 +6351,8 @@ export default function DraftClass() {
             border-radius: 3px;
             color: var(--dc-text);
             font-variant-numeric: tabular-nums;
+            font-size: 1.28rem;
+            font-weight: 900;
             transition: background var(--motion-micro), box-shadow var(--motion-micro);
           }
 
@@ -6698,9 +7232,9 @@ export default function DraftClass() {
           .dc-intel-feed ul { margin: 3px 0 0; padding: 0; list-style: none; display: flex; gap: 12px; white-space: nowrap; overflow: auto; font-family: var(--dc-font-mono); font-size: 0.6875rem; }
           .dc-intel-feed li::before { content: "• "; color: var(--dc-cyan); }
 
-          .dc-shared-headshot.player-headshot.size-sm { --size: 40px; }
-          .dc-shared-headshot.player-headshot.size-md { --size: 80px; }
-          .dc-shared-headshot.player-headshot.size-lg { --size: 126px; }
+          .dc-shared-headshot.player-headshot.size-sm { --size: 52px; }
+          .dc-shared-headshot.player-headshot.size-md { --size: 72px; }
+          .dc-shared-headshot.player-headshot.size-lg { --size: 148px; }
 
           .dc-profile-body, .dc-stat-layout, .dc-attributes-layout, .dc-scout-layout, .dc-character-layout { display: grid; gap: 8px; }
           .dc-profile-card, .dc-info-card, .dc-list-card, .dc-summary-card, .dc-stat-card, .dc-attribute-card, .dc-scout-card, .dc-character-card {
@@ -6713,18 +7247,18 @@ export default function DraftClass() {
           .dc-character-row, .dc-fit-row { font-size: 0.6875rem; }
 
           @media (max-width: 1600px) {
-            .dc-command-grid { grid-template-columns: 84px minmax(0, 1fr) 320px; }
+            .dc-command-grid { grid-template-columns: 84px minmax(0, 1fr); }
             /* Same eight-column ladder as the base board: the previous
                four-column override wrapped both the header and every row onto
                a second line, so ranks and grades no longer aligned. */
             .dc-prospect-board__columns,
             .dc-prospect-row {
-              grid-template-columns: 40px minmax(150px, 1.5fr) 38px minmax(62px, 0.8fr) 64px 60px 48px 56px;
+              grid-template-columns: 52px minmax(200px, 1.6fr) 38px minmax(64px, 0.7fr) 96px 64px 80px 72px;
               gap: 9px;
               padding-left: 12px;
               padding-right: 12px;
             }
-            .dc-prospect-row { min-height: 76px; }
+            .dc-prospect-row { min-height: 52px; }
             .dc-prospect-row__rank span { font-size: 1.45rem; }
             .dc-prospect-identity__avatar-wrap { width: 84px; height: 84px; }
             .dc-prospect-identity .dc-board-headshot.player-headshot { --size: 66px; }
@@ -6848,6 +7382,18 @@ export default function DraftClass() {
               "footer footer footer";
             gap: 0;
           }
+          .dc-signal-panel.dc-brochure {
+            width: min(1480px, 98vw);
+            height: min(96vh, 980px);
+            height: min(96dvh, 980px);
+            grid-template-columns: minmax(220px, 260px) minmax(0, 1.35fr) minmax(280px, 340px);
+            grid-template-rows: auto minmax(0, 1.2fr) minmax(220px, 0.95fr);
+            grid-template-areas:
+              "banner banner banner"
+              "identity dna reports"
+              "identity analytics analytics";
+          }
+          .dc-featured { display: none !important; }
           .dc-signal-panel--premium .dc-signal-identity {
             background:
               linear-gradient(180deg, rgba(10,28,44,0.96), rgba(5,14,24,0.88)),
@@ -7133,7 +7679,7 @@ export default function DraftClass() {
           }
           .dc-skill-dna__stage {
             position: relative;
-            width: min(100%, 248px);
+            width: min(100%, 360px);
             aspect-ratio: 1;
             margin: 0 auto;
           }
@@ -7162,8 +7708,8 @@ export default function DraftClass() {
             position: absolute;
             left: 50%;
             top: 50%;
-            width: 92px;
-            height: 92px;
+            width: 108px;
+            height: 108px;
             margin: 0;
             transform: translate(-50%, -50%);
             display: flex;
@@ -7778,7 +8324,7 @@ export default function DraftClass() {
           }
           .dc-signal-chart__svg {
             width: 100%;
-            height: 64px;
+            height: 140px;
             display: block;
             background: linear-gradient(180deg, rgba(43,228,255,0.04), transparent);
             border: 1px solid rgba(118, 200, 245, 0.1);
@@ -8146,7 +8692,8 @@ export default function DraftClass() {
             .dc-signal-panel { height: 96vh; }
             .dc-signal-identity .player-headshot,
             .dc-signal-portrait .player-headshot { --size: 88px; }
-            .dc-signal-chart__svg { height: 40px; }
+            .dc-signal-chart__svg { height: 72px; }
+            .dc-signal-chart--weekly .dc-signal-chart__svg { height: 140px; }
             .dc-signal-core { gap: 6px; padding: 8px 10px 6px; }
             .dc-signal-meters { gap: 7px; }
             .dc-skill-dna__ranges { display: none; }

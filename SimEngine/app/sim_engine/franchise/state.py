@@ -45,7 +45,14 @@ def _merge_simengine_league_news_into_storylines(session: FranchiseSession) -> N
             continue
         _record_storyline(session, raw)
 def _record_storyline(session: FranchiseSession, event: Dict[str, Any]) -> None:
-    ev = _normalize_storyline_payload(event if isinstance(event, dict) else {})
+    raw = event if isinstance(event, dict) else {}
+    try:
+        from app.sim_engine.franchise.storyline_engine import enrich_storyline_for_narrative_universe  # noqa: WPS433
+
+        raw = enrich_storyline_for_narrative_universe(session, raw)
+    except Exception:
+        pass
+    ev = _normalize_storyline_payload(raw)
     if not ev.get("headline"):
         return
     dq = getattr(session, "_storyline_dedupe", None)

@@ -82,6 +82,7 @@ const PANEL_TABS = [
   { value: "performance", label: "Performance" },
   { value: "development", label: "Development" },
   { value: "contract", label: "Contract" },
+  { value: "media", label: "Media" },
   { value: "career", label: "Career" },
   { value: "moves", label: "Moves" },
 ];
@@ -4009,21 +4010,39 @@ function RosterTable({
       <div className="nhlrost-table__body">
         {players.map((player, index) => {
           const selected = player.key === selectedPlayerKey;
+          const posGroup = String(player.positionClass || player.position || "").toUpperCase();
+          const prev = players[index - 1];
+          const prevGroup = String(prev?.positionClass || prev?.position || "").toUpperCase();
+          const groupLabel = posGroup.startsWith("G")
+            ? "Goalies"
+            : posGroup === "D" || posGroup.startsWith("LD") || posGroup.startsWith("RD")
+              ? "Defence"
+              : "Forwards";
+          const prevLabel = prev
+            ? (prevGroup.startsWith("G")
+              ? "Goalies"
+              : prevGroup === "D" || prevGroup.startsWith("LD") || prevGroup.startsWith("RD")
+                ? "Defence"
+                : "Forwards")
+            : null;
+          const showGroup = groupLabel !== prevLabel;
+          const globalIndex = pageOffset + index;
+          const scratched = Boolean(player.scratched || player.is_scratch || player.line === "scratch");
           const archetypeColor = getArchetypeColor(player.archetype);
           const healthBand = getHealthBand(player);
-          const globalIndex = pageOffset + index;
 
           return (
+            <React.Fragment key={player.key || `${player.name}-${globalIndex}`}>
+              {showGroup ? <div className="nhlrost-group-head">{groupLabel}</div> : null}
             <button
               type="button"
-              key={player.key || `${player.name}-${globalIndex}`}
-              className={`nhlrost-row ${selected ? "is-selected" : ""}`}
+              className={`nhlrost-row ${selected ? "is-selected" : ""} ${scratched ? "is-scratch" : ""}`}
               onClick={() => onSelectPlayer(player)}
             >
               <span className="nhlrost-row__name">
                 <PlayerAvatar player={player} size="sm" />
                 <span>
-                  <strong>{player.name}</strong>
+                  <strong>{player.jersey_number || player.jerseyNumber || player.number ? `#${player.jersey_number || player.jerseyNumber || player.number} ` : ""}{player.name}</strong>
                   {(player.locker_room_cancer || player.brady_tkachuk_chaos || (player.name_tags || []).includes("CANCER")) ? (
                     <em className="nhlrost-cancer-tag" title="Locker-room cancer">CANCER</em>
                   ) : null}
@@ -4064,6 +4083,7 @@ function RosterTable({
 
               {showPoolColumn ? <span className="nhlrost-row__pool">{player.league || player._source || "—"}</span> : null}
             </button>
+            </React.Fragment>
           );
         })}
       </div>
@@ -5444,6 +5464,311 @@ function CareerTransactionsCard({ transactions }) {
   );
 }
 
+function rosterMediaHeatPhrase(heat) {
+  const n = Number(heat);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n < 20) return "Quiet";
+  if (n < 45) return "Building";
+  if (n < 75) return "Hot";
+  return "Boiling";
+}
+
+function rosterMediaCredPhrase(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n < 30) return "Speculation";
+  if (n < 50) return "Early chatter";
+  if (n < 75) return "Credible";
+  return "Strongly sourced";
+}
+
+function groupPlayerStoryArcs(events) {
+  const byArc = new Map();
+  (Array.isArray(events) ? events : []).forEach((ev, idx) => {
+    const arcId = String(ev?.storyline_id || ev?.storylineId || ev?.id || `beat-${idx}`);
+    if (!byArc.has(arcId)) byArc.set(arcId, []);
+    byArc.get(arcId).push(ev);
+  });
+  return [...byArc.entries()]
+    .map(([arcId, beats]) => {
+      const sorted = [...beats].sort((a, b) =>
+        String(a?.calendar_iso || a?.date || a?.season || "").localeCompare(
+          String(b?.calendar_iso || b?.date || b?.season || "")
+        )
+      );
+      const latest = sorted[sorted.length - 1] || {};
+      return {
+        arcId,
+        beats: sorted,
+        headline: latest.headline || latest.title || "Career storyline",
+        heat: Math.max(...sorted.map((b) => Number(b?.heat) || 0)),
+        stage: String(latest?.arc_status || latest?.status || "active").toLowerCase() === "resolved"
+          ? "Archived"
+          : sorted.length > 2
+            ? "Escalating"
+            : "Developing",
+      };
+    })
+    .sort((a, b) => b.heat - a.heat || b.beats.length - a.beats.length);
+}
+
+function buildPlayerPublicImage(player, storylines) {
+  const labels = [];
+  const events = Array.isArray(storylines) ? storylines : EMPTY_ARRAY;
+  const hasTrade = events.some((e) => /trade|rumor|market/i.test(`${e?.type || ""} ${e?.category || ""} ${e?.headline || ""}`));
+  const hasInjury = events.some((e) => /injur/i.test(`${e?.type || ""} ${e?.category || ""}`));
+  const hasConduct = events.some((e) => /legal|conduct/i.test(`${e?.type || ""} ${e?.category || ""}`));
+  const hasPerformance = events.some((e) => /performance|underperform|breakout|streak/i.test(`${e?.type || ""} ${e?.category || ""}`));
+
+  if (Number(player?.ovr) >= 88) labels.push("Franchise centerpiece");
+  if (player?.captain || player?.isCaptain) labels.push("Captain");
+  if (hasTrade) labels.push("Trade speculation magnet");
+  if (hasInjury) labels.push("Injury narrative");
+  if (hasConduct) labels.push("Off-ice scrutiny");
+  if (hasPerformance) labels.push("Performance storyline");
+  if (Number(player?.morale) <= 45) labels.push("Frustrated");
+  else if (Number(player?.morale) >= 80) labels.push("Locker-room favourite");
+
+  if (!labels.length) labels.push("Professional");
+  return labels.slice(0, 5);
+}
+
+function MediaPanel({ player, storylines, franchiseState }) {
+  if (!player) {
+    return <EmptyPanel title="No player selected" body="Select a player to view media coverage." compact />;
+  }
+
+  const playerId = String(player.id || player.player_id || "");
+  const narrativeUniverse = franchiseState?.narrative_universe || {};
+  const playerMem = narrativeUniverse?.player_narrative_memory?.[playerId] || null;
+  const events = Array.isArray(storylines) ? storylines : EMPTY_ARRAY;
+  const backendArcs = Array.isArray(narrativeUniverse?.story_arcs)
+    ? narrativeUniverse.story_arcs.filter((a) => String(a?.player_id || "") === playerId)
+    : [];
+  const arcs = backendArcs.length
+    ? backendArcs.map((arc) => ({
+        arcId: arc.arc_id,
+        beats: (Array.isArray(arc.beats) ? arc.beats : []).map((b, index) => ({
+          id: b.beat_id,
+          storyline_id: b.beat_id,
+          headline: b.headline,
+          summary: b.summary,
+          calendar_iso: b.calendar_iso,
+          date: b.calendar_iso,
+          credibility: b.credibility,
+        })),
+        headline: arc.headline || "Career storyline",
+        heat: Number(arc.heat) || 0,
+        stage: arc.phase || arc.status || "Developing",
+      }))
+    : groupPlayerStoryArcs(events);
+  const memTags = Array.isArray(playerMem?.reputation_tags) ? playerMem.reputation_tags : [];
+  const publicImage = memTags.length ? memTags : buildPlayerPublicImage(player, events);
+  const maxHeat = Math.max(
+    events.reduce((m, s) => Math.max(m, Number(s?.heat) || 0), 0),
+    Number(playerMem?.media_heat) || 0
+  );
+  const mediaPressure = rosterMediaHeatPhrase(maxHeat);
+  const backendSocial = Array.isArray(narrativeUniverse?.social_posts)
+    ? narrativeUniverse.social_posts.filter((p) => {
+        const blob = `${p?.related_headline || ""} ${p?.text || ""}`.toLowerCase();
+        const name = safeStr(player.name, "").toLowerCase();
+        return name && blob.includes(name.split(/\s+/).pop());
+      }).slice(0, 6)
+    : [];
+  const agentRel = narrativeUniverse?.agent_relationships?.[playerId] || null;
+  const agents = Array.isArray(narrativeUniverse?.agents) ? narrativeUniverse.agents : [];
+  const agentInfo = agentRel
+    ? agents.find((a) => String(a?.id || "") === String(agentRel.agent_id || "")) || null
+    : null;
+  const privateKnowledge = Array.isArray(narrativeUniverse?.knowledge_graph)
+    ? narrativeUniverse.knowledge_graph.filter(
+        (node) =>
+          String(node?.player_id || "") === playerId ||
+          events.some((ev) => String(ev?.storyline_id || ev?.id || "") === String(node?.storyline_id || ""))
+      ).slice(-4)
+    : [];
+  const gmKnowsMore = events.some((ev) => ev?.gm_knows_more) || privateKnowledge.some((n) => n.gm_knows_more);
+  const quotes = events
+    .slice(0, 5)
+    .map((ev) => ({
+      source: ev?.source_label || ev?.source || "League Wire",
+      text: ev?.summary || ev?.short_summary || ev?.effect_summary || ev?.headline || ev?.title || "",
+    }))
+    .filter((q) => q.text);
+
+  return (
+    <section className="nhlrost-history-layout nhlrost-media-layout">
+      <article className="nhlrost-panel">
+        <header className="nhlrost-panel__head">
+          <div>
+            <p>Media universe</p>
+            <h3>Public image</h3>
+          </div>
+          {mediaPressure ? <span className="nhlrost-media-pressure">{mediaPressure}</span> : null}
+        </header>
+        <div className="nhlrost-media-tags">
+          {publicImage.map((tag) => (
+            <span key={tag} className="nhlrost-media-tag">{tag}</span>
+          ))}
+        </div>
+      </article>
+
+      {agentInfo ? (
+        <article className="nhlrost-panel">
+          <header className="nhlrost-panel__head">
+            <div>
+              <p>Representation</p>
+              <h3>Player agent</h3>
+            </div>
+          </header>
+          <p className="nhlrost-muted-text">
+            <strong>{agentInfo.name}</strong> · {agentInfo.agency}
+            {agentRel?.trust != null ? ` · client trust ${Math.round(Number(agentRel.trust) * 100)}%` : ""}
+            {agentRel?.gm_trust != null ? ` · GM trust ${Math.round(Number(agentRel.gm_trust) * 100)}%` : ""}
+          </p>
+          <p className="nhlrost-muted-text">
+            Style: {String(agentInfo.style || "").replace(/_/g, " ")}
+            {agentInfo.leak_tendency != null
+              ? ` · leak tendency ${Math.round(Number(agentInfo.leak_tendency) * 100)}%`
+              : ""}
+          </p>
+        </article>
+      ) : null}
+
+      {gmKnowsMore || privateKnowledge.length ? (
+        <article className="nhlrost-panel">
+          <header className="nhlrost-panel__head">
+            <div>
+              <p>Knowledge layers</p>
+              <h3>Public vs private</h3>
+            </div>
+          </header>
+          {gmKnowsMore ? (
+            <p className="nhlrost-muted-text">
+              You know more than the public wire — internal facts may not match headlines.
+            </p>
+          ) : null}
+          {privateKnowledge.map((node, index) => (
+            <p key={node.storyline_id || index} className="nhlrost-muted-text">
+              {node.public_headline || node.headline || "Storyline"} · public level:{" "}
+              {String(node.public_level || "unknown").replace(/_/g, " ")}
+              {node.gm_knows_more ? " · GM knows more" : ""}
+            </p>
+          ))}
+        </article>
+      ) : null}
+
+      {arcs.length ? (
+        <article className="nhlrost-panel">
+          <header className="nhlrost-panel__head">
+            <div>
+              <p>Story arcs</p>
+              <h3>Career narrative</h3>
+            </div>
+          </header>
+          <div className="nhlrost-media-arcs">
+            {arcs.map((arc) => (
+              <div key={arc.arcId} className="nhlrost-media-arc">
+                <div className="nhlrost-media-arc__head">
+                  <strong>{arc.headline}</strong>
+                  <span>{arc.stage} · {arc.beats.length} beat{arc.beats.length === 1 ? "" : "s"}</span>
+                </div>
+                <ol className="nhlrost-media-timeline">
+                  {arc.beats.map((beat, index) => (
+                    <li key={beat.id || beat.storyline_id || index}>
+                      <time>{beat.calendar_iso || beat.date || beat.season || "—"}</time>
+                      <span>{beat.headline || beat.title || beat.type || "Update"}</span>
+                      {beat.summary || beat.short_summary ? <p>{beat.summary || beat.short_summary}</p> : null}
+                      {rosterMediaCredPhrase(beat.credibility) ? (
+                        <em>{rosterMediaCredPhrase(beat.credibility)}</em>
+                      ) : null}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ))}
+          </div>
+        </article>
+      ) : (
+        <article className="nhlrost-panel">
+          <header className="nhlrost-panel__head">
+            <div>
+              <p>Story arcs</p>
+              <h3>Career narrative</h3>
+            </div>
+          </header>
+          <p className="nhlrost-muted-text">No recorded storyline events yet. Coverage appears as the league reacts to performance, trades, injuries, and off-ice incidents.</p>
+        </article>
+      )}
+
+      {backendSocial.length ? (
+        <article className="nhlrost-panel">
+          <header className="nhlrost-panel__head">
+            <div>
+              <p>Social universe</p>
+              <h3>Recent posts</h3>
+            </div>
+          </header>
+          <div className="nhlrost-media-quotes">
+            {backendSocial.map((post, index) => (
+              <blockquote key={post.id || index}>
+                <strong>{post.author_name}{post.verified ? " ✓" : ""}{post.author_type === "agent" ? " · Agent" : ""} · {post.handle || ""}</strong>
+                <p>{post.text}</p>
+              </blockquote>
+            ))}
+          </div>
+        </article>
+      ) : null}
+
+      {quotes.length ? (
+        <article className="nhlrost-panel">
+          <header className="nhlrost-panel__head">
+            <div>
+              <p>What people are saying</p>
+              <h3>Media conversation</h3>
+            </div>
+          </header>
+          <div className="nhlrost-media-quotes">
+            {quotes.map((q, index) => (
+              <blockquote key={`${q.source}-${index}`}>
+                <strong>{q.source}</strong>
+                <p>{q.text}</p>
+              </blockquote>
+            ))}
+          </div>
+        </article>
+      ) : null}
+
+      {events.length ? (
+        <article className="nhlrost-panel">
+          <header className="nhlrost-panel__head">
+            <div>
+              <p>Wire file</p>
+              <h3>Recent headlines</h3>
+            </div>
+          </header>
+          <div className="nhlrost-storyline-list">
+            {events.map((event, index) => (
+              <article key={event.id || event.storyline_id || index} className="nhlrost-storyline-card">
+                <strong>{event.headline || event.title || event.type || "Storyline"}</strong>
+                {event.calendar_iso || event.date || event.season ? (
+                  <span>{event.calendar_iso || event.date || event.season}</span>
+                ) : null}
+                {event.summary || event.short_summary ? <p>{event.summary || event.short_summary}</p> : null}
+                {event.effect_summary ? <p>{event.effect_summary}</p> : null}
+                {rosterMediaHeatPhrase(event.heat) ? (
+                  <em className="nhlrost-media-heat">{rosterMediaHeatPhrase(event.heat)}</em>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        </article>
+      ) : null}
+    </section>
+  );
+}
+
 function CareerPanel({ player, storylines, franchiseState }) {
   if (!player) {
     return <EmptyPanel title="No career selected" body="Select a player to view career history." compact />;
@@ -5514,28 +5839,6 @@ function CareerPanel({ player, storylines, franchiseState }) {
       <CareerSeasonsTable seasons={seasons} isGoalie={isGoalie} />
       <CareerAwardsCard awards={awards} />
       <CareerTransactionsCard transactions={transactions} />
-
-      <article className="nhlrost-panel">
-        <header className="nhlrost-panel__head">
-          <div>
-            <p>Career</p>
-            <h3>Storyline Timeline</h3>
-          </div>
-        </header>
-        {events.length ? (
-          <div className="nhlrost-storyline-list">
-            {events.map((event, index) => (
-              <article key={event.id || event.storyline_id || index} className="nhlrost-storyline-card">
-                <strong>{event.headline || event.title || event.type || "Storyline"}</strong>
-                {event.season || event.date ? <span>{event.season || event.date}</span> : null}
-                {event.effect_summary ? <p>{event.effect_summary}</p> : null}
-              </article>
-            ))}
-          </div>
-        ) : (
-          <p className="nhlrost-muted-text">No recorded storyline events yet for this player.</p>
-        )}
-      </article>
     </section>
   );
 }
@@ -5746,6 +6049,7 @@ function DetailPanelRouter({ activeTab, player, storylines, franchiseState, onRe
   if (activeTab === "performance") return <ProductionPanel player={player} franchiseState={franchiseState} />;
   if (activeTab === "development") return <DevelopmentPanel player={player} />;
   if (activeTab === "contract") return <ContractPanel player={player} />;
+  if (activeTab === "media") return <MediaPanel player={player} storylines={storylines} franchiseState={franchiseState} />;
   if (activeTab === "career") return <CareerPanel player={player} storylines={storylines} franchiseState={franchiseState} />;
   if (activeTab === "moves") return <UsagePanel player={player} onRefresh={onRefresh} />;
 
@@ -6250,7 +6554,7 @@ export function RosterScreen() {
           (selectedName && eventPlayers.includes(selectedName))
         );
       })
-      .slice(-8)
+      .slice(-24)
       .reverse();
   }, [franchiseState, selectedPlayer]);
 
@@ -8694,6 +8998,115 @@ function RosterScreenStyles() {
         margin: 6px 0 0;
         color: rgba(232, 244, 251, 0.86);
         font-size: 0.82rem;
+      }
+
+      .nhlrost-media-pressure {
+        font-size: 0.68rem;
+        font-weight: 900;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--gold);
+        border: 1px solid rgba(233, 168, 60, 0.35);
+        padding: 4px 8px;
+        border-radius: 4px;
+      }
+      .nhlrost-media-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .nhlrost-media-tag {
+        font-size: 0.72rem;
+        font-weight: 800;
+        padding: 4px 8px;
+        border-radius: 4px;
+        border: 1px solid rgba(233, 168, 60, 0.28);
+        background: rgba(233, 168, 60, 0.08);
+        color: #f4d9a6;
+      }
+      .nhlrost-media-arcs {
+        display: grid;
+        gap: 10px;
+      }
+      .nhlrost-media-arc {
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .nhlrost-media-arc__head {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: baseline;
+        margin-bottom: 6px;
+      }
+      .nhlrost-media-arc__head span {
+        font-size: 0.68rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .nhlrost-media-timeline {
+        margin: 0;
+        padding: 0 0 0 16px;
+        display: grid;
+        gap: 8px;
+      }
+      .nhlrost-media-timeline time {
+        display: block;
+        font-size: 0.68rem;
+        color: var(--muted);
+        font-family: var(--font-mono-data, monospace);
+      }
+      .nhlrost-media-timeline p {
+        margin: 2px 0 0;
+        font-size: 0.78rem;
+        color: rgba(232, 244, 251, 0.78);
+      }
+      .nhlrost-media-timeline em {
+        font-style: normal;
+        font-size: 0.64rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--gold);
+      }
+      .nhlrost-media-quotes {
+        display: grid;
+        gap: 8px;
+      }
+      .nhlrost-media-quotes blockquote {
+        margin: 0;
+        padding: 10px 12px;
+        border-left: 3px solid var(--cyan);
+        background: rgba(19, 216, 231, 0.06);
+        border-radius: 0 8px 8px 0;
+      }
+      .nhlrost-media-quotes blockquote strong {
+        display: block;
+        font-size: 0.68rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--cyan);
+        margin-bottom: 4px;
+      }
+      .nhlrost-media-quotes blockquote p {
+        margin: 0;
+        font-size: 0.82rem;
+        line-height: 1.4;
+      }
+      .nhlrost-media-heat {
+        display: inline-block;
+        margin-top: 6px;
+        font-style: normal;
+        font-size: 0.64rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--gold);
       }
 
       .nhlrost-inspector {

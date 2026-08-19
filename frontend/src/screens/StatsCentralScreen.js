@@ -2221,7 +2221,7 @@ export function StatsCentralScreen() {
           </button>
 
           <div className="sc-terminal-title">
-            <span className="sc-terminal-kicker">League Intelligence</span>
+            <span className="sc-terminal-kicker">NHL League Intelligence</span>
             <strong>Stats Central</strong>
           </div>
 
@@ -8673,6 +8673,7 @@ function LeadersTab({ data }) {
   ];
 
   const podium = active.rows.slice(0, 3);
+  const seasonIdle = !active.rows.length;
 
   return (
     <div className="sc-leaders-workspace">
@@ -8702,6 +8703,16 @@ function LeadersTab({ data }) {
         </nav>
       </header>
 
+      {seasonIdle ? (
+        <div className="sc-season-pending">
+          <h2>Season Not Started</h2>
+          <p>
+            Counting stats and leaderboards unlock once the franchise calendar reaches opening night.
+            Returning context stays on the Team Stats and Awards boards until then.
+          </p>
+        </div>
+      ) : (
+        <>
       <section className="sc-leader-podium">
         {podium.map((row, index) => (
           <article
@@ -8732,6 +8743,8 @@ function LeadersTab({ data }) {
         tableClassName="sc-leader-table-v2"
         empty="No ranked rows are available."
       />
+        </>
+      )}
     </div>
   );
 }

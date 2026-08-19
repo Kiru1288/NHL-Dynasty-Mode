@@ -29,6 +29,12 @@ import {
 import { markNavigation, record as perfRecord } from "../services/perfProfiler";
 import { HUB_MENU, SCREENS, buildDefaultFranchiseTeamList } from "./constants";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
+import {
+  activeBreakingAlerts,
+  breakingAlertKey,
+  readDismissedBreakingKeys,
+  writeDismissedBreakingKeys,
+} from "../utils/breakingAlerts";
 import hubWallTextureSrc from "../pictures/gray-abstract-texture-background.jpg";
 import officeFontBold from "../styles/ArchivoBlack-Regular.ttf";
 import { ShowcasePopupLayer } from "../components/game/ShowcasePopupLayer";
@@ -39,6 +45,45 @@ import { resolveWorldJuniorsPayload } from "../events/worldJuniors/WorldJuniorsM
 const GameUIContext = createContext(null);
 
 export const INJURIES_STORAGE_KEY = "nhl_franchise_injuries_enabled";
+
+function franchiseTeamKey(team) {
+  if (!team || typeof team !== "object") {
+    return "";
+  }
+  return String(
+    team.abbr ||
+      team.abbreviation ||
+      team.team_id ||
+      team.teamId ||
+      team.id ||
+      team.name ||
+      ""
+  )
+    .trim()
+    .toUpperCase();
+}
+
+function remapTeamIndex(prevTeams, prevIndex, nextTeams) {
+  if (!Array.isArray(nextTeams) || !nextTeams.length) {
+    return -1;
+  }
+  if (prevIndex == null || prevIndex < 0 || !Array.isArray(prevTeams)) {
+    return -1;
+  }
+  const code = franchiseTeamKey(prevTeams[prevIndex]);
+  if (!code) {
+    return Math.min(prevIndex, nextTeams.length - 1);
+  }
+  const found = nextTeams.findIndex((team) => franchiseTeamKey(team) === code);
+  return found >= 0 ? found : -1;
+}
+
+function sameTeamRoster(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+    return false;
+  }
+  return left.every((team, index) => franchiseTeamKey(team) === franchiseTeamKey(right[index]));
+}
 
 function readInjuriesPref() {
   try {
@@ -126,6 +171,157 @@ function prefetchResource(src, timeoutMs = 40000) {
   });
 }
 
+function prefetchImagesBatched(sources, batchSize = 6) {
+  const list = Array.from(new Set((sources || []).filter(Boolean)));
+  if (!list.length) return Promise.resolve(true);
+
+  return new Promise((resolve) => {
+    let index = 0;
+    const runBatch = () => {
+      const slice = list.slice(index, index + batchSize);
+      index += batchSize;
+      if (!slice.length) {
+        resolve(true);
+        return;
+      }
+      Promise.allSettled(slice.map((src) => prefetchImage(src))).finally(() => {
+        if (typeof window.requestIdleCallback === "function") {
+          window.requestIdleCallback(runBatch, { timeout: 1200 });
+        } else {
+          window.setTimeout(runBatch, 48);
+        }
+      });
+    };
+    runBatch();
+  });
+}
+
+function playGlobalBreakingSting(level) {
+  if (typeof window === "undefined") return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = level === "league_defining" ? "sawtooth" : "square";
+    osc.frequency.value = level === "league_defining" ? 880 : 660;
+    gain.gain.value = 0.035;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.3);
+    osc.stop(ctx.currentTime + 0.35);
+  } catch {
+    /* optional */
+  }
+}
+
+function BreakingNewsLayer({ franchiseState, screen, setScreen }) {
+  const sessionId = String(franchiseState?.session_id || getFranchiseSessionId() || "anon");
+  const [dismissedBreaking, setDismissedBreaking] = useState(() =>
+    readDismissedBreakingKeys(sessionId)
+  );
+  const alerts = Array.isArray(franchiseState?.narrative_universe?.breaking_alerts)
+    ? franchiseState.narrative_universe.breaking_alerts
+    : [];
+  const pending = activeBreakingAlerts(alerts, dismissedBreaking);
+  const active = pending[0] || null;
+
+  useEffect(() => {
+    setDismissedBreaking(readDismissedBreakingKeys(sessionId));
+  }, [sessionId]);
+
+  const dismissAlerts = useCallback(
+    (list) => {
+      const batch = Array.isArray(list) ? list : [];
+      if (!batch.length) return;
+      setDismissedBreaking((prev) => {
+        const next = new Set(prev);
+        batch.forEach((alert) => {
+          const key = breakingAlertKey(alert);
+          if (key) next.add(key);
+        });
+        writeDismissedBreakingKeys(sessionId, next);
+        return next;
+      });
+    },
+    [sessionId]
+  );
+
+  useEffect(() => {
+    if (!active?.level || screen === SCREENS.STORYLINES) return;
+    playGlobalBreakingSting(active.level);
+  }, [active?.storyline_id, active?.headline, active?.level, screen]);
+
+  if (!active || screen === SCREENS.STORYLINES || screen === SCREENS.SETUP || !franchiseState) return null;
+
+  return (
+    <div
+      className="nhl-breaking-global"
+      role="status"
+      style={{
+        position: "fixed",
+        top: 12,
+        right: 12,
+        zIndex: 11000,
+        width: "min(360px, calc(100vw - 24px))",
+        border: "1px solid rgba(255, 96, 109, 0.55)",
+        borderTop: "3px solid #ff606d",
+        background: "linear-gradient(180deg, rgba(40, 8, 12, 0.98), rgba(9, 25, 38, 0.98))",
+        padding: "12px 14px",
+        boxShadow: "0 12px 32px rgba(0,0,0,.4)",
+      }}
+    >
+      <p style={{ margin: "0 0 4px", fontSize: 10, fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", color: "#ff606d" }}>
+        Breaking · {String(active.level || "major").replace(/_/g, " ")}
+        {pending.length > 1 ? ` · ${pending.length} alerts` : ""}
+      </p>
+      <strong style={{ display: "block", fontSize: 13, lineHeight: 1.35, marginBottom: 8 }}>
+        {String(active.headline || "Major league development")}
+      </strong>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button
+          type="button"
+          onClick={() => {
+            dismissAlerts(pending);
+            setScreen?.(SCREENS.STORYLINES);
+          }}
+          style={{
+            border: "1px solid rgba(73, 231, 240, 0.5)",
+            borderRadius: 6,
+            background: "rgba(19, 216, 231, 0.18)",
+            color: "#13d8e7",
+            padding: "6px 10px",
+            fontSize: 11,
+            fontWeight: 800,
+            cursor: "pointer",
+          }}
+        >
+          Open wire
+        </button>
+        <button
+          type="button"
+          onClick={() => dismissAlerts(pending)}
+          style={{
+            border: "1px solid rgba(156, 218, 236, 0.2)",
+            borderRadius: 6,
+            background: "transparent",
+            color: "#e9f7fb",
+            padding: "6px 10px",
+            fontSize: 11,
+            fontWeight: 800,
+            cursor: "pointer",
+          }}
+        >
+          Dismiss{pending.length > 1 ? " all" : ""}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function GameUIProvider({ children }) {
   const [screen, setScreenState] = useState(() =>
     getFranchiseSessionId() ? SCREENS.HUB : SCREENS.SETUP
@@ -150,6 +346,8 @@ export function GameUIProvider({ children }) {
   const [commandPlaceholder, setCommandPlaceholder] = useState(null);
 
   const [teams, setTeams] = useState([]);
+  const teamsRef = useRef(teams);
+  teamsRef.current = teams;
   const [teamsLoading, setTeamsLoading] = useState(false);
   const [gmName, setGmName] = useState("");
   const [playerUniverse, setPlayerUniverse] = useState("generated");
@@ -315,19 +513,19 @@ export function GameUIProvider({ children }) {
 
   const loadTeams = useCallback(async () => {
     const fallback = buildDefaultFranchiseTeamList();
-    setTeams(fallback);
-    setSetupTeamIndex((i) =>
-      i < 0 ? -1 : Math.min(i, Math.max(0, fallback.length - 1))
-    );
+    if (!teamsRef.current.length) {
+      setTeams(fallback);
+    }
     setTeamsLoading(true);
     try {
       await resolveApiBaseUrl();
       const t = await listTeams();
       const list = Array.isArray(t) && t.length > 0 ? t : fallback;
-      setTeams(list);
-      setSetupTeamIndex((i) =>
-        i < 0 ? -1 : Math.min(i, Math.max(0, list.length - 1))
-      );
+      const current = teamsRef.current.length ? teamsRef.current : fallback;
+      if (!sameTeamRoster(current, list)) {
+        setSetupTeamIndex((index) => remapTeamIndex(current, index, list));
+        setTeams(list);
+      }
     } catch (e) {
       console.warn(
         "Franchise teams API unavailable; using local 32-club list.",
@@ -375,7 +573,7 @@ export function GameUIProvider({ children }) {
               .filter(Boolean)
           )
         );
-        job = Promise.all(crests.map((src) => prefetchImage(src)));
+        job = prefetchImagesBatched(crests);
       } else if (stage === HUB_WARMUP_STAGES.OPERATIONS) {
         /*
           Records can only be pulled once a session exists. Before that this
@@ -963,6 +1161,7 @@ export function GameUIProvider({ children }) {
   return (
     <GameUIContext.Provider value={value}>
       {children}
+      <BreakingNewsLayer franchiseState={franchiseState} screen={screen} setScreen={setScreen} />
       <ShowcasePopupLayer />
       <FranchiseEventLayer />
       {worldJuniorsOpen ? (

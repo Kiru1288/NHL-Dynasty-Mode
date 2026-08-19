@@ -145,7 +145,7 @@ def advance_days(session, n: int) -> None:
         advance_franchise_day(session)
 
 
-def test_1_baseline(session) -> None:
+def test_1_baseline(session_holder: Dict[str, Any]) -> None:
     s = start_franchise(team_query="Buffalo Sabres", head_coach_name="Test", coach_archetype="balanced", seed=9001)
     migrate_session_storyline_state(s)
     base_ovrs: Dict[str, int] = {}
@@ -186,6 +186,7 @@ def test_1_baseline(session) -> None:
         f"base_ovr_changes={len(ovr_changed)} blocked_log={len(blocked)}",
         "; ".join(fake_hits[:3]) if fake_hits else "",
     )
+    session_holder["session"] = s
 
 
 def test_2_trade_rejected(session_holder: Dict[str, Any]) -> None:

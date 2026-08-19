@@ -1,9 +1,8 @@
-import React, { useEffect, useRef } from "react";
+import React, { Suspense, useEffect, useRef } from "react";
 import { GameUIProvider, useGameUI } from "./game/GameUIContext";
 import { SCREENS } from "./game/constants";
 import setupTheme from "./soundtrack/JJ's Energy - Felix Weber (FIFA 2014 World Cup Brazil OST).mp3";
 import { GameCanvas } from "./components/game/GameCanvas";
-import { SetupScreen } from "./screens/SetupScreen";
 import { HubScreen } from "./screens/HubScreen";
 import { RosterScreen } from "./screens/RosterScreen";
 import { StatsCentralScreen } from "./screens/StatsCentralScreen";
@@ -25,6 +24,31 @@ import LeagueOperations from "./screens/LeagueOperations";
 /** TEMP: remove with frontend/src/dev/EventMenuReplay.js after menu QA */
 import EventMenuReplay from "./dev/EventMenuReplay";
 
+const SetupScreen = React.lazy(() =>
+  import("./screens/SetupScreen").then((m) => ({ default: m.SetupScreen }))
+);
+
+function SetupScreenFallback() {
+  return (
+    <div
+      style={{
+        minHeight: "100%",
+        display: "grid",
+        placeItems: "center",
+        background: "#0c0e14",
+        color: "rgba(201,168,106,0.85)",
+        fontFamily: 'var(--font-office-display, "Archivo Black", sans-serif)',
+        letterSpacing: "0.12em",
+        textTransform: "uppercase",
+        fontSize: 12,
+        fontWeight: 800,
+      }}
+    >
+      Loading franchise setup…
+    </div>
+  );
+}
+
 const isEventMenuReplay =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("replayEvents") === "1";
@@ -37,6 +61,8 @@ function useSetupSoundtrack(screen) {
   const fadeFrameRef = useRef(null);
 
   useEffect(() => {
+    if (screen !== SCREENS.SETUP) return undefined;
+
     const audio = new Audio(setupTheme);
     audio.loop = true;
     audio.volume = SETUP_MUSIC_VOLUME;
@@ -51,7 +77,7 @@ function useSetupSoundtrack(screen) {
       audio.src = "";
       audioRef.current = null;
     };
-  }, []);
+  }, [screen]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -131,7 +157,11 @@ function GameRoot() {
 
   return (
     <GameCanvas>
-      {screen === SCREENS.SETUP && <SetupScreen />}
+      {screen === SCREENS.SETUP && (
+        <Suspense fallback={<SetupScreenFallback />}>
+          <SetupScreen />
+        </Suspense>
+      )}
       {screen === SCREENS.HUB && <HubScreen />}
       {screen === SCREENS.ROSTER && <RosterScreen />}
       {screen === SCREENS.CALENDAR && <CalendarScreen />}

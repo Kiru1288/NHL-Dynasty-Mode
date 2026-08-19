@@ -37,7 +37,6 @@ import React, {
   import { SCREENS } from "../game/constants";
   import "./FirstPersonOfficeHub.css";
   import officeFontBold from "../styles/ArchivoBlack-Regular.ttf";
-  import retroOfficePackGlb from "../styles/Retro Office Pack/Itch Upload/90s Retro Office Pack.glb";
   import officeWallTextureSrc from "../pictures/gray-abstract-texture-background.jpg";
 
   /**
@@ -473,8 +472,12 @@ import React, {
   const USE_RETRO_OFFICE_PACK = false;
   const USE_PROCEDURAL_ROOM_SHELL = true;
 
-  /** Bundled from src — source: styles/Retro Office Pack/Itch Upload/ */
-  const RETRO_OFFICE_MODEL_PATH = retroOfficePackGlb;
+  /**
+   * Gitignored (GitHub 100MB limit): styles/Retro Office Pack/Itch Upload/
+   * Do not statically import that .glb — webpack fails when the local pack is absent.
+   * Drop a copy into public/office/ and flip USE_RETRO_OFFICE_PACK to enable it.
+   */
+  const RETRO_OFFICE_MODEL_PATH = `${process.env.PUBLIC_URL || ""}/office/90s-retro-office-pack.glb`;
 
   const RETRO_OFFICE_TRANSFORM = {
     position: [0, 0, -0.95],
@@ -6499,6 +6502,19 @@ import React, {
     lowPowerMode = false,
     transform = RETRO_OFFICE_TRANSFORM,
   }) {
+    if (!enabled || !RETRO_OFFICE_MODEL_PATH) return null;
+    return (
+      <RetroOfficeModelLoaded
+        lowPowerMode={lowPowerMode}
+        transform={transform}
+      />
+    );
+  }
+
+  function RetroOfficeModelLoaded({
+    lowPowerMode = false,
+    transform = RETRO_OFFICE_TRANSFORM,
+  }) {
     const { scene } = useGLTF(RETRO_OFFICE_MODEL_PATH);
 
     const clonedScene = useMemo(() => {
@@ -6548,7 +6564,7 @@ import React, {
       }
     }, [clonedScene, lowPowerMode]);
 
-    if (!enabled || !clonedScene) return null;
+    if (!clonedScene) return null;
 
     return (
       <group
@@ -6562,7 +6578,9 @@ import React, {
     );
   }
 
-  useGLTF.preload(RETRO_OFFICE_MODEL_PATH);
+  if (USE_RETRO_OFFICE_PACK && RETRO_OFFICE_MODEL_PATH) {
+    useGLTF.preload(RETRO_OFFICE_MODEL_PATH);
+  }
 
   function OfficeScene({
     teamName,

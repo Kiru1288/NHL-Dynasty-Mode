@@ -8200,9 +8200,33 @@ def _normalize_storyline_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         "to_team_abbrev",
         "related_teams",
         "teams",
+        # Narrative universe
+        "arc_id",
+        "beat_id",
+        "beat_index",
+        "arc_phase",
+        "knowledge_type",
+        "narrative_angle",
+        "reporter_id",
+        "reporter_name",
+        "outlet_id",
+        "outlet_name",
+        "world_event_id",
+        "body",
+        "knowledge_layers",
+        "public_knowledge_level",
+        "gm_knows_more",
+        "visibility",
+        "market_key",
+        "market_tone",
+        "market_descriptor",
+        "breaking_level",
+        "press_conference_id",
     ):
         if raw.get(key) is not None:
             out[key] = raw.get(key)
+    if raw.get("body") is not None and not out.get("summary"):
+        out["summary"] = str(raw.get("body") or "").strip()
     if raw.get("requires_action") is not None:
         out["requires_action"] = bool(raw.get("requires_action"))
     if raw.get("eligible_to_play") is not None:
@@ -8465,7 +8489,14 @@ def _merge_simengine_league_news_into_storylines(session: FranchiseSession) -> N
 
 
 def _record_storyline(session: FranchiseSession, event: Dict[str, Any]) -> None:
-    ev = _normalize_storyline_payload(event if isinstance(event, dict) else {})
+    raw = event if isinstance(event, dict) else {}
+    try:
+        from app.sim_engine.franchise.storyline_engine import enrich_storyline_for_narrative_universe  # noqa: WPS433
+
+        raw = enrich_storyline_for_narrative_universe(session, raw)
+    except Exception:
+        pass
+    ev = _normalize_storyline_payload(raw)
     if not ev.get("headline"):
         return
     dq = getattr(session, "_storyline_dedupe", None)
@@ -13384,8 +13415,24 @@ def _apply_storyline_event_choice(
         effects.update(_apply_generic_storyline_choice_effect(session, decision, chosen))
 
     label = str(chosen.get("label") or choice_id)
+    eff = dict(chosen.get("effects") or {})
+    press_id = str(ev.get("press_conference_id") or "")
     headline = f"{decision['title']}: {label}"
     summary = f"You chose: {label}."
+    if press_id and eff.get("question_id") and eff.get("response_id"):
+        try:
+            from app.sim_engine.franchise.storyline_engine import apply_press_conference_response  # noqa: WPS433
+
+            press_result = apply_press_conference_response(
+                session,
+                press_id,
+                str(eff.get("question_id") or ""),
+                str(eff.get("response_id") or ""),
+            )
+            headline = str(press_result.get("headline") or headline)
+            summary = f"Press conference response: {label}."
+        except Exception:
+            pass
     if chosen.get("effect_summary"):
         summary += f" {chosen.get('effect_summary')}"
 
@@ -17144,8 +17191,14 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
 
     notifications_raw = list(session.notifications[-56:])
     notifications_norm = [_normalize_notification_payload(n, i) for i, n in enumerate(notifications_raw)]
-    storylines_norm = [_normalize_storyline_payload(ev if isinstance(ev, dict) else {"headline": str(ev or "")}) for ev in list(getattr(session, "storyline_events", None) or [])[-80:]]
+    storylines_norm = [_normalize_storyline_payload(ev if isinstance(ev, dict) else {"headline": str(ev or "")}) for ev in list(getattr(session, "storyline_events", None) or [])[-120:]]
     storyline_choices = _storyline_choices_payload(session)
+    try:
+        from app.sim_engine.franchise.storyline_engine import build_narrative_universe_payload  # noqa: WPS433
+
+        narrative_universe = build_narrative_universe_payload(session)
+    except Exception:
+        narrative_universe = {}
     injuries_payload = _build_injuries_payload(session)
     injury_history_payload = _build_injury_history_payload(session)
 
@@ -17239,6 +17292,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         "timeline": list(session.timeline[-80:]),
         "storyline_events": storylines_norm,
         "active_storylines": len(storylines_norm),
+        "narrative_universe": narrative_universe,
         "conduct_org_pressure": dict(getattr(session, "_conduct_org_pressure", None) or {}),
         "injuries": injuries_payload,
         "injury_history": injury_history_payload,

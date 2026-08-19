@@ -15,6 +15,7 @@ abstracted by the engine when needed).
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+import math
 import random
 
 from .standings import StandingsTable, TeamStandingRecord
@@ -106,26 +107,38 @@ def _build_league_bracket(
 
 
 # --- Playoff realism tuning constants -----------------------------------
-# Sensitivity of per-game win prob to playoff strength gap (raised from 0.8 so
-# regular-season dominance matters), capped so underdogs always have a path.
-_SERIES_STRENGTH_SENSITIVITY = 1.12
-_SERIES_P_MIN = 0.42
-_SERIES_P_MAX = 0.68
+# Logistic maps strength gaps onto per-game odds:
+#   ~0.10 gap (typical 1 vs 8) -> ~59% favorite
+#   ~0.40 gap (70-win vs 30-win) -> ~82-88% favorite
+# Hard floor/ceiling still leave a path for upsets, but not coin-flips
+# when the regular season was a mismatch.
+_SERIES_LOGISTIC_K = 3.8
+_SERIES_P_MIN = 0.22
+_SERIES_P_MAX = 0.88
 # Home-ice swing per game (games 1, 2, 5, 7 for the higher seed).
 _HOME_ICE_GAME_EDGE = 0.038
+
+
+def playoff_game_win_probability(
+    strength_high: float,
+    strength_low: float,
+) -> float:
+    """Per-game win probability for the higher-strength club (0..1)."""
+    try:
+        hi = float(strength_high)
+        lo = float(strength_low)
+    except (TypeError, ValueError):
+        return 0.5
+    diff = max(-0.55, min(0.55, hi - lo))
+    p = 1.0 / (1.0 + math.exp(-_SERIES_LOGISTIC_K * diff))
+    return max(_SERIES_P_MIN, min(_SERIES_P_MAX, p))
 
 
 def _series_win_probability(
     strength_high: float,
     strength_low: float,
 ) -> float:
-    """
-    Approximate per-game win probability for the higher seed, based on
-    normalized playoff strength values (0..1 range). Favors the stronger
-    team while leaving genuine room for best-of-seven upsets.
-    """
-    diff = max(-0.35, min(0.35, strength_high - strength_low))
-    return max(_SERIES_P_MIN, min(_SERIES_P_MAX, 0.5 + diff * _SERIES_STRENGTH_SENSITIVITY))
+    return playoff_game_win_probability(strength_high, strength_low)
 
 
 def _simulate_series(
@@ -145,6 +158,7 @@ def _simulate_series(
         game_idx = wins_high + wins_low
         home_high = game_idx in (0, 1, 4, 6)
         p_game = p_high + (_HOME_ICE_GAME_EDGE if home_high else -_HOME_ICE_GAME_EDGE)
+        p_game = max(_SERIES_P_MIN, min(_SERIES_P_MAX, p_game))
         if rng.random() < p_game:
             wins_high += 1
         else:
@@ -184,6 +198,7 @@ def _augment_strength_with_results(
     out = dict(strength_map or {})
     goalie_by_tid: Dict[str, float] = {}
     top6_by_tid: Dict[str, float] = {}
+    xg_share_by_tid: Dict[str, float] = {}
     for t in teams or []:
         tid = getattr(t, "team_id", None)
         if tid is None:
@@ -209,6 +224,15 @@ def _augment_strength_with_results(
             sk_vals.sort(reverse=True)
             top = sk_vals[:6]
             top6_by_tid[tid] = sum(top) / len(top)
+        xgf = getattr(t, "season_xgf", None)
+        xga = getattr(t, "season_xga", None)
+        try:
+            if xgf is not None and xga is not None:
+                tot = float(xgf) + float(xga)
+                if tot >= 15.0:
+                    xg_share_by_tid[tid] = float(xgf) / tot
+        except (TypeError, ValueError):
+            pass
 
     g_mean = (sum(goalie_by_tid.values()) / len(goalie_by_tid)) if goalie_by_tid else 0.0
     s_mean = (sum(top6_by_tid.values()) / len(top6_by_tid)) if top6_by_tid else 0.0
@@ -221,6 +245,9 @@ def _augment_strength_with_results(
         adj = float(out.get(tid, 0.5))
         adj += 0.62 * (ppct - 0.5)
         adj += 0.038 * max(-2.0, min(2.0, gd_pg))
+        if tid in xg_share_by_tid:
+            # Season xG can contradict a lucky/unlucky record.
+            adj += 0.90 * (xg_share_by_tid[tid] - 0.5)
         if tid in goalie_by_tid and g_mean > 0:
             adj += 0.20 * (goalie_by_tid[tid] - g_mean)
         if tid in top6_by_tid and s_mean > 0:

@@ -19,7 +19,6 @@ import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { ClubBallBoard } from "./setupClubBalls";
 import setupTheme from "../soundtrack/JJ's Energy - Felix Weber (FIFA 2014 World Cup Brazil OST).mp3";
 import { getStroke } from "perfect-freehand";
-
 import {
   ArcRotateCamera,
   Color3,
@@ -44,8 +43,29 @@ import {
   UniversalCamera,
   Vector3,
   VertexBuffer,
+  VertexData,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
+import darkOfficeGlb
+  from "../pictures/modern_office.glb?url";
+import executiveDeskGlb
+  from "../pictures/office_pics/ambani_executive_office_desk_with_walnut_finish.glb?url";
+import leatherChairGlb
+  from "../pictures/office_pics/worn_leather_office_chair.glb?url";
+import manSittingGlb
+  from "../pictures/office_pics/man_sitting.glb?url";
+import manDressedInSuitGlb
+  from "../pictures/office_pics/man_dressed_in_suit.glb?url";
+import hockeyStickGlb
+  from "../pictures/office_pics/hockey_stick (1).glb?url";
+import trophyCupGlb
+  from "../pictures/office_pics/trophy_cup.glb?url";
+import officePropsGlb
+  from "../pictures/office_pics/office_props_pack.glb?url";
+import contractGlb
+  from "../pictures/contract.glb?url";
+import clipboardGlb
+  from "../pictures/ps1_style_patient_sheet_with_clipboard.glb?url";
 
 /*
   ============================================================================
@@ -59,41 +79,6 @@ import "@babylonjs/loaders/glTF";
   - This component never touches the existing music/audio system.
   - The backend/state integration remains useGameUI() + beginFranchise().
 */
-
-import darkOfficeGlb
-  from "../pictures/modern_office.glb?url";
-
-import executiveDeskGlb
-  from "../pictures/office_pics/ambani_executive_office_desk_with_walnut_finish.glb?url";
-
-import leatherChairGlb
-  from "../pictures/office_pics/worn_leather_office_chair.glb?url";
-
-import manSittingGlb
-  from "../pictures/office_pics/man_sitting.glb?url";
-
-import manDressedInSuitGlb
-  from "../pictures/office_pics/man_dressed_in_suit.glb?url";
-
-import hockeyStickGlb
-  from "../pictures/office_pics/hockey_stick (1).glb?url";
-
-import trophyCupGlb
-  from "../pictures/office_pics/trophy_cup.glb?url";
-
-import officePropsGlb
-  from "../pictures/office_pics/office_props_pack.glb?url";
-
-/*
-  These two assets were already part of the earlier setup work.
-  They stay in the root pictures directory unless you move them.
-*/
-import contractGlb
-  from "../pictures/contract.glb?url";
-
-import clipboardGlb
-  from "../pictures/ps1_style_patient_sheet_with_clipboard.glb?url";
-
 
 /* ============================================================================
    TEAM / SETUP DATA
@@ -237,6 +222,7 @@ const HALL = Object.freeze({
   doorZ: 1.15,
   eyeHeight: 1.68,
   runnerWidth: 1.9,
+  tkachukZ: -16.9,
 });
 
 const HALL_PHASE = Object.freeze({
@@ -256,9 +242,9 @@ const EXHIBIT_CARDS = Object.freeze({
     title: "Erik Karlsson",
     subtitle: "Ottawa Senators · No. 65 · Defence",
     lines: [
+      "White Reebok away sweater, hung back-out. KARLSSON over a red 65, shoulder O crests, and the NHL 100 patch still on the right sleeve.",
       "Game 1, Eastern Conference Second Round, 2017 Stanley Cup Playoffs. Ottawa hosts the New York Rangers to open the series.",
-      "Karlsson captained the Senators through that spring on a fractured foot, logging close to thirty minutes a night and running the power play from the point.",
-      "Signed on the front numbers in silver. The sweater still carries the shoulder crests, twill nameplate and fight-strap stitching from the 2016-17 season.",
+      "Signed in silver across the numbers. The fight-strap stitching from that 2016-17 run is still on the hem.",
     ],
     footer: "Round 2 · Game 1 · 2017",
   },
@@ -326,10 +312,11 @@ const EXHIBIT_CARDS = Object.freeze({
   },
   tkachuk: {
     kicker: "Editorial position",
-    title: "House Rules",
-    subtitle: "Right wall · unframed on purpose",
+    title: "Fuck Brady Tkachuk",
+    subtitle: "Ottawa Senators · No. 7 · Right wall",
     lines: [
-      "This is the only object in the corridor that was not professionally mounted.",
+      "The only object in the corridor that was not professionally mounted.",
+      "Brady Tkachuk, spelled correctly, because management has standards even when it is being petty.",
       "There is a dart tray underneath it. Management considers that a feature.",
     ],
     footer: "Press the interact key to throw",
@@ -2094,7 +2081,7 @@ function TeamLogo({
 
 
 /* ============================================================================
-   APPOINTMENT DEED AND 3D CLUB BALLS
+   APPOINTMENT DEED AND CLUB PICKER
    ========================================================================== */
 
 /*
@@ -2317,6 +2304,7 @@ function AppointmentDeedSheet({
                     ? "setup-token is-on"
                     : "setup-token"
                 }
+                aria-pressed={playerUniverse !== "real_nhl"}
                 onClick={() => setPlayerUniverse("generated")}
               >
                 <span className="setup-token-orb" aria-hidden="true" />
@@ -2329,6 +2317,7 @@ function AppointmentDeedSheet({
                     ? "setup-token is-on"
                     : "setup-token"
                 }
+                aria-pressed={playerUniverse === "real_nhl"}
                 onClick={() => setPlayerUniverse("real_nhl")}
               >
                 <span className="setup-token-orb" aria-hidden="true" />
@@ -2344,6 +2333,7 @@ function AppointmentDeedSheet({
                 className={
                   injuriesEnabled ? "setup-token is-on" : "setup-token"
                 }
+                aria-pressed={injuriesEnabled}
                 onClick={() => setInjuriesEnabled(true)}
               >
                 <span className="setup-token-orb" aria-hidden="true" />
@@ -2354,6 +2344,7 @@ function AppointmentDeedSheet({
                 className={
                   !injuriesEnabled ? "setup-token is-on" : "setup-token"
                 }
+                aria-pressed={!injuriesEnabled}
                 onClick={() => setInjuriesEnabled(false)}
               >
                 <span className="setup-token-orb" aria-hidden="true" />
@@ -2423,7 +2414,7 @@ function AppointmentDeedSheet({
   );
 }
 
-function TeamSelection({
+const TeamSelection = React.memo(function TeamSelection({
   teams,
   selectedIndex,
   onSelect,
@@ -2445,7 +2436,7 @@ function TeamSelection({
       />
     </section>
   );
-}
+});
 
 function ConfigurationPanel({
   selected,
@@ -4090,137 +4081,120 @@ function drawJerseyLaces(ctx, x, y, width, height) {
   ctx.restore();
 }
 
+function clipHangingJersey(ctx, width, height) {
+  const cx = width / 2;
+  const collarY = height * 0.1;
+  const sleeveY = height * 0.265;
+  const armpitY = height * 0.55;
+  const hemY = height * 0.9;
+  ctx.beginPath();
+  ctx.moveTo(cx - width * 0.09, collarY);
+  ctx.quadraticCurveTo(cx, height * 0.16, cx + width * 0.09, collarY);
+  ctx.lineTo(cx + width * 0.185, collarY + height * 0.018);
+  ctx.lineTo(cx + width * 0.445, sleeveY);
+  ctx.lineTo(cx + width * 0.418, height * 0.6);
+  ctx.lineTo(cx + width * 0.262, armpitY);
+  ctx.lineTo(cx + width * 0.275, hemY);
+  ctx.quadraticCurveTo(cx, hemY + height * 0.022, cx - width * 0.275, hemY);
+  ctx.lineTo(cx - width * 0.262, armpitY);
+  ctx.lineTo(cx - width * 0.418, height * 0.6);
+  ctx.lineTo(cx - width * 0.445, sleeveY);
+  ctx.lineTo(cx - width * 0.185, collarY + height * 0.018);
+  ctx.closePath();
+}
+
 /*
-  Ottawa Senators 2016-17 home sweater, front, as it hung in the frame:
-  red body, black-and-white sleeve and hem stripes, centurion roundel on the
-  chest, shoulder crests, sleeve numbers, and a silver signature across it.
+  Ottawa Senators Reebok-era white away sweater, reverse, as photographed:
+  KARLSSON nameplate, large 65 in red with a black outline, shoulder O crests,
+  Reebok mark under the collar, NHL 100 patch on the right sleeve.
 */
 function paintKarlssonJersey(ctx, width, height) {
-  const red = "#b31939";
-  const black = "#0b0b0d";
-  const cream = "#efe9dc";
+  const red = "#c8102e";
+  const black = "#111111";
+  const white = "#f4f1ea";
 
   ctx.clearRect(0, 0, width, height);
 
   const cx = width / 2;
-  const shoulderY = height * 0.14;
   const hemY = height * 0.9;
 
-  // silhouette
-  ctx.beginPath();
-  ctx.moveTo(cx - width * 0.19, shoulderY);
-  ctx.quadraticCurveTo(cx, height * 0.09, cx + width * 0.19, shoulderY);
-  ctx.lineTo(cx + width * 0.42, height * 0.29);
-  ctx.lineTo(cx + width * 0.4, height * 0.62);
-  ctx.lineTo(cx + width * 0.26, height * 0.6);
-  ctx.lineTo(cx + width * 0.27, hemY);
-  ctx.quadraticCurveTo(cx, hemY + height * 0.03, cx - width * 0.27, hemY);
-  ctx.lineTo(cx - width * 0.26, height * 0.6);
-  ctx.lineTo(cx - width * 0.4, height * 0.62);
-  ctx.lineTo(cx - width * 0.42, height * 0.29);
-  ctx.closePath();
+  clipHangingJersey(ctx, width, height);
   ctx.save();
   ctx.clip();
 
-  ctx.fillStyle = red;
+  ctx.fillStyle = white;
   ctx.fillRect(0, 0, width, height);
 
-  // shoulder yoke
-  const yoke = ctx.createLinearGradient(0, shoulderY, 0, height * 0.28);
-  yoke.addColorStop(0, black);
-  yoke.addColorStop(1, "#141418");
-  ctx.fillStyle = yoke;
-  ctx.beginPath();
-  ctx.moveTo(0, shoulderY - 10);
-  ctx.lineTo(width, shoulderY - 10);
-  ctx.lineTo(width, height * 0.25);
-  ctx.quadraticCurveTo(cx, height * 0.31, 0, height * 0.25);
-  ctx.closePath();
-  ctx.fill();
+  // sleeve: black cuff, then a thick red band
+  ctx.fillStyle = black;
+  ctx.fillRect(0, height * 0.5, width * 0.2, height * 0.14);
+  ctx.fillRect(width * 0.8, height * 0.5, width * 0.2, height * 0.14);
+  ctx.fillStyle = red;
+  ctx.fillRect(0, height * 0.4, width * 0.2, height * 0.11);
+  ctx.fillRect(width * 0.8, height * 0.4, width * 0.2, height * 0.11);
 
-  // yoke piping
-  ctx.strokeStyle = cream;
-  ctx.lineWidth = 7;
-  ctx.beginPath();
-  ctx.moveTo(0, height * 0.252);
-  ctx.quadraticCurveTo(cx, height * 0.312, width, height * 0.252);
-  ctx.stroke();
-
-  // sleeve stripes
+  // hem: black / red / black
   [
-    [height * 0.47, 34, black],
-    [height * 0.508, 12, cream],
-    [height * 0.527, 26, black],
-  ].forEach(([y, thickness, colour]) => {
-    ctx.fillStyle = colour;
-    ctx.fillRect(0, y, width * 0.16, thickness);
-    ctx.fillRect(width * 0.84, y, width * 0.16, thickness);
-  });
-
-  // hem stripes
-  [
-    [height * 0.79, 30, black],
-    [height * 0.825, 11, cream],
-    [height * 0.843, 22, black],
+    [height * 0.78, 22, black],
+    [height * 0.808, 28, red],
+    [height * 0.848, 22, black],
   ].forEach(([y, thickness, colour]) => {
     ctx.fillStyle = colour;
     ctx.fillRect(0, y, width, thickness);
   });
 
-  // chest roundel
-  const crestY = height * 0.44;
+  // Reebok mark, centered just below the collar
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(cx - width * 0.055, height * 0.168, width * 0.11, height * 0.028);
+  ctx.strokeStyle = "rgba(0,0,0,0.28)";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(cx - width * 0.055, height * 0.168, width * 0.11, height * 0.028);
   ctx.fillStyle = black;
-  ctx.beginPath();
-  ctx.arc(cx, crestY, width * 0.135, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "#c9a86a";
-  ctx.lineWidth = 8;
-  ctx.stroke();
-  ctx.strokeStyle = cream;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(cx, crestY, width * 0.108, 0, Math.PI * 2);
-  ctx.stroke();
+  ctx.font = `800 ${Math.round(height * 0.016)}px "Arial Black", sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Reebok", cx, height * 0.183);
 
-  // legionary profile inside the roundel
-  ctx.save();
-  ctx.translate(cx, crestY);
-  ctx.fillStyle = "#d9c48a";
-  ctx.beginPath();
-  ctx.moveTo(-width * 0.055, width * 0.062);
-  ctx.quadraticCurveTo(-width * 0.075, -width * 0.02, -width * 0.03, -width * 0.055);
-  ctx.quadraticCurveTo(width * 0.02, -width * 0.086, width * 0.052, -width * 0.038);
-  ctx.lineTo(width * 0.03, -width * 0.012);
-  ctx.quadraticCurveTo(width * 0.052, width * 0.008, width * 0.028, width * 0.03);
-  ctx.quadraticCurveTo(width * 0.03, width * 0.058, width * 0.006, width * 0.062);
-  ctx.closePath();
-  ctx.fill();
-  // crest of the helmet
-  ctx.fillStyle = red;
-  ctx.beginPath();
-  ctx.moveTo(-width * 0.03, -width * 0.055);
-  ctx.quadraticCurveTo(width * 0.004, -width * 0.098, width * 0.05, -width * 0.086);
-  ctx.quadraticCurveTo(width * 0.018, -width * 0.062, width * 0.008, -width * 0.05);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
+  // nameplate
+  ctx.fillStyle = white;
+  ctx.fillRect(cx - width * 0.24, height * 0.215, width * 0.48, height * 0.08);
+  drawTwill(
+    ctx,
+    "KARLSSON",
+    cx,
+    height * 0.258,
+    Math.round(height * 0.052),
+    [{ colour: black, width: 6 }],
+    { fill: black }
+  );
 
-  // shoulder crests
+  // back number
+  drawTwill(
+    ctx,
+    "65",
+    cx,
+    height * 0.52,
+    Math.round(height * 0.3),
+    [{ colour: black, width: 28 }],
+    { fill: red }
+  );
+
+  // shoulder O crests — red disc, black O
   [-1, 1].forEach((side) => {
     const sx = cx + side * width * 0.3;
-    const sy = height * 0.2;
-    ctx.fillStyle = "#111114";
+    const sy = height * 0.195;
+    ctx.fillStyle = red;
     ctx.beginPath();
-    ctx.arc(sx, sy, width * 0.052, 0, Math.PI * 2);
+    ctx.arc(sx, sy, width * 0.05, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = "#c9a86a";
-    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = black;
+    ctx.lineWidth = 4;
     ctx.stroke();
-    ctx.fillStyle = "#d9c48a";
-    ctx.font = `900 ${Math.round(width * 0.042)}px "Arial Black", sans-serif`;
+    ctx.fillStyle = black;
+    ctx.font = `900 ${Math.round(width * 0.048)}px "Arial Black", sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText("O", sx, sy + 2);
+    ctx.fillText("O", sx, sy + 1);
   });
 
   // sleeve numbers
@@ -4228,292 +4202,263 @@ function paintKarlssonJersey(ctx, width, height) {
     drawTwill(
       ctx,
       "65",
-      cx + side * width * 0.335,
-      height * 0.395,
-      Math.round(width * 0.085),
-      [
-        { colour: black, width: 14 },
-        { colour: cream, width: 7 },
-      ],
-      { fill: cream }
+      cx + side * width * 0.345,
+      height * 0.355,
+      Math.round(width * 0.072),
+      [{ colour: black, width: 10 }],
+      { fill: red }
     );
   });
 
-  drawJerseyLaces(ctx, cx, height * 0.155, width * 0.075, height * 0.085);
+  // NHL centennial patch on the right sleeve
+  const patchX = cx + width * 0.345;
+  const patchY = height * 0.455;
+  ctx.fillStyle = "#c5cdd6";
+  ctx.beginPath();
+  ctx.arc(patchX, patchY, width * 0.032, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#1d4e89";
+  ctx.lineWidth = 4;
+  ctx.stroke();
+  ctx.fillStyle = "#1d4e89";
+  ctx.font = `900 ${Math.round(width * 0.028)}px "Arial Black", sans-serif`;
+  ctx.fillText("100", patchX, patchY + 1);
 
-  paintClothWeave(ctx, width, height, 0.15);
+  paintClothWeave(ctx, width, height, 0.12);
 
-  // seams
   drawStitchRun(
     ctx,
     [
-      [cx - width * 0.19, shoulderY + 6],
-      [cx - width * 0.26, height * 0.6],
-      [cx - width * 0.27, hemY],
+      [cx - width * 0.185, height * 0.13],
+      [cx - width * 0.26, height * 0.55],
+      [cx - width * 0.275, hemY],
     ],
-    "rgba(0,0,0,0.42)"
+    "rgba(0,0,0,0.28)"
   );
   drawStitchRun(
     ctx,
     [
-      [cx + width * 0.19, shoulderY + 6],
-      [cx + width * 0.26, height * 0.6],
-      [cx + width * 0.27, hemY],
+      [cx + width * 0.185, height * 0.13],
+      [cx + width * 0.26, height * 0.55],
+      [cx + width * 0.275, hemY],
     ],
-    "rgba(0,0,0,0.42)"
+    "rgba(0,0,0,0.28)"
   );
 
-  // fold shading — the sweater is mounted over a form, not pressed flat
   const fold = ctx.createLinearGradient(0, 0, width, 0);
-  fold.addColorStop(0, "rgba(0,0,0,0.42)");
-  fold.addColorStop(0.2, "rgba(0,0,0,0.06)");
-  fold.addColorStop(0.42, "rgba(255,255,255,0.07)");
-  fold.addColorStop(0.62, "rgba(0,0,0,0.1)");
-  fold.addColorStop(0.82, "rgba(255,255,255,0.04)");
-  fold.addColorStop(1, "rgba(0,0,0,0.44)");
+  fold.addColorStop(0, "rgba(0,0,0,0.22)");
+  fold.addColorStop(0.22, "rgba(0,0,0,0.04)");
+  fold.addColorStop(0.5, "rgba(255,255,255,0.08)");
+  fold.addColorStop(0.78, "rgba(0,0,0,0.05)");
+  fold.addColorStop(1, "rgba(0,0,0,0.24)");
   ctx.fillStyle = fold;
   ctx.fillRect(0, 0, width, height);
 
   ctx.restore();
 
-  // silver signature laid across the chest
+  // silver autograph across the 65
   ctx.save();
-  ctx.translate(cx - width * 0.02, height * 0.6);
-  ctx.rotate(-0.12);
-  ctx.strokeStyle = "rgba(232,236,242,0.92)";
-  ctx.lineWidth = 7;
+  ctx.translate(cx + width * 0.02, height * 0.58);
+  ctx.rotate(-0.08);
+  ctx.strokeStyle = "rgba(210, 216, 224, 0.92)";
+  ctx.lineWidth = 6;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.beginPath();
-  ctx.moveTo(-width * 0.19, width * 0.03);
+  ctx.moveTo(-width * 0.16, 0);
   ctx.bezierCurveTo(
-    -width * 0.16,
-    -width * 0.07,
-    -width * 0.09,
-    -width * 0.08,
     -width * 0.1,
-    width * 0.015
-  );
-  ctx.bezierCurveTo(
-    -width * 0.105,
-    width * 0.05,
-    -width * 0.03,
     -width * 0.05,
-    0.0,
-    width * 0.01
+    -width * 0.04,
+    width * 0.04,
+    width * 0.02,
+    -width * 0.01
   );
   ctx.bezierCurveTo(
+    width * 0.08,
+    -width * 0.05,
+    width * 0.12,
     width * 0.03,
-    width * 0.06,
-    width * 0.06,
-    -width * 0.06,
-    width * 0.1,
-    width * 0.005
-  );
-  ctx.bezierCurveTo(
-    width * 0.13,
-    width * 0.05,
-    width * 0.16,
-    -width * 0.02,
-    width * 0.2,
+    width * 0.18,
     -width * 0.005
   );
   ctx.stroke();
-  ctx.lineWidth = 5;
-  ctx.beginPath();
-  ctx.moveTo(width * 0.02, width * 0.055);
-  ctx.lineTo(width * 0.15, width * 0.045);
-  ctx.stroke();
   ctx.restore();
 
-  // fight strap still hanging off the hem
   ctx.save();
   ctx.fillStyle = "#16161a";
   ctx.fillRect(cx + width * 0.11, hemY - height * 0.012, width * 0.09, height * 0.04);
   ctx.fillStyle = "#0b0b0d";
   ctx.fillRect(cx + width * 0.125, hemY + height * 0.012, width * 0.06, height * 0.016);
-  ctx.strokeStyle = "rgba(232,236,242,0.35)";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(cx + width * 0.11, hemY - height * 0.012, width * 0.09, height * 0.04);
   ctx.restore();
 }
 
 /*
-  Washington Capitals rookie-era sweater, reverse. Black body with the copper
-  and blue banding of that period, Koho-cut shoulders, twill nameplate.
+  Washington Capitals rookie-era sweater, reverse. Black screaming-eagle Koho
+  cut: copper name and number, KOHO under the collar, V-stripes on the sleeves.
 */
 function paintOvechkinJerseyBack(ctx, width, height) {
-  const body = "#0a0a0c";
-  const copper = "#a3641e";
-  const blue = "#1f3f8f";
-  const cream = "#e8e3d6";
+  const body = "#0c0c0e";
+  const copper = "#c17a28";
+  const blue = "#1a3f8f";
+  const cream = "#efeae0";
 
   ctx.clearRect(0, 0, width, height);
 
   const cx = width / 2;
-  const shoulderY = height * 0.13;
-  const hemY = height * 0.91;
+  const hemY = height * 0.9;
 
-  ctx.beginPath();
-  ctx.moveTo(cx - width * 0.2, shoulderY);
-  ctx.quadraticCurveTo(cx, height * 0.085, cx + width * 0.2, shoulderY);
-  ctx.lineTo(cx + width * 0.43, height * 0.3);
-  ctx.lineTo(cx + width * 0.41, height * 0.64);
-  ctx.lineTo(cx + width * 0.27, height * 0.61);
-  ctx.lineTo(cx + width * 0.285, hemY);
-  ctx.quadraticCurveTo(cx, hemY + height * 0.028, cx - width * 0.285, hemY);
-  ctx.lineTo(cx - width * 0.27, height * 0.61);
-  ctx.lineTo(cx - width * 0.41, height * 0.64);
-  ctx.lineTo(cx - width * 0.43, height * 0.3);
-  ctx.closePath();
+  clipHangingJersey(ctx, width, height);
   ctx.save();
   ctx.clip();
 
   const bodyFill = ctx.createLinearGradient(0, 0, 0, height);
-  bodyFill.addColorStop(0, "#131316");
+  bodyFill.addColorStop(0, "#16161a");
   bodyFill.addColorStop(0.5, body);
   bodyFill.addColorStop(1, "#08080a");
   ctx.fillStyle = bodyFill;
   ctx.fillRect(0, 0, width, height);
 
-  // shoulder yoke in the old cut
-  ctx.fillStyle = "#16161a";
-  ctx.beginPath();
-  ctx.moveTo(0, shoulderY - 12);
-  ctx.lineTo(width, shoulderY - 12);
-  ctx.lineTo(width, height * 0.235);
-  ctx.quadraticCurveTo(cx, height * 0.285, 0, height * 0.235);
-  ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = copper;
-  ctx.lineWidth = 5;
-  ctx.beginPath();
-  ctx.moveTo(0, height * 0.237);
-  ctx.quadraticCurveTo(cx, height * 0.287, width, height * 0.237);
-  ctx.stroke();
-
-  // sleeve banding
-  [
-    [height * 0.485, 30, copper],
-    [height * 0.52, 10, cream],
-    [height * 0.537, 26, blue],
-  ].forEach(([y, thickness, colour]) => {
-    ctx.fillStyle = colour;
-    ctx.fillRect(0, y, width * 0.17, thickness);
-    ctx.fillRect(width * 0.83, y, width * 0.17, thickness);
+  // V-shaped sleeve banding (blue / white / copper / white / blue)
+  const sleeveBands = [
+    [0.0, blue],
+    [0.22, cream],
+    [0.36, copper],
+    [0.62, cream],
+    [0.74, blue],
+  ];
+  [-1, 1].forEach((side) => {
+    const innerX = cx + side * width * 0.28;
+    const outerX = side < 0 ? 0 : width;
+    sleeveBands.forEach(([t, colour], index) => {
+      const next = sleeveBands[index + 1] ? sleeveBands[index + 1][0] : 1;
+      const y0 = height * 0.42 + t * height * 0.16;
+      const y1 = height * 0.42 + next * height * 0.16;
+      ctx.fillStyle = colour;
+      ctx.beginPath();
+      ctx.moveTo(innerX, y0);
+      ctx.lineTo(outerX, y0 + height * 0.04);
+      ctx.lineTo(outerX, y1 + height * 0.04);
+      ctx.lineTo(innerX, y1);
+      ctx.closePath();
+      ctx.fill();
+    });
   });
 
-  // hem banding
+  // hem banding to match the sleeves
   [
-    [height * 0.8, 26, copper],
-    [height * 0.832, 10, cream],
-    [height * 0.848, 24, blue],
+    [height * 0.785, 16, blue],
+    [height * 0.805, 8, cream],
+    [height * 0.816, 18, copper],
+    [height * 0.838, 8, cream],
+    [height * 0.85, 18, blue],
   ].forEach(([y, thickness, colour]) => {
     ctx.fillStyle = colour;
     ctx.fillRect(0, y, width, thickness);
   });
 
-  // nameplate strip
-  const plateY = height * 0.285;
-  const plateH = height * 0.075;
-  ctx.fillStyle = "#121216";
-  ctx.fillRect(cx - width * 0.235, plateY, width * 0.47, plateH);
-  drawStitchRun(
-    ctx,
-    [
-      [cx - width * 0.235, plateY],
-      [cx + width * 0.235, plateY],
-      [cx + width * 0.235, plateY + plateH],
-      [cx - width * 0.235, plateY + plateH],
-      [cx - width * 0.235, plateY],
-    ],
-    "rgba(214,180,120,0.55)",
-    [6, 5],
-    2
-  );
-
+  // KOHO sits under the collar on this cut, not on the hem
   ctx.save();
-  ctx.font = `900 ${Math.round(height * 0.052)}px "Arial Black", Impact, sans-serif`;
+  ctx.font = `800 ${Math.round(height * 0.022)}px "Arial Black", sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.letterSpacing = "6px";
-  ctx.lineJoin = "round";
-  ctx.strokeStyle = copper;
-  ctx.lineWidth = 9;
-  ctx.strokeText("OVECHKIN", cx, plateY + plateH * 0.54);
   ctx.fillStyle = cream;
-  ctx.fillText("OVECHKIN", cx, plateY + plateH * 0.54);
+  ctx.letterSpacing = "3px";
+  ctx.fillText("KOHO", cx, height * 0.175);
   ctx.restore();
 
-  // back number
+  // arched nameplate
+  const name = "OVECHKIN";
+  const nameSize = Math.round(height * 0.046);
+  const nameY = height * 0.245;
+  const spread = 0.22;
+  [...name].forEach((letter, i) => {
+    const t = name.length <= 1 ? 0.5 : i / (name.length - 1);
+    const angle = -spread / 2 + t * spread;
+    ctx.save();
+    ctx.translate(cx + Math.sin(angle) * width * 0.42, nameY + (1 - Math.cos(angle)) * height * 0.08);
+    ctx.rotate(angle);
+    drawTwill(
+      ctx,
+      letter,
+      0,
+      0,
+      nameSize,
+      [{ colour: cream, width: 8 }],
+      { fill: copper }
+    );
+    ctx.restore();
+  });
+
+  // back number — copper fill, white then black outline
   drawTwill(
     ctx,
     "8",
     cx,
-    height * 0.52,
-    Math.round(height * 0.29),
+    height * 0.5,
+    Math.round(height * 0.32),
     [
-      { colour: copper, width: 30 },
-      { colour: cream, width: 17 },
+      { colour: "#0a0a0c", width: 32 },
+      { colour: cream, width: 16 },
     ],
-    { fill: blue }
+    { fill: copper }
   );
 
-  // sleeve numbers
+  // sleeve numbers sit above the V
   [-1, 1].forEach((side) => {
     drawTwill(
       ctx,
       "8",
       cx + side * width * 0.345,
-      height * 0.4,
-      Math.round(width * 0.085),
+      height * 0.355,
+      Math.round(width * 0.08),
       [
-        { colour: copper, width: 12 },
-        { colour: cream, width: 6 },
+        { colour: "#0a0a0c", width: 10 },
+        { colour: cream, width: 5 },
       ],
-      { fill: blue }
+      { fill: copper }
     );
   });
 
-  // supplier mark on the hem
+  // NHL shield on the lower right hem
   ctx.save();
-  ctx.font = `800 ${Math.round(height * 0.022)}px "Arial Black", sans-serif`;
-  ctx.textAlign = "center";
-  ctx.fillStyle = "rgba(232,227,214,0.72)";
-  ctx.letterSpacing = "4px";
-  ctx.fillText("KOHO", cx, height * 0.877);
+  ctx.fillStyle = "#d4c4a0";
+  ctx.beginPath();
+  ctx.moveTo(cx + width * 0.16, height * 0.868);
+  ctx.lineTo(cx + width * 0.2, height * 0.868);
+  ctx.lineTo(cx + width * 0.195, height * 0.895);
+  ctx.quadraticCurveTo(cx + width * 0.18, height * 0.905, cx + width * 0.165, height * 0.895);
+  ctx.closePath();
+  ctx.fill();
   ctx.restore();
 
-  paintClothWeave(ctx, width, height, 0.17);
+  paintClothWeave(ctx, width, height, 0.14);
 
   drawStitchRun(
     ctx,
     [
-      [cx - width * 0.2, shoulderY + 8],
-      [cx - width * 0.27, height * 0.61],
-      [cx - width * 0.285, hemY],
+      [cx - width * 0.185, height * 0.13],
+      [cx - width * 0.26, height * 0.55],
+      [cx - width * 0.275, hemY],
     ],
     "rgba(180,150,100,0.28)"
   );
   drawStitchRun(
     ctx,
     [
-      [cx + width * 0.2, shoulderY + 8],
-      [cx + width * 0.27, height * 0.61],
-      [cx + width * 0.285, hemY],
+      [cx + width * 0.185, height * 0.13],
+      [cx + width * 0.26, height * 0.55],
+      [cx + width * 0.275, hemY],
     ],
     "rgba(180,150,100,0.28)"
   );
 
-  // hanging folds
   const fold = ctx.createLinearGradient(0, 0, width, 0);
-  fold.addColorStop(0, "rgba(0,0,0,0.5)");
-  fold.addColorStop(0.16, "rgba(255,255,255,0.05)");
-  fold.addColorStop(0.34, "rgba(0,0,0,0.24)");
-  fold.addColorStop(0.5, "rgba(255,255,255,0.09)");
-  fold.addColorStop(0.68, "rgba(0,0,0,0.2)");
-  fold.addColorStop(0.86, "rgba(255,255,255,0.04)");
-  fold.addColorStop(1, "rgba(0,0,0,0.52)");
+  fold.addColorStop(0, "rgba(0,0,0,0.38)");
+  fold.addColorStop(0.18, "rgba(255,255,255,0.04)");
+  fold.addColorStop(0.5, "rgba(255,255,255,0.07)");
+  fold.addColorStop(0.82, "rgba(255,255,255,0.03)");
+  fold.addColorStop(1, "rgba(0,0,0,0.4)");
   ctx.fillStyle = fold;
   ctx.fillRect(0, 0, width, height);
 
@@ -5013,10 +4958,15 @@ function paintTkachukProtestPoster(ctx, width, height) {
   ctx.fillStyle = "#ff2d4b";
   ctx.fillText("TKACHUK", 0, height * 0.18);
 
-  ctx.font = `800 ${Math.round(height * 0.048)}px "Arial", sans-serif`;
+  ctx.font = `800 ${Math.round(height * 0.055)}px "Arial Black", sans-serif`;
+  ctx.fillStyle = "rgba(244,241,232,0.88)";
+  ctx.letterSpacing = "4px";
+  ctx.fillText("NO. 7", 0, height * 0.3);
+
+  ctx.font = `800 ${Math.round(height * 0.038)}px "Arial", sans-serif`;
   ctx.fillStyle = "rgba(244,241,232,0.6)";
-  ctx.letterSpacing = "6px";
-  ctx.fillText("MANAGEMENT REGRETS NOTHING", 0, height * 0.38);
+  ctx.letterSpacing = "5px";
+  ctx.fillText("MANAGEMENT REGRETS NOTHING", 0, height * 0.42);
   ctx.restore();
 
   // ink flaws and tape
@@ -5338,7 +5288,9 @@ function createFacePanel(
       const u = c / columns;
       const z = relief ? relief * (reliefShape ? reliefShape(u, v) : 1) : 0;
       positions.push((u - 0.5) * width, (0.5 - v) * height, z);
-      uvs.push(u, 1 - v);
+      // DynamicTexture.update(false) keeps canvas Y unflipped, so v=0 is
+      // the top of the painting. Mapping 1-v here hung every sweater upside down.
+      uvs.push(u, v);
     }
   }
 
@@ -5376,6 +5328,12 @@ function createFacePanel(
   mesh.isPickable = false;
   mesh.receiveShadows = true;
   return mesh;
+}
+
+function hangingJerseyRelief(u, v) {
+  const torso = Math.pow(Math.sin(Math.PI * Math.max(0.04, Math.min(v, 0.96))), 0.7);
+  const across = Math.max(0.18, 1 - Math.pow((u - 0.5) * 2.05, 2));
+  return 0.28 + 0.72 * torso * across;
 }
 
 function place(mesh, parent, options = {}) {
@@ -5682,7 +5640,7 @@ function buildKarlssonExhibit(scene, materials, parent, cache) {
     900,
     1200,
     paintKarlssonJersey,
-    { roughness: 0.86, bump: 0.55, environmentIntensity: 0.08 }
+    { roughness: 0.86, bump: 0.35, environmentIntensity: 0.14, emissive: 0.16 }
   );
   jerseyMaterial.albedoTexture.hasAlpha = true;
   jerseyMaterial.useAlphaFromAlbedoTexture = true;
@@ -5737,15 +5695,10 @@ function buildKarlssonExhibit(scene, materials, parent, cache) {
   const jersey = createFacePanel(scene, "karlsson-jersey", {
     width: 0.86,
     height: 1.14,
-    columns: 26,
-    rows: 32,
-    relief: 0.055,
-    reliefShape: (u, v) =>
-      (0.34 +
-        0.66 * Math.pow(Math.sin(Math.max(v, 0.02) * Math.PI), 0.6)) *
-      (0.5 +
-        0.28 * Math.sin(u * Math.PI * 5.2) +
-        0.22 * Math.sin(u * Math.PI * 2.1 + 1.2)),
+    columns: 18,
+    rows: 22,
+    relief: 0.022,
+    reliefShape: hangingJerseyRelief,
   });
   jersey.parent = group;
   jersey.position.set(0, 0.02, depth - 0.028);
@@ -5829,8 +5782,8 @@ function buildKarlssonExhibit(scene, materials, parent, cache) {
   );
   spot.setDirectionToTarget(worldAnchor);
   spot.diffuse = new Color3(1, 0.9, 0.72);
-  spot.intensity = 9;
-  spot.range = 3.4;
+  spot.intensity = 16;
+  spot.range = 4.2;
   spot.includedOnlyMeshes = groupMeshes;
 
   cache.lights.push(spot);
@@ -5858,7 +5811,7 @@ function buildOvechkinExhibit(scene, materials, parent, cache) {
     900,
     1200,
     paintOvechkinJerseyBack,
-    { roughness: 0.9, bump: 0.6, environmentIntensity: 0.07 }
+    { roughness: 0.9, bump: 0.38, environmentIntensity: 0.12, emissive: 0.14 }
   );
   jerseyMaterial.albedoTexture.hasAlpha = true;
   jerseyMaterial.useAlphaFromAlbedoTexture = true;
@@ -5936,14 +5889,10 @@ function buildOvechkinExhibit(scene, materials, parent, cache) {
   const jersey = createFacePanel(scene, "ovechkin-jersey", {
     width: 0.94,
     height: 1.24,
-    columns: 28,
-    rows: 34,
-    relief: 0.09,
-    reliefShape: (u, v) =>
-      (0.3 + 0.7 * Math.pow(Math.sin(Math.max(v, 0.03) * Math.PI), 0.5)) *
-      (0.46 +
-        0.3 * Math.sin(u * Math.PI * 4.1 + 0.6) +
-        0.24 * Math.sin(u * Math.PI * 7.3)),
+    columns: 18,
+    rows: 22,
+    relief: 0.028,
+    reliefShape: hangingJerseyRelief,
   });
   jersey.parent = group;
   jersey.position.set(0, -0.06, 0.14);
@@ -5973,8 +5922,8 @@ function buildOvechkinExhibit(scene, materials, parent, cache) {
   );
   spot.setDirectionToTarget(worldAnchor);
   spot.diffuse = new Color3(1, 0.86, 0.66);
-  spot.intensity = 8.5;
-  spot.range = 3.6;
+  spot.intensity = 15;
+  spot.range = 4.4;
   spot.includedOnlyMeshes = groupMeshes;
   cache.lights.push(spot);
 
@@ -7504,7 +7453,7 @@ function buildOfficeDoor(scene, materials, parent, cache) {
    -------------------------------------------------------------------------- */
 
 function buildDartStation(scene, materials, parent, cache) {
-  const mount = wallMount(scene, parent, 1, -3.1, 0);
+  const mount = wallMount(scene, parent, 1, HALL.tkachukZ, 0);
   const group = new TransformNode("dart-station", scene);
   group.parent = mount;
 
@@ -7514,11 +7463,11 @@ function buildDartStation(scene, materials, parent, cache) {
     768,
     1024,
     paintTkachukProtestPoster,
-    { roughness: 0.88 }
+    { roughness: 0.88, emissive: 0.22 }
   );
   const poster = artPanel(scene, "tkachuk-poster", group, {
-    width: 0.98,
-    height: 1.28,
+    width: 1.12,
+    height: 1.46,
     at: [0.02, 1.92, 0.012],
     turn: [0, 0, -0.035],
     material: posterMaterial,
@@ -7687,12 +7636,12 @@ function buildDartStation(scene, materials, parent, cache) {
 
   const boardLight = new PointLight(
     "dart-board-light",
-    new Vector3(HALL.width / 2 - 0.6, 1.9, -3.1),
+    new Vector3(HALL.width / 2 - 0.55, 1.95, HALL.tkachukZ),
     scene
   );
-  boardLight.diffuse = new Color3(1, 0.72, 0.6);
-  boardLight.intensity = 1.5;
-  boardLight.range = 3;
+  boardLight.diffuse = new Color3(1, 0.82, 0.7);
+  boardLight.intensity = 7.5;
+  boardLight.range = 5.5;
   boardLight.includedOnlyMeshes = [
     ...group.getChildMeshes(),
     ...darts.flatMap((dart) => dart.getChildMeshes()),
@@ -7994,13 +7943,24 @@ function buildCorridorShell(scene, materials, parent, cache) {
       new Vector3(0, HALL.height - 0.2, HALL.startZ + length * t),
       scene
     );
-    light.diffuse = new Color3(1, 0.85, 0.66);
-    light.specular = new Color3(1, 0.94, 0.82);
-    light.intensity = 2.5;
-    light.range = 8.5;
+    light.diffuse = new Color3(1, 0.9, 0.76);
+    light.specular = new Color3(1, 0.95, 0.86);
+    light.intensity = 5.4;
+    light.range = 12;
     lights.push(light);
     cache.lights.push(light);
   });
+
+  const hallHemi = new HemisphericLight(
+    "corridor-hemi",
+    new Vector3(0.08, 1, 0.18),
+    scene
+  );
+  hallHemi.intensity = 1.4;
+  hallHemi.diffuse = new Color3(1, 0.95, 0.88);
+  hallHemi.groundColor = new Color3(0.42, 0.38, 0.34);
+  lights.push(hallHemi);
+  cache.lights.push(hallHemi);
 
   // HVAC grilles, louvres modelled rather than painted
   [-1, 1].forEach((side) => {
@@ -8061,10 +8021,20 @@ function buildCorridorShell(scene, materials, parent, cache) {
         material: materials.flat("sconce-shade", "#d8cbaa", {
           roughness: 0.8,
           emissive: "#ffcf94",
-          emissiveIntensity: 0.85,
+          emissiveIntensity: 2.1,
         }),
       });
       shade.isPickable = false;
+
+      const sconceLight = new PointLight(
+        `corridor-sconce-light${side}-${index}`,
+        new Vector3(side * (HALL.width / 2 - 0.22), 2.12, z),
+        scene
+      );
+      sconceLight.diffuse = new Color3(1, 0.88, 0.7);
+      sconceLight.intensity = 2.4;
+      sconceLight.range = 6.2;
+      cache.lights.push(sconceLight);
     });
   });
 
@@ -8612,11 +8582,11 @@ function buildMemorabiliaHall(scene, materials) {
   const dartStation = buildDartStation(scene, materials, root, cache);
   register({
     id: "tkachuk",
-    label: "Throw a dart",
-    hint: "Throw",
+    label: "Fuck Brady Tkachuk",
+    hint: "Throw a dart",
     card: EXHIBIT_CARDS.tkachuk,
-    point: new Vector3(HALL.width / 2 - 0.3, 1.4, -3.1),
-    radius: 3.0,
+    point: new Vector3(HALL.width / 2 - 0.3, 1.55, HALL.tkachukZ),
+    radius: 3.2,
     action: "dart",
   });
   void dartStation;
@@ -8875,7 +8845,11 @@ function createHallController({
     ].includes(code);
 
   const onKeyDown = (event) => {
+    if (!state.enabled) return;
     if (event.code === "Escape") return;
+    if (event.target && /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName)) {
+      return;
+    }
     if (isMoveKey(event.code) || event.code === "ShiftLeft" || event.code === "ShiftRight") {
       keys.add(event.code);
       if (isMoveKey(event.code)) {
@@ -8905,6 +8879,7 @@ function createHallController({
   };
 
   const onPointerMove = (event) => {
+    if (!state.enabled) return;
     if (state.pointerLocked) {
       applyLook(event.movementX || 0, event.movementY || 0);
       return;
@@ -8915,7 +8890,7 @@ function createHallController({
   };
 
   const onPointerDown = (event) => {
-    if (event.button !== 0) return;
+    if (!state.enabled || event.button !== 0) return;
     if (!state.pointerLocked) {
       // Pointer lock is the good path; drag-look is the fallback if it is denied.
       const request = canvas.requestPointerLock?.();
@@ -9095,7 +9070,11 @@ function createHallController({
       keys.clear();
       state.velocity.x = 0;
       state.velocity.z = 0;
+      state.dragging = false;
       detach();
+      if (document.pointerLockElement === canvas) {
+        document.exitPointerLock?.();
+      }
     },
     releasePointer() {
       if (document.pointerLockElement === canvas) {
@@ -9171,9 +9150,9 @@ function createHallAudio() {
   sfxBus.gain.value = 0.6;
   sfxBus.connect(master);
 
-  // small-corridor impulse response
+  // small-corridor impulse response (shorter IR keeps init off the critical path)
   const reverb = ctx.createConvolver();
-  const irLength = Math.floor(ctx.sampleRate * 1.5);
+  const irLength = Math.floor(ctx.sampleRate * 0.45);
   const ir = ctx.createBuffer(2, irLength, ctx.sampleRate);
   for (let channel = 0; channel < 2; channel += 1) {
     const data = ir.getChannelData(channel);
@@ -10414,6 +10393,34 @@ function ExecutiveCinematic({
     let hallController = null;
     let hallAudio = null;
     let lowPower = false;
+    let renderPaused = false;
+
+    const renderScene = () => {
+      if (renderPaused) {
+        return;
+      }
+      if (scene && !scene.isDisposed) {
+        scene.render();
+      }
+    };
+
+    const setPausedRender = (paused) => {
+      if (renderPaused === paused) {
+        return;
+      }
+      renderPaused = paused;
+      if (!engine) {
+        return;
+      }
+      if (paused) {
+        engine.stopRenderLoop();
+        if (scene && !scene.isDisposed) {
+          scene.render();
+        }
+      } else {
+        engine.runRenderLoop(renderScene);
+      }
+    };
 
     const reducedMotion =
       window.matchMedia?.(
@@ -10565,12 +10572,12 @@ function ExecutiveCinematic({
 
           // corridor grade: dark, warm practicals, real reflections on metal
           scene.environmentIntensity = 1;
-          scene.clearColor = new Color4(0.017, 0.019, 0.024, 1);
-          scene.ambientColor = new Color3(0.1, 0.1, 0.12);
-          scene.imageProcessingConfiguration.exposure = 1.04;
-          scene.imageProcessingConfiguration.contrast = 1.18;
+          scene.clearColor = new Color4(0.055, 0.052, 0.048, 1);
+          scene.ambientColor = new Color3(0.36, 0.34, 0.31);
+          scene.imageProcessingConfiguration.exposure = 1.46;
+          scene.imageProcessingConfiguration.contrast = 1.08;
           scene.imageProcessingConfiguration.vignetteEnabled = true;
-          scene.imageProcessingConfiguration.vignetteWeight = 2.6;
+          scene.imageProcessingConfiguration.vignetteWeight = 0.9;
           scene.imageProcessingConfiguration.vignetteColor = new Color4(
             0,
             0,
@@ -10644,8 +10651,15 @@ function ExecutiveCinematic({
               lowPower = enabled;
               engine?.setHardwareScalingLevel(enabled ? 1.7 : 1);
             },
+            setPausedRender,
             duckAudio: (amount) => hallAudio?.duck(amount, 0.5),
             stopAudio: () => hallAudio?.stop(1.6),
+            releaseInput: () => {
+              hallController?.suspend?.();
+              if (document.pointerLockElement) {
+                document.exitPointerLock?.();
+              }
+            },
           };
 
           /*
@@ -10667,11 +10681,7 @@ function ExecutiveCinematic({
             physicalUnits: "meters",
           };
 
-          engine.runRenderLoop(() => {
-            if (scene && !scene.isDisposed) {
-              scene.render();
-            }
-          });
+          engine.runRenderLoop(renderScene);
 
           resizeHandler = () => engine?.resize();
           window.addEventListener("resize", resizeHandler);
@@ -10946,6 +10956,12 @@ function ExecutiveCinematic({
               lowPower = enabled;
               engine?.setHardwareScalingLevel(enabled ? 1.7 : 1);
             },
+            setPausedRender,
+            releaseInput: () => {
+              if (document.pointerLockElement) {
+                document.exitPointerLock?.();
+              }
+            },
           };
 
           // the setup interface now takes over the document
@@ -11038,14 +11054,7 @@ function ExecutiveCinematic({
           physicalUnits: "meters",
         };
 
-        engine.runRenderLoop(() => {
-          if (
-            scene &&
-            !scene.isDisposed
-          ) {
-            scene.render();
-          }
-        });
+        engine.runRenderLoop(renderScene);
 
         resizeHandler = () =>
           engine?.resize();
@@ -11923,9 +11932,15 @@ function ExecutiveCinematic({
   */
   useEffect(() => {
     controlRef.current?.setLowPower?.(Boolean(overlayActive));
+    controlRef.current?.setPausedRender?.(Boolean(overlayActive));
 
     if (overlayActive) {
+      controlRef.current?.releaseInput?.();
+      if (document.pointerLockElement) {
+        document.exitPointerLock?.();
+      }
       controlRef.current?.duckAudio?.(0.5);
+      setCard(null);
     }
   }, [overlayActive]);
 
@@ -12033,6 +12048,10 @@ function ExecutiveCinematic({
         hallPhase === HALL_PHASE.EXPLORING && !card
           ? "setup-cinematic--roaming"
           : ""
+      } ${
+        overlayActive
+          ? "setup-cinematic--overlay"
+          : ""
       }`}
       aria-label={
         appointment
@@ -12080,7 +12099,7 @@ function ExecutiveCinematic({
 
       {/* ---------- opening hallway HUD ---------- */}
 
-      {hallPhase === HALL_PHASE.EXPLORING ? (
+      {hallPhase === HALL_PHASE.EXPLORING && !overlayActive ? (
         <>
           <div
             className={`hall-reticle ${
@@ -12554,6 +12573,11 @@ export function SetupScreen() {
   ] = useState(false);
 
   const [
+    pickedTeamCode,
+    setPickedTeamCode,
+  ] = useState("");
+
+  const [
     statusText,
     setStatusText,
   ] = useState(
@@ -12568,12 +12592,11 @@ export function SetupScreen() {
   useSetupStageMusic(floorFailed);
 
   useEffect(() => {
-    /*
-      Team loading starts immediately but DOES NOT block the intro cinematic.
-      The intro is generic and intentionally does not reveal a selected club.
-    */
+    if (appStage !== APP_STAGE.CONFIGURE) {
+      return;
+    }
     loadTeams();
-  }, [loadTeams]);
+  }, [appStage, loadTeams]);
 
   /*
     Progressive priority. The corridor is on screen first; the hub's expensive
@@ -12588,7 +12611,9 @@ export function SetupScreen() {
       }
 
       if (tier === "officeEssentials") {
-        primeHubAssets(HUB_WARMUP_STAGES.CRESTS);
+        window.setTimeout(() => {
+          primeHubAssets(HUB_WARMUP_STAGES.CRESTS);
+        }, 1800);
         return;
       }
 
@@ -12623,13 +12648,23 @@ export function SetupScreen() {
 
   const orderedIndex =
     useMemo(
-      () =>
-        findOrderedIndexFromSetupIndex(
+      () => {
+        if (pickedTeamCode) {
+          const byCode = orderedTeams.findIndex(
+            (item) => item.code === pickedTeamCode
+          );
+          if (byCode >= 0) {
+            return byCode;
+          }
+        }
+        return findOrderedIndexFromSetupIndex(
           orderedTeams,
           setupTeamIndex
-        ),
+        );
+      },
       [
         orderedTeams,
+        pickedTeamCode,
         setupTeamIndex,
       ]
     );
@@ -12657,17 +12692,21 @@ export function SetupScreen() {
     );
 
   useEffect(() => {
+    if (!pickedTeamCode) {
+      return;
+    }
+    const match = orderedTeams.find(
+      (item) => item.code === pickedTeamCode
+    );
     if (
-      selected?.index != null &&
-      selected.index !==
-        setupTeamIndex
+      match &&
+      match.index !== setupTeamIndex
     ) {
-      setSetupTeamIndex(
-        selected.index
-      );
+      setSetupTeamIndex(match.index);
     }
   }, [
-    selected,
+    pickedTeamCode,
+    orderedTeams,
     setupTeamIndex,
     setSetupTeamIndex,
   ]);
@@ -12700,6 +12739,10 @@ export function SetupScreen() {
           return;
         }
 
+        setPickedTeamCode(
+          team.code || ""
+        );
+
         setSetupTeamIndex(
           team.index
         );
@@ -12708,14 +12751,14 @@ export function SetupScreen() {
           `${team.name} selected.`
         );
       },
-      [
-        orderedTeams,
-        setSetupTeamIndex,
-      ]
+      [orderedTeams, setSetupTeamIndex]
     );
 
   const finishIntro =
     useCallback(() => {
+      sceneControlRef.current?.current?.releaseInput?.();
+      sceneControlRef.current?.current?.setPausedRender?.(true);
+      sceneControlRef.current?.current?.duckAudio?.(0.35);
       setAppStage(
         APP_STAGE.CONFIGURE
       );
@@ -13181,6 +13224,33 @@ const SETUP_SCREEN_CSS = `
   overflow: hidden;
   padding: 2px 2px 2px 8px;
   background: transparent;
+}
+
+.setup-team-picker-fallback {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 6px;
+  overflow: auto;
+  max-height: min(52vh, 420px);
+  padding: 4px 2px 8px;
+}
+
+.setup-team-picker-fallback button {
+  border: 1px solid rgba(201, 168, 106, 0.22);
+  border-radius: 4px;
+  background: rgba(8, 10, 14, 0.72);
+  color: rgba(236, 232, 224, 0.88);
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+
+.setup-team-picker-fallback button.is-selected {
+  border-color: rgba(201, 168, 106, 0.72);
+  background: rgba(201, 168, 106, 0.14);
+  color: #f3e6c8;
 }
 
 .setup-panel-heading {
@@ -13730,6 +13800,8 @@ const SETUP_SCREEN_CSS = `
   background: transparent;
   color: var(--setup-text);
   cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
 }
 
 .setup-token-orb {
@@ -13849,20 +13921,104 @@ const SETUP_SCREEN_CSS = `
   margin-top: auto;
 }
 
-.setup-club-ball-wrap {
-  position: relative;
-  inset: auto;
+.setup-club-ball-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  align-content: start;
+  gap: 10px 8px;
   min-height: 0;
   height: 100%;
-  width: 100%;
+  overflow: auto;
+  padding: 8px 4px 12px;
+}
+
+.setup-club-ball {
+  appearance: none;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 2px 2px;
+  border: 0;
   background: transparent;
+  color: var(--setup-text);
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.setup-club-ball-orb {
+  width: clamp(44px, 6.2vw, 62px);
+  height: clamp(44px, 6.2vw, 62px);
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid rgba(201, 168, 106, 0.28);
+  background:
+    radial-gradient(
+      circle at 32% 28%,
+      #6a5a40,
+      #1c1710 62%,
+      #070605 100%
+    );
+  box-shadow:
+    0 10px 14px rgba(0, 0, 0, 0.5),
+    inset -6px -8px 12px rgba(0, 0, 0, 0.45),
+    inset 4px 5px 8px rgba(255, 236, 190, 0.12);
+}
+
+.setup-club-ball-orb img,
+.setup-club-ball-orb em {
+  width: 68%;
+  height: 68%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.setup-club-ball-orb em {
+  display: grid;
+  place-items: center;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 900;
+  color: #f3e6c8;
+}
+
+.setup-club-ball strong {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--setup-muted);
+}
+
+.setup-club-ball.is-selected .setup-club-ball-orb {
+  border-color: rgba(201, 168, 106, 0.78);
+  box-shadow:
+    0 0 0 2px rgba(201, 168, 106, 0.35),
+    0 12px 16px rgba(0, 0, 0, 0.5),
+    inset -5px -7px 10px rgba(80, 50, 10, 0.45),
+    inset 5px 6px 8px rgba(255, 255, 255, 0.22);
+}
+
+.setup-club-ball.is-selected strong {
+  color: var(--setup-gold);
+}
+
+.setup-club-ball:hover .setup-club-ball-orb,
+.setup-club-ball:focus-visible .setup-club-ball-orb {
+  border-color: rgba(201, 168, 106, 0.55);
+}
+
+.setup-club-ball-wrap {
+  display: none;
 }
 
 .setup-club-ball-wrap canvas {
-  display: block;
-  width: 100% !important;
-  height: 100% !important;
-  background: transparent !important;
+  display: none;
 }
 
 .setup-logo-coin {
@@ -14363,6 +14519,11 @@ const SETUP_SCREEN_CSS = `
 
   font-family:
     var(--setup-font);
+}
+
+.setup-cinematic--overlay,
+.setup-cinematic--overlay .setup-cinematic-canvas {
+  pointer-events: none;
 }
 
 .setup-cinematic-canvas {
@@ -15529,6 +15690,10 @@ const SETUP_SCREEN_CSS = `
   .setup-team-selector {
     padding-left: 8px;
   }
+
+  .setup-club-ball-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 860px) {
@@ -16263,6 +16428,9 @@ const SETUP_SCREEN_CSS = `
 
   gap: clamp(8px, 1.4vh, 16px);
 
+  isolation: isolate;
+  transform: translateZ(0);
+
   background:
     radial-gradient(
       ellipse 70% 55% at 50% 78%,
@@ -16273,7 +16441,7 @@ const SETUP_SCREEN_CSS = `
 
   animation:
     setupDeskArrive
-    720ms cubic-bezier(.2,.72,.2,1)
+    280ms ease-out
     both;
 }
 
@@ -16317,8 +16485,6 @@ const SETUP_SCREEN_CSS = `
     0 40px 110px rgba(0, 0, 0, 0.5),
     0 2px 0 rgba(255, 226, 168, 0.05) inset,
     0 -18px 40px rgba(0, 0, 0, 0.32) inset;
-
-  backdrop-filter: blur(3px) saturate(0.96);
 }
 
 /* paper-clip and a stamp, so the sheet belongs to a physical file */
@@ -16349,14 +16515,9 @@ const SETUP_SCREEN_CSS = `
 @keyframes setupDeskArrive {
   from {
     opacity: 0;
-    transform:
-      perspective(1400px)
-      rotateX(5deg)
-      translateY(26px);
   }
   to {
     opacity: 1;
-    transform: none;
   }
 }
 
@@ -16575,6 +16736,10 @@ const SETUP_SCREEN_CSS = `
     grid-template-columns: minmax(0, 1fr);
 
     overflow-y: auto;
+  }
+
+  .setup-club-ball-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .hall-hint {

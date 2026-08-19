@@ -22,6 +22,7 @@ import {
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import PlayerHeadshot from "../components/PlayerHeadshot";
 import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
+import { ContractStrip, StatusSeal } from "../components/franchise/commandVisuals";
 import "./CapLedger.css";
 
 const NHL_ROSTER_LIMIT = 23;
@@ -201,11 +202,23 @@ function ContractBoardRow({ row, onSelect, isSelected = false }) {
   const value = getValueLabel(row);
   const stripe = valueKey(value, tags);
   const player = buildHeadshotPlayer(row);
+  const expiry = String(row?.expiry_status || "").toUpperCase();
+  const daysLeft = Number(row?.days_to_expiry ?? row?.daysToExpiry ?? row?.ufa_days);
+  const isExpiring = yrs <= 1 || /UFA|RFA|EXP/i.test(status);
+  const sealTone = /UFA/.test(expiry) || /UFA/.test(status)
+    ? "ufa"
+    : /RFA/.test(expiry) || /RFA/.test(status)
+      ? "rfa"
+      : /ELC|ENTRY/.test(status) || tags.some((t) => /elc/i.test(String(t)))
+        ? "elc"
+        : /NTC|NMC/.test(status)
+          ? "ntc"
+          : "neutral";
 
   return (
     <button
       type="button"
-      className={`cap-contract-card cap-contract-row cap-stripe-${stripe}${isSelected ? " is-selected" : ""}`}
+      className={`cap-contract-card cap-contract-row cap-stripe-${stripe}${isSelected ? " is-selected" : ""}${isExpiring ? " is-expiring" : ""}`}
       onClick={() => onSelect(row)}
     >
       <span className="cap-contract-player">
@@ -227,18 +240,16 @@ function ContractBoardRow({ row, onSelect, isSelected = false }) {
       </span>
 
       <span className="cap-contract-row__cell">
-        <strong>{formatMoneyM(aav)}</strong>
-        <em>AAV</em>
-      </span>
-
-      <span className="cap-contract-row__cell">
-        <strong>{yrs ? `${yrs}` : "—"}</strong>
-        <em>YR</em>
+        <ContractStrip aav={aav} years={yrs} />
+        <em>Deal</em>
       </span>
 
       <span className="cap-contract-row__tags">
-        <span className={chipClass(status)}>{status}</span>
+        <StatusSeal label={status} tone={sealTone} />
         <span className={chipClass(value)}>{value}</span>
+        {isExpiring && Number.isFinite(daysLeft) ? (
+          <span className="cap-ufa-count">{expiry || "UFA"} IN {Math.max(0, Math.round(daysLeft))} DAYS</span>
+        ) : null}
       </span>
     </button>
   );
@@ -1152,6 +1163,7 @@ function OfficeTopBar({ team, snap, slotSummary, teamLogo, onBack }) {
         )}
 
         <div className="cap-ledger-hero-main">
+          <p className="cap-office-kicker">Contract Office</p>
           <h1>{team.name || "Franchise"}</h1>
         </div>
       </div>
@@ -1165,6 +1177,9 @@ function OfficeTopBar({ team, snap, slotSummary, teamLogo, onBack }) {
         <div>
           <span>Hit</span>
           <strong>{formatMoneyM(hit)}</strong>
+          <div className="cap-payroll-meter" aria-hidden="true">
+            <i style={{ width: `${Math.max(4, Math.min(100, (hit / Math.max(hit + Math.max(space, 0), 1)) * 100))}%` }} />
+          </div>
         </div>
 
         <div className="cap-metric-roster">
