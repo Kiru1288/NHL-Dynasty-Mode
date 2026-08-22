@@ -1531,7 +1531,9 @@ def backfill_draft_eligible_goalies(league: Any, rng: Any, needed: int) -> int:
         return 0
 
     from app.sim_engine.entities.player import Position
-    from app.sim_engine.league_hierarchy_bootstrap import _set_assignment, _spawn_player
+    from app.sim_engine.league_hierarchy_bootstrap import _set_assignment, _spawn_player, set_spawn_as_of_year
+
+    set_spawn_as_of_year(getattr(league, "season_start_year", None) or getattr(league, "season_year", None))
 
     dev = list(getattr(league, "development_leagues", None) or [])
     if not dev:
@@ -1590,6 +1592,7 @@ def backfill_draft_eligible_goalies(league: Any, rng: Any, needed: int) -> int:
             used_names=used_names,
             league_players=league_players,
             pool_context="junior",
+            league_code=code,
         )
         tier, pot = _tier_and_pot()
         p.ratings["dev_potential"] = pot

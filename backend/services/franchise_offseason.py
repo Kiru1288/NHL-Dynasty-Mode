@@ -6053,6 +6053,12 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
         return {"ok": False, "error": "no league"}
 
     rng = getattr(sim, "rng", None) or _random.Random(int(season_year) * 9973)
+    try:
+        from app.sim_engine.league_hierarchy_bootstrap import set_spawn_as_of_year
+
+        set_spawn_as_of_year(int(season_year))
+    except Exception:
+        pass
     aged = 0
     reset_stats = 0
     injected = 0
@@ -6153,12 +6159,13 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
                         pos=pos,
                         ovr_lo=ovr_lo,
                         ovr_hi=ovr_hi,
-                        # Draft-eligible cohort (matches bootstrap CHL 17–20).
+                        # Next-year CHL intake: 17–18 first-year kids, not overagers.
                         age_lo=17,
                         age_hi=18,
                         used_names=used_names,
                         league_players=league_players,
                         pool_context="junior",
+                        league_code=code,
                     )
                     _set_assignment(
                         newbie,
@@ -6267,6 +6274,12 @@ def _ensure_undrafted_draft_depth(session: FranchiseSession, season_year: int) -
         return {"ok": True, "undrafted": undrafted, "injected": 0}
 
     rng = getattr(sim, "rng", None) or _random.Random(int(season_year) * 4243)
+    try:
+        from app.sim_engine.league_hierarchy_bootstrap import set_spawn_as_of_year
+
+        set_spawn_as_of_year(int(season_year))
+    except Exception:
+        pass
     used_names: set = set()
     league_players = list(getattr(league, "players", None) or [])
     for p in league_players:
@@ -6302,6 +6315,7 @@ def _ensure_undrafted_draft_depth(session: FranchiseSession, season_year: int) -
                 used_names=used_names,
                 league_players=league_players,
                 pool_context="junior",
+                league_code=code,
             )
             _set_assignment(newbie, level="junior", league_code=code, club=str(tm.get("name") or ""))
             try:

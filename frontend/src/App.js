@@ -112,7 +112,17 @@ function useSetupSoundtrack(screen) {
     };
 
     if (screen === SCREENS.SETUP) {
-      return cancelFade;
+      const tryPlay = () => {
+        audio.play().catch(() => {});
+      };
+      tryPlay();
+      window.addEventListener("pointerdown", tryPlay);
+      window.addEventListener("keydown", tryPlay);
+      return () => {
+        cancelFade();
+        window.removeEventListener("pointerdown", tryPlay);
+        window.removeEventListener("keydown", tryPlay);
+      };
     }
 
     if (screen === SCREENS.HUB) {

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import random
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.sim_engine.entities.player import (
     Player,
@@ -109,6 +109,139 @@ def _set_assignment(player: Any, **meta: Any) -> None:
     setattr(player, "_franchise_assignment", d)
 
 
+_SPAWN_AS_OF_YEAR = 0
+
+# CHL / USHL / Euro junior rosters are mostly 16–18. Uniform 17–20 (and a
+# hardcoded 2025 birth year) made the NHL draft board look like an overager
+# combine. Weights are NHL-entry-draft shaped: first-year kids dominate.
+_CHL_AGE_TABLE = ((16, 17, 18, 19, 20), (12, 28, 36, 16, 8))
+_USHL_AGE_TABLE = ((16, 17, 18, 19), (14, 34, 38, 14))
+_NCAA_AGE_TABLE = ((18, 19, 20, 21, 22, 23, 24), (12, 18, 18, 16, 14, 12, 10))
+_EU_J_AGE_TABLE = ((16, 17, 18, 19, 20), (10, 30, 38, 14, 8))
+
+
+def set_spawn_as_of_year(year: Optional[int]) -> None:
+    global _SPAWN_AS_OF_YEAR
+    try:
+        y = int(year or 0)
+    except Exception:
+        y = 0
+    _SPAWN_AS_OF_YEAR = y if y >= 2000 else 0
+
+
+def spawn_as_of_year(explicit: Optional[int] = None) -> int:
+    try:
+        y = int(explicit or 0)
+    except Exception:
+        y = 0
+    if y >= 2000:
+        return y
+    if _SPAWN_AS_OF_YEAR >= 2000:
+        return _SPAWN_AS_OF_YEAR
+    try:
+        from datetime import date
+
+        today = date.today()
+        return int(today.year) if int(today.month) >= 7 else int(today.year) - 1
+    except Exception:
+        return 2026
+
+
+def _pick_spawn_age(
+    rng: random.Random,
+    age_lo: int,
+    age_hi: int,
+    *,
+    pool_context: str = "",
+    league_code: str = "",
+) -> int:
+    lo = int(age_lo)
+    hi = int(age_hi)
+    if hi < lo:
+        lo, hi = hi, lo
+    code = str(league_code or "").upper()
+    ctx = str(pool_context or "").lower()
+    table = None
+    if code.startswith("CHL_") or code in ("OHL", "WHL", "QMJHL"):
+        table = _CHL_AGE_TABLE
+    elif code == "USHL":
+        table = _USHL_AGE_TABLE
+    elif code == "NCAA":
+        table = _NCAA_AGE_TABLE
+    elif code.startswith("EU_J"):
+        table = _EU_J_AGE_TABLE
+    elif ctx in ("junior", "european_junior", "college"):
+        table = _CHL_AGE_TABLE if ctx != "college" else _NCAA_AGE_TABLE
+    if table:
+        ages, weights = table
+        filtered = [(a, w) for a, w in zip(ages, weights) if lo <= int(a) <= hi]
+        if filtered:
+            picks, wts = zip(*filtered)
+            return int(rng.choices(list(picks), weights=list(wts), k=1)[0])
+    return int(rng.randint(lo, hi))
+
+
+def _ident_age(player: Any) -> int:
+    ident = getattr(player, "identity", None)
+    try:
+        return int(getattr(ident, "age", 99) or 99) if ident is not None else 99
+    except Exception:
+        return 99
+
+
+def reanchor_generated_junior_dobs(league: Any, as_of_year: int) -> int:
+    """Fix juniors spawned with the old `birth_year = 2025 - age` formula.
+
+    Year-one 2026 franchises displayed those kids as 19–20. One-shot per league.
+    Skips real NHL imports and anyone already stamped with `_dob_anchor_year`.
+    """
+    if league is None or bool(getattr(league, "_junior_dobs_reanchored", False)):
+        return 0
+    try:
+        year = int(as_of_year or 0)
+    except Exception:
+        year = 0
+    if year < 2000:
+        return 0
+    fixed = 0
+    for block in getattr(league, "development_leagues", None) or []:
+        for tm in block.get("teams") or []:
+            for p in tm.get("players") or []:
+                if getattr(p, "real_nhl_import", False):
+                    continue
+                if getattr(p, "_dob_anchor_year", None):
+                    continue
+                ident = getattr(p, "identity", None)
+                if ident is None:
+                    continue
+                try:
+                    birth_year = int(getattr(ident, "birth_year", 0) or 0)
+                except Exception:
+                    continue
+                spawn_age = 2025 - birth_year
+                if spawn_age < 15 or spawn_age > 24:
+                    continue
+                ident.birth_year = year - spawn_age
+                ident.age = spawn_age
+                try:
+                    ident.birth_month = 7
+                    ident.birth_day = 1
+                except Exception:
+                    pass
+                try:
+                    p.age = spawn_age
+                except Exception:
+                    pass
+                setattr(p, "_dob_anchor_year", year)
+                fixed += 1
+    try:
+        setattr(league, "_junior_dobs_reanchored", True)
+        setattr(league, "season_start_year", year)
+    except Exception:
+        pass
+    return fixed
+
+
 def _spawn_player(
     rng: random.Random,
     *,
@@ -121,14 +254,20 @@ def _spawn_player(
     league_players: List[Any],
     pool_context: str = "junior",
     nationality: Optional[str] = None,
+    league_code: str = "",
+    as_of_year: Optional[int] = None,
 ) -> Player:
     target_ovr = ovr_lo + rng.uniform(0, max(1e-6, ovr_hi - ovr_lo))
     target_ovr = max(0.30, min(0.92, target_ovr))
     archetype = assign_skater_archetype(pos, rng)
     build_role_shaped_ratings = _build_role_shaped_ratings_cached()
     ratings = build_role_shaped_ratings(position=pos, target_ovr=target_ovr, rng=rng)
-    age = rng.randint(age_lo, age_hi)
-    birth_year = 2025 - age
+    age = _pick_spawn_age(
+        rng, age_lo, age_hi, pool_context=pool_context, league_code=league_code
+    )
+    year = spawn_as_of_year(as_of_year)
+    # July 1 birthday: listed age stays stable from camp through the June draft.
+    birth_year = int(year) - int(age)
     seed = rng.randint(1, 2_000_000_000)
     ident = generate_human_identity(rng, nationality=nationality) if nationality else generate_human_identity(rng)
     for _ in range(6):
@@ -159,6 +298,11 @@ def _spawn_player(
         draft_round=1 + (rng.randint(1, 7)),
         draft_pick=1 + (rng.randint(0, 30)),
     )
+    try:
+        identity.birth_month = 7
+        identity.birth_day = 1
+    except Exception:
+        pass
     backstory = BackstoryUpbringing(
         backstory=BackstoryType.GRINDER,
         upbringing=UpbringingType.STABLE_MIDDLE_CLASS,
@@ -175,6 +319,11 @@ def _spawn_player(
         pool_context=pool_context,
         enforce_floor_on_init=False,
     )
+    setattr(player, "_dob_anchor_year", year)
+    try:
+        player.age = age
+    except Exception:
+        pass
     apply_body_tradeoffs_to_ratings(player, rng)
     floor = get_ovr_floor_for_pool(pool_context)
     if floor > 0:
@@ -242,7 +391,7 @@ def _positions_for_block(
     return slots
 
 
-def bootstrap_full_league_hierarchy(league: Any, rng: random.Random) -> None:
+def bootstrap_full_league_hierarchy(league: Any, rng: random.Random, season_year: Optional[int] = None) -> None:
     """
     Mutates league + NHL Team objects:
       - team.ahl_roster, team.echl_roster
@@ -253,6 +402,13 @@ def bootstrap_full_league_hierarchy(league: Any, rng: random.Random) -> None:
     teams = list(getattr(league, "teams", None) or [])
     if not teams:
         return
+
+    year = spawn_as_of_year(season_year)
+    set_spawn_as_of_year(year)
+    try:
+        setattr(league, "season_start_year", year)
+    except Exception:
+        pass
 
     if not hasattr(league, "players") or league.players is None:
         league.players = []
@@ -390,6 +546,7 @@ def bootstrap_full_league_hierarchy(league: Any, rng: random.Random) -> None:
                         league_players=league_players,
                         pool_context=_pool_context_for_level("junior", code),
                         nationality=nat,
+                        league_code=code,
                     )
                     birth_country = str(getattr(getattr(p, "identity", None), "birth_country", "") or "")
                     if validate_prospect_league_fit(birth_country, code):
@@ -410,10 +567,10 @@ def bootstrap_full_league_hierarchy(league: Any, rng: random.Random) -> None:
         display = str(LEAGUE_REGISTRY.get(code, {}).get("display") or title)
         dev.append({"league_code": code, "league_name": display, "teams": teams_out})
 
-    _add_league("CHL_OHL", "OHL", 12, 7, 3, 17, 20, 0.32, 0.52)
-    _add_league("CHL_WHL", "WHL", 12, 7, 3, 17, 20, 0.32, 0.52)
-    _add_league("CHL_QMJHL", "QMJHL", 12, 7, 3, 17, 20, 0.32, 0.52)
-    _add_league("USHL", "USHL", 12, 6, 3, 17, 19, 0.30, 0.48)
+    _add_league("CHL_OHL", "OHL", 12, 7, 3, 16, 20, 0.32, 0.52)
+    _add_league("CHL_WHL", "WHL", 12, 7, 3, 16, 20, 0.32, 0.52)
+    _add_league("CHL_QMJHL", "QMJHL", 12, 7, 3, 16, 20, 0.32, 0.52)
+    _add_league("USHL", "USHL", 12, 6, 3, 16, 19, 0.30, 0.48)
     _add_league("NCAA", "NCAA", 13, 7, 3, 18, 24, 0.34, 0.55)
 
     # European junior blocks span far more clubs (112 teams) than the CHL (61).
@@ -434,7 +591,7 @@ def bootstrap_full_league_hierarchy(league: Any, rng: random.Random) -> None:
         "EU_J_AUT",
     ):
         label = str(LEAGUE_REGISTRY.get(code, {}).get("display") or code)
-        _add_league(code, label, 5, 3, 1, 17, 19, 0.30, 0.50)
+        _add_league(code, label, 5, 3, 1, 16, 20, 0.30, 0.50)
 
     league.development_leagues = dev
     league.players = league_players
@@ -669,6 +826,29 @@ def _assign_residual_dev_potential(
     ratings["dev_potential"] = pot
 
 
+def _split_first_year_overage(players: List[Any], rng: random.Random) -> Tuple[List[Any], List[Any]]:
+    fy = [p for p in players if _ident_age(p) <= 18]
+    og = [p for p in players if _ident_age(p) >= 19]
+    rng.shuffle(fy)
+    rng.shuffle(og)
+    return fy, og
+
+
+def _take_age_biased(
+    fy: List[Any],
+    og: List[Any],
+    rng: random.Random,
+    first_year_p: float,
+) -> Optional[Any]:
+    if fy and (not og or rng.random() < float(first_year_p)):
+        return fy.pop(0)
+    if og:
+        return og.pop(0)
+    if fy:
+        return fy.pop(0)
+    return None
+
+
 def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
     """
     Post-spawn pass: builds a full draft-class talent pool with star power AND depth.
@@ -755,39 +935,43 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
 
     skaters = [p for p in draft_age if getattr(getattr(p, "identity", None), "position", None) != Position.G]
     goalies = [p for p in draft_age if getattr(getattr(p, "identity", None), "position", None) == Position.G]
-    rng.shuffle(skaters)
-    rng.shuffle(goalies)
+    fy_sk, og_sk = _split_first_year_overage(skaters, rng)
+    fy_g, og_g = _split_first_year_overage(goalies, rng)
 
-    generational_goalie = goalies[0] if goalies and rng.random() < 0.05 else None
-    if getattr(league, "goalie_class_strength", "") in ("elite", "generational") and goalies:
-        generational_goalie = goalies[0]
+    def _next_skater(p: float = 0.92) -> Optional[Any]:
+        return _take_age_biased(fy_sk, og_sk, rng, p)
+
+    def _next_goalie(p: float = 0.90) -> Optional[Any]:
+        return _take_age_biased(fy_g, og_g, rng, p)
+
+    generational_goalie = _next_goalie(0.95) if (goalies and rng.random() < 0.05) else None
+    if getattr(league, "goalie_class_strength", "") in ("elite", "generational") and generational_goalie is None:
+        generational_goalie = _next_goalie(0.95)
 
     chosen: List[tuple] = []
-    si = 0
 
-    if transcendent_roll and skaters:
-        tp = skaters[0]
-        chosen.append((tp, "transcendent", top_range[1], min(0.92, top_range[1] + 0.08), 99, 99))
-        setattr(tp, "is_transcendent", True)
-        setattr(tp, "transcendent_talent", True)
-        setattr(tp, "aura_tier", "gold")
-        setattr(tp, "draft_hype_tier", "mythic")
-        setattr(tp, "tank_target", True)
-        setattr(tp, "storyline_priority", "legendary")
-        setattr(tp, "pipeline_tier", "transcendent")
-        setattr(tp, "backstory_key", rng.choice(_TRANSCENDENT_BACKSTORY_KEYS))
-        si = 1
+    if transcendent_roll:
+        tp = _next_skater(0.99)
+        if tp is not None:
+            chosen.append((tp, "transcendent", top_range[1], min(0.92, top_range[1] + 0.08), 99, 99))
+            setattr(tp, "is_transcendent", True)
+            setattr(tp, "transcendent_talent", True)
+            setattr(tp, "aura_tier", "gold")
+            setattr(tp, "draft_hype_tier", "mythic")
+            setattr(tp, "tank_target", True)
+            setattr(tp, "storyline_priority", "legendary")
+            setattr(tp, "pipeline_tier", "transcendent")
+            setattr(tp, "backstory_key", rng.choice(_TRANSCENDENT_BACKSTORY_KEYS))
 
     for _ in range(n_franchise):
-        if si >= len(skaters):
+        sp = _next_skater(0.94)
+        if sp is None:
             break
-        chosen.append((skaters[si], "franchise", top_range[0], top_range[1], 88, 97))
-        si += 1
+        chosen.append((sp, "franchise", top_range[0], top_range[1], 88, 97))
     if generational_goalie is not None:
         chosen.append((generational_goalie, "franchise", top_range[0], top_range[1], 90, 98))
         setattr(generational_goalie, "generational_goalie", True)
 
-    gi = 1 if generational_goalie else 0
     _goalie_shape = {
         "weak": (0, 1),
         "normal": (0, 3),
@@ -798,68 +982,68 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
     n_elite_g, n_top_g = _goalie_shape.get(g_label, (0, 2))
     if n_elite_g > 0:
         for _ in range(n_elite_g):
-            if gi >= len(goalies):
+            gp = _next_goalie(0.90)
+            if gp is None:
                 break
-            chosen.append((goalies[gi], "elite", top_range[0] - 0.03, top_range[1] - 0.02, 84, 92))
-            gi += 1
+            chosen.append((gp, "elite", top_range[0] - 0.03, top_range[1] - 0.02, 84, 92))
     for _ in range(n_top_g):
-        if gi >= len(goalies):
+        gp = _next_goalie(0.88)
+        if gp is None:
             break
-        chosen.append((goalies[gi], "top", top_range[0] - 0.08, top_range[0] - 0.02, 76, 88))
-        gi += 1
+        chosen.append((gp, "top", top_range[0] - 0.08, top_range[0] - 0.02, 76, 88))
 
     for _ in range(n_elite):
-        if si >= len(skaters):
+        sp = _next_skater(0.92)
+        if sp is None:
             break
-        chosen.append((skaters[si], "elite", top_range[0] - 0.05, top_range[1] - 0.05, 82, 92))
-        si += 1
+        chosen.append((sp, "elite", top_range[0] - 0.05, top_range[1] - 0.05, 82, 92))
     for _ in range(n_top):
-        if si >= len(skaters):
+        sp = _next_skater(0.90)
+        if sp is None:
             break
-        chosen.append((skaters[si], "top", top_range[0] - 0.09, top_range[1] - 0.09, 76, 86))
-        si += 1
+        chosen.append((sp, "top", top_range[0] - 0.09, top_range[1] - 0.09, 76, 86))
 
     n_round1_tail = int(depth_slots.get("round1_tail", 38))
     for _ in range(n_round1_tail):
-        if si >= len(skaters):
+        sp = _next_skater(0.86)
+        if sp is None:
             break
-        chosen.append((skaters[si], "round1_tail", top_range[0] - 0.12, top_range[0] - 0.06, 70, 82))
-        si += 1
+        chosen.append((sp, "round1_tail", top_range[0] - 0.12, top_range[0] - 0.06, 70, 82))
 
     n_nhl_floor = int(depth_slots.get("nhl_floor", 16))
     for _ in range(n_nhl_floor):
-        if si >= len(skaters):
+        sp = _next_skater(0.78)
+        if sp is None:
             break
         # Solid NHL-bound depth — below top-of-class current ability.
-        chosen.append((skaters[si], "nhl_floor", 0.58, 0.65, 72, 80))
-        si += 1
+        chosen.append((sp, "nhl_floor", 0.58, 0.65, 72, 80))
 
     n_round2 = int(depth_slots.get("round2", 28))
     for _ in range(n_round2):
-        if si >= len(skaters):
+        sp = _next_skater(0.70)
+        if sp is None:
             break
-        chosen.append((skaters[si], "round2", 0.54, 0.62, 74, 84))
-        si += 1
+        chosen.append((sp, "round2", 0.54, 0.62, 74, 84))
 
     n_round3_4 = int(depth_slots.get("round3_4", 40))
     for _ in range(n_round3_4):
-        if si >= len(skaters):
+        sp = _next_skater(0.58)
+        if sp is None:
             break
-        chosen.append((skaters[si], "round3_4", 0.50, 0.58, 70, 82))
-        si += 1
+        chosen.append((sp, "round3_4", 0.50, 0.58, 70, 82))
 
     n_round5_7 = int(depth_slots.get("round5_7", 48))
     upside_pct = float(depth_slots.get("upside_pct", 0.08))
     for _ in range(n_round5_7):
-        if si >= len(skaters):
+        sp = _next_skater(0.48)
+        if sp is None:
             break
         if rng.random() < upside_pct * 0.55:
-            chosen.append((skaters[si], "hidden_upside", 0.46, 0.56, 80, 92))
+            chosen.append((sp, "hidden_upside", 0.46, 0.56, 80, 92))
         elif rng.random() < 0.22:
-            chosen.append((skaters[si], "round5_7", 0.48, 0.56, 72, 84))
+            chosen.append((sp, "round5_7", 0.48, 0.56, 72, 84))
         else:
-            chosen.append((skaters[si], "round5_7", 0.42, 0.52, 65, 78))
-        si += 1
+            chosen.append((sp, "round5_7", 0.42, 0.52, 65, 78))
 
     shaped_ids = set()
     for p, tier, lo, hi, pot_lo, pot_hi in chosen:

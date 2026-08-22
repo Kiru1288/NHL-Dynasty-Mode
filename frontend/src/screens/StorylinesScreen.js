@@ -40,6 +40,9 @@ const CATEGORY_META = {
   rivalry: { icon: "⚔", label: "Rivalry", accent: "#ff606d" },
   decision: { icon: "?", label: "GM Decision", accent: "#e9a83c" },
   league: { icon: "◉", label: "League News", accent: "#8ab4ff" },
+  locker_room: { icon: "◎", label: "Locker Room", accent: "#7ee0b0" },
+  business: { icon: "$", label: "Business", accent: "#52df94" },
+  management: { icon: "▣", label: "Front Office", accent: "#e9a83c" },
   storyline: { icon: "◉", label: "League News", accent: "#8096a8" },
 };
 
@@ -114,6 +117,9 @@ function resolveCategoryKey(story) {
   if (/draft|prospect/.test(cat)) return "draft";
   if (/goalie|goaltender/.test(cat)) return "goalie";
   if (/trade|rumor|contract/.test(cat)) return /contract/.test(cat) ? "contract" : "trade";
+  if (/locker|belong|role/.test(cat)) return "locker_room";
+  if (/business|agent/.test(cat)) return "business";
+  if (/coach|gm|captain|ahl/.test(cat)) return "league";
   if (/crisis|collapse|skid/.test(cat)) return "team_crisis";
   if (/rival/.test(cat)) return "rivalry";
   if (/performance|underperform|breakout|streak|star|rookie/.test(cat)) return "performance";
@@ -399,6 +405,17 @@ function heatLabel(heat) {
   if (n < 75) return "Hot";
   return "Boiling";
 }
+function heatTier(heat) {
+  const n = Number(heat) || 0;
+  if (n >= 70) return "hot";
+  if (n >= 40) return "warm";
+  return "cool";
+}
+function formatCount(n) {
+  const v = Number(n) || 0;
+  if (v >= 1000) return `${(v / 1000).toFixed(1)}K`;
+  return String(v);
+}
 function credibilityLabel(v) {
   const n = Number(v);
   if (!Number.isFinite(n) || n <= 0) return null;
@@ -477,6 +494,101 @@ function buildSocialPosts(stories, narrativeUniverse) {
       storyId: s.id,
     };
   });
+}
+
+
+
+function collectDossiers(narrativeUniverse) {
+  const direct = asArray(narrativeUniverse?.player_dossiers);
+  if (direct.length) return direct;
+  return asArray(narrativeUniverse?.players).map((p) => ({
+    player_id: p.player_id,
+    player_name: p.player_name,
+    identity: p.identity || {},
+    wants: p.top_concerns || [],
+    trusts: p.trusts || {},
+    remembers: asArray(p.memories).slice(-6),
+    reputation: asArray(p.reputation_tags).length ? p.reputation_tags : asArray(p.personality_tags),
+    personality_tags: asArray(p.personality_tags),
+    niches: asArray(p.niche_abilities).map((n) => n.label).filter(Boolean),
+    overall: p.overall,
+    position: p.position,
+  }));
+}
+
+function DossierCard({ dossier }) {
+  if (!dossier) return null;
+  const ident = asObject(dossier.identity);
+  const trusts = asObject(dossier.trusts);
+  const wants = asArray(dossier.wants);
+  const remembers = asArray(dossier.remembers);
+  const tags = asArray(dossier.reputation).length ? asArray(dossier.reputation) : asArray(dossier.personality_tags);
+  const birth = [ident.birth_city, ident.birth_country].filter(Boolean).join(", ");
+  const draft = ident.draft_year
+    ? `${ident.draft_year} R${ident.draft_round || "—"} P${ident.draft_pick || "—"}`
+    : "";
+  return (
+    <article className="sl-dossier">
+      <div className="sl-dossier__head">
+        <strong>{str(dossier.player_name || ident.name || "Player")}</strong>
+        <span>
+          {str(dossier.position || ident.position || "")}
+          {dossier.overall != null ? ` · ${Math.round(Number(dossier.overall))}` : ""}
+          {ident.age ? ` · ${ident.age}` : ""}
+        </span>
+      </div>
+      {birth || draft ? (
+        <p className="sl-dossier__ident">
+          {birth || "Identity on file"}
+          {draft ? ` · Draft ${draft}` : ""}
+        </p>
+      ) : null}
+      {tags.length ? (
+        <div className="sl-dossier__tags">
+          {tags.slice(0, 5).map((tag) => (
+            <span key={tag}>{tag}</span>
+          ))}
+        </div>
+      ) : null}
+      <div className="sl-dossier__grid">
+        <div>
+          <h4>Wants</h4>
+          {wants.length ? (
+            wants.slice(0, 3).map((want) => (
+              <p key={want.id || want.label}>
+                {str(want.label || want.id)}
+                {want.pressure != null ? ` · pressure ${want.pressure}` : ""}
+              </p>
+            ))
+          ) : (
+            <p>No live concerns published.</p>
+          )}
+        </div>
+        <div>
+          <h4>Trusts</h4>
+          {Object.keys(trusts).length ? (
+            Object.entries(trusts).map(([key, val]) => (
+              <p key={key}>
+                {formatEffectLabel(key)} · {Math.round(Number(val) || 0)}
+              </p>
+            ))
+          ) : (
+            <p>Trust ledger still forming.</p>
+          )}
+        </div>
+      </div>
+      <div>
+        <h4>Remembers</h4>
+        {remembers.length ? (
+          remembers.slice(-4).reverse().map((mem, idx) => (
+            <p key={mem.id || idx}>{str(mem.summary || mem.kind || "A private beat")}</p>
+          ))
+        ) : (
+          <p>No memories on the public desk.</p>
+        )}
+      </div>
+    </article>
+  );
 }
 
 function collectArcTimeline(stories, selected, narrativeUniverse) {
@@ -728,6 +840,7 @@ export default function StorylinesScreen() {
   const [sortId, setSortId] = useState("decisions");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
   const [activeTab, setActiveTab] = useState("details");
   const [busyChoice, setBusyChoice] = useState("");
   const sessionId = str(franchiseState?.session_id || getFranchiseSessionId() || "anon");
@@ -752,6 +865,22 @@ export default function StorylinesScreen() {
       });
     },
     [sessionId]
+  );
+
+  const openStory = useCallback((id) => {
+    if (!id) return;
+    setSelectedId(id);
+    setExpandedId(id);
+    setFilter("all");
+    setSearch("");
+  }, []);
+
+  const toggleRow = useCallback(
+    (id) => {
+      setExpandedId((prev) => (prev === id ? null : id));
+      setSelectedId(id);
+    },
+    []
   );
 
   const stories = useMemo(() => collectStories(franchiseState), [franchiseState]);
@@ -790,6 +919,13 @@ export default function StorylinesScreen() {
   const agentRoster = asArray(narrativeUniverse?.agents);
   const agentRelationships = asObject(narrativeUniverse?.agent_relationships);
   const knowledgeGraph = asArray(narrativeUniverse?.knowledge_graph);
+  const insiderItems = asArray(narrativeUniverse?.insider_items).length
+    ? asArray(narrativeUniverse.insider_items)
+    : knowledgeGraph;
+  const beatWriters = asArray(narrativeUniverse?.beat_writers).length
+    ? asArray(narrativeUniverse.beat_writers)
+    : asArray(narrativeUniverse?.reporters);
+  const playerDossiers = useMemo(() => collectDossiers(narrativeUniverse), [narrativeUniverse]);
   const breakingAlerts = asArray(narrativeUniverse?.breaking_alerts);
   const pendingBreaking = useMemo(() => activeBreakingAlerts(breakingAlerts, dismissedBreaking), [breakingAlerts, dismissedBreaking]);
   const activeBreaking = pendingBreaking[0] || null;
@@ -800,8 +936,18 @@ export default function StorylinesScreen() {
   }, [activeBreaking?.storyline_id, activeBreaking?.headline, activeBreaking?.level]);
 
   const socialPosts = useMemo(() => buildSocialPosts(stories, narrativeUniverse), [stories, narrativeUniverse]);
+  const socialCountByStory = useMemo(() => {
+    const map = new Map();
+    asArray(narrativeUniverse?.social_posts).forEach((p) => {
+      const sid = str(p?.storyline_id || "");
+      if (!sid) return;
+      map.set(sid, (map.get(sid) || 0) + 1);
+    });
+    return map;
+  }, [narrativeUniverse]);
 
   const selected = filtered.find((s) => s.id === selectedId) || stories.find((s) => s.id === selectedId) || filtered[0] || null;
+  const selectedDossier = playerDossiers.find((d) => str(d.player_id) === str(selected?.playerId)) || null;
 
   useEffect(() => {
     if (!filtered.length) {
@@ -979,22 +1125,36 @@ export default function StorylinesScreen() {
         .sl-frontoffice-alert strong { font-size: 13px; font-weight: 800; flex: 1; }
         .sl-frontoffice-alert em { font-size: 11px; color: #ffc9cf; font-style: normal; font-weight: 800; }
 
-        /* ---------- 3-column workspace ---------- */
-        .sl-workspace { display: grid; grid-template-columns: 300px minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
-        @media (max-width: 1180px) { .sl-workspace { grid-template-columns: 1fr; } }
-
-        /* feed column */
-        .sl-feed-col { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); overflow: hidden; }
-        .sl-feed-head { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 10.5px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
-        .sl-feed-head span { color: var(--cyan); }
-        .sl-feed-list { max-height: 78vh; overflow-y: auto; }
-        .sl-feed-card { width: 100%; display: grid; grid-template-columns: 40px 1fr; gap: 10px; text-align: left; border: 0; border-bottom: 1px solid rgba(156,218,236,.1); background: transparent; color: inherit; padding: 10px 12px; cursor: pointer; }
-        .sl-feed-card:hover { background: rgba(19,216,231,.05); }
-        .sl-feed-card.is-active { background: rgba(19,216,231,.1); box-shadow: inset 3px 0 0 var(--cyan); }
-        .sl-feed-card-meta { display: flex; gap: 6px; align-items: center; font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 3px; }
-        .sl-feed-card h4 { margin: 0 0 2px; font-size: 12.5px; line-height: 1.32; font-weight: 700; }
-        .sl-feed-card-time { font-size: 10px; color: var(--muted); font-weight: 800; }
+        /* ---------- single-stream feed ---------- */
+        .sl-stream { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); overflow: hidden; }
+        .sl-stream-head { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 10.5px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+        .sl-stream-head span:last-child { color: var(--cyan); }
         .sl-feed-empty { padding: 24px 16px; color: var(--muted); font-size: 12px; text-align: center; }
+
+        /* story row */
+        .sl-row { border-bottom: 1px solid rgba(156,218,236,.1); }
+        .sl-row:last-child { border-bottom: 0; }
+        .sl-row.is-open { background: rgba(19,216,231,.04); }
+        .sl-row__header { width: 100%; display: grid; grid-template-columns: 4px 1fr auto; align-items: stretch; gap: 12px; text-align: left; border: 0; background: transparent; color: inherit; padding: 12px 14px 12px 0; cursor: pointer; }
+        .sl-row__header:hover { background: rgba(19,216,231,.05); }
+        .sl-row__heatbar { border-radius: 3px; align-self: stretch; min-height: 100%; }
+        .sl-row__heatbar--cool { background: linear-gradient(180deg, var(--cyan), rgba(19,216,231,.35)); }
+        .sl-row__heatbar--warm { background: linear-gradient(180deg, var(--gold), rgba(233,168,60,.4)); }
+        .sl-row__heatbar--hot { background: linear-gradient(180deg, var(--red), rgba(255,96,109,.4)); }
+        .sl-row__main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+        .sl-row__topline { display: flex; align-items: center; gap: 8px; font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .06em; }
+        .sl-row__decision { color: var(--gold); }
+        .sl-row__headline { margin: 0; font-size: 14px; line-height: 1.32; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .sl-row.is-open .sl-row__headline { white-space: normal; }
+        .sl-row__subline { display: flex; gap: 10px; font-size: 11px; color: var(--muted); font-weight: 700; }
+        .sl-row__pulse { color: var(--cyan); }
+        .sl-row__meta { display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; gap: 4px; flex-shrink: 0; }
+        .sl-row__date { font-size: 10px; color: var(--muted); font-weight: 800; white-space: nowrap; }
+        .sl-row__chevron { font-size: 10px; color: var(--muted); }
+        .sl-row__body { border-top: 1px solid var(--line); background: var(--panel); padding: 16px; }
+        .sl-row__layout { display: grid; grid-template-columns: minmax(0,1fr) 300px; gap: 16px; align-items: start; }
+        @media (max-width: 900px) { .sl-row__layout { grid-template-columns: 1fr; } }
+        .sl-row__impact { display: grid; gap: 12px; }
 
         /* score badge */
         .sl-score { width: 38px; height: 38px; border-radius: 8px; display: grid; place-items: center; font-weight: 900; border: 1px solid; align-self: start; }
@@ -1013,8 +1173,6 @@ export default function StorylinesScreen() {
         .sl-status-pill--resolved { color: #8ef0b8; background: rgba(82,223,148,.12); border: 1px solid rgba(82,223,148,.35); }
 
         /* detail column */
-        .sl-detail-col { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 16px; }
-        .sl-detail-empty { padding: 60px 20px; text-align: center; color: var(--muted); }
         .sl-detail-head { display: flex; gap: 12px; align-items: flex-start; }
         .sl-detail-headmeta { flex: 1; min-width: 0; }
         .sl-detail-eyebrow { display: flex; align-items: center; gap: 10px; font-size: 11px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 4px; }
@@ -1090,7 +1248,6 @@ export default function StorylinesScreen() {
         .sl-detail-footer { display: flex; justify-content: space-between; margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 10.5px; color: var(--muted); font-weight: 700; }
 
         /* impact rail */
-        .sl-impact-col { display: grid; gap: 12px; }
         .sl-impact-panel { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); padding: 12px 14px; }
         .sl-impact-panel h3 { margin: 0 0 10px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--cyan); font-weight: 900; }
         .sl-impact-panel h3.is-title { color: var(--text); font-size: 13px; letter-spacing: .06em; }
@@ -1171,6 +1328,26 @@ export default function StorylinesScreen() {
 
         .sl-market-banner { margin: 0; padding: 8px 12px; border: 1px solid rgba(233,168,60,.25); border-radius: 6px; background: rgba(233,168,60,.08); font-size: 12px; font-weight: 800; color: #ffc98a; }
 
+        .sl-insiders-layout { display: grid; grid-template-columns: minmax(0,1fr) minmax(260px,340px); gap: 14px; }
+        .sl-insider-feed { display: grid; gap: 8px; }
+        .sl-insider-row { text-align: left; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 10px 12px; color: inherit; cursor: pointer; }
+        .sl-insider-row:hover { border-color: var(--line-strong); }
+        .sl-insider-row__head { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+        .sl-insider-row__head strong { font-size: 13px; }
+        .sl-insider-row__head em { font-style: normal; font-size: 10.5px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; color: var(--gold); }
+        .sl-insider-row p { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+        .sl-insider-row__meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--cyan); }
+        .sl-insider-rail { display: grid; gap: 10px; align-content: start; }
+        .sl-insider-rail h3 { margin: 0; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+        .sl-dossier { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 10px 12px; }
+        .sl-dossier__head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+        .sl-dossier__head strong { font-size: 13px; }
+        .sl-dossier__head span, .sl-dossier__ident, .sl-dossier p { margin: 0; font-size: 11.5px; color: var(--muted); }
+        .sl-dossier h4 { margin: 8px 0 4px; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--cyan); }
+        .sl-dossier__tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+        .sl-dossier__tags span { font-size: 10px; font-weight: 900; letter-spacing: .04em; text-transform: uppercase; border: 1px solid rgba(156,218,236,.18); border-radius: 4px; padding: 2px 6px; }
+        .sl-dossier__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
         @media (prefers-reduced-motion: reduce) { .nhlcal-sl-root * { transition: none !important; animation: none !important; } }
       `}</style>
 
@@ -1192,7 +1369,7 @@ export default function StorylinesScreen() {
                     const storyKey = str(activeBreaking.storyline_id || "");
                     if (storyKey) {
                       const match = stories.find((s) => str(s.storylineId) === storyKey || str(s.id) === storyKey);
-                      if (match) setSelectedId(match.id);
+                      if (match) openStory(match.id);
                     }
                     setDepartment("front_page");
                     dismissBreakingAlerts(pendingBreaking);
@@ -1225,7 +1402,9 @@ export default function StorylinesScreen() {
         <nav className="sl-departments" aria-label="Media departments">
           {DEPARTMENTS.map((d) => {
             const alert =
-              (d.id === "press_room" && pressQueue.length > 0) || (d.id === "archive" && narrativeEras.length > 0);
+              (d.id === "press_room" && pressQueue.length > 0)
+              || (d.id === "archive" && narrativeEras.length > 0)
+              || (d.id === "insiders" && (insiderItems.length > 0 || playerDossiers.length > 0));
             return (
               <button
                 key={d.id}
@@ -1252,18 +1431,12 @@ export default function StorylinesScreen() {
             <h2>No Coverage Yet</h2>
             <p>Advance the calendar to populate the newsroom from backend storylines.</p>
           </div>
-        ) : stories.length === 0 ? (
-          <div className="sl-empty-panel">
-            <p className="sl-kicker">League Wire · Idle</p>
-            <h2>Wire Standing By</h2>
-            <p>No active storylines on file. Coverage will appear as the season generates league beats.</p>
-          </div>
         ) : department === "social" ? (
           <div className="sl-social-layout">
             <div className="sl-social-feed">
               {socialPosts.length ? (
                 socialPosts.map((post) => (
-                  <button key={post.id} type="button" className="sl-social-post" onClick={() => post.storyId && setSelectedId(post.storyId)}>
+                  <button key={post.id} type="button" className="sl-social-post" onClick={() => { if (post.storyId) { openStory(post.storyId); setDepartment("front_page"); } }}>
                     <div className="sl-social-post__head">
                       <strong>
                         {post.name}
@@ -1305,6 +1478,68 @@ export default function StorylinesScreen() {
                     </div>
                   ))}
               </div>
+            </aside>
+          </div>
+        ) : department === "insiders" ? (
+          <div className="sl-insiders-layout">
+            <div className="sl-insider-feed">
+              {insiderItems.length ? (
+                insiderItems.slice().reverse().slice(0, 48).map((item, idx) => {
+                  const sid = str(item.storyline_id || item.world_event_id || idx);
+                  const match = stories.find((s) => str(s.storylineId) === sid || str(s.id) === sid);
+                  return (
+                    <button
+                      key={sid}
+                      type="button"
+                      className="sl-insider-row"
+                      onClick={() => {
+                        if (match) {
+                          openStory(match.id);
+                          setDepartment("front_page");
+                        }
+                      }}
+                    >
+                      <div className="sl-insider-row__head">
+                        <strong>{str(item.headline || match?.headline || "Desk note")}</strong>
+                        <em>{knowledgeLevelLabel(item.public_knowledge_level)}</em>
+                      </div>
+                      <p>{str(item.summary || match?.summary || "")}</p>
+                      <div className="sl-insider-row__meta">
+                        <span>{str(item.reporter_name || item.source_label || "Insider")}</span>
+                        {item.outlet_name ? <span>{item.outlet_name}</span> : null}
+                        <span>{str(item.knowledge_type || "report").replace(/_/g, " ")}</span>
+                        {item.player_name ? <span>{item.player_name}</span> : null}
+                        {item.calendar_iso ? <span>{item.calendar_iso}</span> : null}
+                      </div>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="sl-empty-panel">
+                  <p className="sl-kicker">Insiders · Quiet</p>
+                  <h2>No private layers yet</h2>
+                  <p>Rumors, claims, and confirmed facts land here as the knowledge graph fills in.</p>
+                </div>
+              )}
+            </div>
+            <aside className="sl-insider-rail">
+              <h3>Beat desks</h3>
+              <div className="sl-effects-grid">
+                {beatWriters.slice(0, 10).map((writer) => (
+                  <div key={str(writer.id || writer.name)} className="sl-effect-row">
+                    <span>{str(writer.name)}</span>
+                    <strong>{str(writer.specialty || writer.role || writer.outlet)}</strong>
+                  </div>
+                ))}
+              </div>
+              <h3>Player dossiers</h3>
+              {playerDossiers.length ? (
+                playerDossiers.slice(0, 8).map((dossier) => (
+                  <DossierCard key={str(dossier.player_id || dossier.player_name)} dossier={dossier} />
+                ))
+              ) : (
+                <p className="sl-decision-empty">Roster beings publish here after the next calendar tick.</p>
+              )}
             </aside>
           </div>
         ) : department === "press_room" ? (
@@ -1383,7 +1618,7 @@ export default function StorylinesScreen() {
                             (s) => str(s.storylineId) === str(story.storyline_id) || s.headline === story.headline
                           );
                           if (match) {
-                            setSelectedId(match.id);
+                            openStory(match.id);
                             setDepartment("front_page");
                           }
                         }}
@@ -1413,7 +1648,7 @@ export default function StorylinesScreen() {
                       onClick={() => {
                         const match = stories.find((s) => str(s.storylineId) === str(story.storyline_id));
                         if (match) {
-                          setSelectedId(match.id);
+                          openStory(match.id);
                           setDepartment("front_page");
                         }
                       }}
@@ -1432,10 +1667,16 @@ export default function StorylinesScreen() {
               </div>
             )}
           </div>
+        ) : stories.length === 0 ? (
+          <div className="sl-empty-panel">
+            <p className="sl-kicker">League Wire · Idle</p>
+            <h2>Wire Standing By</h2>
+            <p>No active storylines on file. Coverage will appear as the season generates league beats.</p>
+          </div>
         ) : (
           <>
             {topPending ? (
-              <button type="button" className="sl-frontoffice-alert" onClick={() => setSelectedId(topPending.id)}>
+              <button type="button" className="sl-frontoffice-alert" onClick={() => openStory(topPending.id)}>
                 <span>Front Office Alert</span>
                 <strong>{topPending.headline}</strong>
                 <em>Review decision →</em>
@@ -1474,283 +1715,278 @@ export default function StorylinesScreen() {
               </div>
             </div>
 
-            <div className="sl-workspace">
-              {/* --- LEFT: story feed --- */}
-              <aside className="sl-feed-col">
-                <div className="sl-feed-head">
-                  <span>Story Feed</span>
-                  <span>{filtered.length} active</span>
-                </div>
-                <div className="sl-feed-list">
-                  {filtered.length === 0 ? (
-                    <div className="sl-feed-empty">{filterEmptyMsg || "No matching stories."}</div>
-                  ) : (
-                    filtered.map((s) => {
-                      const score = storyScore(s);
-                      return (
-                        <button
-                          key={s.id}
-                          type="button"
-                          className={`sl-feed-card ${selected?.id === s.id ? "is-active" : ""}`}
-                          onClick={() => setSelectedId(s.id)}
-                        >
-                          <ScoreBadge score={score} size="sm" />
-                          <div>
-                            <div className="sl-feed-card-meta">
-                              <span style={{ color: categoryMeta(s).accent }}>{categoryMeta(s).label}</span>
-                              {s.requiresAction ? <span style={{ color: "var(--gold)" }}>· Decision</span> : null}
-                            </div>
-                            <h4>{s.headline}</h4>
-                            <span className="sl-feed-card-time">{s.ageLabel || "—"}</span>
-                          </div>
-                        </button>
-                      );
-                    })
-                  )}
-                </div>
-              </aside>
+            <div className="sl-stream">
+              <div className="sl-stream-head">
+                <span>Story Feed</span>
+                <span>{filtered.length} active</span>
+              </div>
+              {filtered.length === 0 ? (
+                <div className="sl-feed-empty">{filterEmptyMsg || "No matching stories."}</div>
+              ) : (
+                filtered.map((s) => {
+                  const isOpen = expandedId === s.id;
+                  const socialCount = socialCountByStory.get(s.storylineId) || socialCountByStory.get(s.id) || 0;
+                  return (
+                    <article key={s.id} className={`sl-row${isOpen ? " is-open" : ""}`}>
+                      <button type="button" className="sl-row__header" onClick={() => toggleRow(s.id)} aria-expanded={isOpen}>
+                        <span className={`sl-row__heatbar sl-row__heatbar--${heatTier(s.heat)}`} aria-hidden="true" />
+                        <span className="sl-row__main">
+                          <span className="sl-row__topline">
+                            <span className="sl-row__category" style={{ color: categoryMeta(s).accent }}>{categoryMeta(s).label}</span>
+                            {s.requiresAction ? <span className="sl-row__decision">Decision</span> : null}
+                            <StatusPill story={s} />
+                          </span>
+                          <h4 className="sl-row__headline">{s.headline}</h4>
+                          <span className="sl-row__subline">
+                            {heatLabel(s.heat) ? <span>Heat: {Math.round(Number(s.heat) || 0)}</span> : null}
+                            {socialCount ? <span className="sl-row__pulse">↙ {formatCount(socialCount)} social posts</span> : null}
+                          </span>
+                        </span>
+                        <span className="sl-row__meta">
+                          <span className="sl-row__date">{s.ageLabel || "—"}</span>
+                          <span className="sl-row__chevron">{isOpen ? "▼" : "▶"}</span>
+                        </span>
+                      </button>
 
-              {/* --- CENTER: case file --- */}
-              <main className="sl-detail-col">
-                {!selected ? (
-                  <div className="sl-detail-empty">Select a story from the feed to open the case file.</div>
-                ) : (
-                  <>
-                    <div className="sl-detail-head">
-                      <ScoreBadge score={storyScore(selected)} size="lg" />
-                      <div className="sl-detail-headmeta">
-                        <div className="sl-detail-eyebrow">
-                          <span style={{ color: categoryMeta(selected).accent }}>{categoryMeta(selected).label}</span>
-                          <StatusPill story={selected} />
-                        </div>
-                        <h2>{selected.headline}</h2>
-                        <div className="sl-detail-source">
-                          {selected.reporterName || selected.sourceLabel ? (
-                            <span>Source: {selected.reporterName || selected.sourceLabel}{selected.outletName ? ` (${selected.outletName})` : ""}</span>
-                          ) : null}
-                          {credibilityLabel(selected.credibility) ? <span>Credibility: {credibilityLabel(selected.credibility)}</span> : null}
-                          <span>{selected.ageLabel || "—"}</span>
-                        </div>
-                        {selected.summary ? <p className="sl-detail-summary">{selected.summary}</p> : null}
-                      </div>
-                    </div>
-
-                    <TeamOrPlayerIdentity story={selected} />
-                    {isRumourStory(selected) ? <TradeSwap story={selected} /> : null}
-                    {selected.description && selected.description !== selected.summary ? (
-                      <p className="sl-detail-summary">{selected.description}</p>
-                    ) : null}
-                    <ConductChannels story={selected} />
-
-                    <DevelopmentTimeline beats={arcTimeline} fallbackStory={selected} />
-
-                    <nav className="sl-tabs">
-                      {DETAIL_TABS.map((t) => (
-                        <button key={t.id} type="button" className={activeTab === t.id ? "is-active" : ""} onClick={() => setActiveTab(t.id)}>
-                          {t.label}
-                        </button>
-                      ))}
-                    </nav>
-
-                    <div className="sl-tab-panel">
-                      {activeTab === "details" ? (
-                        <div className="sl-detail-grid">
-                          <div className="sl-detail-block">
-                            <h4>Information</h4>
-                            {infoRows.length ? (
-                              infoRows.map(([label, val]) => (
-                                <div key={label} className="sl-info-row">
-                                  <span>{label}</span>
-                                  <span>{val}</span>
-                                </div>
-                              ))
-                            ) : (
-                              <p style={{ color: "var(--muted)", fontSize: 12 }}>No sourcing details on file.</p>
-                            )}
-                            {Object.keys(selected.evidence || {}).length ? (
-                              <div className="sl-numbers">
-                                {Object.entries(selected.evidence).slice(0, 4).map(([k, v]) => (
-                                  <div key={k} className="sl-num" title={`${formatEffectLabel(k)}: ${v}`}>
-                                    <strong>{String(v)}</strong>
-                                    <span>{formatEffectLabel(k)}</span>
+                      {isOpen && selected ? (
+                        <div className="sl-row__body">
+                          <div className="sl-row__layout">
+                            <div className="sl-row__detail">
+                              <div className="sl-detail-head">
+                                <ScoreBadge score={storyScore(selected)} size="lg" />
+                                <div className="sl-detail-headmeta">
+                                  <div className="sl-detail-source">
+                                    {selected.reporterName || selected.sourceLabel ? (
+                                      <span>Source: {selected.reporterName || selected.sourceLabel}{selected.outletName ? ` (${selected.outletName})` : ""}</span>
+                                    ) : null}
+                                    {credibilityLabel(selected.credibility) ? <span>Credibility: {credibilityLabel(selected.credibility)}</span> : null}
+                                    <span>{selected.ageLabel || "—"}</span>
                                   </div>
+                                  {selected.summary ? <p className="sl-detail-summary">{selected.summary}</p> : null}
+                                </div>
+                              </div>
+
+                              <TeamOrPlayerIdentity story={selected} />
+                              {selectedDossier ? <DossierCard dossier={selectedDossier} /> : null}
+                              {isRumourStory(selected) ? <TradeSwap story={selected} /> : null}
+                              {selected.description && selected.description !== selected.summary ? (
+                                <p className="sl-detail-summary">{selected.description}</p>
+                              ) : null}
+                              <ConductChannels story={selected} />
+
+                              <DevelopmentTimeline beats={arcTimeline} fallbackStory={selected} />
+
+                              <nav className="sl-tabs">
+                                {DETAIL_TABS.map((t) => (
+                                  <button key={t.id} type="button" className={activeTab === t.id ? "is-active" : ""} onClick={() => setActiveTab(t.id)}>
+                                    {t.label}
+                                  </button>
                                 ))}
+                              </nav>
+
+                              <div className="sl-tab-panel">
+                                {activeTab === "details" ? (
+                                  <div className="sl-detail-grid">
+                                    <div className="sl-detail-block">
+                                      <h4>Information</h4>
+                                      {infoRows.length ? (
+                                        infoRows.map(([label, val]) => (
+                                          <div key={label} className="sl-info-row">
+                                            <span>{label}</span>
+                                            <span>{val}</span>
+                                          </div>
+                                        ))
+                                      ) : (
+                                        <p style={{ color: "var(--muted)", fontSize: 12 }}>No sourcing details on file.</p>
+                                      )}
+                                      {Object.keys(selected.evidence || {}).length ? (
+                                        <div className="sl-numbers">
+                                          {Object.entries(selected.evidence).slice(0, 4).map(([k, v]) => (
+                                            <div key={k} className="sl-num" title={`${formatEffectLabel(k)}: ${v}`}>
+                                              <strong>{String(v)}</strong>
+                                              <span>{formatEffectLabel(k)}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      ) : null}
+                                    </div>
+
+                                    <div className="sl-detail-block">
+                                      <h4>Parties Involved</h4>
+                                      {parties.length ? (
+                                        parties.map((p) => (
+                                          <div key={p.label} className="sl-party-row">
+                                            <span>{p.label}</span>
+                                            <span>{p.name}</span>
+                                          </div>
+                                        ))
+                                      ) : (
+                                        <p style={{ color: "var(--muted)", fontSize: 12 }}>No named parties on file.</p>
+                                      )}
+                                    </div>
+
+                                    <div className="sl-detail-block">
+                                      <h4>Key Factors</h4>
+                                      <ul className="sl-key-factors">
+                                        {keyFactors.map((f, i) => (
+                                          <li key={i}>{f}</li>
+                                        ))}
+                                      </ul>
+                                      {(selected.effectSummary || Object.keys(selected.effects || {}).length) ? (
+                                        <div style={{ marginTop: 10 }}>
+                                          {selected.effectSummary ? <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>{selected.effectSummary}</p> : null}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                ) : null}
+
+                                {activeTab === "related" ? (
+                                  <div className="sl-related-list">
+                                    {relatedStories.length ? (
+                                      relatedStories.slice(0, 8).map((r) => (
+                                        <button key={r.id} type="button" onClick={() => openStory(r.id)}>
+                                          <span style={{ color: categoryMeta(r).accent }}>{categoryMeta(r).label}</span>
+                                          <strong>{r.headline}</strong>
+                                          <em>{r.ageLabel || "—"}</em>
+                                        </button>
+                                      ))
+                                    ) : (
+                                      <p style={{ color: "var(--muted)", fontSize: 12 }}>No related coverage yet.</p>
+                                    )}
+                                  </div>
+                                ) : null}
+
+                                {activeTab === "rumors" ? (
+                                  <div className="sl-rumor-list">
+                                    {leagueRumours.length ? (
+                                      leagueRumours.map((r) => (
+                                        <button key={r.id} type="button" onClick={() => openStory(r.id)}>
+                                          <span>{r.playerName || r.teamName || "League"}</span>
+                                          <strong>{r.headline}</strong>
+                                          <em>
+                                            {heatLabel(r.heat) ? `Heat: ${heatLabel(r.heat)}` : ""}
+                                            {credibilityLabel(r.credibility) ? ` · ${credibilityLabel(r.credibility)}` : ""}
+                                          </em>
+                                        </button>
+                                      ))
+                                    ) : (
+                                      <p style={{ color: "var(--muted)", fontSize: 12 }}>Trade wire is quiet.</p>
+                                    )}
+                                  </div>
+                                ) : null}
+
+                                {activeTab === "history" ? (
+                                  <ul className="sl-history-list">
+                                    {arcTimeline.length ? (
+                                      arcTimeline.map((beat) => (
+                                        <li key={beat.id}>
+                                          <time>{beat.date || "—"}</time>
+                                          <div>
+                                            <strong>{beat.headline}</strong>
+                                            {beat.summary ? <p>{beat.summary}</p> : null}
+                                          </div>
+                                        </li>
+                                      ))
+                                    ) : (
+                                      <p style={{ color: "var(--muted)", fontSize: 12 }}>No prior beats on file for this story.</p>
+                                    )}
+                                    {selected.repeatCount > 0 ? (
+                                      <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 4 }}>
+                                        Beat #{selected.repeatCount + 1}
+                                        {selected.escalatedFrom ? ` · escalated from ${selected.escalatedFrom}` : ""}
+                                      </p>
+                                    ) : null}
+                                  </ul>
+                                ) : null}
                               </div>
-                            ) : null}
-                          </div>
 
-                          <div className="sl-detail-block">
-                            <h4>Parties Involved</h4>
-                            {parties.length ? (
-                              parties.map((p) => (
-                                <div key={p.label} className="sl-party-row">
-                                  <span>{p.label}</span>
-                                  <span>{p.name}</span>
-                                </div>
-                              ))
-                            ) : (
-                              <p style={{ color: "var(--muted)", fontSize: 12 }}>No named parties on file.</p>
-                            )}
-                          </div>
+                              <section className="sl-detail-block" style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+                                <h4>What Comes Next</h4>
+                                <p style={{ fontSize: 12.5, color: "rgba(233,247,251,.85)" }}>{deriveFollowUp(selected)}</p>
+                              </section>
 
-                          <div className="sl-detail-block">
-                            <h4>Key Factors</h4>
-                            <ul className="sl-key-factors">
-                              {keyFactors.map((f, i) => (
-                                <li key={i}>{f}</li>
-                              ))}
-                            </ul>
-                            {(selected.effectSummary || Object.keys(selected.effects || {}).length) ? (
-                              <div style={{ marginTop: 10 }}>
-                                {selected.effectSummary ? <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>{selected.effectSummary}</p> : null}
+                              <div className="sl-detail-footer">
+                                <span>Last updated: {selected.date || selected.ageLabel || "—"}</span>
+                                <span>Story ID: {selected.storylineId || selected.id}</span>
                               </div>
-                            ) : null}
+                            </div>
+
+                            <div className="sl-row__impact">
+                              <div className="sl-impact-panel">
+                                <h3 className="is-title">Story Impact</h3>
+                                {userOrg ? (
+                                  <>
+                                    <h3 style={{ marginTop: 4 }}>Organizational Pressure</h3>
+                                    <OrgPressureBars org={userOrg} />
+                                  </>
+                                ) : (
+                                  <p style={{ fontSize: 12, color: "var(--muted)" }}>No organizational pressure data on file.</p>
+                                )}
+                              </div>
+
+                              {selected && Object.keys(selected.effects || {}).length ? (
+                                <div className="sl-impact-panel">
+                                  <h3>Potential Effects</h3>
+                                  <div className="sl-effects-grid">
+                                    {Object.entries(selected.effects).slice(0, 6).map(([k, v]) => (
+                                      <div key={k} className={`sl-effect-row ${effectPillClass(v)}`}>
+                                        <span>{formatEffectLabel(k)}</span>
+                                        <strong>{Number(v) > 0 ? "+" : ""}{String(v)}</strong>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+
+                              <div className="sl-impact-panel">
+                                <h3>GM Decisions</h3>
+                                {choiceOptions.length ? (
+                                  <div className="sl-decisions">
+                                    {choiceOptions.map((opt) => {
+                                      const busy = busyChoice === `${selected.storylineId}:${opt.id}`;
+                                      return (
+                                        <button
+                                          key={opt.id}
+                                          type="button"
+                                          className="sl-decision-btn"
+                                          disabled={Boolean(busyChoice)}
+                                          onClick={() => handleResolve(selectedChoice?.storyline_id || selected.storylineId, opt.id)}
+                                        >
+                                          <span className="sl-decision-btn__dot" />
+                                          <span>
+                                            <strong>{opt.label}</strong>
+                                            {opt.effect_summary ? <span>{opt.effect_summary}</span> : null}
+                                            {busy ? <em>Applying…</em> : null}
+                                          </span>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                ) : (
+                                  <p className="sl-decision-empty">No action needed on this story.</p>
+                                )}
+                              </div>
+
+                              {selected?.gmKnowsMore || knowledgeLevelLabel(selected?.publicKnowledgeLevel) ? (
+                                <div className="sl-impact-panel">
+                                  <h3>Knowledge Layers</h3>
+                                  {selected.gmKnowsMore ? (
+                                    <p style={{ fontSize: 12, color: "#8ef0b8", marginBottom: 6 }}>You know more than the public sees.</p>
+                                  ) : null}
+                                  {knowledgeLevelLabel(selected.publicKnowledgeLevel) ? (
+                                    <p style={{ fontSize: 12, color: "var(--muted)" }}>Public knowledge: {knowledgeLevelLabel(selected.publicKnowledgeLevel)}</p>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
                         </div>
                       ) : null}
-
-                      {activeTab === "related" ? (
-                        <div className="sl-related-list">
-                          {relatedStories.length ? (
-                            relatedStories.slice(0, 8).map((r) => (
-                              <button key={r.id} type="button" onClick={() => setSelectedId(r.id)}>
-                                <span style={{ color: categoryMeta(r).accent }}>{categoryMeta(r).label}</span>
-                                <strong>{r.headline}</strong>
-                                <em>{r.ageLabel || "—"}</em>
-                              </button>
-                            ))
-                          ) : (
-                            <p style={{ color: "var(--muted)", fontSize: 12 }}>No related coverage yet.</p>
-                          )}
-                        </div>
-                      ) : null}
-
-                      {activeTab === "rumors" ? (
-                        <div className="sl-rumor-list">
-                          {leagueRumours.length ? (
-                            leagueRumours.map((r) => (
-                              <button key={r.id} type="button" onClick={() => setSelectedId(r.id)}>
-                                <span>{r.playerName || r.teamName || "League"}</span>
-                                <strong>{r.headline}</strong>
-                                <em>
-                                  {heatLabel(r.heat) ? `Heat: ${heatLabel(r.heat)}` : ""}
-                                  {credibilityLabel(r.credibility) ? ` · ${credibilityLabel(r.credibility)}` : ""}
-                                </em>
-                              </button>
-                            ))
-                          ) : (
-                            <p style={{ color: "var(--muted)", fontSize: 12 }}>Trade wire is quiet.</p>
-                          )}
-                        </div>
-                      ) : null}
-
-                      {activeTab === "history" ? (
-                        <ul className="sl-history-list">
-                          {arcTimeline.length ? (
-                            arcTimeline.map((beat) => (
-                              <li key={beat.id}>
-                                <time>{beat.date || "—"}</time>
-                                <div>
-                                  <strong>{beat.headline}</strong>
-                                  {beat.summary ? <p>{beat.summary}</p> : null}
-                                </div>
-                              </li>
-                            ))
-                          ) : (
-                            <p style={{ color: "var(--muted)", fontSize: 12 }}>No prior beats on file for this story.</p>
-                          )}
-                          {selected.repeatCount > 0 ? (
-                            <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 4 }}>
-                              Beat #{selected.repeatCount + 1}
-                              {selected.escalatedFrom ? ` · escalated from ${selected.escalatedFrom}` : ""}
-                            </p>
-                          ) : null}
-                        </ul>
-                      ) : null}
-                    </div>
-
-                    <section className="sl-detail-block" style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
-                      <h4>What Comes Next</h4>
-                      <p style={{ fontSize: 12.5, color: "rgba(233,247,251,.85)" }}>{deriveFollowUp(selected)}</p>
-                    </section>
-
-                    <div className="sl-detail-footer">
-                      <span>Last updated: {selected.date || selected.ageLabel || "—"}</span>
-                      <span>Story ID: {selected.storylineId || selected.id}</span>
-                    </div>
-                  </>
-                )}
-              </main>
-
-              {/* --- RIGHT: impact + decisions --- */}
-              <aside className="sl-impact-col">
-                <div className="sl-impact-panel">
-                  <h3 className="is-title">Story Impact</h3>
-                  {userOrg ? (
-                    <>
-                      <h3 style={{ marginTop: 4 }}>Organizational Pressure</h3>
-                      <OrgPressureBars org={userOrg} />
-                    </>
-                  ) : (
-                    <p style={{ fontSize: 12, color: "var(--muted)" }}>No organizational pressure data on file.</p>
-                  )}
-                </div>
-
-                {selected && Object.keys(selected.effects || {}).length ? (
-                  <div className="sl-impact-panel">
-                    <h3>Potential Effects</h3>
-                    <div className="sl-effects-grid">
-                      {Object.entries(selected.effects).slice(0, 6).map(([k, v]) => (
-                        <div key={k} className={`sl-effect-row ${effectPillClass(v)}`}>
-                          <span>{formatEffectLabel(k)}</span>
-                          <strong>{Number(v) > 0 ? "+" : ""}{String(v)}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="sl-impact-panel">
-                  <h3>GM Decisions</h3>
-                  {choiceOptions.length ? (
-                    <div className="sl-decisions">
-                      {choiceOptions.map((opt) => {
-                        const busy = busyChoice === `${selected.storylineId}:${opt.id}`;
-                        return (
-                          <button
-                            key={opt.id}
-                            type="button"
-                            className="sl-decision-btn"
-                            disabled={Boolean(busyChoice)}
-                            onClick={() => handleResolve(selectedChoice?.storyline_id || selected.storylineId, opt.id)}
-                          >
-                            <span className="sl-decision-btn__dot" />
-                            <span>
-                              <strong>{opt.label}</strong>
-                              {opt.effect_summary ? <span>{opt.effect_summary}</span> : null}
-                              {busy ? <em>Applying…</em> : null}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <p className="sl-decision-empty">No action needed on this story.</p>
-                  )}
-                </div>
-
-                {selected?.gmKnowsMore || knowledgeLevelLabel(selected?.publicKnowledgeLevel) ? (
-                  <div className="sl-impact-panel">
-                    <h3>Knowledge Layers</h3>
-                    {selected.gmKnowsMore ? (
-                      <p style={{ fontSize: 12, color: "#8ef0b8", marginBottom: 6 }}>You know more than the public sees.</p>
-                    ) : null}
-                    {knowledgeLevelLabel(selected.publicKnowledgeLevel) ? (
-                      <p style={{ fontSize: 12, color: "var(--muted)" }}>Public knowledge: {knowledgeLevelLabel(selected.publicKnowledgeLevel)}</p>
-                    ) : null}
-                  </div>
-                ) : null}
-              </aside>
+                    </article>
+                  );
+                })
+              )}
             </div>
           </>
         )}

@@ -1354,7 +1354,7 @@ def start_franchise(
     try:
         from app.sim_engine.league_hierarchy_bootstrap import bootstrap_full_league_hierarchy
 
-        bootstrap_full_league_hierarchy(league, sim.rng)
+        bootstrap_full_league_hierarchy(league, sim.rng, season_year=season_y)
         npl = len(getattr(league, "players", None) or [])
         session.notifications.append(
             f"League depth online ΓÇö NHL affiliates (AHL/ECHL), UFA pools, overseas, juniors (~{npl} player records)."

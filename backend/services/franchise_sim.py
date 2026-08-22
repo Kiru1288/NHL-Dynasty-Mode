@@ -2226,7 +2226,7 @@ def start_franchise(
     try:
         from app.sim_engine.league_hierarchy_bootstrap import bootstrap_full_league_hierarchy
 
-        bootstrap_full_league_hierarchy(league, sim.rng)
+        bootstrap_full_league_hierarchy(league, sim.rng, season_year=season_y)
         if universe == "real_nhl":
             from services.real_nhl_roster_importer import (
                 enforce_opening_night_cap_compliance,
@@ -3827,6 +3827,12 @@ def _accumulate_franchise_game_stats(
 
     session.game_results.append(box)
     processed.add(gid)
+    try:
+        from app.sim_engine.franchise.storyline_coverage import ingest_game_box_storylines  # noqa: WPS433
+
+        ingest_game_box_storylines(session, box)
+    except Exception:
+        pass
 
     if len(session.game_results) > 2400:
         session.game_results = session.game_results[-1800:]
@@ -7329,6 +7335,21 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
     except Exception:
         pass
     try:
+        if not getattr(session, "_draft_age_reanchored", False):
+            from app.sim_engine.league_hierarchy_bootstrap import (
+                reanchor_generated_junior_dobs,
+                set_spawn_as_of_year,
+            )
+
+            anchor = int(getattr(session, "season_calendar_year", 0) or 0)
+            if anchor < 2000:
+                anchor = int(session_age_as_of(session)[0])
+            set_spawn_as_of_year(anchor)
+            reanchor_generated_junior_dobs(league, anchor)
+            setattr(session, "_draft_age_reanchored", True)
+    except Exception:
+        pass
+    try:
         from app.sim_engine.generation.prospect_league_scoring import (
             prospect_stats_for_api,
             normalize_league_leader_board,
@@ -9794,6 +9815,19 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
 
         h_scale = max(0.93, min(1.07, hm * hc * hf * hmr)) * float(sim._roster_injury_depth_penalty(home))
         a_scale = max(0.93, min(1.07, am * ac * af * amr)) * float(sim._roster_injury_depth_penalty(away))
+        try:
+            from app.sim_engine.franchise.storyline_coverage import apply_matchup_to_scales  # noqa: WPS433
+
+            h_scale, a_scale, _ = apply_matchup_to_scales(
+                session,
+                hid,
+                aid,
+                h_scale,
+                a_scale,
+                {"game_id": f"{hid}_{aid}_{d}", "is_playoff": is_playoff_slot},
+            )
+        except Exception:
+            pass
 
         base_noise = 1.0 + 0.22 * (session.chaos_index - 0.5)
         nh = world_chemistry.chemistry_chaos_dampen(home, base_noise)
@@ -9920,6 +9954,19 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         id_noise = 0.5 * (nh + na)
         h_inj = float(sim._roster_injury_depth_penalty(home))
         a_inj = float(sim._roster_injury_depth_penalty(away))
+        try:
+            from app.sim_engine.franchise.storyline_coverage import apply_matchup_to_scales  # noqa: WPS433
+
+            h_inj, a_inj, _ = apply_matchup_to_scales(
+                session,
+                hid,
+                aid,
+                h_inj,
+                a_inj,
+                {"game_id": f"{hid}_{aid}_{d}", "is_playoff": is_playoff_slot},
+            )
+        except Exception:
+            pass
         _attach_franchise_saved_lineups(
             session, home, away, home_id=hid, away_id=aid, user_tid=user_tid
         )
@@ -10487,6 +10534,12 @@ def _finalize_regular_calendar_day(
         # Bulk: keep cause/storyline cadence but thin it (every 3rd day) so week/month
         # sims stay feature-complete without N× full narrative cost.
         if int(session.calendar_days_finished) % 3 == 0:
+            try:
+                from app.sim_engine.franchise.storyline_engine import franchise_record_data_storylines  # noqa: WPS433
+
+                franchise_record_data_storylines(session, just_idx, day_meta, rng=session.sim.rng)
+            except Exception:
+                pass
             try:
                 from app.sim_engine.franchise.storyline_engine import franchise_cause_storyline_daily_pass  # noqa: WPS433
 
@@ -17728,6 +17781,26 @@ def get_cached_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict
                 session._draft_class_detail_cache = None
     except Exception:
         setattr(session, "_draft_pipeline_ovr_repaired", True)
+    try:
+        if league is not None and not getattr(session, "_draft_age_reanchored", False):
+            from app.sim_engine.league_hierarchy_bootstrap import (
+                reanchor_generated_junior_dobs,
+                set_spawn_as_of_year,
+            )
+
+            anchor = int(getattr(session, "season_calendar_year", 0) or 0)
+            if anchor < 2000:
+                anchor = int(session_age_as_of(session)[0])
+            set_spawn_as_of_year(anchor)
+            fixed = reanchor_generated_junior_dobs(league, anchor)
+            setattr(session, "_draft_age_reanchored", True)
+            if fixed:
+                session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
+                session._cached_draft_class_rankings = None
+                session._cached_draft_class_hud_payload = None
+                session._draft_class_detail_cache = None
+    except Exception:
+        setattr(session, "_draft_age_reanchored", True)
 
     rev = int(getattr(session, "_prospect_revision", 0) or 0)
     cached = getattr(session, "_cached_draft_class_rankings", None)
