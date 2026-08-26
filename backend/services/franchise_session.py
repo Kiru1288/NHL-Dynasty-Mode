@@ -86,6 +86,8 @@ class FranchiseSession:
     resign_phase_outcomes: Dict[str, Any] = field(default_factory=dict)
     # Player trade demands keyed by player_id (open / resolved ledger).
     trade_demands: Dict[str, Any] = field(default_factory=dict)
+    # Per-player Trade Stability Score + invisible escalation levels (0–4).
+    trade_stability_state: Dict[str, Any] = field(default_factory=dict)
     # Exclusive own-FA window before open market (days elapsed of OWN_FA_MORATORIUM_DAYS).
     own_fa_window_day: int = 0
     own_fa_window_active: bool = False

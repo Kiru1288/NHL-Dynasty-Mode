@@ -1696,6 +1696,9 @@ class Player:
         self.chemistry_relationships: Dict[str, float] = {}
         self.chemistry_history: List[Dict[str, Any]] = []
 
+        # Chapter-Based Player Rating System (optional — legacy ratings remain source for sim until synced).
+        self.attribute_profile: Optional[Dict[str, Any]] = None
+
         self._apply_creation_biases()
 
         self._pool_context = str(pool_context or "nhl").strip().lower()
@@ -1735,6 +1738,15 @@ class Player:
 
     def group_averages(self) -> Dict[str, float]:
         return _group_avgs(self.ratings, self.position)
+
+    def has_chapter_profile(self) -> bool:
+        profile = getattr(self, "attribute_profile", None)
+        return isinstance(profile, dict) and bool(profile.get("hidden") or profile.get("chapters"))
+
+    def get_chapter_ratings(self) -> Dict[str, int]:
+        from app.sim_engine.entities.chapter_attributes import get_player_chapters  # noqa: WPS433
+
+        return get_player_chapters(self)
 
     def ovr(self) -> float:
         memo = getattr(self, "_ovr_memo", None)

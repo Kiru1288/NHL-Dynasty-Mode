@@ -38,6 +38,7 @@ import {
 import hubWallTextureSrc from "../pictures/gray-abstract-texture-background.jpg";
 import officeFontBold from "../styles/ArchivoBlack-Regular.ttf";
 import { ShowcasePopupLayer } from "../components/game/ShowcasePopupLayer";
+import { TradeDemandCrisisOverlay } from "../components/game/TradeDemandCrisisOverlay";
 import { FranchiseEventLayer } from "../components/game/FranchiseEventLayer";
 import WorldJuniorsEvent from "../events/worldJuniors/WorldJuniorsEvent";
 import { resolveWorldJuniorsPayload } from "../events/worldJuniors/WorldJuniorsMenu";
@@ -1163,6 +1164,7 @@ export function GameUIProvider({ children }) {
       {children}
       <BreakingNewsLayer franchiseState={franchiseState} screen={screen} setScreen={setScreen} />
       <ShowcasePopupLayer />
+      <TradeDemandCrisisOverlay />
       <FranchiseEventLayer />
       {worldJuniorsOpen ? (
         <div className="wjc-event-shell wjc-event-shell--global" role="presentation">

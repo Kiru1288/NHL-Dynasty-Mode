@@ -1148,14 +1148,31 @@ def _evaluate_player_asset_value_impl(
         waive_mod = -max(2.5, min(9.0, base_core * float(waive_pct)))
         risk_mod += waive_mod
     mult = _safe_float(getattr(player, "_systemic_trade_value_mult", 1.0), 1.0)
-    if mult != 1.0:
+    crisis_mult = _safe_float(getattr(player, "_crisis_trade_value_mult", 1.0), 1.0)
+    distressed = _safe_float(getattr(player, "_crisis_distressed_asset", 0.0), 0.0)
+    if crisis_mult != 1.0:
+        risk_mod += (crisis_mult - 1.0) * 8.0
+    elif mult != 1.0:
         risk_mod += (mult - 1.0) * 5.0
+    if distressed > 0:
+        risk_mod -= min(18.0, distressed * 0.45)
 
     risk_flags: List[str] = []
     contract_flags: List[str] = []
     if bool(getattr(player, "_trade_demand_active", False) or getattr(player, "trade_demand_active", False)):
-        risk_mod -= 6.0 if bool(getattr(player, "locker_room_disruptor", False)) else 3.5
-        risk_flags.append("Active trade demand — value depressed")
+        stage = int(getattr(player, "_crisis_trade_stage", 0) or 0)
+        if stage >= 4 or distressed > 0:
+            risk_mod -= 12.0
+            risk_flags.append("Distressed asset — may require sweetener to move")
+        elif stage >= 3:
+            risk_mod -= 9.0
+            risk_flags.append("Trade demand crisis — leverage collapsing")
+        elif stage >= 2:
+            risk_mod -= 6.5
+            risk_flags.append("Trade demand leaking — value falling")
+        else:
+            risk_mod -= 6.0 if bool(getattr(player, "locker_room_disruptor", False)) else 3.5
+            risk_flags.append("Active trade demand — value depressed")
     if bool(getattr(player, "locker_room_disruptor", False)):
         risk_flags.append("Locker-room disruptor")
         risk_mod -= 4.0

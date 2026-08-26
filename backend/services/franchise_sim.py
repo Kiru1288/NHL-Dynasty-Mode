@@ -6149,6 +6149,14 @@ def _serialize_player_row(
         pass
     if include_ratings:
         row["rating_groups"] = _rating_groups_for_player(p)
+        try:
+            from app.sim_engine.entities.chapter_attributes import serialize_chapter_profile_for_api  # noqa: WPS433
+
+            chapter_payload = serialize_chapter_profile_for_api(p)
+            if chapter_payload:
+                row["chapter_profile"] = chapter_payload
+        except Exception:
+            pass
     try:
         from app.sim_engine.franchise.storyline_conduct import (  # noqa: WPS433
             get_base_ovr_display,
@@ -6306,6 +6314,12 @@ def _serialize_player_row(
             "start_year": cnorm.get("start_year") or cnorm.get("signed_year"),
             "rights_status": str(cnorm.get("rights_status") or getattr(p, "rights_status", "") or "") or None,
         }
+        try:
+            from app.sim_engine.franchise.player_agent_engine import agent_public_view  # noqa: WPS433
+
+            row["contract"]["agent"] = agent_public_view(p, session)
+        except Exception:
+            pass
         try:
             row["waiver_exempt"] = bool(is_waiver_exempt(p, _team, getattr(getattr(session, "sim", None), "league", None) if session else None))
         except Exception:
@@ -9790,6 +9804,25 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
     hb2b = _team_b2b(hid)
     ab2b = _team_b2b(aid)
 
+    try:
+        from app.sim_engine.franchise.storyline_stat_bridge import (  # noqa: WPS433
+            prime_franchise_game_stat_modifiers,
+        )
+
+        prime_franchise_game_stat_modifiers(
+            session,
+            sim,
+            hid,
+            aid,
+            game_meta={
+                "game_id": stable_gid,
+                "calendar_day": d,
+                "calendar_iso": cal_iso,
+            },
+        )
+    except Exception:
+        pass
+
     if session.use_world and world_momentum is not None:
         if session.prev_calendar_day is not None and d > session.prev_calendar_day:
             span = float(d - session.prev_calendar_day)
@@ -10094,6 +10127,15 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         if ot:
             gs += " OT"
         user_line = f"{wl} vs {_display_team(opp)} ({gs}) ΓÇö calendar day {d}"
+
+    try:
+        from app.sim_engine.franchise.storyline_stat_bridge import (  # noqa: WPS433
+            clear_franchise_game_stat_modifiers,
+        )
+
+        clear_franchise_game_stat_modifiers(sim)
+    except Exception:
+        pass
 
     return user_line, league_line
 
@@ -17252,6 +17294,12 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         narrative_universe = build_narrative_universe_payload(session)
     except Exception:
         narrative_universe = {}
+    try:
+        from services.trade_demand_engine import build_trade_demand_crisis_payload  # noqa: WPS433
+
+        trade_demand_crisis = build_trade_demand_crisis_payload(session)
+    except Exception:
+        trade_demand_crisis = None
     injuries_payload = _build_injuries_payload(session)
     injury_history_payload = _build_injury_history_payload(session)
 
@@ -17346,6 +17394,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         "storyline_events": storylines_norm,
         "active_storylines": len(storylines_norm),
         "narrative_universe": narrative_universe,
+        "trade_demand_crisis": trade_demand_crisis,
         "conduct_org_pressure": dict(getattr(session, "_conduct_org_pressure", None) or {}),
         "injuries": injuries_payload,
         "injury_history": injury_history_payload,

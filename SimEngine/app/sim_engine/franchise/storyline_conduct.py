@@ -795,6 +795,26 @@ def build_impact_storyline_fields(
     }
 
 
+def get_player_stat_allocation_modifiers(player: Any) -> Dict[str, float]:
+    """
+    Map active temporary readiness modifiers into engine stat-allocation fingerprints.
+
+    Base effective OVR already flows through engine._gm_ovr_0_100; these deltas
+    steer *how* readiness shows up (shots vs assists vs TOI), not raw talent.
+    """
+    ovr_delta = float(sum_active_modifier_amount(player))
+    if ovr_delta == 0:
+        return {}
+    return {
+        "readiness_ovr_delta": ovr_delta,
+        "shot_involvement": ovr_delta * 0.004,
+        "assist_involvement": ovr_delta * 0.003,
+        "toi_readiness": ovr_delta * 0.003,
+        "turnover_risk": max(0.0, -ovr_delta) * 0.003,
+        "penalty_risk": max(0.0, -ovr_delta) * 0.0025,
+    }
+
+
 def serialize_ovr_modifiers_for_ui(player: Any) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for m in _ensure_modifiers(player):

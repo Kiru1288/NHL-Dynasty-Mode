@@ -4951,6 +4951,13 @@ function ContractPanel({ player }) {
           {contract.minorSalaryM ? <Metric label="Minor $" value={formatMoneyMillions(contract.minorSalaryM)} /> : null}
           {contract.startYear ? <Metric label="Start" value={contract.startYear} /> : null}
         </MetricStrip>
+        {contract.agent?.name ? (
+          <MetricStrip className="nhlrost-metric-strip--stats nhlrost-metric-strip--agent">
+            <Metric label="Agent" value={contract.agent.name} />
+            <Metric label="Agency" value={contract.agent.agency || "—"} />
+            <Metric label="Style" value={contract.agent.style_label || contract.agent.style || "—"} />
+          </MetricStrip>
+        ) : null}
       </article>
 
       {hasRightsInfo ? (

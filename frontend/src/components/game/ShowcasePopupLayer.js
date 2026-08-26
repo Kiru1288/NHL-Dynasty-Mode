@@ -452,6 +452,17 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
       value: `${demand.value_before ?? "—"} → ${demand.value_after ?? "—"}`,
       sub: demand.value_delta != null ? `Δ ${demand.value_delta}` : "",
     });
+    if (demand.remaining_seconds != null) {
+      const sec = Math.max(0, Math.floor(Number(demand.remaining_seconds) || 0));
+      stats.push({
+        label: "Crisis timer",
+        value: `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`,
+        sub: demand.formal_crisis ? "Real-time deadline" : "",
+      });
+    }
+    if (demand.agent?.name) {
+      stats.push({ label: "Agent", value: demand.agent.name, sub: demand.agent.style_label || "" });
+    }
     stats.push({
       label: "Willing destinations",
       value: demand.destination_label || `${(demand.preferred_destinations || []).length || 0} teams`,

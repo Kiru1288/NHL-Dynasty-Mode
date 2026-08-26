@@ -14,6 +14,13 @@ import random
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.sim_engine.franchise.storyline_copy import (
+    classify_story_lane,
+    lane_flags,
+    pick_line,
+    story_ctx,
+)
+
 _log = logging.getLogger("uvicorn.error")
 _DEV = os.environ.get("NODE_ENV", "") == "development" or os.environ.get("NHL_FRANCHISE_DEBUG", "0") == "1"
 
@@ -284,14 +291,35 @@ def _build_storyline(
         "win_streak": "WINNING_STREAK",
         "hot_streak_team": "WINNING_STREAK",
         "injury_ripple": "PLAYER_INJURED",
+        "goalie_heater": "GOALIE_HEATER",
+        "goal_drought": "GOAL_DROUGHT",
+        "veteran_fade": "VETERAN_FADE",
+        "backup_taking_net": "BACKUP_TAKING_NET",
+        "rookie_breakout": "ROOKIE_BREAKOUT",
+        "superstar_carrying": "SUPERSTAR_CARRY",
+        "surprise_team": "WINNING_STREAK",
+        "contender_collapse": "LOSING_STREAK",
+        "playoff_race": "WINNING_CONCERN",
     }
     cause_type = cause_type_map.get(str(stype), "")
+    lane = classify_story_lane(
+        cause_type=cause_type,
+        category=category,
+        stype=str(stype),
+        severity=severity,
+        priority=priority,
+        heat=heat,
+    )
+    flags = lane_flags(lane)
     return {
         "id": sid,
         "storyline_id": sid,
         "stable_key": stable_key,
         "type": stype,
         "category": category,
+        **flags,
+        "knowledge_type": "claim" if lane == "rumor" else ("fact" if lane == "recap" else ""),
+        "public_knowledge_level": "rumour" if lane == "rumor" else ("reported" if lane == "recap" else ""),
         "priority": priority,
         "severity": severity,
         "tone": tone,
@@ -494,6 +522,21 @@ def run_data_storyline_pass(
         delta = pts - exp_pts
         tw, tl, to, trec = _team_record(session, tid)
         cap = _cap_hit_m(_player_from_roster(session, str(pid)) or object())
+        role_word = "defenseman" if _pos_bucket(pos) == "D" else "forward"
+        ctx = story_ctx(
+            name=pname,
+            team=team_name_by_id.get(tid, tid),
+            role=role_word,
+            ovr=ovr,
+            gp=gp,
+            pts=pts,
+            goals=g,
+            ppg=ppg,
+            exp_pts=exp_pts,
+            cap=cap,
+            record=trec,
+            age=age,
+        )
 
         # Star underperforming
         if ovr >= 84 and gp >= SKATER_GP_MINOR:
@@ -503,17 +546,8 @@ def run_data_storyline_pass(
                 sev = "major" if major and delta <= threshold * 2 else "minor"
                 pri = "HIGH" if major else "MEDIUM"
                 stype = "star_underperforming"
-                headlines_minor = [
-                    f"{pname} enters witness protection program on the scoresheet",
-                    f"Local ${cap:.1f}M forward reportedly still searching for the net" if cap >= 4 else f"{pname}'s scoring lamp remains cold",
-                ]
-                headlines_major = [
-                    "Top-line center producing at the pace of a decorative traffic cone",
-                    f"The ${cap:.1f}M man has gone missing" if cap >= 6 else f"{pname}'s drought becoming impossible to ignore",
-                ]
-                hl = _headline_pick(r, headlines_major if major else headlines_minor)
-                if sev == "major" and not _can_fire(session, f"{stype}_esc|{pid}", cur_day, "major")[0]:
-                    hl = "Scoring drought becoming impossible to ignore"
+                hl = pick_line(r, "star_underperforming", ctx)
+                body = pick_line(r, "star_underperforming", ctx, body=True)
                 try_emit(
                     stable_key=f"{stype}|{pid}|{season}",
                     stype=stype,
@@ -522,8 +556,8 @@ def run_data_storyline_pass(
                     priority=pri,
                     tone="negative",
                     headline=hl,
-                    description=f"{pname} ({round(ovr)} OVR) has {pts} points in {gp} games ({ppg:.2f} P/GP) vs ~{exp_pts:.0f} expected for role.",
-                    short_summary=f"{round(ovr)} OVR · {gp} GP · {pts}P · expected ~{exp_pts:.0f}P",
+                    description=body,
+                    short_summary=body,
                     cause=f"Production pace {ppg:.2f} P/GP is well below expected {exp_ppg:.2f} for a {round(ovr)}-overall {_pos_bucket(pos)}.",
                     team_id=tid,
                     team_name=team_name_by_id.get(tid, tid),
@@ -549,9 +583,9 @@ def run_data_storyline_pass(
                 severity="minor",
                 priority="MEDIUM",
                 tone="positive",
-                headline="Rookie refuses to wait politely for his development timeline",
-                description=f"{pname} is outpacing development expectations with {pts} points in {gp} games.",
-                short_summary=f"Rookie surge · {pts}P in {gp}GP",
+                headline=pick_line(r, "rookie_breakout", ctx),
+                description=pick_line(r, "rookie_breakout", ctx, body=True),
+                short_summary=pick_line(r, "rookie_breakout", ctx, body=True),
                 cause=f"Rookie scoring pace {ppg:.2f} P/GP exceeds expected {exp_ppg:.2f}.",
                 team_id=tid,
                 team_name=team_name_by_id.get(tid, tid),
@@ -577,9 +611,9 @@ def run_data_storyline_pass(
                     severity="minor",
                     priority="MEDIUM",
                     tone="mixed",
-                    headline=f"{pname} accidentally becomes the entire offense",
-                    description=f"{pname} is producing like a star on a team sitting {trec} (league rank ~{rank}).",
-                    short_summary=f"{pts}P on a struggling club",
+                    headline=pick_line(r, "superstar_carrying", ctx),
+                    description=pick_line(r, "superstar_carrying", ctx, body=True),
+                    short_summary=pick_line(r, "superstar_carrying", ctx, body=True),
                     cause="Elite individual scoring on a sub-.500 team.",
                     team_id=tid,
                     team_name=team_name_by_id.get(tid, tid),
@@ -601,9 +635,9 @@ def run_data_storyline_pass(
                 severity="minor",
                 priority="MEDIUM",
                 tone="negative",
-                headline="Cap hit remains elite, production has filed a missing persons report",
-                description=f"${cap:.2f}M AAV vs {pts} points in {gp} games.",
-                short_summary=f"${cap:.1f}M · {pts}P · {gp}GP",
+                headline=pick_line(r, "contract_pressure", ctx),
+                description=pick_line(r, "contract_pressure", ctx, body=True),
+                short_summary=pick_line(r, "contract_pressure", ctx, body=True),
                 cause="High cap hit with well-below-expected production.",
                 team_id=tid,
                 team_name=team_name_by_id.get(tid, tid),
@@ -638,18 +672,28 @@ def run_data_storyline_pass(
         gaa = float(row.get("gaa") or (ga / max(1, gp)))
         exp_sv = _expected_save_pct(ovr)
         major = gp >= GOALIE_GP_MAJOR
+        gctx = story_ctx(
+            name=pname,
+            team=team_name_by_id.get(tid, tid),
+            role="goaltender",
+            ovr=ovr,
+            gp=gp,
+            sv=sv_pct,
+            gaa=gaa,
+            exp_sv=exp_sv,
+        )
 
         if sv_pct < exp_sv - 0.018 and major:
             try_emit(
                 stable_key=f"goalie_meltdown|{pid}|{season}",
                 stype="goalie_meltdown",
                 category="performance",
-                severity="major" if sv_pct < exp_sv - 0.028 else "minor",
+                severity="minor",
                 priority="HIGH" if sv_pct < exp_sv - 0.028 else "MEDIUM",
                 tone="negative",
-                headline="Goalie has apparently decided the puck deserves freedom",
-                description=f"{pname} at {sv_pct:.3f} SV% and {gaa:.2f} GAA over {gp} starts.",
-                short_summary=f"{sv_pct:.3f} SV% · {gp} GP",
+                headline=pick_line(r, "goalie_meltdown", gctx),
+                description=pick_line(r, "goalie_meltdown", gctx, body=True),
+                short_summary=pick_line(r, "goalie_meltdown", gctx, body=True),
                 cause=f"Save percentage {sv_pct:.3f} well below {exp_sv:.3f} expected for {round(ovr)} OVR.",
                 team_id=tid,
                 team_name=team_name_by_id.get(tid, tid),
@@ -671,9 +715,9 @@ def run_data_storyline_pass(
                 severity="minor",
                 priority="MEDIUM",
                 tone="positive",
-                headline="Netminder commits grand larceny, steals another two points",
-                description=f"{pname} rolling at {sv_pct:.3f} SV% over {gp} starts.",
-                short_summary=f"Heater · {sv_pct:.3f} SV%",
+                headline=pick_line(r, "goalie_heater", gctx),
+                description=pick_line(r, "goalie_heater", gctx, body=True),
+                short_summary=pick_line(r, "goalie_heater", gctx, body=True),
                 cause="Save percentage materially above expected baseline.",
                 team_id=tid,
                 team_name=team_name_by_id.get(tid, tid),
@@ -684,6 +728,71 @@ def run_data_storyline_pass(
                 evidence={"save_pct": round(sv_pct, 3), "games_played": gp, "gaa": round(gaa, 2)},
                 effects={"goalie_confidence": 5, "team_morale": 3, "fan_confidence": 4},
                 heat=60,
+            )
+
+    # Backup stealing the net
+    goalies_by_team: Dict[str, List[Dict[str, Any]]] = {}
+    for pid, row in stats.items():
+        if not isinstance(row, dict):
+            continue
+        pos = str(row.get("position") or "G")
+        if _pos_bucket(pos) != "G" and _stat_int(row, "shots_against", "sa") <= 0:
+            continue
+        gp = _stat_int(row, "gp", "games_played")
+        if gp < GOALIE_GP_MINOR:
+            continue
+        tid = str(row.get("team_id") or "")
+        sa = _stat_int(row, "shots_against", "sa")
+        ga = _stat_int(row, "ga", "goals_against")
+        sv_pct = float(row.get("save_pct") or ((sa - ga) / max(1, sa)))
+        goalies_by_team.setdefault(tid, []).append(
+            {
+                "pid": str(pid),
+                "gp": gp,
+                "sv": sv_pct,
+                "name": str(row.get("name") or name_by_id.get(str(pid), "Goalie")),
+                "ovr": float(ovr_by_id.get(str(pid), 78)),
+            }
+        )
+    for tid, group in goalies_by_team.items():
+        if len(group) < 2:
+            continue
+        group.sort(key=lambda x: -x["gp"])
+        starter, backup = group[0], group[1]
+        if backup["gp"] >= GOALIE_GP_MINOR and backup["sv"] >= starter["sv"] + 0.015 and starter["gp"] >= GOALIE_GP_MAJOR:
+            bctx = story_ctx(
+                name=backup["name"],
+                team=team_name_by_id.get(tid, tid),
+                role="goaltender",
+                ovr=backup["ovr"],
+                gp=backup["gp"],
+                sv=backup["sv"],
+            )
+            try_emit(
+                stable_key=f"backup_net|{backup['pid']}|{season}",
+                stype="backup_taking_net",
+                category="performance",
+                severity="minor",
+                priority="MEDIUM",
+                tone="mixed",
+                headline=pick_line(r, "backup_taking_net", bctx),
+                description=pick_line(r, "backup_taking_net", bctx, body=True),
+                short_summary=pick_line(r, "backup_taking_net", bctx, body=True),
+                cause="Backup save percentage materially ahead of the starter's workload.",
+                team_id=tid,
+                team_name=team_name_by_id.get(tid, tid),
+                player_id=str(backup["pid"]),
+                player_name=backup["name"],
+                player_position="G",
+                player_overall=round(backup["ovr"], 1),
+                evidence={
+                    "backup_sv": round(backup["sv"], 3),
+                    "starter_sv": round(starter["sv"], 3),
+                    "backup_gp": backup["gp"],
+                    "starter_gp": starter["gp"],
+                },
+                effects={"goalie_confidence": 3, "lineup_pressure": 2, "media_pressure": 2},
+                heat=57,
             )
 
     # --- Team triggers ---
@@ -697,6 +806,7 @@ def run_data_storyline_pass(
         rank = _league_points_rank(session, tid)
         strength = float((getattr(session, "strength_map", None) or {}).get(tid, 0.5) or 0.5)
         tname = team_name_by_id.get(tid, tid)
+        tctx = story_ctx(name=tname, team=tname, record=trec, gp=gp)
 
         # Surprise team
         if strength < 0.46 and win_pct >= 0.58 and gp >= TEAM_GP_MIN:
@@ -707,9 +817,9 @@ def run_data_storyline_pass(
                 severity="minor",
                 priority="MEDIUM",
                 tone="positive",
-                headline=f"{tname} keeps winning games nobody scheduled on the calendar",
+                headline=pick_line(r, "surprise_team", tctx),
                 description=f"Expected also-ran is {trec} with a {win_pct:.3f} win rate.",
-                short_summary=f"Surprise · {trec}",
+                short_summary=pick_line(r, "surprise_team", tctx),
                 cause="Low pre-season strength rating with strong actual record.",
                 team_id=tid,
                 team_name=tname,
@@ -724,12 +834,12 @@ def run_data_storyline_pass(
                 stable_key=f"contender_collapse|{tid}|{season}",
                 stype="contender_collapse",
                 category="league",
-                severity="major",
+                severity="minor",
                 priority="HIGH",
                 tone="negative",
-                headline=f"{tname} begins annual tradition of making everyone nervous",
+                headline=pick_line(r, "contender_collapse", tctx),
                 description=f"Strong on paper club is {trec} through {gp} games.",
-                short_summary=f"Collapse · {trec}",
+                short_summary=pick_line(r, "contender_collapse", tctx),
                 cause="High team strength rating with losing record.",
                 team_id=tid,
                 team_name=tname,
@@ -748,7 +858,7 @@ def run_data_storyline_pass(
                 severity="minor",
                 priority="HIGH" if tid == uid else "MEDIUM",
                 tone="mixed",
-                headline="Every point now feels like it comes with a stress tax",
+                headline=pick_line(r, "playoff_race", tctx),
                 description=f"{tname} sits around the wild-card line at {trec} (rank ~{rank}).",
                 short_summary=f"Bubble team · rank {rank}",
                 cause="Late-season standings place team near playoff cut line.",
@@ -768,7 +878,7 @@ def run_data_storyline_pass(
                 severity="minor",
                 priority="MEDIUM",
                 tone="negative",
-                headline=f"{tname} skid has the room playing like the clock is guilty",
+                headline=pick_line(r, "losing_skid", tctx),
                 description=f"Team record {trec} with mounting losses.",
                 short_summary=f"Skid · {trec}",
                 cause="Multiple losses in current standings snapshot.",
@@ -788,7 +898,7 @@ def run_data_storyline_pass(
                 severity="minor",
                 priority="LOW",
                 tone="positive",
-                headline=f"{tname} rolling like they found a cheat code for effort",
+                headline=pick_line(r, "win_streak", tctx),
                 description=f"Strong run reflected in {trec} record.",
                 short_summary=f"Heating up · {trec}",
                 cause="Standings show sustained winning.",
@@ -1358,6 +1468,17 @@ def record_trade_hub_evaluation(
         if sl:
             generated.append(sl)
             _emit_cause_storyline(session, sl)
+        try:
+            from app.sim_engine.franchise.trade_stability_engine import apply_trade_hub_exposure  # noqa: WPS433
+
+            apply_trade_hub_exposure(
+                session,
+                pl,
+                attempt_n=attempt_n,
+                rejection_kind=rejection_kind,
+            )
+        except Exception:
+            pass
     return generated
 
 
@@ -5516,3 +5637,1811 @@ def player_narrative_profile(session: Any, player_id: str) -> Dict[str, Any]:
     expanded = player_universe_profile(session, player_id)
     return {**dict(legacy or {}), **expanded, "legacy_media_profile": legacy}
 
+
+# ========================= STORYLINE UNIVERSE V3 PATCH =========================
+# Paste this block at the VERY BOTTOM of the existing storyline module.
+# Later Python definitions override the V2 implementations without deleting old code.
+
+UNIVERSE_ENGINE_VERSION = 3
+UNIVERSE_MAJOR_EVENTS_MIN = 3
+UNIVERSE_MAJOR_EVENTS_MAX = 5
+UNIVERSE_POTENTIAL_SEASON_CAP = 2.5
+UNIVERSE_READINESS_MIN = -25.0
+UNIVERSE_READINESS_MAX = 6.0
+
+_V3_CAUSE_TYPES = frozenset(
+    {
+        "MINOR_LIFE_EVENT",
+        "POSITIVE_LIFE_EVENT",
+        "PLAYER_MEETING_REQUEST",
+        "REQUEST_MORE_ICE",
+        "REQUEST_PP_TIME",
+        "REQUEST_STARTING_ROLE",
+        "CONTRACT_CLARITY_REQUEST",
+        "DEVELOPMENT_MEETING",
+        "WINNING_CONCERN",
+        "TRADE_PROPOSAL_EXPOSURE",
+        "PRIVATE_TRADE_DEMAND",
+        "TRADE_DEMAND",
+        "PLAYER_ARRESTED",
+        "LEAGUE_SUSPENSION",
+        "PLAYER_BANNED",
+        "MAJOR_PUBLIC_ALTERCATION",
+        "GAMBLING_VIOLATION",
+        "PLAYER_DEATH",
+        "ILLEGAL_TEAM_WORKOUTS",
+        "UNDER_TABLE_PAYMENTS",
+        "CAP_CIRCUMVENTION",
+        "EXECUTIVE_MISCONDUCT",
+    }
+)
+STORYLINE_CAUSE_TYPES = frozenset(set(STORYLINE_CAUSE_TYPES) | set(_V3_CAUSE_TYPES))
+_CLAIM_CAUSE_TYPES = frozenset(set(_CLAIM_CAUSE_TYPES) | {"PRIVATE_TRADE_DEMAND", "TRADE_DEMAND", "TRADE_PROPOSAL_EXPOSURE"})
+_FACT_CAUSE_TYPES = frozenset(
+    set(_FACT_CAUSE_TYPES)
+    | {
+        "PLAYER_ARRESTED",
+        "LEAGUE_SUSPENSION",
+        "PLAYER_BANNED",
+        "MAJOR_PUBLIC_ALTERCATION",
+        "GAMBLING_VIOLATION",
+        "PLAYER_DEATH",
+        "ILLEGAL_TEAM_WORKOUTS",
+        "UNDER_TABLE_PAYMENTS",
+        "CAP_CIRCUMVENTION",
+        "EXECUTIVE_MISCONDUCT",
+    }
+)
+
+# 17 negative + 17 positive small life events. These are minor human events,
+# not major conduct incidents. They create tiny but real readiness/stat effects.
+MINOR_NEGATIVE_LIFE_EVENTS: List[Dict[str, Any]] = [
+    {"id": "headache", "headline": "{name} wakes up feeling off", "summary": "A headache makes today's preparation less comfortable than usual.", "profile": {"state.focus": -2.5, "state.energy": -1.0}, "ovr": -0.35, "attrs": {"offensive_awareness": -0.25}, "days": 2, "heat": 8},
+    {"id": "breakup", "headline": "Personal change weighs on {name}", "summary": "A recent breakup creates a difficult stretch away from the rink.", "profile": {"state.morale": -4.0, "state.focus": -3.0, "state.personal_stress": 5.0}, "character": -0.3, "ovr": -1.0, "attrs": {"passing": -0.4, "offensive_awareness": -0.4}, "days": 12, "heat": 18, "requires_partnered": True},
+    {"id": "poor_sleep", "headline": "Poor sleep disrupts {name}'s routine", "summary": "A bad night's sleep leaves the player slightly drained.", "profile": {"state.energy": -3.0, "state.focus": -2.0}, "ovr": -0.45, "attrs": {"stamina": -0.4}, "days": 2, "heat": 7},
+    {"id": "partner_argument", "headline": "Home tension follows {name} to the rink", "summary": "A minor argument at home adds distraction to the day.", "profile": {"state.morale": -2.0, "state.personal_stress": 3.0}, "ovr": -0.4, "days": 4, "heat": 9, "requires_partnered": True},
+    {"id": "family_difficulty", "headline": "Family concern occupies {name}", "summary": "A family member is going through a difficult period and the player is distracted.", "profile": {"state.personal_stress": 5.0, "state.focus": -2.5}, "ovr": -0.7, "days": 8, "heat": 11},
+    {"id": "child_relocation", "headline": "Relocation remains difficult for {name}'s family", "summary": "A child is having trouble adjusting to the new city.", "profile": {"state.personal_stress": 4.0, "state.belonging": -2.0}, "ovr": -0.55, "days": 10, "heat": 10, "requires_dependents": True},
+    {"id": "homesick", "headline": "{name} admits to feeling homesick", "summary": "Distance from home is beginning to affect the player's routine.", "profile": {"state.morale": -2.5, "state.belonging": -2.0}, "ovr": -0.45, "days": 8, "heat": 10},
+    {"id": "pet_illness", "headline": "Small home-life worry follows {name}", "summary": "A sick pet creates a minor distraction away from hockey.", "profile": {"state.personal_stress": 2.5, "state.focus": -1.0}, "ovr": -0.25, "days": 4, "heat": 6},
+    {"id": "home_repairs", "headline": "Home problems add stress for {name}", "summary": "Unexpected home repairs disrupt the player's routine.", "profile": {"state.personal_stress": 2.0, "state.energy": -1.0}, "ovr": -0.25, "days": 4, "heat": 6},
+    {"id": "lost_luggage", "headline": "Road-trip inconvenience frustrates {name}", "summary": "Lost luggage makes an already busy travel day more irritating.", "profile": {"state.focus": -1.5, "state.energy": -1.0}, "ovr": -0.25, "days": 2, "heat": 5},
+    {"id": "unexpected_expense", "headline": "Unexpected expense bothers {name}", "summary": "A frustrating personal expense creates a small amount of off-ice stress.", "profile": {"state.personal_stress": 2.0, "state.morale": -1.0}, "ovr": -0.2, "days": 5, "heat": 5},
+    {"id": "social_media_noise", "headline": "Online criticism gets under {name}'s skin", "summary": "A wave of negative social-media replies becomes a distraction.", "profile": {"state.media_stress": 3.0, "state.confidence": -1.5}, "character": -0.15, "ovr": -0.35, "attrs": {"discipline": -0.2}, "days": 5, "heat": 13},
+    {"id": "family_travel_issue", "headline": "Family travel issue distracts {name}", "summary": "Travel plans involving family fall apart at an inconvenient time.", "profile": {"state.personal_stress": 2.0, "state.focus": -1.0}, "ovr": -0.2, "days": 3, "heat": 5},
+    {"id": "car_trouble", "headline": "A stressful morning starts badly for {name}", "summary": "Car trouble throws off the player's normal preparation routine.", "profile": {"state.focus": -1.5, "state.energy": -0.5}, "ovr": -0.2, "days": 1, "heat": 4},
+    {"id": "missed_family_event", "headline": "Schedule conflict weighs on {name}", "summary": "The NHL schedule forces the player to miss an important family event.", "profile": {"state.morale": -2.0, "state.personal_stress": 2.5}, "ovr": -0.35, "days": 5, "heat": 7},
+    {"id": "agent_disagreement", "headline": "{name} and his representation are not fully aligned", "summary": "A small disagreement with the player's agent creates uncertainty.", "profile": {"state.focus": -1.0, "state.personal_stress": 2.0}, "ovr": -0.25, "days": 5, "heat": 12},
+    {"id": "privacy_intrusion", "headline": "Unwanted attention frustrates {name}", "summary": "The player feels that public attention has crossed into his private life.", "profile": {"state.media_stress": 4.0, "state.morale": -1.5}, "character": -0.2, "ovr": -0.45, "days": 7, "heat": 15},
+]
+
+MINOR_POSITIVE_LIFE_EVENTS: List[Dict[str, Any]] = [
+    {"id": "engagement", "headline": "{name} celebrates an engagement", "summary": "A major positive step in the player's personal life lifts the mood around him.", "profile": {"state.morale": 5.0, "state.belonging": 2.0, "state.personal_stress": -2.0}, "character": 0.3, "ovr": 0.5, "attrs": {"composure": 0.3}, "days": 10, "heat": 24, "public_chance": 0.65, "potential_chance": 0.16, "potential": 0.2, "requires_partnered": True},
+    {"id": "new_child", "headline": "{name}'s family welcomes a new child", "summary": "The player is energized by a new addition to the family, even as sleep becomes harder to manage.", "profile": {"state.morale": 6.0, "state.belonging": 3.0, "state.personal_stress": 1.5, "state.energy": -1.5}, "character": 0.5, "ovr": 0.35, "attrs": {"stamina": -0.2, "composure": 0.4}, "days": 12, "heat": 28, "public_chance": 0.75, "potential_chance": 0.18, "potential": 0.25, "requires_partnered": True},
+    {"id": "wedding", "headline": "{name} celebrates his wedding", "summary": "A joyful family milestone gives the player a noticeable emotional lift.", "profile": {"state.morale": 6.0, "state.belonging": 3.0, "state.personal_stress": -3.0}, "character": 0.4, "ovr": 0.55, "days": 12, "heat": 26, "public_chance": 0.7, "potential_chance": 0.14, "potential": 0.2, "requires_partnered": True},
+    {"id": "pregnancy_news", "headline": "Good family news lifts {name}", "summary": "The player's family shares exciting news and his mood noticeably improves.", "profile": {"state.morale": 4.0, "state.belonging": 2.0}, "character": 0.25, "ovr": 0.3, "days": 8, "heat": 18, "public_chance": 0.45, "potential_chance": 0.12, "potential": 0.15, "requires_partnered": True},
+    {"id": "family_settles", "headline": "{name}'s family settling comfortably into the city", "summary": "Home life is becoming more stable and the player feels increasingly rooted.", "profile": {"state.belonging": 4.0, "state.personal_stress": -3.0, "state.focus": 1.5}, "character": 0.2, "ovr": 0.3, "days": 12, "heat": 12, "potential_chance": 0.18, "potential": 0.2},
+    {"id": "parents_visit", "headline": "Family visit gives {name} a lift", "summary": "A visit from family makes the homestand feel a little easier.", "profile": {"state.morale": 2.5, "state.personal_stress": -1.5}, "ovr": 0.2, "days": 4, "heat": 7},
+    {"id": "buys_home", "headline": "{name} puts down roots in the city", "summary": "Buying a home strengthens the player's sense of stability and belonging.", "profile": {"state.belonging": 4.0, "state.personal_stress": -2.0}, "character": 0.25, "ovr": 0.25, "days": 10, "heat": 16, "public_chance": 0.35, "potential_chance": 0.12, "potential": 0.15},
+    {"id": "charity_success", "headline": "Community event becomes a meaningful day for {name}", "summary": "A charity event goes exceptionally well and strengthens the player's connection to the city.", "profile": {"state.morale": 3.0, "state.belonging": 4.0, "state.confidence": 1.0}, "character": 0.6, "ovr": 0.25, "days": 7, "heat": 22, "public_chance": 0.8, "potential_chance": 0.10, "potential": 0.15},
+    {"id": "fan_moment", "headline": "A fan interaction sticks with {name}", "summary": "A meaningful interaction with a supporter gives the player perspective and energy.", "profile": {"state.morale": 2.0, "state.belonging": 2.0}, "character": 0.25, "ovr": 0.15, "days": 4, "heat": 10, "public_chance": 0.3},
+    {"id": "hometown_honor", "headline": "Hometown recognition means a lot to {name}", "summary": "Recognition from home gives the player an extra dose of confidence.", "profile": {"state.confidence": 3.0, "state.morale": 2.0}, "ovr": 0.3, "attrs": {"composure": 0.25}, "days": 6, "heat": 18, "public_chance": 0.6},
+    {"id": "old_friend_visit", "headline": "Familiar face helps {name} reset", "summary": "Time with an old friend gives the player a useful mental reset.", "profile": {"state.personal_stress": -2.5, "state.focus": 1.5}, "ovr": 0.2, "days": 4, "heat": 6},
+    {"id": "family_break", "headline": "Family time leaves {name} refreshed", "summary": "A successful short break with family restores energy and focus.", "profile": {"state.energy": 2.0, "state.focus": 2.0, "state.morale": 1.5}, "ovr": 0.35, "attrs": {"stamina": 0.3}, "days": 5, "heat": 7},
+    {"id": "endorsement", "headline": "New opportunity boosts {name}'s profile", "summary": "A new endorsement opportunity gives the player a small confidence lift.", "profile": {"state.confidence": 2.0, "state.morale": 1.0}, "ovr": 0.15, "days": 4, "heat": 16, "public_chance": 0.75},
+    {"id": "youth_hockey", "headline": "{name} connects with local youth hockey", "summary": "Time spent with young players strengthens the player's connection to the community.", "profile": {"state.belonging": 3.0, "state.morale": 2.0}, "character": 0.5, "ovr": 0.15, "days": 6, "heat": 18, "public_chance": 0.7, "potential_chance": 0.08, "potential": 0.1},
+    {"id": "partner_settles", "headline": "Home life becoming more comfortable for {name}", "summary": "The player's partner is settling into the city, reducing background stress.", "profile": {"state.personal_stress": -3.0, "state.belonging": 3.0}, "ovr": 0.25, "days": 8, "heat": 8, "requires_partnered": True},
+    {"id": "mentor_connection", "headline": "Veteran advice clicks for {name}", "summary": "A strong conversation with a veteran helps the player see his situation more clearly.", "profile": {"state.confidence": 2.0, "state.focus": 2.0}, "character": 0.2, "ovr": 0.25, "attrs": {"offensive_awareness": 0.25}, "days": 6, "heat": 10, "potential_chance": 0.22, "potential": 0.3},
+    {"id": "community_award", "headline": "{name} recognized for work away from the rink", "summary": "A community award reinforces the player's positive relationship with the city.", "profile": {"state.morale": 3.0, "state.belonging": 4.0}, "character": 0.75, "ovr": 0.2, "days": 7, "heat": 24, "public_chance": 0.9, "potential_chance": 0.08, "potential": 0.1},
+]
+
+
+def _u_migrate_v2(session: Any) -> None:
+    """V3-compatible save migration. Safe for old V2 saves."""
+    defaults = {
+        "universe_engine_version": UNIVERSE_ENGINE_VERSION,
+        "universe_players": {},
+        "universe_locker_rooms": {},
+        "universe_interactions": [],
+        "universe_interaction_queue": [],
+        "universe_event_log": [],
+        "universe_reporter_relationships": {},
+        "universe_attribute_modifiers": {},
+        "universe_readiness_modifiers": {},
+        "universe_promises": [],
+        "universe_trade_demands": [],
+        "universe_team_sanctions": [],
+        "universe_cap_penalties": {},
+        "universe_forfeited_picks": [],
+        "universe_player_availability": {},
+        "universe_major_event_state": {},
+        "universe_daily_snapshots": [],
+        "universe_game_contexts": {},
+        "_universe_last_daily_tick": -1,
+    }
+    for key, default in defaults.items():
+        if getattr(session, key, None) is None:
+            if isinstance(default, dict):
+                setattr(session, key, default.copy())
+            elif isinstance(default, list):
+                setattr(session, key, list(default))
+            else:
+                setattr(session, key, default)
+    session.universe_engine_version = UNIVERSE_ENGINE_VERSION
+
+
+def _u_sync_player_entities(session: Any) -> Dict[str, Dict[str, Any]]:
+    """Sync real players into Universe state while preserving V3 mental/life ledgers."""
+    _u_migrate_v2(session)
+    entities = dict(getattr(session, "universe_players", None) or {})
+    active_ids: List[str] = []
+    for team_id, player in _u_all_players(session):
+        player_id = str(getattr(player, "id", "") or "")
+        active_ids.append(player_id)
+        entity = dict(entities.get(player_id) or {})
+        if not entity:
+            entity = _u_create_player_entity(session, team_id, player)
+        entity["player_name"] = _u_name(player)
+        entity["team_id"] = str(team_id)
+        entity["position"] = _u_position(player)
+        entity["age"] = _player_age(player)
+        entity["overall"] = round(_player_ovr99(player), 1)
+        entity.setdefault("state", {})
+        entity.setdefault("life", {})
+        entity.setdefault("social", {})
+        entity.setdefault("concerns", {})
+        entity.setdefault("memories", [])
+        entity.setdefault("attribute_ledger", [])
+        entity.setdefault("potential_ledger", [])
+        entity.setdefault("reputation_tags", [])
+        entity.setdefault("season_permanent_attribute_delta", {})
+        entity.setdefault("season_potential_delta", {})
+        entity["state"].setdefault("character_modifier", 0.0)
+        entity["state"].setdefault("mental_ovr", None)
+        entity["life"].setdefault("last_minor_event_day", -999)
+        entity["life"].setdefault("minor_event_history", [])
+        base_personality = _u_personality(player, player_id)
+        base_personality["character"] = _u_clip(
+            float(base_personality.get("character", 55))
+            + float(entity["state"].get("character_modifier", 0.0) or 0.0)
+        )
+        entity["personality"] = base_personality
+        ident = getattr(player, "identity", None)
+        entity["identity"] = {
+            "name": _u_name(player),
+            "age": entity["age"],
+            "birth_city": str(getattr(ident, "birth_city", "") or ""),
+            "birth_country": str(getattr(ident, "birth_country", "") or ""),
+            "draft_year": int(getattr(ident, "draft_year", 0) or 0),
+            "draft_round": int(getattr(ident, "draft_round", 0) or 0),
+            "draft_pick": int(getattr(ident, "draft_pick", 0) or 0),
+            "position": entity["position"],
+            "overall": entity["overall"],
+        }
+        entity["trusts"] = {
+            "coach": round(_u_psych_value(player, ("coach_trust", "coach_relationship"), 55.0), 1),
+            "gm": round(_u_psych_value(player, ("trust_in_management",), float((entity.get("state") or {}).get("gm_trust", 55))), 1),
+            "teammates": round(_u_psych_value(player, ("trust_in_teammates",), 55.0), 1),
+            "room": round(_u_psych_value(player, ("locker_room_fit",), float((entity.get("state") or {}).get("belonging", 55))), 1),
+        }
+        entity["personality_tags"] = _u_personality_tags(entity)
+        entities[player_id] = entity
+    for player_id, entity in entities.items():
+        entity["active_roster"] = player_id in active_ids
+    session.universe_players = entities
+    return entities
+
+
+def _u_mental_ovr(entity: Dict[str, Any], player: Any = None) -> float:
+    """Use future Mental OVR if present; otherwise derive a stable temporary fallback."""
+    state = entity.get("state") or {}
+    for candidate in (
+        state.get("mental_ovr"),
+        entity.get("mental_ovr"),
+        getattr(player, "mental_ovr", None) if player is not None else None,
+        getattr(getattr(player, "psych", None), "mental_ovr", None) if player is not None else None,
+    ):
+        if candidate is None or candidate == "":
+            continue
+        try:
+            value = float(candidate)
+            return _u_clip(value * 100.0 if value <= 1.5 else value, 1.0, 99.0)
+        except (TypeError, ValueError):
+            pass
+    personality = entity.get("personality") or {}
+    return _u_clip(
+        float(personality.get("resilience", 55)) * 0.28
+        + float(personality.get("professionalism", 55)) * 0.17
+        + float(state.get("confidence", 55)) * 0.23
+        + float(state.get("focus", 60)) * 0.18
+        + float(state.get("morale", 55)) * 0.14,
+        1.0,
+        99.0,
+    )
+
+
+def _u_apply_readiness_modifier(
+    session: Any,
+    player_id: str,
+    *,
+    source_id: str,
+    ovr_delta: float,
+    days: int,
+    reason: str,
+    stat_modifiers: Optional[Dict[str, float]] = None,
+) -> Dict[str, Any]:
+    """Apply day-based effective-OVR/stat effects without rewriting base hockey talent."""
+    store = dict(getattr(session, "universe_readiness_modifiers", None) or {})
+    rows = list(store.get(str(player_id)) or [])
+    receipt = {
+        "id": f"ready_{uuid.uuid4().hex[:10]}",
+        "source_id": str(source_id),
+        "player_id": str(player_id),
+        "ovr_delta": round(max(UNIVERSE_READINESS_MIN, min(UNIVERSE_READINESS_MAX, float(ovr_delta))), 2),
+        "days_remaining": max(1, int(days)),
+        "reason": str(reason),
+        "stat_modifiers": {str(k): float(v) for k, v in (stat_modifiers or {}).items()},
+    }
+    rows.append(receipt)
+    store[str(player_id)] = rows[-20:]
+    session.universe_readiness_modifiers = store
+    return receipt
+
+
+def _u_active_readiness(session: Any, player_id: str) -> Dict[str, Any]:
+    total_ovr = 0.0
+    stats: Dict[str, float] = {}
+    sources: List[Dict[str, Any]] = []
+    for row in (getattr(session, "universe_readiness_modifiers", None) or {}).get(str(player_id), []) or []:
+        if int(row.get("days_remaining", 0) or 0) <= 0:
+            continue
+        total_ovr += float(row.get("ovr_delta", 0) or 0)
+        for key, value in (row.get("stat_modifiers") or {}).items():
+            stats[str(key)] = stats.get(str(key), 0.0) + float(value or 0)
+        sources.append(row)
+    return {
+        "ovr_delta": round(max(UNIVERSE_READINESS_MIN, min(UNIVERSE_READINESS_MAX, total_ovr)), 2),
+        "stat_modifiers": {k: round(v, 3) for k, v in stats.items()},
+        "sources": sources,
+    }
+
+
+def _u_tick_readiness_modifiers(session: Any) -> int:
+    store = dict(getattr(session, "universe_readiness_modifiers", None) or {})
+    expired = 0
+    for player_id, rows in list(store.items()):
+        kept: List[Dict[str, Any]] = []
+        for row in rows or []:
+            row["days_remaining"] = int(row.get("days_remaining", 0) or 0) - 1
+            if row["days_remaining"] > 0:
+                kept.append(row)
+            else:
+                expired += 1
+        if kept:
+            store[player_id] = kept
+        else:
+            store.pop(player_id, None)
+    session.universe_readiness_modifiers = store
+    return expired
+
+
+def _u_write_potential(player: Any, delta_99: float) -> Tuple[Optional[float], Optional[float], str]:
+    """Best-effort writer for the project's known potential field names."""
+    for container_name, container in (
+        ("player", player),
+        ("development", getattr(player, "development", None)),
+        ("ratings", getattr(player, "ratings", None)),
+    ):
+        if container is None:
+            continue
+        for name in ("dev_potential", "potential", "dev_ceiling"):
+            exists = name in container if isinstance(container, dict) else hasattr(container, name)
+            if not exists:
+                continue
+            raw = _u_get(container, name, None)
+            if callable(raw):
+                continue
+            try:
+                before = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if before <= 1.5:
+                after = max(0.01, min(1.0, before + float(delta_99) / 99.0))
+            else:
+                after = max(1.0, min(99.0, before + float(delta_99)))
+            if isinstance(container, dict):
+                container[name] = after
+            else:
+                try:
+                    setattr(container, name, after)
+                except Exception:
+                    continue
+            return before, after, f"{container_name}.{name}"
+    return None, None, "ledger_only"
+
+
+def _u_apply_potential_change(session: Any, player_id: str, delta: float, source_id: str, reason: str) -> Dict[str, Any]:
+    """Capped long-term potential movement for genuine development/life arcs."""
+    entities = getattr(session, "universe_players", None) or {}
+    entity = entities.get(str(player_id)) or {}
+    season = _u_current_meta(session)[2]
+    caps = entity.setdefault("season_potential_delta", {})
+    key = str(season)
+    used = float(caps.get(key, 0.0) or 0.0)
+    requested = float(delta)
+    if requested >= 0:
+        applied = min(requested, max(0.0, UNIVERSE_POTENTIAL_SEASON_CAP - used))
+    else:
+        applied = max(requested, min(0.0, -UNIVERSE_POTENTIAL_SEASON_CAP - used))
+    caps[key] = round(used + applied, 3)
+    player = _player_from_roster(session, str(player_id))
+    before = after = None
+    location = "ledger_only"
+    if player is not None and abs(applied) > 0.0001:
+        before, after, location = _u_write_potential(player, applied)
+    receipt = {
+        "id": f"pot_{uuid.uuid4().hex[:10]}",
+        "source_id": str(source_id),
+        "player_id": str(player_id),
+        "requested_delta": requested,
+        "applied_delta": round(applied, 3),
+        "before": before,
+        "after": after,
+        "location": location,
+        "reason": str(reason),
+        "season": season,
+    }
+    ledger = list(entity.get("potential_ledger") or [])
+    ledger.append(receipt)
+    entity["potential_ledger"] = ledger[-40:]
+    return receipt
+
+
+def _u_notify_user_event(
+    session: Any,
+    event: Dict[str, Any],
+    *,
+    presentation_level: int = 1,
+    force_league: bool = False,
+) -> None:
+    """Central notification router: 1=inbox, 2=banner, 3=popup, 4=blocking breaking news."""
+    _ensure_session_event_lists(session)
+    user_team_id = str(getattr(session, "user_team_id", "") or "")
+    team_id = str(event.get("team_id") or "")
+    if not force_league and user_team_id and team_id and team_id != user_team_id:
+        return
+    day, iso, _ = _u_current_meta(session)
+    event_id = str(event.get("id") or f"uve_{uuid.uuid4().hex[:10]}")
+    notif_id = f"universe_notif:{event_id}"
+    if not any(str(row.get("id") or "") == notif_id for row in session.notifications):
+        session.notifications.append(
+            {
+                "id": notif_id,
+                "type": "breaking_news" if presentation_level >= 4 else "player_meeting" if event.get("requires_action") else "storyline",
+                "priority": "CRITICAL" if presentation_level >= 4 else "HIGH" if presentation_level >= 2 else "MEDIUM",
+                "title": str(event.get("notification_title") or event.get("headline") or event.get("title") or "Franchise update")[:110],
+                "text": str(event.get("summary") or event.get("description") or "")[:280],
+                "date": iso or day,
+                "calendar_day": day,
+                "calendar_iso": iso,
+                "team_id": team_id,
+                "player_id": str(event.get("player_id") or event.get("actor_id") or ""),
+                "source": "storyline_universe_v3",
+                "presentation_level": int(presentation_level),
+                "storyline_id": event.get("storyline_id"),
+                "interaction_id": event.get("interaction_id") or event.get("id") if event.get("requires_action") else None,
+            }
+        )
+        session.notifications = session.notifications[-180:]
+    if presentation_level < 3:
+        return
+    popup_id = f"universe_popup:{event_id}"
+    if any(str(row.get("id") or "") == popup_id for row in session.pending_ui_popups):
+        return
+    session.pending_ui_popups.append(
+        {
+            "id": popup_id,
+            "kind": "breaking_news" if presentation_level >= 4 else "player_meeting",
+            "blocking": presentation_level >= 4,
+            "severity": "catastrophic" if str(event.get("event_tier")) == "catastrophic" else "major" if presentation_level >= 4 else "significant",
+            "title": str(event.get("popup_title") or event.get("notification_title") or ("BREAKING NEWS" if presentation_level >= 4 else "PLAYER MEETING")),
+            "headline": str(event.get("headline") or event.get("title") or "Franchise update"),
+            "summary": str(event.get("summary") or event.get("description") or ""),
+            "description": str(event.get("summary") or event.get("description") or ""),
+            "team_id": team_id,
+            "player_id": str(event.get("player_id") or event.get("actor_id") or ""),
+            "player_name": str(event.get("player_name") or ""),
+            "calendar_day": day,
+            "calendar_iso": iso,
+            "presentation_level": int(presentation_level),
+            "requires_decision": bool(event.get("requires_action")),
+            "interaction_id": event.get("interaction_id") or (event.get("id") if event.get("requires_action") else None),
+            "storyline_id": event.get("storyline_id"),
+            "choices": list(event.get("choices") or []),
+        }
+    )
+    session.pending_ui_popups = session.pending_ui_popups[-30:]
+
+
+def _u_record_storyline(session: Any, *, event: Dict[str, Any], headline: str, summary: str, cause_type: str, category: str, heat: int, public: bool = True) -> Optional[Dict[str, Any]]:
+    """V3 storyline writer: event tier controls severity; heat only controls media attention."""
+    record_private = bool(event.get("record_private_storyline"))
+    if not public and not record_private:
+        return None
+    day, iso, _ = _u_current_meta(session)
+    participants = list(event.get("participants") or [])
+    player_id = str(participants[0] if participants else event.get("player_id") or "")
+    entities = getattr(session, "universe_players", None) or {}
+    entity = entities.get(player_id) or {}
+    team_id = str(event.get("team_id") or entity.get("team_id") or "")
+    event_id = str(event.get("id") or f"uve_{uuid.uuid4().hex[:10]}")
+    try:
+        cause_event_id = record_decision_event(
+            session,
+            {
+                "event_type": cause_type,
+                "team_id": team_id,
+                "player_id": player_id,
+                "player_name": entity.get("player_name") or event.get("player_name"),
+                "calendar_day": day,
+                "calendar_iso": iso,
+                "universe_event_id": event_id,
+                "event_tier": event.get("event_tier"),
+            },
+        )
+    except Exception:
+        cause_event_id = event_id
+    tier = str(event.get("event_tier") or "minor").lower()
+    severity_map = {"ambient": "minor", "minor": "minor", "developing": "mid", "major": "major", "catastrophic": "crisis"}
+    priority_map = {"ambient": "LOW", "minor": "MEDIUM", "developing": "HIGH", "major": "HIGH", "catastrophic": "CRITICAL"}
+    tone = str(event.get("tone") or "")
+    if not tone:
+        tone = "negative" if cause_type in (
+            "TEAMMATE_CONFLICT", "TEAMMATE_FIGHT", "PLAYER_REPORTER_ALTERCATION", "PROMISE_BROKEN",
+            "LOW_CHARACTER_GAME_IMPACT", "PLAYER_ARRESTED", "LEAGUE_SUSPENSION", "PLAYER_BANNED",
+            "MAJOR_PUBLIC_ALTERCATION", "GAMBLING_VIOLATION", "PLAYER_DEATH", "UNDER_TABLE_PAYMENTS",
+            "CAP_CIRCUMVENTION", "ILLEGAL_TEAM_WORKOUTS", "EXECUTIVE_MISCONDUCT", "TRADE_DEMAND"
+        ) else "positive" if cause_type in ("HIGH_CHARACTER_IMPACT", "PROMISE_KEPT", "COMMUNITY_MOMENT", "POSITIVE_LIFE_EVENT") else "neutral"
+    visibility = str(event.get("visibility") or ("public" if public else "team_only"))
+    knowledge_type = str(event.get("knowledge_type") or ("fact" if cause_type in _FACT_CAUSE_TYPES else "claim" if cause_type in _CLAIM_CAUSE_TYPES else "report"))
+    public_level = str(event.get("public_knowledge_level") or ("confirmed" if visibility == "public" and knowledge_type == "fact" else "widely_reported" if visibility == "public" else "private"))
+    row = {
+        "id": f"story_{uuid.uuid4().hex[:12]}",
+        "storyline_id": "",
+        "type": str(event.get("kind") or category),
+        "category": category,
+        "cause_type": cause_type,
+        "cause_event_id": cause_event_id,
+        "universe_event_id": event_id,
+        "team_id": team_id,
+        "team_name": _team_display(session, team_id) if team_id else "League",
+        "player_id": player_id,
+        "player_name": entity.get("player_name") or event.get("player_name") or "",
+        "related_player_ids": participants,
+        "headline": headline,
+        "title": headline,
+        "summary": summary,
+        "short_summary": summary[:180],
+        "description": summary,
+        "tone": tone,
+        "priority": priority_map.get(tier, "MEDIUM"),
+        "severity": severity_map.get(tier, "minor"),
+        "event_tier": tier,
+        "mechanical_severity": int(event.get("mechanical_severity") or 10),
+        "visibility": visibility,
+        "heat": int(_u_clip(heat, 5, 100)),
+        "credibility": int(event.get("credibility") or 90),
+        "calendar_day": day,
+        "calendar_iso": iso,
+        "date": iso or day,
+        "source": "storyline_universe_v3",
+        "effects": dict(event.get("effects") or {}),
+        "stable_key": str(event.get("stable_key") or ""),
+        "knowledge_type": knowledge_type,
+        "public_knowledge_level": public_level,
+        "source_label": event.get("source_label") or "",
+        "reporter_name": event.get("reporter_name") or "",
+        "outlet_name": event.get("outlet_name") or "",
+        "evidence": dict(event.get("evidence") or {}),
+        "personality_tags": list(entity.get("personality_tags") or []),
+        "top_concerns": list(entity.get("top_concerns") or []),
+        "trusts": dict(entity.get("trusts") or {}),
+        **lane_flags(
+            classify_story_lane(
+                cause_type=cause_type,
+                category=category,
+                knowledge_type=knowledge_type,
+                public_level=public_level,
+                heat=heat,
+                legal_status=str(event.get("legal_status") or ""),
+                incident_family=str(event.get("incident_family") or ""),
+            )
+        ),
+    }
+    row["storyline_id"] = row["id"]
+    try:
+        from app.sim_engine.franchise.state import _record_storyline  # noqa: WPS433
+        _record_storyline(session, row)
+    except (ImportError, ModuleNotFoundError):
+        enriched = _UNIVERSE_LEGACY_ENRICH(session, row)
+        existing = list(getattr(session, "storyline_events", None) or [])
+        existing.append(enriched)
+        session.storyline_events = existing[-300:]
+    return row
+
+
+def _u_life_event_allowed(entity: Dict[str, Any], spec: Dict[str, Any]) -> bool:
+    life = entity.get("life") or {}
+    relationship = str(life.get("relationship_status") or "single")
+    dependents = int(life.get("dependents", 0) or 0)
+    if spec.get("requires_partnered") and relationship == "single":
+        return False
+    if spec.get("requires_dependents") and dependents <= 0:
+        return False
+    return True
+
+
+def _u_generate_minor_life_events(session: Any, rng: random.Random) -> int:
+    """Generate diverse small positive/negative off-ice events with subtle real sim effects."""
+    user_team_id = str(getattr(session, "user_team_id", "") or "")
+    entities = getattr(session, "universe_players", None) or {}
+    created = 0
+    day, iso, _ = _u_current_meta(session)
+    for team_id_raw, team in (getattr(session, "team_by_id", None) or {}).items():
+        team_id = str(team_id_raw)
+        for player in list(getattr(team, "roster", None) or []):
+            player_id = str(getattr(player, "id", "") or "")
+            entity = entities.get(player_id)
+            if not entity or getattr(player, "retired", False):
+                continue
+            life = entity.get("life") or {}
+            last = int(life.get("last_minor_event_day", -999) or -999)
+            if day - last < 18:
+                continue
+            chance = 0.0045 if team_id == user_team_id else 0.00055
+            if rng.random() > chance:
+                continue
+            positive = rng.random() < 0.52
+            pool = MINOR_POSITIVE_LIFE_EVENTS if positive else MINOR_NEGATIVE_LIFE_EVENTS
+            allowed = [spec for spec in pool if _u_life_event_allowed(entity, spec)]
+            if not allowed:
+                continue
+            spec = rng.choice(allowed)
+            event_id = f"life_{spec['id']}_{player_id}_{day}"
+            for field, delta in (spec.get("profile") or {}).items():
+                _u_apply_profile_delta(entity, str(field), float(delta))
+            char_delta = float(spec.get("character", 0) or 0)
+            if char_delta:
+                _u_apply_profile_delta(entity, "state.character_modifier", char_delta)
+            readiness = _u_apply_readiness_modifier(
+                session,
+                player_id,
+                source_id=event_id,
+                ovr_delta=float(spec.get("ovr", 0) or 0),
+                days=int(spec.get("days", 3) or 3),
+                reason=str(spec.get("summary") or spec.get("headline") or "Minor life event"),
+                stat_modifiers={str(k): float(v) for k, v in (spec.get("attrs") or {}).items()},
+            )
+            potential_receipt = None
+            if positive and int(entity.get("age", 30) or 30) <= 25 and rng.random() < float(spec.get("potential_chance", 0) or 0):
+                potential_receipt = _u_apply_potential_change(
+                    session,
+                    player_id,
+                    float(spec.get("potential", 0) or 0),
+                    event_id,
+                    str(spec.get("summary") or "Positive stability/development event"),
+                )
+            life["last_minor_event_day"] = day
+            history = list(life.get("minor_event_history") or [])
+            history.append({"id": event_id, "event_type": spec["id"], "positive": positive, "calendar_day": day, "calendar_iso": iso})
+            life["minor_event_history"] = history[-30:]
+            entity["life"] = life
+            headline = str(spec["headline"]).format(name=entity.get("player_name") or "Player")
+            summary = str(spec["summary"])
+            public = rng.random() < float(spec.get("public_chance", 0.08 if positive else 0.03))
+            event = {
+                "id": event_id,
+                "kind": spec["id"],
+                "team_id": team_id,
+                "player_id": player_id,
+                "player_name": entity.get("player_name"),
+                "participants": [player_id],
+                "headline": headline,
+                "summary": summary,
+                "tone": "positive" if positive else "negative",
+                "event_tier": "minor",
+                "mechanical_severity": 10 if positive else 12,
+                "visibility": "public" if public else "team_only",
+                "knowledge_type": "fact",
+                "record_private_storyline": team_id == user_team_id,
+                "evidence": {"readiness": readiness, "potential": potential_receipt},
+            }
+            _u_append_event(session, {**event, "calendar_day": day, "calendar_iso": iso})
+            _u_add_memory(entity, kind=spec["id"], summary=summary, day=day, iso=iso, emotional_delta=2.0 if positive else -2.0, public=public)
+            storyline = _u_record_storyline(
+                session,
+                event=event,
+                headline=headline,
+                summary=summary,
+                cause_type="POSITIVE_LIFE_EVENT" if positive else "MINOR_LIFE_EVENT",
+                category="personal_life",
+                heat=int(spec.get("heat", 10) or 10),
+                public=public,
+            )
+            if storyline:
+                event["storyline_id"] = storyline.get("storyline_id")
+            if team_id == user_team_id:
+                _u_notify_user_event(session, event, presentation_level=1)
+            created += 1
+            if created >= 4:
+                return created
+    return created
+
+
+def _u_interaction_candidates(session: Any, team_id: str, rng: random.Random) -> List[Tuple[float, str, str, str]]:
+    """V3 candidate list with specific role/contract/development meeting families."""
+    entities = getattr(session, "universe_players", None) or {}
+    room = _u_rebuild_locker_room(session, team_id)
+    player_ids = [str(getattr(p, "id", "") or "") for p in _u_team_players(session, team_id)]
+    candidates: List[Tuple[float, str, str, str]] = []
+    for player_id in player_ids:
+        entity = entities.get(player_id) or {}
+        state = entity.get("state") or {}
+        personality = entity.get("personality") or {}
+        concerns = entity.get("concerns") or {}
+        niches = _u_niche_ids(entity)
+        role_sat = float(state.get("role_satisfaction", 60))
+        pos = str(entity.get("position") or "F").upper()
+        offense_signal = max(
+            _u_read_numeric(_player_from_roster(session, player_id) or object(), ("offensive_awareness", "passing"), 50),
+            _u_read_numeric(_player_from_roster(session, player_id) or object(), ("shot_accuracy", "shooting_accuracy"), 50),
+        )
+        if role_sat < 45:
+            kind = "request_starting_role" if pos == "G" else "request_pp_time" if offense_signal >= 78 and float(personality.get("ambition", 50)) >= 60 else "request_more_ice"
+            candidates.append((80 - role_sat + float(personality.get("ambition", 50)) * 0.24, kind, player_id, ""))
+        contract = concerns.get("contract") or {}
+        if float(contract.get("satisfaction", 60)) < 38 and float(contract.get("importance", 50)) >= 58:
+            candidates.append((72 - float(contract.get("satisfaction", 60)) + float(personality.get("money_focus", 45)) * 0.20, "contract_clarity", player_id, ""))
+        winning = concerns.get("winning") or {}
+        if float(winning.get("satisfaction", 60)) < 34 and float(personality.get("competitiveness", 50)) >= 65:
+            candidates.append((70 - float(winning.get("satisfaction", 60)) + float(personality.get("competitiveness", 50)) * 0.25, "winning_concern_meeting", player_id, ""))
+        development = concerns.get("development") or {}
+        if int(entity.get("age", 30) or 30) <= 24 and float(development.get("satisfaction", 60)) < 45:
+            candidates.append((66 - float(development.get("satisfaction", 60)) + float(personality.get("ambition", 50)) * 0.20, "development_meeting", player_id, ""))
+        if float(state.get("personal_stress", 25)) > 65:
+            candidates.append((float(state.get("personal_stress", 25)) + 8, "personal_check_in", player_id, ""))
+        reporter_rel = _u_reporter_relationship(session, "hart", player_id)
+        media_score = float(state.get("media_stress", 25)) + float(reporter_rel.get("friction", 20)) * 0.55 + float(personality.get("volatility", 40)) * 0.25
+        if media_score > 76:
+            kind = "reporter_altercation" if media_score > 118 and float(personality.get("volatility", 0)) > 76 and rng.random() < 0.16 else "reporter_confrontation"
+            candidates.append((media_score, kind, player_id, ""))
+        if float(entity.get("overall", 99)) < 80 and float(entity.get("room_value", 0)) >= 72:
+            candidates.append((float(entity.get("room_value", 0)) - 8, "unheralded_leader", player_id, ""))
+        if "mentor" in niches or "glue_guy" in niches or "peacemaker" in niches:
+            possible_targets = [pid for pid in player_ids if pid != player_id]
+            if possible_targets:
+                target_id = min(possible_targets, key=lambda pid: float((entities.get(pid) or {}).get("age", 27)) + float(((entities.get(pid) or {}).get("state") or {}).get("confidence", 55)) * 0.08)
+                target = entities.get(target_id) or {}
+                if "mentor" in niches and int(target.get("age", 30)) <= 24:
+                    candidates.append((58 + max(0, 52 - float((target.get("state") or {}).get("confidence", 55))), "mentor_session", player_id, target_id))
+                if ("glue_guy" in niches or "peacemaker" in niches) and float((room.get("culture") or {}).get("tension", 30)) >= 44:
+                    candidates.append((62 + float((room.get("culture") or {}).get("tension", 30)) * 0.35, "glue_intervention", player_id, target_id))
+    for rel in (room.get("relationships") or {}).values():
+        ids = list(rel.get("player_ids") or [])
+        if len(ids) != 2 or any(pid not in entities for pid in ids):
+            continue
+        a = entities[ids[0]]
+        b = entities[ids[1]]
+        tension = float(rel.get("tension", 0))
+        volatility = (float((a.get("personality") or {}).get("volatility", 40)) + float((b.get("personality") or {}).get("volatility", 40))) / 2
+        character_floor = min(float((a.get("personality") or {}).get("character", 55)), float((b.get("personality") or {}).get("character", 55)))
+        if tension >= 62 and character_floor < 52:
+            kind = "teammate_fight" if tension >= 82 and volatility >= 72 and rng.random() < 0.24 else "blame_game"
+            candidates.append((tension + volatility * 0.35, kind, ids[0], ids[1]))
+    candidates.sort(key=lambda row: (-row[0], row[1], row[2]))
+    return candidates
+
+
+def _u_make_extended_interaction(session: Any, team_id: str, kind: str, actor_id: str, target_id: str, rng: random.Random, score: float) -> Dict[str, Any]:
+    """Build new specific meeting types; fall back to the existing V2 scene builder."""
+    if kind not in {"request_more_ice", "request_pp_time", "request_starting_role", "contract_clarity", "winning_concern_meeting", "development_meeting"}:
+        return _u_make_interaction(session, team_id, kind, actor_id, target_id, rng, score)
+    entity = (getattr(session, "universe_players", None) or {}).get(actor_id) or {}
+    name = str(entity.get("player_name") or "Player")
+    day, iso, _ = _u_current_meta(session)
+    interaction = {
+        "id": f"int_{uuid.uuid4().hex[:12]}",
+        "kind": kind,
+        "team_id": str(team_id),
+        "participants": [actor_id],
+        "actor_id": actor_id,
+        "target_id": "",
+        "player_id": actor_id,
+        "player_name": name,
+        "calendar_day": day,
+        "calendar_iso": iso,
+        "expires_day": day + 3,
+        "status": "pending",
+        "score": round(score, 2),
+        "requires_action": str(team_id) == str(getattr(session, "user_team_id", "") or ""),
+        "private": True,
+        "stakes": "high",
+        "dialogue": [],
+        "choices": [],
+        "default_choice_id": "honest",
+        "event_tier": "minor",
+        "notification_title": "PLAYER MEETING REQUEST",
+    }
+    if kind == "request_more_ice":
+        interaction.update({
+            "title": f"{name} asks for more ice time",
+            "summary": f"{name} believes his recent work warrants a larger role and wants a direct answer from management.",
+            "dialogue": [{"speaker": name, "text": "I want more responsibility. If you think I haven't earned it, tell me exactly what I need to do."}],
+            "choices": [
+                _u_choice("honest", "Give an honest assessment", "Explain the current role and what must improve.", {"profile_changes": {"actor": {"state.gm_trust": 4, "state.focus": 2}}, "readiness_changes": [{"who": "actor", "ovr_delta": 0.25, "days": 5, "reason": "Clear role expectations", "stats": {"toi_readiness": 0.02}}], "public": False}),
+                _u_choice("promise", "Promise a bigger opportunity", "Morale jumps now, but the promise must be delivered.", {"profile_changes": {"actor": {"state.morale": 5, "state.gm_trust": 3}}, "promise": {"type": "role_opportunity", "player_id": actor_id, "due_games": 6, "description": "Give the player a meaningful lineup opportunity within six games.", "success_potential_delta": 0.35, "success_readiness": 0.5, "failure_readiness": -2.0}, "public": False}),
+                _u_choice("decline", "Tell him the role is earned", "Push back without offering a timetable.", {"profile_changes": {"actor": {"state.gm_trust": -4, "state.morale": -3, "state.focus": 2}}, "readiness_changes": [{"who": "actor", "ovr_delta": -0.75, "days": 8, "reason": "Frustration after role meeting", "stats": {"offensive_awareness": -0.25}}], "public": False}),
+            ],
+        })
+    elif kind == "request_pp_time":
+        interaction.update({
+            "title": f"{name} wants a power-play opportunity",
+            "summary": f"{name} believes his offensive game deserves a larger special-teams role.",
+            "dialogue": [{"speaker": name, "text": "Give me a real look on the power play. I think I can help us there."}],
+            "choices": [
+                _u_choice("honest", "Explain the current PP hierarchy", "Set expectations without making a promise.", {"profile_changes": {"actor": {"state.gm_trust": 3, "state.focus": 2}}, "public": False}),
+                _u_choice("promise", "Promise a PP look", "Create a development opportunity that can pay off if delivered.", {"profile_changes": {"actor": {"state.morale": 4, "state.confidence": 2}}, "promise": {"type": "power_play_opportunity", "player_id": actor_id, "due_games": 8, "description": "Give the player meaningful power-play usage within eight games.", "success_potential_delta": 0.5, "success_attribute": "offensive_awareness", "success_attribute_delta": 0.4, "failure_readiness": -2.0}, "public": False}),
+                _u_choice("decline", "Decline the request", "Keep the current units intact.", {"profile_changes": {"actor": {"state.morale": -3, "state.gm_trust": -3}}, "readiness_changes": [{"who": "actor", "ovr_delta": -0.6, "days": 7, "reason": "Power-play role frustration", "stats": {"shot_involvement": -0.015}}], "public": False}),
+            ],
+        })
+    elif kind == "request_starting_role":
+        interaction.update({
+            "title": f"{name} wants more starts",
+            "summary": f"{name} believes his play warrants a larger share of the crease.",
+            "dialogue": [{"speaker": name, "text": "I want the net more often. I think I've earned the chance to run with it."}],
+            "choices": [
+                _u_choice("honest", "Explain the goalie plan", "Give a clear workload explanation.", {"profile_changes": {"actor": {"state.gm_trust": 4, "state.focus": 2}}, "public": False}),
+                _u_choice("promise", "Promise more starts", "A real opportunity can raise confidence and development.", {"profile_changes": {"actor": {"state.confidence": 4, "state.morale": 3}}, "promise": {"type": "goalie_start_opportunity", "player_id": actor_id, "due_games": 6, "description": "Give the goalie a meaningful run of starts.", "success_potential_delta": 0.35, "failure_readiness": -2.5}, "public": False}),
+                _u_choice("decline", "Stay with the current starter", "The hierarchy remains unchanged.", {"profile_changes": {"actor": {"state.morale": -4, "state.gm_trust": -3}}, "readiness_changes": [{"who": "actor", "ovr_delta": -0.8, "days": 10, "reason": "Goalie role frustration", "stats": {"goalie_positioning": -0.3}}], "public": False}),
+            ],
+        })
+    elif kind == "contract_clarity":
+        interaction.update({
+            "title": f"{name} wants contract clarity",
+            "summary": f"{name} asks where he stands before contract uncertainty becomes a distraction.",
+            "dialogue": [{"speaker": name, "text": "I don't need a number today. I need to know whether I'm part of the plan."}],
+            "choices": [
+                _u_choice("honest", "Be direct", "Give an honest view of the club's plans.", {"profile_changes": {"actor": {"state.gm_trust": 5, "state.focus": 2}}, "public": False}),
+                _u_choice("commit", "Express commitment", "Reassure the player without promising contract terms.", {"profile_changes": {"actor": {"state.gm_trust": 4, "state.morale": 3}}, "readiness_changes": [{"who": "actor", "ovr_delta": 0.4, "days": 7, "reason": "Contract reassurance"}], "public": False}),
+                _u_choice("deflect", "Avoid committing", "Keep flexibility, but uncertainty grows.", {"profile_changes": {"actor": {"state.gm_trust": -5, "state.media_stress": 2}}, "readiness_changes": [{"who": "actor", "ovr_delta": -0.65, "days": 10, "reason": "Contract uncertainty", "stats": {"focus": -0.2}}], "public": False}),
+            ],
+        })
+    elif kind == "winning_concern_meeting":
+        interaction.update({
+            "title": f"{name} wants to talk about the club's direction",
+            "summary": f"{name} is increasingly concerned about whether the team is positioned to compete.",
+            "dialogue": [{"speaker": name, "text": "I want to win. I need to understand what we're building toward."}],
+            "choices": [
+                _u_choice("honest", "Explain the plan", "A concrete explanation can stabilize trust.", {"profile_changes": {"actor": {"state.gm_trust": 4, "state.focus": 2}}, "public": False}),
+                _u_choice("promise_compete", "Promise to improve the roster", "Creates a meaningful management promise.", {"profile_changes": {"actor": {"state.morale": 3, "state.gm_trust": 3}}, "promise": {"type": "winning_commitment", "player_id": actor_id, "due_games": 12, "description": "Show meaningful progress toward a more competitive team.", "success_readiness": 0.75, "failure_readiness": -3.0}, "public": False}),
+                _u_choice("dismiss", "Tell him to focus on playing", "The issue is pushed back onto the player.", {"profile_changes": {"actor": {"state.gm_trust": -6, "state.morale": -3}}, "readiness_changes": [{"who": "actor", "ovr_delta": -1.0, "days": 14, "reason": "Winning concern dismissed"}], "public": False}),
+            ],
+        })
+    else:
+        interaction.update({
+            "title": f"{name} asks about his development plan",
+            "summary": f"{name} wants a clearer path for his next stage of development.",
+            "dialogue": [{"speaker": name, "text": "Tell me what the organization needs me to become. I want a real plan."}],
+            "choices": [
+                _u_choice("honest", "Set a clear development plan", "Specific expectations increase focus.", {"profile_changes": {"actor": {"state.focus": 4, "state.gm_trust": 3}}, "readiness_changes": [{"who": "actor", "ovr_delta": 0.35, "days": 8, "reason": "Clear development plan"}], "potential_changes": [{"who": "actor", "delta": 0.2, "reason": "Development plan alignment"}], "public": False}),
+                _u_choice("skills_focus", "Assign focused skills work", "Target one area and build confidence through repetition.", {"profile_changes": {"actor": {"state.confidence": 3}}, "attributes": [{"who": "actor", "attribute": "offensive_awareness", "delta": 0.4, "permanent": False, "duration_games": 8, "reason": "Focused development work"}], "potential_changes": [{"who": "actor", "delta": 0.25, "reason": "Focused development opportunity"}], "public": False}),
+                _u_choice("wait", "Tell him to be patient", "No change to the development plan.", {"profile_changes": {"actor": {"state.gm_trust": -2, "state.morale": -1}}, "public": False}),
+            ],
+        })
+    return interaction
+
+
+def _u_apply_outcome(session: Any, interaction: Dict[str, Any], choice: Dict[str, Any]) -> Dict[str, Any]:
+    """V3 outcome router: profile, relationships, stats, readiness, potential, promises and coverage."""
+    outcome = dict(choice.get("outcome") or {})
+    entities = getattr(session, "universe_players", None) or {}
+    actor_id = str(interaction.get("actor_id") or "")
+    target_id = str(interaction.get("target_id") or "")
+    team_id = str(interaction.get("team_id") or "")
+    day, iso, _ = _u_current_meta(session)
+    receipts: Dict[str, Any] = {"profiles": [], "relationships": [], "attributes": [], "potential": [], "readiness": [], "reporter": [], "team": []}
+    role_ids = {"actor": actor_id, "target": target_id}
+    for role, changes in (outcome.get("profile_changes") or {}).items():
+        player_id = role_ids.get(str(role), str(role))
+        entity = entities.get(player_id)
+        if not entity:
+            continue
+        for field, delta in (changes or {}).items():
+            receipt = _u_apply_profile_delta(entity, str(field), float(delta))
+            receipt["player_id"] = player_id
+            receipts["profiles"].append(receipt)
+        _u_add_memory(entity, kind=str(interaction.get("kind") or "interaction"), summary=str(interaction.get("summary") or "Team interaction"), day=day, iso=iso, emotional_delta=sum(float(v) for v in (changes or {}).values()), related_ids=[pid for pid in (actor_id, target_id) if pid and pid != player_id], public=bool(outcome.get("public")))
+    if actor_id and target_id and outcome.get("relationship"):
+        receipts["relationships"] = _u_change_relationship(session, team_id, actor_id, target_id, dict(outcome["relationship"]), str(interaction.get("title") or "Interaction"))
+    room = _u_rebuild_locker_room(session, team_id) if team_id else {}
+    culture = room.get("culture") or {}
+    for field, delta in (outcome.get("team_changes") or {}).items():
+        before = float(culture.get(field, 50.0) or 0.0)
+        after = _u_clip(before + float(delta))
+        culture[field] = after
+        receipts["team"].append({"field": field, "before": before, "after": after, "delta": round(after - before, 2)})
+    for change in outcome.get("attributes") or []:
+        who = str(change.get("who") or "actor")
+        player_id = role_ids.get(who, who)
+        if player_id:
+            receipts["attributes"].append(_u_apply_attribute_change(session, player_id, change, str(interaction.get("id") or "interaction")))
+    for change in outcome.get("potential_changes") or []:
+        who = str(change.get("who") or "actor")
+        player_id = role_ids.get(who, who)
+        if player_id:
+            receipts["potential"].append(_u_apply_potential_change(session, player_id, float(change.get("delta") or 0), str(interaction.get("id") or "interaction"), str(change.get("reason") or "Narrative development")))
+    for change in outcome.get("readiness_changes") or []:
+        who = str(change.get("who") or "actor")
+        player_id = role_ids.get(who, who)
+        if player_id:
+            receipts["readiness"].append(_u_apply_readiness_modifier(session, player_id, source_id=str(interaction.get("id") or "interaction"), ovr_delta=float(change.get("ovr_delta") or 0), days=int(change.get("days") or 5), reason=str(change.get("reason") or "Narrative readiness"), stat_modifiers=dict(change.get("stats") or {})))
+    reporter_id = str(interaction.get("reporter_id") or "")
+    if reporter_id and actor_id:
+        rel = _u_reporter_relationship(session, reporter_id, actor_id)
+        for field, delta in (outcome.get("reporter_changes") or {}).items():
+            before = float(rel.get(field, 50.0) or 0.0)
+            after = _u_clip(before + float(delta))
+            rel[field] = after
+            receipts["reporter"].append({"field": field, "before": before, "after": after, "delta": round(after - before, 2)})
+        rel["interview_count"] = int(rel.get("interview_count", 0) or 0) + 1
+        history = list(rel.get("history") or [])
+        history.append({"interaction_id": interaction.get("id"), "choice_id": choice.get("id"), "calendar_day": day})
+        rel["history"] = history[-20:]
+    promise_spec = outcome.get("promise")
+    if isinstance(promise_spec, dict):
+        promises = list(getattr(session, "universe_promises", None) or [])
+        due_games = int(promise_spec.get("due_games") or 5)
+        promise = {
+            "id": f"promise_{uuid.uuid4().hex[:10]}",
+            "interaction_id": interaction.get("id"),
+            "type": promise_spec.get("type"),
+            "player_id": promise_spec.get("player_id") or actor_id,
+            "description": promise_spec.get("description"),
+            "created_day": day,
+            "games_remaining": due_games,
+            "status": "active",
+            "progress": 0,
+            "success_potential_delta": float(promise_spec.get("success_potential_delta", 0) or 0),
+            "success_readiness": float(promise_spec.get("success_readiness", 0) or 0),
+            "failure_readiness": float(promise_spec.get("failure_readiness", 0) or 0),
+            "success_attribute": promise_spec.get("success_attribute"),
+            "success_attribute_delta": float(promise_spec.get("success_attribute_delta", 0) or 0),
+        }
+        promises.append(promise)
+        session.universe_promises = promises[-80:]
+        receipts["promise_id"] = promise["id"]
+    interaction["status"] = "resolved"
+    interaction["resolved_day"] = day
+    interaction["resolved_iso"] = iso
+    interaction["selected_choice_id"] = choice.get("id")
+    interaction["resolution"] = receipts
+    interaction["effects"] = {"team_morale": sum(r.get("delta", 0) for r in receipts["team"] if r.get("field") in ("unity", "confidence")), "room_tension": sum(r.get("delta", 0) for r in receipts["team"] if r.get("field") == "tension")}
+    cause_type = str(outcome.get("cause_type") or ("PLAYER_INTERACTION" if outcome.get("public") else ""))
+    storyline = None
+    if bool(outcome.get("public")):
+        storyline = _u_record_storyline(session, event={**interaction, "event_tier": "major" if str(interaction.get("stakes")) == "critical" else "minor"}, headline=str(interaction.get("title") or "Team interaction"), summary=str(interaction.get("summary") or "A team interaction became public."), cause_type=cause_type or "PLAYER_INTERACTION", category="locker_room" if "reporter" not in str(interaction.get("kind") or "") else "media", heat=int(outcome.get("heat") or 38), public=True)
+        if storyline:
+            _u_social_burst(session, storyline, interaction, random.Random(_u_seed(interaction.get("id"), choice.get("id"))))
+    _u_append_event(session, {"id": interaction.get("id"), "kind": interaction.get("kind"), "team_id": team_id, "participants": interaction.get("participants"), "choice_id": choice.get("id"), "calendar_day": day, "calendar_iso": iso, "public": bool(outcome.get("public")), "receipts": receipts})
+    return {"interaction": interaction, "receipts": receipts, "storyline": storyline}
+
+
+def _u_queue_or_resolve(session: Any, interaction: Dict[str, Any]) -> None:
+    """Queue user meetings and always surface them through the notification system."""
+    rows = list(getattr(session, "universe_interactions", None) or [])
+    rows.append(interaction)
+    session.universe_interactions = rows[-UNIVERSE_MAX_INTERACTIONS:]
+    if interaction.get("requires_action"):
+        queue = list(getattr(session, "universe_interaction_queue", None) or [])
+        if not any(str(row.get("id") or "") == str(interaction.get("id") or "") for row in queue):
+            queue.append(interaction)
+        session.universe_interaction_queue = queue[-12:]
+        stakes = str(interaction.get("stakes") or "medium")
+        level = 3 if stakes == "critical" else 2 if stakes == "high" else 1
+        _u_notify_user_event(session, {**interaction, "interaction_id": interaction.get("id"), "headline": interaction.get("title"), "notification_title": interaction.get("notification_title") or "PLAYER MEETING REQUEST"}, presentation_level=level)
+        return
+    choices = list(interaction.get("choices") or [])
+    default_id = str(interaction.get("default_choice_id") or "")
+    choice = next((row for row in choices if str(row.get("id") or "") == default_id), choices[0] if choices else None)
+    if choice:
+        _u_apply_outcome(session, interaction, choice)
+
+
+def _u_generate_daily_interactions(session: Any, rng: random.Random) -> int:
+    user_team_id = str(getattr(session, "user_team_id", "") or "")
+    created = 0
+    team_ids = list((getattr(session, "team_by_id", None) or {}).keys())
+    if user_team_id in team_ids:
+        team_ids.remove(user_team_id)
+        team_ids.insert(0, user_team_id)
+    pending = len([row for row in (getattr(session, "universe_interaction_queue", None) or []) if str(row.get("status") or "") == "pending"])
+    for team_id_raw in team_ids:
+        team_id = str(team_id_raw)
+        candidates = _u_interaction_candidates(session, team_id, rng)
+        if not candidates:
+            continue
+        is_user = team_id == user_team_id
+        if is_user and pending >= 3:
+            continue
+        threshold = 40 if is_user else 61
+        score, kind, actor_id, target_id = candidates[0]
+        roll = rng.uniform(0, 100)
+        if score + rng.uniform(-12, 12) < threshold or roll > (60 if is_user else 28):
+            continue
+        interaction = _u_make_extended_interaction(session, team_id, kind, actor_id, target_id, rng, score)
+        _u_queue_or_resolve(session, interaction)
+        created += 1
+        if is_user:
+            pending += 1
+            continue
+        if created >= 8:
+            break
+    return created
+
+
+def _u_tick_promises(session: Any) -> Dict[str, int]:
+    """Resolve promises with long-term potential rewards and readiness fallout."""
+    promises = list(getattr(session, "universe_promises", None) or [])
+    counts = {"kept": 0, "broken": 0}
+    day, iso, _ = _u_current_meta(session)
+    for promise in promises:
+        if str(promise.get("status") or "") != "active" or int(promise.get("games_remaining", 1) or 0) > 0:
+            continue
+        fulfilled = int(promise.get("progress", 0) or 0) > 0
+        promise["status"] = "kept" if fulfilled else "broken"
+        promise["resolved_day"] = day
+        player_id = str(promise.get("player_id") or "")
+        entity = (getattr(session, "universe_players", None) or {}).get(player_id) or {}
+        delta = 6 if fulfilled else -12
+        _u_apply_profile_delta(entity, "state.gm_trust", delta)
+        _u_apply_profile_delta(entity, "state.morale", 3 if fulfilled else -6)
+        if fulfilled and float(promise.get("success_potential_delta", 0) or 0):
+            _u_apply_potential_change(session, player_id, float(promise.get("success_potential_delta") or 0), str(promise.get("id")), "Management delivered a development/role promise")
+        readiness_delta = float(promise.get("success_readiness", 0) if fulfilled else promise.get("failure_readiness", 0) or 0)
+        if readiness_delta:
+            _u_apply_readiness_modifier(session, player_id, source_id=str(promise.get("id")), ovr_delta=readiness_delta, days=10 if fulfilled else 21, reason=f"Management promise {promise['status']}")
+        if fulfilled and promise.get("success_attribute") and float(promise.get("success_attribute_delta", 0) or 0):
+            _u_apply_attribute_change(session, player_id, {"attribute": promise.get("success_attribute"), "delta": float(promise.get("success_attribute_delta") or 0), "permanent": False, "duration_games": 10, "reason": "Promise delivered"}, str(promise.get("id")))
+        _u_add_memory(entity, kind=promise["status"], summary=f"Management promise {promise['status']}: {promise.get('description')}", day=day, iso=iso, emotional_delta=delta, public=not fulfilled)
+        event = {"id": f"uve_{uuid.uuid4().hex[:10]}", "kind": f"promise_{promise['status']}", "team_id": entity.get("team_id"), "participants": [player_id], "player_id": player_id, "player_name": entity.get("player_name"), "event_tier": "minor" if fulfilled else "developing", "tone": "positive" if fulfilled else "negative"}
+        _u_append_event(session, {**event, "calendar_day": day, "calendar_iso": iso, "promise_id": promise.get("id")})
+        storyline = _u_record_storyline(session, event=event, headline=f"Management promise {promise['status']} with {entity.get('player_name') or 'player'}", summary=str(promise.get("description") or "A management promise reached its deadline."), cause_type="PROMISE_KEPT" if fulfilled else "PROMISE_BROKEN", category="management", heat=32 if fulfilled else 67, public=not fulfilled or bool(promise.get("public")))
+        if storyline:
+            event["storyline_id"] = storyline.get("storyline_id")
+        if str(entity.get("team_id") or "") == str(getattr(session, "user_team_id", "") or ""):
+            _u_notify_user_event(session, {**event, "headline": f"Promise {promise['status']}: {entity.get('player_name') or 'player'}", "summary": str(promise.get("description") or "")}, presentation_level=1 if fulfilled else 2)
+        counts[promise["status"]] += 1
+    session.universe_promises = promises
+    return counts
+
+
+def _trade_fallout_magnitude(session: Any, player: Any, attempt_count: int) -> Tuple[int, int, int, str, int]:
+    """Scale trade fallout by future Mental OVR, personality and repeated exposure."""
+    player_id = str(getattr(player, "id", "") or "")
+    entity = (getattr(session, "universe_players", None) or {}).get(player_id) or {}
+    char = _player_character_0_100(player)
+    mental = _u_mental_ovr(entity, player)
+    personality = entity.get("personality") or {}
+    pst = _ensure_player_storyline_state(player)
+    heat = int(pst.get("trade_rumor_heat") or 0)
+    fragility = max(0.0, min(1.0, (80.0 - mental) / 55.0))
+    volatility = float(personality.get("volatility", 50)) / 100.0
+    professionalism = float(personality.get("professionalism", 55)) / 100.0
+    gm_trust_drop = int(round(3 + attempt_count * 2.2 + fragility * 8 + volatility * 3 - professionalism * 2))
+    morale_drop = int(round(2 + attempt_count * 2.0 + fragility * 10 + volatility * 2))
+    base_penalty = 0.5 + attempt_count * 0.85 + heat * 0.018
+    ovr_mod = int(round(base_penalty * (0.65 + fragility * 2.6)))
+    if mental < 45:
+        ovr_mod += 2
+    if mental < 30 and attempt_count >= 2:
+        ovr_mod += 3
+    ovr_mod = max(1, min(18, ovr_mod))
+    duration_days = int(round(7 + attempt_count * 7 + fragility * 52 + max(0, 50 - char) * 0.35))
+    duration_days = max(7, min(120, duration_days))
+    severity = "minor" if ovr_mod <= 2 else "mid" if ovr_mod <= 6 else "major"
+    pst["gm_trust"] = _clamp(float(pst.get("gm_trust", 0.72)) - gm_trust_drop * 0.01)
+    pst["last_trade_mental_ovr"] = round(mental, 1)
+    pst["last_trade_readiness_penalty"] = -ovr_mod
+    pst["last_trade_recovery_days"] = duration_days
+    return morale_drop, gm_trust_drop, ovr_mod, severity, duration_days
+
+
+def _build_trade_rejected_storyline(
+    session: Any,
+    *,
+    player: Any,
+    player_id: str,
+    player_name: str,
+    team_id: str,
+    partner_team_id: str,
+    attempt_count: int,
+    cause_event_id: str,
+    calendar_iso: str,
+    cur_day: int,
+) -> Optional[Dict[str, Any]]:
+    tname = _team_display(session, team_id)
+    partner = _team_display(session, partner_team_id)
+    morale_drop, gm_trust_drop, ovr_mod, severity, duration_days = _trade_fallout_magnitude(session, player, attempt_count)
+    mental = _u_mental_ovr((getattr(session, "universe_players", None) or {}).get(player_id) or {}, player)
+    if attempt_count >= 4:
+        headline = f"{player_name} camp pushing for clarity after repeated trade talks"
+        body = f"{tname} has now included {player_name} in repeated trade proposals. The latest discussion with {partner} failed, and the relationship with management is under real strain."
+        cause_type = "PLAYER_REPEATEDLY_SHOPPED"
+    elif attempt_count >= 2:
+        headline = f"Another failed proposal increases tension around {player_name}"
+        body = f"{tname}'s attempt to move {player_name} to {partner} was rejected. This is the {_ordinal(attempt_count)} submitted proposal involving him this season."
+        cause_type = "PLAYER_REPEATEDLY_SHOPPED"
+    else:
+        headline = f"Trade proposal involving {player_name} creates an internal ripple"
+        body = f"{tname} included {player_name} in a submitted proposal to {partner}. The deal failed, and the player now has to process the fact that management considered moving him."
+        cause_type = "TRADE_REJECTED"
+    stable_key = f"{cause_type}|{player_id}|{cause_event_id}"
+    return {
+        "id": _storyline_id(stable_key),
+        "storyline_id": _storyline_id(stable_key),
+        "stable_key": stable_key,
+        "type": "trade_fallout",
+        "category": "trade",
+        "cause_type": cause_type,
+        "cause_event_id": cause_event_id,
+        "culprit_player_id": player_id,
+        "player_id": player_id,
+        "player_name": player_name,
+        "affected_player_ids": [player_id],
+        "participants": [player_id],
+        "team_id": team_id,
+        "team_name": tname,
+        "severity": severity,
+        "event_tier": "major" if ovr_mod >= 7 else "developing" if ovr_mod >= 3 else "minor",
+        "mechanical_severity": min(95, 15 + ovr_mod * 5),
+        "priority": "HIGH" if ovr_mod >= 4 else "MEDIUM",
+        "tone": "negative",
+        "headline": headline,
+        "title": headline,
+        "description": body,
+        "short_summary": body[:180],
+        "summary": body,
+        "cause": f"User submitted a TradeHub proposal involving {player_name}; {partner} rejected it.",
+        "calendar_iso": calendar_iso,
+        "calendar_day": cur_day,
+        "date": calendar_iso or cur_day,
+        "source": "TradeHub Fallout",
+        "source_label": "TradeHub Fallout",
+        "effects": {"player_morale": -float(morale_drop), "gm_trust": -float(gm_trust_drop), "room_tension": float(2 + min(8, attempt_count)), "trade_market_heat": float(2 + attempt_count)},
+        "ovr_modifier": -int(ovr_mod),
+        "readiness_duration_days": duration_days,
+        "mental_ovr_at_event": round(mental, 1),
+        "recovery_conditions": ["Win games together", "Restore a meaningful role", "Meet with player privately", "Trade player if relationship is broken", "Allow time to pass"],
+        "resolution_condition": "relationship_recovers_or_player_traded",
+        "status": "active",
+        "resolved": False,
+        "requires_action": attempt_count >= 2 or ovr_mod >= 4,
+        "visibility": "team_only",
+        "knowledge_type": "fact",
+        "public_knowledge_level": "private",
+    }
+
+
+def record_trade_hub_evaluation(
+    session: Any,
+    evaluation: Dict[str, Any],
+    assets_by_team: Dict[str, List[Dict[str, Any]]],
+    *,
+    proposal_submitted: bool = False,
+) -> List[Dict[str, Any]]:
+    """Track every submitted user trade proposal and apply Mental-OVR-driven fallout when players learn."""
+    if not proposal_submitted:
+        return []
+    migrate_session_storyline_state(session)
+    _u_sync_player_entities(session)
+    utid = str(getattr(session, "user_team_id", "") or "")
+    if not utid:
+        return []
+    accepted = bool(evaluation.get("accepted"))
+    partner_id = ""
+    for tid in (evaluation.get("participating_teams") or evaluation.get("team_ids") or []):
+        if str(tid) != utid:
+            partner_id = str(tid)
+            break
+    if not partner_id:
+        for tid in (assets_by_team or {}).keys():
+            if str(tid) != utid:
+                partner_id = str(tid)
+                break
+    generated: List[Dict[str, Any]] = []
+    cur, iso, season = _u_current_meta(session)
+    rejection_kind = _classify_trade_rumor_verdict(evaluation)
+    for pid, pname, player in _outgoing_user_players(session, assets_by_team):
+        pst = _ensure_player_storyline_state(player)
+        pst["proposal_submission_count"] = int(pst.get("proposal_submission_count", 0) or 0) + 1
+        pst["last_proposed_day"] = cur
+        pst["last_trade_rumor_context"] = _trade_rumor_context_key(partner_id, str(evaluation.get("verdict") or ""))
+        eid = record_decision_event(session, {"event_type": "TRADE_ATTEMPTED_BY_USER", "date": iso or cur, "calendar_day": cur, "team_id": utid, "player_ids": [pid], "player_id": pid, "player_name": pname, "target_team_id": partner_id, "accepted": accepted, "proposal_submitted": True, "proposal_submission_count": pst["proposal_submission_count"]})
+        if accepted:
+            continue
+        if rejection_kind == "technical_no_fallout":
+            continue
+        if rejection_kind == "soft_blocked":
+            pst["trade_rumor_heat"] = min(100, int(pst.get("trade_rumor_heat") or 0) + 1)
+            continue
+        cooldown_active = _is_trade_rumor_cooldown_active(pst, cur_day=cur, season=season)
+        if cooldown_active:
+            continue
+        pst["trade_attempt_count"] = int(pst.get("trade_attempt_count") or 0) + 1
+        pst["trade_rumor_heat"] = min(100, int(pst.get("trade_rumor_heat") or 0) + 12)
+        pst["last_trade_rumor_day"] = cur
+        pst["last_trade_rumor_week"] = cur // 7
+        pst["last_trade_rumor_season"] = season
+        attempt_n = int(pst["trade_attempt_count"])
+        sl = _build_trade_rejected_storyline(session, player=player, player_id=pid, player_name=pname, team_id=utid, partner_team_id=partner_id, attempt_count=attempt_n, cause_event_id=eid, calendar_iso=iso, cur_day=cur)
+        if not sl:
+            continue
+        _apply_storyline_effects(session, utid, pid, dict(sl.get("effects") or {}))
+        readiness = _u_apply_readiness_modifier(session, pid, source_id=eid, ovr_delta=float(sl.get("ovr_modifier") or 0), days=int(sl.get("readiness_duration_days") or 14), reason=str(sl.get("cause") or "Trade proposal fallout"), stat_modifiers={"focus": -0.25 * abs(float(sl.get("ovr_modifier") or 0)), "shot_involvement": -0.004 * abs(float(sl.get("ovr_modifier") or 0)), "assist_involvement": -0.003 * abs(float(sl.get("ovr_modifier") or 0))})
+        event = {**sl, "id": f"trade_exposure_{pid}_{cur}_{attempt_n}", "kind": "trade_proposal_exposure", "participants": [pid], "record_private_storyline": True, "evidence": {"readiness": readiness, "attempt_count": attempt_n}}
+        story = _u_record_storyline(session, event=event, headline=sl["headline"], summary=sl["description"], cause_type="TRADE_PROPOSAL_EXPOSURE", category="trade", heat=35 + min(35, attempt_n * 9), public=False)
+        if story:
+            sl["storyline_id"] = story.get("storyline_id")
+        _u_notify_user_event(session, {**event, "headline": sl["headline"], "summary": sl["description"], "requires_action": bool(sl.get("requires_action"))}, presentation_level=2 if sl.get("requires_action") else 1)
+        generated.append(sl)
+        try:
+            from app.sim_engine.franchise.trade_stability_engine import apply_trade_hub_exposure  # noqa: WPS433
+
+            apply_trade_hub_exposure(
+                session,
+                player,
+                attempt_n=attempt_n,
+                rejection_kind=rejection_kind,
+            )
+        except Exception:
+            pass
+    return generated
+
+
+def _u_create_trade_demand(session: Any, player_id: str, reason: str, rng: random.Random) -> Optional[Dict[str, Any]]:
+    """Create a private major trade demand; low-character players can leak immediately."""
+    demands = list(getattr(session, "universe_trade_demands", None) or [])
+    if any(str(row.get("player_id") or "") == str(player_id) and str(row.get("status") or "") == "active" for row in demands):
+        return None
+    entity = (getattr(session, "universe_players", None) or {}).get(str(player_id)) or {}
+    player = _player_from_roster(session, str(player_id))
+    if not entity or player is None:
+        return None
+    team_id = str(entity.get("team_id") or "")
+    day, iso, season = _u_current_meta(session)
+    character = float((entity.get("personality") or {}).get("character", _player_character_0_100(player)))
+    mental = _u_mental_ovr(entity, player)
+    agent = _agent_for_player(session, str(player_id), rng)
+    leak_tendency = float(agent.get("leak_tendency") or 0.3)
+    immediate_leak_chance = 0.0
+    if character < 35:
+        immediate_leak_chance = min(0.92, 0.62 + leak_tendency * 0.30)
+    elif character < 45:
+        immediate_leak_chance = 0.18 + leak_tendency * 0.18
+    demand_id = f"trade_demand_{player_id}_{season}_{day}"
+    demand = {
+        "id": demand_id,
+        "kind": "private_trade_demand",
+        "event_tier": "major",
+        "mechanical_severity": 72,
+        "team_id": team_id,
+        "player_id": str(player_id),
+        "player_name": entity.get("player_name"),
+        "participants": [str(player_id)],
+        "headline": f"{entity.get('player_name') or 'Player'} formally requests a trade",
+        "summary": str(reason),
+        "reason": str(reason),
+        "created_day": day,
+        "calendar_iso": iso,
+        "leak_day": day + 7,
+        "status": "active",
+        "public": False,
+        "visibility": "gm_private",
+        "knowledge_type": "fact",
+        "public_knowledge_level": "private",
+        "agent_id": agent.get("id"),
+        "mental_ovr": round(mental, 1),
+        "character": round(character, 1),
+        "immediate_leak_chance": round(immediate_leak_chance, 3),
+    }
+    demands.append(demand)
+    session.universe_trade_demands = demands[-60:]
+    _u_apply_profile_delta(entity, "state.gm_trust", -12)
+    _u_apply_profile_delta(entity, "state.morale", -8)
+    penalty = -max(3.0, min(12.0, 3.0 + (70.0 - mental) * 0.16))
+    _u_apply_readiness_modifier(session, str(player_id), source_id=demand_id, ovr_delta=penalty, days=45 if mental >= 55 else 75, reason="Unresolved trade demand", stat_modifiers={"focus": -1.2, "shot_involvement": -0.04, "assist_involvement": -0.035})
+    _u_append_event(session, {**demand, "calendar_day": day})
+    if team_id == str(getattr(session, "user_team_id", "") or ""):
+        _u_notify_user_event(session, {**demand, "notification_title": "URGENT PLAYER MEETING", "requires_action": True}, presentation_level=3)
+    if rng.random() < immediate_leak_chance:
+        _u_publish_trade_demand(session, demand, leaked_by="player_camp")
+    return demand
+
+
+def _u_publish_trade_demand(session: Any, demand: Dict[str, Any], *, leaked_by: str) -> Optional[Dict[str, Any]]:
+    if bool(demand.get("public")):
+        return None
+    demand["public"] = True
+    demand["visibility"] = "public"
+    demand["public_knowledge_level"] = "widely_reported"
+    demand["knowledge_type"] = "corroborated_claim"
+    demand["leaked_by"] = leaked_by
+    name = str(demand.get("player_name") or "Player")
+    team_id = str(demand.get("team_id") or "")
+    headline = f"Sources: {name} has asked {_team_display(session, team_id)} for a trade"
+    summary = f"Multiple sources now say {name} formally requested a move. Management had been given time to handle the matter privately before it became public."
+    event = {**demand, "headline": headline, "summary": summary, "event_tier": "major", "mechanical_severity": 78, "source_label": "Mark Ellison · NorthStar Hockey", "reporter_name": "Mark Ellison", "outlet_name": "NorthStar Hockey", "credibility": 88}
+    storyline = _u_record_storyline(session, event=event, headline=headline, summary=summary, cause_type="TRADE_DEMAND", category="trade", heat=88, public=True)
+    if storyline:
+        demand["storyline_id"] = storyline.get("storyline_id")
+        event["storyline_id"] = storyline.get("storyline_id")
+    _u_notify_user_event(session, event, presentation_level=4, force_league=True)
+    return storyline
+
+
+def _u_tick_trade_demands(session: Any, rng: random.Random) -> Dict[str, int]:
+    day = _u_current_meta(session)[0]
+    leaked = 0
+    active = 0
+    for demand in list(getattr(session, "universe_trade_demands", None) or []):
+        if str(demand.get("status") or "") != "active":
+            continue
+        active += 1
+        if not bool(demand.get("public")) and day >= int(demand.get("leak_day", day + 1) or day + 1):
+            _u_publish_trade_demand(session, demand, leaked_by="reporter_deadline")
+            leaked += 1
+    return {"active": active, "leaked": leaked}
+
+
+def _u_maybe_create_trade_demand_from_state(session: Any, rng: random.Random) -> int:
+    """Escalate only severe, persistent role/winning/trade damage into a formal demand."""
+    created = 0
+    season = _u_current_meta(session)[2]
+    for team_id, player in _u_all_players(session):
+        player_id = str(getattr(player, "id", "") or "")
+        entity = (getattr(session, "universe_players", None) or {}).get(player_id) or {}
+        state = entity.get("state") or {}
+        concerns = entity.get("concerns") or {}
+        pst = _ensure_player_storyline_state(player)
+        if int(pst.get("trade_demand_season", -1) or -1) == season:
+            continue
+        role_sat = float(state.get("role_satisfaction", 60))
+        gm_trust = float(state.get("gm_trust", 60))
+        winning_sat = float((concerns.get("winning") or {}).get("satisfaction", 60))
+        attempts = int(pst.get("trade_attempt_count", 0) or 0)
+        competitiveness = float((entity.get("personality") or {}).get("competitiveness", 55))
+        severe = (role_sat <= 24 and gm_trust <= 42) or attempts >= 3 or (winning_sat <= 23 and competitiveness >= 78 and gm_trust <= 48)
+        if not severe or rng.random() > 0.055:
+            continue
+        reason = "The player no longer believes his role and relationship with management can be repaired." if role_sat <= 24 else "Repeated trade exposure has convinced the player that a move is necessary." if attempts >= 3 else "The player no longer believes the club's competitive direction matches his career goals."
+        if _u_create_trade_demand(session, player_id, reason, rng):
+            pst["trade_demand_season"] = season
+            created += 1
+            if created >= 1:
+                break
+    return created
+
+
+def resolve_universe_trade_demands_after_trade(session: Any, moved_players: List[Dict[str, Any]]) -> int:
+    """Call beside resolve_culprit_traded_storylines after a completed trade."""
+    moved = {str(row.get("asset_id") or row.get("player_id") or "") for row in moved_players or []}
+    resolved = 0
+    for demand in getattr(session, "universe_trade_demands", None) or []:
+        if str(demand.get("player_id") or "") in moved and str(demand.get("status") or "") == "active":
+            demand["status"] = "resolved"
+            demand["resolution"] = "player_traded"
+            demand["resolved_day"] = _u_current_meta(session)[0]
+            resolved += 1
+    return resolved
+
+
+def _u_set_player_availability(session: Any, player_id: str, *, status: str, reason: str, days: int = 0, games: int = 0) -> Dict[str, Any]:
+    store = dict(getattr(session, "universe_player_availability", None) or {})
+    row = {"player_id": str(player_id), "status": str(status), "reason": str(reason), "days_remaining": max(0, int(days)), "games_remaining": max(0, int(games)), "active": True}
+    store[str(player_id)] = row
+    session.universe_player_availability = store
+    return row
+
+
+def universe_player_is_available(session: Any, player_id: str) -> bool:
+    row = (getattr(session, "universe_player_availability", None) or {}).get(str(player_id)) or {}
+    if not row or not row.get("active"):
+        return True
+    return str(row.get("status") or "available") not in ("suspended", "banned", "investigative_leave", "deceased")
+
+
+def _u_tick_player_availability_days(session: Any) -> int:
+    store = dict(getattr(session, "universe_player_availability", None) or {})
+    cleared = 0
+    for row in store.values():
+        if not row.get("active"):
+            continue
+        if int(row.get("days_remaining", 0) or 0) > 0:
+            row["days_remaining"] = int(row.get("days_remaining") or 0) - 1
+        if int(row.get("days_remaining", 0) or 0) <= 0 and int(row.get("games_remaining", 0) or 0) <= 0 and str(row.get("status")) != "deceased":
+            row["active"] = False
+            row["status"] = "available"
+            cleared += 1
+    session.universe_player_availability = store
+    return cleared
+
+
+def tick_universe_player_availability_after_game(session: Any, player_ids: List[str]) -> int:
+    """Game-loop hook: decrement suspension/ban games for the involved clubs."""
+    store = dict(getattr(session, "universe_player_availability", None) or {})
+    changed = 0
+    for player_id in player_ids or []:
+        row = store.get(str(player_id))
+        if not row or not row.get("active"):
+            continue
+        if int(row.get("games_remaining", 0) or 0) > 0:
+            row["games_remaining"] = int(row.get("games_remaining") or 0) - 1
+            changed += 1
+        if int(row.get("games_remaining", 0) or 0) <= 0 and int(row.get("days_remaining", 0) or 0) <= 0 and str(row.get("status")) != "deceased":
+            row["active"] = False
+            row["status"] = "available"
+    session.universe_player_availability = store
+    return changed
+
+
+def _u_apply_team_sanction(session: Any, team_id: str, event_type: str, rng: random.Random, event_id: str) -> Dict[str, Any]:
+    """Persist fictional league sanctions; cap/draft engines can consume the dedicated ledgers."""
+    sanctions = list(getattr(session, "universe_team_sanctions", None) or [])
+    cap_penalties = dict(getattr(session, "universe_cap_penalties", None) or {})
+    forfeited = list(getattr(session, "universe_forfeited_picks", None) or [])
+    season = _u_current_meta(session)[2]
+    sanction: Dict[str, Any] = {"id": f"sanction_{uuid.uuid4().hex[:10]}", "source_event_id": event_id, "team_id": str(team_id), "event_type": event_type, "season": season, "active": True, "fine_m": 0.0, "cap_penalty_m": 0.0, "forfeited_picks": []}
+    if event_type == "ILLEGAL_TEAM_WORKOUTS":
+        sanction["fine_m"] = round(rng.uniform(0.25, 1.5), 2)
+        if rng.random() < 0.18:
+            pick = {"team_id": str(team_id), "draft_year": season + 1, "round": 2, "source_event_id": event_id}
+            forfeited.append(pick)
+            sanction["forfeited_picks"].append(pick)
+    elif event_type == "UNDER_TABLE_PAYMENTS":
+        sanction["fine_m"] = round(rng.uniform(2.0, 8.0), 2)
+        sanction["cap_penalty_m"] = round(rng.uniform(3.0, 7.5), 2)
+        pick = {"team_id": str(team_id), "draft_year": season + 1, "round": 1, "source_event_id": event_id}
+        forfeited.append(pick)
+        sanction["forfeited_picks"].append(pick)
+    elif event_type == "CAP_CIRCUMVENTION":
+        sanction["fine_m"] = round(rng.uniform(1.0, 5.0), 2)
+        sanction["cap_penalty_m"] = round(rng.uniform(2.0, 6.0), 2)
+        if rng.random() < 0.55:
+            pick = {"team_id": str(team_id), "draft_year": season + 1, "round": 1, "source_event_id": event_id}
+            forfeited.append(pick)
+            sanction["forfeited_picks"].append(pick)
+    else:
+        sanction["fine_m"] = round(rng.uniform(0.5, 4.0), 2)
+    if sanction["cap_penalty_m"]:
+        cap_penalties[str(team_id)] = round(float(cap_penalties.get(str(team_id), 0) or 0) + float(sanction["cap_penalty_m"]), 2)
+    sanctions.append(sanction)
+    session.universe_team_sanctions = sanctions[-80:]
+    session.universe_cap_penalties = cap_penalties
+    session.universe_forfeited_picks = forfeited[-80:]
+    return sanction
+
+
+def _u_major_event_state_for_season(session: Any, rng: random.Random) -> Dict[str, Any]:
+    season = _u_current_meta(session)[2]
+    state = dict(getattr(session, "universe_major_event_state", None) or {})
+    if int(state.get("season", -1) or -1) != season:
+        deterministic = random.Random(_u_seed("major_event_budget", season))
+        state = {"season": season, "target": deterministic.randint(UNIVERSE_MAJOR_EVENTS_MIN, UNIVERSE_MAJOR_EVENTS_MAX), "generated": 0, "last_event_day": -999, "event_ids": []}
+        session.universe_major_event_state = state
+    return state
+
+
+def _u_run_major_league_event_pass(session: Any, rng: random.Random) -> int:
+    """League-wide scheduler: 3-5 major incidents per season, never 3-5 per team."""
+    state = _u_major_event_state_for_season(session, rng)
+    target = int(state.get("target", 4) or 4)
+    generated = int(state.get("generated", 0) or 0)
+    if generated >= target:
+        return 0
+    day, iso, season = _u_current_meta(session)
+    if day - int(state.get("last_event_day", -999) or -999) < 14:
+        return 0
+    calendar_len = max(day + 1, len(getattr(session, "nhl_calendar", None) or []))
+    remaining_days = max(1, calendar_len - day)
+    remaining_events = max(1, target - generated)
+    chance_today = min(0.12, max(0.0035, remaining_events / remaining_days * 1.25))
+    if rng.random() > chance_today:
+        return 0
+    teams = [(str(tid), tm) for tid, tm in (getattr(session, "team_by_id", None) or {}).items()]
+    if not teams:
+        return 0
+    event_id = f"major_{season}_{day}_{uuid.uuid4().hex[:8]}"
+    is_team_event = rng.random() < 0.24
+    storyline = None
+    event: Dict[str, Any]
+    if is_team_event:
+        team_id, _ = rng.choice(teams)
+        choices = [
+            ("ILLEGAL_TEAM_WORKOUTS", 0.34, "League investigation finds prohibited team workouts", "The league has sanctioned the club after determining that prohibited workouts violated league rules."),
+            ("UNDER_TABLE_PAYMENTS", 0.18, "League uncovers undisclosed player compensation", "Investigators found compensation outside registered contracts, triggering major financial, cap and draft sanctions."),
+            ("CAP_CIRCUMVENTION", 0.28, "League sanctions club for cap circumvention", "A league investigation found an improper attempt to work around salary-cap rules."),
+            ("EXECUTIVE_MISCONDUCT", 0.20, "Team executive misconduct triggers league discipline", "The league announced sanctions after an investigation into serious front-office misconduct."),
+        ]
+        roll = rng.random()
+        acc = 0.0
+        chosen = choices[-1]
+        for row in choices:
+            acc += row[1]
+            if roll <= acc:
+                chosen = row
+                break
+        event_type, _, headline, summary = chosen
+        sanction = _u_apply_team_sanction(session, team_id, event_type, rng, event_id)
+        team = (getattr(session, "team_by_id", None) or {}).get(team_id)
+        state_obj = getattr(team, "state", None) if team is not None else None
+        if state_obj is not None:
+            try:
+                state_obj.team_morale = _clamp(float(getattr(state_obj, "team_morale", 0.5)) - 0.08)
+                state_obj.organizational_pressure = _clamp(float(getattr(state_obj, "organizational_pressure", 0.5)) + 0.18)
+            except Exception:
+                pass
+        event = {"id": event_id, "kind": event_type.lower(), "event_tier": "major", "mechanical_severity": 88 if event_type in ("UNDER_TABLE_PAYMENTS", "CAP_CIRCUMVENTION") else 76, "team_id": team_id, "headline": headline, "summary": summary, "tone": "negative", "visibility": "public", "knowledge_type": "fact", "public_knowledge_level": "confirmed", "source_label": "League Office", "evidence": {"sanction": sanction}, "incident_family": "organizational_misconduct"}
+        storyline = _u_record_storyline(session, event=event, headline=headline, summary=summary, cause_type=event_type, category="league_discipline", heat=94 if event_type in ("UNDER_TABLE_PAYMENTS", "CAP_CIRCUMVENTION") else 84, public=True)
+    else:
+        nhl_players: List[Tuple[str, Any]] = []
+        for team_id, team in teams:
+            for player in list(getattr(team, "roster", None) or []):
+                if not getattr(player, "retired", False):
+                    nhl_players.append((team_id, player))
+        if not nhl_players:
+            return 0
+        team_id, player = rng.choice(nhl_players)
+        player_id = str(getattr(player, "id", "") or "")
+        entity = (getattr(session, "universe_players", None) or {}).get(player_id) or {}
+        name = str(entity.get("player_name") or _u_name(player))
+        # PLAYER_DEATH has weight 0.01 against a ~4.5 total pool: exceptionally rare.
+        pool = [
+            ("PLAYER_ARRESTED", 1.35),
+            ("LEAGUE_SUSPENSION", 1.25),
+            ("PLAYER_BANNED", 0.35),
+            ("MAJOR_PUBLIC_ALTERCATION", 1.15),
+            ("GAMBLING_VIOLATION", 0.45),
+            ("PLAYER_DEATH", 0.01),
+        ]
+        total = sum(weight for _, weight in pool)
+        pick = rng.random() * total
+        acc = 0.0
+        event_type = pool[-1][0]
+        for key, weight in pool:
+            acc += weight
+            if pick <= acc:
+                event_type = key
+                break
+        mental = _u_mental_ovr(entity, player)
+        if event_type == "PLAYER_ARRESTED":
+            headline = f"{name} arrested; league and team reviewing situation"
+            summary = f"The club has confirmed that {name} was arrested. The player is away from team activities while the matter is reviewed."
+            availability = _u_set_player_availability(session, player_id, status="investigative_leave", reason="Arrest / league review", days=rng.randint(5, 14))
+            ovr_delta, days = -max(8, min(18, 11 + (60 - mental) * 0.12)), rng.randint(60, 120)
+        elif event_type == "LEAGUE_SUSPENSION":
+            games = rng.randint(8, 30)
+            headline = f"League suspends {name} for {games} games"
+            summary = f"The league announced a {games}-game suspension for {name}. The player is immediately unavailable."
+            availability = _u_set_player_availability(session, player_id, status="suspended", reason="League suspension", games=games)
+            ovr_delta, days = -max(6, min(16, 8 + (58 - mental) * 0.10)), rng.randint(45, 90)
+        elif event_type == "PLAYER_BANNED":
+            days_banned = rng.randint(180, 365)
+            headline = f"League imposes long-term ban on {name}"
+            summary = f"The league has banned {name} from competition while a major disciplinary matter is resolved."
+            availability = _u_set_player_availability(session, player_id, status="banned", reason="Long-term league ban", days=days_banned)
+            ovr_delta, days = -max(12, min(22, 15 + (55 - mental) * 0.12)), days_banned
+        elif event_type == "MAJOR_PUBLIC_ALTERCATION":
+            games = rng.randint(3, 8)
+            headline = f"Major public altercation puts {name} under league review"
+            summary = f"Video of a serious public altercation involving {name} has triggered immediate team and league discipline."
+            availability = _u_set_player_availability(session, player_id, status="suspended", reason="Major public altercation", games=games)
+            ovr_delta, days = -max(7, min(16, 9 + (55 - mental) * 0.10)), rng.randint(30, 75)
+        elif event_type == "GAMBLING_VIOLATION":
+            games = rng.randint(20, 50)
+            headline = f"League announces major gambling-policy suspension for {name}"
+            summary = f"A league investigation found a serious gambling-policy violation. {name} has been suspended for {games} games."
+            availability = _u_set_player_availability(session, player_id, status="suspended", reason="Gambling-policy violation", games=games)
+            ovr_delta, days = -max(10, min(20, 13 + (55 - mental) * 0.11)), rng.randint(90, 180)
+        else:
+            headline = f"League mourns the death of {name}"
+            summary = f"The organization and league have announced that {name} has died. The player is permanently removed from competition."
+            availability = _u_set_player_availability(session, player_id, status="deceased", reason="Player deceased")
+            try:
+                setattr(player, "retired", True)
+                setattr(player, "career_ended", True)
+                setattr(player, "_universe_deceased", True)
+            except Exception:
+                pass
+            entity.setdefault("life", {})["status"] = "deceased"
+            entity["active_roster"] = False
+            ovr_delta, days = 0.0, 1
+        readiness = None
+        if ovr_delta:
+            readiness = _u_apply_readiness_modifier(session, player_id, source_id=event_id, ovr_delta=ovr_delta, days=days, reason=summary, stat_modifiers={"focus": -2.0, "composure": -1.5, "shot_involvement": -0.06, "assist_involvement": -0.05})
+        _u_apply_profile_delta(entity, "state.morale", -14 if event_type != "PLAYER_DEATH" else 0)
+        _u_apply_profile_delta(entity, "state.confidence", -10 if event_type != "PLAYER_DEATH" else 0)
+        _u_apply_profile_delta(entity, "state.media_stress", 25 if event_type != "PLAYER_DEATH" else 0)
+        event = {"id": event_id, "kind": event_type.lower(), "event_tier": "catastrophic" if event_type == "PLAYER_DEATH" else "major", "mechanical_severity": 100 if event_type == "PLAYER_DEATH" else 90, "team_id": team_id, "player_id": player_id, "player_name": name, "participants": [player_id], "headline": headline, "summary": summary, "tone": "negative", "visibility": "public", "knowledge_type": "fact", "public_knowledge_level": "confirmed", "source_label": "League Desk", "incident_family": "major_player_conduct", "evidence": {"availability": availability, "readiness": readiness, "mental_ovr": mental}}
+        storyline = _u_record_storyline(session, event=event, headline=headline, summary=summary, cause_type=event_type, category="major_news", heat=100 if event_type == "PLAYER_DEATH" else 94, public=True)
+        # Team-wide shock for the most serious player events.
+        tm = (getattr(session, "team_by_id", None) or {}).get(team_id)
+        st = getattr(tm, "state", None) if tm is not None else None
+        if st is not None:
+            try:
+                shock = 0.20 if event_type == "PLAYER_DEATH" else 0.07
+                st.team_morale = _clamp(float(getattr(st, "team_morale", 0.5)) - shock)
+                st.organizational_pressure = _clamp(float(getattr(st, "organizational_pressure", 0.5)) + (0.20 if event_type != "PLAYER_DEATH" else 0.12))
+            except Exception:
+                pass
+    if storyline:
+        event["storyline_id"] = storyline.get("storyline_id")
+    _u_append_event(session, {**event, "calendar_day": day, "calendar_iso": iso})
+    _u_notify_user_event(session, event, presentation_level=4, force_league=True)
+    state["generated"] = generated + 1
+    state["last_event_day"] = day
+    ids = list(state.get("event_ids") or [])
+    ids.append(event_id)
+    state["event_ids"] = ids[-10:]
+    session.universe_major_event_state = state
+    return 1
+
+
+def _u_tick_player_life(session: Any, team_id: str, entity: Dict[str, Any], rng: random.Random) -> None:
+    """State simulation only. Actual discrete life events are generated separately by V3."""
+    day, iso, season = _u_current_meta(session)
+    if int(entity.get("last_tick_day", -1) or -1) == day:
+        return
+    state = entity.get("state") or {}
+    life = entity.get("life") or {}
+    personality = entity.get("personality") or {}
+    state["character_modifier"] = round(float(state.get("character_modifier", 0) or 0) * 0.992, 3)
+    previous_role = float(state.get("role_satisfaction", 58))
+    role_target = _u_infer_role_satisfaction(session, team_id, entity)
+    state["role_satisfaction"] = _u_clip(previous_role + (role_target - previous_role) * 0.18)
+    home_stability = float(life.get("home_stability", 65))
+    relocation = float(life.get("relocation_strain", 15))
+    sleep = float(life.get("sleep_quality", 68))
+    personal_target = _u_clip(30 + relocation * 0.30 + max(0, 60 - home_stability) * 0.36 + max(0, 62 - sleep) * 0.28)
+    state["personal_stress"] = _u_clip(float(state.get("personal_stress", 30)) * 0.86 + personal_target * 0.14 + rng.uniform(-1.8, 1.8))
+    state["energy"] = _u_clip(float(state.get("energy", 70)) + (sleep - 65) * 0.035 - float(state.get("personal_stress", 30)) * 0.012 + rng.uniform(-1.2, 1.2))
+    state["focus"] = _u_clip(48 + float(state.get("confidence", 55)) * 0.24 + float(state.get("energy", 70)) * 0.20 - float(state.get("personal_stress", 30)) * 0.14)
+    life["relocation_strain"] = _u_clip(relocation - 0.18)
+    life["community_connection"] = _u_clip(float(life.get("community_connection", 35)) + rng.uniform(0, 0.25))
+    life["current_note"] = "Travel and home responsibilities are competing with hockey focus." if float(state.get("personal_stress", 0)) >= 68 else "Home life is stable."
+    concerns = entity.get("concerns") or {}
+    role_concern = concerns.get("role") or {}
+    role_concern["trend"] = round(float(state.get("role_satisfaction", 58)) - previous_role, 2)
+    role_concern["satisfaction"] = float(state.get("role_satisfaction", 58))
+    concerns["role"] = role_concern
+    home_concern = concerns.get("home_life") or {}
+    home_before = float(home_concern.get("satisfaction", 65))
+    home_after = _u_clip(home_stability - relocation * 0.35)
+    home_concern.update({"satisfaction": home_after, "trend": round(home_after - home_before, 2)})
+    concerns["home_life"] = home_concern
+    years = _u_contract_years(_player_from_roster(session, str(entity.get("player_id") or "")) or object(), season)
+    contract_concern = concerns.get("contract") or {}
+    old_contract = float(contract_concern.get("satisfaction", 55))
+    contract_after = _u_clip(38 + years * 18 - max(0, float(personality.get("ambition", 50)) - 70) * 0.18)
+    contract_concern.update({"satisfaction": contract_after, "trend": round(contract_after - old_contract, 2)})
+    concerns["contract"] = contract_concern
+    w, l, o, _ = _team_record(session, team_id)
+    gp = w + l + o
+    points_pct = (w * 2 + o) / max(2, gp * 2)
+    winning = concerns.get("winning") or {}
+    old_win = float(winning.get("satisfaction", 55))
+    win_after = _u_clip(25 + points_pct * 70)
+    winning.update({"satisfaction": win_after, "trend": round(win_after - old_win, 2)})
+    concerns["winning"] = winning
+    belonging = concerns.get("team_belonging") or {}
+    old_belong = float(belonging.get("satisfaction", 60))
+    belong_after = float(state.get("belonging", 60))
+    belonging.update({"satisfaction": belong_after, "trend": round(belong_after - old_belong, 2)})
+    concerns["team_belonging"] = belonging
+    entity["top_concerns"] = sorted([{"id": key, **value, "pressure": round(float(value.get("importance", 50)) * (100 - float(value.get("satisfaction", 50))) / 100, 1)} for key, value in concerns.items()], key=lambda row: (-float(row.get("pressure", 0)), row["id"]))[:3]
+    entity["last_tick_day"] = day
+    entity["last_updated_iso"] = iso
+
+
+def narrative_universe_v2_daily_pass(session: Any, calendar_idx: int, day_meta: Dict[str, Any], rng: Optional[random.Random] = None) -> Dict[str, Any]:
+    """V3 daily director: lives, meetings, trade-demand deadlines, minor events and 3-5 league-wide major events."""
+    _u_migrate_v2(session)
+    if int(getattr(session, "_universe_last_daily_tick", -1) or -1) == int(calendar_idx):
+        return {"already_processed": True, "calendar_day": int(calendar_idx), "generated_interactions": 0}
+    entities = _u_sync_player_entities(session)
+    season = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    local_rng = rng or random.Random(_u_seed("universe_daily_v3", season, calendar_idx, getattr(session, "user_team_id", "")))
+    readiness_expired = _u_tick_readiness_modifiers(session)
+    availability_cleared = _u_tick_player_availability_days(session)
+    for team_id, player in _u_all_players(session):
+        entity = entities.get(str(getattr(player, "id", "") or ""))
+        if entity:
+            _u_tick_player_life(session, team_id, entity, local_rng)
+    for team_id in (getattr(session, "team_by_id", None) or {}).keys():
+        _u_rebuild_locker_room(session, str(team_id))
+    minor_life = _u_generate_minor_life_events(session, local_rng)
+    expired = _u_expire_interactions(session)
+    interactions = _u_generate_daily_interactions(session, local_rng)
+    trade_demands_created = _u_maybe_create_trade_demand_from_state(session, local_rng)
+    trade_demand_tick = _u_tick_trade_demands(session, local_rng)
+    major_events = _u_run_major_league_event_pass(session, local_rng)
+    social_created = _u_generate_ambient_social(session, local_rng)
+    promise_counts = _u_tick_promises(session)
+    coverage_stats: Dict[str, Any] = {}
+    try:
+        from app.sim_engine.franchise.storyline_coverage import run_coverage_daily_pass  # noqa: WPS433
+        coverage_stats = run_coverage_daily_pass(session, local_rng)
+    except Exception:
+        coverage_stats = {}
+    user_team_id = str(getattr(session, "user_team_id", "") or "")
+    user_room = (getattr(session, "universe_locker_rooms", None) or {}).get(user_team_id) or {}
+    snapshots = list(getattr(session, "universe_daily_snapshots", None) or [])
+    snapshots.append({"calendar_day": int(calendar_idx), "calendar_iso": str(day_meta.get("iso") or ""), "team_id": user_team_id, "culture": dict(user_room.get("culture") or {}), "pending_interactions": len(getattr(session, "universe_interaction_queue", None) or []), "minor_life_events": minor_life, "major_events": major_events})
+    session.universe_daily_snapshots = snapshots[-120:]
+    session._universe_last_daily_tick = int(calendar_idx)
+    return {
+        "already_processed": False,
+        "calendar_day": int(calendar_idx),
+        "player_entities": len(entities),
+        "locker_rooms": len(getattr(session, "universe_locker_rooms", None) or {}),
+        "generated_interactions": interactions,
+        "minor_life_events": minor_life,
+        "major_league_events": major_events,
+        "trade_demands_created": trade_demands_created,
+        "trade_demands_active": trade_demand_tick["active"],
+        "trade_demands_leaked": trade_demand_tick["leaked"],
+        "expired_interactions": expired,
+        "readiness_modifiers_expired": readiness_expired,
+        "availability_cleared": availability_cleared,
+        "ambient_social_created": social_created,
+        "promises_kept": promise_counts["kept"],
+        "promises_broken": promise_counts["broken"],
+        "pending_interactions": len(getattr(session, "universe_interaction_queue", None) or []),
+        "coverage": coverage_stats,
+    }
+
+
+def build_universe_game_context(session: Any, team_id: str, opponent_id: str = "", game_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """V3 sim bridge with effective OVR and stat-specific fingerprints for realData generation."""
+    migrate_session_storyline_state(session)
+    _u_sync_player_entities(session)
+    room = _u_rebuild_locker_room(session, str(team_id))
+    culture = room.get("culture") or {}
+    entities = getattr(session, "universe_players", None) or {}
+    player_modifiers: Dict[str, Dict[str, Any]] = {}
+    hidden_contributors: List[Dict[str, Any]] = []
+    risks: List[Dict[str, Any]] = []
+    glue_count = 0
+    disruptor_tax = 0.0
+    readiness_team_tax = 0.0
+    for player in _u_team_players(session, str(team_id)):
+        player_id = str(getattr(player, "id", "") or "")
+        entity = entities.get(player_id) or {}
+        state = entity.get("state") or {}
+        personality = entity.get("personality") or {}
+        niches = _u_niche_ids(entity)
+        morale = float(state.get("morale", 55))
+        confidence = float(state.get("confidence", 55))
+        focus = float(state.get("focus", 60))
+        energy = float(state.get("energy", 70))
+        character = float(personality.get("character", 55))
+        role_satisfaction = float(state.get("role_satisfaction", 55))
+        mental = _u_mental_ovr(entity, player)
+        effort = (morale - 50) * 0.012 + (focus - 50) * 0.010 + (energy - 65) * 0.008
+        composure = (confidence - 50) * 0.012 + (float(personality.get("resilience", 50)) - 50) * 0.009 + (mental - 55) * 0.004
+        discipline = (character - 50) * 0.007 - max(0, float(personality.get("volatility", 50)) - 60) * 0.012
+        passing = 0.0
+        defensive_effort = 0.0
+        penalty_risk = 0.0
+        if character < 45 and role_satisfaction < 46:
+            defensive_effort -= (45 - character) * 0.020 + (46 - role_satisfaction) * 0.014
+            passing -= max(0, float(personality.get("ego", 50)) - 60) * 0.014
+            penalty_risk += max(0, float(personality.get("volatility", 50)) - 58) * 0.018
+            disruptor_tax += float(entity.get("disruption_risk", 0)) * 0.00012
+            risks.append({"player_id": player_id, "player_name": entity.get("player_name"), "risk": "Frustration may become selfish decisions", "severity": round(float(entity.get("disruption_risk", 0)), 1)})
+        for ability in entity.get("niche_abilities") or []:
+            tier_mult = 0.72 + int(ability.get("tier", 1) or 1) * 0.28
+            game = ability.get("game_effects") or {}
+            effort += float(game.get("effort", 0)) * tier_mult
+            effort = max(effort, float(game.get("effort_floor", -99)) * tier_mult)
+            composure += float(game.get("composure", 0)) * tier_mult
+            discipline += float(game.get("discipline", 0)) * tier_mult
+            passing += float(game.get("passing", 0)) * tier_mult
+            defensive_effort += float(game.get("defensive_effort", 0)) * tier_mult
+            penalty_risk += float(game.get("penalty_risk", 0)) * tier_mult
+        if any(n in niches for n in ("glue_guy", "mentor", "peacemaker", "culture_carrier", "quiet_professional")):
+            glue_count += 1
+        temporary = _u_active_modifiers(session, player_id)
+        readiness = _u_active_readiness(session, player_id)
+        readiness_ovr = float(readiness.get("ovr_delta", 0) or 0)
+        readiness_stats = dict(readiness.get("stat_modifiers") or {})
+        readiness_team_tax += max(0.0, -readiness_ovr) * 0.00018
+        overall_equivalent = effort * 0.36 + composure * 0.22 + discipline * 0.14 + passing * 0.14 + defensive_effort * 0.14 + readiness_ovr
+        specific = {
+            "shooting": readiness_stats.pop("shooting", 0.0),
+            "shot_accuracy": readiness_stats.pop("shot_accuracy", 0.0),
+            "puck_control": readiness_stats.pop("puck_control", 0.0),
+            "offensive_awareness": readiness_stats.pop("offensive_awareness", 0.0),
+            "defensive_awareness": readiness_stats.pop("defensive_awareness", 0.0),
+            "speed": readiness_stats.pop("speed", 0.0),
+            "agility": readiness_stats.pop("agility", 0.0),
+            "stamina": readiness_stats.pop("stamina", 0.0),
+            "faceoffs": readiness_stats.pop("faceoffs", 0.0),
+            "goalie_positioning": readiness_stats.pop("goalie_positioning", readiness_stats.pop("positioning", 0.0)),
+            "rebound_control": readiness_stats.pop("rebound_control", 0.0),
+            "shot_involvement": readiness_stats.pop("shot_involvement", readiness_ovr * 0.006),
+            "assist_involvement": readiness_stats.pop("assist_involvement", readiness_ovr * 0.005),
+            "turnover_risk": readiness_stats.pop("turnover_risk", max(0.0, -readiness_ovr) * 0.004),
+            "toi_readiness": readiness_stats.pop("toi_readiness", readiness_ovr * 0.004),
+        }
+        player_modifiers[player_id] = {
+            "available": universe_player_is_available(session, player_id),
+            "mental_ovr": round(mental, 2),
+            "readiness_ovr_delta": round(readiness_ovr, 2),
+            "effort": round(effort, 3),
+            "composure": round(composure, 3),
+            "discipline": round(discipline, 3),
+            "passing": round(passing, 3),
+            "defensive_effort": round(defensive_effort, 3),
+            "penalty_risk": round(max(0.0, penalty_risk + max(0.0, -readiness_ovr) * 0.004), 3),
+            "overall_equivalent": round(max(-25.0, min(6.0, overall_equivalent)), 3),
+            **specific,
+            **readiness_stats,
+            **temporary,
+        }
+        if float(entity.get("overall", 99)) < 80 and float(entity.get("room_value", 0)) >= 70:
+            hidden_contributors.append({"player_id": player_id, "player_name": entity.get("player_name"), "overall": entity.get("overall"), "room_value": entity.get("room_value"), "impact": "Raises the emotional and effort floor of teammates"})
+    unity = float(culture.get("unity", 50))
+    tension = float(culture.get("tension", 35))
+    confidence = float(culture.get("confidence", 50))
+    leadership = float(culture.get("leadership", 50))
+    accountability = float(culture.get("accountability", 50))
+    win_delta = ((unity - 50) * 0.00042 + (confidence - 50) * 0.00032 + (leadership - 50) * 0.00024 + (accountability - 50) * 0.00018 - max(0, tension - 35) * 0.00045 + min(0.010, glue_count * 0.0012) - disruptor_tax - min(0.035, readiness_team_tax))
+    win_delta = max(-0.10, min(0.085, win_delta))
+    context_id = str((game_meta or {}).get("game_id") or f"gamectx_{team_id}_{_u_current_meta(session)[0]}")
+    context = {
+        "id": context_id,
+        "team_id": str(team_id),
+        "opponent_id": str(opponent_id or ""),
+        "calendar_day": _u_current_meta(session)[0],
+        "win_probability_delta": round(win_delta, 4),
+        "team_modifiers": {"chemistry": round((unity - 50) / 25, 3), "composure": round((confidence + leadership - 100) / 50, 3), "discipline": round((accountability - tension) / 50, 3), "effort_floor": round((accountability + unity - 100) / 55, 3)},
+        "player_modifiers": player_modifiers,
+        "hidden_contributors": hidden_contributors,
+        "character_risks": risks,
+        "locker_room_snapshot": dict(culture),
+        "explanation": f"Locker-room, mental and readiness state changes win probability by {win_delta * 100:+.1f} percentage points.",
+    }
+    contexts = dict(getattr(session, "universe_game_contexts", None) or {})
+    contexts[context_id] = context
+    session.universe_game_contexts = dict(list(contexts.items())[-60:])
+    return context
+
+
+# Extend the existing V2 payload instead of replacing its UI contract.
+_UNIVERSE_V2_PAYLOAD_BEFORE_V3 = build_narrative_universe_v2_payload
+
+def build_narrative_universe_v2_payload(session: Any) -> Dict[str, Any]:
+    base = dict(_UNIVERSE_V2_PAYLOAD_BEFORE_V3(session) or {})
+    state = dict(getattr(session, "universe_major_event_state", None) or {})
+    base.update(
+        {
+            "universe_engine_version": UNIVERSE_ENGINE_VERSION,
+            "trade_demands": list(getattr(session, "universe_trade_demands", None) or [])[-30:],
+            "team_sanctions": list(getattr(session, "universe_team_sanctions", None) or [])[-30:],
+            "cap_penalties": dict(getattr(session, "universe_cap_penalties", None) or {}),
+            "forfeited_picks": list(getattr(session, "universe_forfeited_picks", None) or [])[-30:],
+            "player_availability": dict(getattr(session, "universe_player_availability", None) or {}),
+            "major_event_budget": state,
+        }
+    )
+    return base

@@ -448,6 +448,23 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
     if 0 <= int(d) < len(cal):
         cal_iso = str(cal[int(d)].get("iso") or "")
 
+    hid_str = str(hid)
+    aid_str = str(aid)
+    try:
+        from app.sim_engine.franchise.storyline_stat_bridge import (  # noqa: WPS433
+            prime_franchise_game_stat_modifiers,
+        )
+
+        prime_franchise_game_stat_modifiers(
+            session,
+            sim,
+            hid_str,
+            aid_str,
+            game_meta={"calendar_day": d, "calendar_iso": cal_iso},
+        )
+    except Exception:
+        pass
+
     h_goal = _goalie_availability_status(home)
     a_goal = _goalie_availability_status(away)
     if int(h_goal["total"]) <= 0 or int(a_goal["total"]) <= 0:
@@ -723,6 +740,15 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         if ot:
             gs += " OT"
         user_line = f"{wl} vs {_display_team(opp)} ({gs}) ΓÇö calendar day {d}"
+
+    try:
+        from app.sim_engine.franchise.storyline_stat_bridge import (  # noqa: WPS433
+            clear_franchise_game_stat_modifiers,
+        )
+
+        clear_franchise_game_stat_modifiers(sim)
+    except Exception:
+        pass
 
     return user_line, league_line
 def _simulate_slots_for_day(

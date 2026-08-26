@@ -10393,7 +10393,11 @@ class SimEngine:
         if explicit:
             return str(explicit).lower()
         try:
-            ovr = float(career_ovr_0_100(p))
+            ovr = float(self._gm_ovr_0_100(p))
+        except Exception:
+            ovr = 70.0
+        try:
+            ovr = float(self._gm_ovr_0_100(p))
         except Exception:
             ovr = 70.0
         raw_pot = getattr(p, "potential", None)
@@ -10475,7 +10479,9 @@ class SimEngine:
             tier_mult = 1.0 + (tier_mult - 1.0) * 0.42
         elif usage < 1.45:
             tier_mult = 1.0 + (tier_mult - 1.0) * 0.72
-        return float(max(0.85, min(1.58, tier_mult)))
+        return float(max(0.85, min(1.58, tier_mult * self._gm_franchise_alloc_mult(
+            p, "overall_equivalent", "effort", "shot_involvement", "assist_involvement"
+        ))))
 
     def _gm_repeat_goal_damp_for(self, p: Any) -> float:
         """Per-game repeat damping; generational/GOAT historic nights can still explode."""
@@ -10703,6 +10709,48 @@ class SimEngine:
         healthy = [p for p in all_goalies if not self._injury_sidelined(p)]
         # Hard runtime truth: prefer available goalies; only fall back if none are healthy.
         return healthy or all_goalies
+
+    def set_franchise_game_stat_modifiers(
+        self,
+        *,
+        home_player_modifiers: Optional[Dict[str, Dict[str, Any]]] = None,
+        away_player_modifiers: Optional[Dict[str, Dict[str, Any]]] = None,
+        home_win_probability_delta: float = 0.0,
+    ) -> None:
+        """Attach storyline / universe per-player stat fingerprints for one game."""
+        self._franchise_home_player_mods = {
+            str(pid): {str(k): float(v) for k, v in (row or {}).items()}
+            for pid, row in (home_player_modifiers or {}).items()
+            if pid
+        }
+        self._franchise_away_player_mods = {
+            str(pid): {str(k): float(v) for k, v in (row or {}).items()}
+            for pid, row in (away_player_modifiers or {}).items()
+            if pid
+        }
+        self._franchise_home_win_prob_delta = float(home_win_probability_delta or 0.0)
+
+    def clear_franchise_game_stat_modifiers(self) -> None:
+        self._franchise_home_player_mods = {}
+        self._franchise_away_player_mods = {}
+        self._franchise_home_win_prob_delta = 0.0
+
+    def _gm_franchise_player_modifiers(self, p: Any) -> Dict[str, float]:
+        pid = _id_str(p, "id")
+        if not pid:
+            return {}
+        home_mods = getattr(self, "_franchise_home_player_mods", None) or {}
+        away_mods = getattr(self, "_franchise_away_player_mods", None) or {}
+        row = home_mods.get(pid) or away_mods.get(pid) or {}
+        return {str(k): float(v) for k, v in row.items()}
+
+    def _gm_franchise_mod_sum(self, p: Any, *keys: str) -> float:
+        mods = self._gm_franchise_player_modifiers(p)
+        return sum(float(mods.get(k, 0) or 0) for k in keys)
+
+    def _gm_franchise_alloc_mult(self, p: Any, *keys: str, lo: float = 0.55, hi: float = 1.48) -> float:
+        delta = self._gm_franchise_mod_sum(p, *keys)
+        return float(max(lo, min(hi, 1.0 + delta)))
 
     def _gm_ovr_0_100(self, p: Any) -> float:
         """Canonical 0-100 overall for usage / scoring allocation (matches UI OVR)."""
@@ -11034,7 +11082,9 @@ class SimEngine:
             talent *= 0.62
         elif ovr_n < 0.78:
             talent *= 0.82
-        return max(0.03, talent * usage * type_mult * pos_mult)
+        return max(0.03, talent * usage * type_mult * pos_mult * self._gm_franchise_alloc_mult(
+            p, "shot_involvement", "effort", "shooting", "overall_equivalent"
+        ))
 
     def _gm_shot_quality_weight(self, p: Any) -> float:
         cache = getattr(p, "_gm_runtime_cache", None)
@@ -11048,6 +11098,7 @@ class SimEngine:
         pt = self._gm_player_type_str(p)
         net_front = 1.22 if "power" in pt or "net" in pt else 1.0
         val = max(0.04, (0.34 * aware + 0.26 * puck + 0.18 * deking + 0.14 * speed + 0.08 * strength) / 99.0 * net_front)
+        val *= self._gm_franchise_alloc_mult(p, "shooting", "shot_accuracy", "offensive_awareness")
         if isinstance(cache, dict):
             cache["shot_quality"] = val
         return val
@@ -11104,6 +11155,9 @@ class SimEngine:
         pt = self._gm_player_type_str(p)
         nudge = 1.02 if "playmaker" in pt else (1.01 if "sniper" in pt or "finisher" in pt else 1.0)
         val = max(0.04, (base + star_curve * 0.42) * usage * nudge * depth_penalty)
+        val *= self._gm_franchise_alloc_mult(
+            p, "overall_equivalent", "effort", "composure", "offensive_awareness", "readiness_ovr_delta"
+        )
         if isinstance(cache, dict):
             cache["offensive_skill"] = val
         return val
@@ -11171,7 +11225,9 @@ class SimEngine:
             combined *= 0.62
         elif ovr_n < 0.78:
             combined *= 0.82
-        return max(0.05, combined ** 1.12)
+        return max(0.05, combined ** 1.12 * self._gm_franchise_alloc_mult(
+            p, "assist_involvement", "passing", "offensive_awareness", "puck_control"
+        ))
 
     def _gm_secondary_assist_weight(self, p: Any) -> float:
         balance = self._gm_production_balance_score(p)
@@ -11179,7 +11235,9 @@ class SimEngine:
         process = self._gm_possession_weight(p)
         ovr_n = self._gm_ovr_norm(p)
         combined = 0.34 * (ovr_n ** 1.25) + 0.22 * base + 0.24 * process + 0.20 * balance
-        return max(0.06, combined ** 1.08)
+        return max(0.06, combined ** 1.08 * self._gm_franchise_alloc_mult(
+            p, "assist_involvement", "passing", "puck_control"
+        ))
 
     def _gm_event_involvement_weight(self, p: Any) -> float:
         return self._gm_offensive_skill_composite(p)
@@ -11288,7 +11346,9 @@ class SimEngine:
         # Extreme defensive awareness / stick work shows as a real sim strength/flaw.
         aware = self._gm_rating_lookup(p, "def_defensive_awareness", default=df)
         extremes = 1.0 + max(-0.12, min(0.14, (aware - float(DEFAULT_NHL_RATING)) / 180.0))
-        return max(0.04, (0.42 * df + 0.28 * stick + 0.18 * block + 0.12 * speed) / 99.0 * mult * extremes)
+        return max(0.04, (0.42 * df + 0.28 * stick + 0.18 * block + 0.12 * speed) / 99.0 * mult * extremes * self._gm_franchise_alloc_mult(
+            p, "defensive_effort", "defensive_awareness", "discipline"
+        ))
 
     def _gm_block_weight(self, p: Any) -> float:
         cache = getattr(p, "_gm_runtime_cache", None)
@@ -11298,6 +11358,7 @@ class SimEngine:
         df = self._gm_rating_avg(p, DEFENSE_KEYS)
         pos = self._gm_pos_str(p).upper()
         val = max(0.04, (0.55 * block + 0.45 * df) / 99.0 * (1.12 if pos == "D" else 0.82))
+        val *= self._gm_franchise_alloc_mult(p, "defensive_effort", "defensive_awareness")
         if isinstance(cache, dict):
             cache["block_weight"] = val
         return val
@@ -11314,7 +11375,9 @@ class SimEngine:
         phys = self._gm_rating_avg(p, PHYS_KEYS)
         agg = self._gm_rating_lookup(p, "aggression", "phy_aggression", default=50.0)
         discipline = self._gm_rating_lookup(p, "discipline", "iqm_discipline", default=72.0)
-        return max(0.02, (0.35 * agg + 0.35 * phys - 0.30 * discipline + 18.0) / 99.0)
+        return max(0.02, (0.35 * agg + 0.35 * phys - 0.30 * discipline + 18.0) / 99.0 * self._gm_franchise_alloc_mult(
+            p, "penalty_risk", lo=0.35, hi=1.65
+        ))
 
     def _gm_goalie_save_adjustment(self, g: Any, chance_type: str) -> float:
         g_skill = self._gm_rating_avg(g, GOALIE_KEYS) / 99.0
@@ -11333,6 +11396,9 @@ class SimEngine:
             base *= 0.93 + 0.09 * reflex
         else:
             base *= 0.95 + 0.07 * positioning
+        base *= self._gm_franchise_alloc_mult(
+            g, "goalie_positioning", "positioning", "rebound_control", "overall_equivalent"
+        )
         return max(0.70, min(1.26, base))
 
     def _gm_offense_weight(self, p: Any) -> float:
@@ -11986,14 +12052,18 @@ class SimEngine:
             pair_weights = (1.38, 1.05, 0.62)
             base = pair_weights[pair_idx]
             rank = min(1, max(0, int(getattr(p, "_gm_game_pair_rank", 0) or 0)))
-            return float(max(0.35, base * (1.04 if rank == 0 else 0.96) * self._gm_readiness_usage_mult(p)))
+            return float(max(0.35, base * (1.04 if rank == 0 else 0.96) * self._gm_readiness_usage_mult(p) * self._gm_franchise_alloc_mult(
+                p, "toi_readiness", "effort", "stamina"
+            )))
 
         line_idx = min(3, max(0, int(getattr(p, "_gm_game_line_idx", 2) or 2)))
         line_weights = (1.52, 1.18, 0.86, 0.48)
         base = line_weights[line_idx]
         rank = min(2, max(0, int(getattr(p, "_gm_game_line_rank", 1) or 1)))
         rank_mult = (1.06, 1.00, 0.94)[rank]
-        return float(max(0.25, base * rank_mult * self._gm_readiness_usage_mult(p)))
+        return float(max(0.25, base * rank_mult * self._gm_readiness_usage_mult(p) * self._gm_franchise_alloc_mult(
+            p, "toi_readiness", "effort", "stamina"
+        )))
 
     def _gm_team_attempt_environment(
         self,
@@ -12133,9 +12203,18 @@ class SimEngine:
 
     def _gm_goalie_ovr_0_100(self, g: Any) -> float:
         try:
-            ovr = float(career_ovr_0_100(g))
+            from app.sim_engine.franchise.storyline_conduct import (  # noqa: WPS433
+                get_effective_ovr_display,
+            )
+
+            ovr = float(get_effective_ovr_display(g))
         except Exception:
-            ovr = 78.0
+            ovr = None
+        if ovr is None or ovr <= 0:
+            try:
+                ovr = float(career_ovr_0_100(g))
+            except Exception:
+                ovr = 78.0
         if ovr <= 1.5:
             ovr *= 99.0
         return float(ovr)
@@ -14592,6 +14671,10 @@ class SimEngine:
         aid = str(getattr(away, "team_id", getattr(away, "id", "A")))
         s_home = max(0.15, min(0.92, float(strength_map.get(hid, 0.5)) * float(home_strength_scale)))
         s_away = max(0.15, min(0.92, float(strength_map.get(aid, 0.5)) * float(away_strength_scale)))
+        win_delta = float(getattr(self, "_franchise_home_win_prob_delta", 0) or 0)
+        if win_delta:
+            s_home = max(0.15, min(0.92, s_home + win_delta * 0.85))
+            s_away = max(0.15, min(0.92, s_away - win_delta * 0.85))
 
         base = 2.85
         diff = s_home - s_away

@@ -132,6 +132,7 @@ class TradeDemandTests(unittest.TestCase):
             calendar_idx=40,
             iso_date="2025-12-01",
             rng=random.Random(7),
+            force_formal=True,
         )
         self.assertEqual(row["status"], "open")
         self.assertLess(row["value_after"], row["value_before"])
@@ -168,6 +169,7 @@ class TradeDemandTests(unittest.TestCase):
             reason="locker_room_disruptor",
             calendar_idx=50,
             rng=random.Random(3),
+            force_formal=True,
         )
         self.assertTrue(row["disruptor"])
         self.assertEqual(row["dossier_label"], "Locker-room disruptor")
