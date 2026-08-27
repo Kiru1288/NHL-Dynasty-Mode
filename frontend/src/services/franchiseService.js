@@ -156,18 +156,23 @@ export async function getLeagueOperations() {
   return data;
 }
 
-export async function getFranchiseState() {
+export async function getFranchiseState({ crisisTick = false } = {}) {
   const sid = getFranchiseSessionId();
   if (!sid) {
     resetFranchiseStateCache();
     throw new Error("No franchise session");
   }
-  if (inflightFranchiseStatePromise && inflightFranchiseStateSessionId === sid) {
+  if (
+    !crisisTick &&
+    inflightFranchiseStatePromise &&
+    inflightFranchiseStateSessionId === sid
+  ) {
     return inflightFranchiseStatePromise;
   }
   inflightFranchiseStateSessionId = sid;
+  const params = crisisTick ? { crisis_tick: 1 } : undefined;
   inflightFranchiseStatePromise = api
-    .get("/api/franchise/state")
+    .get("/api/franchise/state", { params })
     .then((res) => res.data)
     .finally(() => {
       if (inflightFranchiseStateSessionId === sid) {
@@ -364,6 +369,39 @@ export async function submitStorylineChoice(storylineId, choiceId) {
   return data;
 }
 
+/** Resolve player-initiated universe meeting. */
+export async function resolvePlayerMeeting(interactionId, choiceId) {
+  const { data } = await api.post("/api/franchise/player-meetings/resolve", {
+    interaction_id: interactionId,
+    choice_id: choiceId,
+  });
+  return data;
+}
+
+/** Start GM-initiated player meeting. */
+export async function startPlayerMeeting(playerId, interactionType) {
+  const { data } = await api.post("/api/franchise/player-meetings/start", {
+    player_id: playerId,
+    interaction_type: interactionType,
+  });
+  return data;
+}
+
+/** Resolve in-progress GM-initiated meeting. */
+export async function advancePlayerMeeting(meetingId, choiceId) {
+  const { data } = await api.post("/api/franchise/player-meetings/resolve", {
+    meeting_id: meetingId,
+    choice_id: choiceId,
+  });
+  return data;
+}
+
+/** Fetch player meeting detail + available interactions. */
+export async function getPlayerMeetingDetail(playerId) {
+  const { data } = await api.get(`/api/franchise/player-meetings/player/${encodeURIComponent(playerId)}`);
+  return data;
+}
+
 /** @param {string[]} ids */
 export async function dismissFranchisePopups(ids) {
   const { data } = await api.post("/api/franchise/popup/dismiss", { ids: ids || [] });
@@ -462,3 +500,34 @@ export async function submitCombineMeeting(body) {
   const { data } = await api.post("/api/franchise/draft-combine/meeting", body);
   return data;
 }
+
+export async function getSocialFeed(sessionId) {
+  const sid = sessionId || getFranchiseSessionId();
+  const { data } = await api.get(`/api/franchise/${encodeURIComponent(sid)}/social-feed`);
+  return data;
+}
+
+export async function getBurnerState(sessionId) {
+  const sid = sessionId || getFranchiseSessionId();
+  const { data } = await api.get(`/api/franchise/${encodeURIComponent(sid)}/burner`);
+  return data;
+}
+
+export async function previewBurnerPost(text, marketKey, sessionId) {
+  const sid = sessionId || getFranchiseSessionId();
+  const { data } = await api.post(`/api/franchise/${encodeURIComponent(sid)}/burner/preview`, {
+    text,
+    market_key: marketKey || undefined,
+  });
+  return data;
+}
+
+export async function postBurnerMessage(text, marketKey, sessionId) {
+  const sid = sessionId || getFranchiseSessionId();
+  const { data } = await api.post(`/api/franchise/${encodeURIComponent(sid)}/burner/post`, {
+    text,
+    market_key: marketKey || undefined,
+  });
+  return data;
+}
+

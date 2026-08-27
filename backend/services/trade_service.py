@@ -386,6 +386,26 @@ def execute_franchise_trade(
     )
 
     try:
+        from app.sim_engine.franchise.storyline_engine import apply_trade_universe_relocation  # noqa: WPS433
+
+        history = exec_result.get("history_record") if isinstance(exec_result, dict) else {}
+        for move in list((history or {}).get("moved_players") or []):
+            if str((move or {}).get("asset_type") or "") != "player":
+                continue
+            pid = str((move or {}).get("asset_id") or "")
+            from_tid = str((move or {}).get("source_team_id") or "")
+            to_tid = str((move or {}).get("acquiring_team_id") or "")
+            if pid and from_tid and to_tid and from_tid != to_tid:
+                apply_trade_universe_relocation(
+                    session,
+                    player_id=pid,
+                    from_team_id=from_tid,
+                    to_team_id=to_tid,
+                )
+    except Exception:
+        pass
+
+    try:
         from services.trade_demand_engine import clear_demands_on_trade
 
         moved: List[str] = []

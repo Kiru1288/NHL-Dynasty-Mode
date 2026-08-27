@@ -145,13 +145,55 @@ def get_agent_gm_relationship(session: Any, agent_id: str) -> Dict[str, Any]:
 
 
 def assign_agent_id(player: Any) -> str:
-    """Deterministic ~20% split across the five agents."""
+    """Deterministic assignment weighted by star tier and character."""
     pid = _player_id(player)
     if not pid:
         return AGENT_IDS[0]
+
     digest = hashlib.sha256(pid.encode("utf-8")).hexdigest()
-    bucket = int(digest[:8], 16) % len(AGENT_IDS)
-    return AGENT_IDS[bucket]
+    roll = int(digest[:8], 16) / float(0xFFFFFFFF)
+
+    ovr = 74.0
+    raw_ovr = getattr(player, "ovr", None)
+    if callable(raw_ovr):
+        try:
+            ovr = float(raw_ovr())
+        except Exception:
+            ovr = 74.0
+    elif raw_ovr is not None:
+        try:
+            ovr = float(raw_ovr)
+        except Exception:
+            ovr = 74.0
+
+    character = 74
+    try:
+        from app.sim_engine.franchise.trade_stability_engine import _player_character_0_100  # noqa: WPS433
+
+        character = int(_player_character_0_100(player))
+    except Exception:
+        character = int(getattr(player, "character", 74) or 74)
+
+    # Elite professionals -> Walsh / Kim / Rossi; volatile low-character -> Carter / Blake
+    if ovr >= 90 and character >= 80:
+        pool = ("walsh", "kim", "rossi")
+        weights = (0.34, 0.36, 0.30)
+    elif ovr >= 86 and character >= 72:
+        pool = ("kim", "rossi", "walsh", "carter")
+        weights = (0.30, 0.28, 0.27, 0.15)
+    elif character < 65:
+        pool = ("blake", "carter", "kim", "rossi", "walsh")
+        weights = (0.30, 0.26, 0.18, 0.14, 0.12)
+    else:
+        pool = AGENT_IDS
+        weights = (0.20, 0.20, 0.20, 0.20, 0.20)
+
+    acc = 0.0
+    for aid, w in zip(pool, weights):
+        acc += w
+        if roll <= acc:
+            return aid
+    return pool[-1]
 
 
 def ensure_player_agent(player: Any, session: Optional[Any] = None) -> Dict[str, Any]:

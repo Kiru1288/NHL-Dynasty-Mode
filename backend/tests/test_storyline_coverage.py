@@ -158,3 +158,118 @@ def test_coverage_payload_has_dossiers_and_graph():
     assert "wants" in dossier and "trusts" in dossier and "remembers" in dossier
     assert payload["insider_items"]
     assert payload["beat_writers"]
+
+
+def test_breakup_mutates_life_state():
+    import random
+    from app.sim_engine.franchise.storyline_engine import _u_mutate_life_from_event  # noqa: E402
+
+    entity = {
+        "player_id": "p1",
+        "life": {"relationship_status": "partnered", "dependents": 0, "partner": {"id": "fam_p1_partner"}},
+        "state": {},
+    }
+    spec = {"id": "breakup", "event_tier": "meaningful"}
+    _u_mutate_life_from_event(entity, spec, random.Random(1), day=40)
+    assert entity["life"]["relationship_status"] == "single"
+    assert "partner" not in entity["life"]
+
+
+def test_new_child_increments_dependents_and_creates_child():
+    import random
+    from app.sim_engine.franchise.storyline_engine import _u_mutate_life_from_event  # noqa: E402
+
+    entity = {
+        "player_id": "p2",
+        "life": {"relationship_status": "married", "dependents": 1, "children": [{"id": "c0", "age_bracket": "toddler"}]},
+        "state": {},
+    }
+    spec = {"id": "new_child", "event_tier": "major"}
+    _u_mutate_life_from_event(entity, spec, random.Random(2), day=50)
+    assert entity["life"]["dependents"] == 2
+    assert len(entity["life"]["children"]) == 2
+    assert entity["life"]["children"][-1]["age_bracket"] == "infant"
+
+
+def test_human_dossier_payload_tier_language():
+    from app.sim_engine.franchise.storyline_engine import build_human_dossier_payload  # noqa: E402
+
+    session = _Session()
+    entity = {
+        "player_id": "p_test_1",
+        "overall": 82,
+        "personality": {
+            "character": 78,
+            "competitiveness": 92,
+            "professionalism": 85,
+            "loyalty": 79,
+            "volatility": 25,
+            "family_orientation": 72,
+            "resilience": 80,
+            "sociability": 60,
+            "money_focus": 40,
+            "ambition": 88,
+        },
+        "state": {"morale": 62, "confidence": 58, "role_satisfaction": 34, "gm_trust": 41},
+        "life": {"relationship_status": "married", "dependents": 2, "city_attachment": 70, "home_stability": 75, "relocation_strain": 18},
+        "human_pressure": {"tier": 2, "tier_label": "Frustrated", "drivers": [{"label": "Role", "value": 12}]},
+        "mental_wellbeing": {"state": "strained", "wellbeing_score": 58},
+    }
+    dossier = build_human_dossier_payload(session, entity, include_private=True)
+    assert dossier["character"]["headline"] in ("Strong", "High", "Very High", "Above Average", "Elite")
+    assert dossier["current_state"]["base_ovr"] == 82.0
+    assert dossier["current_state"]["pressure_label"] == "Frustrated"
+    assert dossier["life"]["summary"].startswith("Married")
+    assert dossier["mental_wellbeing"]["private"] is True
+
+
+def test_human_pressure_competing_forces():
+    from app.sim_engine.franchise.storyline_engine import _u_compute_human_pressure  # noqa: E402
+
+    loyal_winner = {
+        "personality": {"competitiveness": 92, "loyalty": 79, "volatility": 30, "resilience": 80},
+        "state": {"role_satisfaction": 34, "gm_trust": 65, "coach_trust": 60, "belonging": 62, "personal_stress": 25, "media_stress": 20},
+        "life": {"city_attachment": 60, "relocation_strain": 15},
+        "concerns": {"winning": {"satisfaction": 78}},
+        "memories": [],
+    }
+    volatile_loser = {
+        "personality": {"competitiveness": 70, "loyalty": 45, "volatility": 82, "resilience": 48, "ego": 81},
+        "state": {"role_satisfaction": 38, "gm_trust": 41, "coach_trust": 44, "belonging": 40, "personal_stress": 35, "media_stress": 40},
+        "life": {"city_attachment": 32, "relocation_strain": 45},
+        "concerns": {"winning": {"satisfaction": 28}},
+        "memories": [{"kind": "betrayal", "emotional_delta": 8, "calendar_day": 10}],
+    }
+    p_loyal = _u_compute_human_pressure(loyal_winner)
+    p_volatile = _u_compute_human_pressure(volatile_loser)
+    assert p_volatile["score"] > p_loyal["score"]
+    assert p_volatile["tier"] >= p_loyal["tier"]
+
+
+def test_player_meetings_catalog_and_ovr_explanation():
+    from app.sim_engine.franchise.storyline_engine import (  # noqa: E402
+        build_ovr_trend_explanation,
+        get_available_gm_interactions,
+        _gm_relationship_summary,
+    )
+
+    session = _Session()
+    entity = session.universe_players["p_test_1"]
+    entity["state"] = {
+        "morale": 42,
+        "confidence": 38,
+        "gm_trust": 35,
+        "role_satisfaction": 32,
+        "personal_stress": 55,
+    }
+    entity["personality"] = {"loyalty": 55, "ambition": 80, "volatility": 60}
+    rel = _gm_relationship_summary(entity, session, "p_test_1")
+    assert rel["label"] in ("Neutral", "Strained", "Broken")
+    ovr = build_ovr_trend_explanation(session, "p_test_1")
+    assert "factors" in ovr
+    avail = get_available_gm_interactions(session, "p_test_1")
+    assert isinstance(avail, list)
+    assert len(avail) >= 5
+    ids = {row["id"] for row in avail}
+    assert "discuss_ice_time" in ids or "repair_relationship" in ids
+    assert "ask_ntc_waiver" not in ids

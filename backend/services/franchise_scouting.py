@@ -16,6 +16,20 @@ DRAFT_OVR_REVEAL_THRESHOLD = 72.0
 
 DEFAULT_SCOUTING_BUDGET = 2_500_000
 
+# Passive dedicated-file growth (per calendar day) — caps below locked-read threshold
+# unless the GM runs explicit scouting actions.
+PASSIVE_ASSIGNED_DAILY = 0.42
+PASSIVE_WATCHLIST_DAILY = 0.16
+PASSIVE_TARGET_BONUS = 0.20
+PASSIVE_REGION_DAILY = 0.10
+PASSIVE_TOP_RANK_DAILY = 0.06
+PASSIVE_TOP_RANK_CUTOFF = 120
+PASSIVE_MAX_WITHOUT_ACTION = 62.0
+PASSIVE_TARGET_CAP = 78.0
+PASSIVE_ASSIGN_KICKSTART = 3.0
+MAX_ACTIVE_DEPLOYMENTS = 3
+MAX_ASSIGNED_PASSIVE_TARGETS = 18
+
 
 def _draft_franchise_date_context(session: FranchiseSession) -> Dict[str, Any]:
     month: Optional[int] = None
@@ -134,7 +148,131 @@ def _ensure_scouting_state(session: FranchiseSession) -> Dict[str, Any]:
     raw.setdefault("prospects", {})
     raw.setdefault("assignments", [])
     raw.setdefault("watchlist", [])
+    raw.setdefault("active_deployments", [])
     return raw
+
+
+def _register_coverage_deployment(
+    state: Dict[str, Any],
+    session: FranchiseSession,
+    *,
+    kind: str,
+    deploy_id: str,
+) -> None:
+    """Track an active regional/country deployment for passive daily coverage."""
+    slug = _slug(deploy_id)
+    if not slug or slug == "unknown":
+        return
+    deployments: List[Dict[str, Any]] = [
+        d for d in list(state.get("active_deployments") or [])
+        if not (str(d.get("kind") or "") == kind and _slug(str(d.get("id") or "")) == slug)
+    ]
+    deployments.append({
+        "kind": kind,
+        "id": deploy_id,
+        "since_cursor": int(getattr(session, "calendar_cursor", 0) or 0),
+    })
+    state["active_deployments"] = deployments[-MAX_ACTIVE_DEPLOYMENTS:]
+
+
+def apply_passive_scouting_progress(session: FranchiseSession) -> bool:
+    """Apply one calendar day of passive dedicated-file growth for assigned/shortlist/deployed targets."""
+    state = _ensure_scouting_state(session)
+    ctx = _draft_franchise_date_context(session)
+    month = ctx.get("month")
+    if month == 7:
+        return False
+
+    entries = _draft_entries(session)
+    if not entries:
+        return False
+
+    prospects = state.get("prospects") if isinstance(state.get("prospects"), dict) else {}
+    watchlist = {str(x) for x in (state.get("watchlist") or [])}
+    deployments = list(state.get("active_deployments") or [])
+    deployed_regions = {
+        _slug(str(d.get("id") or ""))
+        for d in deployments
+        if str(d.get("kind") or "") == "region"
+    }
+    deployed_countries = {
+        _slug(str(d.get("id") or ""))
+        for d in deployments
+        if str(d.get("kind") or "") == "country"
+    }
+
+    assigned_count = sum(
+        1
+        for ov in prospects.values()
+        if isinstance(ov, dict) and str(ov.get("assigned_scout") or "").strip()
+    )
+
+    changed = False
+    for entry in entries:
+        pid = str(entry.get("key") or entry.get("id") or "")
+        if not pid:
+            continue
+        overlay = _prospect_overlay(state, pid)
+        try:
+            current = float(overlay.get("scouted_percentage") or 0.0)
+        except (TypeError, ValueError):
+            current = 0.0
+        if current >= 100.0:
+            continue
+
+        gain = 0.0
+        assigned = str(overlay.get("assigned_scout") or "").strip()
+        on_watchlist = bool(overlay.get("watchlist")) or pid in watchlist
+        is_target = bool(overlay.get("target"))
+
+        if assigned and assigned_count <= MAX_ASSIGNED_PASSIVE_TARGETS:
+            gain += PASSIVE_ASSIGNED_DAILY
+        if on_watchlist:
+            gain += PASSIVE_WATCHLIST_DAILY
+        if is_target:
+            gain += PASSIVE_TARGET_BONUS
+
+        country_slug = _slug(str(entry.get("country") or ""))
+        region_slug = _slug(str(entry.get("region") or ""))
+        if not region_slug:
+            region_slug = _slug(_region_for_country(str(entry.get("country") or "")))
+        if country_slug in deployed_countries or region_slug in deployed_regions:
+            gain += PASSIVE_REGION_DAILY
+
+        rank = int(entry.get("rank") or 999)
+        if current <= 0.0 and rank <= PASSIVE_TOP_RANK_CUTOFF:
+            gain += PASSIVE_TOP_RANK_DAILY
+
+        if gain <= 0.0:
+            continue
+
+        cap = PASSIVE_MAX_WITHOUT_ACTION
+        if is_target or assigned:
+            cap = PASSIVE_TARGET_CAP
+
+        new_pct = min(cap, current + gain)
+        if new_pct <= current + 0.005:
+            continue
+
+        _set_prospect_overlay(state, pid, {"scouted_percentage": round(new_pct, 1)})
+        changed = True
+
+    if changed:
+        invalidate_session_payload_caches(session, "passive_scouting")
+    return changed
+
+
+def _region_for_country(country: str) -> str:
+    cl = str(country or "").strip().lower()
+    if cl in ("canada", "united states", "usa", "us"):
+        return "North America"
+    if cl in ("sweden", "finland", "norway", "denmark"):
+        return "Scandinavia"
+    if cl in ("russia", "belarus", "kazakhstan"):
+        return "Russia / CIS"
+    if cl and cl not in ("unknown", ""):
+        return "Europe"
+    return "International"
 
 
 def _scouting_phase(session: FranchiseSession) -> str:
@@ -456,6 +594,7 @@ def get_scouting_state(session: FranchiseSession) -> Dict[str, Any]:
         "used_budget": float(state.get("used_budget") or 0.0),
         "budget_remaining": float(state.get("budget") or DEFAULT_SCOUTING_BUDGET)
         - float(state.get("used_budget") or 0.0),
+        "active_deployments": list(state.get("active_deployments") or []),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -660,6 +799,14 @@ def _apply_to_targets(
 
         _set_prospect_overlay(state, pid, patch)
 
+    if action == "region_sweep":
+        if target_type == "country" and country_id:
+            _register_coverage_deployment(state, session, kind="country", deploy_id=country_id)
+        elif target_type == "region" and target_id:
+            _register_coverage_deployment(state, session, kind="region", deploy_id=target_id)
+        elif country_id:
+            _register_coverage_deployment(state, session, kind="country", deploy_id=country_id)
+
     return affected, cost
 
 
@@ -742,6 +889,21 @@ def _apply_scouting_meta_patch(
     patch = {k: v for k, v in meta_patch.items() if k in allowed}
     if not patch:
         return {"ok": False, "message": "meta_patch contained no allowed fields."}
+
+    overlay_before = _prospect_overlay(state, pid)
+    if patch.get("assigned_scout") and str(patch.get("assigned_scout") or "").strip():
+        if not str(overlay_before.get("assigned_scout") or "").strip():
+            try:
+                current = float(overlay_before.get("scouted_percentage") or 0.0)
+            except (TypeError, ValueError):
+                current = 0.0
+            patch["scouted_percentage"] = round(
+                min(100.0, max(current, current + PASSIVE_ASSIGN_KICKSTART)),
+                1,
+            )
+        patch["assigned_at_cursor"] = int(getattr(session, "calendar_cursor", 0) or 0)
+    elif "assigned_scout" in patch and not str(patch.get("assigned_scout") or "").strip():
+        patch["assigned_at_cursor"] = None
 
     _set_prospect_overlay(state, pid, patch)
     invalidate_session_payload_caches(session, "scouting_meta")

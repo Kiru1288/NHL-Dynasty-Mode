@@ -178,6 +178,10 @@ class FranchiseSession:
     # Narrative universe: persistent arcs, social feed, player reputation memory
     story_arcs: List[Dict[str, Any]] = field(default_factory=list)
     social_posts: List[Dict[str, Any]] = field(default_factory=list)
+    reddit_threads: List[Dict[str, Any]] = field(default_factory=list)
+    reddit_engagement_pulse: List[Dict[str, Any]] = field(default_factory=list)
+    gm_burner_account: Dict[str, Any] = field(default_factory=dict)
+    gm_burner_investigation: Dict[str, Any] = field(default_factory=dict)
     player_narrative_memory: Dict[str, Any] = field(default_factory=dict)
     knowledge_graph: List[Dict[str, Any]] = field(default_factory=list)
     press_conference_queue: List[Dict[str, Any]] = field(default_factory=list)

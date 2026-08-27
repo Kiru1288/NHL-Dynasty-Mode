@@ -295,6 +295,29 @@ export function enrichProspectsForWarRoom(prospects, profilesById = {}) {
       label: weeklyDelta > 0 ? `Wk +${weeklyDelta}` : weeklyDelta < 0 ? `Wk ${weeklyDelta}` : "Wk 0",
       available: true,
     };
+    const publicRank = Number(p.publicRank) || 999;
+    const delta = scoutRank - publicRank;
+    const boardDivergence = Math.abs(delta) >= 5
+      ? { scoutRank, publicRank, delta }
+      : null;
+    const pos = String(p.position || "").toUpperCase();
+    const displayedCeiling = Number(p.potentialScore ?? p.potentialRange?.high ?? p.potentialRange?.low);
+    const ceilingVal = Number.isFinite(displayedCeiling) && displayedCeiling > 0
+      ? displayedCeiling
+      : peakFromPlayer(p);
+    const goalieBoardCap = pos === "G" && publicRank >= 33 && (
+      ceilingVal >= 80 || Boolean(p.ceilingHidden)
+    );
+    let consensusFloorApplied = false;
+    if (publicRank >= 1 && publicRank <= 32) {
+      const floor = 86 - (publicRank - 1) * (86 - 70) / 31;
+      const shown = Number.isFinite(displayedCeiling) && displayedCeiling > 0
+        ? displayedCeiling
+        : null;
+      if (shown != null && shown <= floor + 0.55 && shown >= floor - 0.15) {
+        consensusFloorApplied = true;
+      }
+    }
     return {
       ...p,
       scoutRank,
@@ -302,6 +325,9 @@ export function enrichProspectsForWarRoom(prospects, profilesById = {}) {
       draftStock,
       weeklyDelta,
       characterConcerns: Boolean(p.characterFile?.flagged),
+      boardDivergence,
+      goalieBoardCap,
+      consensusFloorApplied,
     };
   });
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import traceback
 from pathlib import Path
 from typing import Any, Optional
@@ -9,7 +10,7 @@ from services._simengine_bootstrap import ensure_simengine_path
 
 ensure_simengine_path()
 
-from fastapi import Body, FastAPI, Header, HTTPException
+from fastapi import Body, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -365,9 +366,12 @@ def post_franchise_start(body: FranchiseStartBody) -> Any:
 
 
 @app.get("/api/franchise/state")
-def get_franchise_state(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+def get_franchise_state(
+    crisis_tick: int = Query(default=0, alias="crisis_tick"),
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
     s = _session_or_404(x_franchise_session)
-    return franchise_sim.build_state_payload_safe(s, include_heavy=False)
+    return franchise_sim.build_state_payload_safe(s, include_heavy=False, crisis_tick=bool(crisis_tick))
 
 
 @app.get("/api/franchise/stats-central")
@@ -1340,9 +1344,115 @@ def post_franchise_scouting_focus(
     return _scouting_post("focus", body, x_franchise_session)
 
 
+class PlayerMeetingResolveBody(BaseModel):
+    interaction_id: Optional[str] = None
+    meeting_id: Optional[str] = None
+    choice_id: str
+
+
+class PlayerMeetingStartBody(BaseModel):
+    player_id: str
+    interaction_type: str
+
+
+@app.post("/api/franchise/player-meetings/resolve")
+def post_player_meeting_resolve(
+    body: PlayerMeetingResolveBody,
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    s = _session_or_404(x_franchise_session)
+    try:
+        if body.meeting_id:
+            result = franchise_sim.advance_player_meeting(s, body.meeting_id, body.choice_id)
+        elif body.interaction_id:
+            result = franchise_sim.resolve_player_meeting(s, body.interaction_id, body.choice_id)
+        else:
+            raise HTTPException(status_code=400, detail="meeting_id or interaction_id required")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    save_session(s)
+    return {**result, "state": franchise_sim.build_state_payload(s, include_heavy=False)}
+
+
+@app.post("/api/franchise/player-meetings/start")
+def post_player_meeting_start(
+    body: PlayerMeetingStartBody,
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    s = _session_or_404(x_franchise_session)
+    try:
+        result = franchise_sim.start_player_meeting(s, body.player_id, body.interaction_type)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    save_session(s)
+    return {**result, "state": franchise_sim.build_state_payload(s, include_heavy=False)}
+
+
+@app.get("/api/franchise/player-meetings/player/{player_id}")
+def get_player_meeting_detail(
+    player_id: str,
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    s = _session_or_404(x_franchise_session)
+    detail = franchise_sim.get_player_meeting_detail_payload(s, player_id)
+    return {"detail": detail, "state": franchise_sim.build_state_payload(s, include_heavy=False)}
+
+
 from services.fan_reactions_api import register_fan_reactions_routes
 
 register_fan_reactions_routes(app, _session_or_404)
+
+
+class BurnerPostBody(BaseModel):
+    text: str
+    market_key: Optional[str] = None
+
+
+class BurnerPreviewBody(BaseModel):
+    text: str
+    market_key: Optional[str] = None
+
+
+@app.get("/api/franchise/{session_id}/social-feed")
+def get_social_feed(session_id: str) -> dict[str, Any]:
+    s = _session_or_404(session_id)
+    from app.sim_engine.franchise.storyline_engine import build_narrative_universe_v2_payload  # noqa: WPS433
+
+    payload = build_narrative_universe_v2_payload(s)
+    posts = list(payload.get("social_posts") or payload.get("twitter_feed") or [])[-60:]
+    threads = list(payload.get("reddit_threads") or [])[-40:]
+    return {"puckr": posts, "icehole": threads}
+
+
+@app.get("/api/franchise/{session_id}/burner")
+def get_burner_state(session_id: str) -> dict[str, Any]:
+    s = _session_or_404(session_id)
+    from app.sim_engine.franchise.burner_engine import burner_state_payload  # noqa: WPS433
+
+    return burner_state_payload(s)
+
+
+@app.post("/api/franchise/{session_id}/burner/preview")
+def preview_burner_post(session_id: str, body: BurnerPreviewBody) -> dict[str, Any]:
+    s = _session_or_404(session_id)
+    from app.sim_engine.franchise.burner_engine import preview_burner_risk  # noqa: WPS433
+    from app.sim_engine.franchise.storyline_engine import _market_key_for_team  # noqa: WPS433
+
+    mk = body.market_key or _market_key_for_team(s, str(getattr(s, "user_team_id", "") or ""))
+    return preview_burner_risk(s, body.text, mk)
+
+
+@app.post("/api/franchise/{session_id}/burner/post")
+def post_burner(session_id: str, body: BurnerPostBody) -> dict[str, Any]:
+    s = _session_or_404(session_id)
+    from app.sim_engine.franchise.burner_engine import submit_burner_post  # noqa: WPS433
+    from app.sim_engine.franchise.storyline_engine import _market_key_for_team  # noqa: WPS433
+
+    mk = body.market_key or _market_key_for_team(s, str(getattr(s, "user_team_id", "") or ""))
+    result = submit_burner_post(s, body.text, mk, random.Random())
+    save_session(s)
+    return {**result, "state": franchise_sim.build_state_payload(s, include_heavy=False)}
+
 
 # DEV ONLY — delete dev_jump_to_draft.py and remove this block when done testing draft UI.
 try:

@@ -361,6 +361,8 @@ export function GameUIProvider({ children }) {
   const [worldJuniorsOpen, setWorldJuniorsOpen] = useState(false);
   const [wjcEventSnapshot, setWjcEventSnapshot] = useState(null);
   const [pendingDraftProspectId, setPendingDraftProspectId] = useState(null);
+  const [pendingMeetingPlayerId, setPendingMeetingPlayerId] = useState(null);
+  const [pendingSocialNav, setPendingSocialNav] = useState(null);
   const [hubWarmup, setHubWarmup] = useState(() => ({
     [HUB_WARMUP_STAGES.ENVIRONMENT]: "waiting",
     [HUB_WARMUP_STAGES.CRESTS]: "waiting",
@@ -398,12 +400,12 @@ export function GameUIProvider({ children }) {
     [expireFranchiseSession]
   );
 
-  const refreshFranchise = useCallback(async () => {
+  const refreshFranchise = useCallback(async ({ crisisTick = false } = {}) => {
     if (!getFranchiseSessionId()) return;
     setError(null);
     const t0 = performance.now();
     try {
-      const s = await getFranchiseState();
+      const s = await getFranchiseState({ crisisTick });
       // Authoritative lean state always wins for identity fields that can change
       // with backend code (roster contracts, lines, morale, etc.).
       setFranchiseState((prev) => {
@@ -428,6 +430,24 @@ export function GameUIProvider({ children }) {
       if (handleFranchiseApiError(e)) return;
     }
   }, [handleFranchiseApiError]);
+
+  useEffect(() => {
+    if (!franchiseState?.trade_demand_crisis) return undefined;
+    const tick = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      refreshFranchise({ crisisTick: true });
+    };
+    tick();
+    const timer = setInterval(tick, 2000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [franchiseState?.trade_demand_crisis?.demand_id, refreshFranchise]);
 
   const mergeFranchiseState = useCallback((nextState) => {
     if (!nextState || typeof nextState !== "object") return;
@@ -1086,6 +1106,10 @@ export function GameUIProvider({ children }) {
       wjcEventSnapshot,
       pendingDraftProspectId,
       setPendingDraftProspectId,
+      pendingMeetingPlayerId,
+      setPendingMeetingPlayerId,
+      pendingSocialNav,
+      setPendingSocialNav,
       openDraftClassFromWjc,
       onResolveDecision,
       onResolveStorylineChoice,
@@ -1143,6 +1167,10 @@ export function GameUIProvider({ children }) {
       wjcEventSnapshot,
       pendingDraftProspectId,
       setPendingDraftProspectId,
+      pendingMeetingPlayerId,
+      setPendingMeetingPlayerId,
+      pendingSocialNav,
+      setPendingSocialNav,
       openDraftClassFromWjc,
       onResolveDecision,
       onResolveStorylineChoice,

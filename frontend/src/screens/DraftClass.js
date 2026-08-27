@@ -163,6 +163,51 @@ const SCOUTING_ENDPOINTS = Object.freeze({
   interview: "/api/franchise/scouting/interview",
 });
 
+const COVERAGE_DEPLOY_TARGETS = Object.freeze([
+  { kind: "region", id: "north-america", label: "North America" },
+  { kind: "region", id: "europe", label: "Europe" },
+  { kind: "region", id: "scandinavia", label: "Scandinavia" },
+  { kind: "country", id: "canada", label: "Canada" },
+  { kind: "country", id: "united-states", label: "United States" },
+  { kind: "country", id: "sweden", label: "Sweden" },
+  { kind: "country", id: "finland", label: "Finland" },
+]);
+
+function slugifyCoverageId(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "unknown";
+}
+
+function prospectMatchesDeployTarget(player, target) {
+  if (!player || !target) return false;
+  if (target.kind === "country") {
+    const country = slugifyCoverageId(player.country || player.nationality || "");
+    return country === slugifyCoverageId(target.id);
+  }
+  const region = slugifyCoverageId(player.region || regionForCountry(player.country));
+  return region === slugifyCoverageId(target.id);
+}
+
+function countDeployTargets(prospects, target) {
+  return (prospects || []).filter((p) => prospectMatchesDeployTarget(p, target)).length;
+}
+
+async function runCoverageDeploy(target, { intensity = "normal" } = {}) {
+  const body = {
+    action: "region_sweep",
+    target_type: target.kind,
+    target_id: target.id,
+    intensity,
+  };
+  if (target.kind === "country") {
+    body.country_id = target.id;
+  }
+  const res = await api.post(SCOUTING_ENDPOINTS.focus, body);
+  return res?.data || {};
+}
 function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
@@ -264,6 +309,12 @@ function humanizeScoutReason(raw) {
     position_need: "Addresses a positional roster gap",
     timeline_mismatch: "Timeline mismatch with current competitive window",
     surplus_position: "Position is already deep on the depth chart",
+    elite_junior_production: "Elite junior production",
+    high_junior_production: "High junior production",
+    role_adjusted_production: "Role-adjusted production",
+    defensive_defenseman_projection: "Defensive D projection",
+    offensive_role_underproduction: "Offensive underproduction",
+    production_concern: "Production concern",
   };
   if (COPY[s]) return COPY[s];
   if (/^[a-z0-9]+(_[a-z0-9]+)+$/i.test(s)) {
@@ -498,10 +549,29 @@ function ProspectMetric({ label, value, align = "left", tone = "", valueStyle = 
   );
 }
 
-function prospectScoutingPct(player) {
-  const n = Number(coalesce(player?.scoutingConfidence, player?.completion, player?.scouting_confidence));
+function prospectPublicPct(player) {
+  const n = Number(coalesce(
+    player?.publicScoutingConfidence,
+    player?.public_scouting_confidence,
+    player?.scoutingConfidence,
+    player?.scouting_confidence,
+  ));
   if (!Number.isFinite(n)) return null;
   return Math.round(Math.min(100, Math.max(0, n)));
+}
+
+function prospectDedicatedPct(player) {
+  const n = Number(coalesce(player?.dedicatedScoutingPct, player?.scouted_percentage, player?.scoutedPercentage));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(Math.min(100, Math.max(0, n)));
+}
+
+function prospectEffectivePct(player) {
+  return prospectDedicatedPct(player) ?? prospectPublicPct(player);
+}
+
+function prospectScoutingPct(player) {
+  return prospectEffectivePct(player);
 }
 
 function prospectIntelTier(pct) {
@@ -554,7 +624,8 @@ function resolvePotentialEstimate(player) {
   const blank = (detail) => ({ text: "—", value: null, exact: false, tier: null, detail });
   if (player?.ceilingHidden) return blank("Ceiling unreported — assign a scout");
 
-  const pct = prospectScoutingPct(player);
+  const pct = prospectEffectivePct(player);
+  const dedicated = prospectDedicatedPct(player);
   if (pct == null || pct < 15) return blank("Ceiling not scouted");
 
   const range = player?.potentialRange;
@@ -566,7 +637,8 @@ function resolvePotentialEstimate(player) {
 
   // A grade only settles once the file is deep enough, or the band has closed to a
   // few points. Everything else stays a range so the colour can't oversell a guess.
-  if (hasScore && (pct >= 91 || (pct >= 76 && hasRange && hi - lo <= 5))) {
+  // Exact ceiling requires a dedicated file — public intel alone stays a range.
+  if (hasScore && dedicated != null && (dedicated >= 91 || (dedicated >= 76 && hasRange && hi - lo <= 5))) {
     const v = Math.round(score);
     return { text: String(v), value: v, exact: true, tier: potentialTier(v), detail: "Projected ceiling" };
   }
@@ -587,23 +659,38 @@ function resolvePotentialEstimate(player) {
 }
 
 function ScoutConfidenceMetric({ player }) {
-  const pct = prospectScoutingPct(player);
-  const tier = prospectIntelTier(pct) || player?.intelLabel || null;
-  const fogClass = prospectConfidenceFogClass(pct);
-  const title = pct != null
-    ? `${tier || "Scouting"} · ${pct}% confidence`
-    : "Scouting confidence unknown";
+  const pub = prospectPublicPct(player);
+  const you = prospectDedicatedPct(player);
+  return <ScoutingFileSplit player={player} compact />;
+}
+
+function ScoutingFileSplit({ player, compact = false }) {
+  const pub = prospectPublicPct(player);
+  const you = prospectDedicatedPct(player);
+  const effective = you ?? pub;
+  const pubFog = prospectConfidenceFogClass(pub);
+  const youFog = you != null ? prospectConfidenceFogClass(you) : "dc-conf-fog--blind";
+  const conf = confMeaning(effective);
+  const title = [
+    pub != null ? `Public file ${pub}% — what the hockey world already knows` : "Public file unknown",
+    you != null && you > 0 ? `Your file ${you}% — dedicated scouting coverage` : "No dedicated file — assign a scout or deploy regional coverage",
+    conf.detail,
+  ].join(" · ");
 
   return (
-    <div
-      className={`dc-prospect-metric dc-prospect-metric--center is-scout dc-scout-confidence ${fogClass}`}
+    <span
+      className={`dc-prospect-row__cell dc-prospect-row__conf dc-scout-file-split${compact ? " dc-scout-file-split--compact" : ""}`}
       title={title}
     >
-      <span className="dc-prospect-metric__value">{pct != null ? `${pct}%` : "—"}</span>
-      <span className="dc-scout-confidence__bar" aria-hidden="true">
-        <span className="dc-scout-confidence__fill" style={{ width: `${pct ?? 0}%` }} />
+      <span className={`dc-scout-file-split__line is-public ${pubFog}`}>
+        <em>PUB</em>
+        <strong>{pub != null ? `${pub}%` : "—"}</strong>
       </span>
-    </div>
+      <span className={`dc-scout-file-split__line is-yours ${youFog}${you == null ? " is-empty" : ""}`}>
+        <em>YOU</em>
+        <strong>{you != null ? `${you}%` : "—"}</strong>
+      </span>
+    </span>
   );
 }
 
@@ -616,7 +703,7 @@ function ProspectBoardColumnHeader({ showConsensus }) {
       <span className="dc-prospect-board__col dc-prospect-board__col--league">League</span>
       <span className="dc-prospect-board__col dc-prospect-board__col--pot">Pot</span>
       <span className="dc-prospect-board__col dc-prospect-board__col--proj">Window</span>
-      <span className="dc-prospect-board__col dc-prospect-board__col--conf">File</span>
+      <span className="dc-prospect-board__col dc-prospect-board__col--conf">Pub / You</span>
       <span className="dc-prospect-board__col dc-prospect-board__col--stock">Stock</span>
       {showConsensus ? (
         <span className="dc-prospect-board__col dc-prospect-board__col--pub">Public</span>
@@ -1138,21 +1225,16 @@ function mapBackendDraftBoard(entries, dateContext) {
     const projected = resolveProjectedStatsRow(fixedRow);
     const recentForm = fixedRow?.recent_form && typeof fixedRow.recent_form === "object" ? fixedRow.recent_form : null;
     const scoutedRaw = coalesce(row?.scouted_percentage, row?.user_scouted_percentage, row?.team_scout_pct);
-    const ambientRaw = coalesce(row?.scouting_confidence, row?.scout_grade, base.completion);
-    // scouted_percentage=0 means "no dedicated file" — do not override ambient board confidence.
+    const ambientRaw = coalesce(row?.public_scouting_confidence, row?.scouting_confidence, row?.scout_grade, base.completion);
     const scoutedNum = scoutedRaw != null && scoutedRaw !== "" ? Number(scoutedRaw) : null;
     const ambientNum = ambientRaw != null && ambientRaw !== "" ? Number(ambientRaw) : null;
-    const completion = Math.min(
-      100,
-      Math.max(
-        0,
-        Math.round(
-          (Number.isFinite(scoutedNum) && scoutedNum > 0)
-            ? scoutedNum
-            : (Number.isFinite(ambientNum) ? ambientNum : (Number(base.completion) || 40))
-        )
-      )
-    );
+    const dedicatedScoutingPct = Number.isFinite(scoutedNum) && scoutedNum > 0
+      ? Math.round(Math.min(100, Math.max(0, scoutedNum)))
+      : null;
+    const publicScoutingConfidence = Number.isFinite(ambientNum)
+      ? Math.round(Math.min(100, Math.max(0, ambientNum)))
+      : null;
+    const completion = dedicatedScoutingPct ?? publicScoutingConfidence ?? (Number(base.completion) || 40);
     const ovrRevealed = completion >= OVR_REVEAL_THRESHOLD || Boolean(row?.ovr_revealed);
     const rawRange = row?.ovr_range;
     const ovrRange = rawRange && rawRange.low != null && rawRange.high != null
@@ -1196,6 +1278,8 @@ function mapBackendDraftBoard(entries, dateContext) {
       talent: String(coalesce(row?.talent_grade, row?.scout_tier, base.talent) || "B"),
       playerType: coalesce(row?.player_type, row?.playerType, base.playerType),
       completion,
+      dedicatedScoutingPct,
+      publicScoutingConfidence,
       stock,
       stockLabel: coalesce(row?.stock_label, row?.stockLabel),
       stockReason: coalesce(row?.stock_reason, row?.stockReason),
@@ -2774,10 +2858,153 @@ function ProspectIdentityBlock({ player }) {
   );
 }
 
+function wrNumClassForRank(rank) {
+  const n = Number(rank);
+  if (n <= 5) return "wr-num-gold";
+  if (n <= 32) return "wr-num-cyan";
+  return "wr-num-slate";
+}
+
+function wrNumClassForTier(tierKey) {
+  if (tierKey === "generational" || tierKey === "elite") return "wr-num-gold";
+  if (tierKey === "high" || tierKey === "strong") return "wr-num-cyan";
+  return "wr-num-slate";
+}
+
+function estimateNumericMid(text) {
+  if (text == null || text === "—") return null;
+  const range = String(text).match(/(\d+)\s*[–-]\s*(\d+)/);
+  if (range) return (Number(range[1]) + Number(range[2])) / 2;
+  const n = Number(String(text).replace(/[^\d.]/g, ""));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function outcomeRibbonSegments(outcomes) {
+  if (!outcomes) return null;
+  const keys = ["peak", "expected", "worst", "nhlOdds", "hitPeakPct", "shootPastPct"];
+  if (keys.some((k) => outcomes[k] == null || !Number.isFinite(Number(outcomes[k])))) return null;
+  const nhl = Math.max(0, Math.min(100, Number(outcomes.nhlOdds)));
+  const non = Math.max(0, 100 - nhl);
+  const bust = Math.round(non * 0.42);
+  const ahl = Math.max(0, non - bust);
+  const star = Math.min(Number(outcomes.shootPastPct), Math.round(nhl * 0.28));
+  const top6 = Math.min(Number(outcomes.hitPeakPct), Math.max(0, nhl - star));
+  const mid6 = Math.max(0, nhl - star - top6);
+  const segs = [
+    { key: "bust", label: "Bust", w: bust },
+    { key: "ahl", label: "AHL", w: ahl },
+    { key: "mid", label: "Mid-6", w: mid6 },
+    { key: "top", label: "Top-6", w: top6 },
+    { key: "star", label: "Star+", w: star },
+  ];
+  const sum = segs.reduce((s, x) => s + x.w, 0);
+  if (sum <= 0) return null;
+  return segs.map((x) => ({ ...x, pct: (x.w / sum) * 100 }));
+}
+
+function zoneGradeWord(n) {
+  if (n == null || !Number.isFinite(n)) return "Unknown";
+  if (n >= 85) return "Elite";
+  if (n >= 75) return "High-end";
+  if (n >= 62) return "Serviceable";
+  return "Limited";
+}
+
+function ProspectRinkZoneMap({ tools, position }) {
+  const pos = String(position || "").toUpperCase();
+  if (pos === "G") return null;
+  const byLabel = Object.fromEntries((tools || []).map((t) => [t.label, t]));
+  const composite = (parts) => {
+    const rows = parts.map((label) => byLabel[label]).filter(Boolean);
+    if (!rows.length) return { locked: true, value: null };
+    if (rows.some((t) => t.locked)) return { locked: true, value: null };
+    const vals = rows.map((t) => t.mid ?? t.raw).filter((n) => Number.isFinite(n));
+    if (!vals.length) return { locked: true, value: null };
+    return { locked: false, value: vals.reduce((a, b) => a + b, 0) / vals.length };
+  };
+  const offensive = composite(["Shot", "Vision"]);
+  const transition = composite(["Skating", "IQ"]);
+  const defensive = composite(["Defense"]);
+  const isD = pos === "D" || pos === "LD" || pos === "RD";
+  const zones = [
+    { key: "def", label: "Defensive", data: defensive, large: isD },
+    { key: "trans", label: "Transition", data: transition, large: false },
+    { key: "off", label: "Offensive", data: offensive, large: !isD },
+  ];
+  const numClass = (v) => wrNumClassForTier(v >= 85 ? "elite" : v >= 75 ? "high" : "depth");
+
+  return (
+    <div className="wr-rink">
+      <span className="dc-profile-tags__label">Zone map</span>
+      <div className="wr-rink__board">
+        <svg className="wr-rink__svg" viewBox="0 0 360 160" aria-hidden="true">
+          <rect x="8" y="8" width="344" height="144" rx="72" fill="rgba(4,14,24,0.9)" stroke="rgba(118,200,245,0.4)" />
+          <line x1="180" y1="8" x2="180" y2="152" stroke="rgba(118,200,245,0.28)" />
+          <circle cx="180" cy="80" r="22" fill="none" stroke="rgba(118,200,245,0.22)" />
+        </svg>
+        <div className="wr-rink__zones">
+          {zones.map((z) => {
+            const opacity = z.data.locked ? 0 : Math.max(0.12, Math.min(0.72, (Number(z.data.value) || 0) / 100));
+            return (
+              <div
+                key={z.key}
+                className={`wr-rink__cell${z.data.locked ? " is-fog" : ""}${z.large ? " is-hero" : ""}`}
+                style={z.data.locked ? undefined : { "--wr-zone-fill": opacity }}
+              >
+                {z.data.locked ? (
+                  <strong className="wr-rink__fog" aria-label={`${z.label} withheld`}>??</strong>
+                ) : (
+                  <strong className={numClass(z.data.value)}>{Math.round(z.data.value)}</strong>
+                )}
+                <em>{z.data.locked ? "Withheld" : zoneGradeWord(z.data.value)}</em>
+                <span>{z.label}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OffIcePipStrip({ player, tools }) {
+  const physicalTool = tools?.find((t) => t.label === "Physical");
+  const mentalTool = tools?.find((t) => t.label === "IQ");
+  const physical = physicalTool?.locked ? null : Number(player?.physical ?? physicalTool?.mid);
+  const mental = mentalTool?.locked ? null : Number(player?.poise ?? player?.hockeyIQ ?? mentalTool?.mid);
+  const character = Number(player?.character ?? player?.compete);
+  const leadership = Number(player?.leadership);
+  const rows = [
+    ["Physical", physical],
+    ["Mental", mental],
+    ["Character", character],
+    ["Leadership", leadership],
+  ];
+  const pips = (v) => {
+    if (!Number.isFinite(v) || v <= 0) return 0;
+    return Math.max(0, Math.min(10, Math.round(v / 10)));
+  };
+  return (
+    <div className="wr-office-strip">
+      {rows.map(([label, value]) => (
+        <div className="wr-office-strip__item" key={label}>
+          <span>{label}</span>
+          <div className="wr-office-pips" aria-label={`${label} ${pips(value)} of 10`}>
+            {Array.from({ length: 10 }, (_, i) => (
+              <i key={i} className={i < pips(value) ? "is-on" : ""} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ProspectBoardRow({ player, index, selected, expanded, onSelect, meta, showConsensus }) {
   const rank = player.boardRank || prospectRank(player, index);
   const countryCode = normalizeCountryCode(player);
-  const scoutPct = prospectScoutingPct(player);
+  const scoutPct = prospectEffectivePct(player);
+  const dedicatedPct = prospectDedicatedPct(player);
   const fogClass = prospectConfidenceFogClass(scoutPct);
   const ceilingHidden = Boolean(player?.ceilingHidden);
   const profile = player?.profile || null;
@@ -2796,14 +3023,24 @@ function ProspectBoardRow({ player, index, selected, expanded, onSelect, meta, s
   const conf = confMeaning(scoutPct);
   const tier = player.pyramidTier;
 
+  const reasonCode = Array.isArray(player.draftRankReasonCodes) ? player.draftRankReasonCodes[0] : null;
+  const reasonLabel = humanizeScoutReason(reasonCode);
+  const divergence = player.boardDivergence;
+  const ceilingFog = player.ceilingHidden
+    ? "hidden"
+    : (pot.exact ? "exact" : ((dedicatedPct == null || dedicatedPct < 76) && String(pot.text || "").includes("–") ? "range-fog" : "plain"));
+  const rankNumClass = wrNumClassForRank(rank);
+  const potNumClass = wrNumClassForTier(pot.tier?.key);
+  const glowCeiling = pot.exact && (pot.tier?.key === "elite" || pot.tier?.key === "generational" || rank <= 5);
+
   return (
     <button
       type="button"
-      className={`dc-prospect-row${selected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${meta.doNotDraft ? " is-dnd" : ""}${player?.isTranscendent ? " prospect-card--transcendent" : ""}${rank > 32 ? " is-late-round" : ""}${topFive ? " is-top5" : ""}${player.overager ? " is-overager" : ""}`}
+      className={`dc-prospect-row${selected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${meta?.doNotDraft ? " is-dnd" : ""}${player?.isTranscendent ? " prospect-card--transcendent" : ""}${rank > 32 ? " is-late-round" : ""}${topFive ? " is-top5" : ""}${player.overager ? " is-overager" : ""}`}
       onClick={onSelect}
       style={tier ? { "--tier-color": tier.color } : undefined}
     >
-      <div className="dc-prospect-row__rank" aria-label={`Rank ${rank}`}>
+      <div className={`dc-prospect-row__rank ${rankNumClass}`} aria-label={`Rank ${rank}`}>
         <RankChange rank={rank} delta={delta} />
       </div>
 
@@ -2824,12 +3061,17 @@ function ProspectBoardRow({ player, index, selected, expanded, onSelect, meta, s
         <span className="dc-prospect-row__identity">
           <span className="dc-prospect-row__name-row">
             <strong className="dc-prospect-row__name">{player.firstName} {player.lastName}</strong>
-            {topFive ? <b className="dc-prospect-row__ovr">{ovr.text !== "—" ? ovr.text : "—"}</b> : null}
+            {topFive ? <b className={`dc-prospect-row__ovr ${ovr.exact ? "wr-num-gold" : "wr-num-slate"}`}>{ovr.text !== "—" ? ovr.text : "—"}</b> : null}
           </span>
           <span className="dc-prospect-row__sub">
             {player.teamDisplay || player.team || league} · {player.age || "—"} yrs
             {player.overager ? <em className="dc-overage-pill">Overager</em> : null}
             {player.characterFile?.flagged ? <em className="dc-char-pill">Character</em> : null}
+            {reasonLabel ? <em className="wr-reason-chip">{reasonLabel}</em> : null}
+            {divergence ? (
+              <em className="wr-div-chip">YOU #{divergence.scoutRank} · PUBLIC #{divergence.publicRank}</em>
+            ) : null}
+            {player.goalieBoardCap ? <em className="wr-cap-chip">Goalie board cap</em> : null}
           </span>
         </span>
       </div>
@@ -2839,15 +3081,26 @@ function ProspectBoardRow({ player, index, selected, expanded, onSelect, meta, s
         <LeagueBadge league={league} />
       </span>
       <span
-        className={`dc-prospect-row__cell dc-prospect-row__pot${pot.tier ? ` is-pot-${pot.tier.key}` : ""}${pot.exact ? "" : " is-range"} ${fogClass}`}
+        className={`dc-prospect-row__cell dc-prospect-row__pot${pot.tier ? ` is-pot-${pot.tier.key}` : ""}${pot.exact ? "" : " is-range"}`}
         title={`${pot.tier ? `${pot.tier.label} · ` : ""}${pot.detail} · Now ${ovr.text}`}
       >
-        <ProjectionRange low={lo} mid={mid} high={hi} confidence={scoutPct} />
+        <span
+          className={`wr-ceiling-chip${ceilingFog === "hidden" ? " is-hidden" : ""}${ceilingFog === "range-fog" ? " is-range-fog" : ""}${ceilingFog === "exact" ? " is-exact" : ""}${glowCeiling ? " is-glow" : ""}`}
+          aria-label={ceilingFog === "hidden" ? "Ceiling unreported" : undefined}
+        >
+          {ceilingFog === "hidden" ? null : (
+            <ProjectionRange
+              low={lo}
+              mid={mid}
+              high={hi}
+              confidence={scoutPct}
+              className={pot.exact ? potNumClass : ""}
+            />
+          )}
+        </span>
       </span>
       <span className="dc-prospect-row__cell dc-prospect-row__proj">{player.projection || projectionForRank(rank)}</span>
-      <span className={`dc-prospect-row__cell dc-prospect-row__conf ${fogClass}`} title={conf.detail}>
-        {scoutPct != null ? `${Math.round(scoutPct)}%` : "—"}
-      </span>
+      <ScoutingFileSplit player={player} compact />
       <span className="dc-prospect-row__cell dc-prospect-row__stock" title="Weekly stock">
         <StockTrajectory delta={delta} direction={stock.direction} />
       </span>
@@ -2863,6 +3116,51 @@ function ProspectBoardRow({ player, index, selected, expanded, onSelect, meta, s
   );
 }
 
+function CoverageDeployPanel({ prospects, activeDeployments, onDeploy, busy, notice }) {
+  const [open, setOpen] = useState(false);
+  const activeKeys = new Set(
+    (activeDeployments || []).map((d) => `${d.kind}:${slugifyCoverageId(d.id)}`)
+  );
+
+  return (
+    <div className="dc-coverage-deploy">
+      <button
+        type="button"
+        className={`dc-coverage-deploy__toggle${open ? " is-open" : ""}`}
+        onClick={() => setOpen((v) => !v)}
+        title="Deploy regional scouting coverage — passive daily file growth plus an instant sweep"
+      >
+        Deploy coverage {activeDeployments?.length ? `(${activeDeployments.length})` : ""}
+      </button>
+      {notice ? <span className="dc-coverage-deploy__notice">{notice}</span> : null}
+      {open ? (
+        <div className="dc-coverage-deploy__menu">
+          <p className="dc-coverage-deploy__hint">
+            Sweep a region now (+6% each) and keep scouts on passive coverage. Max 3 active deployments.
+          </p>
+          {COVERAGE_DEPLOY_TARGETS.map((target) => {
+            const count = countDeployTargets(prospects, target);
+            const active = activeKeys.has(`${target.kind}:${slugifyCoverageId(target.id)}`);
+            return (
+              <button
+                key={`${target.kind}-${target.id}`}
+                type="button"
+                className={`dc-coverage-deploy__opt${active ? " is-active" : ""}`}
+                disabled={busy || count <= 0}
+                onClick={() => onDeploy(target)}
+                title={`Region sweep — ${count} prospect${count === 1 ? "" : "s"}`}
+              >
+                <strong>{target.label}</strong>
+                <span>{count} on board{active ? " · active" : ""}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ProspectBoardPanel({
   prospects,
   selectedProspectId,
@@ -2875,6 +3173,10 @@ function ProspectBoardPanel({
   setShowConsensus,
   pyramidMode,
   setPyramidMode,
+  activeDeployments,
+  onDeployCoverage,
+  deployBusy,
+  deployNotice,
 }) {
   const filterLabel = boardFilterLabel(activeBoardView);
   const groups = pyramidMode ? groupByPyramid(prospects) : [{ key: "rank", prospects, color: null, label: null, rarity: null }];
@@ -2914,6 +3216,13 @@ function ProspectBoardPanel({
           ))}
         </div>
         <div className="dc-board-filters">
+          <CoverageDeployPanel
+            prospects={prospects}
+            activeDeployments={activeDeployments}
+            onDeploy={onDeployCoverage}
+            busy={deployBusy}
+            notice={deployNotice}
+          />
           <button
             type="button"
             className={`dc-consensus-chip${pyramidMode ? " is-on" : ""}`}
@@ -3491,7 +3800,7 @@ function SkillDnaRadar({ tools, compositeText, developOdds, skatingWeak }) {
             <span>{t.label}</span>
             <strong>
               {t.locked
-                ? "?"
+                ? ""
                 : (t.low != null && t.high != null
                   ? `${t.low}-${t.high}`
                   : t.text)}
@@ -4139,6 +4448,11 @@ function ProspectProfileModal({
   const skillNotes = skillDevelopmentNotes(tools, player);
   const toolsWithNotes = skillNotes.rows;
   const outcomes = projectionOutcomes(player, profile, skillNotes.developOdds);
+  const ribbonSegs = outcomeRibbonSegments(outcomes);
+  const currentMid = estimateNumericMid(currentEstimate.text);
+  const headroom = currentMid != null && outcomes?.peak != null
+    ? Math.round(Number(outcomes.peak) - currentMid)
+    : null;
   const overageNote = overageStockNote(player);
   const strengthLines = strengthCopy(player, toolsWithNotes);
   const weaknessLines = weaknessCopy(player, toolsWithNotes, skillNotes.skatingWeak);
@@ -4233,7 +4547,7 @@ function ProspectProfileModal({
                 <DraftClassHeadshot player={player} size="lg" />
                 <SignalNationFlag country={countryLabel} size={64} className="dc-signal-portrait__flag" />
                 <div className={`dc-signal-portrait__stock is-${trendTone || "muted"}`}>
-                  <strong>#{rank}</strong>
+                  <strong className={wrNumClassForRank(rank)}>#{rank}</strong>
                   <span>{trend}</span>
                 </div>
               </div>
@@ -4278,7 +4592,7 @@ function ProspectProfileModal({
               </ul>
 
               <div className="dc-signal-board-card">
-                <strong>#{rank}</strong>
+                <strong className={wrNumClassForRank(rank)}>#{rank}</strong>
                 <span>{boardYear ? `${boardYear} Scout Board` : "Scout Board"}</span>
                 <em className={`is-${trendTone || "muted"}`}>{trend}</em>
               </div>
@@ -4292,38 +4606,56 @@ function ProspectProfileModal({
             </aside>
 
             <section className="dc-brochure-dna">
-              <SkillDnaRadar
-                tools={toolsWithNotes}
-                compositeText={currentEstimate.text}
-                developOdds={skillNotes.developOdds}
-                skatingWeak={skillNotes.skatingWeak}
-              />
+              <div>
+                <ProspectRinkZoneMap tools={toolsWithNotes} position={player.position} />
+                <SkillDnaRadar
+                  tools={toolsWithNotes}
+                  compositeText={currentEstimate.text}
+                  developOdds={skillNotes.developOdds}
+                  skatingWeak={skillNotes.skatingWeak}
+                />
+                <OffIcePipStrip player={player} tools={toolsWithNotes} />
+              </div>
               <div className="dc-proj-plain">
-                <span className="dc-profile-tags__label">Projection</span>
-                <div className="dc-proj-plain__row is-peak">
-                  <span>Peak overall</span>
-                  <strong>{outcomes.peak ?? "—"}</strong>
-                  <em>
-                    {outcomes.nhlOdds != null
-                      ? `${outcomes.nhlOdds}% NHL odds · backend ${outcomes.band || "ceiling"}`
-                      : (outcomes.note || "Backend ceiling")}
-                  </em>
+                <span className="dc-profile-tags__label">Now → Peak</span>
+                <div className="wr-now-peak">
+                  <div className="wr-now-peak__chip">
+                    <span>Current OVR</span>
+                    <strong className={currentEstimate.exact ? "wr-num-cyan" : "wr-num-slate"}>{currentEstimate.text}</strong>
+                  </div>
+                  <span className="wr-now-peak__delta wr-num-gold">
+                    {headroom == null ? "—" : (headroom >= 0 ? `+${headroom}` : String(headroom))}
+                  </span>
+                  <div className={`wr-now-peak__chip is-peak${ceilingHidden ? " is-hidden" : ""}`}>
+                    <span>Peak</span>
+                    <strong className={ceilingHidden ? "" : "wr-num-gold"}>{ceilingHidden ? "" : (outcomes?.peak ?? "—")}</strong>
+                  </div>
                 </div>
-                <div className="dc-proj-plain__row">
-                  <span>Expected outcome</span>
-                  <strong>{outcomes.expected ?? "—"}</strong>
-                  <em>{outcomes.hitPeakPct != null ? `${outcomes.hitPeakPct}% to land near this grade` : "Most likely landing spot"}</em>
-                </div>
-                <div className="dc-proj-plain__row is-worst">
-                  <span>Worst case</span>
-                  <strong>{outcomes.worst ?? "—"}</strong>
-                  <em>Floor from the scouting file{outcomes.band ? ` · ${outcomes.band}` : ""}</em>
-                </div>
-                <div className="dc-proj-plain__row">
-                  <span>Shoots past peak</span>
-                  <strong>{outcomes.shootPastPct != null ? `${outcomes.shootPastPct}%` : "—"}</strong>
-                  <em>Odds he outruns the ceiling on this file</em>
-                </div>
+                {player.consensusFloorApplied ? (
+                  <p className="wr-now-peak__note">Consensus floor applied</p>
+                ) : null}
+                <span className="dc-profile-tags__label">Outcome distribution</span>
+                {ribbonSegs ? (
+                  <>
+                    <div className="wr-outcome-ribbon" role="img" aria-label="Outcome distribution">
+                      {ribbonSegs.map((seg) => (
+                        <span
+                          key={seg.key}
+                          className={`wr-outcome-ribbon__seg is-${seg.key}`}
+                          style={{ width: `${seg.pct}%` }}
+                          title={`${seg.label} ${Math.round(seg.pct)}%`}
+                        />
+                      ))}
+                    </div>
+                    <div className="wr-outcome-legend">
+                      {ribbonSegs.map((seg) => (
+                        <span key={`leg-${seg.key}`}><i className={`is-${seg.key}`} />{seg.label}</span>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className="wr-outcome-ribbon is-unavailable" title={outcomes?.note || "Distribution unavailable"} />
+                )}
               </div>
             </section>
 
@@ -4924,20 +5256,26 @@ function LeagueLeaders({
 
 function ScoutingPanel({ player, meta, onAssignScout, showAssign, setShowAssign }) {
   if (!player) return null;
-  const conf = confidenceLabel(player.completion);
+  const pub = prospectPublicPct(player);
+  const you = prospectDedicatedPct(player);
+  const conf = confidenceLabel(prospectEffectivePct(player) ?? 0);
   return (
     <div className="dc-scouting-panel">
       <h3>SCOUTING DOSSIER</h3>
       <div className="dc-scout-grid">
-        <div><span>Completion</span><strong>{player.completion}%</strong></div>
+        <div><span>Public file</span><strong>{pub != null ? `${pub}%` : "—"}</strong></div>
+        <div><span>Your file</span><strong>{you != null ? `${you}%` : "—"}</strong></div>
         <div><span>Confidence</span><strong>{conf}</strong></div>
         <div><span>Assigned Scout</span><strong>{meta.assignedScout || "Unassigned"}</strong></div>
         <div><span>Last Viewed</span><strong>{meta.lastViewed || "—"}</strong></div>
-        <div><span>Next Report</span><strong>{nextReportDue(player.completion)}</strong></div>
+        <div><span>Next Report</span><strong>{nextReportDue(prospectEffectivePct(player) ?? 0)}</strong></div>
       </div>
       {!meta.assignedScout && (
-        <p className="dc-scout-prompt">Assign a regional scout to begin detailed reports.</p>
+        <p className="dc-scout-prompt">Assign a scout to build a dedicated file passively (~3%/week). Use Deploy coverage for regional sweeps.</p>
       )}
+      {meta.assignedScout ? (
+        <p className="dc-scout-prompt dc-scout-prompt--active">Scout assigned — file grows daily while they stay on your shortlist.</p>
+      ) : null}
       {showAssign && (
         <div className="dc-scout-assign">
           {SCOUT_NAMES.map((name) => (
@@ -5264,11 +5602,11 @@ function AttributeBar({ label, value, completion, seed }) {
     <div className={`dc-attribute ${display.locked ? "is-locked" : ""}`}>
       <div>
         <span>{label}</span>
-        <b>{display.text}</b>
+        <b>{display.locked ? "" : display.text}</b>
         <em>{display.confidence}</em>
       </div>
       <div className="dc-attribute__track">
-        <div style={{ width: `${display.width}%`, opacity: display.locked ? 0.15 : 1 }} />
+        <div style={{ width: display.locked ? "0%" : `${display.width}%` }} />
       </div>
     </div>
   );
@@ -5300,7 +5638,10 @@ function AttributesTab({ player }) {
             const display = attributeDisplay(val, player.completion, seed);
             const grade = display.locked ? "?" : gradeFromValue(display.width);
             return (
-              <div key={label}><span>{label}</span><strong>{grade}</strong></div>
+              <div key={label} className={display.locked ? "is-locked" : ""}>
+                <span>{label}</span>
+                <strong className={display.locked ? "" : "wr-num-cyan"}>{grade === "?" ? "" : grade}</strong>
+              </div>
             );
           })}
         </div>
@@ -5349,7 +5690,43 @@ function ScoutReportTab({ player, meta, profile }) {
 function CharacterTab({ player, meta, profile }) {
   const p = profile || player?.profile || null;
   const teamFitScore = p?.team_fit?.score ?? p?.teamFit?.score ?? player.fit;
-  const charAvailable = meta.requestedReports?.character === "complete" || meta.requestedReports?.character === "requested" || player.completion >= 82;
+  const read = p?.character_read;
+
+  if (read && (read.headline || (read.traits || []).length)) {
+    return (
+      <div className="dc-character-layout">
+        <div className="dc-character-card">
+          <h3>CHARACTER READ</h3>
+          <div className="dc-character-read__head">
+            <strong className={wrNumClassForTier(String(read.headline || "").toLowerCase().includes("elite") ? "elite" : "high")}>
+              {read.headline || "Mixed reports"}
+            </strong>
+            {read.confidence != null ? <span>Scout confidence {read.confidence}%</span> : null}
+          </div>
+          {(read.traits || []).map((trait) => (
+            <div className="dc-character-read__trait" key={trait.label}>
+              <span>{trait.label}</span>
+              <strong className={wrNumClassForTier(String(trait.tier || "").toLowerCase().includes("elite") ? "elite" : "high")}>
+                {trait.tier || "Unknown"}
+              </strong>
+              {trait.confidence != null ? <em>{trait.confidence}%</em> : <em />}
+            </div>
+          ))}
+          {read.interview_notes ? <p className="nhlrost-muted-text">{read.interview_notes}</p> : null}
+        </div>
+        <div className="dc-character-card">
+          <h3>MORALE & FIT</h3>
+          <div className="dc-fit-row"><span>Morale</span><strong>{ratingLabel(player.morale)}</strong></div>
+          <div className="dc-fit-row"><span>Character</span><strong>{ratingLabel(player.character)}</strong></div>
+          <div className="dc-fit-row"><span>Willingness To Join Org</span><strong>{ratingLabel(player.fit)}</strong></div>
+          <div className="dc-fit-row"><span>Team Need Fit</span><strong>{teamFitScore != null ? ratingLabel(teamFitScore) : "—"}</strong></div>
+          <div className="dc-fit-row"><span>Potential Impact</span><strong>{player.rank <= 5 ? "Franchise" : player.rank <= 32 ? "Core" : "Depth"}</strong></div>
+        </div>
+      </div>
+    );
+  }
+
+  const charAvailable = meta?.requestedReports?.character === "complete" || meta?.requestedReports?.character === "requested" || player.completion >= 82;
   if (!charAvailable) {
     return (
       <div className="dc-character-layout">
@@ -5378,7 +5755,9 @@ function CharacterTab({ player, meta, profile }) {
           <div className="dc-character-row" key={label}>
             <span>{label}</span>
             <p>{player.completion >= 70 ? note : "Preliminary observation — needs follow-up."}</p>
-            <strong>{player.completion >= 70 ? gradeFromValue(value) : "?"}</strong>
+            <strong className={player.completion >= 70 ? "wr-num-cyan" : "is-locked"}>
+              {player.completion >= 70 ? gradeFromValue(value) : ""}
+            </strong>
           </div>
         ))}
       </div>
@@ -5445,6 +5824,7 @@ export default function DraftClass() {
     openWorldJuniors,
     pendingDraftProspectId,
     setPendingDraftProspectId,
+    refreshFranchise,
   } = useGameUI();
   const dateContext = useMemo(() => buildDateContext(franchiseState), [franchiseState]);
   const [activeBoardView, setActiveBoardView] = useState("rank");
@@ -5457,6 +5837,13 @@ export default function DraftClass() {
   const [scoutingStore, setScoutingStore] = useState({});
   const [compareIds, setCompareIds] = useState([]);
   const [selectedProspect, setSelectedProspect] = useState(null);
+  const [deployBusy, setDeployBusy] = useState(false);
+  const [deployNotice, setDeployNotice] = useState("");
+
+  const activeDeployments = useMemo(
+    () => franchiseState?.scouting_state?.active_deployments || [],
+    [franchiseState?.scouting_state?.active_deployments]
+  );
 
   const patchProspectMeta = useCallback(async (prospectId, localPatch, apiPatch) => {
     if (!prospectId) return;
@@ -5466,10 +5853,11 @@ export default function DraftClass() {
     }));
     try {
       await patchScoutingMeta(prospectId, apiPatch || localPatch);
+      await refreshFranchise();
     } catch {
       // Keep optimistic UI; board refresh will reconcile later.
     }
-  }, []);
+  }, [refreshFranchise]);
 
   const toggleProspectWatchlist = useCallback((prospectId) => {
     const current = getScoutingMeta(scoutingStore, prospectId);
@@ -5492,6 +5880,21 @@ export default function DraftClass() {
   const assignProspectScout = useCallback((prospectId, scoutName) => {
     patchProspectMeta(prospectId, { assignedScout: scoutName }, { assigned_scout: scoutName });
   }, [patchProspectMeta]);
+
+  const handleDeployCoverage = useCallback(async (target) => {
+    if (!target || deployBusy) return;
+    setDeployBusy(true);
+    setDeployNotice("");
+    try {
+      const result = await runCoverageDeploy(target);
+      setDeployNotice(result?.message || `Coverage deployed to ${target.label}.`);
+      await refreshFranchise();
+    } catch (err) {
+      setDeployNotice(err?.message || "Coverage deploy failed.");
+    } finally {
+      setDeployBusy(false);
+    }
+  }, [deployBusy, refreshFranchise]);
 
   const toggleProspectCompare = useCallback((prospectId) => {
     setCompareIds((prev) => {
@@ -5690,6 +6093,10 @@ export default function DraftClass() {
                 setPyramidMode={setPyramidMode}
                 showConsensus={showConsensus}
                 setShowConsensus={setShowConsensus}
+                activeDeployments={activeDeployments}
+                onDeployCoverage={handleDeployCoverage}
+                deployBusy={deployBusy}
+                deployNotice={deployNotice}
               />
             </div>
           )}
@@ -5731,8 +6138,8 @@ export default function DraftClass() {
 
         <style>{`
           .dc-root.dc-screen {
-            --dc-font-title: var(--font-broadcast-display);
-            --dc-font-number: var(--font-mono-data);
+            --dc-font-title: "Barlow Condensed", var(--font-broadcast-display), "Archivo Black", "Rajdhani", "Arial Narrow", sans-serif;
+            --dc-font-number: "Barlow Condensed", var(--font-broadcast-display), "Archivo Black", "Rajdhani", "Arial Narrow", sans-serif;
             --dc-font-ui: var(--font-ops-ui);
             --dc-font-mono: var(--font-mono-data);
             --dc-text: var(--ops-text);
@@ -5766,6 +6173,7 @@ export default function DraftClass() {
             color: var(--dc-text);
             font-family: var(--dc-font-ui);
             background:
+              var(--wr-scan),
               radial-gradient(circle at 50% 42%, rgba(53, 185, 255, 0.1), transparent 28%),
               radial-gradient(circle at 10% 0%, rgba(43, 228, 255, 0.09), transparent 25%),
               radial-gradient(circle at 90% 8%, rgba(244, 198, 110, 0.07), transparent 20%),
@@ -5789,7 +6197,6 @@ export default function DraftClass() {
           .dc-topbar,
           .dc-stat-strip,
           .dc-board-nav,
-          .dc-prospect-board,
           .dc-selected-file,
           .dc-stock-rail,
           .dc-intel-feed {
@@ -5797,6 +6204,13 @@ export default function DraftClass() {
             border-radius: 10px;
             background: var(--dc-panel);
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 18px 40px rgba(0,0,0,0.35);
+          }
+          .dc-prospect-board {
+            border: 1px solid var(--dc-line);
+            border-radius: 0;
+            background: var(--dc-panel);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 18px 40px rgba(0,0,0,0.35);
+            clip-path: var(--wr-cut);
           }
 
           .dc-topbar {
@@ -6149,7 +6563,7 @@ export default function DraftClass() {
             justify-content: space-between;
             align-items: center;
             gap: 8px;
-            border-bottom: 1px solid var(--dc-line);
+            border-bottom: 0;
             padding: 10px 12px;
             flex-shrink: 0;
           }
@@ -6214,7 +6628,7 @@ export default function DraftClass() {
             margin-bottom: 2px;
             padding-top: 6px;
             padding-bottom: 6px;
-            border-bottom: 1px solid var(--dc-line);
+            border-bottom: 0;
             background: rgba(6, 16, 28, 0.98);
           }
 
@@ -6486,7 +6900,6 @@ export default function DraftClass() {
             letter-spacing: 0.03em;
             line-height: 1.15;
           }
-          .dc-prospect-row__sub,
           .dc-prospect-row__team,
           .dc-prospect-row__nation-label {
             margin: 0;
@@ -6495,9 +6908,12 @@ export default function DraftClass() {
             text-overflow: ellipsis;
           }
           .dc-prospect-row__sub {
+            margin: 0;
             font-size: 0.92rem;
             color: #b8d4ea;
             font-weight: 500;
+            white-space: normal;
+            overflow: visible;
           }
           .dc-prospect-row__team {
             font-size: 0.86rem;
@@ -6679,19 +7095,19 @@ export default function DraftClass() {
             color: var(--dc-text);
             background: rgba(8, 22, 36, 0.92);
           }
-          .dc-btn--primary { border-color: rgba(43,228,255,0.65); box-shadow: 0 0 18px rgba(43,228,255,0.18); background: linear-gradient(180deg, rgba(27,83,124,0.9), rgba(8,31,50,0.9)); }
+          .dc-btn--primary { border-radius: 0; clip-path: var(--wr-cut-sm); border-color: rgba(43,228,255,0.65); box-shadow: 0 0 18px rgba(43,228,255,0.18); background: linear-gradient(180deg, rgba(27,83,124,0.9), rgba(8,31,50,0.9)); }
           .dc-btn--secondary { background: rgba(14,30,46,0.9); }
           .dc-btn--danger { border-color: rgba(255,111,126,0.55); color: #ffd6db; background: linear-gradient(180deg, rgba(95,34,42,0.9), rgba(43,17,22,0.9)); }
           .dc-btn.is-active { border-color: rgba(108,247,166,0.6); }
           .dc-btn.is-disabled, .dc-btn:disabled { opacity: 0.4; cursor: not-allowed; }
           .dc-file-toggle-wrap { padding: 0 10px 8px; }
 
-          .dc-selected-file__tabs { display: flex; gap: 5px; flex-wrap: wrap; padding: 0 10px 8px; border-bottom: 1px solid var(--dc-line); }
+          .dc-selected-file__tabs { display: flex; gap: 5px; flex-wrap: wrap; padding: 0 10px 8px; border-bottom: 0; position: relative; }
           .dc-profile-tab.is-active { color: #061018; background: linear-gradient(180deg, #6df7ff, #47c8d8); border-color: transparent; }
           .dc-selected-file__detail { min-height: 0; flex: 1; padding: 8px 10px 10px; }
 
-          .dc-stock-card { padding: 8px 10px; border-bottom: 1px solid var(--dc-line); position: relative; }
-          .dc-stock-card::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(43,228,255,0.5), transparent); opacity: .55; }
+          .dc-stock-card { padding: 8px 10px; border-bottom: 0; position: relative; }
+          .dc-stock-card::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 0; height: 1px; background: var(--wr-rule); }
           .dc-stock-card h4 { margin: 0 0 5px; font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dc-muted); }
           .dc-stock-card--rise h4 { color: var(--dc-green); }
           .dc-stock-card--fall h4 { color: var(--dc-red); }
@@ -7308,6 +7724,8 @@ export default function DraftClass() {
           }
           @media (prefers-reduced-motion: reduce) {
             .dc-prospect-row { transition: none; }
+            .wr-ceiling-chip.is-exact.is-glow,
+            .wr-now-peak__chip.is-peak { animation: none; filter: none; }
           }
 
           .dc-profile-modal {
@@ -7323,6 +7741,7 @@ export default function DraftClass() {
           .dc-profile-modal--prospect .dc-signal-panel {
             border-color: var(--ops-grid-2);
             background:
+              var(--wr-scan),
               linear-gradient(180deg, rgba(6, 21, 34, 0.98), rgba(4, 13, 22, 0.98));
           }
 
@@ -7364,8 +7783,10 @@ export default function DraftClass() {
             max-height: 94vh;
             max-height: 94dvh;
             border: 1px solid rgba(118, 200, 245, 0.42);
-            border-radius: 10px;
+            border-radius: 0;
+            clip-path: var(--wr-cut);
             background:
+              var(--wr-scan),
               radial-gradient(ellipse 85% 70% at 12% -5%, rgba(56, 190, 255, 0.42), transparent 55%),
               radial-gradient(ellipse 70% 55% at 95% 105%, rgba(30, 140, 255, 0.32), transparent 52%),
               radial-gradient(ellipse 50% 40% at 48% 42%, rgba(40, 120, 210, 0.28), transparent 62%),

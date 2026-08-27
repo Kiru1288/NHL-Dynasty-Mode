@@ -1143,6 +1143,33 @@ function ProspectDossier({
 
           {tab === "scouting" ? (
             <>
+              {d.character_read ? (
+                <section>
+                  <h3>Character read</h3>
+                  <div className={`${PREFIX}-sheet-facts`}>
+                    <span>Headline: {d.character_read.headline || "Mixed reports"}</span>
+                    {d.character_read.confidence ? (
+                      <span>Scout confidence: {d.character_read.confidence}%</span>
+                    ) : null}
+                  </div>
+                  {(d.character_read.traits || []).length ? (
+                    <div className={`${PREFIX}-attr-grid`}>
+                      {d.character_read.traits.map((trait) => (
+                        <div key={trait.label} className={`${PREFIX}-attr-row`}>
+                          <span>{trait.label}</span>
+                          <strong>{trait.tier || "Unknown"}</strong>
+                          {trait.confidence ? (
+                            <em>{trait.confidence}% conf.</em>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {d.character_read.interview_notes ? (
+                    <p className={`${PREFIX}-dossier-note`}>{d.character_read.interview_notes}</p>
+                  ) : null}
+                </section>
+              ) : null}
               {getScoutSummary(prospect) || d.micro_summary ? (
                 <section>
                   <h3>Scout report</h3>

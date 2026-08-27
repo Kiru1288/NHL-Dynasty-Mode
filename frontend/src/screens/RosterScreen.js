@@ -79,6 +79,7 @@ const VIEW_MODE_OPTIONS = [
 
 const PANEL_TABS = [
   { value: "overview", label: "Overview" },
+  { value: "character", label: "Character & Life" },
   { value: "performance", label: "Performance" },
   { value: "development", label: "Development" },
   { value: "contract", label: "Contract" },
@@ -1722,6 +1723,50 @@ function getFatigueBand(fatigue) {
   return { label: "Exhausted", tone: "bad" };
 }
 
+const TRADE_STABILITY_ESCALATION = {
+  0: { shortLabel: "Monitor", label: "Monitor — early concern", tone: "neutral" },
+  1: { shortLabel: "Frustrated", label: "Growing frustration", tone: "warn" },
+  2: { shortLabel: "Disconnect", label: "Disconnecting from organization", tone: "warn" },
+  3: { shortLabel: "Demand", label: "Formal trade demand", tone: "bad" },
+  4: { shortLabel: "Crisis", label: "Locker-room crisis", tone: "bad" },
+};
+
+function formatPressureLabel(pressure) {
+  if (!pressure) return "";
+  return String(pressure).replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function lookupTradeStabilityFlag(franchiseState, player) {
+  const flags = franchiseState?.trade_stability_roster_flags;
+  if (!flags || typeof flags !== "object") return null;
+  const pid = String(player?.id || player?.player_id || player?.key || "");
+  if (!pid) return null;
+  return flags[pid] || null;
+}
+
+function getTradeStabilityConcernBand(flag) {
+  if (!flag) return null;
+  const level = Number(flag.escalation_level ?? flag.escalationLevel ?? 0);
+  const preset = TRADE_STABILITY_ESCALATION[level] || TRADE_STABILITY_ESCALATION[0];
+  const score = flag.score != null ? Math.round(Number(flag.score)) : null;
+  const pressure = flag.top_pressure || flag.topPressure || "";
+  const titleParts = [preset.label];
+  if (score != null) titleParts.push(`Stability ${score}`);
+  if (pressure) titleParts.push(formatPressureLabel(pressure));
+  return {
+    ...preset,
+    escalationLevel: level,
+    score,
+    topPressure: pressure,
+    title: titleParts.join(" · "),
+  };
+}
+
+function resolvePlayerTradeStabilityConcern(player, franchiseState) {
+  const flag = player?.tradeStabilityFlag || lookupTradeStabilityFlag(franchiseState, player);
+  return getTradeStabilityConcernBand(flag);
+}
+
 function getHealthBand(player) {
   const health = normalizeHealth(player);
 
@@ -2777,6 +2822,9 @@ function buildPlayerNote(player) {
   if (moraleBand.tone === "bad") pieces.push("Morale is hurting the current read.");
   if (fatigueBand.tone === "bad") pieces.push("Fatigue is high enough to affect deployment.");
   if (asset?.label) pieces.push(`Asset read: ${asset.label}.`);
+  if (player.tradeStabilityConcern) {
+    pieces.push(`Trade stability: ${player.tradeStabilityConcern.title}.`);
+  }
 
   return pieces.join(" ");
 }
@@ -2839,6 +2887,15 @@ function buildStrengthsConcerns(player) {
     strengths.push(`${formatMoneyMillions(contract.capHit)} cap hit for an 80+ overall`);
   }
 
+  if (player.tradeStabilityConcern) {
+    const concern = player.tradeStabilityConcern;
+    concerns.unshift(
+      `${concern.label}${concern.score != null ? ` — stability ${concern.score}` : ""}${
+        concern.topPressure ? ` (${formatPressureLabel(concern.topPressure)})` : ""
+      }`
+    );
+  }
+
   return {
     strengths: strengths.slice(0, 4),
     concerns: concerns.slice(0, 4),
@@ -2889,6 +2946,14 @@ function buildDecisionBullets(player) {
   const slideThreshold = pickFirstDefined(player.slide_games_threshold, player.slideGamesThreshold);
   if (elcSlideEligible && slideThreshold != null) {
     bullets.push({ tone: "neutral", text: `ELC slide eligible below ${slideThreshold} GP` });
+  }
+
+  if (player.tradeStabilityConcern) {
+    const concern = player.tradeStabilityConcern;
+    bullets.push({
+      tone: concern.tone,
+      text: `Trade concern — ${concern.label}${concern.score != null ? ` (${concern.score})` : ""}`,
+    });
   }
 
   return bullets;
@@ -3049,9 +3114,16 @@ function normalizeLivePlayer(player, franchiseState, index) {
     displayOvr: displayOverallValue(normalizedBase),
   };
 
-  return {
+  const tradeStabilityFlag = lookupTradeStabilityFlag(franchiseState, output);
+  const withConcern = {
     ...output,
-    note: buildPlayerNote(output),
+    tradeStabilityFlag,
+    tradeStabilityConcern: getTradeStabilityConcernBand(tradeStabilityFlag),
+  };
+
+  return {
+    ...withConcern,
+    note: buildPlayerNote(withConcern),
   };
 }
 
@@ -3385,6 +3457,30 @@ function buildRosterWarnings(players, capInfo) {
     });
   }
 
+  const tradeConcernPlayers = (players || EMPTY_ARRAY).filter((player) => player.tradeStabilityConcern);
+  if (tradeConcernPlayers.length) {
+    const hasCritical = tradeConcernPlayers.some(
+      (player) => Number(player.tradeStabilityConcern?.escalationLevel ?? 0) >= 3
+    );
+    warnings.push({
+      key: "trade_stability",
+      tone: hasCritical ? "bad" : "warn",
+      title: "Trade satisfaction concerns",
+      body: `${tradeConcernPlayers.length} player${tradeConcernPlayers.length === 1 ? "" : "s"} flagged by agent monitoring.`,
+    });
+
+    tradeConcernPlayers.forEach((player) => {
+      const concern = player.tradeStabilityConcern;
+      warnings.push({
+        key: `trade_stability:${player.id || player.key}`,
+        tone: concern.tone,
+        title: `${player.name} — ${concern.label}`,
+        body: concern.title,
+        playerId: player.id,
+      });
+    });
+  }
+
   return warnings;
 }
 
@@ -3441,6 +3537,19 @@ function MiniBadge({ text, tone = "neutral", title = "" }) {
     <span className={`nhlrost-mini-badge ${toneClass(tone)}`} title={title || text}>
       {text || "—"}
     </span>
+  );
+}
+
+function TradeStabilityConcernBadge({ player, franchiseState, compact = false }) {
+  const concern = player?.tradeStabilityConcern || resolvePlayerTradeStabilityConcern(player, franchiseState);
+  if (!concern) return null;
+
+  return (
+    <MiniBadge
+      text={compact ? concern.shortLabel : concern.label}
+      tone={concern.tone}
+      title={concern.title}
+    />
   );
 }
 
@@ -3652,7 +3761,7 @@ function PotentialStack({ player }) {
   );
 }
 
-function PlayerStatusStrip({ player }) {
+function PlayerStatusStrip({ player, franchiseState }) {
   const moraleBand = getMoraleBand(player?.morale);
   const fatigueBand = getFatigueBand(player?.fatigue);
   const healthBand = getHealthBand(player);
@@ -3662,6 +3771,7 @@ function PlayerStatusStrip({ player }) {
       <MiniBadge text={`Morale ${round0(player?.morale)}`} tone={moraleBand.tone} title={moraleBand.label} />
       <MiniBadge text={`Fatigue ${round0(player?.fatigue)}`} tone={fatigueBand.tone} title={fatigueBand.label} />
       <MiniBadge text={healthBand.label} tone={healthBand.tone} />
+      <TradeStabilityConcernBadge player={player} franchiseState={franchiseState} compact />
     </div>
   );
 }
@@ -3791,11 +3901,14 @@ function RosterPlayerFlag({ player }) {
 
 function PremiumPlayerRow({ player, selected, onSelect, showTeam = false }) {
   const healthBand = getHealthBand(player);
+  const concernLevel = Number(player?.tradeStabilityConcern?.escalationLevel ?? 0);
+  const concernClass =
+    concernLevel >= 3 ? "has-trade-concern is-critical" : concernLevel > 0 ? "has-trade-concern" : "";
 
   return (
     <button
       type="button"
-      className={`nhlrost-board-row ${selected ? "is-selected" : ""}${showTeam ? " has-team" : ""}`}
+      className={`nhlrost-board-row ${selected ? "is-selected" : ""}${showTeam ? " has-team" : ""} ${concernClass}`.trim()}
       onClick={() => onSelect(player)}
     >
       <span className="nhlrost-board-row__name">
@@ -3804,6 +3917,9 @@ function PremiumPlayerRow({ player, selected, onSelect, showTeam = false }) {
           <span className="nhlrost-board-row__name-line">
             <RosterPlayerFlag player={player} />
             <strong>{player.name}</strong>
+            {player.tradeStabilityConcern ? (
+              <TradeStabilityConcernBadge player={player} compact />
+            ) : null}
           </span>
           {showTeam && player.teamName && player.teamName !== "—" ? (
             <em className="nhlrost-board-row__team">{player.teamName}</em>
@@ -4030,13 +4146,16 @@ function RosterTable({
           const scratched = Boolean(player.scratched || player.is_scratch || player.line === "scratch");
           const archetypeColor = getArchetypeColor(player.archetype);
           const healthBand = getHealthBand(player);
+          const concernLevel = Number(player?.tradeStabilityConcern?.escalationLevel ?? 0);
+          const concernClass =
+            concernLevel >= 3 ? "has-trade-concern is-critical" : concernLevel > 0 ? "has-trade-concern" : "";
 
           return (
             <React.Fragment key={player.key || `${player.name}-${globalIndex}`}>
               {showGroup ? <div className="nhlrost-group-head">{groupLabel}</div> : null}
             <button
               type="button"
-              className={`nhlrost-row ${selected ? "is-selected" : ""} ${scratched ? "is-scratch" : ""}`}
+              className={`nhlrost-row ${selected ? "is-selected" : ""} ${scratched ? "is-scratch" : ""} ${concernClass}`.trim()}
               onClick={() => onSelectPlayer(player)}
             >
               <span className="nhlrost-row__name">
@@ -4045,6 +4164,9 @@ function RosterTable({
                   <strong>{player.jersey_number || player.jerseyNumber || player.number ? `#${player.jersey_number || player.jerseyNumber || player.number} ` : ""}{player.name}</strong>
                   {(player.locker_room_cancer || player.brady_tkachuk_chaos || (player.name_tags || []).includes("CANCER")) ? (
                     <em className="nhlrost-cancer-tag" title="Locker-room cancer">CANCER</em>
+                  ) : null}
+                  {player.tradeStabilityConcern ? (
+                    <TradeStabilityConcernBadge player={player} compact />
                   ) : null}
                   <em>{player.teamName}</em>
                 </span>
@@ -4186,6 +4308,7 @@ function RosterCards({ players, selectedPlayerKey, onSelectPlayer }) {
               <MiniBadge text={player.archetype} />
               <MiniBadge text={player.roleLabel || player.role} />
               <MiniBadge text={player.status} tone={healthBand.tone} />
+              <TradeStabilityConcernBadge player={player} compact />
             </div>
 
             <div className="nhlrost-player-card__metrics">
@@ -4392,6 +4515,7 @@ function PlayerOverviewPanel({ player, franchiseState }) {
   const isUndrafted = Boolean(player.undrafted) && !hasDraftMeta;
   const ratingGroups = (player.rating_groups || EMPTY_ARRAY).filter((group) => group?.rows?.length);
   const { strengths, concerns } = buildStrengthsConcerns(player);
+  const tradeConcern = player.tradeStabilityConcern || resolvePlayerTradeStabilityConcern(player, franchiseState);
   const measuredToi = safeNumOrNull(
     pickFirstDefined(player.explicitMinutes, stats.toi, stats.average_toi, stats.avg_toi)
   );
@@ -4481,6 +4605,28 @@ function PlayerOverviewPanel({ player, franchiseState }) {
           <Metric label="Morale" value={player.morale != null ? round0(player.morale) : "—"} />
         </MetricStrip>
       </article>
+
+      {tradeConcern ? (
+        <article className="nhlrost-profile-zone nhlrost-profile-zone--trade-stability">
+          <header className="nhlrost-profile-zone__head">
+            <p>Trade Stability</p>
+            <h3>{tradeConcern.label}</h3>
+          </header>
+          <MetricStrip>
+            <Metric
+              label="Status"
+              value={<TradeStabilityConcernBadge player={player} franchiseState={franchiseState} />}
+            />
+            <Metric label="Score" value={tradeConcern.score != null ? tradeConcern.score : "—"} tone={tradeConcern.tone} />
+            <Metric
+              label="Top pressure"
+              value={tradeConcern.topPressure ? formatPressureLabel(tradeConcern.topPressure) : "—"}
+            />
+            <Metric label="Level" value={`L${tradeConcern.escalationLevel}`} tone={tradeConcern.tone} />
+          </MetricStrip>
+          <p className="nhlrost-muted-text">{tradeConcern.title}</p>
+        </article>
+      ) : null}
 
       <article className="nhlrost-profile-zone nhlrost-profile-zone--performance">
         <header className="nhlrost-profile-zone__head">
@@ -5583,6 +5729,15 @@ function MediaPanel({ player, storylines, franchiseState }) {
         return name && blob.includes(name.split(/\s+/).pop());
       }).slice(0, 6)
     : [];
+  const backendReddit = Array.isArray(narrativeUniverse?.reddit_threads)
+    ? narrativeUniverse.reddit_threads.filter((t) => {
+        const pid = String(t?.player_id || "");
+        if (pid && pid === playerId) return true;
+        const blob = `${t?.title || ""} ${t?.body || ""}`.toLowerCase();
+        const name = safeStr(player.name, "").toLowerCase();
+        return name && blob.includes(name.split(/\s+/).pop());
+      }).slice(0, 4)
+    : [];
   const agentRel = narrativeUniverse?.agent_relationships?.[playerId] || null;
   const agents = Array.isArray(narrativeUniverse?.agents) ? narrativeUniverse.agents : [];
   const agentInfo = agentRel
@@ -5708,6 +5863,26 @@ function MediaPanel({ player, storylines, franchiseState }) {
           <p className="nhlrost-muted-text">No recorded storyline events yet. Coverage appears as the league reacts to performance, trades, injuries, and off-ice incidents.</p>
         </article>
       )}
+
+      {backendReddit.length ? (
+        <article className="nhlrost-panel">
+          <header className="nhlrost-panel__head">
+            <div>
+              <p>IceHole</p>
+              <h3>Forum threads</h3>
+            </div>
+          </header>
+          <div className="nhlrost-media-quotes">
+            {backendReddit.map((thread, index) => (
+              <blockquote key={thread.thread_id || index}>
+                <strong>{thread.subreddit} · {thread.flair} · {Number(thread.upvotes || 0).toLocaleString()}↑</strong>
+                <p>{thread.title}</p>
+                {thread.body ? <p className="nhlrost-muted-text">{thread.body}</p> : null}
+              </blockquote>
+            ))}
+          </div>
+        </article>
+      ) : null}
 
       {backendSocial.length ? (
         <article className="nhlrost-panel">
@@ -5861,6 +6036,7 @@ function PlayerProfileModal({
   onClose,
   franchiseState,
   onRefresh,
+  onCallMeeting,
 }) {
   const modalBodyRef = React.useRef(null);
   const rosterList = Array.isArray(players) ? players : EMPTY_ARRAY;
@@ -5969,6 +6145,7 @@ function PlayerProfileModal({
                 <span className="nhlrost-profile-modal__role">{player.roleLabel || player.role}</span>
               ) : null}
               <span className={`nhlrost-profile-modal__health ${toneClass(healthBand.tone)}`}>{healthBand.label}</span>
+              <TradeStabilityConcernBadge player={player} franchiseState={franchiseState} />
               <span className="nhlrost-profile-modal__contract">{contractSummaryDisplay(player)}</span>
             </div>
           </div>
@@ -6027,6 +6204,7 @@ function PlayerProfileModal({
             storylines={storylines}
             franchiseState={franchiseState}
             onRefresh={onRefresh}
+            onCallMeeting={onCallMeeting}
           />
         </div>
       </div>
@@ -6051,8 +6229,115 @@ function DetailTabs({ activeTab, setActiveTab }) {
   );
 }
 
-function DetailPanelRouter({ activeTab, player, storylines, franchiseState, onRefresh }) {
+function PlayerCharacterLifePanel({ player, franchiseState, onCallMeeting }) {
+  if (!player) {
+    return <EmptyPanel title="No player selected" body="Choose a player from the roster board." />;
+  }
+
+  const pid = String(player.id || player.player_id || player.key || "");
+  const universe = franchiseState?.narrative_universe || {};
+  const meetings = universe?.player_meetings || {};
+  const rosterRow = (meetings.roster || []).find((r) => String(r?.player_id || "") === pid) || null;
+  const dossier =
+    universe?.human_dossiers?.[pid] ||
+    universe?.players?.find?.((row) => String(row?.player_id || "") === pid)?.human_dossier ||
+    null;
+
+  if (!dossier) {
+    return (
+      <EmptyPanel
+        title="Character profile unavailable"
+        body="Human universe data has not synced for this player yet. Advance the calendar to populate off-ice context."
+        compact
+      />
+    );
+  }
+
+  const charBlock = dossier.character || {};
+  const stateBlock = dossier.current_state || {};
+  const lifeBlock = dossier.life || {};
+  const mw = dossier.mental_wellbeing || {};
+
+  return (
+    <section className="nhlrost-player-overview nhlrost-character-life">
+      {rosterRow?.relationship ? (
+        <article className="nhlrost-profile-zone nhlrost-profile-zone--relationship">
+          <header className="nhlrost-profile-zone__head">
+            <p>GM Relationship</p>
+            <h3>{rosterRow.relationship.label || "—"}</h3>
+          </header>
+          <p className="nhlrost-muted-text">{rosterRow.relationship.detail || "No major friction on file."}</p>
+          {typeof onCallMeeting === "function" ? (
+            <button type="button" className="nhlrost-call-meeting-btn" onClick={() => onCallMeeting(pid)}>
+              Call Meeting
+            </button>
+          ) : null}
+        </article>
+      ) : null}
+      <article className="nhlrost-profile-zone nhlrost-profile-zone--character">
+        <header className="nhlrost-profile-zone__head">
+          <p>Character</p>
+          <h3>{charBlock.headline || "—"}</h3>
+        </header>
+        {charBlock.summary_line ? <p className="nhlrost-muted-text">{charBlock.summary_line}</p> : null}
+        <div className="nhlrost-character-trait-grid">
+          {(charBlock.traits || []).map((trait) => (
+            <InfoPair key={trait.label} label={trait.label} value={trait.tier || "—"} />
+          ))}
+        </div>
+      </article>
+
+      <article className="nhlrost-profile-zone">
+        <header className="nhlrost-profile-zone__head">
+          <p>Current State</p>
+          <h3>
+            Base {stateBlock.base_ovr ?? "—"} · Current {stateBlock.current_ovr ?? "—"}
+            {stateBlock.readiness_delta ? ` (${stateBlock.readiness_delta > 0 ? "+" : ""}${stateBlock.readiness_delta})` : ""}
+          </h3>
+        </header>
+        <MetricStrip>
+          <Metric label="Morale" value={stateBlock.morale_tier || "—"} />
+          <Metric label="Confidence" value={stateBlock.confidence_tier || "—"} />
+          <Metric label="Role satisfaction" value={stateBlock.role_satisfaction_tier || "—"} />
+          <Metric label="Pressure" value={stateBlock.pressure_label || "Settled"} tone={stateBlock.pressure_tier >= 3 ? "bad" : stateBlock.pressure_tier >= 2 ? "warn" : "neutral"} />
+        </MetricStrip>
+        {(dossier.pressure_drivers || []).length ? (
+          <ul className="nhlrost-character-drivers">
+            {dossier.pressure_drivers.map((driver) => (
+              <li key={driver.label}>{driver.label}</li>
+            ))}
+          </ul>
+        ) : null}
+      </article>
+
+      <article className="nhlrost-profile-zone">
+        <header className="nhlrost-profile-zone__head">
+          <p>Life</p>
+          <h3>{lifeBlock.summary || "—"}</h3>
+        </header>
+        <MetricStrip>
+          <Metric label="City attachment" value={lifeBlock.city_attachment_tier || "—"} />
+          <Metric label="Home stability" value={lifeBlock.home_stability_tier || "—"} />
+          <Metric label="Relocation" value={lifeBlock.relocation_tier || "—"} />
+        </MetricStrip>
+      </article>
+
+      {mw?.state ? (
+        <article className="nhlrost-profile-zone">
+          <header className="nhlrost-profile-zone__head">
+            <p>Mental wellbeing</p>
+            <h3>{mw.tier || "—"}</h3>
+          </header>
+          <p className="nhlrost-muted-text">Private team information — not a character judgment.</p>
+        </article>
+      ) : null}
+    </section>
+  );
+}
+
+function DetailPanelRouter({ activeTab, player, storylines, franchiseState, onRefresh, onCallMeeting }) {
   if (activeTab === "overview") return <PlayerOverviewPanel player={player} franchiseState={franchiseState} />;
+  if (activeTab === "character") return <PlayerCharacterLifePanel player={player} franchiseState={franchiseState} onCallMeeting={onCallMeeting} />;
   if (activeTab === "performance") return <ProductionPanel player={player} franchiseState={franchiseState} />;
   if (activeTab === "development") return <DevelopmentPanel player={player} />;
   if (activeTab === "contract") return <ContractPanel player={player} />;
@@ -6124,6 +6409,7 @@ export function RosterScreen() {
     setRosterRowIndex,
     setScreen,
     refreshFranchise,
+    setPendingMeetingPlayerId,
   } = gameUI;
 
   const rb = franchiseState?.roster_browser || EMPTY_OBJECT;
@@ -6433,6 +6719,7 @@ export function RosterScreen() {
           health.isInjured ||
           morale.tone === "bad" ||
           fatigue.tone === "bad" ||
+          Boolean(player.tradeStabilityConcern) ||
           (capHit >= 8 && safeNum(player.ovr, 0) < 86) ||
           safeNum(player.growth, 0) <= -1;
 
@@ -6888,6 +7175,15 @@ export function RosterScreen() {
     [setScreen]
   );
 
+  const handleCallMeeting = useCallback(
+    (playerId) => {
+      if (!playerId) return;
+      setPendingMeetingPlayerId?.(String(playerId));
+      openScreen(SCREENS.STORYLINES);
+    },
+    [openScreen, setPendingMeetingPlayerId]
+  );
+
   const handleKeyDown = useCallback(
     (event) => {
       if (event.target?.matches?.("input, textarea, select, button")) return;
@@ -7204,12 +7500,17 @@ export function RosterScreen() {
             </article>
 
             {rosterWarnings.length ? (
-              <article className={`nhlrost-hud-tile nhlrost-attention-chip ${showWarningsOnly ? "is-active" : ""}`}>
+              <button
+                type="button"
+                className={`nhlrost-hud-tile nhlrost-attention-chip ${showWarningsOnly ? "is-active" : ""}`}
+                onClick={() => setShowWarningsOnly((value) => !value)}
+                title="Filter to players with roster or trade concerns"
+              >
                 <div className="nhlrost-hud-tile__body">
                   <small>Alert</small>
                   <strong>{rosterWarnings.length}</strong>
                 </div>
-              </article>
+              </button>
             ) : null}
           </div>
         </header>
@@ -7334,6 +7635,7 @@ export function RosterScreen() {
             storylines={selectedStorylines}
             franchiseState={franchiseState}
             onRefresh={handleRefresh}
+            onCallMeeting={handleCallMeeting}
             onClose={clearSelection}
           />
         ) : null}
@@ -7952,6 +8254,40 @@ function RosterScreenStyles() {
         background: rgba(255, 159, 67, 0.1);
       }
 
+      button.nhlrost-attention-chip {
+        cursor: pointer;
+        font: inherit;
+        color: inherit;
+        text-align: left;
+      }
+
+      button.nhlrost-attention-chip:hover {
+        border-color: rgba(255, 159, 67, 0.32);
+        background: rgba(255, 159, 67, 0.08);
+      }
+
+      .nhlrost-board-row.has-trade-concern,
+      .nhlrost-row.has-trade-concern {
+        box-shadow: inset 3px 0 0 rgba(234, 179, 8, 0.55);
+      }
+
+      .nhlrost-board-row.has-trade-concern.is-critical,
+      .nhlrost-row.has-trade-concern.is-critical {
+        box-shadow: inset 3px 0 0 rgba(239, 68, 68, 0.72);
+      }
+
+      .nhlrost-board-row.has-trade-concern.is-selected,
+      .nhlrost-row.has-trade-concern.is-selected {
+        box-shadow:
+          inset 3px 0 0 rgba(239, 68, 68, 0.72),
+          inset 0 0 0 1px rgba(19, 216, 231, 0.18);
+      }
+
+      .nhlrost-profile-zone--trade-stability {
+        border-color: rgba(255, 159, 67, 0.22);
+        background: linear-gradient(180deg, rgba(255, 159, 67, 0.06), rgba(255, 159, 67, 0.015));
+      }
+
       .nhlrost-filters-bar {
         flex: 0 0 auto;
         padding: 10px 14px;
@@ -8407,8 +8743,9 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-board-row__name-line {
-        display: flex;
+        display: inline-flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: 6px;
         min-width: 0;
       }
@@ -11959,6 +12296,27 @@ function RosterScreenStyles() {
           justify-content: space-between;
           align-items: center;
         }
+      }
+
+      .nhlrost-call-meeting-btn {
+        margin-top: 10px;
+        border: 1px solid rgba(19, 216, 231, 0.35);
+        border-radius: 6px;
+        background: rgba(19, 216, 231, 0.08);
+        color: var(--cyan);
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+      .nhlrost-call-meeting-btn:hover {
+        border-color: var(--cyan);
+        background: rgba(19, 216, 231, 0.14);
+      }
+      .nhlrost-profile-zone--relationship h3 {
+        color: var(--gold);
       }
     `}</style>
   );

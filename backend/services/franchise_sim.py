@@ -3351,6 +3351,38 @@ def _player_role_usage_mult(p: Any) -> float:
     return 0.85
 
 
+def _split_game_toi_sec(p: Any, total_sec: int, rng: random.Random) -> tuple[int, int, int]:
+    """Split total TOI into EV/PP/PK for the season stats ledger."""
+    total = max(0, int(total_sec))
+    if total <= 0:
+        return 0, 0, 0
+    pos = _pos_str(p).upper()
+    if pos == "G":
+        return total, 0, 0
+    usage = _player_role_usage_mult(p)
+    role_raw = str(getattr(p, "line_role", None) or getattr(p, "role", None) or "").lower()
+    pp_share = 0.0
+    pk_share = 0.0
+    if "pp" in role_raw or usage >= 1.5:
+        pp_share = min(0.22, 0.08 + usage * 0.05) + rng.uniform(-0.02, 0.02)
+    elif usage >= 1.0:
+        pp_share = min(0.12, 0.04 + usage * 0.03)
+    if pos == "D" or "pk" in role_raw or usage >= 1.2:
+        pk_share = min(0.18, 0.05 + usage * 0.04) + rng.uniform(-0.01, 0.02)
+    elif usage >= 0.9:
+        pk_share = min(0.08, 0.02 + usage * 0.02)
+    pp_share = max(0.0, min(0.28, pp_share))
+    pk_share = max(0.0, min(0.22, pk_share))
+    if pp_share + pk_share > 0.38:
+        scale = 0.38 / (pp_share + pk_share)
+        pp_share *= scale
+        pk_share *= scale
+    pp_sec = int(total * pp_share)
+    pk_sec = int(total * pk_share)
+    ev_sec = max(0, total - pp_sec - pk_sec)
+    return ev_sec, pp_sec, pk_sec
+
+
 def _rating_avg(p: Any, keys: List[str], default: float = 68.0) -> float:
     r = getattr(p, "ratings", None) or {}
     vals = [float(r.get(k, default) or default) for k in keys]
@@ -3408,6 +3440,9 @@ def _stat_ensure(session: FranchiseSession, p: Any, team_id: str) -> Dict[str, A
             "hit": 0,
             "blk": 0,
             "toi_sec": 0,
+            "ev_toi_sec": 0,
+            "pp_toi_sec": 0,
+            "pk_toi_sec": 0,
             "ga": 0,
             "w": 0,
             "l": 0,
@@ -3526,6 +3561,7 @@ def _skater_box_rows(
             toi_min = int(rng.randint(10, 18) * usage)
         toi_min = max(7, min(28, toi_min))
         toi = int(toi_min * 60 + rng.randint(0, 55))
+        ev_toi, pp_toi, pk_toi = _split_game_toi_sec(p, toi, rng)
         pim = int(rng.choices([0, 2, 4, 6], weights=[0.56, 0.28, 0.12, 0.04], k=1)[0])
         if pos == "D":
             hit = int(rng.choices([0, 1, 2, 3, 4], weights=[0.17, 0.28, 0.30, 0.18, 0.07], k=1)[0] * max(0.7, min(1.5, usage)))
@@ -3533,7 +3569,20 @@ def _skater_box_rows(
         else:
             hit = int(rng.choices([0, 1, 2, 3], weights=[0.29, 0.37, 0.24, 0.10], k=1)[0] * max(0.7, min(1.4, usage)))
             blk = int(rng.choices([0, 1, 2], weights=[0.64, 0.29, 0.07], k=1)[0] * max(0.7, min(1.3, usage)))
-        _stat_add(session, p, tid, gp=1, sog=sog, pim=pim, hit=hit, blk=blk, toi_sec=toi)
+        _stat_add(
+            session,
+            p,
+            tid,
+            gp=1,
+            sog=sog,
+            pim=pim,
+            hit=hit,
+            blk=blk,
+            toi_sec=toi,
+            ev_toi_sec=ev_toi,
+            pp_toi_sec=pp_toi,
+            pk_toi_sec=pk_toi,
+        )
         rows[pid] = {
             "player_id": pid,
             "name": _name_str(p),
@@ -3545,6 +3594,9 @@ def _skater_box_rows(
             "hit": hit,
             "blk": blk,
             "toi_sec": toi,
+            "ev_toi_sec": ev_toi,
+            "pp_toi_sec": pp_toi,
+            "pk_toi_sec": pk_toi,
         }
     return rows
 
@@ -6584,6 +6636,11 @@ def _compact_season_stats_for_player(session: FranchiseSession, player_id: str) 
     a = int(st.get("a", 0) or 0)
     pts = int(st.get("pts", 0) or (g + a))
     toi_sec = int(st.get("toi_sec", 0) or 0)
+    ev_toi_sec = int(st.get("ev_toi_sec") or st.get("even_strength_toi_sec") or 0)
+    pp_toi_sec = int(st.get("pp_toi_sec") or st.get("power_play_toi_sec") or 0)
+    pk_toi_sec = int(st.get("pk_toi_sec") or st.get("penalty_kill_toi_sec") or 0)
+    if ev_toi_sec <= 0 and toi_sec > 0:
+        ev_toi_sec = max(0, toi_sec - pp_toi_sec - pk_toi_sec)
     # Goalies: light bulk historically omitted toi_sec while accruing GA → absurd GAA.
     pos_u = str(st.get("position") or st.get("pos") or "").upper()
     if pos_u == "G" and gp > 0 and toi_sec < gp * 1800:
@@ -6621,6 +6678,13 @@ def _compact_season_stats_for_player(session: FranchiseSession, player_id: str) 
         "blk": int(st.get("blk", st.get("blocks", 0)) or 0),
         "blocks": int(st.get("blk", st.get("blocks", 0)) or 0),
         "toi": round((toi_sec / max(1, gp)) / 60.0, 1) if gp > 0 else 0.0,
+        "toi_sec": toi_sec,
+        "ev_toi_sec": ev_toi_sec,
+        "pp_toi_sec": pp_toi_sec,
+        "pk_toi_sec": pk_toi_sec,
+        "even_strength_toi_sec": ev_toi_sec,
+        "power_play_toi_sec": pp_toi_sec,
+        "penalty_kill_toi_sec": pk_toi_sec,
         "plus_minus": int(
             st.get("plus_minus", st.get("pm"))
             if st.get("plus_minus", st.get("pm")) is not None
@@ -7934,6 +7998,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                     "Medium" if float(row.get("scouting_confidence") or 70) < 65 else "Low"
                 ),
                 "scouting_confidence": round(float(conf), 1),
+                "public_scouting_confidence": round(float(base_conf), 1),
                 "intel_label": intel["intel_label"],
                 "potential_range": intel["potential_range"],
                 "ceiling_range": intel.get("ceiling_range") or intel["potential_range"],
@@ -13237,6 +13302,11 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
         league_lines,
         day_ordinal=day_ordinal,
     )
+    try:
+        from services.franchise_scouting import apply_passive_scouting_progress
+        apply_passive_scouting_progress(session)
+    except Exception:
+        pass
     if not bool(getattr(session, "_defer_payload_invalidation", False)):
         invalidate_session_payload_caches(session, reason="advance_day")
 
@@ -17143,14 +17213,14 @@ def _build_gm_world_payload(session: FranchiseSession) -> Dict[str, Any]:
     }
 
 
-def build_state_payload(session: FranchiseSession, *, include_heavy: bool = False) -> Dict[str, Any]:
+def build_state_payload(session: FranchiseSession, *, include_heavy: bool = False, crisis_tick: bool = False) -> Dict[str, Any]:
     from services.perf_profiler import span
 
     with span("state.build", heavy=bool(include_heavy)):
-        return _build_state_payload_impl(session, include_heavy=include_heavy)
+        return _build_state_payload_impl(session, include_heavy=include_heavy, crisis_tick=crisis_tick)
 
 
-def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool = False) -> Dict[str, Any]:
+def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool = False, crisis_tick: bool = False) -> Dict[str, Any]:
     _sync_nhl_calendar_bounds(session)
     _sync_session_phase_from_calendar(session)
     ensure_session_nhl_salary_cap(session)
@@ -17295,11 +17365,16 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
     except Exception:
         narrative_universe = {}
     try:
-        from services.trade_demand_engine import build_trade_demand_crisis_payload  # noqa: WPS433
+        from services.trade_demand_engine import (  # noqa: WPS433
+            build_trade_demand_crisis_payload,
+            get_trade_deadline_context,
+        )
 
-        trade_demand_crisis = build_trade_demand_crisis_payload(session)
+        trade_demand_crisis = build_trade_demand_crisis_payload(session, tick_timers=crisis_tick)
+        trade_deadline = get_trade_deadline_context(session)
     except Exception:
         trade_demand_crisis = None
+        trade_deadline = {}
     injuries_payload = _build_injuries_payload(session)
     injury_history_payload = _build_injury_history_payload(session)
 
@@ -17395,6 +17470,8 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         "active_storylines": len(storylines_norm),
         "narrative_universe": narrative_universe,
         "trade_demand_crisis": trade_demand_crisis,
+        "trade_deadline": trade_deadline,
+        "trade_stability_roster_flags": dict(getattr(session, "trade_stability_roster_flags", None) or {}),
         "conduct_org_pressure": dict(getattr(session, "_conduct_org_pressure", None) or {}),
         "injuries": injuries_payload,
         "injury_history": injury_history_payload,
@@ -17489,6 +17566,19 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         except Exception:
             pass
     try:
+        from services.franchise_scouting import _ensure_scouting_state, DEFAULT_SCOUTING_BUDGET
+
+        ss = _ensure_scouting_state(session)
+        payload["scouting_state"] = {
+            "budget": float(ss.get("budget") or DEFAULT_SCOUTING_BUDGET),
+            "used_budget": float(ss.get("used_budget") or 0.0),
+            "watchlist": list(ss.get("watchlist") or []),
+            "active_deployments": list(ss.get("active_deployments") or []),
+            "prospects": dict(ss.get("prospects") or {}),
+        }
+    except Exception:
+        payload["scouting_state"] = {}
+    try:
         import os
         from app.sim_engine.franchise.storyline_engine import build_storyline_debug_payload  # noqa: WPS433
 
@@ -17531,14 +17621,14 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
     return payload
 
 
-def build_state_payload_safe(session: FranchiseSession, *, include_heavy: bool = False) -> Dict[str, Any]:
+def build_state_payload_safe(session: FranchiseSession, *, include_heavy: bool = False, crisis_tick: bool = False) -> Dict[str, Any]:
     """Never fail Cup/offseason advances on a state-serialize bug — return a lean shell."""
     from services.json_safe import json_safe
     from services.perf_profiler import span
 
     with span("state.build_safe", heavy=bool(include_heavy)):
         try:
-            return json_safe(build_state_payload(session, include_heavy=include_heavy))
+            return json_safe(build_state_payload(session, include_heavy=include_heavy, crisis_tick=crisis_tick))
         except Exception as exc:  # noqa: BLE001
             try:
                 from services.franchise_offseason import slim_awards_payload_for_client
@@ -19076,3 +19166,36 @@ def execute_franchise_draft_pick(
 
     _ = pick_round, pick_overall, pick_number, drafting_team_id
     return execute_user_draft_pick(session, str(player_id), request_id=request_id)
+
+
+def resolve_player_meeting(session: FranchiseSession, interaction_id: str, choice_id: str) -> Dict[str, Any]:
+    """Resolve player-initiated universe meeting or storyline interaction."""
+    from app.sim_engine.franchise.storyline_engine import resolve_player_meeting_interaction
+
+    result = resolve_player_meeting_interaction(session, str(interaction_id), str(choice_id))
+    invalidate_session_payload_caches(session, "player_meeting_resolve")
+    return result
+
+
+def start_player_meeting(session: FranchiseSession, player_id: str, interaction_type: str) -> Dict[str, Any]:
+    """GM-initiated player meeting."""
+    from app.sim_engine.franchise.storyline_engine import start_gm_player_meeting
+
+    result = start_gm_player_meeting(session, str(player_id), str(interaction_type))
+    invalidate_session_payload_caches(session, "player_meeting_start")
+    return result
+
+
+def advance_player_meeting(session: FranchiseSession, meeting_id: str, choice_id: str) -> Dict[str, Any]:
+    """Resolve an in-progress GM-initiated meeting."""
+    from app.sim_engine.franchise.storyline_engine import resolve_gm_player_meeting
+
+    result = resolve_gm_player_meeting(session, str(meeting_id), str(choice_id))
+    invalidate_session_payload_caches(session, "player_meeting_advance")
+    return result
+
+
+def get_player_meeting_detail_payload(session: FranchiseSession, player_id: str) -> Dict[str, Any]:
+    from app.sim_engine.franchise.storyline_engine import get_player_meeting_detail
+
+    return get_player_meeting_detail(session, str(player_id))

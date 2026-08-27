@@ -132,6 +132,15 @@ def ensure_player_storyline_state(player: Any) -> Dict[str, Any]:
         ("previous_trade_demand_team", ""),
         ("previous_trade_demand_reason", ""),
         ("broken_promises", 0),
+        ("promises_kept", 0),
+        ("captaincy_promised", False),
+        ("captaincy_stripped", False),
+        ("family_satisfaction", 62),
+        ("home_stability", 65),
+        ("relocation_strain", 0),
+        ("media_stress", 0),
+        ("stability_concern_days", 0),
+        ("stability_warnings_sent", []),
     ):
         st.setdefault(k, default)
     return st
@@ -179,6 +188,7 @@ class PlayerConcernSnapshot:
     previous_trade_demands: int = 0
     agent_patience: float = 0.5
     agent_pressure: float = 0.0
+    human_life_pressure: float = 0.0
     pressures: Dict[str, float] = field(default_factory=dict)
 
 
@@ -202,9 +212,550 @@ def _team_win_pct(session: Any, team: Any) -> float:
         return 0.50
 
 
+@dataclass
+class PlayerDeploymentSnapshot:
+    """Real deployment inputs for role / ice-time satisfaction."""
+
+    player_id: str = ""
+    gp: int = 0
+    pts: float = 0.0
+    avg_toi_min: Optional[float] = None
+    pp_toi_min_pg: float = 0.0
+    pk_toi_min_pg: float = 0.0
+    ev_toi_min_pg: float = 0.0
+    ev_line_rank: int = 0
+    pp_unit: int = 0
+    pk_unit: int = 0
+    scratched: bool = False
+    line_role: str = ""
+    stat_source: str = ""
+    line_source: str = ""
+
+
+_EV_LINE_RANK = {"f1": 1, "f2": 2, "f3": 3, "f4": 4, "line1": 1, "line2": 2, "line3": 3, "line4": 4}
+_DEF_PAIR_RANK = {"d1": 1, "d2": 2, "d3": 3, "pair1": 1, "pair2": 2, "pair3": 3}
+_PP_UNIT_RANK = {"pp1": 1, "pp2": 2}
+_PK_UNIT_RANK = {"pk1": 1, "pk2": 2, "pk3": 3}
+
+
+def _team_id(team: Any) -> str:
+    return str(_get(team, "team_id", "") or _get(team, "id", "") or "")
+
+
+def _lines_unit_payload(session: Any, team: Any, unit_type: str) -> Optional[Any]:
+    """Saved Edit Lines payload for this team (user team only)."""
+    if session is None or team is None:
+        return None
+    if _team_id(team) != str(getattr(session, "user_team_id", "") or ""):
+        return None
+    lines_root = getattr(session, "lines", None)
+    if not isinstance(lines_root, dict):
+        return None
+    block = lines_root.get(unit_type)
+    if not isinstance(block, dict):
+        return None
+    inner = block.get("lines")
+    return inner if inner is not None else block
+
+
+def _line_rank_from_unit(group: str, line_id: str, slot: str) -> int:
+    lid = str(line_id or "").lower()
+    if group == "forwards":
+        return int(_EV_LINE_RANK.get(lid, 4))
+    if group == "defense":
+        return int(_DEF_PAIR_RANK.get(lid, 3))
+    if group == "goalies":
+        slot_u = str(slot or "").lower()
+        if slot_u in ("starter", "start"):
+            return 1
+        if slot_u in ("backup", "back"):
+            return 2
+        return 3
+    return 5
+
+
+def _parse_line_ranks(lines: Any) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    if not isinstance(lines, dict):
+        return out
+    for group in ("forwards", "defense", "goalies"):
+        for line in lines.get(group) or []:
+            if not isinstance(line, dict):
+                continue
+            line_id = str(line.get("id") or "")
+            for slot, pid in (line.get("slots") or {}).items():
+                spid = str(pid or "")
+                if spid:
+                    out[spid] = _line_rank_from_unit(group, line_id, str(slot))
+    return out
+
+
+def _parse_special_team_units(lines: Any, prefix: str, rank_map: Dict[str, int]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    if isinstance(lines, dict) and (lines.get("forwards") or lines.get("defense") or lines.get("units")):
+        units = lines.get("units") or lines.get("forwards") or []
+        if isinstance(lines.get("forwards"), list):
+            units = lines.get("forwards")
+        for unit in units if isinstance(units, list) else []:
+            if not isinstance(unit, dict):
+                continue
+            uid = str(unit.get("id") or "").lower()
+            rank = rank_map.get(uid, 0)
+            if rank <= 0 and uid.startswith(prefix):
+                try:
+                    rank = int(uid.replace(prefix, "") or "0")
+                except ValueError:
+                    rank = 0
+            for pid in (unit.get("slots") or {}).values():
+                spid = str(pid or "")
+                if spid and rank > 0:
+                    out[spid] = rank
+        return out
+    if isinstance(lines, list):
+        for unit in lines:
+            if not isinstance(unit, dict):
+                continue
+            uid = str(unit.get("id") or "").lower()
+            rank = rank_map.get(uid, 0)
+            for pid in (unit.get("slots") or {}).values():
+                spid = str(pid or "")
+                if spid and rank > 0:
+                    out[spid] = rank
+    return out
+
+
+def _season_stat_row(player: Any, session: Any = None) -> Dict[str, Any]:
+    """Current-season box — prefers session.player_season_stats authority."""
+    pid = _player_id(player)
+    if session is not None and pid:
+        book = getattr(session, "player_season_stats", None) or {}
+        row = book.get(pid)
+        if isinstance(row, dict) and row:
+            return dict(row)
+
+    raw = getattr(player, "season_stats", None)
+    if not isinstance(raw, dict):
+        return {}
+    if raw.get("gp") is not None or raw.get("toi_sec") is not None:
+        return raw
+    for value in raw.values():
+        if isinstance(value, dict) and (value.get("gp") is not None or value.get("toi_sec") is not None):
+            return value
+    return raw
+
+
+def _avg_toi_minutes_from_row(row: Dict[str, Any]) -> Optional[float]:
+    gp = int(row.get("gp") or row.get("games") or row.get("games_played") or 0)
+    toi_sec = int(row.get("toi_sec") or row.get("toi_total_sec") or row.get("time_on_ice_sec") or 0)
+    if toi_sec <= 0 and row.get("toi") is not None:
+        try:
+            toi_val = float(row.get("toi"))
+            if toi_val > 0:
+                if toi_val <= 45.0 and gp > 0:
+                    return toi_val
+                if gp > 0:
+                    return toi_val / gp if toi_val > 45.0 else toi_val
+        except (TypeError, ValueError):
+            pass
+    if gp >= 3 and toi_sec > 0:
+        return toi_sec / gp / 60.0
+    return None
+
+
+def _player_avg_toi_minutes(player: Any, session: Any = None) -> Optional[float]:
+    row = _season_stat_row(player, session)
+    return _avg_toi_minutes_from_row(row)
+
+
+def _project_ev_line_rank(player: Any, team: Any) -> int:
+    """Fallback EV line rank from roster OVR sort when no saved lines."""
+    roster = list(getattr(team, "roster", None) or [])
+    if not roster:
+        return 2
+    pid = _player_id(player)
+    pos = str(
+        getattr(player, "position", "")
+        or getattr(getattr(player, "identity", None), "position", "")
+        or "C"
+    ).upper()
+    if pos == "G":
+        return 1
+    if pos in {"D", "LD", "RD", "DEF", "DEFENSE"}:
+        defs = sorted(
+            [p for p in roster if str(getattr(p, "position", "") or "").upper() in {"D", "LD", "RD", "DEF", "DEFENSE"}],
+            key=lambda p: -_player_ovr(p),
+        )
+        for idx, p in enumerate(defs[:6], start=1):
+            if _player_id(p) == pid:
+                return min(3, (idx - 1) // 2 + 1)
+        return 3
+    fw = sorted(
+        [
+            p
+            for p in roster
+            if str(getattr(p, "position", "") or "").upper() not in {"D", "LD", "RD", "DEF", "DEFENSE", "G", "GOALIE"}
+        ],
+        key=lambda p: -_player_ovr(p),
+    )
+    for idx, p in enumerate(fw[:12], start=1):
+        if _player_id(p) == pid:
+            return min(4, (idx - 1) // 3 + 1)
+    return 4
+
+
+def resolve_player_deployment(session: Any, player: Any, team: Any) -> PlayerDeploymentSnapshot:
+    """Merge franchise stats + saved lines into one deployment snapshot."""
+    pid = _player_id(player)
+    row = _season_stat_row(player, session)
+    gp = int(row.get("gp") or row.get("games") or 0)
+    pts = float(row.get("pts") or row.get("points") or (int(row.get("g") or 0) + int(row.get("a") or 0)))
+    avg_toi = _avg_toi_minutes_from_row(row)
+
+    pp_toi_sec = int(row.get("pp_toi_sec") or row.get("power_play_toi_sec") or 0)
+    pk_toi_sec = int(row.get("pk_toi_sec") or row.get("penalty_kill_toi_sec") or 0)
+    ev_toi_sec = int(row.get("ev_toi_sec") or row.get("even_strength_toi_sec") or 0)
+    if ev_toi_sec <= 0 and int(row.get("toi_sec") or 0) > 0:
+        ev_toi_sec = max(0, int(row.get("toi_sec") or 0) - pp_toi_sec - pk_toi_sec)
+
+    gp_div = max(1, gp)
+    pp_min = pp_toi_sec / gp_div / 60.0
+    pk_min = pk_toi_sec / gp_div / 60.0
+    ev_min = ev_toi_sec / gp_div / 60.0 if ev_toi_sec > 0 else (avg_toi or 0.0) - pp_min - pk_min
+
+    ev_payload = _lines_unit_payload(session, team, "even_strength")
+    pp_payload = _lines_unit_payload(session, team, "power_play")
+    pk_payload = _lines_unit_payload(session, team, "penalty_kill")
+
+    ev_ranks = _parse_line_ranks(ev_payload) if ev_payload else {}
+    pp_units = _parse_special_team_units(pp_payload, "pp", _PP_UNIT_RANK) if pp_payload else {}
+    pk_units = _parse_special_team_units(pk_payload, "pk", _PK_UNIT_RANK) if pk_payload else {}
+
+    ev_rank = int(ev_ranks.get(pid) or 0)
+    pp_unit = int(pp_units.get(pid) or 0)
+    pk_unit = int(pk_units.get(pid) or 0)
+
+    line_source = "none"
+    if ev_rank > 0:
+        line_source = "session.lines.even_strength"
+    elif ev_payload is not None:
+        line_source = "session.lines.missing_from_ev"
+    else:
+        ev_rank = _project_ev_line_rank(player, team)
+        line_source = "roster_projection"
+
+    pos = str(getattr(player, "position", "") or "").upper()
+    is_goalie = pos in {"G", "GOALIE", "GOALTENDER"}
+    roster_ids = {_player_id(p) for p in (getattr(team, "roster", None) or []) if _player_id(p)}
+    scratched = (
+        not is_goalie
+        and pid in roster_ids
+        and ev_payload is not None
+        and pid not in ev_ranks
+        and pid not in pp_units
+        and pid not in pk_units
+    )
+
+    if scratched:
+        line_role = "scratch"
+    elif is_goalie:
+        line_role = "G1" if ev_rank <= 1 else "G2" if ev_rank == 2 else "G3"
+    elif pos in {"D", "LD", "RD", "DEF", "DEFENSE"}:
+        line_role = f"D{ev_rank}"
+    else:
+        line_role = f"L{ev_rank}"
+
+    stat_source = "session.player_season_stats" if session is not None and pid in (getattr(session, "player_season_stats", None) or {}) else ""
+    if not stat_source and row:
+        stat_source = str(row.get("stat_authority") or "player.season_stats")
+
+    return PlayerDeploymentSnapshot(
+        player_id=pid,
+        gp=gp,
+        pts=pts,
+        avg_toi_min=avg_toi,
+        pp_toi_min_pg=round(pp_min, 2),
+        pk_toi_min_pg=round(pk_min, 2),
+        ev_toi_min_pg=round(max(0.0, ev_min), 2),
+        ev_line_rank=ev_rank,
+        pp_unit=pp_unit,
+        pk_unit=pk_unit,
+        scratched=scratched,
+        line_role=line_role,
+        stat_source=stat_source,
+        line_source=line_source,
+    )
+
+
+def sync_player_role_from_real_data(session: Any, player: Any, team: Any) -> PlayerDeploymentSnapshot:
+    """Attach line role + psych satisfaction from stats/lines onto the live player object."""
+    deploy = resolve_player_deployment(session, player, team)
+    try:
+        setattr(player, "line_role", deploy.line_role)
+        setattr(player, "pp_unit", deploy.pp_unit)
+        setattr(player, "pk_unit", deploy.pk_unit)
+        setattr(player, "_deployment_snapshot", deploy)
+        if deploy.scratched:
+            setattr(player, "_recently_scratched", True)
+    except Exception:
+        pass
+
+    satisfaction = infer_role_satisfaction_from_deployment(player, team, session, deploy=deploy)
+    if satisfaction is not None:
+        sat_norm = round(_clamp(satisfaction / 100.0, 0.0, 1.0), 4)
+        psych = getattr(player, "psych", None)
+        if psych is not None:
+            try:
+                setattr(psych, "role_satisfaction", sat_norm)
+                setattr(psych, "ice_time_satisfaction", sat_norm)
+            except Exception:
+                pass
+    return deploy
+
+
+def _expected_toi_from_deployment(
+    deploy: PlayerDeploymentSnapshot,
+    *,
+    ovr: float,
+    is_defense: bool,
+) -> float:
+    if deploy.scratched:
+        return 7.5 if deploy.gp > 0 else 0.0
+
+    rank = max(1, int(deploy.ev_line_rank or 4))
+    if is_defense:
+        base = {1: 23.0, 2: 20.0, 3: 16.5}.get(rank, 14.0)
+    else:
+        base = {1: 20.5, 2: 17.0, 3: 14.0, 4: 11.0}.get(rank, 9.5)
+
+    if ovr >= 90 and rank >= 3:
+        base += 1.5
+    elif ovr >= 86 and rank >= 4:
+        base += 1.0
+
+    if deploy.pp_unit == 1:
+        base += 1.8
+    elif deploy.pp_unit == 2:
+        base += 0.9
+    elif deploy.pp_toi_min_pg >= 1.2:
+        base += min(1.5, deploy.pp_toi_min_pg * 0.45)
+
+    if deploy.pk_unit == 1:
+        base += 0.6
+    elif deploy.pk_toi_min_pg >= 0.8:
+        base += 0.4
+
+    return base
+
+
+def infer_role_satisfaction_from_deployment(
+    player: Any,
+    team: Any,
+    session: Any,
+    *,
+    deploy: Optional[PlayerDeploymentSnapshot] = None,
+) -> Optional[float]:
+    """Derive role satisfaction from franchise stats + saved lines (0–100)."""
+    deploy = deploy or resolve_player_deployment(session, player, team)
+    avg_toi = deploy.avg_toi_min
+    if avg_toi is None:
+        avg_toi = _player_avg_toi_minutes(player, session)
+
+    ovr = _player_ovr(player)
+    pos = str(
+        getattr(player, "position", "")
+        or getattr(getattr(player, "identity", None), "position", "")
+        or "C"
+    ).upper()
+    is_defense = pos in {"D", "LD", "RD", "DEF", "DEFENSE"}
+
+    if deploy.scratched:
+        if ovr >= 80:
+            return 22.0
+        return 30.0
+
+    expected = _expected_toi_from_deployment(deploy, ovr=ovr, is_defense=is_defense)
+
+    if avg_toi is None:
+        if expected > 0:
+            rank = max(1, deploy.ev_line_rank or _project_ev_line_rank(player, team))
+            if rank >= 4 and ovr >= 82:
+                return 36.0
+            if rank <= 2 and ovr >= 86:
+                return 74.0
+            return 52.0
+        psych = getattr(player, "psych", None)
+        ice = getattr(psych, "ice_time_satisfaction", None) if psych is not None else None
+        if ice is not None:
+            return _to_0_100(float(ice) * 100.0 if float(ice) <= 1.5 else float(ice))
+        return None
+
+    ratio = avg_toi / max(7.5, expected)
+    if ratio >= 1.05:
+        satisfaction = 88.0 + min(12.0, (ratio - 1.0) * 45.0)
+    elif ratio >= 0.92:
+        satisfaction = 72.0 + (ratio - 0.92) / 0.13 * 16.0
+    elif ratio >= 0.78:
+        satisfaction = 52.0 + (ratio - 0.78) / 0.14 * 20.0
+    elif ratio >= 0.62:
+        satisfaction = 32.0 + (ratio - 0.62) / 0.16 * 20.0
+    else:
+        satisfaction = max(8.0, ratio / 0.62 * 32.0)
+
+    if deploy.gp < 5 and int(getattr(session, "calendar_cursor", 40) or 40) > 20:
+        satisfaction = min(satisfaction, 35.0)
+
+    if deploy.ev_line_rank >= 4 and ovr >= 80:
+        satisfaction = min(satisfaction, 38.0)
+    elif deploy.ev_line_rank <= 2 and ovr >= 84 and ratio >= 0.9:
+        satisfaction = max(satisfaction, 70.0)
+
+    if (
+        deploy.pp_unit == 0
+        and ovr >= 86
+        and not is_defense
+        and deploy.ev_line_rank <= 2
+        and deploy.line_source.startswith("session.lines")
+        and deploy.pp_toi_min_pg < 0.25
+    ):
+        satisfaction -= 10.0
+
+    return round(_clamp(satisfaction, 0.0, 100.0), 2)
+
+
+def infer_performance_vs_deployment(
+    player: Any,
+    team: Any,
+    role_satisfaction: float,
+    *,
+    session: Any = None,
+    deploy: Optional[PlayerDeploymentSnapshot] = None,
+) -> float:
+    """Production (pts/60) relative to minutes — benched producers get extra frustration."""
+    deploy = deploy or resolve_player_deployment(session, player, team)
+    avg_toi = deploy.avg_toi_min
+    if avg_toi is None:
+        avg_toi = _player_avg_toi_minutes(player, session)
+    ovr = _player_ovr(player)
+    if avg_toi is None or ovr < 70:
+        return role_satisfaction
+
+    row = _season_stat_row(player, session)
+    pts = float(deploy.pts or row.get("pts") or row.get("points") or 0)
+    toi_sec = int(row.get("toi_sec") or row.get("toi_total_sec") or 0)
+    if toi_sec <= 0 and avg_toi and deploy.gp > 0:
+        toi_sec = int(avg_toi * deploy.gp * 60)
+    if toi_sec <= 0:
+        return role_satisfaction
+
+    pts60 = pts / (toi_sec / 3600.0)
+    expected_pts60 = 1.85 if ovr >= 88 else 1.45 if ovr >= 82 else 1.05 if ovr >= 76 else 0.70
+    prod_ratio = pts60 / max(0.25, expected_pts60)
+
+    pos = str(getattr(player, "position", "") or "").upper()
+    is_defense = pos in {"D", "LD", "RD", "DEF", "DEFENSE"}
+    expected = _expected_toi_from_deployment(deploy, ovr=ovr, is_defense=is_defense)
+
+    if prod_ratio >= 1.08 and avg_toi + 1.5 < expected:
+        return min(role_satisfaction, 28.0)
+    if prod_ratio >= 1.05 and role_satisfaction < 45:
+        return min(role_satisfaction, 35.0)
+    if ovr >= 84 and role_satisfaction < 45:
+        return min(role_satisfaction, 35.0)
+    return role_satisfaction
+
+
+def _infer_captaincy_treatment(player: Any, pst: Dict[str, Any]) -> float:
+    cap = str(
+        getattr(player, "captaincy", "")
+        or getattr(player, "captain_role", "")
+        or pst.get("captaincy", "")
+        or ""
+    ).upper()
+    is_c = cap in ("C", "CAPTAIN") or bool(getattr(player, "is_captain", False))
+    is_a = cap in ("A", "ALT", "ALTERNATE")
+    score = 62.0
+    if is_c:
+        score = 80.0
+    elif is_a:
+        score = 72.0
+    if bool(pst.get("captaincy_promised")) and not is_c and not is_a:
+        score = 38.0
+    if bool(pst.get("captaincy_stripped")):
+        score = 24.0
+    return score
+
+
+def _infer_contract_satisfaction(player: Any, contract: Any, ovr: float) -> float:
+    if contract is None:
+        return 55.0
+    try:
+        aav = float(
+            _get(contract, "aav_m", 0)
+            or _get(contract, "cap_hit_m", 0)
+            or _get(contract, "salary_m", 0)
+            or 0
+        )
+    except (TypeError, ValueError):
+        aav = 0.0
+    if aav <= 0:
+        return 55.0
+    expected = max(1.2, float(ovr) * 0.105)
+    ratio = aav / expected
+    if ratio >= 1.10:
+        return 84.0
+    if ratio >= 0.95:
+        return 70.0
+    if ratio >= 0.80:
+        return 54.0
+    return 36.0
+
+
+def _infer_family_satisfaction(pst: Dict[str, Any], psych: Dict[str, Any]) -> float:
+    base = float(pst.get("family_satisfaction") or pst.get("home_stability") or 62)
+    if base <= 1.5:
+        base *= 100.0
+    stress = float(pst.get("personal_stress") or 0)
+    if stress > 0:
+        base -= min(18.0, stress * 0.22)
+    return _clamp(base, 0.0, 100.0)
+
+
+def _infer_relocation_strain(pst: Dict[str, Any]) -> float:
+    raw = float(pst.get("relocation_strain") or pst.get("relocation_pressure") or 0)
+    if raw <= 1.5:
+        return _clamp(raw * 100.0, 0.0, 100.0)
+    return _clamp(raw, 0.0, 100.0)
+
+
+def _infer_media_stress(pst: Dict[str, Any], psych: Dict[str, Any], trade_exposure: float) -> float:
+    raw = psych.get("media_stress", pst.get("media_stress", 0.28))
+    if raw is None:
+        raw = 28.0
+    ms = float(raw)
+    if ms <= 1.5:
+        ms *= 100.0
+    return _clamp(ms * 0.55 + float(trade_exposure) * 0.45, 0.0, 100.0)
+
+
+def _infer_organizational_direction(
+    winning_sat: float,
+    gm_trust: float,
+    coach_trust: float,
+    team: Any,
+) -> float:
+    window = str(getattr(team, "gm_window", "") or getattr(team, "window", "") or "").lower()
+    score = winning_sat * 0.42 + gm_trust * 0.33 + coach_trust * 0.25
+    if "rebuild" in window or "tank" in window or "declin" in window:
+        score -= 10.0
+    elif "contend" in window or "win" in window:
+        score += 5.0
+    return _clamp(score, 0.0, 100.0)
+
+
 def gather_player_concerns(session: Any, player: Any, team: Any) -> PlayerConcernSnapshot:
     from app.sim_engine.systems.chemistry import ensure_player_chemistry_profile, safe_get_psych
 
+    deploy = sync_player_role_from_real_data(session, player, team)
     psych = safe_get_psych(player)
     chem = ensure_player_chemistry_profile(player)
     pst = ensure_player_storyline_state(player)
@@ -212,6 +763,9 @@ def gather_player_concerns(session: Any, player: Any, team: Any) -> PlayerConcer
     gm_rel = get_agent_gm_relationship(session, str(agent.get("id") or ""))
 
     role = _to_0_100(psych.get("role_satisfaction", 0.5) * 100.0 if psych.get("role_satisfaction", 0.5) <= 1.5 else psych.get("role_satisfaction", 50))
+    deployment_role = infer_role_satisfaction_from_deployment(player, team, session, deploy=deploy)
+    if deployment_role is not None:
+        role = deployment_role
     morale = _to_0_100(psych.get("morale", 0.5) * 100.0 if psych.get("morale", 0.5) <= 1.5 else psych.get("morale", 50))
     conf = _to_0_100(psych.get("confidence", 0.5) * 100.0 if psych.get("confidence", 0.5) <= 1.5 else psych.get("confidence", 50))
 
@@ -242,9 +796,12 @@ def gather_player_concerns(session: Any, player: Any, team: Any) -> PlayerConcer
 
     gm_trust = _to_0_100(float(pst.get("gm_trust", 0.72)) * 100.0 if float(pst.get("gm_trust", 0.72)) <= 1.5 else pst.get("gm_trust", 72))
 
+    age = int(getattr(getattr(player, "identity", None), "age", None) or getattr(player, "age", 27) or 27)
+    ovr = _player_ovr(player)
+
     contract = getattr(player, "contract", None)
     has_ntc = False
-    contract_sat = 55.0
+    contract_sat = _infer_contract_satisfaction(player, contract, ovr)
     contract_sec = 55.0
     if contract is not None:
         clause = str(
@@ -257,21 +814,64 @@ def gather_player_concerns(session: Any, player: Any, team: Any) -> PlayerConcer
         yrs = int(_get(contract, "years_remaining", 0) or _get(contract, "term", 0) or 0)
         contract_sec = _clamp(40.0 + yrs * 8.0, 0.0, 100.0)
 
-    age = int(getattr(getattr(player, "identity", None), "age", None) or getattr(player, "age", 27) or 27)
-    ovr = _player_ovr(player)
     career_pressure = 0.0
     if age >= 32 and ovr >= 80:
         career_pressure = min(35.0, (age - 31) * 4.0)
     dev_sat = 70.0 if age >= 26 else _clamp(role + (winning_sat - 50) * 0.25, 0.0, 100.0)
 
-    perf_vs_deploy = role
-    if ovr >= 84 and role < 45:
-        perf_vs_deploy = min(role, 35.0)
+    perf_vs_deploy = infer_performance_vs_deployment(player, team, role, session=session, deploy=deploy)
 
     prev_demands = int(pst.get("career_trade_demand_count") or 0)
     agent_patience = float(agent.get("patience", 0.5) or 0.5) + (float(gm_rel.get("agent_gm_trust", 0.55)) - 0.5) * 0.2
 
-    return PlayerConcernSnapshot(
+    captaincy_treatment = _infer_captaincy_treatment(player, pst)
+    family_sat = _infer_family_satisfaction(pst, psych)
+    relocation = _infer_relocation_strain(pst)
+    media_stress = _infer_media_stress(pst, psych, trade_exposure)
+    org_direction = _infer_organizational_direction(winning_sat, gm_trust, coach_trust, team)
+    broken_promises = float(int(pst.get("broken_promises") or 0) * 18.0)
+    if bool(pst.get("captaincy_stripped")):
+        broken_promises = min(100.0, broken_promises + 12.0)
+
+    human_pressure_score = 0.0
+    human_pressure_tier = 0
+    human_life_pressure = 0.0
+    try:
+        from app.sim_engine.franchise.storyline_engine import _u_sync_player_entities  # noqa: WPS433
+
+        pid = str(getattr(player, "id", "") or getattr(player, "player_id", "") or "")
+        if pid:
+            entities = _u_sync_player_entities(session)
+            entity = entities.get(pid) or {}
+            life = entity.get("life") or {}
+            est = entity.get("state") or {}
+            hp = entity.get("human_pressure") or {}
+            if life:
+                family_sat = _clamp(
+                    float(life.get("home_stability") or family_sat) * 0.45
+                    + (100.0 - float(life.get("relocation_strain") or relocation)) * 0.25
+                    + float(life.get("city_attachment") or 50) * 0.30,
+                    0.0,
+                    100.0,
+                )
+                partner = life.get("partner") if isinstance(life.get("partner"), dict) else {}
+                if partner:
+                    family_sat = _clamp(family_sat * 0.7 + float(partner.get("city_satisfaction") or 55) * 0.3, 0.0, 100.0)
+                relocation = _clamp(float(life.get("relocation_strain") or relocation), 0.0, 100.0)
+            if est.get("belonging") is not None:
+                belonging = _to_0_100(float(est.get("belonging")))
+            if est.get("gm_trust") is not None:
+                gm_trust = _to_0_100(float(est.get("gm_trust")))
+            human_pressure_score = float(hp.get("score") or 0)
+            human_pressure_tier = int(hp.get("tier") or 0)
+            if human_pressure_tier >= 2:
+                human_life_pressure = human_pressure_score * 0.35
+            elif human_pressure_tier >= 1:
+                human_life_pressure = human_pressure_score * 0.18
+    except Exception:
+        pass
+
+    snap = PlayerConcernSnapshot(
         role_satisfaction=role,
         gm_trust=gm_trust,
         coach_trust=coach_trust,
@@ -287,28 +887,34 @@ def gather_player_concerns(session: Any, player: Any, team: Any) -> PlayerConcer
         contract_satisfaction=contract_sat,
         contract_security=contract_sec,
         trade_exposure=trade_exposure,
-        broken_promises=float(int(pst.get("broken_promises") or 0) * 18.0),
+        broken_promises=broken_promises,
         development_satisfaction=dev_sat,
         team_belonging=belonging,
         locker_room_relationships=belonging,
-        leadership_treatment=coach_trust,
+        leadership_treatment=captaincy_treatment,
         performance_vs_deployment=perf_vs_deploy,
         career_stage_pressure=career_pressure,
         nhl_experience=min(100.0, max(0.0, (age - 18) * 4.5)),
         has_ntc=has_ntc,
-        family_satisfaction=60.0,
-        relocation_strain=0.0,
-        media_stress=min(100.0, trade_exposure * 0.35),
-        organizational_direction=winning_sat * 0.6 + gm_trust * 0.4,
+        family_satisfaction=family_sat,
+        relocation_strain=relocation,
+        media_stress=media_stress,
+        organizational_direction=org_direction,
         recent_team_performance=winning_sat,
         previous_trade_demands=prev_demands,
         agent_patience=_clamp(agent_patience, 0.05, 0.98),
         agent_pressure=max(0.0, (1.0 - agent_patience) * 20.0),
+        human_life_pressure=human_life_pressure,
     )
+    return snap
 
 
-def _dissatisfaction(satisfaction: float) -> float:
-    return _clamp(100.0 - satisfaction, 0.0, 100.0)
+def _dissatisfaction(satisfaction: float, *, neutral_floor: float = 62.0) -> float:
+    """Only count dissatisfaction below neutral_floor — stubbed inputs at ~55 won't stack."""
+    if satisfaction >= neutral_floor:
+        return 0.0
+    scale = (neutral_floor - satisfaction) / neutral_floor
+    return _clamp(scale * neutral_floor, 0.0, 100.0)
 
 
 def character_tolerance_bonus(character: float) -> float:
@@ -372,24 +978,33 @@ def _winning_pressure(snap: PlayerConcernSnapshot) -> float:
 
 
 def _contract_pressure(snap: PlayerConcernSnapshot) -> float:
-    dissat = (_dissatisfaction(snap.contract_satisfaction) * 0.6 + _dissatisfaction(snap.contract_security) * 0.4)
-    return dissat * 0.14
+    dissat = (
+        _dissatisfaction(snap.contract_satisfaction, neutral_floor=60.0) * 0.6
+        + _dissatisfaction(snap.contract_security, neutral_floor=52.0) * 0.4
+    )
+    return dissat * 0.10
 
 
 def _development_pressure(snap: PlayerConcernSnapshot) -> float:
-    dissat = _dissatisfaction(snap.development_satisfaction)
+    dissat = _dissatisfaction(snap.development_satisfaction, neutral_floor=58.0)
     if snap.ambition >= 72:
-        dissat *= 1.28
-    return dissat * 0.12
+        dissat *= 1.20
+    return dissat * 0.08
+
+
+def _coach_pressure(snap: PlayerConcernSnapshot) -> float:
+    dissat = _dissatisfaction(snap.coach_trust, neutral_floor=58.0)
+    if snap.leadership_treatment < 50:
+        dissat = max(dissat, _dissatisfaction(snap.leadership_treatment, neutral_floor=55.0) * 0.45)
+    return dissat * 0.10
 
 
 def _belonging_pressure(snap: PlayerConcernSnapshot) -> float:
     dissat = (
-        _dissatisfaction(snap.team_belonging) * 0.45
-        + _dissatisfaction(snap.locker_room_relationships) * 0.35
-        + _dissatisfaction(snap.leadership_treatment) * 0.20
+        _dissatisfaction(snap.team_belonging, neutral_floor=58.0) * 0.55
+        + _dissatisfaction(snap.locker_room_relationships, neutral_floor=58.0) * 0.45
     )
-    return dissat * 0.14
+    return dissat * 0.10
 
 
 def _trade_exposure_pressure(snap: PlayerConcernSnapshot) -> float:
@@ -406,17 +1021,21 @@ def _trade_exposure_pressure(snap: PlayerConcernSnapshot) -> float:
 
 
 def _personal_pressure(snap: PlayerConcernSnapshot) -> float:
+    family_dissat = _dissatisfaction(snap.family_satisfaction, neutral_floor=62.0)
     dissat = (
-        _dissatisfaction(snap.family_satisfaction) * 0.5
-        + snap.relocation_strain * 0.25
-        + snap.media_stress * 0.25
+        snap.relocation_strain * 0.30
+        + snap.media_stress * 0.22
+        + family_dissat * 0.28
+        + snap.broken_promises * 0.35
     )
-    return dissat * 0.08
+    if dissat < 4.0:
+        return 0.0
+    return dissat * 0.07
 
 
 def _organizational_pressure(snap: PlayerConcernSnapshot) -> float:
-    dissat = _dissatisfaction(snap.organizational_direction)
-    return dissat * 0.10 + snap.career_stage_pressure * 0.06
+    dissat = _dissatisfaction(snap.organizational_direction, neutral_floor=55.0)
+    return dissat * 0.08 + snap.career_stage_pressure * 0.05
 
 
 def _performance_pressure(snap: PlayerConcernSnapshot) -> float:
@@ -436,7 +1055,7 @@ def compute_component_pressures(snap: PlayerConcernSnapshot) -> Dict[str, float]
         "belonging": _belonging_pressure(snap),
         "trade_exposure": _trade_exposure_pressure(snap),
         "personal": _personal_pressure(snap),
-        "coach": _management_pressure(snap) * 0.35,
+        "coach": _coach_pressure(snap),
         "organizational": _organizational_pressure(snap),
         "performance": _performance_pressure(snap),
     }
@@ -444,6 +1063,8 @@ def compute_component_pressures(snap: PlayerConcernSnapshot) -> Dict[str, float]
         pressures["broken_promise"] = min(28.0, snap.broken_promises * 1.1)
     if snap.previous_trade_demands > 0:
         pressures["demand_history"] = min(18.0, snap.previous_trade_demands * 4.5)
+    if float(snap.human_life_pressure or 0) > 0:
+        pressures["human_life"] = float(snap.human_life_pressure)
     snap.pressures = pressures
     return pressures
 
@@ -487,16 +1108,43 @@ def stability_to_escalation_level(stability: float) -> int:
     return 4
 
 
-def character_escalation_skip(character: float, stability: float) -> int:
-    """Low character can skip warning stages."""
+def character_daily_drift_multiplier(character: float) -> float:
+    """Low character erodes stability faster over time — not instant level skips."""
     c = float(character)
+    if c >= 85:
+        return 0.75
     if c >= 77:
-        return 0
-    if c < 58 and stability < STABILITY_ANGER_MIN + 8:
-        return 2
-    if c < 65 and stability < STABILITY_APATHY_MIN + 6:
-        return 1
-    return 0
+        return 0.90
+    if c >= 70:
+        return 1.0
+    if c >= 63:
+        return 1.15
+    if c >= 55:
+        return 1.30
+    return 1.45
+
+
+def count_significant_pressures(pressures: Dict[str, float], threshold: float = 7.5) -> int:
+    return sum(1 for v in (pressures or {}).values() if float(v or 0) >= threshold)
+
+
+def formal_demand_eligible(stability_row: Dict[str, Any]) -> bool:
+    """Require meaningful multi-signal breakdown before a formal L3+ demand."""
+    score = float(stability_row.get("trade_stability_score") or 100.0)
+    level = stability_to_escalation_level(score)
+    if level < 3:
+        return False
+    concern_days = int(stability_row.get("stability_concern_days") or 0)
+    if score > 22 and concern_days < 21:
+        return False
+    pressures = dict(stability_row.get("pressures") or {})
+    sig = count_significant_pressures(pressures)
+    if score <= 22:
+        return True
+    if sig >= 2:
+        return True
+    top = max(pressures.values()) if pressures else 0.0
+    return top >= 14.0 and score <= 32
 
 
 def readiness_penalties(stability: float, character: float, mental: float, escalation: int) -> Dict[str, float]:
@@ -555,14 +1203,103 @@ def clear_demand_temporary_modifiers(player: Any) -> None:
                 pass
 
 
-def update_player_stability(session: Any, player: Any, team: Any) -> Dict[str, Any]:
+def compute_instant_stability(session: Any, player: Any, team: Any) -> Dict[str, Any]:
+    """Snapshot stability from current concerns — no day drift applied."""
     snap = gather_player_concerns(session, player, team)
     score, pressures = compute_trade_stability(snap)
     escalation = stability_to_escalation_level(score)
-    skip = character_escalation_skip(snap.character, score)
-    effective_escalation = min(4, escalation + skip)
-    penalties = readiness_penalties(score, snap.character, snap.mental, effective_escalation)
+    penalties = readiness_penalties(score, snap.character, snap.mental, escalation)
+    return {
+        "player_id": _player_id(player),
+        "trade_stability_score": score,
+        "escalation_level": escalation,
+        "pressures": {k: round(v, 2) for k, v in pressures.items()},
+        "character": int(snap.character),
+        "mental": int(snap.mental),
+        "readiness_penalties": penalties,
+        "snap": snap,
+    }
+
+
+def apply_daily_stability_update(session: Any, player: Any, team: Any, calendar_idx: int) -> Dict[str, Any]:
+    """Drift stored stability toward target — weeks/months pacing, not days."""
+    instant = compute_instant_stability(session, player, team)
+    target_score = float(instant["trade_stability_score"])
+    character = float(instant["character"])
+    mental = float(instant["mental"])
+    drift_mult = character_daily_drift_multiplier(character)
+    pst = ensure_player_storyline_state(player)
+
+    pid = _player_id(player)
+    book = ensure_trade_stability_state(session)
+    prev = book.get(pid) if isinstance(book.get(pid), dict) else {}
+    prev_score = float(prev.get("trade_stability_score") if prev.get("trade_stability_score") is not None else 88.0)
+    prev_level = int(prev.get("escalation_level") or 0)
+    prev_day = int(prev.get("last_calendar_day") or -1)
+    last_level_change_day = int(prev.get("last_level_change_day") or prev_day if prev_day >= 0 else calendar_idx)
+
+    if prev_day == int(calendar_idx):
+        return prev if prev else instant
+
+    delta = (target_score - prev_score) * 0.18
+    max_drop = 1.15 * drift_mult
+    max_rise = 1.35
+    if target_score < prev_score:
+        drift = _clamp(delta, -max_drop, 0.0)
+    else:
+        drift = _clamp(delta, 0.0, max_rise)
+    score = round(_clamp(prev_score + drift, 0.0, 100.0), 2)
+
+    target_level = stability_to_escalation_level(score)
+    days_since_level_change = int(calendar_idx) - last_level_change_day
+    level_change_cooldown = 10 if target_level > prev_level else 14
+    if target_level > prev_level + 1:
+        if days_since_level_change >= level_change_cooldown:
+            level = prev_level + 1
+            last_level_change_day = int(calendar_idx)
+        else:
+            level = prev_level
+    elif target_level < prev_level - 1:
+        if days_since_level_change >= level_change_cooldown:
+            level = prev_level - 1
+            last_level_change_day = int(calendar_idx)
+        else:
+            level = prev_level
+    else:
+        level = target_level
+
+    sig_count = count_significant_pressures(instant["pressures"])
+    if score < 70.0 or sig_count >= 1:
+        pst["stability_concern_days"] = int(pst.get("stability_concern_days") or 0) + 1
+    else:
+        pst["stability_concern_days"] = max(0, int(pst.get("stability_concern_days") or 0) - 1)
+
+    penalties = readiness_penalties(score, character, mental, level)
     apply_readiness_to_player(player, penalties)
+
+    row = {
+        "player_id": pid,
+        "trade_stability_score": score,
+        "target_stability_score": target_score,
+        "escalation_level": level,
+        "pressures": instant["pressures"],
+        "character": int(character),
+        "mental": int(mental),
+        "readiness_penalties": penalties,
+        "prev_escalation_level": prev_level,
+        "last_calendar_day": int(calendar_idx),
+        "last_level_change_day": last_level_change_day,
+        "stability_concern_days": int(pst.get("stability_concern_days") or 0),
+        "significant_pressure_count": sig_count,
+    }
+    book[pid] = row
+    return row
+
+
+def update_player_stability(session: Any, player: Any, team: Any) -> Dict[str, Any]:
+    """Immediate stability refresh (trade exposure, crisis hooks)."""
+    instant = compute_instant_stability(session, player, team)
+    apply_readiness_to_player(player, instant["readiness_penalties"])
 
     pid = _player_id(player)
     book = ensure_trade_stability_state(session)
@@ -570,13 +1307,14 @@ def update_player_stability(session: Any, player: Any, team: Any) -> Dict[str, A
     prev_level = int(prev.get("escalation_level") or 0)
     row = {
         "player_id": pid,
-        "trade_stability_score": score,
-        "escalation_level": effective_escalation,
-        "pressures": {k: round(v, 2) for k, v in pressures.items()},
-        "character": int(snap.character),
-        "mental": int(snap.mental),
-        "readiness_penalties": penalties,
+        "trade_stability_score": instant["trade_stability_score"],
+        "escalation_level": instant["escalation_level"],
+        "pressures": instant["pressures"],
+        "character": instant["character"],
+        "mental": instant["mental"],
+        "readiness_penalties": instant["readiness_penalties"],
         "prev_escalation_level": prev_level,
+        "significant_pressure_count": count_significant_pressures(instant["pressures"]),
     }
     book[pid] = row
     return row
@@ -660,8 +1398,9 @@ def crisis_trade_value_multiplier(crisis_stage: int) -> float:
     }.get(int(crisis_stage or 1), 0.93)
 
 
-def crisis_distressed_asset_cost(base_value: float, crisis_stage: int) -> float:
-    if crisis_stage < 4:
+def crisis_distressed_asset_cost(base_value: float, *, timer_expired: bool = False) -> float:
+    """Negative-value distressed pricing only when the crisis timer fully expires."""
+    if not timer_expired:
         return 0.0
     return max(8.0, base_value * 0.35)
 
@@ -671,7 +1410,7 @@ def primary_complaint_from_pressures(pressures: Dict[str, float]) -> str:
         return "general dissatisfaction"
     top = max(pressures.items(), key=lambda kv: kv[1])
     labels = {
-        "role": "deployment and ice time",
+        "role": "deployment and ice time (TOI vs expected usage)",
         "management": "management trust",
         "winning": "team competitiveness",
         "contract": "contract situation",

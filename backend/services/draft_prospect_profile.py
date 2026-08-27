@@ -1919,6 +1919,42 @@ def _rank_history_from_row(row: Dict[str, Any]) -> List[Dict[str, Any]]:
     return points
 
 
+def _prospect_character_read(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Scouting-based character read — never expose exact hidden morality or diagnoses."""
+    scout_conf = round(_f(row.get("scouting_confidence"), 55), 1)
+    user_scout = _f(row.get("scouted_percentage") or row.get("user_scouted_percentage") or row.get("team_scout_pct"), 0.0)
+    if user_scout >= 20.0:
+        scout_conf = max(scout_conf, min(95.0, user_scout + 15.0))
+    interviews = _i(row.get("interview_count") or row.get("scout_interviews"))
+    pid = str(row.get("key") or row.get("id") or row.get("name") or "")
+    seed = sum(ord(c) for c in pid) % 97
+
+    def _blur(base: float, label: str) -> Dict[str, Any]:
+        conf = min(95.0, scout_conf + interviews * 4.0)
+        if conf < 45:
+            return {"label": label, "tier": "Unknown", "confidence": int(conf)}
+        if conf < 58:
+            return {"label": label, "tier": "Mixed reports", "confidence": int(conf)}
+        val = base + (seed % 11) - 5
+        tier = "Elite" if val >= 88 else "Very High" if val >= 78 else "High" if val >= 68 else "Above Average" if val >= 58 else "Average" if val >= 48 else "Below Average"
+        return {"label": label, "tier": tier, "confidence": int(conf)}
+
+    character_base = _f(row.get("character_score") or row.get("character"), 62 + (seed % 18))
+    return {
+        "headline": _blur(character_base, "Character")["tier"] if scout_conf >= 50 else "Mixed reports",
+        "confidence": int(min(95.0, scout_conf + interviews * 3)),
+        "traits": [
+            _blur(_f(row.get("competitiveness"), 70 + seed % 15), "Competitive Drive"),
+            _blur(_f(row.get("coachability"), 58 + (seed % 20)), "Coachability"),
+            _blur(_f(row.get("leadership"), 50 + (seed % 25)), "Leadership"),
+            _blur(_f(row.get("sociability"), 52 + (seed % 22)), "Social Adjustment"),
+            _blur(_f(row.get("family_priority"), 60 + (seed % 18)), "Family / Relocation"),
+        ],
+        "interview_notes": str(row.get("interview_notes") or row.get("scout_character_note") or "").strip() or None,
+        "private_diagnosis_hidden": True,
+    }
+
+
 def build_prospect_profile(
     row: Dict[str, Any],
     *,
@@ -2228,6 +2264,7 @@ def build_prospect_profile(
             translation=translation_label,
             comparison=comparison,
         ),
+        "character_read": _prospect_character_read(row),
     }
     if is_transcendent:
         # Narrative metadata stays server-side / storyline only. Do not ship

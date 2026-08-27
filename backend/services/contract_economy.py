@@ -3114,6 +3114,28 @@ def evaluate_contract_offer(
         + (morale - 55.0) * 0.18
         + (importance - 0.5) * 10.0
     )
+    try:
+        session = offer.get("_franchise_session") or offer.get("_session")
+        pid = str(getattr(player, "id", "") or getattr(player, "player_id", "") or "")
+        tid = str(getattr(team, "team_id", "") or getattr(team, "id", "") or "")
+        if session is not None and pid:
+            from app.sim_engine.franchise.storyline_engine import (  # noqa: WPS433
+                _u_sync_player_entities,
+                build_human_dossier_payload,
+            )
+
+            entities = _u_sync_player_entities(session)
+            entity = entities.get(pid) or {}
+            life = entity.get("life") or {}
+            city_attachment = float(life.get("city_attachment") or 40)
+            home_owned = bool(life.get("home_owned"))
+            relationship_component += (city_attachment - 50) * 0.08
+            if home_owned:
+                relationship_component += 4.0
+            if float((entity.get("state") or {}).get("gm_trust", 65)) >= 68:
+                relationship_component += 3.0
+    except Exception:
+        pass
     stay_interest = max(
         0.0,
         min(
@@ -7691,6 +7713,7 @@ def handle_contract_action(session: Any, action: str, body: Dict[str, Any]) -> D
     player_id = str(body.get("player_id") or body.get("playerId") or "")
     body = dict(body or {})
     body["_session"] = session
+    body["_franchise_session"] = session
 
     if user_team is None:
         return {"ok": False, "reason": "User team not found"}

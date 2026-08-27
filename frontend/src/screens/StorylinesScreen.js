@@ -10,6 +10,14 @@ import {
   readDismissedBreakingKeys,
   writeDismissedBreakingKeys,
 } from "../utils/breakingAlerts";
+import {
+  resolvePlayerMeeting,
+  startPlayerMeeting,
+  advancePlayerMeeting,
+  getPlayerMeetingDetail,
+  getSocialFeed,
+} from "../services/franchiseService";
+import BurnerPanel from "../components/franchise/social/BurnerPanel";
 
 /*
   StorylinesScreen — backend-driven news hub.
@@ -67,6 +75,7 @@ const FILTER_EMPTY = {
 
 const DEPARTMENTS = [
   { id: "front_page", label: "Newsroom" },
+  { id: "player_meetings", label: "Player Meetings", icon: "meetings" },
   { id: "social", label: "Social" },
   { id: "insiders", label: "Insiders" },
   { id: "press_room", label: "Press Room" },
@@ -496,6 +505,49 @@ function buildSocialPosts(stories, narrativeUniverse) {
   });
 }
 
+function buildRedditThreads(threads, subFilter = "all") {
+  const rows = asArray(threads);
+  const filtered =
+    subFilter === "all"
+      ? rows
+      : rows.filter((t) => str(t.subreddit).toLowerCase() === str(subFilter).toLowerCase());
+  return filtered.slice(0, 40).map((t, idx) => ({
+    id: str(t.thread_id || `thread-${idx}`),
+    subreddit: str(t.subreddit || "r/hockey"),
+    title: str(t.title || "Thread"),
+    author: str(t.op_author || "u/fan"),
+    archetype: str(t.op_archetype || ""),
+    flair: str(t.flair || "Discussion"),
+    body: str(t.body || ""),
+    upvotes: Number(t.upvotes) || 0,
+    upvoteRatio: Number(t.upvote_ratio) || 0.75,
+    commentCount: Number(t.comment_count) || 0,
+    controversial: Number(t.upvote_ratio) < 0.7,
+    storyId: str(t.storyline_id || ""),
+    playerId: str(t.player_id || ""),
+    playerName: str(t.player_name || ""),
+    knowledgeType: str(t.knowledge_type || ""),
+    comments: asArray(t.top_comments).map((c, ci) => ({
+      id: `c-${idx}-${ci}`,
+      author: str(c.author || "u/fan"),
+      text: str(c.text || ""),
+      upvotes: Number(c.upvotes) || 0,
+      isRival: Boolean(c.is_rival),
+    })),
+    heat: heatLabel(t.heat),
+    createdAt: str(t.created_at || "—"),
+  }));
+}
+
+function fanPulseTrend(pulse) {
+  const rows = asArray(pulse).slice(-8);
+  if (!rows.length) return { net: 0, label: "Flat" };
+  const net = rows.reduce((s, r) => s + Number(r.delta || 0), 0);
+  if (net > 0.15) return { net, label: "Rising" };
+  if (net < -0.15) return { net, label: "Cooling" };
+  return { net, label: "Split" };
+}
+
 
 
 function collectDossiers(narrativeUniverse) {
@@ -833,9 +885,371 @@ function OrgPressureBars({ org }) {
   );
 }
 
+function PlayerMeetingsDeptIcon({ active }) {
+  return (
+    <svg className={`sl-dept-icon sl-dept-icon--meetings${active ? " is-active" : ""}`} viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="1" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <line x1="12" y1="4" x2="12" y2="20" stroke="currentColor" strokeWidth="1.2" opacity="0.45" />
+      <circle cx="8" cy="10" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <circle cx="16" cy="10" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M6 15h4M14 15h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function relToneClass(tone) {
+  if (tone === "positive") return "is-strong";
+  if (tone === "negative") return "is-strained";
+  return "is-neutral";
+}
+
+function PlayerMeetingsPanel({
+  meetingsPayload,
+  busy,
+  onResolvePlayerRequest,
+  onStartMeeting,
+  onAdvanceMeeting,
+  onRefresh,
+  initialPlayerId,
+}) {
+  const [view, setView] = useState(initialPlayerId ? "player" : "home");
+  const [playerTab, setPlayerTab] = useState("talk");
+  const [selectedPlayerId, setSelectedPlayerId] = useState(initialPlayerId || null);
+  const [playerDetail, setPlayerDetail] = useState(null);
+  const [activeMeeting, setActiveMeeting] = useState(null);
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    if (initialPlayerId) {
+      setSelectedPlayerId(initialPlayerId);
+      setView("player");
+    }
+  }, [initialPlayerId]);
+
+  useEffect(() => {
+    if (view !== "player" || !selectedPlayerId) {
+      setPlayerDetail(null);
+      return undefined;
+    }
+    let cancelled = false;
+    getPlayerMeetingDetail(selectedPlayerId)
+      .then((res) => {
+        if (!cancelled) setPlayerDetail(res?.detail || null);
+      })
+      .catch(() => {
+        if (!cancelled) setPlayerDetail(null);
+      });
+    return () => { cancelled = true; };
+  }, [view, selectedPlayerId]);
+
+  const roster = asArray(meetingsPayload?.roster);
+  const needs = asArray(meetingsPayload?.needs_attention);
+  const requests = asArray(meetingsPayload?.player_requests);
+  const promises = asObject(meetingsPayload?.promises);
+  const history = asArray(meetingsPayload?.history);
+  const selected = roster.find((r) => str(r.player_id) === str(selectedPlayerId)) || null;
+
+  const handleStart = useCallback(async (playerId, interactionType) => {
+    setNotice("");
+    try {
+      const res = await onStartMeeting(playerId, interactionType);
+      setActiveMeeting(res?.meeting || null);
+      setView("meeting");
+    } catch (err) {
+      setNotice(err?.message || "Could not start meeting.");
+    }
+  }, [onStartMeeting]);
+
+  const handleResolveRequest = useCallback(async (interactionId, choiceId) => {
+    setNotice("");
+    try {
+      await onResolvePlayerRequest(interactionId, choiceId);
+      setNotice("Meeting resolved.");
+      setActiveMeeting(null);
+      onRefresh?.();
+    } catch (err) {
+      setNotice(err?.message || "Could not resolve meeting.");
+    }
+  }, [onResolvePlayerRequest, onRefresh]);
+
+  const handleAdvance = useCallback(async (meetingId, choiceId) => {
+    setNotice("");
+    try {
+      const res = await onAdvanceMeeting(meetingId, choiceId);
+      setNotice(res?.message || "Conversation recorded.");
+      setActiveMeeting(null);
+      setView("player");
+      onRefresh?.();
+    } catch (err) {
+      setNotice(err?.message || "Could not complete meeting.");
+    }
+  }, [onAdvanceMeeting, onRefresh]);
+
+  if (!meetingsPayload || !roster.length) {
+    return (
+      <div className="sl-empty-panel sl-pm-empty">
+        <p className="sl-kicker">GM Office · Private</p>
+        <h2>Player Meetings</h2>
+        <p>Advance the calendar to sync roster relationships and meeting availability.</p>
+      </div>
+    );
+  }
+
+  if (view === "meeting" && activeMeeting) {
+    const dialogue = asArray(activeMeeting.dialogue);
+    return (
+      <div className="sl-pm-meeting">
+        <header className="sl-pm-meeting__head">
+          <button type="button" className="sl-pm-back" onClick={() => { setActiveMeeting(null); setView("player"); }}>← Back</button>
+          <div>
+            <p className="sl-kicker">Private Meeting</p>
+            <h2>{str(activeMeeting.player_name)}</h2>
+            <span>{str(activeMeeting.title)}</span>
+          </div>
+        </header>
+        <div className="sl-pm-dialogue">
+          {dialogue.map((line, i) => (
+            <div key={i} className={`sl-pm-line${str(line.speaker) === "GM" ? " is-gm" : " is-player"}`}>
+              <em>{str(line.speaker)}</em>
+              <p>{str(line.text)}</p>
+            </div>
+          ))}
+        </div>
+        {activeMeeting.ovr_explanation?.factors?.length ? (
+          <div className="sl-pm-ovr">
+            <h4>{str(activeMeeting.ovr_explanation.headline)}</h4>
+            <ul>
+              {activeMeeting.ovr_explanation.factors.map((f, i) => (
+                <li key={i}>{str(f.text)}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        <div className="sl-pm-choices">
+          {asArray(activeMeeting.choices).map((c) => (
+            <button
+              key={str(c.id)}
+              type="button"
+              disabled={busy}
+              onClick={() => handleAdvance(str(activeMeeting.id), str(c.id))}
+            >
+              <strong>{str(c.label)}</strong>
+              {c.detail ? <span>{str(c.detail)}</span> : null}
+            </button>
+          ))}
+        </div>
+        {notice ? <p className="sl-pm-notice">{notice}</p> : null}
+      </div>
+    );
+  }
+
+  if (view === "player" && selected) {
+    const avail = asArray(playerDetail?.available_interactions);
+    const rel = playerDetail?.relationship || selected.relationship || {};
+    return (
+      <div className="sl-pm-player">
+        <header className="sl-pm-player__head">
+          <button type="button" className="sl-pm-back" onClick={() => { setView("home"); setSelectedPlayerId(null); }}>← Roster</button>
+          <div className="sl-pm-player__identity">
+            <PlayerHeadshot player={{ id: str(selected.player_id), player_id: str(selected.player_id) }} size={56} />
+            <div>
+              <h2>{str(selected.player_name)}</h2>
+              <p>{str(selected.position)} · {selected.age} · OVR {selected.overall}{selected.readiness_delta ? ` (${selected.readiness_delta > 0 ? "+" : ""}${selected.readiness_delta})` : ""}</p>
+              <p className={`sl-pm-rel ${relToneClass(rel.tone)}`}>
+                Relationship: {str(rel.label)} — {str(rel.detail)}
+              </p>
+            </div>
+          </div>
+        </header>
+        {requests.filter((r) => str(r.player_id || r.actor_id) === str(selected.player_id)).map((req) => (
+          <article key={str(req.id)} className="sl-pm-request">
+            <h3>{str(req.title || "Player requested a meeting")}</h3>
+            <p>{str(req.summary)}</p>
+            {asArray(req.dialogue).slice(0, 1).map((d, i) => <p key={i} className="sl-pm-request__line">&ldquo;{str(d.text)}&rdquo;</p>)}
+            <div className="sl-pm-choices">
+              {asArray(req.choices).map((c) => (
+                <button key={str(c.id)} type="button" disabled={busy} onClick={() => handleResolveRequest(str(req.id), str(c.id))}>
+                  <strong>{str(c.label)}</strong>
+                  {c.detail ? <span>{str(c.detail)}</span> : null}
+                </button>
+              ))}
+            </div>
+          </article>
+        ))}
+        <nav className="sl-pm-tabs">
+          {["talk", "promises", "history"].map((tab) => (
+            <button key={tab} type="button" className={playerTab === tab ? "is-active" : ""} onClick={() => setPlayerTab(tab)}>
+              {tab === "talk" ? "Talk" : tab === "promises" ? "Promises" : "History"}
+            </button>
+          ))}
+        </nav>
+        {playerTab === "promises" ? (
+          <div className="sl-pm-list">
+            {asArray(playerDetail?.promises || promises.active).filter((p) => str(p.player_id) === str(selected.player_id)).map((p) => (
+              <div key={str(p.id || p.type)} className="sl-pm-promise is-active">
+                <strong>{str(p.description || p.type)}</strong>
+                <span>{p.games_remaining != null ? `${p.games_remaining} games left` : "Active"}</span>
+              </div>
+            ))}
+          </div>
+        ) : playerTab === "history" ? (
+          <div className="sl-pm-list">
+            {asArray(playerDetail?.history || history).filter((h) => str(h.player_id) === str(selected.player_id)).map((h) => (
+              <div key={str(h.id)} className="sl-pm-history-row">
+                <time>{str(h.calendar_iso || h.calendar_day)}</time>
+                <div>
+                  <strong>{str(h.interaction_type)}</strong>
+                  <p>{str(h.choice_label || h.choice_id)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="sl-pm-interactions">
+            {playerDetail?.ovr_explanation?.factors?.length ? (
+              <div className="sl-pm-ovr sl-pm-ovr--inline">
+                <h4>{str(playerDetail.ovr_explanation.headline)}</h4>
+                <ul>
+                  {playerDetail.ovr_explanation.factors.map((f, i) => (
+                    <li key={i}>{str(f.text)}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {avail.length ? (
+              Object.entries(
+                avail.reduce((acc, row) => {
+                  const cat = str(row.category_label || row.category);
+                  if (!acc[cat]) acc[cat] = [];
+                  acc[cat].push(row);
+                  return acc;
+                }, {})
+              ).map(([cat, items]) => (
+                <section key={cat}>
+                  <h4>{cat}</h4>
+                  {items.map((item) => (
+                    <button
+                      key={str(item.id)}
+                      type="button"
+                      className="sl-pm-interaction"
+                      disabled={busy}
+                      onClick={() => handleStart(str(selected.player_id), str(item.id))}
+                    >
+                      {str(item.title)}
+                    </button>
+                  ))}
+                </section>
+              ))
+            ) : (
+              <p className="sl-pm-muted">Loading topics…</p>
+            )}
+          </div>
+        )}
+        {notice ? <p className="sl-pm-notice">{notice}</p> : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="sl-pm-home">
+      <header className="sl-pm-home__head">
+        <p className="sl-kicker">GM Office · Relationship Desk</p>
+        <h2>Player Meetings</h2>
+        <p>Private conversations with your organization. Player requests and broken promises surface first.</p>
+      </header>
+      {notice ? <p className="sl-pm-notice">{notice}</p> : null}
+
+      {requests.length ? (
+        <section className="sl-pm-section">
+          <h3>Needs Attention · Requests ({requests.length})</h3>
+          {requests.map((req) => (
+            <article key={str(req.id)} className="sl-pm-request">
+              <div className="sl-pm-request__head">
+                <strong>{str(req.player_name || "Player")}</strong>
+                <span>{str(req.title)}</span>
+              </div>
+              <p>{str(req.summary)}</p>
+              <div className="sl-pm-choices sl-pm-choices--compact">
+                {asArray(req.choices).map((c) => (
+                  <button key={str(c.id)} type="button" disabled={busy} onClick={() => handleResolveRequest(str(req.id), str(c.id))}>
+                    {str(c.label)}
+                  </button>
+                ))}
+              </div>
+            </article>
+          ))}
+        </section>
+      ) : null}
+
+      {needs.length ? (
+        <section className="sl-pm-section">
+          <h3>Needs Attention · Roster ({needs.length})</h3>
+          <div className="sl-pm-roster">
+            {needs.map((row) => (
+              <button key={str(row.player_id)} type="button" className="sl-pm-roster-row" onClick={() => { setSelectedPlayerId(str(row.player_id)); setView("player"); }}>
+                <PlayerHeadshot player={{ id: str(row.player_id), player_id: str(row.player_id) }} size={40} />
+                <div className="sl-pm-roster-row__main">
+                  <strong>{str(row.player_name)}</strong>
+                  <span>{str(row.position)} · OVR {row.overall} · {str(row.relationship?.label)}</span>
+                  <em>{str(row.concern_label)}</em>
+                </div>
+                {row.requested_meeting ? <span className="sl-pm-badge">Requested</span> : null}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="sl-pm-section">
+        <h3>Full Roster</h3>
+        <div className="sl-pm-roster">
+          {roster.map((row) => (
+            <button key={str(row.player_id)} type="button" className="sl-pm-roster-row" onClick={() => { setSelectedPlayerId(str(row.player_id)); setView("player"); }}>
+              <PlayerHeadshot player={{ id: str(row.player_id), player_id: str(row.player_id) }} size={40} />
+              <div className="sl-pm-roster-row__main">
+                <strong>{str(row.player_name)}</strong>
+                <span>{str(row.position)} · {row.age} · OVR {row.overall}{row.ovr_trend === "up" ? " ↑" : row.ovr_trend === "down" ? " ↓" : ""}</span>
+                <em>{str(row.relationship?.label)} · {str(row.agent?.name || "Agent TBD")}</em>
+              </div>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {asArray(promises.active).length ? (
+        <section className="sl-pm-section">
+          <h3>Active Promises</h3>
+          {promises.active.map((p) => (
+            <div key={str(p.id)} className="sl-pm-promise is-active">
+              <strong>{str(p.description || p.type)}</strong>
+              <span>{str(p.player_id)} · {p.games_remaining != null ? `${p.games_remaining}g` : "open"}</span>
+            </div>
+          ))}
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
 export default function StorylinesScreen() {
-  const { franchiseState, onResolveStorylineChoice, setScreen } = useGameUI();
-  const [department, setDepartment] = useState("front_page");
+  const {
+    franchiseState,
+    onResolveStorylineChoice,
+    setScreen,
+    refreshFranchise,
+    pendingMeetingPlayerId,
+    setPendingMeetingPlayerId,
+    pendingSocialNav,
+    setPendingSocialNav,
+  } = useGameUI();
+  const [department, setDepartment] = useState(
+    pendingMeetingPlayerId ? "player_meetings" : pendingSocialNav ? "social" : "front_page"
+  );
+  const [socialSubTab, setSocialSubTab] = useState(pendingSocialNav?.subTab || "puckr");
+  const [redditSubFilter, setRedditSubFilter] = useState(pendingSocialNav?.subreddit || "all");
+  const [expandedThreadId, setExpandedThreadId] = useState(null);
+  const [liveSocialFeed, setLiveSocialFeed] = useState(null);
+  const [meetingBusy, setMeetingBusy] = useState(false);
   const [filter, setFilter] = useState("all");
   const [sortId, setSortId] = useState("decisions");
   const [search, setSearch] = useState("");
@@ -912,6 +1326,7 @@ export default function StorylinesScreen() {
     orgPressure[userTeamId(franchiseState)] || orgPressure[str(franchiseState?.user_team_id || "")] || null;
 
   const narrativeUniverse = asObject(franchiseState?.narrative_universe);
+  const playerMeetingsPayload = asObject(narrativeUniverse?.player_meetings);
   const pressQueue = asArray(narrativeUniverse?.press_conference_queue).filter((p) => str(p?.status) === "pending");
   const narrativeEras = asArray(narrativeUniverse?.narrative_eras);
   const narrativeArchive = asArray(narrativeUniverse?.narrative_archive);
@@ -935,7 +1350,57 @@ export default function StorylinesScreen() {
     playBreakingSting(activeBreaking.level);
   }, [activeBreaking?.storyline_id, activeBreaking?.headline, activeBreaking?.level]);
 
-  const socialPosts = useMemo(() => buildSocialPosts(stories, narrativeUniverse), [stories, narrativeUniverse]);
+  useEffect(() => {
+    if (pendingSocialNav) {
+      setDepartment("social");
+      if (pendingSocialNav.subTab) setSocialSubTab(pendingSocialNav.subTab);
+      if (pendingSocialNav.subreddit) setRedditSubFilter(pendingSocialNav.subreddit);
+      if (pendingSocialNav.threadId) setExpandedThreadId(pendingSocialNav.threadId);
+      setPendingSocialNav(null);
+    }
+  }, [pendingSocialNav, setPendingSocialNav]);
+
+  useEffect(() => {
+    if (department !== "social") return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const feed = await getSocialFeed(sessionId);
+        if (!cancelled) setLiveSocialFeed(feed);
+      } catch {
+        if (!cancelled) setLiveSocialFeed(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [department, sessionId, franchiseState?.calendar_idx]);
+
+  const socialPosts = useMemo(() => {
+    const puckr = asArray(liveSocialFeed?.puckr);
+    if (puckr.length) {
+      return buildSocialPosts(stories, { social_posts: puckr });
+    }
+    return buildSocialPosts(stories, narrativeUniverse);
+  }, [stories, narrativeUniverse, liveSocialFeed]);
+  const redditThreads = useMemo(() => {
+    const icehole = asArray(liveSocialFeed?.icehole);
+    const source = icehole.length ? icehole : asArray(narrativeUniverse?.reddit_threads);
+    return buildRedditThreads(source, redditSubFilter);
+  }, [liveSocialFeed, narrativeUniverse, redditSubFilter]);
+  const redditPulse = useMemo(
+    () => fanPulseTrend(narrativeUniverse?.reddit_engagement_pulse),
+    [narrativeUniverse]
+  );
+  const userSubreddit = useMemo(() => {
+    const label = str(userMarket?.label || franchiseState?.user_team_name || "Team");
+    const slug = label.replace(/[^A-Za-z0-9]+/g, "").slice(-12) || "Team";
+    return `r/${slug}`;
+  }, [userMarket, franchiseState]);
+  const redditSubPills = useMemo(
+    () => ["all", userSubreddit, "r/hockey"],
+    [userSubreddit]
+  );
   const socialCountByStory = useMemo(() => {
     const map = new Map();
     asArray(narrativeUniverse?.social_posts).forEach((p) => {
@@ -1009,6 +1474,49 @@ export default function StorylinesScreen() {
     },
     [onResolveStorylineChoice]
   );
+
+  const handleMeetingRefresh = useCallback(async () => {
+    await refreshFranchise?.();
+  }, [refreshFranchise]);
+
+  const handleResolvePlayerMeeting = useCallback(async (interactionId, choiceId) => {
+    setMeetingBusy(true);
+    try {
+      const res = await resolvePlayerMeeting(interactionId, choiceId);
+      if (res?.state) {
+        /* refreshFranchise merges via caller */
+      }
+      await refreshFranchise?.();
+      if (pendingMeetingPlayerId) setPendingMeetingPlayerId?.(null);
+    } finally {
+      setMeetingBusy(false);
+    }
+  }, [refreshFranchise, pendingMeetingPlayerId, setPendingMeetingPlayerId]);
+
+  const handleStartPlayerMeeting = useCallback(async (playerId, interactionType) => {
+    setMeetingBusy(true);
+    try {
+      const res = await startPlayerMeeting(playerId, interactionType);
+      await refreshFranchise?.();
+      return res;
+    } finally {
+      setMeetingBusy(false);
+    }
+  }, [refreshFranchise]);
+
+  const handleAdvancePlayerMeeting = useCallback(async (meetingId, choiceId) => {
+    setMeetingBusy(true);
+    try {
+      const res = await advancePlayerMeeting(meetingId, choiceId);
+      await refreshFranchise?.();
+      return res;
+    } finally {
+      setMeetingBusy(false);
+    }
+  }, [refreshFranchise]);
+
+  const meetingAlertCount = asArray(playerMeetingsPayload?.player_requests).length
+    + asArray(playerMeetingsPayload?.needs_attention).length;
 
   const hasBackend = Array.isArray(franchiseState?.storyline_events);
   const filterEmptyMsg = FILTER_EMPTY[filter];
@@ -1283,6 +1791,60 @@ export default function StorylinesScreen() {
         .sl-empty-panel h2 { margin: 0 0 6px; font-size: 15px; letter-spacing: .04em; text-transform: uppercase; font-weight: 800; }
         .sl-empty-panel p { margin: 0; color: var(--muted); font-size: 12.5px; }
 
+        /* player meetings */
+        .sl-departments button { display: inline-flex; align-items: center; gap: 6px; }
+        .sl-dept-icon { width: 16px; height: 16px; color: var(--muted); flex-shrink: 0; }
+        .sl-dept-icon.is-active { color: var(--cyan); }
+        .sl-pm-home__head { margin-bottom: 14px; }
+        .sl-pm-section { margin-bottom: 18px; }
+        .sl-pm-section h3 { margin: 0 0 10px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--gold); font-weight: 900; }
+        .sl-pm-roster { display: grid; gap: 6px; }
+        .sl-pm-roster-row { display: flex; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 8px 10px; text-align: left; color: inherit; cursor: pointer; width: 100%; }
+        .sl-pm-roster-row:hover { border-color: var(--line-strong); }
+        .sl-pm-roster-row__main { flex: 1; min-width: 0; }
+        .sl-pm-roster-row__main strong { display: block; font-size: 13px; }
+        .sl-pm-roster-row__main span { display: block; font-size: 11px; color: var(--muted); font-weight: 700; }
+        .sl-pm-roster-row__main em { display: block; font-size: 10.5px; color: var(--cyan); font-style: normal; font-weight: 700; margin-top: 2px; }
+        .sl-pm-badge { font-size: 9px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: var(--gold); border: 1px solid rgba(233,168,60,.35); padding: 3px 6px; border-radius: 4px; }
+        .sl-pm-request { border: 1px solid rgba(233,168,60,.28); border-left: 3px solid var(--gold); border-radius: 8px; background: rgba(233,168,60,.05); padding: 12px 14px; margin-bottom: 10px; }
+        .sl-pm-request h3 { margin: 0 0 6px; font-size: 13px; }
+        .sl-pm-request p { margin: 0 0 8px; font-size: 12px; line-height: 1.4; color: rgba(233,247,251,.88); }
+        .sl-pm-choices { display: grid; gap: 8px; margin-top: 10px; }
+        .sl-pm-choices button { border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.03); color: inherit; text-align: left; padding: 10px 12px; cursor: pointer; }
+        .sl-pm-choices button:hover:not(:disabled) { border-color: var(--cyan); }
+        .sl-pm-choices button strong { display: block; font-size: 12px; font-weight: 900; margin-bottom: 3px; }
+        .sl-pm-choices button span { display: block; font-size: 11px; color: var(--muted); font-weight: 700; }
+        .sl-pm-choices--compact button { font-size: 11px; font-weight: 800; padding: 8px 10px; }
+        .sl-pm-player__head { margin-bottom: 12px; }
+        .sl-pm-player__identity { display: flex; gap: 12px; align-items: center; margin-top: 8px; }
+        .sl-pm-back { border: 0; background: transparent; color: var(--cyan); font-size: 11px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; padding: 0; }
+        .sl-pm-rel { font-size: 12px; margin-top: 6px; }
+        .sl-pm-rel.is-strong { color: #7ee0b0; }
+        .sl-pm-rel.is-strained { color: #ff8a4c; }
+        .sl-pm-rel.is-neutral { color: var(--muted); }
+        .sl-pm-tabs { display: flex; gap: 12px; margin: 14px 0 10px; border-bottom: 1px solid var(--line); }
+        .sl-pm-tabs button { border: 0; background: transparent; color: var(--muted); font-size: 11px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; padding: 8px 2px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+        .sl-pm-tabs button.is-active { color: var(--text); border-bottom-color: var(--cyan); }
+        .sl-pm-interactions section { margin-bottom: 14px; }
+        .sl-pm-interactions h4 { margin: 0 0 8px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 900; }
+        .sl-pm-interaction { display: block; width: 100%; text-align: left; border: 1px solid var(--line); border-radius: 6px; background: rgba(255,255,255,.02); color: inherit; padding: 9px 11px; margin-bottom: 6px; cursor: pointer; font-size: 12.5px; font-weight: 700; }
+        .sl-pm-interaction:hover:not(:disabled) { border-color: var(--line-strong); }
+        .sl-pm-meeting__head { margin-bottom: 12px; }
+        .sl-pm-dialogue { display: grid; gap: 10px; margin-bottom: 14px; }
+        .sl-pm-line { border-left: 2px solid var(--line); padding-left: 10px; }
+        .sl-pm-line.is-gm { border-left-color: var(--gold); }
+        .sl-pm-line.is-player { border-left-color: var(--cyan); }
+        .sl-pm-line em { display: block; font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-style: normal; margin-bottom: 4px; }
+        .sl-pm-line p { margin: 0; font-size: 13px; line-height: 1.45; }
+        .sl-pm-ovr { border: 1px solid rgba(19,216,231,.22); border-radius: 8px; background: rgba(19,216,231,.05); padding: 10px 12px; margin-bottom: 12px; }
+        .sl-pm-ovr h4 { margin: 0 0 8px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--cyan); }
+        .sl-pm-ovr ul { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.4; }
+        .sl-pm-promise { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 6px; font-size: 12px; }
+        .sl-pm-history-row { display: grid; grid-template-columns: 88px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(156,218,236,.1); }
+        .sl-pm-history-row time { font-size: 10.5px; color: var(--muted); font-weight: 800; }
+        .sl-pm-notice { font-size: 12px; color: var(--cyan); margin: 10px 0 0; font-weight: 700; }
+        .sl-pm-muted { color: var(--muted); font-size: 12px; }
+
         /* social */
         .sl-social-layout { display: grid; grid-template-columns: minmax(0,1fr) minmax(240px,300px); gap: 14px; }
         .sl-social-feed { display: grid; gap: 10px; }
@@ -1294,6 +1856,45 @@ export default function StorylinesScreen() {
         .sl-social-post__head em { margin-left: auto; font-style: normal; font-size: 10.5px; color: var(--muted); }
         .sl-social-post p { margin: 0; font-size: 12.5px; line-height: 1.4; }
         .sl-social-post__related { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(156,218,236,.1); font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--gold); }
+        .sl-social-subtabs { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+        .sl-social-subtabs button { border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); font-size: 11px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; padding: 7px 12px; border-radius: 6px; cursor: pointer; }
+        .sl-social-subtabs button.is-active { color: var(--text); border-color: var(--cyan); }
+        .sl-icehole-pills { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+        .sl-icehole-pills button { border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 10px; font-weight: 800; padding: 5px 10px; border-radius: 999px; cursor: pointer; }
+        .sl-icehole-pills button.is-active { border-color: var(--gold); color: var(--gold); }
+        .sl-icehole-thread { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 10px 12px; text-align: left; color: inherit; width: 100%; cursor: pointer; }
+        .sl-icehole-thread.is-controversial { border-color: rgba(255,120,80,.35); background: rgba(255,80,40,.04); }
+        .sl-icehole-thread__meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 10.5px; color: var(--muted); font-weight: 800; margin-bottom: 6px; }
+        .sl-icehole-flair { color: var(--gold); text-transform: uppercase; letter-spacing: .05em; }
+        .sl-icehole-thread h4 { margin: 0 0 6px; font-size: 13px; line-height: 1.35; }
+        .sl-icehole-thread p { margin: 0; font-size: 12px; line-height: 1.4; color: var(--muted); }
+        .sl-icehole-comments { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(156,218,236,.12); display: grid; gap: 8px; }
+        .sl-icehole-comment { font-size: 12px; line-height: 1.35; }
+        .sl-icehole-comment em { font-style: normal; color: var(--cyan); font-weight: 800; font-size: 10.5px; margin-right: 6px; }
+        .sl-fan-pulse { border: 1px solid rgba(19,216,231,.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: rgba(19,216,231,.04); }
+        .sl-fan-pulse strong { display: block; font-size: 18px; margin-top: 4px; }
+        .burner-panel { display: grid; gap: 12px; }
+        .burner-panel__head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+        .burner-panel__suspicion span { display: block; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+        .burner-investigation { display: flex; justify-content: space-between; padding: 8px 10px; border: 1px solid rgba(255,120,80,.3); border-radius: 6px; font-size: 12px; }
+        .burner-field select { width: 100%; margin-top: 4px; padding: 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); color: inherit; }
+        .burner-composer { position: relative; min-height: 120px; }
+        .burner-composer__backdrop, .burner-composer__input { font: inherit; font-size: 13px; line-height: 1.45; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); width: 100%; min-height: 120px; box-sizing: border-box; white-space: pre-wrap; word-wrap: break-word; }
+        .burner-composer__backdrop { position: absolute; inset: 0; pointer-events: none; color: transparent; overflow: auto; }
+        .burner-composer__input { position: relative; background: transparent; color: inherit; resize: vertical; }
+        .burner-hl--warn { background: rgba(255,200,80,.25); border-radius: 2px; }
+        .burner-hl--danger { background: rgba(255,80,60,.28); border-radius: 2px; }
+        .burner-risk-row { display: grid; grid-template-columns: 120px 1fr; gap: 12px; align-items: start; }
+        .burner-gauge__label { font-size: 9px; fill: var(--muted); }
+        .burner-outcomes { display: grid; gap: 8px; }
+        .burner-outcome { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 12px; }
+        .burner-outcome span { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 4px; }
+        .burner-outcome p { margin: 0; line-height: 1.35; }
+        .burner-outcome--ok { border-color: rgba(19,216,231,.25); }
+        .burner-outcome--bad { border-color: rgba(255,80,60,.25); }
+        .burner-error { color: #ff8a70; font-size: 12px; margin: 0; }
+        .burner-history__row { border-bottom: 1px solid rgba(156,218,236,.1); padding: 8px 0; font-size: 12px; }
+        .burner-history__row--caught { color: #ff9b82; }
 
         /* press room */
         .sl-press-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 14px 16px; margin-bottom: 12px; }
@@ -1402,7 +2003,8 @@ export default function StorylinesScreen() {
         <nav className="sl-departments" aria-label="Media departments">
           {DEPARTMENTS.map((d) => {
             const alert =
-              (d.id === "press_room" && pressQueue.length > 0)
+              (d.id === "player_meetings" && meetingAlertCount > 0)
+              || (d.id === "press_room" && pressQueue.length > 0)
               || (d.id === "archive" && narrativeEras.length > 0)
               || (d.id === "insiders" && (insiderItems.length > 0 || playerDossiers.length > 0));
             return (
@@ -1412,6 +2014,7 @@ export default function StorylinesScreen() {
                 className={`${department === d.id ? "is-active" : ""}${alert ? " has-alert" : ""}`}
                 onClick={() => setDepartment(d.id)}
               >
+                {d.icon === "meetings" ? <PlayerMeetingsDeptIcon active={department === d.id} /> : null}
                 {d.label}
               </button>
             );
@@ -1431,53 +2034,175 @@ export default function StorylinesScreen() {
             <h2>No Coverage Yet</h2>
             <p>Advance the calendar to populate the newsroom from backend storylines.</p>
           </div>
+        ) : department === "player_meetings" ? (
+          <PlayerMeetingsPanel
+            meetingsPayload={playerMeetingsPayload}
+            busy={meetingBusy}
+            onResolvePlayerRequest={handleResolvePlayerMeeting}
+            onStartMeeting={handleStartPlayerMeeting}
+            onAdvanceMeeting={handleAdvancePlayerMeeting}
+            onRefresh={handleMeetingRefresh}
+            initialPlayerId={pendingMeetingPlayerId}
+          />
         ) : department === "social" ? (
           <div className="sl-social-layout">
-            <div className="sl-social-feed">
-              {socialPosts.length ? (
-                socialPosts.map((post) => (
-                  <button key={post.id} type="button" className="sl-social-post" onClick={() => { if (post.storyId) { openStory(post.storyId); setDepartment("front_page"); } }}>
-                    <div className="sl-social-post__head">
-                      <strong>
-                        {post.name}
-                        {post.verified ? " ✓" : ""}
-                        {post.isAgent ? " · Agent" : ""}
-                      </strong>
-                      <span>{post.handle}</span>
-                      <em>{post.age}</em>
-                    </div>
-                    <p>{post.text}</p>
-                    {post.related ? <div className="sl-social-post__related">Related · {post.related}</div> : null}
-                    {post.cred ? <div className="sl-social-post__related">{post.cred}</div> : null}
-                    {post.likes != null ? (
-                      <div className="sl-social-post__related">
-                        {Number(post.replies || 0).toLocaleString()} replies · {Number(post.reposts || 0).toLocaleString()} reposts · {Number(post.likes || 0).toLocaleString()} likes
-                      </div>
-                    ) : null}
+            <div>
+              <div className="sl-social-subtabs">
+                {[
+                  { id: "puckr", label: "Puckr" },
+                  { id: "icehole", label: "IceHole" },
+                  { id: "burner", label: "Burner" },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    className={socialSubTab === tab.id ? "is-active" : ""}
+                    onClick={() => setSocialSubTab(tab.id)}
+                  >
+                    {tab.label}
                   </button>
-                ))
-              ) : (
-                <div className="sl-empty-panel">
-                  <p className="sl-kicker">Social desk · Quiet</p>
-                  <h2>No posts yet</h2>
-                  <p>Hockey Twitter wakes up as storylines generate across the league.</p>
-                </div>
-              )}
-            </div>
-            <aside className="sl-impact-panel">
-              <h3>Trending</h3>
-              <div className="sl-effects-grid">
-                {stories
-                  .filter((s) => Number(s.heat) > 0)
-                  .sort((a, b) => Number(b.heat) - Number(a.heat))
-                  .slice(0, 6)
-                  .map((s, i) => (
-                    <div key={s.id} className="sl-effect-row">
-                      <span>{i + 1}. {s.playerName || s.teamName || s.headline?.slice(0, 26)}</span>
-                      <strong>{heatLabel(s.heat)}</strong>
-                    </div>
-                  ))}
+                ))}
               </div>
+
+              {socialSubTab === "puckr" ? (
+                <div className="sl-social-feed">
+                  {socialPosts.length ? (
+                    socialPosts.map((post) => (
+                      <button key={post.id} type="button" className="sl-social-post" onClick={() => { if (post.storyId) { openStory(post.storyId); setDepartment("front_page"); } }}>
+                        <div className="sl-social-post__head">
+                          <strong>
+                            {post.name}
+                            {post.verified ? " ✓" : ""}
+                            {post.isAgent ? " · Agent" : ""}
+                          </strong>
+                          <span>{post.handle}</span>
+                          <em>{post.age}</em>
+                        </div>
+                        <p>{post.text}</p>
+                        {post.related ? <div className="sl-social-post__related">Related · {post.related}</div> : null}
+                        {post.cred ? <div className="sl-social-post__related">{post.cred}</div> : null}
+                        {post.likes != null ? (
+                          <div className="sl-social-post__related">
+                            {Number(post.replies || 0).toLocaleString()} replies · {Number(post.reposts || 0).toLocaleString()} reposts · {Number(post.likes || 0).toLocaleString()} likes
+                          </div>
+                        ) : null}
+                      </button>
+                    ))
+                  ) : (
+                    <div className="sl-empty-panel">
+                      <p className="sl-kicker">Puckr · Quiet</p>
+                      <h2>No posts yet</h2>
+                      <p>League storylines populate the timeline as the sim advances.</p>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              {socialSubTab === "icehole" ? (
+                <>
+                  <div className="sl-icehole-pills">
+                    {redditSubPills.map((pill) => (
+                      <button
+                        key={pill}
+                        type="button"
+                        className={redditSubFilter === pill ? "is-active" : ""}
+                        onClick={() => setRedditSubFilter(pill)}
+                      >
+                        {pill}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="sl-social-feed">
+                    {redditThreads.length ? (
+                      redditThreads.map((thread) => (
+                        <div key={thread.id}>
+                          <button
+                            type="button"
+                            className={`sl-icehole-thread ${thread.controversial ? "is-controversial" : ""}`}
+                            onClick={() => setExpandedThreadId((prev) => (prev === thread.id ? null : thread.id))}
+                          >
+                            <div className="sl-icehole-thread__meta">
+                              <span>{thread.subreddit}</span>
+                              <span className="sl-icehole-flair">{thread.flair}</span>
+                              <span>{thread.upvotes.toLocaleString()} ↑</span>
+                              <span>{Math.round(thread.upvoteRatio * 100)}% up</span>
+                              <span>{thread.commentCount} comments</span>
+                            </div>
+                            <h4>{thread.title}</h4>
+                            <p>{thread.body}</p>
+                            <div className="sl-icehole-thread__meta">
+                              <span>{thread.author}</span>
+                              <span>{thread.createdAt}</span>
+                            </div>
+                          </button>
+                          {expandedThreadId === thread.id && thread.comments.length ? (
+                            <div className="sl-icehole-comments">
+                              {thread.comments.map((c) => (
+                                <div key={c.id} className="sl-icehole-comment">
+                                  <em>{c.author}{c.isRival ? " · rival" : ""} · {c.upvotes}↑</em>
+                                  {c.text}
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="sl-empty-panel">
+                        <p className="sl-kicker">IceHole · Quiet</p>
+                        <h2>No threads yet</h2>
+                        <p>Heated storylines spawn fan threads once league heat builds.</p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : null}
+
+              {socialSubTab === "burner" ? (
+                <BurnerPanel
+                  sessionId={sessionId}
+                  marketProfiles={narrativeUniverse?.market_profiles}
+                  defaultMarketKey={userMarket?.market_key}
+                  onPosted={() => refreshFranchise?.()}
+                />
+              ) : null}
+            </div>
+
+            <aside className="sl-impact-panel">
+              {socialSubTab === "icehole" ? (
+                <>
+                  <div className="sl-fan-pulse">
+                    <span>Fan pulse (IceHole)</span>
+                    <strong>{redditPulse.label}</strong>
+                    <p className="sl-pm-muted">Net sentiment delta {redditPulse.net.toFixed(2)}</p>
+                  </div>
+                  <h3>Hot threads</h3>
+                  <div className="sl-effects-grid">
+                    {redditThreads.slice(0, 6).map((t) => (
+                      <div key={t.id} className="sl-effect-row">
+                        <span>{t.title.slice(0, 32)}</span>
+                        <strong>{t.upvotes}↑</strong>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h3>Trending</h3>
+                  <div className="sl-effects-grid">
+                    {stories
+                      .filter((s) => Number(s.heat) > 0)
+                      .sort((a, b) => Number(b.heat) - Number(a.heat))
+                      .slice(0, 6)
+                      .map((s, i) => (
+                        <div key={s.id} className="sl-effect-row">
+                          <span>{i + 1}. {s.playerName || s.teamName || s.headline?.slice(0, 26)}</span>
+                          <strong>{heatLabel(s.heat)}</strong>
+                        </div>
+                      ))}
+                  </div>
+                </>
+              )}
             </aside>
           </div>
         ) : department === "insiders" ? (

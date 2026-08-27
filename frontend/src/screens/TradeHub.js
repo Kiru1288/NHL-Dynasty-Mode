@@ -23,6 +23,20 @@ import {
   getUniversalOverall,
 } from "../utils/playerOverall";
 
+function buildIceholeBuzzMap(franchiseState) {
+  const threads = franchiseState?.narrative_universe?.reddit_threads;
+  if (!Array.isArray(threads)) return new Map();
+  const map = new Map();
+  for (const t of threads) {
+    const pid = String(t?.player_id || "");
+    const isRumor = String(t?.flair || "") === "Rumor" || String(t?.knowledge_type || "") === "claim";
+    if (!pid || !isRumor || Number(t?.upvotes || 0) < 180) continue;
+    const prev = map.get(pid);
+    if (!prev || Number(t.upvotes) > Number(prev.upvotes || 0)) map.set(pid, t);
+  }
+  return map;
+}
+
 const SLOTS = 5;
 const DRAG_MIME = "application/x-nhl-trade-asset";
 
@@ -2703,6 +2717,8 @@ function AssetPoolRow({
   onQuickAdd,
   onAssetClick,
   peakValue = null,
+  iceholeThread = null,
+  onOpenIcehole = null,
 }) {
   const key = `${item.type}-${item.id}`;
   const used = usedIds.has(key);
@@ -2843,6 +2859,19 @@ function AssetPoolRow({
             <div className="trade-player-list-name-row">
               <TradeFlagBadge player={item} size="sm" />
               <strong>{item.name}</strong>
+              {iceholeThread ? (
+                <button
+                  type="button"
+                  className="trade-icehole-buzz"
+                  title={String(iceholeThread.title || "IceHole trade rumor thread")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenIcehole?.(iceholeThread);
+                  }}
+                >
+                  IceHole buzz
+                </button>
+              ) : null}
             </div>
 
             <div className="trade-player-list-mid">
@@ -2881,6 +2910,8 @@ function AssetPool({
   onDragStart,
   onQuickAdd,
   onAssetClick,
+  iceholeByPlayerId = null,
+  onOpenIcehole = null,
 }) {
   const [tab, setTab] = useState("ROSTER");
   const players = safeArray(meta?.players?.[teamId]);
@@ -3008,6 +3039,8 @@ function AssetPool({
               onQuickAdd={onQuickAdd}
               onAssetClick={onAssetClick}
               peakValue={rosterPeak}
+              iceholeThread={iceholeByPlayerId?.get?.(String(item.id || item.player_id || "")) || null}
+              onOpenIcehole={onOpenIcehole}
             />
           ))
         ) : (
@@ -6148,6 +6181,8 @@ function TeamPlayersDrawer({
   onDragStart,
   onQuickAdd,
   onAssetClick,
+  iceholeByPlayerId = null,
+  onOpenIcehole = null,
 }) {
   if (!team) return null;
   const cap =
@@ -6190,6 +6225,8 @@ function TeamPlayersDrawer({
             onDragStart={onDragStart}
             onQuickAdd={onQuickAdd}
             onAssetClick={onAssetClick}
+            iceholeByPlayerId={iceholeByPlayerId}
+            onOpenIcehole={onOpenIcehole}
           />
         </div>
       </div>
@@ -6560,7 +6597,19 @@ function buildTradeDecisionToast({
 }
 
 export default function TradeHub() {
-  const { setScreen, franchiseState, setFranchiseState } = useGameUI();
+  const { setScreen, franchiseState, setFranchiseState, setPendingSocialNav } = useGameUI();
+  const iceholeByPlayerId = useMemo(() => buildIceholeBuzzMap(franchiseState), [franchiseState]);
+  const openIceholeThread = useCallback(
+    (thread) => {
+      setPendingSocialNav({
+        subTab: "icehole",
+        subreddit: thread?.subreddit || "all",
+        threadId: thread?.thread_id || null,
+      });
+      setScreen(SCREENS.STORYLINES);
+    },
+    [setPendingSocialNav, setScreen]
+  );
 
   const [tradeAssets, setTradeAssets] = useState(null);
   const [tradeMarket, setTradeMarket] = useState(null);
@@ -7636,6 +7685,8 @@ export default function TradeHub() {
               handleQuickAdd(teamPlayersMenu.side, teamPlayersMenu.teamId, item)
             }
             onAssetClick={handleAssetClick}
+            iceholeByPlayerId={iceholeByPlayerId}
+            onOpenIcehole={openIceholeThread}
           />
         );
       })()}

@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import sys
 import time
 import types
 import unittest
 import random
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+for _p in (str(ROOT / "backend"), str(ROOT / "SimEngine")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 
 def _player(pid: str, *, ovr: float = 84, age: int = 27):
@@ -102,8 +109,8 @@ class TradeStabilityTests(unittest.TestCase):
         from app.sim_engine.franchise.trade_stability_engine import (
             PlayerConcernSnapshot,
             compute_trade_stability,
-            stability_to_escalation_level,
-            character_escalation_skip,
+            character_daily_drift_multiplier,
+            apply_daily_stability_update,
         )
 
         snap = PlayerConcernSnapshot(
@@ -116,9 +123,19 @@ class TradeStabilityTests(unittest.TestCase):
             ego=70,
         )
         score, _ = compute_trade_stability(snap)
-        level = stability_to_escalation_level(score)
-        skip = character_escalation_skip(snap.character, score)
-        self.assertGreaterEqual(level + skip, 2)
+        self.assertLess(score, 75)
+        self.assertGreater(character_daily_drift_multiplier(58), character_daily_drift_multiplier(88))
+
+        session = types.SimpleNamespace(trade_stability_state={})
+        player = _player("low_char")
+        player.character = 58
+        player.mental = 60
+        player.psych.role_satisfaction = 0.38
+        team = types.SimpleNamespace(team_id="CHI", situation="Rebuilding", roster=[player])
+        for day in range(42, 70):
+            apply_daily_stability_update(session, player, team, day)
+        row = session.trade_stability_state["low_char"]
+        self.assertLess(float(row["trade_stability_score"]), 80)
 
     def test_agent_assignment_is_deterministic_and_balanced(self):
         from app.sim_engine.franchise.player_agent_engine import AGENT_IDS, assign_agent_id
@@ -128,8 +145,12 @@ class TradeStabilityTests(unittest.TestCase):
             aid = assign_agent_id(_player(f"player_{i}"))
             counts[aid] += 1
         for aid in AGENT_IDS:
-            self.assertGreater(counts[aid], 60)
-            self.assertLess(counts[aid], 140)
+            self.assertGreater(counts[aid], 20)
+        # Stars should not all land on Blake
+        star = _player("superstar_1", ovr=96)
+        star.character = 90
+        star_agent = assign_agent_id(star)
+        self.assertIn(star_agent, ("walsh", "kim", "rossi", "carter"))
 
     def test_formal_demand_starts_crisis_timer(self):
         from services.trade_demand_engine import open_trade_demand, ensure_trade_demands
@@ -193,6 +214,90 @@ class TradeStabilityTests(unittest.TestCase):
         pst = getattr(star, "_franchise_storyline_state", {})
         self.assertGreaterEqual(result["stability_delta"], -5.0)
         self.assertLessEqual(int(pst.get("trade_rumor_heat") or 0), 25)
+
+    def test_role_satisfaction_reads_toi_not_psych_stub(self):
+        from app.sim_engine.franchise.trade_stability_engine import (
+            gather_player_concerns,
+            infer_role_satisfaction_from_deployment,
+        )
+
+        player = _player("toi_star", ovr=90, age=27)
+        player.character = 80
+        player.season_stats = {"gp": 40, "pts": 36, "toi_sec": 40 * 12 * 60}
+        player.psych.role_satisfaction = 0.85
+        player.ovr = lambda: 90
+        team = _team("OTT", [player])
+        league = _league([team])
+        session = _session(league, "OTT")
+
+        inferred = infer_role_satisfaction_from_deployment(player, team, session)
+        self.assertIsNotNone(inferred)
+        self.assertLess(inferred, 45)
+
+        snap = gather_player_concerns(session, player, team)
+        self.assertLess(snap.role_satisfaction, 50)
+
+    def test_trade_deadline_freezes_crisis_and_blocks_expiry(self):
+        from services.trade_demand_engine import (
+            ensure_trade_demands,
+            get_trade_deadline_context,
+            open_trade_demand,
+            sync_trade_demand_crises,
+        )
+
+        star = _player("deadline_star", ovr=88)
+        team = _team("OTT", [star])
+        league = _league([team])
+        session = _session(league, "OTT")
+        session.phase = "regular"
+        session.nhl_calendar = [{"iso": "2026-03-05", "date": "2026-03-05", "tags": ("trade_deadline",)}]
+        session.calendar_cursor = 0
+
+        row = open_trade_demand(
+            session,
+            star,
+            team,
+            reason="role",
+            calendar_idx=120,
+            rng=random.Random(9),
+            force_formal=True,
+        )
+        self.assertEqual(row["status"], "open")
+        book = ensure_trade_demands(session)
+        book["deadline_star"]["crisis"]["remaining_seconds"] = 5.0
+        book["deadline_star"]["crisis"]["last_sync_unix"] = time.time() - 30
+
+        session.nhl_calendar = [{"iso": "2026-03-15", "date": "2026-03-15", "tags": ()}]
+        ctx = get_trade_deadline_context(session)
+        self.assertTrue(ctx.get("past_deadline"))
+        self.assertFalse(ctx.get("crisis_timer_ticks"))
+
+        sync_trade_demand_crises(session, tick_timers=True)
+        self.assertEqual(book["deadline_star"]["status"], "deadline_closed")
+        self.assertFalse(book["deadline_star"].get("crisis_expired"))
+
+    def test_new_demands_blocked_after_trade_deadline(self):
+        from services.trade_demand_engine import open_trade_demand
+
+        star = _player("late_star", ovr=86)
+        team = _team("NYR", [star])
+        league = _league([team])
+        session = _session(league, "NYR")
+        session.phase = "regular"
+        session.nhl_calendar = [{"iso": "2026-03-12", "date": "2026-03-12", "tags": ()}]
+        session.calendar_cursor = 0
+
+        row = open_trade_demand(
+            session,
+            star,
+            team,
+            reason="management",
+            calendar_idx=130,
+            rng=random.Random(4),
+            force_formal=True,
+        )
+        self.assertEqual(row.get("status"), "blocked")
+        self.assertEqual(row.get("reason"), "trade_deadline_passed")
 
 
 if __name__ == "__main__":
