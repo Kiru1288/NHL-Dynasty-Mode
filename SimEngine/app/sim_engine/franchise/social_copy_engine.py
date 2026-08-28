@@ -320,13 +320,154 @@ def _safe_format(template: str, ctx: Dict[str, Any]) -> str:
     try:
         return template.format(**ctx)
     except (KeyError, ValueError, IndexError):
-        return template
+        return ""
 
 
-def build_evidence_context(storyline: Dict[str, Any]) -> Dict[str, Any]:
+def _stat_int(row: Dict[str, Any], *keys: str) -> int:
+    for key in keys:
+        val = row.get(key)
+        if val is None or val == "":
+            continue
+        try:
+            return int(float(val))
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _team_record_label(session: Any, team_id: str) -> str:
+    if not session or not team_id:
+        return "—"
+    standings = getattr(session, "standings", None) or getattr(session, "league_standings", None) or []
+    for row in standings:
+        if str(row.get("team_id") or row.get("id") or "") != str(team_id):
+            continue
+        w = _stat_int(row, "w", "wins")
+        l = _stat_int(row, "l", "losses")
+        otl = _stat_int(row, "otl", "ot_losses", "ot")
+        if w or l or otl:
+            return f"{w}-{l}-{otl}"
+    team = (getattr(session, "team_by_id", None) or {}).get(str(team_id))
+    if team is not None:
+        w = int(getattr(team, "wins", 0) or 0)
+        l = int(getattr(team, "losses", 0) or 0)
+        otl = int(getattr(team, "otl", 0) or getattr(team, "ot_losses", 0) or 0)
+        if w or l or otl:
+            return f"{w}-{l}-{otl}"
+    return "—"
+
+
+def _lookup_session_evidence(session: Any, storyline: Dict[str, Any]) -> Dict[str, Any]:
+    if session is None:
+        return {}
+    pid = str(storyline.get("player_id") or "")
+    tid = str(storyline.get("team_id") or "")
+    out: Dict[str, Any] = {}
+    stats = dict(getattr(session, "player_season_stats", None) or {})
+    row = stats.get(pid) if pid else None
+    if isinstance(row, dict):
+        gp = _stat_int(row, "gp", "games_played")
+        goals = _stat_int(row, "g", "goals")
+        assists = _stat_int(row, "a", "assists")
+        points = _stat_int(row, "pts", "points")
+        if points <= 0 and (goals or assists):
+            points = goals + assists
+        out["games_played"] = gp
+        out["goals"] = goals
+        out["assists"] = assists
+        out["points"] = points
+        if gp > 0:
+            out["ppg"] = round(points / gp, 2)
+        sv = row.get("save_pct") or row.get("sv_pct")
+        if sv not in (None, ""):
+            out["save_pct"] = round(float(sv), 3) if float(sv) <= 1 else round(float(sv) / 100, 3)
+        gaa = row.get("gaa")
+        if gaa not in (None, ""):
+            out["gaa"] = round(float(gaa), 2)
+        if not tid:
+            tid = str(row.get("team_id") or "")
+        pname = str(row.get("name") or "").strip()
+        if pname:
+            out["name"] = pname
+        ovr = row.get("overall") or row.get("ovr")
+        if ovr not in (None, "", 0):
+            out["overall"] = round(float(ovr), 1)
+
+    if pid:
+        for tm in (getattr(session, "team_by_id", None) or {}).values():
+            for player in getattr(tm, "roster", None) or []:
+                if str(getattr(player, "id", "") or "") != pid:
+                    continue
+                if "name" not in out:
+                    out["name"] = str(getattr(player, "name", "") or getattr(player, "player_name", "") or "").strip()
+                if "overall" not in out or not out.get("overall"):
+                    ovr = getattr(player, "overall", None) or getattr(player, "ovr", None)
+                    if ovr not in (None, "", 0):
+                        out["overall"] = round(float(ovr), 1)
+                cap = getattr(player, "cap_hit", None) or getattr(player, "salary", None)
+                if cap not in (None, "", 0):
+                    cap_m = float(cap)
+                    if cap_m > 1000:
+                        cap_m /= 1_000_000
+                    out["cap_hit"] = round(cap_m, 2)
+                if not tid:
+                    tid = str(getattr(tm, "id", "") or "")
+                break
+
+    if tid and "team_record" not in out:
+        out["team_record"] = _team_record_label(session, tid)
+    team_name = str(storyline.get("team_name") or "").strip()
+    if team_name:
+        out["team"] = team_name
+    elif tid:
+        tm = (getattr(session, "team_by_id", None) or {}).get(str(tid))
+        if tm is not None:
+            out["team"] = str(getattr(tm, "name", "") or getattr(tm, "city", "") or tid)
+    return {k: v for k, v in out.items() if v not in (None, "")}
+
+
+_BROKEN_SOCIAL_PATTERNS = (
+    re.compile(r"\bthe player\b", re.I),
+    re.compile(r"\(\s*0\s*ovr\s*\)", re.I),
+    re.compile(r"\b0 points in 0 games\b", re.I),
+    re.compile(r"\bthrough 0 gp\b", re.I),
+    re.compile(r"\b0 starts\b", re.I),
+    re.compile(r"\b0\.00 ppg through 0\b", re.I),
+    re.compile(r"\{[a-z_]+\}"),
+)
+
+
+def _looks_like_broken_social_text(text: str) -> bool:
+    cleaned = str(text or "").strip()
+    if len(cleaned) < 8:
+        return True
+    return any(p.search(cleaned) for p in _BROKEN_SOCIAL_PATTERNS)
+
+
+def _headline_fallback_post(storyline: Dict[str, Any], reporter: Dict[str, Any]) -> str:
+    headline = str(storyline.get("headline") or "").strip()
+    summary = str(storyline.get("summary") or "").strip()
+    body = headline or summary
+    if not body:
+        team = str(storyline.get("team_name") or "the club")
+        pname = str(storyline.get("player_name") or "").strip()
+        body = f"{pname} remains a storyline around {team}." if pname else f"League desk tracking a developing story around {team}."
+    outlet = str(reporter.get("outlet") or "Desk").strip()
+    return _apply_reporter_voice(f"{outlet} — {body}"[:280], reporter)
+
+
+def build_evidence_context(storyline: Dict[str, Any], session: Any = None) -> Dict[str, Any]:
     ev = dict(storyline.get("evidence") or {})
+    if session is not None:
+        enriched = _lookup_session_evidence(session, storyline)
+        for key, val in enriched.items():
+            if key not in ev or ev.get(key) in (None, "", 0, "0", "0.00", ".900", "—"):
+                ev[key] = val
+    pname = str(storyline.get("player_name") or ev.get("name") or "").strip()
+    if not pname or pname.lower() == "the player":
+        pname = str(ev.get("name") or "").strip()
     ctx = {
-        "name": str(storyline.get("player_name") or ev.get("name") or "the player"),
+        "name": pname or "Unknown player",
         "team": str(storyline.get("team_name") or ev.get("team") or "the club"),
         "ppg": ev.get("ppg", ev.get("points_per_game", storyline.get("ppg", "0.00"))),
         "points": ev.get("points", storyline.get("points", 0)),
@@ -476,7 +617,7 @@ def compose_reporter_post(
 ) -> str:
     angle = str(storyline.get("narrative_angle") or "league_wire")
     frags = REPORTER_FRAGMENTS.get(angle) or REPORTER_FRAGMENTS["league_wire"]
-    ctx = build_evidence_context(storyline)
+    ctx = build_evidence_context(storyline, session)
     if rng.random() < 0.18:
         parts_name = str(ctx.get("name") or "").split()
         if len(parts_name) >= 2:
@@ -497,7 +638,7 @@ def compose_reporter_post(
     stat_keys = ["points", "ppg", "goals", "games_played", "cap_hit", "save_pct", "team_record", "league_rank"]
     stat_key = rng.choice(stat_keys)
     stat_val = ctx.get(stat_key, ctx.get("points", 0))
-    if not re.search(r"\d", " ".join(parts)):
+    if not re.search(r"\d", " ".join(parts)) and stat_val not in (None, "", 0, "—"):
         parts.append(f"({stat_key.replace('_', ' ')}: {stat_val})")
     if rng.random() < 0.22:
         parts.insert(0, f"{reporter.get('outlet', 'Desk')} —")
@@ -512,6 +653,8 @@ def compose_reporter_post(
     suffix = rng.choice(["", ".", " — more coming.", " per league sources.", ""])
     if suffix and not text.endswith((".", "!", "?")):
         text = text + suffix
+    if _looks_like_broken_social_text(text):
+        text = _headline_fallback_post(storyline, reporter)
     return _apply_reporter_voice(text[:280], reporter)
 
 
@@ -521,7 +664,7 @@ def compose_player_post(entity: Dict[str, Any], mood: str, rng: random.Random) -
     opener, clause, closer = _pick_slots(skel, rng, urgent=False)
     style = str((entity.get("social") or {}).get("style") or "polished")
     raw = " ".join(p for p in (_safe_format(opener, ctx), _safe_format(clause, ctx), _safe_format(closer, ctx)) if p)
-    if not re.search(r"\d", raw):
+    if not re.search(r"\d", raw) and int(ctx.get("points") or 0) > 0:
         raw = f"{raw} ({ctx['points']} pts)".strip()
     return voice_filter(raw[:240], style)
 
@@ -530,10 +673,22 @@ def compose_ambient_fan_post(
     sentiment: str,
     ctx: Dict[str, Any],
     rng: random.Random,
+    storyline: Optional[Dict[str, Any]] = None,
+    reporter: Optional[Dict[str, Any]] = None,
 ) -> str:
     pool = AMBIENT_FAN.get(sentiment) or AMBIENT_FAN["concern"]
-    line = rng.choice(pool)
-    text = _safe_format(line, ctx)
-    if not re.search(r"\d", text) and ctx.get("points") is not None:
-        text = f"{text} ({ctx['points']} pts)"
-    return text[:260]
+    for _ in range(6):
+        line = rng.choice(pool)
+        text = _safe_format(line, ctx).strip()
+        if text and not _looks_like_broken_social_text(text):
+            if not re.search(r"\d", text) and int(ctx.get("points") or 0) > 0:
+                text = f"{text} ({ctx['points']} pts)"
+            return text[:260]
+    if storyline and reporter:
+        return _headline_fallback_post(storyline, reporter)[:260]
+    headline = str((storyline or {}).get("headline") or "").strip()
+    if headline:
+        return headline[:260]
+    name = str(ctx.get("name") or "This player")
+    team = str(ctx.get("team") or "the club")
+    return f"{name} is all over the {team} conversation right now."[:260]

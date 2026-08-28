@@ -160,11 +160,62 @@ def _player_from_roster(session: Any, player_id: str) -> Optional[Any]:
     pid = str(player_id or "")
     if not pid:
         return None
+    idx = _player_index_by_id(session)
+    return idx.get(pid)
+
+
+def _player_index_by_id(session: Any) -> Dict[str, Any]:
+    """One roster walk per stats revision — O(1) player lookup for storyline passes."""
+    rev = int(getattr(session, "_stats_revision", 0) or 0)
+    cached_rev = int(getattr(session, "_player_index_rev", -1) or -1)
+    cached = getattr(session, "_player_index_by_id", None)
+    if isinstance(cached, dict) and cached_rev == rev:
+        return cached
+    out: Dict[str, Any] = {}
     for tm in (getattr(session, "team_by_id", None) or {}).values():
-        for p in getattr(tm, "roster", None) or []:
-            if str(getattr(p, "id", "") or "") == pid:
-                return p
-    return None
+        for bucket in ("roster", "ahl_roster", "injured_reserve", "scratches", "echl_roster"):
+            for p in getattr(tm, bucket, None) or []:
+                pid = str(getattr(p, "id", "") or "")
+                if pid:
+                    out[pid] = p
+    session._player_index_by_id = out
+    session._player_index_rev = rev
+    return out
+
+
+def _build_standings_rank_map(session: Any) -> Dict[str, int]:
+    """Sort league standings once; reuse ranks across all storyline triggers."""
+    cached_rev = int(getattr(session, "_standings_rank_rev", -1) or -1)
+    rev = int(getattr(session, "_stats_revision", 0) or 0)
+    cached = getattr(session, "_standings_rank_by_team", None)
+    if isinstance(cached, dict) and cached_rev == rev:
+        return cached
+    st = getattr(session, "standings", None)
+    if st is None:
+        return {}
+    recs = getattr(st, "records", None) or {}
+    rows: List[Tuple[int, str]] = []
+    if isinstance(recs, dict):
+        iter_rows = recs.items()
+    elif isinstance(recs, list):
+        iter_rows = ((getattr(rr, "team_id", None) or getattr(rr, "id", i), rr) for i, rr in enumerate(recs))
+    else:
+        return {}
+    for tid, rr in iter_rows:
+        pts = int(getattr(rr, "points", 0) or 0)
+        rows.append((pts, str(tid)))
+    rows.sort(key=lambda x: (-x[0], x[1]))
+    out = {tid: i + 1 for i, (_, tid) in enumerate(rows)}
+    session._standings_rank_by_team = out
+    session._standings_rank_rev = rev
+    return out
+
+
+def _league_points_rank(session: Any, team_id: str) -> int:
+    ranks = _build_standings_rank_map(session)
+    if not ranks:
+        return 16
+    return int(ranks.get(str(team_id), len(ranks) or 16))
 
 
 def _player_ovr99(player: Any) -> float:
@@ -432,28 +483,6 @@ def _team_games_played(session: Any, team_id: str) -> int:
     return w + l + o
 
 
-def _league_points_rank(session: Any, team_id: str) -> int:
-    st = getattr(session, "standings", None)
-    if st is None:
-        return 16
-    recs = getattr(st, "records", None) or {}
-    rows: List[Tuple[int, str]] = []
-    if isinstance(recs, dict):
-        iter_rows = recs.items()
-    elif isinstance(recs, list):
-        iter_rows = ((getattr(rr, "team_id", None) or getattr(rr, "id", i), rr) for i, rr in enumerate(recs))
-    else:
-        return 16
-    for tid, rr in iter_rows:
-        pts = int(getattr(rr, "points", 0) or 0)
-        rows.append((pts, str(tid)))
-    rows.sort(key=lambda x: (-x[0], x[1]))
-    for i, (_, tid) in enumerate(rows):
-        if tid == str(team_id):
-            return i + 1
-    return len(rows) or 16
-
-
 def _underperform_actions() -> List[Dict[str, Any]]:
     return [
         {"id": "back_publicly", "label": "Publicly back the player", "effects": {"player_confidence": 3, "media_pressure": -1, "fan_confidence": -1}, "effect_summary": "Confidence +3 · Media -1"},
@@ -500,20 +529,26 @@ def run_data_storyline_pass(
     skipped_cd = 0
     skipped_sample = 0
 
-    # Build OVR lookup from rosters
+    # Build OVR / cap / name lookup from rosters (single walk)
     ovr_by_id: Dict[str, float] = {}
     age_by_id: Dict[str, int] = {}
     name_by_id: Dict[str, str] = {}
+    cap_hit_by_id: Dict[str, float] = {}
     team_name_by_id: Dict[str, str] = {}
+    player_by_id = _player_index_by_id(session)
+    rank_by_team = _build_standings_rank_map(session)
     for tid, tm in (getattr(session, "team_by_id", None) or {}).items():
         team_name_by_id[str(tid)] = str(getattr(tm, "name", "") or getattr(tm, "city", "") or tid)
-        for p in getattr(tm, "roster", None) or []:
-            pid = str(getattr(p, "id", "") or "")
-            if not pid:
-                continue
-            ovr_by_id[pid] = _player_ovr99(p)
-            age_by_id[pid] = _player_age(p)
-            name_by_id[pid] = str(getattr(p, "name", "") or "Player")
+        for bucket in ("roster", "ahl_roster", "injured_reserve", "scratches", "echl_roster"):
+            for p in getattr(tm, bucket, None) or []:
+                pid = str(getattr(p, "id", "") or "")
+                if not pid:
+                    continue
+                player_by_id.setdefault(pid, p)
+                ovr_by_id[pid] = _player_ovr99(p)
+                age_by_id[pid] = _player_age(p)
+                name_by_id[pid] = str(getattr(p, "name", "") or "Player")
+                cap_hit_by_id[pid] = _cap_hit_m(p)
 
     def emit(raw: Dict[str, Any], fx_team: str, fx_player: str = "") -> None:
         generated.append(raw)
@@ -553,7 +588,7 @@ def run_data_storyline_pass(
         pname = str(row.get("name") or name_by_id.get(str(pid), "Player"))
         ovr = float(ovr_by_id.get(str(pid), 0) or row.get("overall") or 0)
         if ovr <= 0:
-            player = _player_from_roster(session, str(pid))
+            player = player_by_id.get(str(pid))
             if player:
                 ovr = _player_ovr99(player)
         age = int(age_by_id.get(str(pid), 27))
@@ -566,7 +601,7 @@ def run_data_storyline_pass(
         exp_pts = round(exp_ppg * gp, 1)
         delta = pts - exp_pts
         tw, tl, to, trec = _team_record(session, tid)
-        cap = _cap_hit_m(_player_from_roster(session, str(pid)) or object())
+        cap = float(cap_hit_by_id.get(str(pid), 0) or 0)
         role_word = "defenseman" if _pos_bucket(pos) == "D" else "forward"
         ctx = story_ctx(
             name=pname,
@@ -647,7 +682,7 @@ def run_data_storyline_pass(
 
         # Superstar carrying bad team
         if ovr >= 86 and gp >= SKATER_GP_MAJOR and pts >= 14:
-            rank = _league_points_rank(session, tid)
+            rank = int(rank_by_team.get(tid, len(rank_by_team) or 16))
             if rank >= 20 and ppg >= 0.85:
                 try_emit(
                     stable_key=f"superstar_carry|{pid}|{season}",
@@ -697,7 +732,8 @@ def run_data_storyline_pass(
 
         # Rolling last-10 hot/cold is published by storyline_coverage, not season PPG.
 
-    # --- Goalie triggers ---
+    # --- Goalie triggers + backup net share (single stats pass) ---
+    goalies_by_team: Dict[str, List[Dict[str, Any]]] = {}
     for pid, row in stats.items():
         if not isinstance(row, dict):
             continue
@@ -775,30 +811,16 @@ def run_data_storyline_pass(
                 heat=60,
             )
 
-    # Backup stealing the net
-    goalies_by_team: Dict[str, List[Dict[str, Any]]] = {}
-    for pid, row in stats.items():
-        if not isinstance(row, dict):
-            continue
-        pos = str(row.get("position") or "G")
-        if _pos_bucket(pos) != "G" and _stat_int(row, "shots_against", "sa") <= 0:
-            continue
-        gp = _stat_int(row, "gp", "games_played")
-        if gp < GOALIE_GP_MINOR:
-            continue
-        tid = str(row.get("team_id") or "")
-        sa = _stat_int(row, "shots_against", "sa")
-        ga = _stat_int(row, "ga", "goals_against")
-        sv_pct = float(row.get("save_pct") or ((sa - ga) / max(1, sa)))
         goalies_by_team.setdefault(tid, []).append(
             {
                 "pid": str(pid),
                 "gp": gp,
                 "sv": sv_pct,
-                "name": str(row.get("name") or name_by_id.get(str(pid), "Goalie")),
-                "ovr": float(ovr_by_id.get(str(pid), 78)),
+                "name": pname,
+                "ovr": ovr,
             }
         )
+
     for tid, group in goalies_by_team.items():
         if len(group) < 2:
             continue
@@ -848,7 +870,7 @@ def run_data_storyline_pass(
             continue
         w, l, o, trec = _team_record(session, tid)
         win_pct = w / max(1, gp)
-        rank = _league_points_rank(session, tid)
+        rank = int(rank_by_team.get(tid, len(rank_by_team) or 16))
         strength = float((getattr(session, "strength_map", None) or {}).get(tid, 0.5) or 0.5)
         tname = team_name_by_id.get(tid, tid)
         tctx = story_ctx(name=tname, team=tname, record=trec, gp=gp)
@@ -1269,9 +1291,12 @@ def migrate_session_storyline_state(session: Any) -> None:
     league = getattr(getattr(session, "sim", None), "league", None)
     if league is not None:
         setattr(league, "_franchise_user_team_id", str(getattr(session, "user_team_id", "") or ""))
-    for tm in (getattr(session, "team_by_id", None) or {}).values():
-        for pl in getattr(tm, "roster", None) or []:
-            _ensure_player_storyline_state(pl)
+    stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
+    if int(getattr(session, "_storyline_migrate_stats_rev", -1) or -1) != stats_rev:
+        for tm in (getattr(session, "team_by_id", None) or {}).values():
+            for pl in getattr(tm, "roster", None) or []:
+                _ensure_player_storyline_state(pl)
+        session._storyline_migrate_stats_rev = stats_rev
 
 
 def _ensure_player_storyline_state(player: Any) -> Dict[str, Any]:
@@ -2865,7 +2890,7 @@ def _spawn_social_posts(session: Any, sl: Dict[str, Any]) -> None:
 
     pname = str(sl.get("player_name") or "")
     if pname and heat >= 28:
-        ctx = build_evidence_context(sl)
+        ctx = build_evidence_context(sl, session)
         sentiment = "outrage" if heat >= 55 else "concern" if heat >= 40 else "hype"
         posts.append(
             {
@@ -2876,7 +2901,7 @@ def _spawn_social_posts(session: Any, sl: Dict[str, Any]) -> None:
                 "author_name": f"{pname.split()[-1]} Sicko",
                 "handle": f"@Fan{abs(hash(pname)) % 9000 + 1000}",
                 "verified": False,
-                "text": compose_ambient_fan_post(sentiment, ctx, rng),
+                "text": compose_ambient_fan_post(sentiment, ctx, rng, sl, reporter),
                 "related_headline": str(sl.get("headline") or ""),
                 "calendar_iso": iso,
                 "heat": max(10, heat - 15),
@@ -4821,7 +4846,7 @@ def _u_social_burst(session: Any, storyline: Dict[str, Any], event: Dict[str, An
             "replies": rng.randint(30, 180) + heat * 7,
         },
     )
-    ctx = build_evidence_context(storyline)
+    ctx = build_evidence_context(storyline, session)
     fan_sentiments = ["hype", "concern", "meme", "outrage"] if heat >= 60 else ["hype", "concern", "meme"]
     for index in range(2 + (1 if heat >= 60 else 0)):
         sent = rng.choice(fan_sentiments)
@@ -4830,7 +4855,7 @@ def _u_social_burst(session: Any, storyline: Dict[str, Any], event: Dict[str, An
             {
                 "author_name": rng.choice(["Rink Rat", "Cap Space Enjoyer", "Fourth Line Truthers", "PuckWatch", "Hockey After Dark"]),
                 "handle": f"@FanVoice{rng.randint(100, 9999)}",
-                "text": compose_ambient_fan_post(sent, ctx, rng),
+                "text": compose_ambient_fan_post(sent, ctx, rng, storyline, reporter),
                 "reply_to_id": root["id"] if index > 0 else None,
                 "storyline_id": storyline.get("storyline_id"),
                 "universe_event_id": event.get("id"),
@@ -8387,9 +8412,12 @@ def build_narrative_universe_v2_payload(session: Any) -> Dict[str, Any]:
         dossiers[pid] = build_human_dossier_payload(session, entity, player_obj, include_private=True)
     if dossiers:
         base["human_dossiers"] = dossiers
+        if not base.get("player_dossiers"):
+            base["player_dossiers"] = list(dossiers.values())
     try:
         base["player_meetings"] = build_player_meetings_payload(session)
-    except Exception:
+    except Exception as exc:
+        _log.warning("player_meetings payload failed: %s", exc)
         base["player_meetings"] = {}
     return base
 
@@ -8412,12 +8440,18 @@ def _ensure_gm_meeting_state(session: Any) -> None:
 def _gm_user_org_players(session: Any) -> List[Tuple[str, Any, str]]:
     """(player_id, player_obj, roster_bucket) for user NHL + AHL."""
     utid = str(getattr(session, "user_team_id", "") or "")
-    team = (getattr(session, "team_by_id", None) or {}).get(utid)
+    by_id = getattr(session, "team_by_id", None) or {}
+    team = by_id.get(utid)
+    if team is None:
+        raw = getattr(session, "user_team_id", None)
+        team = by_id.get(raw)
+    if team is None and utid.isdigit():
+        team = by_id.get(int(utid))
     if team is None:
         return []
     rows: List[Tuple[str, Any, str]] = []
     seen: set = set()
-    for bucket in ("roster", "ahl_roster", "ir", "scratch"):
+    for bucket in ("roster", "ahl_roster", "injured_reserve", "scratches"):
         for player in getattr(team, bucket, None) or []:
             pid = str(getattr(player, "id", "") or "")
             if not pid or pid in seen or getattr(player, "retired", False):
@@ -8601,7 +8635,7 @@ def _gm_build_context(session: Any, player_id: str) -> Dict[str, Any]:
     try:
         from app.sim_engine.franchise.player_agent_engine import ensure_player_agent, agent_public_view
 
-        agent = agent_public_view(ensure_player_agent(player, session)) if player is not None else {}
+        agent = agent_public_view(player, session) if player is not None else {}
     except Exception:
         agent = {}
     return {
@@ -8963,6 +8997,11 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
 
 
 def get_available_gm_interactions(session: Any, player_id: str) -> List[Dict[str, Any]]:
+    day, _, _ = _u_current_meta(session)
+    cache = dict(getattr(session, "_gm_interactions_cache", None) or {})
+    cache_key = f"{player_id}:{day}"
+    if cache_key in cache:
+        return list(cache[cache_key])
     ctx = _gm_build_context(session, player_id)
     if not ctx.get("entity"):
         return []
@@ -8988,6 +9027,8 @@ def get_available_gm_interactions(session: Any, player_id: str) -> List[Dict[str
             continue
         cat_label = next((lbl for cid, lbl in GM_MEETING_CATEGORIES if cid == built["category"]), built["category"])
         available.append({"id": iid, "category": built["category"], "category_label": cat_label, "title": built["title"]})
+    cache[cache_key] = available
+    session._gm_interactions_cache = cache
     return available
 
 
@@ -9099,7 +9140,7 @@ def build_player_meetings_payload(session: Any) -> Dict[str, Any]:
         pst = _ensure_player_storyline_state(player)
         try:
             from app.sim_engine.franchise.player_agent_engine import ensure_player_agent, agent_public_view
-            agent = agent_public_view(ensure_player_agent(player, session))
+            agent = agent_public_view(player, session)
         except Exception:
             agent = {}
         requested = any(str(r.get("player_id") or r.get("actor_id") or "") == pid for r in pending_player)

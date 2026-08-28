@@ -3,6 +3,8 @@
  * stock effects, weekly movers, and brochure-dossier copy.
  */
 
+import { goalieStrengthCopy, goalieWeaknessCopy } from "./prospectDossierHelpers";
+
 export const PYRAMID_TIERS = [
   { key: "transcendent", label: "Transcendent", rarity: "1 / 100,000", color: "#ffd24a", ink: "#1a1204", order: 1, minPeak: 96 },
   { key: "generational", label: "Generational", rarity: "Once a decade", color: "#ff6b2d", ink: "#1a0900", order: 2, minPeak: 93 },
@@ -206,30 +208,52 @@ function pickIncident(player) {
   return CHARACTER_INCIDENTS[idx];
 }
 
-export function resolveCharacterFile(player) {
-  const forced = Boolean(player?.characterConcerns || player?.isBustRisk);
-  const rank = Number(player?.publicRank ?? player?.rank) || 200;
-  const roll = hashSeed(`${player?.id || player?.name}-char`) % 100;
-  const chance = rank <= 5 ? 4 : rank <= 20 ? 9 : rank <= 64 ? 14 : 18;
-  const flagged = forced || roll < chance;
-  if (!flagged) {
+export function resolveCharacterFile(player, profile = null) {
+  const charRead = profile?.character_read || null;
+  const forced = Boolean(
+    player?.characterConcerns
+    || player?.character_concerns
+    || profile?.character_concerns
+    || player?.isBustRisk,
+  );
+  const headline = charRead?.headline || null;
+  const interviewNotes = charRead?.interview_notes || null;
+  const traits = Array.isArray(charRead?.traits) ? charRead.traits : [];
+  const weakTraits = traits.filter((t) => {
+    const tier = String(t?.tier || "").toLowerCase();
+    return tier === "below average" || tier === "mixed reports" || tier === "unknown";
+  });
+  // Only flag when the backend explicitly marks character concerns — not from trait tiers alone.
+  const flagged = forced;
+
+  const traitSummary = traits.length
+    ? traits.slice(0, 3).map((t) => `${t.label}: ${t.tier}`).join(" · ")
+    : null;
+  const story = interviewNotes
+    || traitSummary
+    || (headline ? `Character read — ${headline}.` : null)
+    || (forced ? "Character concerns flagged on the central scouting file." : "No material character flags in the current report.");
+
+  if (!flagged && !forced) {
     return {
       flagged: false,
-      title: "Clean file",
-      story: "No material character flags in the current report. Room, coaches, and billets describe a normal junior headache, not a franchise one.",
+      title: headline || "Clean file",
+      story,
       stockHit: 0,
       hitPctHit: 0,
     };
   }
-  const incident = pickIncident(player);
-  const name = `${player?.firstName || ""} ${player?.lastName || ""}`.trim() || "This prospect";
+
+  const concernTitle = weakTraits[0]?.label
+    ? `${weakTraits[0].label} — ${weakTraits[0].tier}`
+    : (headline || "Character follow-up");
   return {
     flagged: true,
-    title: incident.title,
-    story: incident.story(name),
-    stockHit: incident.stockHit,
-    hitPctHit: incident.hitPctHit,
-    id: incident.id,
+    title: concernTitle,
+    story,
+    stockHit: forced ? 12 : 6,
+    hitPctHit: forced ? 9 : 5,
+    id: forced ? "backend_flag" : "character_read",
   };
 }
 
@@ -260,7 +284,7 @@ export function enrichProspectsForWarRoom(prospects, profilesById = {}) {
   const weak = classIsWeak(list);
   const withFiles = list.map((p) => {
     const profile = p.profile || profilesById[p.id] || null;
-    const characterFile = resolveCharacterFile(p);
+    const characterFile = resolveCharacterFile(p, profile);
     const publicRank = Number(p.rank) || 999;
     const age = prospectAge(p);
     const charPenalty = characterFile.flagged ? characterFile.stockHit : 0;
@@ -324,7 +348,7 @@ export function enrichProspectsForWarRoom(prospects, profilesById = {}) {
       pyramidTier,
       draftStock,
       weeklyDelta,
-      characterConcerns: Boolean(p.characterFile?.flagged),
+      characterConcerns: Boolean(p.characterConcerns || p.character_concerns),
       boardDivergence,
       goalieBoardCap,
       consensusFloorApplied,
@@ -425,31 +449,47 @@ export function confMeaning(pct) {
   return { band: "No file", detail: `${n}% — name on a list, not a scouting report.` };
 }
 
+function isGoaliePlayer(player) {
+  const p = String(player?.position || "").toUpperCase();
+  return p === "G" || p.includes("GOAL");
+}
+
 export function skillDevelopmentNotes(tools, player) {
+  const goalie = isGoaliePlayer(player);
   const rows = (tools || []).map((t) => {
     const mid = Number(t.raw != null ? t.raw : t.mid);
     const weak = Number.isFinite(mid) && mid < 70;
     const plus = Number.isFinite(mid) && mid >= 82;
     let reach = "Average translation";
     if (t.locked || mid == null) reach = "Unscouted";
-    else if (weak && t.label === "Skating") reach = "Development drag — pace is the first thing that fails at pro speed";
+    else if (goalie && weak && t.label === "Positioning") reach = "Development drag — angles are the first thing that fail at pro pace";
+    else if (goalie && weak && t.label === "Rebound") reach = "Development drag — second chances decide goalie careers";
+    else if (!goalie && weak && t.label === "Skating") reach = "Development drag — pace is the first thing that fails at pro speed";
     else if (weak) reach = "Needs a real jump to hold this projection";
     else if (plus) reach = "Already a carrying tool";
     else reach = "On-track if the work stays honest";
     return { ...t, weak, plus, reach };
   });
   const skating = rows.find((t) => t.label === "Skating");
+  const positioning = rows.find((t) => t.label === "Positioning");
   const overager = isOverager(player);
   const char = player?.characterFile;
   let developOdds = 62;
-  if (skating?.weak) developOdds -= 14;
+  if (goalie) {
+    if (positioning?.weak) developOdds -= 12;
+    if (rows.find((t) => t.label === "Rebound")?.weak) developOdds -= 10;
+  } else if (skating?.weak) developOdds -= 14;
   if (overager) developOdds -= 16;
   if (char?.flagged) developOdds -= char.hitPctHit || 8;
   if ((Number(player?.workEthic) || 0) >= 80) developOdds += 8;
   if ((Number(player?.coachability) || 0) >= 80) developOdds += 6;
   if (prospectAge(player) <= 17) developOdds += 7;
   developOdds = clamp(developOdds, 12, 92);
-  return { rows, developOdds, skatingWeak: Boolean(skating?.weak) };
+  return {
+    rows,
+    developOdds,
+    skatingWeak: Boolean(goalie ? positioning?.weak : skating?.weak),
+  };
 }
 
 export function projectionOutcomes(player, profile, developOdds = 60) {
@@ -527,6 +567,7 @@ export function projectionOutcomes(player, profile, developOdds = 60) {
 }
 
 export function strengthCopy(player, tools) {
+  if (isGoaliePlayer(player)) return goalieStrengthCopy(player, tools);
   const name = `${player?.firstName || ""} ${player?.lastName || ""}`.trim() || "He";
   const plus = (tools || []).filter((t) => t.plus).map((t) => t.label.toLowerCase());
   if (player?.completion < 40) return [`${name} is still a first-look file — strengths are rumours until we get another viewing.`];
@@ -544,6 +585,7 @@ export function strengthCopy(player, tools) {
 }
 
 export function weaknessCopy(player, tools, skatingWeak) {
+  if (isGoaliePlayer(player)) return goalieWeaknessCopy(player, tools);
   const name = `${player?.firstName || ""} ${player?.lastName || ""}`.trim() || "He";
   if (player?.completion < 40) return [`More looks needed before we tattoo a weakness onto ${name}.`];
   const weak = (tools || []).filter((t) => t.weak).map((t) => t.label.toLowerCase());

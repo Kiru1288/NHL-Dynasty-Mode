@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useEffect } from "react";
+import React, { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
@@ -20,9 +20,14 @@ import {
 import BurnerPanel from "../components/franchise/social/BurnerPanel";
 
 /*
-  StorylinesScreen — backend-driven news hub.
-  Rules: read franchiseState only; no fake storylines or invented metrics.
-  UI language: game HUD (feed / case file / impact rail), not a news website.
+  StorylinesScreen — franchise narrative command center.
+
+  Data rules (unchanged): read franchiseState only. No fabricated storylines,
+  no invented metrics. Every number on screen traces back to a backend field.
+
+  Presentation: broadcast control room. Lead story gets the stage, decisions
+  get weight, heat is something you feel before you read it, and opening a
+  story opens a case file — not an accordion row.
 */
 
 const SORT_OPTIONS = [
@@ -33,25 +38,25 @@ const SORT_OPTIONS = [
 ];
 
 const CATEGORY_META = {
-  performance: { icon: "◆", label: "Performance", accent: "#13d8e7" },
-  star_underperforming: { icon: "◆", label: "Performance", accent: "#13d8e7" },
-  rookie_breakout: { icon: "◆", label: "Performance", accent: "#13d8e7" },
-  hot_streak: { icon: "◆", label: "Performance", accent: "#13d8e7" },
-  injury: { icon: "+", label: "Injury", accent: "#ff606d" },
-  legal_trouble: { icon: "§", label: "League News", accent: "#8ab4ff" },
-  trade: { icon: "⇄", label: "Trade Rumor", accent: "#c992ff" },
-  rumor: { icon: "⇄", label: "Trade Rumor", accent: "#c992ff" },
-  draft: { icon: "★", label: "Draft", accent: "#e9a83c" },
-  goalie: { icon: "◎", label: "Goalie", accent: "#8ab4ff" },
-  contract: { icon: "$", label: "Contract", accent: "#52df94" },
-  team_crisis: { icon: "!", label: "Team Crisis", accent: "#ff8a4c" },
-  rivalry: { icon: "⚔", label: "Rivalry", accent: "#ff606d" },
-  decision: { icon: "?", label: "GM Decision", accent: "#e9a83c" },
-  league: { icon: "◉", label: "League News", accent: "#8ab4ff" },
-  locker_room: { icon: "◎", label: "Locker Room", accent: "#7ee0b0" },
-  business: { icon: "$", label: "Business", accent: "#52df94" },
-  management: { icon: "▣", label: "Front Office", accent: "#e9a83c" },
-  storyline: { icon: "◉", label: "League News", accent: "#8096a8" },
+  performance: { glyph: "◆", label: "Performance", accent: "#13d8e7" },
+  star_underperforming: { glyph: "◆", label: "Performance", accent: "#13d8e7" },
+  rookie_breakout: { glyph: "◆", label: "Performance", accent: "#13d8e7" },
+  hot_streak: { glyph: "◆", label: "Performance", accent: "#13d8e7" },
+  injury: { glyph: "✚", label: "Injury", accent: "#ff606d" },
+  legal_trouble: { glyph: "§", label: "Conduct", accent: "#ff8a4c" },
+  trade: { glyph: "⇄", label: "Trade Wire", accent: "#c992ff" },
+  rumor: { glyph: "⇄", label: "Trade Wire", accent: "#c992ff" },
+  draft: { glyph: "★", label: "Draft", accent: "#e9a83c" },
+  goalie: { glyph: "◎", label: "Crease", accent: "#8ab4ff" },
+  contract: { glyph: "$", label: "Contract", accent: "#52df94" },
+  team_crisis: { glyph: "!", label: "Team Crisis", accent: "#ff8a4c" },
+  rivalry: { glyph: "⚔", label: "Rivalry", accent: "#ff606d" },
+  decision: { glyph: "◈", label: "GM Decision", accent: "#e9a83c" },
+  league: { glyph: "◉", label: "League", accent: "#8ab4ff" },
+  locker_room: { glyph: "◍", label: "Locker Room", accent: "#7ee0b0" },
+  business: { glyph: "$", label: "Business", accent: "#52df94" },
+  management: { glyph: "▣", label: "Front Office", accent: "#e9a83c" },
+  storyline: { glyph: "◉", label: "League", accent: "#8096a8" },
 };
 
 const FILTERS = [
@@ -61,7 +66,7 @@ const FILTERS = [
   { id: "team", label: "Team" },
   { id: "league", label: "League" },
   { id: "player", label: "Player" },
-  { id: "media_buzz", label: "Media Buzz" },
+  { id: "media_buzz", label: "Buzz" },
 ];
 
 const FILTER_EMPTY = {
@@ -74,21 +79,26 @@ const FILTER_EMPTY = {
 };
 
 const DEPARTMENTS = [
-  { id: "front_page", label: "Newsroom" },
-  { id: "player_meetings", label: "Player Meetings", icon: "meetings" },
-  { id: "social", label: "Social" },
-  { id: "insiders", label: "Insiders" },
-  { id: "press_room", label: "Press Room" },
-  { id: "archive", label: "Archive" },
+  { id: "front_page", label: "Newsroom", glyph: "◉" },
+  { id: "player_meetings", label: "Meetings", glyph: "◫" },
+  { id: "social", label: "Social", glyph: "◈" },
+  { id: "insiders", label: "Insiders", glyph: "◇" },
+  { id: "press_room", label: "Press Room", glyph: "▤" },
+  { id: "archive", label: "Archive", glyph: "▥" },
 ];
 
 const PRIORITY_RANK = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+
 const DETAIL_TABS = [
-  { id: "details", label: "Details" },
-  { id: "related", label: "Related Coverage" },
+  { id: "details", label: "Case Notes" },
+  { id: "related", label: "Related" },
   { id: "rumors", label: "Rumor Mill" },
   { id: "history", label: "History" },
 ];
+
+/* ------------------------------------------------------------------ */
+/* primitives                                                          */
+/* ------------------------------------------------------------------ */
 
 function asArray(v) {
   return Array.isArray(v) ? v : [];
@@ -116,6 +126,14 @@ function calendarLabel(state) {
       state?.calendar_day_label ||
       "—"
   );
+}
+
+function prettyDate(iso) {
+  const s = str(iso);
+  if (!/^\d{4}-\d{2}-\d{2}/.test(s)) return s || "—";
+  const d = new Date(s.slice(0, 10));
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 function resolveCategoryKey(story) {
@@ -159,9 +177,9 @@ function storyAgeLabel(story, todayIso) {
   if (!sd || !td || Number.isNaN(td.getTime())) return story.date || "—";
   const days = Math.floor((td - sd) / 86400000);
   if (days <= 0) return "Today";
-  if (days === 1) return "1d ago";
+  if (days === 1) return "Yesterday";
   if (days < 7) return `${days}d ago`;
-  if (days < 14) return "Week-old";
+  if (days < 14) return "Last week";
   return `${Math.floor(days / 7)}w ago`;
 }
 
@@ -403,7 +421,8 @@ function priorityClass(priority) {
   const p = String(priority || "").toUpperCase();
   if (p === "CRITICAL") return "critical";
   if (p === "HIGH") return "high";
-  return "";
+  if (p === "LOW") return "low";
+  return "medium";
 }
 
 function heatLabel(heat) {
@@ -416,8 +435,9 @@ function heatLabel(heat) {
 }
 function heatTier(heat) {
   const n = Number(heat) || 0;
-  if (n >= 70) return "hot";
-  if (n >= 40) return "warm";
+  if (n >= 75) return "boiling";
+  if (n >= 45) return "hot";
+  if (n >= 20) return "warm";
   return "cool";
 }
 function formatCount(n) {
@@ -446,10 +466,9 @@ function knowledgeLevelLabel(level) {
 function isBreakingStory(story) {
   const p = String(story?.priority || "").toUpperCase();
   const heat = Number(story?.heat) || 0;
-  return p === "CRITICAL" || heat >= 75 || story?.requiresAction;
+  return p === "CRITICAL" || heat >= 75 || Boolean(story?.requiresAction);
 }
 
-// --- score badge: a visual read of real heat/priority data, not a fabricated stat ---
 function storyScore(story) {
   const heat = Number(story?.heat);
   if (Number.isFinite(heat) && heat > 0) return Math.max(1, Math.min(99, Math.round(heat)));
@@ -463,8 +482,53 @@ function scoreTone(score) {
   return "low";
 }
 
-function buildSocialPosts(stories, narrativeUniverse) {
-  const backendPosts = asArray(narrativeUniverse?.social_posts);
+function isRumourStory(story) {
+  return /trade|rumor|contract|market/i.test(`${story.type} ${story.category} ${story.headline}`);
+}
+
+function parseIsoDate(iso) {
+  const s = str(iso);
+  if (!/^\d{4}-\d{2}-\d{2}/.test(s)) return null;
+  const d = new Date(s.slice(0, 10));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function socialPostTimestamp(post) {
+  const d = parseIsoDate(post?.calendar_iso || post?.created_at || post?.date);
+  return d ? d.getTime() : 0;
+}
+
+/** Drop stale social posts — keep only recent timeline (default: last 2 days). */
+function filterRecentSocialItems(items, currentIso, maxAgeDays = 2) {
+  const today = parseIsoDate(currentIso);
+  if (!today) return items;
+  const cutoff = today.getTime() - maxAgeDays * 86400000;
+  return items.filter((item) => {
+    const ts = socialPostTimestamp(item);
+    if (!ts) return true;
+    return ts >= cutoff;
+  });
+}
+
+function sortSocialItemsDesc(items) {
+  return [...items].sort((a, b) => socialPostTimestamp(b) - socialPostTimestamp(a));
+}
+
+function isBrokenSocialPost(text) {
+  const raw = str(text);
+  if (!raw || raw.length < 8) return true;
+  const lower = raw.toLowerCase();
+  if (lower.includes("the player")) return true;
+  if (/\(\s*0\s*ovr\s*\)/i.test(raw)) return true;
+  if (/0 points in 0 games|through 0 gp|0 starts|0\.00 ppg through 0/i.test(lower)) return true;
+  if (/\{[a-z_]+\}/.test(raw)) return true;
+  return false;
+}
+
+function buildSocialPosts(stories, narrativeUniverse, { currentIso = null, maxAgeDays = 2 } = {}) {
+  const backendPosts = sortSocialItemsDesc(
+    filterRecentSocialItems(asArray(narrativeUniverse?.social_posts), currentIso, maxAgeDays)
+  ).filter((p) => !isBrokenSocialPost(p?.text));
   if (backendPosts.length) {
     return backendPosts.slice(0, 40).map((p, idx) => ({
       id: str(p.id || `post-${idx}`),
@@ -473,7 +537,7 @@ function buildSocialPosts(stories, narrativeUniverse) {
       verified: Boolean(p.verified),
       isAgent: str(p.author_type || "") === "agent",
       agency: str(p.agency || ""),
-      age: str(p.calendar_iso || "—"),
+      age: storyAgeLabel({ raw: p }, currentIso) || prettyDate(p.calendar_iso) || "—",
       text: str(p.text || ""),
       related: str(p.related_headline || ""),
       heat: heatLabel(p.heat),
@@ -505,8 +569,10 @@ function buildSocialPosts(stories, narrativeUniverse) {
   });
 }
 
-function buildRedditThreads(threads, subFilter = "all") {
-  const rows = asArray(threads);
+function buildRedditThreads(threads, subFilter = "all", { currentIso = null, maxAgeDays = 2 } = {}) {
+  const rows = sortSocialItemsDesc(
+    filterRecentSocialItems(asArray(threads), currentIso, maxAgeDays)
+  ).filter((t) => !isBrokenSocialPost(t?.body) && !isBrokenSocialPost(t?.title));
   const filtered =
     subFilter === "all"
       ? rows
@@ -548,11 +614,12 @@ function fanPulseTrend(pulse) {
   return { net, label: "Split" };
 }
 
-
-
 function collectDossiers(narrativeUniverse) {
   const direct = asArray(narrativeUniverse?.player_dossiers);
   if (direct.length) return direct;
+  const human = asObject(narrativeUniverse?.human_dossiers);
+  const fromHuman = Object.values(human).filter(Boolean);
+  if (fromHuman.length) return fromHuman;
   return asArray(narrativeUniverse?.players).map((p) => ({
     player_id: p.player_id,
     player_name: p.player_name,
@@ -568,7 +635,338 @@ function collectDossiers(narrativeUniverse) {
   }));
 }
 
-function DossierCard({ dossier }) {
+function collectArcTimeline(stories, selected, narrativeUniverse) {
+  if (!selected) return [];
+  const arcId = str(selected.arcId || selected.storylineId || selected.raw?.storyline_id || "");
+  const arcs = asArray(narrativeUniverse?.story_arcs);
+  const arc = arcs.find((a) => str(a.arc_id) === arcId);
+  if (arc && asArray(arc.beats).length) {
+    return arc.beats.map((beat) => ({
+      id: beat.beat_id,
+      date: beat.calendar_iso || "—",
+      headline: beat.headline || beat.summary || "Update",
+      summary: beat.summary || "",
+      knowledgeType: beat.knowledge_type,
+    }));
+  }
+  if (!arcId) return [];
+  return stories
+    .filter((s) => str(s.arcId || s.storylineId || s.raw?.storyline_id || "") === arcId)
+    .sort((a, b) => str(a.date).localeCompare(str(b.date)));
+}
+
+function playBreakingSting(level) {
+  if (typeof window === "undefined") return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const big = level === "league_defining";
+    const now = ctx.currentTime;
+
+    const sub = ctx.createOscillator();
+    const subGain = ctx.createGain();
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(big ? 110 : 90, now);
+    sub.frequency.exponentialRampToValueAtTime(big ? 52 : 46, now + 0.5);
+    subGain.gain.setValueAtTime(0.09, now);
+    subGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.75);
+    sub.connect(subGain);
+    subGain.connect(ctx.destination);
+    sub.start(now);
+    sub.stop(now + 0.8);
+
+    const stab = ctx.createOscillator();
+    const stabGain = ctx.createGain();
+    stab.type = big ? "sawtooth" : "square";
+    stab.frequency.setValueAtTime(big ? 880 : 660, now);
+    stabGain.gain.setValueAtTime(0.035, now);
+    stabGain.gain.exponentialRampToValueAtTime(0.0001, now + (big ? 0.45 : 0.28));
+    stab.connect(stabGain);
+    stabGain.connect(ctx.destination);
+    stab.start(now);
+    stab.stop(now + 0.5);
+  } catch {
+    /* optional audio */
+  }
+}
+
+function parseTradeTeams(story) {
+  const fromA = str(story.fromTeamAbbrev || "");
+  const toA = str(story.toTeamAbbrev || "");
+  if (fromA && toA) return [fromA, toA];
+  const related = asArray(story.relatedTeams);
+  if (related.length >= 2) {
+    const a = str(related[0]?.abbrev || related[0]?.team_abbrev || related[0] || "");
+    const b = str(related[1]?.abbrev || related[1]?.team_abbrev || related[1] || "");
+    if (a && b) return [a.slice(0, 4).toUpperCase(), b.slice(0, 4).toUpperCase()];
+  }
+  const m = String(story.headline || "").match(/\b([A-Z]{2,4})\b.*?\b([A-Z]{2,4})\b/);
+  if (m) return [m[1], m[2]];
+  const named = String(story.headline || "").match(/([A-Za-z .]+)\s+(?:acquires|trades|sends|gets)\s+.+?\s+(?:from|to)\s+([A-Za-z .]+)/i);
+  if (named) {
+    const left = named[1].trim().split(/\s+/).slice(-1)[0].slice(0, 3).toUpperCase();
+    const right = named[2].trim().split(/\s+/).slice(0, 1)[0].slice(0, 3).toUpperCase();
+    if (left && right && left !== right) return [left, right];
+  }
+  return [];
+}
+
+/* ------------------------------------------------------------------ */
+/* presentational pieces                                               */
+/* ------------------------------------------------------------------ */
+
+function HeatRing({ value, size = 64, label = true }) {
+  const v = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+  const tier = heatTier(v);
+  const r = size / 2 - 5;
+  const c = 2 * Math.PI * r;
+  const dash = (v / 100) * c;
+  return (
+    <div className={`sl-ring sl-ring--${tier}`} style={{ width: size, height: size }}>
+      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} aria-hidden="true">
+        <circle cx={size / 2} cy={size / 2} r={r} className="sl-ring__track" />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          className="sl-ring__fill"
+          strokeDasharray={`${dash} ${c}`}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+      </svg>
+      <div className="sl-ring__center">
+        <strong style={{ fontSize: Math.round(size * 0.3) }}>{v}</strong>
+        {label ? <span>heat</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function HeatSpark({ value }) {
+  const v = Math.max(0, Math.min(100, Number(value) || 0));
+  const tier = heatTier(v);
+  return (
+    <div className={`sl-spark sl-spark--${tier}`} title={`Heat ${Math.round(v)}`}>
+      <span style={{ width: `${v}%` }} />
+    </div>
+  );
+}
+
+function ScoreBadge({ score, size = "md" }) {
+  return (
+    <div className={`sl-score sl-score--${scoreTone(score)} sl-score--${size}`}>
+      <strong>{score}</strong>
+    </div>
+  );
+}
+
+function StatusPill({ story }) {
+  const stage = arcStage(story);
+  if (stage === "Active") return null;
+  return (
+    <span className={`sl-status-pill sl-status-pill--${stage.toLowerCase()}`}>
+      {stage === "Escalating" ? <em aria-hidden>▲</em> : null}
+      {stage}
+    </span>
+  );
+}
+
+function CategoryTag({ story, size = "sm" }) {
+  const meta = categoryMeta(story);
+  return (
+    <span
+      className={`sl-cat sl-cat--${size}`}
+      style={{ color: meta.accent, borderColor: `${meta.accent}55`, background: `${meta.accent}14` }}
+    >
+      <em aria-hidden>{meta.glyph}</em>
+      {meta.label}
+    </span>
+  );
+}
+
+function StoryFace({ story, size = 48 }) {
+  const abbr = str(story?.teamName || "TEAM").slice(0, 4).toUpperCase();
+  const logo =
+    resolveFranchiseTeamLogo(
+      { team_id: story?.teamId, team_name: story?.teamName, team_abbrev: abbr, abbrev: abbr },
+      story?.teamName
+    ) || "";
+  return (
+    <div className="sl-face" style={{ width: size, height: size }}>
+      {story?.playerName ? (
+        <PlayerHeadshot
+          player={{
+            name: story.playerName,
+            position: story.playerPosition,
+            overall: story.playerOverall,
+            team_abbrev: abbr,
+            team_name: story.teamName,
+            ...(asObject(story.raw) || {}),
+          }}
+          size={size}
+        />
+      ) : logo ? (
+        <img src={logo} alt="" />
+      ) : (
+        <span>{playerInitials(story?.playerName || abbr)}</span>
+      )}
+    </div>
+  );
+}
+
+function TeamMark({ abbrev, name, size = 34 }) {
+  const abbr = str(abbrev || name || "TM").slice(0, 4).toUpperCase();
+  const logo = resolveFranchiseTeamLogo({ team_abbrev: abbr, abbrev: abbr, team_name: name }, name || abbr) || "";
+  return (
+    <div className="sl-teammark" style={{ width: size, height: size }}>
+      {logo ? <img src={logo} alt="" /> : <strong>{abbr}</strong>}
+    </div>
+  );
+}
+
+function ConductChannels({ story }) {
+  const has =
+    story.allegationNote ||
+    story.informationStatus ||
+    story.legalStatus ||
+    story.leagueStatus ||
+    story.teamStatus ||
+    story.eligibleToPlay != null;
+  if (!has) return null;
+  const eligible = story.eligibleToPlay == null ? null : story.eligibleToPlay ? "Eligible to dress" : "Cannot dress";
+  return (
+    <section className="sl-conduct">
+      <h4>Conduct desk</h4>
+      {story.allegationNote ? <p className="sl-conduct__note">{story.allegationNote}</p> : null}
+      <div className="sl-conduct__grid">
+        {story.informationStatus ? (
+          <div><span>Information</span><strong>{formatEffectLabel(story.informationStatus)}</strong></div>
+        ) : null}
+        {story.legalStatus ? (
+          <div><span>Legal</span><strong>{formatEffectLabel(story.legalStatus)}</strong></div>
+        ) : null}
+        {story.leagueStatus ? (
+          <div><span>League</span><strong>{formatEffectLabel(story.leagueStatus)}</strong></div>
+        ) : null}
+        {story.teamStatus ? (
+          <div><span>Team</span><strong>{formatEffectLabel(story.teamStatus)}</strong></div>
+        ) : null}
+        {eligible ? (
+          <div><span>Availability</span><strong>{eligible}</strong></div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function TradeSwap({ story }) {
+  const pair = parseTradeTeams(story);
+  if (pair.length < 2) return null;
+  const [a, b] = pair;
+  return (
+    <div className="sl-swap" aria-label="Trade parties">
+      <div className="sl-swap__side">
+        <TeamMark abbrev={a} name={story.fromTeamName} size={42} />
+        <span>{story.fromTeamName || a}</span>
+      </div>
+      <div className="sl-swap__mid">
+        <em aria-hidden>⇄</em>
+        <span>Trade wire</span>
+      </div>
+      <div className="sl-swap__side">
+        <TeamMark abbrev={b} name={story.toTeamName} size={42} />
+        <span>{story.toTeamName || b}</span>
+      </div>
+    </div>
+  );
+}
+
+function ArcSpine({ beats, fallbackStory }) {
+  const nodes =
+    beats.length > 1
+      ? beats
+      : fallbackStory
+      ? [
+          {
+            id: "origin",
+            date: fallbackStory.date || fallbackStory.ageLabel,
+            headline: "First reported",
+            summary: fallbackStory.summary || "",
+          },
+        ]
+      : [];
+  if (!nodes.length) return null;
+  return (
+    <section className="sl-spine">
+      <h4>How this developed</h4>
+      <ol className="sl-spine__list">
+        {nodes.map((n, idx) => (
+          <li key={n.id || idx} className={idx === nodes.length - 1 ? "is-latest" : ""}>
+            <span className="sl-spine__dot" aria-hidden />
+            <time>{prettyDate(n.date)}</time>
+            <strong>{n.headline}</strong>
+            {n.summary ? <p>{n.summary}</p> : null}
+          </li>
+        ))}
+        <li className="is-next">
+          <span className="sl-spine__dot sl-spine__dot--ghost" aria-hidden />
+          <time>Next</time>
+          <strong>Situation still developing</strong>
+        </li>
+      </ol>
+    </section>
+  );
+}
+
+function PressureBars({ org }) {
+  if (!org) return null;
+  const rows = [
+    ["owner_confidence", "Owner confidence", false],
+    ["fan_approval", "Fan approval", false],
+    ["media_heat", "Media pressure", true],
+    ["sponsor_confidence", "Sponsor confidence", false],
+  ].filter(([key]) => org[key] != null);
+  if (!rows.length) return null;
+  return (
+    <div className="sl-bars">
+      {rows.map(([key, label, inverted]) => {
+        const pct = Math.round(Number(org[key]) * 100);
+        const tone = inverted
+          ? pct >= 70
+            ? "hot"
+            : pct >= 40
+            ? "warm"
+            : "good"
+          : pct >= 60
+          ? "good"
+          : pct >= 35
+          ? "warm"
+          : "hot";
+        return (
+          <div key={key} className="sl-bar">
+            <div className="sl-bar__label">
+              <span>{label}</span>
+              <strong>{pct}</strong>
+            </div>
+            <div className="sl-bar__track">
+              <div
+                className={`sl-bar__fill sl-bar__fill--${tone}`}
+                style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
+              />
+            </div>
+          </div>
+        );
+      })}
+      {org.revenue_modifier != null ? (
+        <p className="sl-bar__foot">Revenue modifier ×{Number(org.revenue_modifier).toFixed(2)}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function DossierCard({ dossier, compact = false }) {
   if (!dossier) return null;
   const ident = asObject(dossier.identity);
   const trusts = asObject(dossier.trusts);
@@ -580,12 +978,12 @@ function DossierCard({ dossier }) {
     ? `${ident.draft_year} R${ident.draft_round || "—"} P${ident.draft_pick || "—"}`
     : "";
   return (
-    <article className="sl-dossier">
+    <article className={`sl-dossier${compact ? " is-compact" : ""}`}>
       <div className="sl-dossier__head">
         <strong>{str(dossier.player_name || ident.name || "Player")}</strong>
         <span>
           {str(dossier.position || ident.position || "")}
-          {dossier.overall != null ? ` · ${Math.round(Number(dossier.overall))}` : ""}
+          {dossier.overall != null ? ` · ${Math.round(Number(dossier.overall))} OVR` : ""}
           {ident.age ? ` · ${ident.age}` : ""}
         </span>
       </div>
@@ -619,7 +1017,7 @@ function DossierCard({ dossier }) {
         <div>
           <h4>Trusts</h4>
           {Object.keys(trusts).length ? (
-            Object.entries(trusts).map(([key, val]) => (
+            Object.entries(trusts).slice(0, 4).map(([key, val]) => (
               <p key={key}>
                 {formatEffectLabel(key)} · {Math.round(Number(val) || 0)}
               </p>
@@ -629,7 +1027,7 @@ function DossierCard({ dossier }) {
           )}
         </div>
       </div>
-      <div>
+      <div className="sl-dossier__mem">
         <h4>Remembers</h4>
         {remembers.length ? (
           remembers.slice(-4).reverse().map((mem, idx) => (
@@ -643,257 +1041,14 @@ function DossierCard({ dossier }) {
   );
 }
 
-function collectArcTimeline(stories, selected, narrativeUniverse) {
-  if (!selected) return [];
-  const arcId = str(selected.arcId || selected.storylineId || selected.raw?.storyline_id || "");
-  const arcs = asArray(narrativeUniverse?.story_arcs);
-  const arc = arcs.find((a) => str(a.arc_id) === arcId);
-  if (arc && asArray(arc.beats).length) {
-    return arc.beats.map((beat) => ({
-      id: beat.beat_id,
-      date: beat.calendar_iso || "—",
-      headline: beat.headline || beat.summary || "Update",
-      summary: beat.summary || "",
-      knowledgeType: beat.knowledge_type,
-    }));
-  }
-  if (!arcId) return [];
-  return stories
-    .filter((s) => str(s.arcId || s.storylineId || s.raw?.storyline_id || "") === arcId)
-    .sort((a, b) => str(a.date).localeCompare(str(b.date)));
-}
-
-function isRumourStory(story) {
-  return /trade|rumor|contract|market/i.test(`${story.type} ${story.category} ${story.headline}`);
-}
-
-function playBreakingSting(level) {
-  if (typeof window === "undefined") return;
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = level === "league_defining" ? "sawtooth" : "square";
-    osc.frequency.value = level === "league_defining" ? 880 : 660;
-    gain.gain.value = 0.04;
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + (level === "league_defining" ? 0.45 : 0.28));
-    osc.stop(ctx.currentTime + 0.5);
-  } catch {
-    /* optional audio */
-  }
-}
-
-function parseTradeTeams(story) {
-  const fromA = str(story.fromTeamAbbrev || "");
-  const toA = str(story.toTeamAbbrev || "");
-  if (fromA && toA) return [fromA, toA];
-  const related = asArray(story.relatedTeams);
-  if (related.length >= 2) {
-    const a = str(related[0]?.abbrev || related[0]?.team_abbrev || related[0] || "");
-    const b = str(related[1]?.abbrev || related[1]?.team_abbrev || related[1] || "");
-    if (a && b) return [a.slice(0, 4).toUpperCase(), b.slice(0, 4).toUpperCase()];
-  }
-  const m = String(story.headline || "").match(/\b([A-Z]{2,4})\b.*?\b([A-Z]{2,4})\b/);
-  if (m) return [m[1], m[2]];
-  const named = String(story.headline || "").match(/([A-Za-z .]+)\s+(?:acquires|trades|sends|gets)\s+.+?\s+(?:from|to)\s+([A-Za-z .]+)/i);
-  if (named) {
-    const left = named[1].trim().split(/\s+/).slice(-1)[0].slice(0, 3).toUpperCase();
-    const right = named[2].trim().split(/\s+/).slice(0, 1)[0].slice(0, 3).toUpperCase();
-    if (left && right && left !== right) return [left, right];
-  }
-  return [];
-}
-
-// ---- small presentational pieces ----
-
-function ScoreBadge({ score, size = "md" }) {
+function EmptyPanel({ kicker, title, body }) {
   return (
-    <div className={`sl-score sl-score--${scoreTone(score)} sl-score--${size}`}>
-      <strong>{score}</strong>
+    <div className="sl-empty">
+      <div className="sl-empty__mark" aria-hidden>◉</div>
+      <p className="sl-empty__kicker">{kicker}</p>
+      <h2>{title}</h2>
+      <p className="sl-empty__body">{body}</p>
     </div>
-  );
-}
-
-function StatusPill({ story }) {
-  const stage = arcStage(story);
-  if (stage === "Active") return null;
-  return (
-    <span className={`sl-status-pill sl-status-pill--${stage.toLowerCase()}`}>
-      {stage}
-      {stage === "Escalating" ? <em aria-hidden>▲</em> : null}
-    </span>
-  );
-}
-
-function TeamOrPlayerIdentity({ story }) {
-  if (!story?.playerName && !story?.teamName) return null;
-  const abbr = str(story.teamName || "TEAM").slice(0, 4).toUpperCase();
-  const logo =
-    resolveFranchiseTeamLogo(
-      { team_id: story.teamId, team_name: story.teamName, team_abbrev: abbr, abbrev: abbr },
-      story.teamName
-    ) || "";
-  return (
-    <div className="sl-identity-inline">
-      <div className="sl-identity-logo">
-        {story.playerName ? (
-          <PlayerHeadshot
-            player={{
-              name: story.playerName,
-              position: story.playerPosition,
-              overall: story.playerOverall,
-              team_abbrev: abbr,
-              team_name: story.teamName,
-              ...(asObject(story.raw) || {}),
-            }}
-            size="md"
-          />
-        ) : logo ? (
-          <img src={logo} alt="" />
-        ) : (
-          <span>{playerInitials(story.playerName || abbr)}</span>
-        )}
-      </div>
-      <div>
-        <strong>{story.playerName || story.teamName}</strong>
-        <p>
-          {[
-            story.playerPosition,
-            story.teamName,
-            story.playerOverall != null && Number(story.playerOverall) > 0 ? `${story.playerOverall} OVR` : "",
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function ConductChannels({ story }) {
-  const has =
-    story.allegationNote ||
-    story.informationStatus ||
-    story.legalStatus ||
-    story.leagueStatus ||
-    story.teamStatus ||
-    story.eligibleToPlay != null;
-  if (!has) return null;
-  const eligible = story.eligibleToPlay == null ? null : story.eligibleToPlay ? "Eligible to dress" : "Cannot dress";
-  return (
-    <section className="sl-detail-block">
-      <h4>Conduct Desk</h4>
-      {story.allegationNote ? <p>{story.allegationNote}</p> : null}
-      <div className="sl-chip-grid">
-        {story.informationStatus ? <span>Info: {formatEffectLabel(story.informationStatus)}</span> : null}
-        {story.legalStatus ? <span>Legal: {formatEffectLabel(story.legalStatus)}</span> : null}
-        {story.leagueStatus ? <span>League: {formatEffectLabel(story.leagueStatus)}</span> : null}
-        {story.teamStatus ? <span>Team: {formatEffectLabel(story.teamStatus)}</span> : null}
-        {eligible ? <span>{eligible}</span> : null}
-      </div>
-    </section>
-  );
-}
-
-function TradeSwap({ story }) {
-  const pair = parseTradeTeams(story);
-  if (pair.length < 2) return null;
-  const [a, b] = pair;
-  const logoA = resolveFranchiseTeamLogo({ team_abbrev: a, abbrev: a }, a) || "";
-  const logoB = resolveFranchiseTeamLogo({ team_abbrev: b, abbrev: b }, b) || "";
-  return (
-    <div className="sl-trade-swap" aria-label="Trade parties">
-      <div className="sl-trade-side">
-        {logoA ? <img src={logoA} alt="" /> : <strong>{a}</strong>}
-        <span>{a}</span>
-      </div>
-      <em>⇄</em>
-      <div className="sl-trade-side">
-        {logoB ? <img src={logoB} alt="" /> : <strong>{b}</strong>}
-        <span>{b}</span>
-      </div>
-    </div>
-  );
-}
-
-function DevelopmentTimeline({ beats, fallbackStory }) {
-  const nodes =
-    beats.length > 1
-      ? beats
-      : fallbackStory
-      ? [{ id: "origin", date: fallbackStory.date || fallbackStory.ageLabel, headline: "First reported", summary: "" }]
-      : [];
-  if (!nodes.length) return null;
-  return (
-    <section className="sl-timeline">
-      <h4>Development Timeline</h4>
-      <div className="sl-timeline-track">
-        {nodes.map((n, idx) => (
-          <div key={n.id || idx} className={`sl-timeline-node${idx === nodes.length - 1 ? " is-latest" : ""}`}>
-            <span className="sl-timeline-dot" />
-            <time>{n.date || "—"}</time>
-            <strong>{n.headline}</strong>
-            {n.summary ? <p>{n.summary}</p> : null}
-          </div>
-        ))}
-        <div className="sl-timeline-node sl-timeline-node--next">
-          <span className="sl-timeline-dot sl-timeline-dot--ghost" />
-          <time>What's next?</time>
-          <strong>Situation developing</strong>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function OrgPressureBars({ org }) {
-  if (!org) return null;
-  const rows = [
-    ["owner_confidence", "Owner Confidence"],
-    ["fan_approval", "Fan Approval"],
-    ["media_heat", "Media Pressure"],
-    ["sponsor_confidence", "Sponsor Confidence"],
-  ].filter(([key]) => org[key] != null);
-  if (!rows.length) return null;
-  return (
-    <div className="sl-bars">
-      {rows.map(([key, label]) => {
-        const pct = Math.round(Number(org[key]) * 100);
-        const tone = key === "media_heat" ? (pct >= 70 ? "hot" : "warm") : pct >= 60 ? "good" : pct >= 35 ? "warm" : "hot";
-        return (
-          <div key={key} className="sl-bar-row">
-            <div className="sl-bar-label">
-              <span>{label}</span>
-              <strong>{pct}/100</strong>
-            </div>
-            <div className="sl-bar-track">
-              <div className={`sl-bar-fill sl-bar-fill--${tone}`} style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
-            </div>
-          </div>
-        );
-      })}
-      {org.revenue_modifier != null ? (
-        <p className="sl-bar-footnote">Revenue modifier ×{Number(org.revenue_modifier).toFixed(2)}</p>
-      ) : null}
-    </div>
-  );
-}
-
-function PlayerMeetingsDeptIcon({ active }) {
-  return (
-    <svg className={`sl-dept-icon sl-dept-icon--meetings${active ? " is-active" : ""}`} viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="3" y="4" width="18" height="16" rx="1" fill="none" stroke="currentColor" strokeWidth="1.4" />
-      <line x1="12" y1="4" x2="12" y2="20" stroke="currentColor" strokeWidth="1.2" opacity="0.45" />
-      <circle cx="8" cy="10" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.2" />
-      <circle cx="16" cy="10" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.2" />
-      <path d="M6 15h4M14 15h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-    </svg>
   );
 }
 
@@ -902,6 +1057,109 @@ function relToneClass(tone) {
   if (tone === "negative") return "is-strained";
   return "is-neutral";
 }
+
+/* ------------------------------------------------------------------ */
+/* story card + lead story                                             */
+/* ------------------------------------------------------------------ */
+
+function StoryCard({ story, socialCount, onOpen, index }) {
+  const breaking = isBreakingStory(story);
+  const tier = heatTier(story.heat);
+  return (
+    <button
+      type="button"
+      className={`sl-card sl-card--${tier}${breaking ? " is-breaking" : ""}${story.isUserTeam ? " is-ours" : ""} ${story.freshness || ""}`}
+      style={{ animationDelay: `${Math.min(index, 12) * 28}ms` }}
+      onClick={() => onOpen(story.id)}
+    >
+      <span className="sl-card__rail" aria-hidden />
+      <div className="sl-card__top">
+        <CategoryTag story={story} />
+        {story.requiresAction ? <span className="sl-card__decision">On your desk</span> : null}
+        <StatusPill story={story} />
+        <span className="sl-card__age">{story.ageLabel || "—"}</span>
+      </div>
+      <div className="sl-card__body">
+        <StoryFace story={story} size={46} />
+        <div className="sl-card__text">
+          <h3>{story.headline}</h3>
+          {story.summary ? <p>{story.summary}</p> : null}
+        </div>
+      </div>
+      <div className="sl-card__foot">
+        <HeatSpark value={story.heat} />
+        <div className="sl-card__stats">
+          {heatLabel(story.heat) ? <span className="sl-card__heat">{heatLabel(story.heat)}</span> : null}
+          {story.isUserTeam ? <span className="sl-card__ours">Your club</span> : null}
+          {socialCount ? <span className="sl-card__social">{formatCount(socialCount)} posts</span> : null}
+          <span className="sl-card__open">Open file →</span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function LeadStory({ story, socialCount, onOpen, choiceOptions, onResolve, busyChoice }) {
+  if (!story) return null;
+  const meta = categoryMeta(story);
+  const tier = heatTier(story.heat);
+  return (
+    <section className={`sl-lead sl-lead--${tier}`} aria-label="Lead story">
+      <div className="sl-lead__glow" aria-hidden style={{ background: `radial-gradient(circle at 22% 40%, ${meta.accent}22, transparent 62%)` }} />
+      <div className="sl-lead__portrait">
+        <StoryFace story={story} size={132} />
+        <HeatRing value={story.heat} size={72} />
+      </div>
+      <div className="sl-lead__main">
+        <div className="sl-lead__kickers">
+          <span className="sl-lead__flag">{story.requiresAction ? "Awaiting your call" : "Lead story"}</span>
+          <CategoryTag story={story} size="md" />
+          <StatusPill story={story} />
+          <span className="sl-lead__age">{story.ageLabel || "—"}</span>
+        </div>
+        <h2 className="sl-lead__headline">{story.headline}</h2>
+        {story.summary ? <p className="sl-lead__summary">{story.summary}</p> : null}
+        <div className="sl-lead__meta">
+          {story.playerName ? <span><em>Subject</em>{story.playerName}</span> : null}
+          {story.teamName ? <span><em>Club</em>{story.teamName}</span> : null}
+          {credibilityLabel(story.credibility) ? (
+            <span><em>Sourcing</em>{credibilityLabel(story.credibility)}</span>
+          ) : null}
+          {socialCount ? <span><em>Chatter</em>{formatCount(socialCount)} posts</span> : null}
+        </div>
+
+        {choiceOptions.length ? (
+          <div className="sl-lead__choices">
+            {choiceOptions.slice(0, 3).map((opt) => {
+              const busy = busyChoice === `${story.storylineId}:${opt.id}`;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  className="sl-choice sl-choice--lead"
+                  disabled={Boolean(busyChoice)}
+                  onClick={() => onResolve(story.storylineId, opt.id)}
+                >
+                  <strong>{opt.label}</strong>
+                  {opt.effect_summary ? <span>{opt.effect_summary}</span> : null}
+                  {busy ? <em>Applying…</em> : null}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+
+        <button type="button" className="sl-lead__open" onClick={() => onOpen(story.id)}>
+          Open the full case file →
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* player meetings                                                     */
+/* ------------------------------------------------------------------ */
 
 function PlayerMeetingsPanel({
   meetingsPayload,
@@ -916,8 +1174,11 @@ function PlayerMeetingsPanel({
   const [playerTab, setPlayerTab] = useState("talk");
   const [selectedPlayerId, setSelectedPlayerId] = useState(initialPlayerId || null);
   const [playerDetail, setPlayerDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const detailCacheRef = useRef(new Map());
   const [activeMeeting, setActiveMeeting] = useState(null);
   const [notice, setNotice] = useState("");
+  const [rosterQuery, setRosterQuery] = useState("");
 
   useEffect(() => {
     if (initialPlayerId) {
@@ -926,21 +1187,43 @@ function PlayerMeetingsPanel({
     }
   }, [initialPlayerId]);
 
+  const loadPlayerDetail = useCallback((playerId, { background = false } = {}) => {
+    if (!playerId) return undefined;
+    const cached = detailCacheRef.current.get(playerId);
+    if (cached && !background) {
+      setPlayerDetail(cached);
+      setDetailLoading(false);
+    } else if (!background) {
+      setDetailLoading(!cached);
+    }
+    let cancelled = false;
+    getPlayerMeetingDetail(playerId)
+      .then((res) => {
+        if (cancelled) return;
+        const detail = res?.detail || null;
+        if (detail) detailCacheRef.current.set(playerId, detail);
+        setPlayerDetail(detail);
+        setDetailLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          if (!cached) setPlayerDetail(null);
+          setDetailLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     if (view !== "player" || !selectedPlayerId) {
       setPlayerDetail(null);
+      setDetailLoading(false);
       return undefined;
     }
-    let cancelled = false;
-    getPlayerMeetingDetail(selectedPlayerId)
-      .then((res) => {
-        if (!cancelled) setPlayerDetail(res?.detail || null);
-      })
-      .catch(() => {
-        if (!cancelled) setPlayerDetail(null);
-      });
-    return () => { cancelled = true; };
-  }, [view, selectedPlayerId]);
+    return loadPlayerDetail(selectedPlayerId);
+  }, [view, selectedPlayerId, loadPlayerDetail]);
 
   const roster = asArray(meetingsPayload?.roster);
   const needs = asArray(meetingsPayload?.needs_attention);
@@ -949,74 +1232,97 @@ function PlayerMeetingsPanel({
   const history = asArray(meetingsPayload?.history);
   const selected = roster.find((r) => str(r.player_id) === str(selectedPlayerId)) || null;
 
-  const handleStart = useCallback(async (playerId, interactionType) => {
-    setNotice("");
-    try {
-      const res = await onStartMeeting(playerId, interactionType);
-      setActiveMeeting(res?.meeting || null);
-      setView("meeting");
-    } catch (err) {
-      setNotice(err?.message || "Could not start meeting.");
-    }
-  }, [onStartMeeting]);
+  const visibleRoster = useMemo(() => {
+    const q = rosterQuery.trim().toLowerCase();
+    if (!q) return roster;
+    return roster.filter((r) =>
+      `${str(r.player_name)} ${str(r.position)} ${str(r.relationship?.label)}`.toLowerCase().includes(q)
+    );
+  }, [roster, rosterQuery]);
 
-  const handleResolveRequest = useCallback(async (interactionId, choiceId) => {
-    setNotice("");
-    try {
-      await onResolvePlayerRequest(interactionId, choiceId);
-      setNotice("Meeting resolved.");
-      setActiveMeeting(null);
-      onRefresh?.();
-    } catch (err) {
-      setNotice(err?.message || "Could not resolve meeting.");
-    }
-  }, [onResolvePlayerRequest, onRefresh]);
+  const handleStart = useCallback(
+    async (playerId, interactionType) => {
+      setNotice("");
+      try {
+        const res = await onStartMeeting(playerId, interactionType);
+        setActiveMeeting(res?.meeting || null);
+        setView("meeting");
+      } catch (err) {
+        setNotice(err?.message || "Could not start meeting.");
+      }
+    },
+    [onStartMeeting]
+  );
 
-  const handleAdvance = useCallback(async (meetingId, choiceId) => {
-    setNotice("");
-    try {
-      const res = await onAdvanceMeeting(meetingId, choiceId);
-      setNotice(res?.message || "Conversation recorded.");
-      setActiveMeeting(null);
-      setView("player");
-      onRefresh?.();
-    } catch (err) {
-      setNotice(err?.message || "Could not complete meeting.");
-    }
-  }, [onAdvanceMeeting, onRefresh]);
+  const handleResolveRequest = useCallback(
+    async (interactionId, choiceId) => {
+      setNotice("");
+      try {
+        await onResolvePlayerRequest(interactionId, choiceId);
+        setNotice("Meeting resolved.");
+        setActiveMeeting(null);
+        onRefresh?.();
+      } catch (err) {
+        setNotice(err?.message || "Could not resolve meeting.");
+      }
+    },
+    [onResolvePlayerRequest, onRefresh]
+  );
+
+  const handleAdvance = useCallback(
+    async (meetingId, choiceId) => {
+      setNotice("");
+      try {
+        const res = await onAdvanceMeeting(meetingId, choiceId);
+        setNotice(res?.message || "Conversation recorded.");
+        setActiveMeeting(null);
+        setView("player");
+        onRefresh?.();
+      } catch (err) {
+        setNotice(err?.message || "Could not complete meeting.");
+      }
+    },
+    [onAdvanceMeeting, onRefresh]
+  );
 
   if (!meetingsPayload || !roster.length) {
     return (
-      <div className="sl-empty-panel sl-pm-empty">
-        <p className="sl-kicker">GM Office · Private</p>
-        <h2>Player Meetings</h2>
-        <p>Advance the calendar to sync roster relationships and meeting availability.</p>
-      </div>
+      <EmptyPanel
+        kicker="GM office · private"
+        title="The door is closed"
+        body="Advance the calendar to sync roster relationships and open meeting availability."
+      />
     );
   }
 
   if (view === "meeting" && activeMeeting) {
     const dialogue = asArray(activeMeeting.dialogue);
     return (
-      <div className="sl-pm-meeting">
-        <header className="sl-pm-meeting__head">
-          <button type="button" className="sl-pm-back" onClick={() => { setActiveMeeting(null); setView("player"); }}>← Back</button>
-          <div>
-            <p className="sl-kicker">Private Meeting</p>
-            <h2>{str(activeMeeting.player_name)}</h2>
-            <span>{str(activeMeeting.title)}</span>
-          </div>
+      <div className="sl-room">
+        <header className="sl-room__head">
+          <button type="button" className="sl-back" onClick={() => { setActiveMeeting(null); setView("player"); }}>
+            ← Back
+          </button>
+          <p className="sl-room__kicker">Private meeting · door closed</p>
+          <h2>{str(activeMeeting.player_name)}</h2>
+          <span className="sl-room__sub">{str(activeMeeting.title)}</span>
         </header>
-        <div className="sl-pm-dialogue">
+
+        <div className="sl-dialogue">
           {dialogue.map((line, i) => (
-            <div key={i} className={`sl-pm-line${str(line.speaker) === "GM" ? " is-gm" : " is-player"}`}>
+            <div
+              key={i}
+              className={`sl-dialogue__line${str(line.speaker) === "GM" ? " is-gm" : " is-player"}`}
+              style={{ animationDelay: `${i * 90}ms` }}
+            >
               <em>{str(line.speaker)}</em>
               <p>{str(line.text)}</p>
             </div>
           ))}
         </div>
+
         {activeMeeting.ovr_explanation?.factors?.length ? (
-          <div className="sl-pm-ovr">
+          <div className="sl-ovr">
             <h4>{str(activeMeeting.ovr_explanation.headline)}</h4>
             <ul>
               {activeMeeting.ovr_explanation.factors.map((f, i) => (
@@ -1025,11 +1331,13 @@ function PlayerMeetingsPanel({
             </ul>
           </div>
         ) : null}
-        <div className="sl-pm-choices">
+
+        <div className="sl-choices">
           {asArray(activeMeeting.choices).map((c) => (
             <button
               key={str(c.id)}
               type="button"
+              className="sl-choice"
               disabled={busy}
               onClick={() => handleAdvance(str(activeMeeting.id), str(c.id))}
             >
@@ -1038,7 +1346,7 @@ function PlayerMeetingsPanel({
             </button>
           ))}
         </div>
-        {notice ? <p className="sl-pm-notice">{notice}</p> : null}
+        {notice ? <p className="sl-notice">{notice}</p> : null}
       </div>
     );
   }
@@ -1046,29 +1354,48 @@ function PlayerMeetingsPanel({
   if (view === "player" && selected) {
     const avail = asArray(playerDetail?.available_interactions);
     const rel = playerDetail?.relationship || selected.relationship || {};
+    const openRequests = requests.filter((r) => str(r.player_id || r.actor_id) === str(selected.player_id));
     return (
-      <div className="sl-pm-player">
-        <header className="sl-pm-player__head">
-          <button type="button" className="sl-pm-back" onClick={() => { setView("home"); setSelectedPlayerId(null); }}>← Roster</button>
-          <div className="sl-pm-player__identity">
-            <PlayerHeadshot player={{ id: str(selected.player_id), player_id: str(selected.player_id) }} size={56} />
+      <div className="sl-room">
+        <header className="sl-room__head">
+          <button type="button" className="sl-back" onClick={() => { setView("home"); setSelectedPlayerId(null); }}>
+            ← Roster
+          </button>
+          <div className="sl-pm-identity">
+            <PlayerHeadshot player={{ id: str(selected.player_id), player_id: str(selected.player_id) }} size={72} />
             <div>
               <h2>{str(selected.player_name)}</h2>
-              <p>{str(selected.position)} · {selected.age} · OVR {selected.overall}{selected.readiness_delta ? ` (${selected.readiness_delta > 0 ? "+" : ""}${selected.readiness_delta})` : ""}</p>
+              <p className="sl-pm-identity__line">
+                {str(selected.position)} · {selected.age} · OVR {selected.overall}
+                {selected.readiness_delta
+                  ? ` (${selected.readiness_delta > 0 ? "+" : ""}${selected.readiness_delta})`
+                  : ""}
+              </p>
               <p className={`sl-pm-rel ${relToneClass(rel.tone)}`}>
-                Relationship: {str(rel.label)} — {str(rel.detail)}
+                <em>{str(rel.label)}</em>
+                {rel.detail ? ` — ${str(rel.detail)}` : ""}
               </p>
             </div>
           </div>
         </header>
-        {requests.filter((r) => str(r.player_id || r.actor_id) === str(selected.player_id)).map((req) => (
-          <article key={str(req.id)} className="sl-pm-request">
+
+        {openRequests.map((req) => (
+          <article key={str(req.id)} className="sl-request">
+            <span className="sl-request__flag">He asked for this meeting</span>
             <h3>{str(req.title || "Player requested a meeting")}</h3>
             <p>{str(req.summary)}</p>
-            {asArray(req.dialogue).slice(0, 1).map((d, i) => <p key={i} className="sl-pm-request__line">&ldquo;{str(d.text)}&rdquo;</p>)}
-            <div className="sl-pm-choices">
+            {asArray(req.dialogue).slice(0, 1).map((d, i) => (
+              <blockquote key={i}>{str(d.text)}</blockquote>
+            ))}
+            <div className="sl-choices">
               {asArray(req.choices).map((c) => (
-                <button key={str(c.id)} type="button" disabled={busy} onClick={() => handleResolveRequest(str(req.id), str(c.id))}>
+                <button
+                  key={str(c.id)}
+                  type="button"
+                  className="sl-choice"
+                  disabled={busy}
+                  onClick={() => handleResolveRequest(str(req.id), str(c.id))}
+                >
                   <strong>{str(c.label)}</strong>
                   {c.detail ? <span>{str(c.detail)}</span> : null}
                 </button>
@@ -1076,38 +1403,59 @@ function PlayerMeetingsPanel({
             </div>
           </article>
         ))}
-        <nav className="sl-pm-tabs">
+
+        <nav className="sl-subtabs">
           {["talk", "promises", "history"].map((tab) => (
-            <button key={tab} type="button" className={playerTab === tab ? "is-active" : ""} onClick={() => setPlayerTab(tab)}>
+            <button
+              key={tab}
+              type="button"
+              className={playerTab === tab ? "is-active" : ""}
+              onClick={() => setPlayerTab(tab)}
+            >
               {tab === "talk" ? "Talk" : tab === "promises" ? "Promises" : "History"}
             </button>
           ))}
         </nav>
+
         {playerTab === "promises" ? (
-          <div className="sl-pm-list">
-            {asArray(playerDetail?.promises || promises.active).filter((p) => str(p.player_id) === str(selected.player_id)).map((p) => (
-              <div key={str(p.id || p.type)} className="sl-pm-promise is-active">
-                <strong>{str(p.description || p.type)}</strong>
-                <span>{p.games_remaining != null ? `${p.games_remaining} games left` : "Active"}</span>
-              </div>
-            ))}
+          <div className="sl-stack">
+            {asArray(playerDetail?.promises || promises.active)
+              .filter((p) => str(p.player_id) === str(selected.player_id))
+              .map((p) => (
+                <div key={str(p.id || p.type)} className="sl-promise">
+                  <strong>{str(p.description || p.type)}</strong>
+                  <span>{p.games_remaining != null ? `${p.games_remaining} games left` : "Active"}</span>
+                </div>
+              ))}
+            {!asArray(playerDetail?.promises || promises.active).filter(
+              (p) => str(p.player_id) === str(selected.player_id)
+            ).length ? (
+              <p className="sl-muted">Nothing promised to this player yet.</p>
+            ) : null}
           </div>
         ) : playerTab === "history" ? (
-          <div className="sl-pm-list">
-            {asArray(playerDetail?.history || history).filter((h) => str(h.player_id) === str(selected.player_id)).map((h) => (
-              <div key={str(h.id)} className="sl-pm-history-row">
-                <time>{str(h.calendar_iso || h.calendar_day)}</time>
-                <div>
-                  <strong>{str(h.interaction_type)}</strong>
-                  <p>{str(h.choice_label || h.choice_id)}</p>
+          <div className="sl-stack">
+            {asArray(playerDetail?.history || history)
+              .filter((h) => str(h.player_id) === str(selected.player_id))
+              .map((h) => (
+                <div key={str(h.id)} className="sl-histrow">
+                  <time>{str(h.calendar_iso || h.calendar_day)}</time>
+                  <div>
+                    <strong>{formatEffectLabel(h.interaction_type)}</strong>
+                    <p>{str(h.choice_label || h.choice_id)}</p>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            {!asArray(playerDetail?.history || history).filter(
+              (h) => str(h.player_id) === str(selected.player_id)
+            ).length ? (
+              <p className="sl-muted">No recorded conversations yet.</p>
+            ) : null}
           </div>
         ) : (
-          <div className="sl-pm-interactions">
+          <div className="sl-topics">
             {playerDetail?.ovr_explanation?.factors?.length ? (
-              <div className="sl-pm-ovr sl-pm-ovr--inline">
+              <div className="sl-ovr">
                 <h4>{str(playerDetail.ovr_explanation.headline)}</h4>
                 <ul>
                   {playerDetail.ovr_explanation.factors.map((f, i) => (
@@ -1127,52 +1475,66 @@ function PlayerMeetingsPanel({
               ).map(([cat, items]) => (
                 <section key={cat}>
                   <h4>{cat}</h4>
-                  {items.map((item) => (
-                    <button
-                      key={str(item.id)}
-                      type="button"
-                      className="sl-pm-interaction"
-                      disabled={busy}
-                      onClick={() => handleStart(str(selected.player_id), str(item.id))}
-                    >
-                      {str(item.title)}
-                    </button>
-                  ))}
+                  <div className="sl-topic-grid">
+                    {items.map((item) => (
+                      <button
+                        key={str(item.id)}
+                        type="button"
+                        className="sl-topic"
+                        disabled={busy}
+                        onClick={() => handleStart(str(selected.player_id), str(item.id))}
+                      >
+                        {str(item.title)}
+                      </button>
+                    ))}
+                  </div>
                 </section>
               ))
+            ) : detailLoading ? (
+              <p className="sl-muted">Loading topics…</p>
             ) : (
-              <p className="sl-pm-muted">Loading topics…</p>
+              <p className="sl-muted">No conversation topics available right now.</p>
             )}
           </div>
         )}
-        {notice ? <p className="sl-pm-notice">{notice}</p> : null}
+        {notice ? <p className="sl-notice">{notice}</p> : null}
       </div>
     );
   }
 
   return (
-    <div className="sl-pm-home">
-      <header className="sl-pm-home__head">
-        <p className="sl-kicker">GM Office · Relationship Desk</p>
-        <h2>Player Meetings</h2>
-        <p>Private conversations with your organization. Player requests and broken promises surface first.</p>
+    <div className="sl-room">
+      <header className="sl-room__head">
+        <p className="sl-room__kicker">GM office · relationship desk</p>
+        <h2>Player meetings</h2>
+        <span className="sl-room__sub">
+          Private conversations with your organization. Requests and strained relationships surface first.
+        </span>
       </header>
-      {notice ? <p className="sl-pm-notice">{notice}</p> : null}
+      {notice ? <p className="sl-notice">{notice}</p> : null}
 
       {requests.length ? (
-        <section className="sl-pm-section">
-          <h3>Needs Attention · Requests ({requests.length})</h3>
+        <section className="sl-block">
+          <h3 className="sl-block__title sl-block__title--alert">
+            Requests waiting <em>{requests.length}</em>
+          </h3>
           {requests.map((req) => (
-            <article key={str(req.id)} className="sl-pm-request">
-              <div className="sl-pm-request__head">
+            <article key={str(req.id)} className="sl-request">
+              <div className="sl-request__head">
                 <strong>{str(req.player_name || "Player")}</strong>
                 <span>{str(req.title)}</span>
               </div>
               <p>{str(req.summary)}</p>
-              <div className="sl-pm-choices sl-pm-choices--compact">
+              <div className="sl-choices sl-choices--row">
                 {asArray(req.choices).map((c) => (
-                  <button key={str(c.id)} type="button" disabled={busy} onClick={() => handleResolveRequest(str(req.id), str(c.id))}>
-                    {str(c.label)}
+                  <button
+                    key={str(c.id)}
+                    type="button"
+                    className="sl-choice sl-choice--compact"
+                    disabled={busy}
+                    onClick={() => handleResolveRequest(str(req.id), str(c.id))}
+                  >
+                    <strong>{str(c.label)}</strong>
                   </button>
                 ))}
               </div>
@@ -1182,54 +1544,97 @@ function PlayerMeetingsPanel({
       ) : null}
 
       {needs.length ? (
-        <section className="sl-pm-section">
-          <h3>Needs Attention · Roster ({needs.length})</h3>
-          <div className="sl-pm-roster">
+        <section className="sl-block">
+          <h3 className="sl-block__title">
+            Needs attention <em>{needs.length}</em>
+          </h3>
+          <div className="sl-roster">
             {needs.map((row) => (
-              <button key={str(row.player_id)} type="button" className="sl-pm-roster-row" onClick={() => { setSelectedPlayerId(str(row.player_id)); setView("player"); }}>
-                <PlayerHeadshot player={{ id: str(row.player_id), player_id: str(row.player_id) }} size={40} />
-                <div className="sl-pm-roster-row__main">
+              <button
+                key={str(row.player_id)}
+                type="button"
+                className="sl-rosterrow is-flagged"
+                onClick={() => {
+                  setSelectedPlayerId(str(row.player_id));
+                  setView("player");
+                }}
+                onMouseEnter={() => loadPlayerDetail(str(row.player_id), { background: true })}
+              >
+                <PlayerHeadshot player={{ id: str(row.player_id), player_id: str(row.player_id) }} size={44} />
+                <div className="sl-rosterrow__main">
                   <strong>{str(row.player_name)}</strong>
-                  <span>{str(row.position)} · OVR {row.overall} · {str(row.relationship?.label)}</span>
+                  <span>
+                    {str(row.position)} · OVR {row.overall} · {str(row.relationship?.label)}
+                  </span>
                   <em>{str(row.concern_label)}</em>
                 </div>
-                {row.requested_meeting ? <span className="sl-pm-badge">Requested</span> : null}
+                {row.requested_meeting ? <span className="sl-tagbadge">Requested</span> : null}
               </button>
             ))}
           </div>
         </section>
       ) : null}
 
-      <section className="sl-pm-section">
-        <h3>Full Roster</h3>
-        <div className="sl-pm-roster">
-          {roster.map((row) => (
-            <button key={str(row.player_id)} type="button" className="sl-pm-roster-row" onClick={() => { setSelectedPlayerId(str(row.player_id)); setView("player"); }}>
-              <PlayerHeadshot player={{ id: str(row.player_id), player_id: str(row.player_id) }} size={40} />
-              <div className="sl-pm-roster-row__main">
+      <section className="sl-block">
+        <div className="sl-block__bar">
+          <h3 className="sl-block__title">Full roster <em>{roster.length}</em></h3>
+          <input
+            type="search"
+            className="sl-input"
+            placeholder="Find a player…"
+            value={rosterQuery}
+            onChange={(e) => setRosterQuery(e.target.value)}
+          />
+        </div>
+        <div className="sl-roster">
+          {visibleRoster.map((row) => (
+            <button
+              key={str(row.player_id)}
+              type="button"
+              className="sl-rosterrow"
+              onClick={() => {
+                setSelectedPlayerId(str(row.player_id));
+                setView("player");
+              }}
+              onMouseEnter={() => loadPlayerDetail(str(row.player_id), { background: true })}
+            >
+              <PlayerHeadshot player={{ id: str(row.player_id), player_id: str(row.player_id) }} size={44} />
+              <div className="sl-rosterrow__main">
                 <strong>{str(row.player_name)}</strong>
-                <span>{str(row.position)} · {row.age} · OVR {row.overall}{row.ovr_trend === "up" ? " ↑" : row.ovr_trend === "down" ? " ↓" : ""}</span>
-                <em>{str(row.relationship?.label)} · {str(row.agent?.name || "Agent TBD")}</em>
+                <span>
+                  {str(row.position)} · {row.age} · OVR {row.overall}
+                  {row.ovr_trend === "up" ? " ↑" : row.ovr_trend === "down" ? " ↓" : ""}
+                </span>
+                <em>
+                  {str(row.relationship?.label)} · {str(row.agent?.name || "Agent TBD")}
+                </em>
               </div>
             </button>
           ))}
+          {!visibleRoster.length ? <p className="sl-muted">No players match that search.</p> : null}
         </div>
       </section>
 
       {asArray(promises.active).length ? (
-        <section className="sl-pm-section">
-          <h3>Active Promises</h3>
-          {promises.active.map((p) => (
-            <div key={str(p.id)} className="sl-pm-promise is-active">
-              <strong>{str(p.description || p.type)}</strong>
-              <span>{str(p.player_id)} · {p.games_remaining != null ? `${p.games_remaining}g` : "open"}</span>
-            </div>
-          ))}
+        <section className="sl-block">
+          <h3 className="sl-block__title">Active promises <em>{asArray(promises.active).length}</em></h3>
+          <div className="sl-stack">
+            {promises.active.map((p) => (
+              <div key={str(p.id)} className="sl-promise">
+                <strong>{str(p.description || p.type)}</strong>
+                <span>{p.games_remaining != null ? `${p.games_remaining}g remaining` : "Open"}</span>
+              </div>
+            ))}
+          </div>
         </section>
       ) : null}
     </div>
   );
 }
+
+/* ------------------------------------------------------------------ */
+/* main screen                                                         */
+/* ------------------------------------------------------------------ */
 
 export default function StorylinesScreen() {
   const {
@@ -1242,6 +1647,7 @@ export default function StorylinesScreen() {
     pendingSocialNav,
     setPendingSocialNav,
   } = useGameUI();
+
   const [department, setDepartment] = useState(
     pendingMeetingPlayerId ? "player_meetings" : pendingSocialNav ? "social" : "front_page"
   );
@@ -1253,10 +1659,11 @@ export default function StorylinesScreen() {
   const [filter, setFilter] = useState("all");
   const [sortId, setSortId] = useState("decisions");
   const [search, setSearch] = useState("");
-  const [selectedId, setSelectedId] = useState(null);
-  const [expandedId, setExpandedId] = useState(null);
+  const [openCaseId, setOpenCaseId] = useState(null);
   const [activeTab, setActiveTab] = useState("details");
   const [busyChoice, setBusyChoice] = useState("");
+  const caseRef = useRef(null);
+
   const sessionId = str(franchiseState?.session_id || getFranchiseSessionId() || "anon");
   const [dismissedBreaking, setDismissedBreaking] = useState(() => readDismissedBreakingKeys(sessionId));
 
@@ -1281,24 +1688,21 @@ export default function StorylinesScreen() {
     [sessionId]
   );
 
-  const openStory = useCallback((id) => {
-    if (!id) return;
-    setSelectedId(id);
-    setExpandedId(id);
-    setFilter("all");
-    setSearch("");
-  }, []);
-
-  const toggleRow = useCallback(
-    (id) => {
-      setExpandedId((prev) => (prev === id ? null : id));
-      setSelectedId(id);
-    },
-    []
-  );
-
   const stories = useMemo(() => collectStories(franchiseState), [franchiseState]);
   const choicesMap = useMemo(() => buildChoicesMap(franchiseState), [franchiseState]);
+
+  const openStory = useCallback((id) => {
+    if (!id) return;
+    setOpenCaseId(id);
+    setActiveTab("details");
+    if (typeof window !== "undefined") {
+      window.requestAnimationFrame(() => {
+        caseRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+      });
+    }
+  }, []);
+
+  const closeStory = useCallback(() => setOpenCaseId(null), []);
 
   const filterCounts = useMemo(() => {
     const counts = { all: stories.length };
@@ -1318,7 +1722,6 @@ export default function StorylinesScreen() {
     () => stories.filter((s) => s.requiresAction || choicesMap.has(s.storylineId) || choicesMap.has(s.id)),
     [stories, choicesMap]
   );
-  const topPending = pendingDecisions[0] || null;
   const yourTeamCount = stories.filter((s) => s.isUserTeam).length;
 
   const orgPressure = asObject(franchiseState?.conduct_org_pressure);
@@ -1331,8 +1734,6 @@ export default function StorylinesScreen() {
   const narrativeEras = asArray(narrativeUniverse?.narrative_eras);
   const narrativeArchive = asArray(narrativeUniverse?.narrative_archive);
   const userMarket = asObject(narrativeUniverse?.user_market_profile);
-  const agentRoster = asArray(narrativeUniverse?.agents);
-  const agentRelationships = asObject(narrativeUniverse?.agent_relationships);
   const knowledgeGraph = asArray(narrativeUniverse?.knowledge_graph);
   const insiderItems = asArray(narrativeUniverse?.insider_items).length
     ? asArray(narrativeUniverse.insider_items)
@@ -1342,7 +1743,10 @@ export default function StorylinesScreen() {
     : asArray(narrativeUniverse?.reporters);
   const playerDossiers = useMemo(() => collectDossiers(narrativeUniverse), [narrativeUniverse]);
   const breakingAlerts = asArray(narrativeUniverse?.breaking_alerts);
-  const pendingBreaking = useMemo(() => activeBreakingAlerts(breakingAlerts, dismissedBreaking), [breakingAlerts, dismissedBreaking]);
+  const pendingBreaking = useMemo(
+    () => activeBreakingAlerts(breakingAlerts, dismissedBreaking),
+    [breakingAlerts, dismissedBreaking]
+  );
   const activeBreaking = pendingBreaking[0] || null;
 
   useEffect(() => {
@@ -1376,34 +1780,43 @@ export default function StorylinesScreen() {
     };
   }, [department, sessionId, franchiseState?.calendar_idx]);
 
+  const currentCalendarIso = calendarLabel(franchiseState);
+
   const socialPosts = useMemo(() => {
+    const opts = { currentIso: currentCalendarIso, maxAgeDays: 2 };
     const puckr = asArray(liveSocialFeed?.puckr);
-    if (puckr.length) {
-      return buildSocialPosts(stories, { social_posts: puckr });
-    }
-    return buildSocialPosts(stories, narrativeUniverse);
-  }, [stories, narrativeUniverse, liveSocialFeed]);
+    if (puckr.length) return buildSocialPosts(stories, { social_posts: puckr }, opts);
+    return buildSocialPosts(stories, narrativeUniverse, opts);
+  }, [stories, narrativeUniverse, liveSocialFeed, currentCalendarIso]);
+
   const redditThreads = useMemo(() => {
+    const opts = { currentIso: currentCalendarIso, maxAgeDays: 2 };
     const icehole = asArray(liveSocialFeed?.icehole);
     const source = icehole.length ? icehole : asArray(narrativeUniverse?.reddit_threads);
-    return buildRedditThreads(source, redditSubFilter);
-  }, [liveSocialFeed, narrativeUniverse, redditSubFilter]);
+    return buildRedditThreads(source, redditSubFilter, opts);
+  }, [liveSocialFeed, narrativeUniverse, redditSubFilter, currentCalendarIso]);
+
   const redditPulse = useMemo(
     () => fanPulseTrend(narrativeUniverse?.reddit_engagement_pulse),
     [narrativeUniverse]
   );
+
   const userSubreddit = useMemo(() => {
     const label = str(userMarket?.label || franchiseState?.user_team_name || "Team");
     const slug = label.replace(/[^A-Za-z0-9]+/g, "").slice(-12) || "Team";
     return `r/${slug}`;
   }, [userMarket, franchiseState]);
-  const redditSubPills = useMemo(
-    () => ["all", userSubreddit, "r/hockey"],
-    [userSubreddit]
-  );
+
+  const redditSubPills = useMemo(() => ["all", userSubreddit, "r/hockey"], [userSubreddit]);
+
   const socialCountByStory = useMemo(() => {
     const map = new Map();
-    asArray(narrativeUniverse?.social_posts).forEach((p) => {
+    const posts = [
+      ...asArray(narrativeUniverse?.social_posts),
+      ...asArray(narrativeUniverse?.twitter_feed),
+      ...asArray(narrativeUniverse?.social_feed),
+    ];
+    posts.forEach((p) => {
       const sid = str(p?.storyline_id || "");
       if (!sid) return;
       map.set(sid, (map.get(sid) || 0) + 1);
@@ -1411,24 +1824,40 @@ export default function StorylinesScreen() {
     return map;
   }, [narrativeUniverse]);
 
-  const selected = filtered.find((s) => s.id === selectedId) || stories.find((s) => s.id === selectedId) || filtered[0] || null;
+  const socialCountFor = useCallback(
+    (s) => (s ? socialCountByStory.get(s.storylineId) || socialCountByStory.get(s.id) || 0 : 0),
+    [socialCountByStory]
+  );
+
+  const openCase = useMemo(
+    () => (openCaseId ? stories.find((s) => s.id === openCaseId) || null : null),
+    [openCaseId, stories]
+  );
+
+  const leadStory = useMemo(() => {
+    if (!filtered.length) return null;
+    return filtered[0];
+  }, [filtered]);
+
+  const gridStories = useMemo(() => {
+    if (!leadStory) return filtered;
+    return filtered.filter((s) => s.id !== leadStory.id);
+  }, [filtered, leadStory]);
+
+  const tickerItems = useMemo(
+    () =>
+      [...stories]
+        .sort((a, b) => Number(b.heat) - Number(a.heat))
+        .slice(0, 12),
+    [stories]
+  );
+
+  const selected = openCase;
   const selectedDossier = playerDossiers.find((d) => str(d.player_id) === str(selected?.playerId)) || null;
-
-  useEffect(() => {
-    if (!filtered.length) {
-      if (selectedId != null) setSelectedId(null);
-      return;
-    }
-    if (!filtered.some((s) => s.id === selectedId)) setSelectedId(filtered[0].id);
-  }, [filtered, selectedId]);
-
-  useEffect(() => {
-    setActiveTab("details");
-  }, [selectedId]);
 
   const relatedStories = useMemo(() => {
     if (!selected) return [];
-    const scored = stories
+    return stories
       .filter((s) => s.id !== selected.id)
       .map((s) => {
         let score = 0;
@@ -1439,11 +1868,14 @@ export default function StorylinesScreen() {
         return { s, score };
       })
       .filter((r) => r.score > 0)
-      .sort((a, b) => b.score - a.score);
-    return scored.map((r) => r.s);
+      .sort((a, b) => b.score - a.score)
+      .map((r) => r.s);
   }, [selected, stories]);
 
-  const leagueRumours = useMemo(() => stories.filter((s) => isRumourStory(s) && s.id !== selected?.id).slice(0, 10), [stories, selected]);
+  const leagueRumours = useMemo(
+    () => stories.filter((s) => isRumourStory(s) && s.id !== selected?.id).slice(0, 10),
+    [stories, selected]
+  );
 
   const selectedChoice = selected ? choicesMap.get(selected.storylineId) || choicesMap.get(selected.id) : null;
 
@@ -1479,53 +1911,58 @@ export default function StorylinesScreen() {
     await refreshFranchise?.();
   }, [refreshFranchise]);
 
-  const handleResolvePlayerMeeting = useCallback(async (interactionId, choiceId) => {
-    setMeetingBusy(true);
-    try {
-      const res = await resolvePlayerMeeting(interactionId, choiceId);
-      if (res?.state) {
-        /* refreshFranchise merges via caller */
+  const handleResolvePlayerMeeting = useCallback(
+    async (interactionId, choiceId) => {
+      setMeetingBusy(true);
+      try {
+        await resolvePlayerMeeting(interactionId, choiceId);
+        await refreshFranchise?.();
+        if (pendingMeetingPlayerId) setPendingMeetingPlayerId?.(null);
+      } finally {
+        setMeetingBusy(false);
       }
-      await refreshFranchise?.();
-      if (pendingMeetingPlayerId) setPendingMeetingPlayerId?.(null);
-    } finally {
-      setMeetingBusy(false);
-    }
-  }, [refreshFranchise, pendingMeetingPlayerId, setPendingMeetingPlayerId]);
+    },
+    [refreshFranchise, pendingMeetingPlayerId, setPendingMeetingPlayerId]
+  );
 
-  const handleStartPlayerMeeting = useCallback(async (playerId, interactionType) => {
-    setMeetingBusy(true);
-    try {
-      const res = await startPlayerMeeting(playerId, interactionType);
-      await refreshFranchise?.();
-      return res;
-    } finally {
-      setMeetingBusy(false);
-    }
-  }, [refreshFranchise]);
+  const handleStartPlayerMeeting = useCallback(
+    async (playerId, interactionType) => {
+      setMeetingBusy(true);
+      try {
+        const res = await startPlayerMeeting(playerId, interactionType);
+        await refreshFranchise?.();
+        return res;
+      } finally {
+        setMeetingBusy(false);
+      }
+    },
+    [refreshFranchise]
+  );
 
-  const handleAdvancePlayerMeeting = useCallback(async (meetingId, choiceId) => {
-    setMeetingBusy(true);
-    try {
-      const res = await advancePlayerMeeting(meetingId, choiceId);
-      await refreshFranchise?.();
-      return res;
-    } finally {
-      setMeetingBusy(false);
-    }
-  }, [refreshFranchise]);
+  const handleAdvancePlayerMeeting = useCallback(
+    async (meetingId, choiceId) => {
+      setMeetingBusy(true);
+      try {
+        const res = await advancePlayerMeeting(meetingId, choiceId);
+        await refreshFranchise?.();
+        return res;
+      } finally {
+        setMeetingBusy(false);
+      }
+    },
+    [refreshFranchise]
+  );
 
-  const meetingAlertCount = asArray(playerMeetingsPayload?.player_requests).length
-    + asArray(playerMeetingsPayload?.needs_attention).length;
+  const meetingAlertCount =
+    asArray(playerMeetingsPayload?.player_requests).length + asArray(playerMeetingsPayload?.needs_attention).length;
 
   const hasBackend = Array.isArray(franchiseState?.storyline_events);
   const filterEmptyMsg = FILTER_EMPTY[filter];
-  const arcTimeline = useMemo(() => collectArcTimeline(stories, selected, narrativeUniverse), [stories, selected, narrativeUniverse]);
-  const statusLine = `${stories.length} active${yourTeamCount ? ` · ${yourTeamCount} involving your team` : ""}${
-    pendingDecisions.length ? ` · ${pendingDecisions.length} decisions pending` : ""
-  }`;
+  const arcTimeline = useMemo(
+    () => collectArcTimeline(stories, selected, narrativeUniverse),
+    [stories, selected, narrativeUniverse]
+  );
 
-  // key factors + information + parties are all pulled from real fields only — nothing invented
   const keyFactors = useMemo(() => {
     if (!selected) return [];
     const items = [];
@@ -1545,10 +1982,14 @@ export default function StorylinesScreen() {
     if (selected.playerName) list.push({ label: "Player", name: selected.playerName });
     if (selected.teamName) list.push({ label: "Team", name: selected.teamName });
     if (selected.culpritPlayerName && selected.culpritPlayerName !== selected.playerName)
-      list.push({ label: "Central Figure", name: selected.culpritPlayerName });
+      list.push({ label: "Central figure", name: selected.culpritPlayerName });
     if (selected.fromTeamName) list.push({ label: "From", name: selected.fromTeamName });
     if (selected.toTeamName) list.push({ label: "To", name: selected.toTeamName });
-    if (selected.reporterName) list.push({ label: "Reporter", name: `${selected.reporterName}${selected.outletName ? ` (${selected.outletName})` : ""}` });
+    if (selected.reporterName)
+      list.push({
+        label: "Reporter",
+        name: `${selected.reporterName}${selected.outletName ? ` (${selected.outletName})` : ""}`,
+      });
     if (selected.sourceLabel && !selected.reporterName) list.push({ label: "Source", name: selected.sourceLabel });
     return list;
   }, [selected]);
@@ -1556,413 +1997,805 @@ export default function StorylinesScreen() {
   const infoRows = useMemo(() => {
     if (!selected) return [];
     const rows = [];
-    if (selected.informationStatus) rows.push(["Information Status", formatEffectLabel(selected.informationStatus)]);
-    if (credibilityLabel(selected.credibility)) rows.push(["Evidence Strength", credibilityLabel(selected.credibility)]);
-    if (knowledgeLevelLabel(selected.publicKnowledgeLevel)) rows.push(["Public Visibility", knowledgeLevelLabel(selected.publicKnowledgeLevel)]);
-    if (selected.sourceLabel) rows.push(["Leaked By", selected.sourceLabel]);
+    if (selected.informationStatus) rows.push(["Information status", formatEffectLabel(selected.informationStatus)]);
+    if (credibilityLabel(selected.credibility)) rows.push(["Evidence strength", credibilityLabel(selected.credibility)]);
+    if (knowledgeLevelLabel(selected.publicKnowledgeLevel))
+      rows.push(["Public visibility", knowledgeLevelLabel(selected.publicKnowledgeLevel)]);
+    if (selected.sourceLabel) rows.push(["Leaked by", selected.sourceLabel]);
     return rows;
   }, [selected]);
 
   const choiceOptions = selected
-    ? (asArray(selectedChoice?.action_options).length ? selectedChoice.action_options : selected.actionOptions)
+    ? asArray(selectedChoice?.action_options).length
+      ? selectedChoice.action_options
+      : selected.actionOptions
+    : [];
+
+  const leadChoice = leadStory
+    ? choicesMap.get(leadStory.storylineId) || choicesMap.get(leadStory.id) || null
+    : null;
+  const leadChoiceOptions = leadStory
+    ? asArray(leadChoice?.action_options).length
+      ? leadChoice.action_options
+      : asArray(leadStory.actionOptions)
     : [];
 
   return (
     <div className="nhlcal-sl-root">
       <style>{`
         .nhlcal-sl-root {
-          --bg: #04101a;
-          --panel: rgba(9, 25, 38, 0.94);
-          --panel-2: rgba(6, 18, 29, 0.9);
-          --line: rgba(156, 218, 236, 0.14);
-          --line-strong: rgba(73, 231, 240, 0.5);
-          --text: #e9f7fb;
-          --muted: #8096a8;
-          --cyan: #13d8e7;
-          --cyan-soft: rgba(19, 216, 231, 0.13);
+          --bg-deep: #030b13;
+          --panel: rgba(10, 26, 40, 0.82);
+          --panel-2: rgba(7, 19, 30, 0.78);
+          --panel-3: rgba(5, 14, 23, 0.94);
+          --line: rgba(150, 214, 235, 0.13);
+          --line-2: rgba(150, 214, 235, 0.24);
+          --line-strong: rgba(73, 231, 240, 0.55);
+          --text: #eaf7fc;
+          --muted: #7e94a6;
+          --muted-2: #9fb4c4;
+          --cyan: #16dcea;
+          --cyan-dim: rgba(22, 220, 234, 0.14);
           --gold: #e9a83c;
-          --gold-soft: rgba(233, 168, 60, 0.14);
+          --brass: #c9a227;
+          --gold-dim: rgba(233, 168, 60, 0.14);
           --green: #52df94;
-          --red: #ff606d;
-          --red-soft: rgba(255, 96, 109, 0.13);
+          --red: #ff5f6d;
+          --red-dim: rgba(255, 95, 109, 0.14);
+          --ember: #ff8a4c;
           --purple: #c992ff;
 
-          min-height: 100vh;
+          position: relative;
+          height: 100dvh;
+          max-height: 100dvh;
+          overflow: hidden;
+          display: flex;
+          flex-direction: column;
           width: 100%;
           background:
-            radial-gradient(circle at 20% 0%, rgba(19, 216, 231, 0.1), transparent 32%),
-            radial-gradient(circle at 92% 12%, rgba(233, 168, 60, 0.07), transparent 24%),
-            linear-gradient(180deg, #06131f 0%, #020a11 100%);
+            radial-gradient(ellipse 70% 50% at 18% -6%, rgba(22, 220, 234, 0.13), transparent 60%),
+            radial-gradient(ellipse 50% 40% at 92% 4%, rgba(233, 168, 60, 0.09), transparent 60%),
+            radial-gradient(ellipse 80% 60% at 50% 108%, rgba(20, 60, 92, 0.35), transparent 65%),
+            linear-gradient(178deg, #071726 0%, #030b13 55%, #01060b 100%);
           color: var(--text);
           font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         }
 
-        .sl-app { width: min(1480px, 100%); margin: 0 auto; padding: 14px 18px 32px; display: flex; flex-direction: column; gap: 12px; }
-
-        /* ---------- top bar ---------- */
-        .sl-topbar { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
-        .sl-eyebrow { margin: 0; font-size: 10.5px; font-weight: 900; letter-spacing: .16em; text-transform: uppercase; color: var(--cyan); }
-        .sl-topbar h1 { margin: 3px 0; font-size: 26px; font-weight: 900; letter-spacing: .05em; text-transform: uppercase; }
-        .sl-topbar-sub { margin: 0; color: var(--muted); font-size: 11.5px; font-weight: 800; }
-        .sl-topbar-nav { display: flex; gap: 8px; }
-        .sl-topbar-nav button { height: 32px; border: 1px solid var(--line); border-radius: 6px; background: rgba(14,35,50,.85); color: var(--text); padding: 0 14px; font-size: 11px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
-        .sl-topbar-nav button:hover { border-color: var(--line-strong); }
-
-        /* ---------- department pills ---------- */
-        .sl-departments { display: flex; gap: 6px; flex-wrap: wrap; }
-        .sl-departments button { height: 30px; border: 1px solid var(--line); border-radius: 6px; background: rgba(14,35,50,.6); color: rgba(233,247,251,.78); padding: 0 12px; font-size: 11px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
-        .sl-departments button.is-active { border-color: var(--line-strong); background: var(--cyan-soft); color: var(--text); }
-        .sl-departments button.has-alert { border-color: rgba(255,96,109,.5); color: #ffb4bb; }
-
-        /* ---------- filter bar ---------- */
-        .sl-filterbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 8px; background: rgba(7,20,31,.7); padding: 8px 10px; }
-        .sl-filter-chips { display: flex; gap: 6px; flex-wrap: wrap; }
-        .sl-chip { height: 30px; border: 1px solid var(--line); border-radius: 999px; background: rgba(14,35,50,.7); color: rgba(233,247,251,.8); padding: 0 12px; font-size: 11px; font-weight: 900; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-        .sl-chip.is-active { border-color: var(--line-strong); background: var(--cyan-soft); color: var(--text); }
-        .sl-chip .sl-chip-count { opacity: .65; font-weight: 700; }
-        .sl-filter-tools { display: flex; gap: 8px; align-items: center; }
-        .sl-search { height: 30px; border: 1px solid var(--line); border-radius: 6px; background: rgba(8,23,35,.86); color: var(--text); padding: 0 10px; font-size: 12px; font-weight: 700; width: 190px; }
-        .sl-sort select { height: 30px; border: 1px solid var(--line); border-radius: 6px; background: rgba(14,35,50,.9); color: var(--text); font-size: 11px; font-weight: 800; padding: 0 8px; }
-
-        .sl-frontoffice-alert {
-          width: 100%; text-align: left; border: 1px solid rgba(255,96,109,.5); border-left: 4px solid var(--red);
-          background: linear-gradient(90deg, rgba(255,96,109,.14), rgba(6,21,34,.85)); color: var(--text);
-          padding: 9px 12px; border-radius: 6px; display: flex; align-items: center; gap: 10px; cursor: pointer;
+        .sl-atmos {
+          position: absolute; inset: 0; pointer-events: none; z-index: 0;
+          background-image:
+            repeating-linear-gradient(0deg, rgba(255,255,255,.014) 0 1px, transparent 1px 3px),
+            repeating-linear-gradient(90deg, rgba(150,214,235,.03) 0 1px, transparent 1px 96px);
+          mask-image: radial-gradient(ellipse 90% 80% at 50% 40%, #000 40%, transparent 100%);
+          opacity: .7;
         }
-        .sl-frontoffice-alert span { color: #ff8d97; font-size: 10.5px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
-        .sl-frontoffice-alert strong { font-size: 13px; font-weight: 800; flex: 1; }
-        .sl-frontoffice-alert em { font-size: 11px; color: #ffc9cf; font-style: normal; font-weight: 800; }
+        .sl-atmos::after {
+          content: ""; position: absolute; inset: 0;
+          box-shadow: inset 0 0 220px 60px rgba(0,0,0,.55);
+        }
 
-        /* ---------- single-stream feed ---------- */
-        .sl-stream { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); overflow: hidden; }
-        .sl-stream-head { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 10.5px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
-        .sl-stream-head span:last-child { color: var(--cyan); }
-        .sl-feed-empty { padding: 24px 16px; color: var(--muted); font-size: 12px; text-align: center; }
+        .sl-app {
+          position: relative; z-index: 1;
+          width: min(1560px, 100%);
+          margin: 0 auto;
+          padding: 14px 20px 40px;
+          display: flex; flex-direction: column; gap: 14px;
+          flex: 1; min-height: 0;
+          overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+        }
+        .sl-app::-webkit-scrollbar { width: 10px; }
+        .sl-app::-webkit-scrollbar-thumb { background: rgba(150,214,235,.16); border-radius: 8px; }
+        .sl-app::-webkit-scrollbar-track { background: transparent; }
 
-        /* story row */
-        .sl-row { border-bottom: 1px solid rgba(156,218,236,.1); }
-        .sl-row:last-child { border-bottom: 0; }
-        .sl-row.is-open { background: rgba(19,216,231,.04); }
-        .sl-row__header { width: 100%; display: grid; grid-template-columns: 4px 1fr auto; align-items: stretch; gap: 12px; text-align: left; border: 0; background: transparent; color: inherit; padding: 12px 14px 12px 0; cursor: pointer; }
-        .sl-row__header:hover { background: rgba(19,216,231,.05); }
-        .sl-row__heatbar { border-radius: 3px; align-self: stretch; min-height: 100%; }
-        .sl-row__heatbar--cool { background: linear-gradient(180deg, var(--cyan), rgba(19,216,231,.35)); }
-        .sl-row__heatbar--warm { background: linear-gradient(180deg, var(--gold), rgba(233,168,60,.4)); }
-        .sl-row__heatbar--hot { background: linear-gradient(180deg, var(--red), rgba(255,96,109,.4)); }
-        .sl-row__main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-        .sl-row__topline { display: flex; align-items: center; gap: 8px; font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .06em; }
-        .sl-row__decision { color: var(--gold); }
-        .sl-row__headline { margin: 0; font-size: 14px; line-height: 1.32; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .sl-row.is-open .sl-row__headline { white-space: normal; }
-        .sl-row__subline { display: flex; gap: 10px; font-size: 11px; color: var(--muted); font-weight: 700; }
-        .sl-row__pulse { color: var(--cyan); }
-        .sl-row__meta { display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; gap: 4px; flex-shrink: 0; }
-        .sl-row__date { font-size: 10px; color: var(--muted); font-weight: 800; white-space: nowrap; }
-        .sl-row__chevron { font-size: 10px; color: var(--muted); }
-        .sl-row__body { border-top: 1px solid var(--line); background: var(--panel); padding: 16px; }
-        .sl-row__layout { display: grid; grid-template-columns: minmax(0,1fr) 300px; gap: 16px; align-items: start; }
-        @media (max-width: 900px) { .sl-row__layout { grid-template-columns: 1fr; } }
-        .sl-row__impact { display: grid; gap: 12px; }
+        /* ------------- command bar ------------- */
+        .sl-command {
+          display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+          padding: 12px 16px;
+          border: 1px solid var(--line);
+          border-radius: 12px;
+          background:
+            linear-gradient(120deg, rgba(22,220,234,.06), transparent 42%),
+            linear-gradient(180deg, rgba(12,32,48,.92), rgba(6,17,27,.92));
+          box-shadow: 0 14px 34px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.04);
+        }
+        .sl-command__crest { width: 46px; height: 46px; display: grid; place-items: center; flex-shrink: 0;
+          border: 1px solid var(--line-2); border-radius: 10px; background: rgba(255,255,255,.03); overflow: hidden; }
+        .sl-command__crest img { width: 100%; height: 100%; object-fit: contain; padding: 4px; }
+        .sl-command__crest strong { font-size: 13px; font-weight: 900; color: var(--cyan); }
+        .sl-command__id { min-width: 0; }
+        .sl-command__eyebrow { margin: 0; font-size: 10px; font-weight: 900; letter-spacing: .22em; text-transform: uppercase; color: var(--cyan); }
+        .sl-command__id h1 { margin: 2px 0 3px; font-size: 25px; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; line-height: 1; }
+        .sl-command__sub { margin: 0; font-size: 11.5px; font-weight: 700; color: var(--muted-2); }
+        .sl-command__stats { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+        .sl-stat { border: 1px solid var(--line); border-radius: 9px; padding: 6px 12px; min-width: 76px;
+          background: rgba(255,255,255,.02); text-align: left; }
+        .sl-stat strong { display: block; font-size: 19px; font-weight: 900; line-height: 1.05; letter-spacing: .01em; }
+        .sl-stat span { display: block; font-size: 9.5px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-top: 2px; }
+        .sl-stat--alert { border-color: rgba(233,168,60,.45); background: var(--gold-dim); }
+        .sl-stat--alert strong { color: var(--gold); }
+        .sl-stat--ours strong { color: var(--cyan); }
+        .sl-command__nav { display: flex; gap: 8px; }
+        .sl-command__nav button {
+          height: 34px; padding: 0 15px; border-radius: 8px; cursor: pointer;
+          border: 1px solid var(--line-2); background: rgba(14,36,52,.8); color: var(--text);
+          font-size: 11px; font-weight: 900; letter-spacing: .09em; text-transform: uppercase;
+          transition: border-color .15s ease, background .15s ease, transform .12s ease;
+        }
+        .sl-command__nav button:hover { border-color: var(--line-strong); background: rgba(22,220,234,.12); transform: translateY(-1px); }
 
-        /* score badge */
-        .sl-score { width: 38px; height: 38px; border-radius: 8px; display: grid; place-items: center; font-weight: 900; border: 1px solid; align-self: start; }
-        .sl-score--sm { width: 30px; height: 30px; }
-        .sl-score--lg { width: 56px; height: 56px; border-radius: 10px; }
-        .sl-score strong { font-size: 14px; }
-        .sl-score--lg strong { font-size: 20px; }
-        .sl-score--crit { background: rgba(255,96,109,.16); border-color: rgba(255,96,109,.55); color: #ff9aa2; }
-        .sl-score--high { background: rgba(233,168,60,.16); border-color: rgba(233,168,60,.5); color: #ffcd7a; }
-        .sl-score--mid { background: rgba(19,216,231,.12); border-color: rgba(19,216,231,.4); color: var(--cyan); }
-        .sl-score--low { background: rgba(156,218,236,.08); border-color: rgba(156,218,236,.22); color: var(--muted); }
+        /* ------------- ticker ------------- */
+        .sl-ticker {
+          display: flex; align-items: stretch; overflow: hidden;
+          border: 1px solid var(--line); border-radius: 9px;
+          background: linear-gradient(90deg, rgba(255,95,109,.1), rgba(6,17,27,.9) 26%);
+        }
+        .sl-ticker__flag {
+          flex-shrink: 0; display: flex; align-items: center; gap: 7px; padding: 0 14px;
+          font-size: 10px; font-weight: 900; letter-spacing: .16em; text-transform: uppercase; color: #ffb4bb;
+          border-right: 1px solid rgba(255,95,109,.3); background: rgba(255,95,109,.1);
+        }
+        .sl-ticker__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); animation: slPulse 1.6s ease-in-out infinite; }
+        .sl-ticker__viewport { overflow: hidden; flex: 1; position: relative; }
+        .sl-ticker__track { display: flex; gap: 34px; padding: 9px 0; white-space: nowrap; width: max-content;
+          animation: slTicker 46s linear infinite; }
+        .sl-ticker:hover .sl-ticker__track { animation-play-state: paused; }
+        .sl-ticker__item { display: inline-flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 700; color: var(--muted-2);
+          background: none; border: 0; cursor: pointer; padding: 0; }
+        .sl-ticker__item:hover { color: var(--text); }
+        .sl-ticker__item i { font-style: normal; font-size: 9.5px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
+        .sl-ticker__sep { color: rgba(150,214,235,.25); }
 
-        .sl-status-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; border-radius: 4px; padding: 3px 8px; }
-        .sl-status-pill--escalating { color: #ff9aa2; background: rgba(255,96,109,.12); border: 1px solid rgba(255,96,109,.4); }
-        .sl-status-pill--developing { color: #ffcd7a; background: rgba(233,168,60,.12); border: 1px solid rgba(233,168,60,.35); }
+        /* ------------- departments ------------- */
+        .sl-depts { display: flex; gap: 6px; flex-wrap: wrap; padding: 5px; border: 1px solid var(--line);
+          border-radius: 11px; background: rgba(6,17,27,.6); }
+        .sl-depts button {
+          display: inline-flex; align-items: center; gap: 7px; position: relative;
+          height: 34px; padding: 0 15px; border-radius: 8px; cursor: pointer;
+          border: 1px solid transparent; background: transparent; color: rgba(234,247,252,.6);
+          font-size: 11px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase;
+          transition: color .15s ease, background .15s ease, border-color .15s ease;
+        }
+        .sl-depts button em { font-style: normal; font-size: 12px; opacity: .8; }
+        .sl-depts button:hover { color: var(--text); background: rgba(255,255,255,.04); }
+        .sl-depts button.is-active { color: #041018; background: linear-gradient(180deg, #2ee6f0, #12b9c9);
+          border-color: rgba(22,220,234,.4); box-shadow: 0 4px 14px rgba(22,220,234,.22); }
+        .sl-depts .sl-dept-count {
+          min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; display: grid; place-items: center;
+          font-size: 9.5px; font-weight: 900; background: var(--red); color: #290308;
+        }
+        .sl-depts button.is-active .sl-dept-count { background: #062028; color: #7fe9f2; }
+
+        .sl-market {
+          display: flex; align-items: center; gap: 10px; margin: 0; padding: 8px 14px;
+          border: 1px solid rgba(201,162,39,.28); border-left: 3px solid var(--brass); border-radius: 0 8px 8px 0;
+          background: linear-gradient(90deg, rgba(201,162,39,.12), rgba(6,17,27,.5));
+          font-size: 11.5px; font-weight: 800; color: #f0cf93;
+        }
+        .sl-market em { font-style: normal; font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--brass); }
+
+        /* ------------- lead story ------------- */
+        .sl-lead {
+          position: relative; overflow: hidden;
+          display: grid; grid-template-columns: 168px minmax(0,1fr); gap: 22px; align-items: center;
+          padding: 22px 26px; border: 1px solid var(--line-2); border-radius: 14px;
+          background: linear-gradient(135deg, rgba(13,36,53,.95), rgba(5,15,24,.95));
+          box-shadow: 0 22px 52px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.05);
+          animation: slRise .38s cubic-bezier(.2,.7,.3,1) both;
+        }
+        .sl-lead::before {
+          content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+          background: linear-gradient(180deg, var(--cyan), rgba(22,220,234,.1));
+        }
+        .sl-lead--hot::before { background: linear-gradient(180deg, var(--gold), rgba(233,168,60,.1)); }
+        .sl-lead--boiling::before { background: linear-gradient(180deg, var(--red), rgba(255,95,109,.1)); }
+        .sl-lead--boiling { border-color: rgba(255,95,109,.32); }
+        .sl-lead__glow { position: absolute; inset: 0; pointer-events: none; }
+        .sl-lead__portrait { position: relative; z-index: 1; display: grid; justify-items: center; gap: 12px; }
+        .sl-lead__main { position: relative; z-index: 1; min-width: 0; }
+        .sl-lead__kickers { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+        .sl-lead__flag { font-size: 9.5px; font-weight: 900; letter-spacing: .18em; text-transform: uppercase;
+          color: #041018; background: linear-gradient(90deg, #ffd27a, var(--gold)); padding: 4px 10px; border-radius: 4px; }
+        .sl-lead__age { font-size: 10.5px; font-weight: 800; color: var(--muted); margin-left: auto; }
+        .sl-lead__headline { margin: 0 0 10px; font-size: clamp(21px, 2.5vw, 31px); line-height: 1.14; font-weight: 800; letter-spacing: -.01em; }
+        .sl-lead__summary { margin: 0 0 14px; font-size: 14px; line-height: 1.55; color: rgba(234,247,252,.8); max-width: 76ch; }
+        .sl-lead__meta { display: flex; flex-wrap: wrap; gap: 22px; margin-bottom: 16px; }
+        .sl-lead__meta span { font-size: 12.5px; font-weight: 800; }
+        .sl-lead__meta em { display: block; font-style: normal; font-size: 9.5px; font-weight: 900; letter-spacing: .14em;
+          text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+        .sl-lead__choices { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+        .sl-lead__open { border: 0; background: none; cursor: pointer; padding: 0;
+          color: var(--cyan); font-size: 12px; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; }
+        .sl-lead__open:hover { text-decoration: underline; }
+        @media (max-width: 860px) { .sl-lead { grid-template-columns: 1fr; } .sl-lead__portrait { justify-items: start; grid-auto-flow: column; } }
+
+        /* ------------- heat ring / spark ------------- */
+        .sl-ring { position: relative; display: grid; place-items: center; flex-shrink: 0; }
+        .sl-ring svg { position: absolute; inset: 0; }
+        .sl-ring__track { fill: none; stroke: rgba(150,214,235,.12); stroke-width: 5; }
+        .sl-ring__fill { fill: none; stroke-width: 5; stroke-linecap: round; transition: stroke-dasharray .6s cubic-bezier(.2,.8,.3,1); }
+        .sl-ring--cool .sl-ring__fill { stroke: #4fd3e6; }
+        .sl-ring--warm .sl-ring__fill { stroke: var(--cyan); }
+        .sl-ring--hot .sl-ring__fill { stroke: var(--gold); }
+        .sl-ring--boiling .sl-ring__fill { stroke: var(--red); }
+        .sl-ring--boiling { animation: slEmber 2.4s ease-in-out infinite; }
+        .sl-ring__center { position: relative; text-align: center; line-height: 1; }
+        .sl-ring__center strong { display: block; font-weight: 900; }
+        .sl-ring__center span { display: block; font-size: 8.5px; font-weight: 900; letter-spacing: .16em;
+          text-transform: uppercase; color: var(--muted); margin-top: 3px; }
+
+        .sl-spark { height: 4px; border-radius: 3px; background: rgba(150,214,235,.1); overflow: hidden; flex: 1; min-width: 60px; }
+        .sl-spark span { display: block; height: 100%; border-radius: 3px; animation: slGrow .6s cubic-bezier(.2,.8,.3,1) both; }
+        .sl-spark--cool span { background: #3aa8c4; }
+        .sl-spark--warm span { background: var(--cyan); }
+        .sl-spark--hot span { background: linear-gradient(90deg, var(--gold), var(--ember)); }
+        .sl-spark--boiling span { background: linear-gradient(90deg, var(--ember), var(--red)); }
+
+        /* ------------- category tag / pills ------------- */
+        .sl-cat { display: inline-flex; align-items: center; gap: 5px; border: 1px solid; border-radius: 5px;
+          padding: 3px 8px; font-size: 9.5px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
+        .sl-cat--md { font-size: 10.5px; padding: 4px 10px; }
+        .sl-cat em { font-style: normal; font-size: 10px; }
+
+        .sl-status-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 9.5px; font-weight: 900;
+          letter-spacing: .1em; text-transform: uppercase; border-radius: 4px; padding: 3px 8px; }
+        .sl-status-pill em { font-style: normal; font-size: 8px; }
+        .sl-status-pill--escalating { color: #ff9aa2; background: rgba(255,95,109,.13); border: 1px solid rgba(255,95,109,.4); animation: slPulse 2.2s ease-in-out infinite; }
+        .sl-status-pill--developing { color: #ffcd7a; background: rgba(233,168,60,.13); border: 1px solid rgba(233,168,60,.35); }
         .sl-status-pill--resolved { color: #8ef0b8; background: rgba(82,223,148,.12); border: 1px solid rgba(82,223,148,.35); }
 
-        /* detail column */
-        .sl-detail-head { display: flex; gap: 12px; align-items: flex-start; }
-        .sl-detail-headmeta { flex: 1; min-width: 0; }
-        .sl-detail-eyebrow { display: flex; align-items: center; gap: 10px; font-size: 11px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 4px; }
-        .sl-detail-head h2 { margin: 4px 0 8px; font-size: clamp(18px, 2.2vw, 26px); font-weight: 800; line-height: 1.15; }
-        .sl-detail-source { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--muted); font-weight: 800; margin-bottom: 12px; }
-        .sl-detail-summary { margin: 0 0 10px; font-size: 13.5px; line-height: 1.5; color: rgba(233,247,251,.9); }
+        .sl-score { display: grid; place-items: center; border: 1px solid; border-radius: 9px; font-weight: 900; }
+        .sl-score--sm { width: 32px; height: 32px; }
+        .sl-score--md { width: 40px; height: 40px; }
+        .sl-score--lg { width: 58px; height: 58px; }
+        .sl-score--crit { background: rgba(255,95,109,.16); border-color: rgba(255,95,109,.55); color: #ff9aa2; }
+        .sl-score--high { background: rgba(233,168,60,.16); border-color: rgba(233,168,60,.5); color: #ffcd7a; }
+        .sl-score--mid { background: rgba(22,220,234,.12); border-color: rgba(22,220,234,.4); color: var(--cyan); }
+        .sl-score--low { background: rgba(150,214,235,.07); border-color: rgba(150,214,235,.22); color: var(--muted); }
 
-        .sl-identity-inline { display: flex; gap: 10px; align-items: center; margin: 10px 0; }
-        .sl-identity-logo { width: 46px; height: 46px; border-radius: 8px; border: 1px solid rgba(156,218,236,.2); overflow: hidden; display: grid; place-items: center; background: rgba(255,255,255,.03); }
-        .sl-identity-logo img { width: 100%; height: 100%; object-fit: contain; }
-        .sl-identity-logo span { font-size: 13px; font-weight: 1000; color: var(--cyan); }
-        .sl-identity-inline strong { display: block; font-size: 15px; }
-        .sl-identity-inline p { margin: 2px 0 0; color: var(--muted); font-size: 11px; font-weight: 800; }
+        /* ------------- faces ------------- */
+        .sl-face { position: relative; border-radius: 12px; overflow: hidden; flex-shrink: 0;
+          border: 1px solid var(--line-2); background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(0,0,0,.2));
+          display: grid; place-items: center; }
+        .sl-face img { width: 100%; height: 100%; object-fit: cover; }
+        .sl-face > span { font-size: 15px; font-weight: 900; color: var(--cyan); letter-spacing: .04em; }
+        .sl-teammark { display: grid; place-items: center; border-radius: 8px; border: 1px solid var(--line-2);
+          background: rgba(255,255,255,.03); overflow: hidden; flex-shrink: 0; }
+        .sl-teammark img { width: 100%; height: 100%; object-fit: contain; padding: 3px; }
+        .sl-teammark strong { font-size: 11px; font-weight: 900; color: var(--cyan); }
 
-        .sl-trade-swap { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 10px 0 12px; padding: 10px; border: 1px solid rgba(138,180,255,.25); border-radius: 8px; background: rgba(138,180,255,.06); }
-        .sl-trade-side { display: grid; justify-items: center; gap: 4px; min-width: 64px; }
-        .sl-trade-side img { width: 40px; height: 40px; object-fit: contain; }
-        .sl-trade-side span { font-size: 11px; font-weight: 900; letter-spacing: .06em; }
-        .sl-trade-swap em { font-style: normal; color: #8ab4ff; font-size: 18px; font-weight: 1000; }
+        /* ------------- toolbar ------------- */
+        .sl-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
+        .sl-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+        .sl-chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 13px; cursor: pointer;
+          border: 1px solid var(--line); border-radius: 999px; background: rgba(10,28,42,.6); color: rgba(234,247,252,.7);
+          font-size: 10.5px; font-weight: 900; letter-spacing: .07em; text-transform: uppercase;
+          transition: border-color .15s ease, color .15s ease, background .15s ease; }
+        .sl-chip:hover { color: var(--text); border-color: var(--line-2); }
+        .sl-chip.is-active { border-color: var(--line-strong); background: var(--cyan-dim); color: var(--text); }
+        .sl-chip b { font-weight: 800; opacity: .55; }
+        .sl-tools { display: flex; gap: 8px; align-items: center; }
+        .sl-input { height: 32px; padding: 0 12px; width: 210px; border-radius: 8px; border: 1px solid var(--line);
+          background: rgba(6,18,29,.86); color: var(--text); font-size: 12px; font-weight: 700; }
+        .sl-input:focus { outline: none; border-color: var(--line-strong); }
+        .sl-tools select { height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line);
+          background: rgba(12,32,48,.9); color: var(--text); font-size: 11px; font-weight: 800; cursor: pointer; }
 
-        /* development timeline */
-        .sl-timeline { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
-        .sl-timeline h4 { margin: 0 0 12px; font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--cyan); }
-        .sl-timeline-track { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 4px; }
-        .sl-timeline-node { position: relative; flex: 0 0 150px; padding-top: 14px; border-top: 2px solid rgba(19,216,231,.4); }
-        .sl-timeline-node.is-latest { border-top-color: var(--red); }
-        .sl-timeline-node--next { border-top-color: rgba(156,218,236,.2); opacity: .6; }
-        .sl-timeline-dot { position: absolute; top: -5px; left: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); }
-        .sl-timeline-node.is-latest .sl-timeline-dot { background: var(--red); }
-        .sl-timeline-dot--ghost { background: var(--muted); }
-        .sl-timeline-node time { display: block; font-size: 10px; font-weight: 900; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; margin-bottom: 3px; }
-        .sl-timeline-node strong { display: block; font-size: 12px; line-height: 1.3; }
-        .sl-timeline-node p { margin: 3px 0 0; font-size: 11px; color: var(--muted); line-height: 1.3; }
+        /* ------------- story grid ------------- */
+        .sl-gridhead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+          padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+        .sl-gridhead h3 { margin: 0; font-size: 10.5px; font-weight: 900; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+        .sl-gridhead span { font-size: 10.5px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; color: var(--cyan); }
 
-        /* tabs */
-        .sl-tabs { display: flex; gap: 4px; margin-top: 16px; border-bottom: 1px solid var(--line); }
-        .sl-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 11px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; padding: 8px 4px; margin-right: 16px; cursor: pointer; }
+        .sl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+        .sl-card {
+          position: relative; overflow: hidden; text-align: left; cursor: pointer;
+          display: flex; flex-direction: column; gap: 11px;
+          padding: 13px 15px 13px 18px; border: 1px solid var(--line); border-radius: 12px;
+          background: linear-gradient(160deg, rgba(11,29,44,.86), rgba(5,15,24,.9));
+          color: inherit;
+          animation: slRise .34s cubic-bezier(.2,.7,.3,1) both;
+          transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+        }
+        .sl-card:hover { transform: translateY(-2px); border-color: var(--line-strong); box-shadow: 0 14px 30px rgba(0,0,0,.4); }
+        .sl-card__rail { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+        .sl-card--cool .sl-card__rail { background: linear-gradient(180deg, #3aa8c4, rgba(58,168,196,.15)); }
+        .sl-card--warm .sl-card__rail { background: linear-gradient(180deg, var(--cyan), rgba(22,220,234,.15)); }
+        .sl-card--hot .sl-card__rail { background: linear-gradient(180deg, var(--gold), rgba(233,168,60,.15)); }
+        .sl-card--boiling .sl-card__rail { background: linear-gradient(180deg, var(--red), rgba(255,95,109,.15)); }
+        .sl-card.is-breaking { border-color: rgba(255,95,109,.28); }
+        .sl-card.is-ours { background: linear-gradient(160deg, rgba(14,38,56,.9), rgba(5,15,24,.9)); }
+        .sl-card.is-ours::after { content: ""; position: absolute; right: 0; top: 0; width: 42px; height: 42px;
+          background: linear-gradient(225deg, rgba(22,220,234,.16), transparent 60%); pointer-events: none; }
+        .sl-card.is-stale { opacity: .78; }
+        .sl-card__top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .sl-card__decision { font-size: 9.5px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase;
+          color: #041018; background: linear-gradient(90deg, #ffd27a, var(--gold)); padding: 3px 8px; border-radius: 4px; }
+        .sl-card__age { margin-left: auto; font-size: 10px; font-weight: 800; color: var(--muted); white-space: nowrap; }
+        .sl-card__body { display: flex; gap: 12px; align-items: flex-start; }
+        .sl-card__text { min-width: 0; }
+        .sl-card__text h3 { margin: 0 0 5px; font-size: 14.5px; line-height: 1.3; font-weight: 700;
+          display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .sl-card__text p { margin: 0; font-size: 12px; line-height: 1.42; color: var(--muted-2);
+          display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .sl-card__foot { display: flex; align-items: center; gap: 12px; }
+        .sl-card__stats { display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+          font-size: 10px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+        .sl-card__heat { color: var(--muted-2); }
+        .sl-card__ours { color: var(--cyan); }
+        .sl-card__social { color: var(--purple); }
+        .sl-card__open { color: var(--cyan); opacity: 0; transition: opacity .16s ease; }
+        .sl-card:hover .sl-card__open { opacity: 1; }
+
+        /* ------------- case file ------------- */
+        .sl-case { display: grid; grid-template-columns: minmax(0,1fr) 322px; gap: 16px; align-items: start;
+          animation: slRise .32s cubic-bezier(.2,.7,.3,1) both; }
+        @media (max-width: 1060px) { .sl-case { grid-template-columns: 1fr; } }
+        .sl-case__main { border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+          background: linear-gradient(180deg, rgba(10,27,41,.9), rgba(5,14,23,.92)); }
+        .sl-case__hero { position: relative; display: flex; gap: 18px; align-items: flex-start; padding: 20px 22px;
+          border-bottom: 1px solid var(--line);
+          background: linear-gradient(120deg, rgba(22,220,234,.05), transparent 55%); }
+        .sl-case__hero-main { flex: 1; min-width: 0; }
+        .sl-case__crumbs { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+        .sl-back { border: 1px solid var(--line-2); border-radius: 7px; background: rgba(255,255,255,.03); cursor: pointer;
+          color: var(--cyan); font-size: 10.5px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; padding: 6px 11px; }
+        .sl-back:hover { border-color: var(--line-strong); background: var(--cyan-dim); }
+        .sl-case__title { margin: 0 0 10px; font-size: clamp(19px, 2.2vw, 27px); line-height: 1.16; font-weight: 800; }
+        .sl-case__byline { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11px; font-weight: 800; color: var(--muted); margin-bottom: 12px; }
+        .sl-case__byline b { color: var(--muted-2); font-weight: 800; }
+        .sl-case__lede { margin: 0 0 6px; font-size: 14px; line-height: 1.6; color: rgba(234,247,252,.86); }
+        .sl-case__body { padding: 18px 22px 22px; }
+        .sl-case__section { margin-bottom: 20px; }
+        .sl-case__prose { margin: 0 0 14px; font-size: 13.5px; line-height: 1.6; color: rgba(234,247,252,.78); }
+
+        .sl-swap { display: flex; align-items: center; justify-content: center; gap: 26px; margin: 14px 0;
+          padding: 14px; border: 1px solid rgba(201,146,255,.24); border-radius: 10px; background: rgba(201,146,255,.06); }
+        .sl-swap__side { display: grid; justify-items: center; gap: 6px; min-width: 84px; }
+        .sl-swap__side span { font-size: 11px; font-weight: 900; letter-spacing: .05em; text-align: center; }
+        .sl-swap__mid { display: grid; justify-items: center; gap: 3px; }
+        .sl-swap__mid em { font-style: normal; font-size: 20px; font-weight: 900; color: var(--purple); }
+        .sl-swap__mid span { font-size: 9px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+
+        .sl-conduct { border: 1px solid rgba(255,138,76,.26); border-left: 3px solid var(--ember); border-radius: 0 10px 10px 0;
+          background: rgba(255,138,76,.05); padding: 13px 16px; margin: 14px 0; }
+        .sl-conduct h4 { margin: 0 0 8px; font-size: 10px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: var(--ember); }
+        .sl-conduct__note { margin: 0 0 10px; font-size: 12.5px; line-height: 1.5; color: rgba(234,247,252,.85); }
+        .sl-conduct__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 10px; }
+        .sl-conduct__grid > div span { display: block; font-size: 9px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+        .sl-conduct__grid > div strong { font-size: 12px; font-weight: 800; }
+
+        .sl-spine { margin: 18px 0; }
+        .sl-spine h4, .sl-case__section h4 { margin: 0 0 12px; font-size: 10px; font-weight: 900; letter-spacing: .16em;
+          text-transform: uppercase; color: var(--cyan); }
+        .sl-spine__list { list-style: none; margin: 0; padding: 0 0 0 22px; position: relative; }
+        .sl-spine__list::before { content: ""; position: absolute; left: 5px; top: 6px; bottom: 14px; width: 1px;
+          background: linear-gradient(180deg, var(--cyan), rgba(150,214,235,.12)); }
+        .sl-spine__list li { position: relative; padding-bottom: 16px; }
+        .sl-spine__dot { position: absolute; left: -21px; top: 4px; width: 11px; height: 11px; border-radius: 50%;
+          background: #061a26; border: 2px solid var(--cyan); }
+        .sl-spine__list li.is-latest .sl-spine__dot { border-color: var(--red); box-shadow: 0 0 0 4px rgba(255,95,109,.13); }
+        .sl-spine__dot--ghost { border-color: rgba(150,214,235,.3); }
+        .sl-spine__list li.is-next { opacity: .55; padding-bottom: 0; }
+        .sl-spine__list time { display: block; font-size: 9.5px; font-weight: 900; letter-spacing: .1em;
+          text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+        .sl-spine__list strong { display: block; font-size: 13px; line-height: 1.35; font-weight: 700; }
+        .sl-spine__list p { margin: 4px 0 0; font-size: 12px; line-height: 1.45; color: var(--muted-2); }
+
+        .sl-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--line); margin: 18px 0 0; }
+        .sl-tabs button { border: 0; background: none; cursor: pointer; padding: 9px 0; margin-bottom: -1px;
+          border-bottom: 2px solid transparent; color: var(--muted);
+          font-size: 10.5px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
+        .sl-tabs button:hover { color: var(--muted-2); }
         .sl-tabs button.is-active { color: var(--text); border-bottom-color: var(--cyan); }
-        .sl-tab-panel { padding-top: 14px; }
+        .sl-tabpanel { padding-top: 18px; }
 
-        .sl-detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; }
-        @media (max-width: 800px) { .sl-detail-grid { grid-template-columns: 1fr; } }
-        .sl-detail-block h4 { margin: 0 0 8px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .1em; color: var(--cyan); font-weight: 900; }
-        .sl-info-row { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(156,218,236,.1); font-size: 12px; }
-        .sl-info-row span:first-child { color: var(--muted); font-weight: 700; }
-        .sl-info-row span:last-child { font-weight: 800; }
-        .sl-party-row { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(156,218,236,.1); font-size: 12px; }
-        .sl-party-row span:first-child { color: var(--muted); font-weight: 700; }
-        .sl-key-factors { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
-        .sl-key-factors li { font-size: 12px; line-height: 1.4; padding-left: 14px; position: relative; color: rgba(233,247,251,.88); }
-        .sl-key-factors li::before { content: "•"; position: absolute; left: 0; color: var(--gold); }
+        .sl-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px,1fr)); gap: 20px; }
+        .sl-cols h4 { margin: 0 0 10px; font-size: 10px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: var(--cyan); }
+        .sl-kv { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0;
+          border-bottom: 1px solid rgba(150,214,235,.08); font-size: 12px; }
+        .sl-kv span:first-child { color: var(--muted); font-weight: 700; }
+        .sl-kv span:last-child { font-weight: 800; text-align: right; }
+        .sl-factors { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; }
+        .sl-factors li { position: relative; padding-left: 15px; font-size: 12.5px; line-height: 1.45; color: rgba(234,247,252,.85); }
+        .sl-factors li::before { content: "▸"; position: absolute; left: 0; color: var(--gold); font-size: 10px; top: 2px; }
+        .sl-nums { display: grid; grid-template-columns: repeat(auto-fit, minmax(78px,1fr)); gap: 8px; margin-top: 12px; }
+        .sl-num { border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; background: rgba(255,255,255,.02); }
+        .sl-num strong { display: block; font-size: 18px; font-weight: 900; line-height: 1; margin-bottom: 4px; }
+        .sl-num span { font-size: 9px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
 
-        .sl-chip-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
-        .sl-chip-grid span { font-size: 11px; font-weight: 800; color: #c7dde8; border: 1px solid rgba(156,218,236,.16); border-radius: 4px; padding: 4px 7px; }
+        .sl-linklist { display: grid; gap: 8px; }
+        .sl-linklist button { display: grid; gap: 4px; text-align: left; cursor: pointer; padding: 11px 13px;
+          border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.02); color: inherit;
+          transition: border-color .15s ease, transform .12s ease; }
+        .sl-linklist button:hover { border-color: var(--line-strong); transform: translateX(2px); }
+        .sl-linklist strong { font-size: 12.5px; line-height: 1.35; font-weight: 700; }
+        .sl-linklist em { font-style: normal; font-size: 10px; font-weight: 800; color: var(--muted); }
 
-        .sl-numbers { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; margin-top: 6px; }
-        .sl-num { border: 1px solid rgba(156,218,236,.14); border-radius: 6px; padding: 8px; }
-        .sl-num strong { display: block; font-size: 18px; line-height: 1; }
-        .sl-num span { color: var(--muted); font-size: 10.5px; font-weight: 800; text-transform: uppercase; }
+        .sl-case__foot { display: flex; justify-content: space-between; gap: 12px; margin-top: 20px; padding-top: 12px;
+          border-top: 1px solid var(--line); font-size: 10px; font-weight: 800; color: var(--muted); }
 
-        .sl-related-list, .sl-rumor-list, .sl-history-list { display: grid; gap: 8px; }
-        .sl-related-list button, .sl-rumor-list button { border: 1px solid rgba(156,218,236,.16); border-radius: 6px; background: rgba(255,255,255,.02); color: inherit; text-align: left; padding: 10px; cursor: pointer; display: grid; gap: 3px; }
-        .sl-related-list button:hover, .sl-rumor-list button:hover { border-color: var(--line-strong); }
-        .sl-related-list span, .sl-rumor-list span { font-size: 10px; font-weight: 900; text-transform: uppercase; color: var(--muted); }
-        .sl-related-list strong, .sl-rumor-list strong { font-size: 12.5px; line-height: 1.3; }
-        .sl-related-list em, .sl-rumor-list em { font-size: 10.5px; color: var(--muted); font-style: normal; }
+        /* ------------- rail ------------- */
+        .sl-rail { display: grid; gap: 12px; position: sticky; top: 0; }
+        .sl-panel { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+          background: linear-gradient(180deg, rgba(10,27,41,.86), rgba(5,14,23,.9)); }
+        .sl-panel h3 { margin: 0 0 12px; font-size: 10px; font-weight: 900; letter-spacing: .16em;
+          text-transform: uppercase; color: var(--cyan); }
+        .sl-panel--desk { border-color: rgba(201,162,39,.34);
+          background: linear-gradient(180deg, rgba(38,29,12,.75), rgba(9,17,24,.92)); }
+        .sl-panel--desk h3 { color: var(--brass); }
 
-        .sl-history-list li { display: grid; grid-template-columns: 78px 1fr; gap: 10px; padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid rgba(156,218,236,.1); list-style: none; }
-        .sl-history-list time { font-size: 10.5px; font-weight: 800; color: var(--muted); }
-        .sl-history-list strong { display: block; font-size: 12.5px; }
-        .sl-history-list p { margin: 3px 0 0; font-size: 11.5px; color: var(--muted); line-height: 1.35; }
+        .sl-bars { display: grid; gap: 12px; }
+        .sl-bar__label { display: flex; justify-content: space-between; margin-bottom: 5px;
+          font-size: 10px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+        .sl-bar__label strong { color: var(--text); font-size: 11.5px; }
+        .sl-bar__track { height: 6px; border-radius: 4px; background: rgba(150,214,235,.1); overflow: hidden; }
+        .sl-bar__fill { height: 100%; border-radius: 4px; animation: slGrow .7s cubic-bezier(.2,.8,.3,1) both; }
+        .sl-bar__fill--good { background: linear-gradient(90deg, #2f9c68, var(--green)); }
+        .sl-bar__fill--warm { background: linear-gradient(90deg, #a5731c, var(--gold)); }
+        .sl-bar__fill--hot { background: linear-gradient(90deg, #b03744, var(--red)); }
+        .sl-bar__foot { margin: 4px 0 0; font-size: 10.5px; font-weight: 700; color: var(--muted); }
 
-        .sl-detail-footer { display: flex; justify-content: space-between; margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 10.5px; color: var(--muted); font-weight: 700; }
+        .sl-effects { display: grid; gap: 4px; }
+        .sl-effect { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+          padding: 8px 0; border-bottom: 1px solid rgba(150,214,235,.07); font-size: 11.5px; font-weight: 800; }
+        .sl-effect:last-child { border-bottom: 0; }
+        .sl-effect span { color: var(--muted-2); }
+        .sl-effect strong { font-variant-numeric: tabular-nums; }
+        .sl-effect.pos strong { color: var(--green); }
+        .sl-effect.neg strong { color: var(--red); }
+        .sl-effect.neutral strong { color: var(--muted); }
 
-        /* impact rail */
-        .sl-impact-panel { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); padding: 12px 14px; }
-        .sl-impact-panel h3 { margin: 0 0 10px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--cyan); font-weight: 900; }
-        .sl-impact-panel h3.is-title { color: var(--text); font-size: 13px; letter-spacing: .06em; }
+        /* ------------- choices ------------- */
+        .sl-choices { display: grid; gap: 9px; }
+        .sl-choices--row { grid-auto-flow: column; grid-auto-columns: minmax(0,1fr); }
+        @media (max-width: 700px) { .sl-choices--row { grid-auto-flow: row; } }
+        .sl-choice {
+          position: relative; overflow: hidden; text-align: left; cursor: pointer; color: var(--text);
+          display: block; width: 100%; padding: 12px 14px; border-radius: 10px;
+          border: 1px solid var(--line-2);
+          background: linear-gradient(180deg, rgba(22,220,234,.07), rgba(255,255,255,.015));
+          transition: border-color .15s ease, background .15s ease, transform .12s ease;
+        }
+        .sl-choice::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+          background: var(--cyan); opacity: .55; }
+        .sl-choice:hover:not(:disabled) { border-color: var(--line-strong); transform: translateY(-1px);
+          background: linear-gradient(180deg, rgba(22,220,234,.16), rgba(255,255,255,.03)); }
+        .sl-choice:disabled { opacity: .5; cursor: not-allowed; }
+        .sl-choice strong { display: block; font-size: 12px; font-weight: 900; letter-spacing: .04em;
+          text-transform: uppercase; margin-bottom: 4px; }
+        .sl-choice span { display: block; font-size: 11.5px; font-weight: 600; line-height: 1.45; color: var(--muted-2); }
+        .sl-choice em { display: block; margin-top: 6px; font-style: normal; font-size: 10px; font-weight: 900;
+          letter-spacing: .1em; text-transform: uppercase; color: var(--cyan); }
+        .sl-choice--lead { flex: 1 1 220px; width: auto;
+          border-color: rgba(201,162,39,.4); background: linear-gradient(180deg, rgba(233,168,60,.13), rgba(255,255,255,.02)); }
+        .sl-choice--lead::before { background: var(--gold); }
+        .sl-choice--lead:hover:not(:disabled) { border-color: rgba(233,168,60,.75);
+          background: linear-gradient(180deg, rgba(233,168,60,.24), rgba(255,255,255,.04)); }
+        .sl-choice--compact { padding: 9px 12px; }
+        .sl-choice--compact strong { margin-bottom: 0; }
+        .sl-choice-empty { font-size: 12px; color: var(--muted); text-align: center; padding: 10px 0; }
 
-        .sl-bars { display: grid; gap: 10px; }
-        .sl-bar-label { display: flex; justify-content: space-between; font-size: 10.5px; font-weight: 800; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
-        .sl-bar-label strong { color: var(--text); }
-        .sl-bar-track { height: 6px; border-radius: 4px; background: rgba(156,218,236,.1); overflow: hidden; }
-        .sl-bar-fill { height: 100%; border-radius: 4px; }
-        .sl-bar-fill--good { background: var(--green); }
-        .sl-bar-fill--warm { background: var(--gold); }
-        .sl-bar-fill--hot { background: var(--red); }
-        .sl-bar-footnote { margin: 4px 0 0; font-size: 10.5px; color: var(--muted); font-weight: 700; }
+        /* ------------- decision desk strip ------------- */
+        .sl-desk { border: 1px solid rgba(201,162,39,.3); border-radius: 12px; padding: 12px 16px;
+          background: linear-gradient(100deg, rgba(201,162,39,.11), rgba(6,17,27,.7) 55%); }
+        .sl-desk__head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .sl-desk__head h3 { margin: 0; font-size: 10.5px; font-weight: 900; letter-spacing: .16em; text-transform: uppercase; color: var(--brass); }
+        .sl-desk__count { font-size: 9.5px; font-weight: 900; letter-spacing: .1em; color: #2a1f06;
+          background: var(--gold); padding: 3px 8px; border-radius: 4px; }
+        .sl-desk__list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap: 9px; }
+        .sl-desk__item { display: flex; align-items: center; gap: 10px; text-align: left; cursor: pointer;
+          padding: 9px 12px; border-radius: 9px; border: 1px solid rgba(201,162,39,.22);
+          background: rgba(255,255,255,.02); color: inherit; transition: border-color .15s ease, transform .12s ease; }
+        .sl-desk__item:hover { border-color: rgba(233,168,60,.6); transform: translateY(-1px); }
+        .sl-desk__item strong { display: block; font-size: 12.5px; line-height: 1.3; font-weight: 700;
+          display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .sl-desk__item span { display: block; font-size: 10px; font-weight: 800; color: var(--muted); margin-top: 2px; }
 
-        .sl-effects-grid { display: grid; gap: 6px; }
-        .sl-effect-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 800; padding: 6px 0; border-bottom: 1px solid rgba(156,218,236,.08); }
-        .sl-effect-row.pos strong { color: var(--green); }
-        .sl-effect-row.neg strong { color: var(--red); }
+        /* ------------- dossier ------------- */
+        .sl-dossier { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+          background: rgba(255,255,255,.02); margin: 14px 0; }
+        .sl-dossier__head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin-bottom: 4px; }
+        .sl-dossier__head strong { font-size: 13.5px; font-weight: 800; }
+        .sl-dossier__head span { font-size: 11px; font-weight: 800; color: var(--muted); }
+        .sl-dossier__ident { margin: 0 0 8px; font-size: 11.5px; color: var(--muted); }
+        .sl-dossier h4 { margin: 10px 0 5px; font-size: 9px; font-weight: 900; letter-spacing: .14em;
+          text-transform: uppercase; color: var(--cyan); }
+        .sl-dossier p { margin: 0 0 3px; font-size: 11.5px; line-height: 1.4; color: var(--muted-2); }
+        .sl-dossier__tags { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+        .sl-dossier__tags span { font-size: 9px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase;
+          border: 1px solid var(--line-2); border-radius: 4px; padding: 3px 7px; color: var(--muted-2); }
+        .sl-dossier__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .sl-dossier.is-compact { margin: 0; }
 
-        .sl-decisions { display: grid; gap: 8px; }
-        .sl-decision-btn { width: 100%; text-align: left; border: 1px solid var(--line); border-radius: 8px; background: rgba(19,216,231,.06); color: var(--text); padding: 10px 12px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start; }
-        .sl-decision-btn:hover:not(:disabled) { border-color: var(--line-strong); background: rgba(19,216,231,.13); }
-        .sl-decision-btn:disabled { opacity: .55; cursor: not-allowed; }
-        .sl-decision-btn__dot { width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--cyan); margin-top: 4px; flex-shrink: 0; }
-        .sl-decision-btn strong { display: block; font-size: 12.5px; font-weight: 900; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 3px; }
-        .sl-decision-btn span { display: block; font-size: 11px; color: var(--muted); font-weight: 700; line-height: 1.35; }
-        .sl-decision-btn em { display: block; margin-top: 4px; color: var(--cyan); font-size: 10.5px; font-style: normal; font-weight: 800; }
-        .sl-decision-empty { font-size: 12px; color: var(--muted); text-align: center; padding: 12px 0; }
+        /* ------------- social ------------- */
+        .sl-two { display: grid; grid-template-columns: minmax(0,1fr) minmax(250px,320px); gap: 16px; align-items: start; }
+        @media (max-width: 1000px) { .sl-two { grid-template-columns: 1fr; } }
+        .sl-subtabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; padding: 4px;
+          border: 1px solid var(--line); border-radius: 10px; background: rgba(6,17,27,.6); width: fit-content; }
+        .sl-subtabs button { border: 0; border-radius: 7px; background: transparent; cursor: pointer;
+          padding: 8px 15px; color: var(--muted); font-size: 10.5px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+        .sl-subtabs button:hover { color: var(--text); background: rgba(255,255,255,.04); }
+        .sl-subtabs button.is-active { color: #041018; background: linear-gradient(180deg, #2ee6f0, #12b9c9); }
+        .sl-feed { display: grid; gap: 10px; }
+        .sl-post { text-align: left; cursor: pointer; color: inherit; padding: 12px 14px;
+          border: 1px solid var(--line); border-radius: 11px; background: rgba(10,27,41,.7);
+          transition: border-color .15s ease, transform .12s ease;
+          animation: slRise .3s cubic-bezier(.2,.7,.3,1) both; }
+        .sl-post:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+        .sl-post__head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 7px; }
+        .sl-post__avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0;
+          background: linear-gradient(160deg, rgba(22,220,234,.22), rgba(201,146,255,.18));
+          font-size: 10.5px; font-weight: 900; color: #eaf7fc; align-self: center; }
+        .sl-post__head strong { font-size: 12.5px; font-weight: 800; }
+        .sl-post__head span { font-size: 11px; font-weight: 700; color: var(--muted); }
+        .sl-post__head em { margin-left: auto; font-style: normal; font-size: 10px; font-weight: 800; color: var(--muted); }
+        .sl-post__verified { color: var(--cyan); font-size: 11px; }
+        .sl-post p { margin: 0; font-size: 13px; line-height: 1.5; }
+        .sl-post__meta { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 9px; padding-top: 9px;
+          border-top: 1px solid rgba(150,214,235,.08); font-size: 10px; font-weight: 800; color: var(--muted); }
+        .sl-post__related { color: var(--gold); letter-spacing: .04em; text-transform: uppercase; }
 
-        /* empty state */
-        .sl-empty-panel { border: 1px solid var(--line); border-top: 2px solid var(--cyan); border-radius: 10px; background: rgba(7,20,31,.6); padding: 26px 20px; text-align: center; }
-        .sl-empty-panel p.sl-kicker { margin: 0 0 6px; font-size: 10.5px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: var(--cyan); }
-        .sl-empty-panel h2 { margin: 0 0 6px; font-size: 15px; letter-spacing: .04em; text-transform: uppercase; font-weight: 800; }
-        .sl-empty-panel p { margin: 0; color: var(--muted); font-size: 12.5px; }
+        .sl-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+        .sl-pills button { border: 1px solid var(--line); border-radius: 999px; background: transparent; cursor: pointer;
+          padding: 5px 12px; color: var(--muted); font-size: 10px; font-weight: 900; letter-spacing: .06em; }
+        .sl-pills button.is-active { border-color: rgba(233,168,60,.55); color: var(--gold); background: var(--gold-dim); }
 
-        /* player meetings */
-        .sl-departments button { display: inline-flex; align-items: center; gap: 6px; }
-        .sl-dept-icon { width: 16px; height: 16px; color: var(--muted); flex-shrink: 0; }
-        .sl-dept-icon.is-active { color: var(--cyan); }
-        .sl-pm-home__head { margin-bottom: 14px; }
-        .sl-pm-section { margin-bottom: 18px; }
-        .sl-pm-section h3 { margin: 0 0 10px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--gold); font-weight: 900; }
-        .sl-pm-roster { display: grid; gap: 6px; }
-        .sl-pm-roster-row { display: flex; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 8px 10px; text-align: left; color: inherit; cursor: pointer; width: 100%; }
-        .sl-pm-roster-row:hover { border-color: var(--line-strong); }
-        .sl-pm-roster-row__main { flex: 1; min-width: 0; }
-        .sl-pm-roster-row__main strong { display: block; font-size: 13px; }
-        .sl-pm-roster-row__main span { display: block; font-size: 11px; color: var(--muted); font-weight: 700; }
-        .sl-pm-roster-row__main em { display: block; font-size: 10.5px; color: var(--cyan); font-style: normal; font-weight: 700; margin-top: 2px; }
-        .sl-pm-badge { font-size: 9px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: var(--gold); border: 1px solid rgba(233,168,60,.35); padding: 3px 6px; border-radius: 4px; }
-        .sl-pm-request { border: 1px solid rgba(233,168,60,.28); border-left: 3px solid var(--gold); border-radius: 8px; background: rgba(233,168,60,.05); padding: 12px 14px; margin-bottom: 10px; }
-        .sl-pm-request h3 { margin: 0 0 6px; font-size: 13px; }
-        .sl-pm-request p { margin: 0 0 8px; font-size: 12px; line-height: 1.4; color: rgba(233,247,251,.88); }
-        .sl-pm-choices { display: grid; gap: 8px; margin-top: 10px; }
-        .sl-pm-choices button { border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.03); color: inherit; text-align: left; padding: 10px 12px; cursor: pointer; }
-        .sl-pm-choices button:hover:not(:disabled) { border-color: var(--cyan); }
-        .sl-pm-choices button strong { display: block; font-size: 12px; font-weight: 900; margin-bottom: 3px; }
-        .sl-pm-choices button span { display: block; font-size: 11px; color: var(--muted); font-weight: 700; }
-        .sl-pm-choices--compact button { font-size: 11px; font-weight: 800; padding: 8px 10px; }
-        .sl-pm-player__head { margin-bottom: 12px; }
-        .sl-pm-player__identity { display: flex; gap: 12px; align-items: center; margin-top: 8px; }
-        .sl-pm-back { border: 0; background: transparent; color: var(--cyan); font-size: 11px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; padding: 0; }
-        .sl-pm-rel { font-size: 12px; margin-top: 6px; }
+        .sl-thread { width: 100%; text-align: left; cursor: pointer; color: inherit; padding: 12px 14px;
+          border: 1px solid var(--line); border-radius: 11px; background: rgba(10,27,41,.7);
+          transition: border-color .15s ease; }
+        .sl-thread:hover { border-color: var(--line-strong); }
+        .sl-thread.is-controversial { border-color: rgba(255,138,76,.32); background: rgba(255,110,50,.05); }
+        .sl-thread__meta { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 7px;
+          font-size: 10px; font-weight: 800; color: var(--muted); }
+        .sl-thread__flair { color: var(--gold); letter-spacing: .06em; text-transform: uppercase; }
+        .sl-thread h4 { margin: 0 0 6px; font-size: 13.5px; line-height: 1.35; font-weight: 700; }
+        .sl-thread p { margin: 0; font-size: 12px; line-height: 1.45; color: var(--muted-2); }
+        .sl-comments { display: grid; gap: 9px; margin: 9px 0 0; padding: 11px 14px;
+          border: 1px solid var(--line); border-top: 0; border-radius: 0 0 11px 11px; background: rgba(4,12,20,.6); }
+        .sl-comment { font-size: 12px; line-height: 1.45; color: var(--muted-2); padding-left: 10px;
+          border-left: 2px solid rgba(150,214,235,.15); }
+        .sl-comment em { display: block; font-style: normal; font-size: 10px; font-weight: 900; color: var(--cyan); margin-bottom: 3px; }
+        .sl-comment.is-rival { border-left-color: rgba(255,95,109,.4); }
+
+        .sl-pulse { border: 1px solid rgba(22,220,234,.22); border-radius: 10px; padding: 12px 14px;
+          background: rgba(22,220,234,.05); margin-bottom: 12px; }
+        .sl-pulse span { font-size: 9.5px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+        .sl-pulse strong { display: block; font-size: 22px; font-weight: 900; margin: 5px 0 3px; }
+        .sl-pulse p { margin: 0; font-size: 11px; color: var(--muted); font-weight: 700; }
+
+        .sl-trend { display: flex; align-items: center; gap: 10px; padding: 8px 0;
+          border-bottom: 1px solid rgba(150,214,235,.07); font-size: 11.5px; font-weight: 800; }
+        .sl-trend:last-child { border-bottom: 0; }
+        .sl-trend b { width: 18px; font-size: 12px; font-weight: 900; color: var(--muted); }
+        .sl-trend span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-2); }
+        .sl-trend em { font-style: normal; font-size: 10px; font-weight: 900; letter-spacing: .06em;
+          text-transform: uppercase; color: var(--gold); }
+
+        /* ------------- insiders ------------- */
+        .sl-insider { text-align: left; cursor: pointer; color: inherit; padding: 12px 14px;
+          border: 1px solid var(--line); border-radius: 11px; background: rgba(10,27,41,.7);
+          transition: border-color .15s ease, transform .12s ease; }
+        .sl-insider:hover { border-color: var(--line-strong); transform: translateX(2px); }
+        .sl-insider__head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin-bottom: 5px; }
+        .sl-insider__head strong { font-size: 13px; line-height: 1.35; font-weight: 700; }
+        .sl-insider__head em { flex-shrink: 0; font-style: normal; font-size: 9.5px; font-weight: 900;
+          letter-spacing: .1em; text-transform: uppercase; color: var(--gold); }
+        .sl-insider p { margin: 0 0 9px; font-size: 12.5px; line-height: 1.45; color: var(--muted-2); }
+        .sl-insider__meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 9.5px; font-weight: 900;
+          letter-spacing: .07em; text-transform: uppercase; color: var(--cyan); }
+
+        /* ------------- press room ------------- */
+        .sl-press { border: 1px solid var(--line); border-radius: 12px; margin-bottom: 14px; overflow: hidden;
+          background: linear-gradient(180deg, rgba(10,27,41,.9), rgba(5,14,23,.92)); }
+        .sl-press__head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 18px;
+          border-bottom: 1px solid var(--line); background: linear-gradient(90deg, rgba(22,220,234,.06), transparent 60%); }
+        .sl-press__head strong { font-size: 15px; font-weight: 800; }
+        .sl-press__head span { font-size: 10.5px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+        .sl-press__mics { margin-left: auto; font-size: 9.5px; font-weight: 900; letter-spacing: .14em;
+          text-transform: uppercase; color: var(--red); }
+        .sl-press__body { padding: 16px 18px; }
+        .sl-press__summary { margin: 0 0 14px; font-size: 13px; line-height: 1.55; color: var(--muted-2); }
+        .sl-press__q { padding: 14px 0; border-top: 1px solid var(--line); }
+        .sl-press__q:first-child { border-top: 0; padding-top: 0; }
+        .sl-press__reporter { display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+          font-size: 10px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; color: var(--cyan); }
+        .sl-press__reporter i { font-style: normal; width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); }
+        .sl-press__question { margin: 0 0 12px; font-size: 14px; line-height: 1.55; font-style: italic;
+          color: rgba(234,247,252,.9); padding-left: 14px; border-left: 2px solid rgba(22,220,234,.35); }
+
+        /* ------------- archive ------------- */
+        .sl-era { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-bottom: 14px;
+          background: linear-gradient(180deg, rgba(10,27,41,.86), rgba(5,14,23,.9)); }
+        .sl-era__head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 10px;
+          padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+        .sl-era__head h3 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: .02em; }
+        .sl-era__head span { font-size: 10px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+        .sl-era__themes { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+        .sl-era__themes span { font-size: 9.5px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase;
+          border: 1px solid rgba(201,162,39,.3); color: var(--brass); border-radius: 4px; padding: 4px 8px; }
+        .sl-era__stories { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px,1fr)); gap: 8px; }
+        .sl-era__stories button { text-align: left; cursor: pointer; color: inherit; padding: 10px 12px;
+          border: 1px solid transparent; border-radius: 8px; background: rgba(255,255,255,.02); }
+        .sl-era__stories button:hover { border-color: var(--line-2); background: rgba(22,220,234,.06); }
+        .sl-era__stories strong { display: block; font-size: 12.5px; line-height: 1.35; margin-bottom: 3px; }
+        .sl-era__stories em { font-style: normal; font-size: 10px; font-weight: 800; color: var(--muted); }
+
+        /* ------------- meetings room ------------- */
+        .sl-room { border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px;
+          background: linear-gradient(180deg, rgba(10,27,41,.86), rgba(5,14,23,.9)); }
+        .sl-room__head { margin-bottom: 18px; }
+        .sl-room__head .sl-back { margin-bottom: 12px; }
+        .sl-room__kicker { margin: 0 0 4px; font-size: 9.5px; font-weight: 900; letter-spacing: .18em;
+          text-transform: uppercase; color: var(--brass); }
+        .sl-room__head h2 { margin: 0 0 5px; font-size: 22px; font-weight: 800; letter-spacing: .01em; }
+        .sl-room__sub { font-size: 12.5px; color: var(--muted-2); }
+        .sl-block { margin-bottom: 22px; }
+        .sl-block__bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+        .sl-block__title { display: flex; align-items: center; gap: 9px; margin: 0 0 10px;
+          font-size: 10px; font-weight: 900; letter-spacing: .16em; text-transform: uppercase; color: var(--cyan); }
+        .sl-block__bar .sl-block__title { margin: 0; }
+        .sl-block__title em { font-style: normal; font-size: 9.5px; padding: 2px 7px; border-radius: 999px;
+          background: rgba(22,220,234,.15); color: var(--cyan); }
+        .sl-block__title--alert { color: var(--gold); }
+        .sl-block__title--alert em { background: var(--gold); color: #2a1f06; }
+
+        .sl-roster { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); gap: 8px; }
+        .sl-rosterrow { display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; cursor: pointer;
+          padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; color: inherit;
+          background: rgba(255,255,255,.02); transition: border-color .15s ease, transform .12s ease; }
+        .sl-rosterrow:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+        .sl-rosterrow.is-flagged { border-color: rgba(233,168,60,.32); background: rgba(233,168,60,.05); }
+        .sl-rosterrow__main { flex: 1; min-width: 0; }
+        .sl-rosterrow__main strong { display: block; font-size: 13px; font-weight: 700; }
+        .sl-rosterrow__main span { display: block; font-size: 11px; font-weight: 700; color: var(--muted); margin-top: 1px; }
+        .sl-rosterrow__main em { display: block; font-style: normal; font-size: 10.5px; font-weight: 800; color: var(--cyan); margin-top: 2px; }
+        .sl-tagbadge { flex-shrink: 0; font-size: 8.5px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase;
+          color: var(--gold); border: 1px solid rgba(233,168,60,.4); padding: 3px 7px; border-radius: 4px; }
+
+        .sl-pm-identity { display: flex; gap: 16px; align-items: center; }
+        .sl-pm-identity h2 { margin: 0 0 4px; }
+        .sl-pm-identity__line { margin: 0 0 6px; font-size: 12.5px; font-weight: 800; color: var(--muted-2); }
+        .sl-pm-rel { margin: 0; font-size: 12.5px; }
+        .sl-pm-rel em { font-style: normal; font-weight: 900; letter-spacing: .04em; }
         .sl-pm-rel.is-strong { color: #7ee0b0; }
-        .sl-pm-rel.is-strained { color: #ff8a4c; }
-        .sl-pm-rel.is-neutral { color: var(--muted); }
-        .sl-pm-tabs { display: flex; gap: 12px; margin: 14px 0 10px; border-bottom: 1px solid var(--line); }
-        .sl-pm-tabs button { border: 0; background: transparent; color: var(--muted); font-size: 11px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; padding: 8px 2px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
-        .sl-pm-tabs button.is-active { color: var(--text); border-bottom-color: var(--cyan); }
-        .sl-pm-interactions section { margin-bottom: 14px; }
-        .sl-pm-interactions h4 { margin: 0 0 8px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 900; }
-        .sl-pm-interaction { display: block; width: 100%; text-align: left; border: 1px solid var(--line); border-radius: 6px; background: rgba(255,255,255,.02); color: inherit; padding: 9px 11px; margin-bottom: 6px; cursor: pointer; font-size: 12.5px; font-weight: 700; }
-        .sl-pm-interaction:hover:not(:disabled) { border-color: var(--line-strong); }
-        .sl-pm-meeting__head { margin-bottom: 12px; }
-        .sl-pm-dialogue { display: grid; gap: 10px; margin-bottom: 14px; }
-        .sl-pm-line { border-left: 2px solid var(--line); padding-left: 10px; }
-        .sl-pm-line.is-gm { border-left-color: var(--gold); }
-        .sl-pm-line.is-player { border-left-color: var(--cyan); }
-        .sl-pm-line em { display: block; font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-style: normal; margin-bottom: 4px; }
-        .sl-pm-line p { margin: 0; font-size: 13px; line-height: 1.45; }
-        .sl-pm-ovr { border: 1px solid rgba(19,216,231,.22); border-radius: 8px; background: rgba(19,216,231,.05); padding: 10px 12px; margin-bottom: 12px; }
-        .sl-pm-ovr h4 { margin: 0 0 8px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--cyan); }
-        .sl-pm-ovr ul { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.4; }
-        .sl-pm-promise { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 6px; font-size: 12px; }
-        .sl-pm-history-row { display: grid; grid-template-columns: 88px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(156,218,236,.1); }
-        .sl-pm-history-row time { font-size: 10.5px; color: var(--muted); font-weight: 800; }
-        .sl-pm-notice { font-size: 12px; color: var(--cyan); margin: 10px 0 0; font-weight: 700; }
-        .sl-pm-muted { color: var(--muted); font-size: 12px; }
+        .sl-pm-rel.is-strained { color: var(--ember); }
+        .sl-pm-rel.is-neutral { color: var(--muted-2); }
 
-        /* social */
-        .sl-social-layout { display: grid; grid-template-columns: minmax(0,1fr) minmax(240px,300px); gap: 14px; }
-        .sl-social-feed { display: grid; gap: 10px; }
-        .sl-social-post { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 10px 12px; text-align: left; color: inherit; cursor: pointer; }
-        .sl-social-post:hover { border-color: var(--line-strong); }
-        .sl-social-post__head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 6px; }
-        .sl-social-post__head strong { font-size: 12.5px; }
-        .sl-social-post__head span { color: var(--muted); font-size: 11px; font-weight: 700; }
-        .sl-social-post__head em { margin-left: auto; font-style: normal; font-size: 10.5px; color: var(--muted); }
-        .sl-social-post p { margin: 0; font-size: 12.5px; line-height: 1.4; }
-        .sl-social-post__related { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(156,218,236,.1); font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--gold); }
-        .sl-social-subtabs { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
-        .sl-social-subtabs button { border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); font-size: 11px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; padding: 7px 12px; border-radius: 6px; cursor: pointer; }
-        .sl-social-subtabs button.is-active { color: var(--text); border-color: var(--cyan); }
-        .sl-icehole-pills { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
-        .sl-icehole-pills button { border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 10px; font-weight: 800; padding: 5px 10px; border-radius: 999px; cursor: pointer; }
-        .sl-icehole-pills button.is-active { border-color: var(--gold); color: var(--gold); }
-        .sl-icehole-thread { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 10px 12px; text-align: left; color: inherit; width: 100%; cursor: pointer; }
-        .sl-icehole-thread.is-controversial { border-color: rgba(255,120,80,.35); background: rgba(255,80,40,.04); }
-        .sl-icehole-thread__meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 10.5px; color: var(--muted); font-weight: 800; margin-bottom: 6px; }
-        .sl-icehole-flair { color: var(--gold); text-transform: uppercase; letter-spacing: .05em; }
-        .sl-icehole-thread h4 { margin: 0 0 6px; font-size: 13px; line-height: 1.35; }
-        .sl-icehole-thread p { margin: 0; font-size: 12px; line-height: 1.4; color: var(--muted); }
-        .sl-icehole-comments { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(156,218,236,.12); display: grid; gap: 8px; }
-        .sl-icehole-comment { font-size: 12px; line-height: 1.35; }
-        .sl-icehole-comment em { font-style: normal; color: var(--cyan); font-weight: 800; font-size: 10.5px; margin-right: 6px; }
-        .sl-fan-pulse { border: 1px solid rgba(19,216,231,.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: rgba(19,216,231,.04); }
-        .sl-fan-pulse strong { display: block; font-size: 18px; margin-top: 4px; }
-        .burner-panel { display: grid; gap: 12px; }
-        .burner-panel__head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-        .burner-panel__suspicion span { display: block; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
-        .burner-investigation { display: flex; justify-content: space-between; padding: 8px 10px; border: 1px solid rgba(255,120,80,.3); border-radius: 6px; font-size: 12px; }
-        .burner-field select { width: 100%; margin-top: 4px; padding: 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); color: inherit; }
-        .burner-composer { position: relative; min-height: 120px; }
-        .burner-composer__backdrop, .burner-composer__input { font: inherit; font-size: 13px; line-height: 1.45; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); width: 100%; min-height: 120px; box-sizing: border-box; white-space: pre-wrap; word-wrap: break-word; }
-        .burner-composer__backdrop { position: absolute; inset: 0; pointer-events: none; color: transparent; overflow: auto; }
-        .burner-composer__input { position: relative; background: transparent; color: inherit; resize: vertical; }
-        .burner-hl--warn { background: rgba(255,200,80,.25); border-radius: 2px; }
-        .burner-hl--danger { background: rgba(255,80,60,.28); border-radius: 2px; }
-        .burner-risk-row { display: grid; grid-template-columns: 120px 1fr; gap: 12px; align-items: start; }
-        .burner-gauge__label { font-size: 9px; fill: var(--muted); }
-        .burner-outcomes { display: grid; gap: 8px; }
-        .burner-outcome { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 12px; }
-        .burner-outcome span { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 4px; }
-        .burner-outcome p { margin: 0; line-height: 1.35; }
-        .burner-outcome--ok { border-color: rgba(19,216,231,.25); }
-        .burner-outcome--bad { border-color: rgba(255,80,60,.25); }
-        .burner-error { color: #ff8a70; font-size: 12px; margin: 0; }
-        .burner-history__row { border-bottom: 1px solid rgba(156,218,236,.1); padding: 8px 0; font-size: 12px; }
-        .burner-history__row--caught { color: #ff9b82; }
+        .sl-request { border: 1px solid rgba(233,168,60,.3); border-left: 3px solid var(--gold); border-radius: 0 10px 10px 0;
+          background: rgba(233,168,60,.05); padding: 14px 16px; margin-bottom: 12px; }
+        .sl-request__flag { display: inline-block; margin-bottom: 8px; font-size: 9px; font-weight: 900;
+          letter-spacing: .14em; text-transform: uppercase; color: #2a1f06; background: var(--gold); padding: 3px 8px; border-radius: 4px; }
+        .sl-request__head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+        .sl-request__head strong { font-size: 14px; font-weight: 800; }
+        .sl-request__head span { font-size: 11.5px; font-weight: 800; color: var(--muted); }
+        .sl-request h3 { margin: 0 0 7px; font-size: 14px; font-weight: 800; }
+        .sl-request p { margin: 0 0 8px; font-size: 12.5px; line-height: 1.5; color: rgba(234,247,252,.85); }
+        .sl-request blockquote { margin: 0 0 10px; padding-left: 13px; border-left: 2px solid rgba(233,168,60,.5);
+          font-size: 13.5px; line-height: 1.55; font-style: italic; color: #f3dcae; }
 
-        /* press room */
-        .sl-press-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 14px 16px; margin-bottom: 12px; }
-        .sl-press-card__head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 8px; }
-        .sl-press-card__head strong { font-size: 14px; }
-        .sl-press-card__head span { color: var(--muted); font-size: 11px; font-weight: 800; }
-        .sl-press-question { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
-        .sl-press-question p { margin: 0 0 8px; font-size: 12.5px; line-height: 1.4; }
-        .sl-press-question em { display: block; margin-bottom: 8px; font-style: normal; font-size: 11px; font-weight: 800; color: var(--cyan); }
+        .sl-subtabs.sl-pm { margin: 16px 0 14px; }
+        .sl-dialogue { display: grid; gap: 14px; margin-bottom: 18px; }
+        .sl-dialogue__line { padding-left: 14px; border-left: 2px solid var(--line-2);
+          animation: slRise .3s cubic-bezier(.2,.7,.3,1) both; }
+        .sl-dialogue__line.is-gm { border-left-color: var(--gold); }
+        .sl-dialogue__line.is-player { border-left-color: var(--cyan); }
+        .sl-dialogue__line em { display: block; font-style: normal; font-size: 9.5px; font-weight: 900;
+          letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
+        .sl-dialogue__line p { margin: 0; font-size: 14px; line-height: 1.6; }
+        .sl-dialogue__line.is-player p { color: rgba(234,247,252,.94); }
 
-        /* archive */
-        .sl-era-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 14px 16px; margin-bottom: 12px; }
-        .sl-era-card__head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
-        .sl-era-card__head h3 { margin: 0; font-size: 14px; }
-        .sl-era-themes { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-        .sl-era-themes span { font-size: 10px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; border: 1px solid rgba(156,218,236,.18); border-radius: 4px; padding: 3px 7px; color: var(--muted); }
-        .sl-era-stories { display: grid; gap: 6px; }
-        .sl-era-stories button { text-align: left; border: 1px solid transparent; border-radius: 6px; background: rgba(255,255,255,.02); padding: 8px 10px; cursor: pointer; color: var(--text); }
-        .sl-era-stories button:hover { border-color: var(--line); background: rgba(19,216,231,.06); }
-        .sl-era-stories strong { display: block; font-size: 12.5px; margin-bottom: 2px; }
-        .sl-era-stories em { font-style: normal; font-size: 10.5px; color: var(--muted); }
+        .sl-ovr { border: 1px solid rgba(22,220,234,.22); border-radius: 10px; background: rgba(22,220,234,.05);
+          padding: 12px 14px; margin-bottom: 14px; }
+        .sl-ovr h4 { margin: 0 0 8px; font-size: 10px; font-weight: 900; letter-spacing: .12em;
+          text-transform: uppercase; color: var(--cyan); }
+        .sl-ovr ul { margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.55; color: var(--muted-2); }
 
-        /* breaking overlay */
-        .sl-breaking-overlay { position: fixed; inset: 0; z-index: 12000; display: grid; place-items: start center; padding: 24px 16px; background: rgba(2,8,14,.72); backdrop-filter: blur(4px); cursor: pointer; }
-        .sl-breaking-card { width: min(560px,100%); border: 1px solid rgba(255,96,109,.55); border-top: 3px solid #ff606d; background: linear-gradient(180deg, rgba(40,8,12,.98), rgba(9,25,38,.98)); padding: 16px 18px; box-shadow: 0 18px 48px rgba(0,0,0,.45); cursor: default; }
-        .sl-breaking-card__kicker { margin: 0 0 6px; font-size: 11px; font-weight: 1000; letter-spacing: .14em; text-transform: uppercase; color: #ff606d; }
-        .sl-breaking-card h2 { margin: 0 0 8px; font-size: 1.05rem; line-height: 1.35; }
-        .sl-breaking-card p { margin: 0 0 12px; color: var(--muted); font-size: 13px; line-height: 1.45; }
-        .sl-breaking-card__actions { display: flex; gap: 8px; flex-wrap: wrap; }
-        .sl-breaking-card__actions button { border: 1px solid var(--line); border-radius: 6px; background: rgba(19,216,231,.1); color: var(--text); padding: 8px 12px; font-size: 12px; font-weight: 800; cursor: pointer; }
-        .sl-breaking-card__actions button.is-primary { border-color: var(--line-strong); background: rgba(19,216,231,.22); color: var(--cyan); }
+        .sl-topics section { margin-bottom: 18px; }
+        .sl-topics h4 { margin: 0 0 9px; font-size: 9.5px; font-weight: 900; letter-spacing: .14em;
+          text-transform: uppercase; color: var(--muted); }
+        .sl-topic-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px,1fr)); gap: 7px; }
+        .sl-topic { text-align: left; cursor: pointer; color: inherit; padding: 10px 12px;
+          border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.02);
+          font-size: 12.5px; font-weight: 700; transition: border-color .15s ease, background .15s ease; }
+        .sl-topic:hover:not(:disabled) { border-color: var(--line-strong); background: var(--cyan-dim); }
+        .sl-topic:disabled { opacity: .5; cursor: not-allowed; }
 
-        .sl-market-banner { margin: 0; padding: 8px 12px; border: 1px solid rgba(233,168,60,.25); border-radius: 6px; background: rgba(233,168,60,.08); font-size: 12px; font-weight: 800; color: #ffc98a; }
+        .sl-stack { display: grid; gap: 7px; }
+        .sl-promise { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+          padding: 10px 13px; border: 1px solid var(--line); border-left: 3px solid var(--green); border-radius: 0 8px 8px 0;
+          background: rgba(82,223,148,.04); font-size: 12.5px; }
+        .sl-promise strong { font-weight: 700; }
+        .sl-promise span { font-size: 10.5px; font-weight: 800; color: var(--muted); white-space: nowrap; }
+        .sl-histrow { display: grid; grid-template-columns: 96px 1fr; gap: 12px; padding: 10px 0;
+          border-bottom: 1px solid rgba(150,214,235,.08); }
+        .sl-histrow time { font-size: 10.5px; font-weight: 800; color: var(--muted); }
+        .sl-histrow strong { display: block; font-size: 12.5px; font-weight: 700; }
+        .sl-histrow p { margin: 3px 0 0; font-size: 11.5px; color: var(--muted-2); }
+        .sl-notice { margin: 12px 0 0; font-size: 12.5px; font-weight: 700; color: var(--cyan); }
+        .sl-muted { color: var(--muted); font-size: 12.5px; margin: 0; }
 
-        .sl-insiders-layout { display: grid; grid-template-columns: minmax(0,1fr) minmax(260px,340px); gap: 14px; }
-        .sl-insider-feed { display: grid; gap: 8px; }
-        .sl-insider-row { text-align: left; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 10px 12px; color: inherit; cursor: pointer; }
-        .sl-insider-row:hover { border-color: var(--line-strong); }
-        .sl-insider-row__head { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
-        .sl-insider-row__head strong { font-size: 13px; }
-        .sl-insider-row__head em { font-style: normal; font-size: 10.5px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; color: var(--gold); }
-        .sl-insider-row p { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); line-height: 1.4; }
-        .sl-insider-row__meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--cyan); }
-        .sl-insider-rail { display: grid; gap: 10px; align-content: start; }
-        .sl-insider-rail h3 { margin: 0; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
-        .sl-dossier { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 10px 12px; }
-        .sl-dossier__head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
-        .sl-dossier__head strong { font-size: 13px; }
-        .sl-dossier__head span, .sl-dossier__ident, .sl-dossier p { margin: 0; font-size: 11.5px; color: var(--muted); }
-        .sl-dossier h4 { margin: 8px 0 4px; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--cyan); }
-        .sl-dossier__tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
-        .sl-dossier__tags span { font-size: 10px; font-weight: 900; letter-spacing: .04em; text-transform: uppercase; border: 1px solid rgba(156,218,236,.18); border-radius: 4px; padding: 2px 6px; }
-        .sl-dossier__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        /* ------------- empty ------------- */
+        .sl-empty { display: grid; justify-items: center; text-align: center; gap: 6px; padding: 46px 24px;
+          border: 1px solid var(--line); border-radius: 14px;
+          background: linear-gradient(180deg, rgba(9,24,37,.6), rgba(4,12,20,.6)); }
+        .sl-empty__mark { font-size: 30px; color: rgba(22,220,234,.35); margin-bottom: 6px; animation: slPulse 3.4s ease-in-out infinite; }
+        .sl-empty__kicker { margin: 0; font-size: 9.5px; font-weight: 900; letter-spacing: .2em; text-transform: uppercase; color: var(--cyan); }
+        .sl-empty h2 { margin: 2px 0 4px; font-size: 17px; font-weight: 800; letter-spacing: .02em; }
+        .sl-empty__body { margin: 0; max-width: 46ch; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
 
-        @media (prefers-reduced-motion: reduce) { .nhlcal-sl-root * { transition: none !important; animation: none !important; } }
+        /* ------------- breaking ------------- */
+        .sl-breaking { position: fixed; inset: 0; z-index: 12000; display: grid; place-items: center; padding: 24px;
+          background: rgba(1,5,10,.82); backdrop-filter: blur(6px); cursor: pointer;
+          animation: slFade .2s ease both; }
+        .sl-breaking__card { position: relative; overflow: hidden; cursor: default; width: min(600px, 100%);
+          border: 1px solid rgba(255,95,109,.5); border-top: 4px solid var(--red); border-radius: 4px;
+          background: linear-gradient(165deg, rgba(46,9,14,.98), rgba(7,19,30,.99));
+          box-shadow: 0 30px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(255,95,109,.14);
+          animation: slSlam .34s cubic-bezier(.16,.9,.3,1) both; }
+        .sl-breaking__strip { display: flex; align-items: center; gap: 9px; padding: 10px 20px;
+          border-bottom: 1px solid rgba(255,95,109,.28); background: rgba(255,95,109,.1); }
+        .sl-breaking__strip i { font-style: normal; width: 8px; height: 8px; border-radius: 50%; background: var(--red);
+          animation: slPulse 1.2s ease-in-out infinite; }
+        .sl-breaking__strip strong { font-size: 10.5px; font-weight: 900; letter-spacing: .2em; text-transform: uppercase; color: #ffb4bb; }
+        .sl-breaking__strip span { margin-left: auto; font-size: 10px; font-weight: 800; color: rgba(255,180,187,.7); }
+        .sl-breaking__body { padding: 20px 22px 22px; }
+        .sl-breaking__body h2 { margin: 0 0 10px; font-size: 21px; line-height: 1.3; font-weight: 800; }
+        .sl-breaking__body p { margin: 0 0 18px; font-size: 13.5px; line-height: 1.6; color: var(--muted-2); }
+        .sl-breaking__actions { display: flex; gap: 9px; flex-wrap: wrap; }
+        .sl-breaking__actions button { cursor: pointer; padding: 10px 16px; border-radius: 8px;
+          border: 1px solid var(--line-2); background: rgba(255,255,255,.04); color: var(--text);
+          font-size: 11.5px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; }
+        .sl-breaking__actions button:hover { border-color: var(--line-strong); }
+        .sl-breaking__actions button.is-primary { border-color: rgba(22,220,234,.5);
+          background: linear-gradient(180deg, #2ee6f0, #12b9c9); color: #041018; }
+
+        /* ------------- debug ------------- */
+        .sl-debug { border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-top: 14px; }
+        .sl-debug summary { cursor: pointer; font-size: 11px; font-weight: 800; color: var(--muted); }
+        .sl-debug pre { font-size: 11px; overflow: auto; max-height: 240px; color: var(--muted-2); }
+
+        /* ------------- keyframes ------------- */
+        @keyframes slRise { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: none; } }
+        @keyframes slFade { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slSlam {
+          0% { opacity: 0; transform: translateY(-24px) scale(.965); }
+          60% { opacity: 1; transform: translateY(3px) scale(1.004); }
+          100% { opacity: 1; transform: none; }
+        }
+        @keyframes slGrow { from { transform: scaleX(0); transform-origin: left; } to { transform: scaleX(1); } }
+        @keyframes slPulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+        @keyframes slEmber {
+          0%, 100% { filter: drop-shadow(0 0 0 rgba(255,95,109,0)); }
+          50% { filter: drop-shadow(0 0 7px rgba(255,95,109,.45)); }
+        }
+        @keyframes slTicker { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+        @media (prefers-reduced-motion: reduce) {
+          .nhlcal-sl-root *, .nhlcal-sl-root *::before, .nhlcal-sl-root *::after {
+            animation: none !important; transition: none !important;
+          }
+        }
       `}</style>
 
-      <div className="sl-app">
-        {activeBreaking ? (
-          <div className="sl-breaking-overlay" role="dialog" aria-label="Breaking news" onClick={() => dismissBreakingAlerts(pendingBreaking)}>
-            <div className="sl-breaking-card" onClick={(e) => e.stopPropagation()}>
-              <p className="sl-breaking-card__kicker">
-                Breaking · {str(activeBreaking.level || "major").replace(/_/g, " ")}
-                {pendingBreaking.length > 1 ? ` · ${pendingBreaking.length} alerts` : ""}
-              </p>
+      <div className="sl-atmos" aria-hidden />
+
+      {activeBreaking ? (
+        <div
+          className="sl-breaking"
+          role="dialog"
+          aria-label="Breaking news"
+          onClick={() => dismissBreakingAlerts(pendingBreaking)}
+        >
+          <div className="sl-breaking__card" onClick={(e) => e.stopPropagation()}>
+            <div className="sl-breaking__strip">
+              <i aria-hidden />
+              <strong>Breaking · {str(activeBreaking.level || "major").replace(/_/g, " ")}</strong>
+              {pendingBreaking.length > 1 ? <span>{pendingBreaking.length} alerts queued</span> : null}
+            </div>
+            <div className="sl-breaking__body">
               <h2>{str(activeBreaking.headline || "Major league development")}</h2>
               {activeBreaking.summary ? <p>{activeBreaking.summary}</p> : null}
-              <div className="sl-breaking-card__actions">
+              <div className="sl-breaking__actions">
                 <button
                   type="button"
                   className="is-primary"
@@ -1976,7 +2809,7 @@ export default function StorylinesScreen() {
                     dismissBreakingAlerts(pendingBreaking);
                   }}
                 >
-                  Open story
+                  Open the story
                 </button>
                 <button type="button" onClick={() => dismissBreakingAlerts(pendingBreaking)}>
                   Dismiss{pendingBreaking.length > 1 ? " all" : ""}
@@ -1984,56 +2817,118 @@ export default function StorylinesScreen() {
               </div>
             </div>
           </div>
-        ) : null}
+        </div>
+      ) : null}
 
-        <header className="sl-topbar">
-          <div>
-            <p className="sl-eyebrow">Franchise Newsroom</p>
+      <div className="sl-app">
+        {/* ---------- command bar ---------- */}
+        <header className="sl-command">
+          <div className="sl-command__crest">
+            {(() => {
+              const logo =
+                resolveFranchiseTeamLogo(
+                  { team_id: userTeamId(franchiseState), team_name: teamLabel(franchiseState) },
+                  teamLabel(franchiseState)
+                ) || "";
+              return logo ? <img src={logo} alt="" /> : <strong>{playerInitials(teamLabel(franchiseState))}</strong>;
+            })()}
+          </div>
+          <div className="sl-command__id">
+            <p className="sl-command__eyebrow">Franchise newsroom</p>
             <h1>Storylines</h1>
-            <p className="sl-topbar-sub">
-              {calendarLabel(franchiseState)} · {teamLabel(franchiseState)} · {statusLine}
+            <p className="sl-command__sub">
+              {prettyDate(calendarLabel(franchiseState))} · {teamLabel(franchiseState)}
             </p>
           </div>
-          <nav className="sl-topbar-nav" aria-label="Navigation">
+          <div className="sl-command__stats">
+            <div className="sl-stat">
+              <strong>{stories.length}</strong>
+              <span>Active</span>
+            </div>
+            <div className="sl-stat sl-stat--ours">
+              <strong>{yourTeamCount}</strong>
+              <span>Your club</span>
+            </div>
+            {pendingDecisions.length ? (
+              <div className="sl-stat sl-stat--alert">
+                <strong>{pendingDecisions.length}</strong>
+                <span>On your desk</span>
+              </div>
+            ) : null}
+          </div>
+          <nav className="sl-command__nav" aria-label="Navigation">
             <button type="button" onClick={() => setScreen?.(SCREENS.CALENDAR)}>Calendar</button>
             <button type="button" onClick={() => setScreen?.(SCREENS.HUB)}>Hub</button>
           </nav>
         </header>
 
-        <nav className="sl-departments" aria-label="Media departments">
+        {/* ---------- ticker ---------- */}
+        {tickerItems.length ? (
+          <div className="sl-ticker" aria-label="League wire">
+            <div className="sl-ticker__flag">
+              <span className="sl-ticker__dot" aria-hidden />
+              League wire
+            </div>
+            <div className="sl-ticker__viewport">
+              <div className="sl-ticker__track">
+                {[...tickerItems, ...tickerItems].map((s, i) => (
+                  <button
+                    key={`${s.id}-${i}`}
+                    type="button"
+                    className="sl-ticker__item"
+                    onClick={() => {
+                      setDepartment("front_page");
+                      openStory(s.id);
+                    }}
+                  >
+                    <i style={{ color: categoryMeta(s).accent }}>{categoryMeta(s).label}</i>
+                    {s.headline}
+                    <span className="sl-ticker__sep">◆</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {/* ---------- departments ---------- */}
+        <nav className="sl-depts" aria-label="Media departments">
           {DEPARTMENTS.map((d) => {
-            const alert =
-              (d.id === "player_meetings" && meetingAlertCount > 0)
-              || (d.id === "press_room" && pressQueue.length > 0)
-              || (d.id === "archive" && narrativeEras.length > 0)
-              || (d.id === "insiders" && (insiderItems.length > 0 || playerDossiers.length > 0));
+            let count = 0;
+            if (d.id === "player_meetings") count = meetingAlertCount;
+            if (d.id === "press_room") count = pressQueue.length;
+            if (d.id === "front_page") count = pendingDecisions.length;
             return (
               <button
                 key={d.id}
                 type="button"
-                className={`${department === d.id ? "is-active" : ""}${alert ? " has-alert" : ""}`}
+                className={department === d.id ? "is-active" : ""}
                 onClick={() => setDepartment(d.id)}
               >
-                {d.icon === "meetings" ? <PlayerMeetingsDeptIcon active={department === d.id} /> : null}
+                <em aria-hidden>{d.glyph}</em>
                 {d.label}
+                {count > 0 ? <span className="sl-dept-count">{count}</span> : null}
               </button>
             );
           })}
         </nav>
 
-        {userMarket?.label && (department === "front_page") ? (
-          <p className="sl-market-banner">
-            {userMarket.label} market · {userMarket.descriptor || userMarket.tone || "High scrutiny"}
+        {userMarket?.label && department === "front_page" ? (
+          <p className="sl-market">
+            <em>Market</em>
+            {userMarket.label} · {userMarket.descriptor || userMarket.tone || "High scrutiny"}
             {userMarket.pressure_mult ? ` · pressure ×${Number(userMarket.pressure_mult).toFixed(2)}` : ""}
           </p>
         ) : null}
 
+        {/* ================= CONTENT ================= */}
+
         {!hasBackend ? (
-          <div className="sl-empty-panel">
-            <p className="sl-kicker">League Wire · Idle</p>
-            <h2>No Coverage Yet</h2>
-            <p>Advance the calendar to populate the newsroom from backend storylines.</p>
-          </div>
+          <EmptyPanel
+            kicker="League wire · idle"
+            title="No coverage yet"
+            body="Advance the calendar and the newsroom will start filing from backend storylines."
+          />
         ) : department === "player_meetings" ? (
           <PlayerMeetingsPanel
             meetingsPayload={playerMeetingsPayload}
@@ -2045,9 +2940,9 @@ export default function StorylinesScreen() {
             initialPlayerId={pendingMeetingPlayerId}
           />
         ) : department === "social" ? (
-          <div className="sl-social-layout">
+          <div className="sl-two">
             <div>
-              <div className="sl-social-subtabs">
+              <div className="sl-subtabs">
                 {[
                   { id: "puckr", label: "Puckr" },
                   { id: "icehole", label: "IceHole" },
@@ -2065,42 +2960,58 @@ export default function StorylinesScreen() {
               </div>
 
               {socialSubTab === "puckr" ? (
-                <div className="sl-social-feed">
+                <div className="sl-feed">
                   {socialPosts.length ? (
-                    socialPosts.map((post) => (
-                      <button key={post.id} type="button" className="sl-social-post" onClick={() => { if (post.storyId) { openStory(post.storyId); setDepartment("front_page"); } }}>
-                        <div className="sl-social-post__head">
-                          <strong>
-                            {post.name}
-                            {post.verified ? " ✓" : ""}
-                            {post.isAgent ? " · Agent" : ""}
-                          </strong>
+                    socialPosts.map((post, i) => (
+                      <button
+                        key={post.id}
+                        type="button"
+                        className="sl-post"
+                        style={{ animationDelay: `${Math.min(i, 10) * 24}ms` }}
+                        onClick={() => {
+                          if (post.storyId) {
+                            openStory(post.storyId);
+                            setDepartment("front_page");
+                          }
+                        }}
+                      >
+                        <div className="sl-post__head">
+                          <span className="sl-post__avatar" aria-hidden>{playerInitials(post.name)}</span>
+                          <strong>{post.name}</strong>
+                          {post.verified ? <span className="sl-post__verified">✓</span> : null}
                           <span>{post.handle}</span>
+                          {post.isAgent ? <span>· agent</span> : null}
                           <em>{post.age}</em>
                         </div>
                         <p>{post.text}</p>
-                        {post.related ? <div className="sl-social-post__related">Related · {post.related}</div> : null}
-                        {post.cred ? <div className="sl-social-post__related">{post.cred}</div> : null}
-                        {post.likes != null ? (
-                          <div className="sl-social-post__related">
-                            {Number(post.replies || 0).toLocaleString()} replies · {Number(post.reposts || 0).toLocaleString()} reposts · {Number(post.likes || 0).toLocaleString()} likes
-                          </div>
-                        ) : null}
+                        <div className="sl-post__meta">
+                          {post.related && post.related !== post.text && !post.text.includes(post.related) ? (
+                            <span className="sl-post__related">{post.related}</span>
+                          ) : null}
+                          {post.cred ? <span>{post.cred}</span> : null}
+                          {post.likes != null ? (
+                            <>
+                              <span>{Number(post.replies || 0).toLocaleString()} replies</span>
+                              <span>{Number(post.reposts || 0).toLocaleString()} reposts</span>
+                              <span>{Number(post.likes || 0).toLocaleString()} likes</span>
+                            </>
+                          ) : null}
+                        </div>
                       </button>
                     ))
                   ) : (
-                    <div className="sl-empty-panel">
-                      <p className="sl-kicker">Puckr · Quiet</p>
-                      <h2>No posts yet</h2>
-                      <p>League storylines populate the timeline as the sim advances.</p>
-                    </div>
+                    <EmptyPanel
+                      kicker="Puckr · quiet"
+                      title="Nothing in the last 48 hours"
+                      body="Only posts from the past two franchise days appear here. Advance the calendar or trigger storylines to refresh the timeline."
+                    />
                   )}
                 </div>
               ) : null}
 
               {socialSubTab === "icehole" ? (
                 <>
-                  <div className="sl-icehole-pills">
+                  <div className="sl-pills">
                     {redditSubPills.map((pill) => (
                       <button
                         key={pill}
@@ -2112,34 +3023,37 @@ export default function StorylinesScreen() {
                       </button>
                     ))}
                   </div>
-                  <div className="sl-social-feed">
+                  <div className="sl-feed">
                     {redditThreads.length ? (
                       redditThreads.map((thread) => (
                         <div key={thread.id}>
                           <button
                             type="button"
-                            className={`sl-icehole-thread ${thread.controversial ? "is-controversial" : ""}`}
+                            className={`sl-thread${thread.controversial ? " is-controversial" : ""}`}
                             onClick={() => setExpandedThreadId((prev) => (prev === thread.id ? null : thread.id))}
                           >
-                            <div className="sl-icehole-thread__meta">
+                            <div className="sl-thread__meta">
                               <span>{thread.subreddit}</span>
-                              <span className="sl-icehole-flair">{thread.flair}</span>
+                              <span className="sl-thread__flair">{thread.flair}</span>
                               <span>{thread.upvotes.toLocaleString()} ↑</span>
-                              <span>{Math.round(thread.upvoteRatio * 100)}% up</span>
+                              <span>{Math.round(thread.upvoteRatio * 100)}% upvoted</span>
                               <span>{thread.commentCount} comments</span>
                             </div>
                             <h4>{thread.title}</h4>
                             <p>{thread.body}</p>
-                            <div className="sl-icehole-thread__meta">
+                            <div className="sl-thread__meta" style={{ marginTop: 8, marginBottom: 0 }}>
                               <span>{thread.author}</span>
                               <span>{thread.createdAt}</span>
                             </div>
                           </button>
                           {expandedThreadId === thread.id && thread.comments.length ? (
-                            <div className="sl-icehole-comments">
+                            <div className="sl-comments">
                               {thread.comments.map((c) => (
-                                <div key={c.id} className="sl-icehole-comment">
-                                  <em>{c.author}{c.isRival ? " · rival" : ""} · {c.upvotes}↑</em>
+                                <div key={c.id} className={`sl-comment${c.isRival ? " is-rival" : ""}`}>
+                                  <em>
+                                    {c.author}
+                                    {c.isRival ? " · rival fan" : ""} · {c.upvotes}↑
+                                  </em>
                                   {c.text}
                                 </div>
                               ))}
@@ -2148,11 +3062,11 @@ export default function StorylinesScreen() {
                         </div>
                       ))
                     ) : (
-                      <div className="sl-empty-panel">
-                        <p className="sl-kicker">IceHole · Quiet</p>
-                        <h2>No threads yet</h2>
-                        <p>Heated storylines spawn fan threads once league heat builds.</p>
-                      </div>
+                      <EmptyPanel
+                        kicker="IceHole · quiet"
+                        title="No threads yet"
+                        body="Heated storylines spawn fan threads once league heat builds."
+                      />
                     )}
                   </div>
                 </>
@@ -2168,180 +3082,234 @@ export default function StorylinesScreen() {
               ) : null}
             </div>
 
-            <aside className="sl-impact-panel">
+            <aside className="sl-rail">
               {socialSubTab === "icehole" ? (
-                <>
-                  <div className="sl-fan-pulse">
-                    <span>Fan pulse (IceHole)</span>
+                <div className="sl-panel">
+                  <div className="sl-pulse">
+                    <span>Fan pulse · IceHole</span>
                     <strong>{redditPulse.label}</strong>
-                    <p className="sl-pm-muted">Net sentiment delta {redditPulse.net.toFixed(2)}</p>
+                    <p>Net sentiment delta {redditPulse.net.toFixed(2)}</p>
                   </div>
                   <h3>Hot threads</h3>
-                  <div className="sl-effects-grid">
-                    {redditThreads.slice(0, 6).map((t) => (
-                      <div key={t.id} className="sl-effect-row">
-                        <span>{t.title.slice(0, 32)}</span>
-                        <strong>{t.upvotes}↑</strong>
+                  <div className="sl-effects">
+                    {redditThreads.slice(0, 6).map((t, i) => (
+                      <div key={t.id} className="sl-trend">
+                        <b>{i + 1}</b>
+                        <span>{t.title}</span>
+                        <em>{t.upvotes.toLocaleString()}↑</em>
                       </div>
                     ))}
                   </div>
-                </>
+                </div>
               ) : (
-                <>
-                  <h3>Trending</h3>
-                  <div className="sl-effects-grid">
+                <div className="sl-panel">
+                  <h3>Trending now</h3>
+                  <div className="sl-effects">
                     {stories
                       .filter((s) => Number(s.heat) > 0)
                       .sort((a, b) => Number(b.heat) - Number(a.heat))
-                      .slice(0, 6)
+                      .slice(0, 8)
                       .map((s, i) => (
-                        <div key={s.id} className="sl-effect-row">
-                          <span>{i + 1}. {s.playerName || s.teamName || s.headline?.slice(0, 26)}</span>
-                          <strong>{heatLabel(s.heat)}</strong>
+                        <div key={s.id} className="sl-trend">
+                          <b>{i + 1}</b>
+                          <span>{s.playerName || s.teamName || s.headline}</span>
+                          <em>{heatLabel(s.heat)}</em>
                         </div>
                       ))}
                   </div>
-                </>
+                </div>
               )}
             </aside>
           </div>
         ) : department === "insiders" ? (
-          <div className="sl-insiders-layout">
-            <div className="sl-insider-feed">
+          <div className="sl-two">
+            <div className="sl-feed">
               {insiderItems.length ? (
-                insiderItems.slice().reverse().slice(0, 48).map((item, idx) => {
-                  const sid = str(item.storyline_id || item.world_event_id || idx);
-                  const match = stories.find((s) => str(s.storylineId) === sid || str(s.id) === sid);
-                  return (
-                    <button
-                      key={sid}
-                      type="button"
-                      className="sl-insider-row"
-                      onClick={() => {
-                        if (match) {
-                          openStory(match.id);
-                          setDepartment("front_page");
-                        }
-                      }}
-                    >
-                      <div className="sl-insider-row__head">
-                        <strong>{str(item.headline || match?.headline || "Desk note")}</strong>
-                        <em>{knowledgeLevelLabel(item.public_knowledge_level)}</em>
-                      </div>
-                      <p>{str(item.summary || match?.summary || "")}</p>
-                      <div className="sl-insider-row__meta">
-                        <span>{str(item.reporter_name || item.source_label || "Insider")}</span>
-                        {item.outlet_name ? <span>{item.outlet_name}</span> : null}
-                        <span>{str(item.knowledge_type || "report").replace(/_/g, " ")}</span>
-                        {item.player_name ? <span>{item.player_name}</span> : null}
-                        {item.calendar_iso ? <span>{item.calendar_iso}</span> : null}
-                      </div>
-                    </button>
-                  );
-                })
+                insiderItems
+                  .slice()
+                  .reverse()
+                  .slice(0, 48)
+                  .map((item, idx) => {
+                    const sid = str(item.storyline_id || item.world_event_id || idx);
+                    const match = stories.find((s) => str(s.storylineId) === sid || str(s.id) === sid);
+                    return (
+                      <button
+                        key={sid}
+                        type="button"
+                        className="sl-insider"
+                        onClick={() => {
+                          if (match) {
+                            openStory(match.id);
+                            setDepartment("front_page");
+                          }
+                        }}
+                      >
+                        <div className="sl-insider__head">
+                          <strong>{str(item.headline || match?.headline || "Desk note")}</strong>
+                          <em>{knowledgeLevelLabel(item.public_knowledge_level)}</em>
+                        </div>
+                        <p>{str(item.summary || match?.summary || "")}</p>
+                        <div className="sl-insider__meta">
+                          <span>{str(item.reporter_name || item.source_label || "Insider")}</span>
+                          {item.outlet_name ? <span>{item.outlet_name}</span> : null}
+                          <span>{str(item.knowledge_type || "report").replace(/_/g, " ")}</span>
+                          {item.player_name ? <span>{item.player_name}</span> : null}
+                          {item.calendar_iso ? <span>{prettyDate(item.calendar_iso)}</span> : null}
+                        </div>
+                      </button>
+                    );
+                  })
               ) : (
-                <div className="sl-empty-panel">
-                  <p className="sl-kicker">Insiders · Quiet</p>
-                  <h2>No private layers yet</h2>
-                  <p>Rumors, claims, and confirmed facts land here as the knowledge graph fills in.</p>
-                </div>
+                <EmptyPanel
+                  kicker="Insiders · quiet"
+                  title="No private layers yet"
+                  body="Rumors, claims, and confirmed facts land here as the knowledge graph fills in."
+                />
               )}
             </div>
-            <aside className="sl-insider-rail">
-              <h3>Beat desks</h3>
-              <div className="sl-effects-grid">
-                {beatWriters.slice(0, 10).map((writer) => (
-                  <div key={str(writer.id || writer.name)} className="sl-effect-row">
-                    <span>{str(writer.name)}</span>
-                    <strong>{str(writer.specialty || writer.role || writer.outlet)}</strong>
+            <aside className="sl-rail">
+              {beatWriters.length ? (
+                <div className="sl-panel">
+                  <h3>Beat desks</h3>
+                  <div className="sl-effects">
+                    {beatWriters.slice(0, 10).map((writer) => (
+                      <div key={str(writer.id || writer.name)} className="sl-effect">
+                        <span>{str(writer.name)}</span>
+                        <strong>{str(writer.specialty || writer.role || writer.outlet)}</strong>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                </div>
+              ) : null}
+              <div className="sl-panel">
+                <h3>Player dossiers</h3>
+                {playerDossiers.length ? (
+                  playerDossiers.slice(0, 8).map((dossier) => (
+                    <DossierCard key={str(dossier.player_id || dossier.player_name)} dossier={dossier} compact />
+                  ))
+                ) : (
+                  <p className="sl-choice-empty">Dossiers publish after the next calendar tick.</p>
+                )}
               </div>
-              <h3>Player dossiers</h3>
-              {playerDossiers.length ? (
-                playerDossiers.slice(0, 8).map((dossier) => (
-                  <DossierCard key={str(dossier.player_id || dossier.player_name)} dossier={dossier} />
-                ))
-              ) : (
-                <p className="sl-decision-empty">Roster beings publish here after the next calendar tick.</p>
-              )}
             </aside>
           </div>
         ) : department === "press_room" ? (
           <div>
             {pressQueue.length ? (
               pressQueue.map((press) => (
-                <article key={str(press.id)} className="sl-press-card">
-                  <div className="sl-press-card__head">
+                <article key={str(press.id)} className="sl-press">
+                  <div className="sl-press__head">
                     <strong>{str(press.headline || "Media availability scheduled")}</strong>
-                    <span>{heatLabel(press.heat) || "Press heat rising"}</span>
                     {press.player_name ? <span>{press.player_name}</span> : null}
+                    <span className="sl-press__mics">
+                      {heatLabel(press.heat) || "Room is filling"}
+                    </span>
                   </div>
-                  {press.summary ? <p>{press.summary}</p> : null}
-                  {asArray(press.questions).map((q) => (
-                    <div key={str(q.id)} className="sl-press-question">
-                      <em>{str(q.reporter_name || "Reporter")}{q.outlet ? ` · ${q.outlet}` : ""}</em>
-                      <p>{str(q.question || "")}</p>
-                      <div className="sl-decisions">
-                        {asArray(q.responses).map((resp) => {
-                          const sid = str(press.storyline_id);
-                          const choiceId = `${str(q.id)}:${str(resp.id)}`;
-                          const busy = busyChoice === `${sid}:${choiceId}`;
-                          return (
-                            <button
-                              key={resp.id}
-                              type="button"
-                              className="sl-decision-btn"
-                              disabled={Boolean(busyChoice)}
-                              onClick={() => handlePressResponse(press, str(q.id), str(resp.id))}
-                            >
-                              <span className="sl-decision-btn__dot" />
-                              <span>
+                  <div className="sl-press__body">
+                    {press.summary ? <p className="sl-press__summary">{press.summary}</p> : null}
+                    {asArray(press.questions).map((q) => (
+                      <div key={str(q.id)} className="sl-press__q">
+                        <div className="sl-press__reporter">
+                          <i aria-hidden />
+                          {str(q.reporter_name || "Reporter")}
+                          {q.outlet ? ` · ${q.outlet}` : ""}
+                        </div>
+                        <p className="sl-press__question">{str(q.question || "")}</p>
+                        <div className="sl-choices">
+                          {asArray(q.responses).map((resp) => {
+                            const sid = str(press.storyline_id);
+                            const choiceId = `${str(q.id)}:${str(resp.id)}`;
+                            const busy = busyChoice === `${sid}:${choiceId}`;
+                            return (
+                              <button
+                                key={resp.id}
+                                type="button"
+                                className="sl-choice"
+                                disabled={Boolean(busyChoice)}
+                                onClick={() => handlePressResponse(press, str(q.id), str(resp.id))}
+                              >
                                 <strong>{resp.label}</strong>
                                 {resp.description ? <span>{resp.description}</span> : null}
                                 {busy ? <em>Answering…</em> : null}
-                              </span>
-                            </button>
-                          );
-                        })}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </article>
               ))
             ) : (
-              <div className="sl-empty-panel">
-                <p className="sl-kicker">Press room · Clear</p>
-                <h2>No scheduled availability</h2>
-                <p>When heat builds around your team, reporters will queue questions for your next media session.</p>
-              </div>
+              <EmptyPanel
+                kicker="Press room · clear"
+                title="No scheduled availability"
+                body="When heat builds around your club, reporters will queue questions for your next media session."
+              />
             )}
           </div>
         ) : department === "archive" ? (
           <div>
             {narrativeEras.length ? (
-              narrativeEras.slice().reverse().map((era) => (
-                <article key={str(era.season)} className="sl-era-card">
-                  <div className="sl-era-card__head">
-                    <h3>{str(era.label || `Season ${era.season}`)}</h3>
-                    <span>{Number(era.story_count || 0)} archived beats</span>
-                  </div>
-                  {asArray(era.themes).length ? (
-                    <div className="sl-era-themes">
-                      {era.themes.map((theme) => (
-                        <span key={theme}>{theme}</span>
+              narrativeEras
+                .slice()
+                .reverse()
+                .map((era) => (
+                  <article key={str(era.season)} className="sl-era">
+                    <div className="sl-era__head">
+                      <h3>{str(era.label || `Season ${era.season}`)}</h3>
+                      <span>{Number(era.story_count || 0)} archived beats</span>
+                    </div>
+                    {asArray(era.themes).length ? (
+                      <div className="sl-era__themes">
+                        {era.themes.map((theme) => (
+                          <span key={theme}>{theme}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className="sl-era__stories">
+                      {asArray(era.top_stories).map((story, idx) => (
+                        <button
+                          key={str(story.storyline_id || story.headline || idx)}
+                          type="button"
+                          onClick={() => {
+                            const match = stories.find(
+                              (s) => str(s.storylineId) === str(story.storyline_id) || s.headline === story.headline
+                            );
+                            if (match) {
+                              openStory(match.id);
+                              setDepartment("front_page");
+                            }
+                          }}
+                        >
+                          <strong>{str(story.headline || "Archived beat")}</strong>
+                          <em>
+                            {str(story.category || "storyline")}
+                            {story.heat != null ? ` · heat ${Math.round(Number(story.heat))}` : ""}
+                            {story.calendar_iso ? ` · ${prettyDate(story.calendar_iso)}` : ""}
+                          </em>
+                        </button>
                       ))}
                     </div>
-                  ) : null}
-                  <div className="sl-era-stories">
-                    {asArray(era.top_stories).map((story, idx) => (
+                  </article>
+                ))
+            ) : narrativeArchive.length ? (
+              <article className="sl-era">
+                <div className="sl-era__head">
+                  <h3>League archive</h3>
+                  <span>{narrativeArchive.length} beats on file</span>
+                </div>
+                <div className="sl-era__stories">
+                  {narrativeArchive
+                    .slice()
+                    .reverse()
+                    .slice(0, 24)
+                    .map((story, idx) => (
                       <button
                         key={str(story.storyline_id || story.headline || idx)}
                         type="button"
                         onClick={() => {
-                          const match = stories.find(
-                            (s) => str(s.storylineId) === str(story.storyline_id) || s.headline === story.headline
-                          );
+                          const match = stories.find((s) => str(s.storylineId) === str(story.storyline_id));
                           if (match) {
                             openStory(match.id);
                             setDepartment("front_page");
@@ -2349,67 +3317,328 @@ export default function StorylinesScreen() {
                         }}
                       >
                         <strong>{str(story.headline || "Archived beat")}</strong>
-                        <em>
-                          {str(story.category || "storyline")}
-                          {story.heat != null ? ` · heat ${story.heat}` : ""}
-                          {story.calendar_iso ? ` · ${story.calendar_iso}` : ""}
-                        </em>
+                        <em>{prettyDate(story.calendar_iso) || str(story.season || "—")}</em>
                       </button>
                     ))}
-                  </div>
-                </article>
-              ))
-            ) : narrativeArchive.length ? (
-              <article className="sl-era-card">
-                <div className="sl-era-card__head">
-                  <h3>League archive</h3>
-                  <span>{narrativeArchive.length} beats on file</span>
-                </div>
-                <div className="sl-era-stories">
-                  {narrativeArchive.slice().reverse().slice(0, 24).map((story, idx) => (
-                    <button
-                      key={str(story.storyline_id || story.headline || idx)}
-                      type="button"
-                      onClick={() => {
-                        const match = stories.find((s) => str(s.storylineId) === str(story.storyline_id));
-                        if (match) {
-                          openStory(match.id);
-                          setDepartment("front_page");
-                        }
-                      }}
-                    >
-                      <strong>{str(story.headline || "Archived beat")}</strong>
-                      <em>{str(story.calendar_iso || story.season || "—")}</em>
-                    </button>
-                  ))}
                 </div>
               </article>
             ) : (
-              <div className="sl-empty-panel">
-                <p className="sl-kicker">Archive · Empty</p>
-                <h2>No sealed eras yet</h2>
-                <p>Completed seasons are preserved here — themes, top stories, and defining beats.</p>
-              </div>
+              <EmptyPanel
+                kicker="Archive · empty"
+                title="No sealed eras yet"
+                body="Completed seasons are preserved here — themes, top stories, and the beats that defined them."
+              />
             )}
           </div>
         ) : stories.length === 0 ? (
-          <div className="sl-empty-panel">
-            <p className="sl-kicker">League Wire · Idle</p>
-            <h2>Wire Standing By</h2>
-            <p>No active storylines on file. Coverage will appear as the season generates league beats.</p>
+          <EmptyPanel
+            kicker="League wire · idle"
+            title="Wire standing by"
+            body="No active storylines on file. Coverage appears as the season generates league beats."
+          />
+        ) : openCase ? (
+          /* ================= CASE FILE ================= */
+          <div className="sl-case" ref={caseRef}>
+            <div className="sl-case__main">
+              <div className="sl-case__hero">
+                <div style={{ display: "grid", gap: 12, justifyItems: "center" }}>
+                  <StoryFace story={openCase} size={104} />
+                  <HeatRing value={openCase.heat} size={62} />
+                </div>
+                <div className="sl-case__hero-main">
+                  <div className="sl-case__crumbs">
+                    <button type="button" className="sl-back" onClick={closeStory}>
+                      ← Newsroom
+                    </button>
+                    <CategoryTag story={openCase} size="md" />
+                    {openCase.requiresAction ? <span className="sl-card__decision">Decision required</span> : null}
+                    <StatusPill story={openCase} />
+                    <ScoreBadge score={storyScore(openCase)} size="sm" />
+                  </div>
+                  <h2 className="sl-case__title">{openCase.headline}</h2>
+                  <div className="sl-case__byline">
+                    {openCase.reporterName || openCase.sourceLabel ? (
+                      <span>
+                        Filed by <b>{openCase.reporterName || openCase.sourceLabel}</b>
+                        {openCase.outletName ? ` · ${openCase.outletName}` : ""}
+                      </span>
+                    ) : null}
+                    <span>{prettyDate(openCase.date)} · {openCase.ageLabel}</span>
+                    {credibilityLabel(openCase.credibility) ? (
+                      <span>Sourcing: <b>{credibilityLabel(openCase.credibility)}</b></span>
+                    ) : null}
+                    {socialCountFor(openCase) ? (
+                      <span>{formatCount(socialCountFor(openCase))} social posts</span>
+                    ) : null}
+                  </div>
+                  {openCase.summary ? <p className="sl-case__lede">{openCase.summary}</p> : null}
+                </div>
+              </div>
+
+              <div className="sl-case__body">
+                {openCase.description && openCase.description !== openCase.summary ? (
+                  <p className="sl-case__prose">{openCase.description}</p>
+                ) : null}
+
+                {isRumourStory(openCase) ? <TradeSwap story={openCase} /> : null}
+                <ConductChannels story={openCase} />
+                {selectedDossier ? <DossierCard dossier={selectedDossier} /> : null}
+
+                <ArcSpine beats={arcTimeline} fallbackStory={openCase} />
+
+                <nav className="sl-tabs">
+                  {DETAIL_TABS.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className={activeTab === t.id ? "is-active" : ""}
+                      onClick={() => setActiveTab(t.id)}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </nav>
+
+                <div className="sl-tabpanel">
+                  {activeTab === "details" ? (
+                    <div className="sl-cols">
+                      <div>
+                        <h4>Information</h4>
+                        {infoRows.length ? (
+                          infoRows.map(([label, val]) => (
+                            <div key={label} className="sl-kv">
+                              <span>{label}</span>
+                              <span>{val}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="sl-muted">No sourcing details on file.</p>
+                        )}
+                        {Object.keys(openCase.evidence || {}).length ? (
+                          <div className="sl-nums">
+                            {Object.entries(openCase.evidence)
+                              .slice(0, 4)
+                              .map(([k, v]) => (
+                                <div key={k} className="sl-num" title={`${formatEffectLabel(k)}: ${v}`}>
+                                  <strong>{String(v)}</strong>
+                                  <span>{formatEffectLabel(k)}</span>
+                                </div>
+                              ))}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div>
+                        <h4>Parties involved</h4>
+                        {parties.length ? (
+                          parties.map((p) => (
+                            <div key={p.label} className="sl-kv">
+                              <span>{p.label}</span>
+                              <span>{p.name}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="sl-muted">No named parties on file.</p>
+                        )}
+                      </div>
+
+                      <div>
+                        <h4>Key factors</h4>
+                        <ul className="sl-factors">
+                          {keyFactors.map((f, i) => (
+                            <li key={i}>{f}</li>
+                          ))}
+                        </ul>
+                        {openCase.effectSummary ? (
+                          <p className="sl-muted" style={{ marginTop: 12 }}>{openCase.effectSummary}</p>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {activeTab === "related" ? (
+                    <div className="sl-linklist">
+                      {relatedStories.length ? (
+                        relatedStories.slice(0, 8).map((r) => (
+                          <button key={r.id} type="button" onClick={() => openStory(r.id)}>
+                            <CategoryTag story={r} />
+                            <strong>{r.headline}</strong>
+                            <em>{r.ageLabel || "—"}{heatLabel(r.heat) ? ` · ${heatLabel(r.heat)}` : ""}</em>
+                          </button>
+                        ))
+                      ) : (
+                        <p className="sl-muted">No related coverage yet.</p>
+                      )}
+                    </div>
+                  ) : null}
+
+                  {activeTab === "rumors" ? (
+                    <div className="sl-linklist">
+                      {leagueRumours.length ? (
+                        leagueRumours.map((r) => (
+                          <button key={r.id} type="button" onClick={() => openStory(r.id)}>
+                            <em>{r.playerName || r.teamName || "League"}</em>
+                            <strong>{r.headline}</strong>
+                            <em>
+                              {heatLabel(r.heat) ? `Heat: ${heatLabel(r.heat)}` : ""}
+                              {credibilityLabel(r.credibility) ? ` · ${credibilityLabel(r.credibility)}` : ""}
+                            </em>
+                          </button>
+                        ))
+                      ) : (
+                        <p className="sl-muted">Trade wire is quiet.</p>
+                      )}
+                    </div>
+                  ) : null}
+
+                  {activeTab === "history" ? (
+                    <div>
+                      {arcTimeline.length ? (
+                        <ol className="sl-spine__list" style={{ paddingLeft: 22 }}>
+                          {arcTimeline.map((beat, i) => (
+                            <li key={beat.id || i} className={i === arcTimeline.length - 1 ? "is-latest" : ""}>
+                              <span className="sl-spine__dot" aria-hidden />
+                              <time>{prettyDate(beat.date)}</time>
+                              <strong>{beat.headline}</strong>
+                              {beat.summary ? <p>{beat.summary}</p> : null}
+                            </li>
+                          ))}
+                        </ol>
+                      ) : (
+                        <p className="sl-muted">No prior beats on file for this story.</p>
+                      )}
+                      {openCase.repeatCount > 0 ? (
+                        <p className="sl-muted" style={{ marginTop: 10 }}>
+                          Beat #{openCase.repeatCount + 1}
+                          {openCase.escalatedFrom ? ` · escalated from ${openCase.escalatedFrom}` : ""}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+
+                <section className="sl-case__section" style={{ marginTop: 22, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
+                  <h4>What comes next</h4>
+                  <p className="sl-case__prose" style={{ margin: 0 }}>{deriveFollowUp(openCase)}</p>
+                </section>
+
+                <div className="sl-case__foot">
+                  <span>Last updated {prettyDate(openCase.date) || openCase.ageLabel || "—"}</span>
+                  <span>ID {openCase.storylineId || openCase.id}</span>
+                </div>
+              </div>
+            </div>
+
+            <aside className="sl-rail">
+              <div className={`sl-panel${choiceOptions.length ? " sl-panel--desk" : ""}`}>
+                <h3>{choiceOptions.length ? "Your call" : "GM decisions"}</h3>
+                {choiceOptions.length ? (
+                  <div className="sl-choices">
+                    {choiceOptions.map((opt) => {
+                      const busy = busyChoice === `${openCase.storylineId}:${opt.id}`;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          className="sl-choice sl-choice--lead"
+                          style={{ width: "100%", flex: "unset" }}
+                          disabled={Boolean(busyChoice)}
+                          onClick={() => handleResolve(selectedChoice?.storyline_id || openCase.storylineId, opt.id)}
+                        >
+                          <strong>{opt.label}</strong>
+                          {opt.effect_summary ? <span>{opt.effect_summary}</span> : null}
+                          {busy ? <em>Applying…</em> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="sl-choice-empty">Nothing to decide here. The story develops on its own.</p>
+                )}
+              </div>
+
+              {Object.keys(openCase.effects || {}).length ? (
+                <div className="sl-panel">
+                  <h3>Potential effects</h3>
+                  <div className="sl-effects">
+                    {Object.entries(openCase.effects)
+                      .slice(0, 8)
+                      .map(([k, v]) => (
+                        <div key={k} className={`sl-effect ${effectPillClass(v)}`}>
+                          <span>{formatEffectLabel(k)}</span>
+                          <strong>
+                            {Number(v) > 0 ? "+" : ""}
+                            {String(v)}
+                          </strong>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="sl-panel">
+                <h3>Organizational pressure</h3>
+                {userOrg ? (
+                  <PressureBars org={userOrg} />
+                ) : (
+                  <p className="sl-choice-empty">No pressure readings on file.</p>
+                )}
+              </div>
+
+              {openCase.gmKnowsMore || knowledgeLevelLabel(openCase.publicKnowledgeLevel) ? (
+                <div className="sl-panel">
+                  <h3>Knowledge layers</h3>
+                  {openCase.gmKnowsMore ? (
+                    <p style={{ margin: "0 0 8px", fontSize: 12.5, fontWeight: 700, color: "#8ef0b8" }}>
+                      You know more than the public sees.
+                    </p>
+                  ) : null}
+                  {knowledgeLevelLabel(openCase.publicKnowledgeLevel) ? (
+                    <div className="sl-kv" style={{ borderBottom: 0 }}>
+                      <span>Public knowledge</span>
+                      <span>{knowledgeLevelLabel(openCase.publicKnowledgeLevel)}</span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </aside>
           </div>
         ) : (
+          /* ================= NEWSROOM ================= */
           <>
-            {topPending ? (
-              <button type="button" className="sl-frontoffice-alert" onClick={() => openStory(topPending.id)}>
-                <span>Front Office Alert</span>
-                <strong>{topPending.headline}</strong>
-                <em>Review decision →</em>
-              </button>
+            {leadStory ? (
+              <LeadStory
+                story={leadStory}
+                socialCount={socialCountFor(leadStory)}
+                onOpen={openStory}
+                choiceOptions={leadChoiceOptions}
+                onResolve={handleResolve}
+                busyChoice={busyChoice}
+              />
             ) : null}
 
-            <div className="sl-filterbar">
-              <div className="sl-filter-chips">
+            {pendingDecisions.length > 1 ? (
+              <section className="sl-desk">
+                <div className="sl-desk__head">
+                  <h3>On your desk</h3>
+                  <span className="sl-desk__count">{pendingDecisions.length}</span>
+                </div>
+                <div className="sl-desk__list">
+                  {pendingDecisions.slice(0, 6).map((d) => (
+                    <button key={d.id} type="button" className="sl-desk__item" onClick={() => openStory(d.id)}>
+                      <StoryFace story={d} size={34} />
+                      <div style={{ minWidth: 0 }}>
+                        <strong>{d.headline}</strong>
+                        <span>{d.teamName || "League"} · {d.ageLabel}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            <div className="sl-toolbar">
+              <div className="sl-chips">
                 {FILTERS.map((f) => (
                   <button
                     key={f.id}
@@ -2418,316 +3647,74 @@ export default function StorylinesScreen() {
                     onClick={() => setFilter(f.id)}
                   >
                     {f.label}
-                    <span className="sl-chip-count">({filterCounts[f.id] ?? 0})</span>
+                    <b>{filterCounts[f.id] ?? 0}</b>
                   </button>
                 ))}
               </div>
-              <div className="sl-filter-tools">
+              <div className="sl-tools">
                 <input
                   type="search"
-                  className="sl-search"
+                  className="sl-input"
                   placeholder="Search player, team, headline…"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
-                <label className="sl-sort">
-                  <select value={sortId} onChange={(e) => setSortId(e.target.value)}>
-                    {SORT_OPTIONS.map((o) => (
-                      <option key={o.id} value={o.id}>{o.label}</option>
-                    ))}
-                  </select>
-                </label>
+                <select value={sortId} onChange={(e) => setSortId(e.target.value)} aria-label="Sort stories">
+                  {SORT_OPTIONS.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
-            <div className="sl-stream">
-              <div className="sl-stream-head">
-                <span>Story Feed</span>
-                <span>{filtered.length} active</span>
-              </div>
-              {filtered.length === 0 ? (
-                <div className="sl-feed-empty">{filterEmptyMsg || "No matching stories."}</div>
-              ) : (
-                filtered.map((s) => {
-                  const isOpen = expandedId === s.id;
-                  const socialCount = socialCountByStory.get(s.storylineId) || socialCountByStory.get(s.id) || 0;
-                  return (
-                    <article key={s.id} className={`sl-row${isOpen ? " is-open" : ""}`}>
-                      <button type="button" className="sl-row__header" onClick={() => toggleRow(s.id)} aria-expanded={isOpen}>
-                        <span className={`sl-row__heatbar sl-row__heatbar--${heatTier(s.heat)}`} aria-hidden="true" />
-                        <span className="sl-row__main">
-                          <span className="sl-row__topline">
-                            <span className="sl-row__category" style={{ color: categoryMeta(s).accent }}>{categoryMeta(s).label}</span>
-                            {s.requiresAction ? <span className="sl-row__decision">Decision</span> : null}
-                            <StatusPill story={s} />
-                          </span>
-                          <h4 className="sl-row__headline">{s.headline}</h4>
-                          <span className="sl-row__subline">
-                            {heatLabel(s.heat) ? <span>Heat: {Math.round(Number(s.heat) || 0)}</span> : null}
-                            {socialCount ? <span className="sl-row__pulse">↙ {formatCount(socialCount)} social posts</span> : null}
-                          </span>
-                        </span>
-                        <span className="sl-row__meta">
-                          <span className="sl-row__date">{s.ageLabel || "—"}</span>
-                          <span className="sl-row__chevron">{isOpen ? "▼" : "▶"}</span>
-                        </span>
-                      </button>
-
-                      {isOpen && selected ? (
-                        <div className="sl-row__body">
-                          <div className="sl-row__layout">
-                            <div className="sl-row__detail">
-                              <div className="sl-detail-head">
-                                <ScoreBadge score={storyScore(selected)} size="lg" />
-                                <div className="sl-detail-headmeta">
-                                  <div className="sl-detail-source">
-                                    {selected.reporterName || selected.sourceLabel ? (
-                                      <span>Source: {selected.reporterName || selected.sourceLabel}{selected.outletName ? ` (${selected.outletName})` : ""}</span>
-                                    ) : null}
-                                    {credibilityLabel(selected.credibility) ? <span>Credibility: {credibilityLabel(selected.credibility)}</span> : null}
-                                    <span>{selected.ageLabel || "—"}</span>
-                                  </div>
-                                  {selected.summary ? <p className="sl-detail-summary">{selected.summary}</p> : null}
-                                </div>
-                              </div>
-
-                              <TeamOrPlayerIdentity story={selected} />
-                              {selectedDossier ? <DossierCard dossier={selectedDossier} /> : null}
-                              {isRumourStory(selected) ? <TradeSwap story={selected} /> : null}
-                              {selected.description && selected.description !== selected.summary ? (
-                                <p className="sl-detail-summary">{selected.description}</p>
-                              ) : null}
-                              <ConductChannels story={selected} />
-
-                              <DevelopmentTimeline beats={arcTimeline} fallbackStory={selected} />
-
-                              <nav className="sl-tabs">
-                                {DETAIL_TABS.map((t) => (
-                                  <button key={t.id} type="button" className={activeTab === t.id ? "is-active" : ""} onClick={() => setActiveTab(t.id)}>
-                                    {t.label}
-                                  </button>
-                                ))}
-                              </nav>
-
-                              <div className="sl-tab-panel">
-                                {activeTab === "details" ? (
-                                  <div className="sl-detail-grid">
-                                    <div className="sl-detail-block">
-                                      <h4>Information</h4>
-                                      {infoRows.length ? (
-                                        infoRows.map(([label, val]) => (
-                                          <div key={label} className="sl-info-row">
-                                            <span>{label}</span>
-                                            <span>{val}</span>
-                                          </div>
-                                        ))
-                                      ) : (
-                                        <p style={{ color: "var(--muted)", fontSize: 12 }}>No sourcing details on file.</p>
-                                      )}
-                                      {Object.keys(selected.evidence || {}).length ? (
-                                        <div className="sl-numbers">
-                                          {Object.entries(selected.evidence).slice(0, 4).map(([k, v]) => (
-                                            <div key={k} className="sl-num" title={`${formatEffectLabel(k)}: ${v}`}>
-                                              <strong>{String(v)}</strong>
-                                              <span>{formatEffectLabel(k)}</span>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      ) : null}
-                                    </div>
-
-                                    <div className="sl-detail-block">
-                                      <h4>Parties Involved</h4>
-                                      {parties.length ? (
-                                        parties.map((p) => (
-                                          <div key={p.label} className="sl-party-row">
-                                            <span>{p.label}</span>
-                                            <span>{p.name}</span>
-                                          </div>
-                                        ))
-                                      ) : (
-                                        <p style={{ color: "var(--muted)", fontSize: 12 }}>No named parties on file.</p>
-                                      )}
-                                    </div>
-
-                                    <div className="sl-detail-block">
-                                      <h4>Key Factors</h4>
-                                      <ul className="sl-key-factors">
-                                        {keyFactors.map((f, i) => (
-                                          <li key={i}>{f}</li>
-                                        ))}
-                                      </ul>
-                                      {(selected.effectSummary || Object.keys(selected.effects || {}).length) ? (
-                                        <div style={{ marginTop: 10 }}>
-                                          {selected.effectSummary ? <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>{selected.effectSummary}</p> : null}
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                  </div>
-                                ) : null}
-
-                                {activeTab === "related" ? (
-                                  <div className="sl-related-list">
-                                    {relatedStories.length ? (
-                                      relatedStories.slice(0, 8).map((r) => (
-                                        <button key={r.id} type="button" onClick={() => openStory(r.id)}>
-                                          <span style={{ color: categoryMeta(r).accent }}>{categoryMeta(r).label}</span>
-                                          <strong>{r.headline}</strong>
-                                          <em>{r.ageLabel || "—"}</em>
-                                        </button>
-                                      ))
-                                    ) : (
-                                      <p style={{ color: "var(--muted)", fontSize: 12 }}>No related coverage yet.</p>
-                                    )}
-                                  </div>
-                                ) : null}
-
-                                {activeTab === "rumors" ? (
-                                  <div className="sl-rumor-list">
-                                    {leagueRumours.length ? (
-                                      leagueRumours.map((r) => (
-                                        <button key={r.id} type="button" onClick={() => openStory(r.id)}>
-                                          <span>{r.playerName || r.teamName || "League"}</span>
-                                          <strong>{r.headline}</strong>
-                                          <em>
-                                            {heatLabel(r.heat) ? `Heat: ${heatLabel(r.heat)}` : ""}
-                                            {credibilityLabel(r.credibility) ? ` · ${credibilityLabel(r.credibility)}` : ""}
-                                          </em>
-                                        </button>
-                                      ))
-                                    ) : (
-                                      <p style={{ color: "var(--muted)", fontSize: 12 }}>Trade wire is quiet.</p>
-                                    )}
-                                  </div>
-                                ) : null}
-
-                                {activeTab === "history" ? (
-                                  <ul className="sl-history-list">
-                                    {arcTimeline.length ? (
-                                      arcTimeline.map((beat) => (
-                                        <li key={beat.id}>
-                                          <time>{beat.date || "—"}</time>
-                                          <div>
-                                            <strong>{beat.headline}</strong>
-                                            {beat.summary ? <p>{beat.summary}</p> : null}
-                                          </div>
-                                        </li>
-                                      ))
-                                    ) : (
-                                      <p style={{ color: "var(--muted)", fontSize: 12 }}>No prior beats on file for this story.</p>
-                                    )}
-                                    {selected.repeatCount > 0 ? (
-                                      <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 4 }}>
-                                        Beat #{selected.repeatCount + 1}
-                                        {selected.escalatedFrom ? ` · escalated from ${selected.escalatedFrom}` : ""}
-                                      </p>
-                                    ) : null}
-                                  </ul>
-                                ) : null}
-                              </div>
-
-                              <section className="sl-detail-block" style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
-                                <h4>What Comes Next</h4>
-                                <p style={{ fontSize: 12.5, color: "rgba(233,247,251,.85)" }}>{deriveFollowUp(selected)}</p>
-                              </section>
-
-                              <div className="sl-detail-footer">
-                                <span>Last updated: {selected.date || selected.ageLabel || "—"}</span>
-                                <span>Story ID: {selected.storylineId || selected.id}</span>
-                              </div>
-                            </div>
-
-                            <div className="sl-row__impact">
-                              <div className="sl-impact-panel">
-                                <h3 className="is-title">Story Impact</h3>
-                                {userOrg ? (
-                                  <>
-                                    <h3 style={{ marginTop: 4 }}>Organizational Pressure</h3>
-                                    <OrgPressureBars org={userOrg} />
-                                  </>
-                                ) : (
-                                  <p style={{ fontSize: 12, color: "var(--muted)" }}>No organizational pressure data on file.</p>
-                                )}
-                              </div>
-
-                              {selected && Object.keys(selected.effects || {}).length ? (
-                                <div className="sl-impact-panel">
-                                  <h3>Potential Effects</h3>
-                                  <div className="sl-effects-grid">
-                                    {Object.entries(selected.effects).slice(0, 6).map(([k, v]) => (
-                                      <div key={k} className={`sl-effect-row ${effectPillClass(v)}`}>
-                                        <span>{formatEffectLabel(k)}</span>
-                                        <strong>{Number(v) > 0 ? "+" : ""}{String(v)}</strong>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              ) : null}
-
-                              <div className="sl-impact-panel">
-                                <h3>GM Decisions</h3>
-                                {choiceOptions.length ? (
-                                  <div className="sl-decisions">
-                                    {choiceOptions.map((opt) => {
-                                      const busy = busyChoice === `${selected.storylineId}:${opt.id}`;
-                                      return (
-                                        <button
-                                          key={opt.id}
-                                          type="button"
-                                          className="sl-decision-btn"
-                                          disabled={Boolean(busyChoice)}
-                                          onClick={() => handleResolve(selectedChoice?.storyline_id || selected.storylineId, opt.id)}
-                                        >
-                                          <span className="sl-decision-btn__dot" />
-                                          <span>
-                                            <strong>{opt.label}</strong>
-                                            {opt.effect_summary ? <span>{opt.effect_summary}</span> : null}
-                                            {busy ? <em>Applying…</em> : null}
-                                          </span>
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                ) : (
-                                  <p className="sl-decision-empty">No action needed on this story.</p>
-                                )}
-                              </div>
-
-                              {selected?.gmKnowsMore || knowledgeLevelLabel(selected?.publicKnowledgeLevel) ? (
-                                <div className="sl-impact-panel">
-                                  <h3>Knowledge Layers</h3>
-                                  {selected.gmKnowsMore ? (
-                                    <p style={{ fontSize: 12, color: "#8ef0b8", marginBottom: 6 }}>You know more than the public sees.</p>
-                                  ) : null}
-                                  {knowledgeLevelLabel(selected.publicKnowledgeLevel) ? (
-                                    <p style={{ fontSize: 12, color: "var(--muted)" }}>Public knowledge: {knowledgeLevelLabel(selected.publicKnowledgeLevel)}</p>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                            </div>
-                          </div>
-                        </div>
-                      ) : null}
-                    </article>
-                  );
-                })
-              )}
+            <div className="sl-gridhead">
+              <h3>The wire</h3>
+              <span>{filtered.length} filed</span>
             </div>
+
+            {filtered.length === 0 ? (
+              <EmptyPanel
+                kicker="Desk · empty"
+                title="Nothing matches"
+                body={filterEmptyMsg || "No stories match this filter or search."}
+              />
+            ) : (
+              <div className="sl-grid">
+                {gridStories.map((s, i) => (
+                  <StoryCard
+                    key={s.id}
+                    story={s}
+                    index={i}
+                    socialCount={socialCountFor(s)}
+                    onOpen={openStory}
+                  />
+                ))}
+              </div>
+            )}
           </>
         )}
 
         {process.env.NODE_ENV === "development" && !hasBackend ? (
-          <details className="sl-detail-block" style={{ marginTop: 12 }}>
+          <details className="sl-debug">
             <summary>Storyline debug (dev)</summary>
-            <pre style={{ fontSize: 11, overflow: "auto", maxHeight: 240 }}>
-              {JSON.stringify({ has_storyline_events: Array.isArray(franchiseState?.storyline_events), state_keys: Object.keys(franchiseState || {}) }, null, 2)}
+            <pre>
+              {JSON.stringify(
+                {
+                  has_storyline_events: Array.isArray(franchiseState?.storyline_events),
+                  state_keys: Object.keys(franchiseState || {}),
+                },
+                null,
+                2
+              )}
             </pre>
           </details>
         ) : null}
         {process.env.NODE_ENV === "development" && franchiseState?.storyline_debug ? (
-          <details className="sl-detail-block" style={{ marginTop: 12 }}>
+          <details className="sl-debug">
             <summary>Storyline debug (dev)</summary>
-            <pre style={{ fontSize: 11, overflow: "auto", maxHeight: 240 }}>{JSON.stringify(franchiseState.storyline_debug, null, 2)}</pre>
+            <pre>{JSON.stringify(franchiseState.storyline_debug, null, 2)}</pre>
           </details>
         ) : null}
       </div>

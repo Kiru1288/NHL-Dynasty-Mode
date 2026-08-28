@@ -64,12 +64,17 @@ log = logging.getLogger("uvicorn.error")
 
 app = FastAPI(title="NHL Franchise Mode API", version="0.2.1")
 
+# CRA falls back to 3001/3002 when another app already owns 3000.
+_LOCAL_UI_ORIGINS = [
+    f"http://{host}:{port}"
+    for host in ("127.0.0.1", "localhost")
+    for port in (3000, 3001, 3002)
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:3000",
-        "http://localhost:3000",
-    ],
+    allow_origins=_LOCAL_UI_ORIGINS,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1416,11 +1421,61 @@ class BurnerPreviewBody(BaseModel):
 @app.get("/api/franchise/{session_id}/social-feed")
 def get_social_feed(session_id: str) -> dict[str, Any]:
     s = _session_or_404(session_id)
-    from app.sim_engine.franchise.storyline_engine import build_narrative_universe_v2_payload  # noqa: WPS433
+    from datetime import datetime, timedelta
+    from app.sim_engine.franchise.storyline_engine import build_narrative_universe_payload  # noqa: WPS433
+    from services.franchise_sim import _calendar_iso_for_day  # noqa: WPS433
 
-    payload = build_narrative_universe_v2_payload(s)
-    posts = list(payload.get("social_posts") or payload.get("twitter_feed") or [])[-60:]
-    threads = list(payload.get("reddit_threads") or [])[-40:]
+    def _parse_iso(raw: str) -> datetime | None:
+        text = str(raw or "")[:10]
+        if not text:
+            return None
+        try:
+            return datetime.strptime(text, "%Y-%m-%d")
+        except ValueError:
+            return None
+
+    def _is_recent(item: dict[str, Any], current_iso: str, max_days: int = 2) -> bool:
+        today = _parse_iso(current_iso)
+        item_day = _parse_iso(str(item.get("calendar_iso") or item.get("created_at") or item.get("date") or ""))
+        if today is None or item_day is None:
+            return True
+        return item_day >= today - timedelta(days=max_days)
+
+    def _is_broken_social_text(text: str) -> bool:
+        raw = str(text or "").strip()
+        if len(raw) < 8:
+            return True
+        lower = raw.lower()
+        if "the player" in lower:
+            return True
+        if "(0 ovr)" in lower:
+            return True
+        if any(token in lower for token in ("0 points in 0 games", "through 0 gp", "0 starts", "0.00 ppg through 0")):
+            return True
+        if "{" in raw and "}" in raw:
+            return True
+        return False
+
+    payload = build_narrative_universe_payload(s)
+    current_iso = _calendar_iso_for_day(s, int(getattr(s, "calendar_idx", 0) or 0))
+    posts = list(
+        payload.get("social_posts")
+        or payload.get("twitter_feed")
+        or payload.get("social_feed")
+        or []
+    )
+    posts = [p for p in posts if _is_recent(p, current_iso) and not _is_broken_social_text(str(p.get("text") or ""))]
+    posts.sort(key=lambda p: str(p.get("calendar_iso") or p.get("created_at") or ""), reverse=True)
+    posts = posts[:60]
+    threads = list(payload.get("reddit_threads") or [])
+    threads = [
+        t for t in threads
+        if _is_recent(t, current_iso)
+        and not _is_broken_social_text(str(t.get("body") or ""))
+        and not _is_broken_social_text(str(t.get("title") or ""))
+    ]
+    threads.sort(key=lambda t: str(t.get("created_at") or t.get("calendar_iso") or ""), reverse=True)
+    threads = threads[:40]
     return {"puckr": posts, "icehole": threads}
 
 

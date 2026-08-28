@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useGameUI } from "../../game/GameUIContext";
 import { SCREENS } from "../../game/constants";
 import { isFranchiseCinematicPopup } from "../../events/franchiseEventKinds";
@@ -750,7 +750,7 @@ function ShowcasePopupStyles() {
       .showcase-popup {
         position: fixed;
         inset: 0;
-        z-index: var(--z-popup, 12000);
+        z-index: 14000;
         display: grid;
         place-items: stretch;
         pointer-events: auto;
@@ -1069,12 +1069,30 @@ export function ShowcasePopupLayer() {
     : rawQueue;
   const first = visiblePopups[0];
 
+  const dismiss = useCallback(() => {
+    if (!first) return;
+    const pid = String(first.id || first.popup_id || "").trim();
+    if (pid) {
+      onDismissShowcasePopups([pid]);
+      return;
+    }
+    onDismissShowcasePopups([`__drop_first__:${String(first.kind || "popup")}`]);
+  }, [first, onDismissShowcasePopups]);
+
+  useEffect(() => {
+    if (!first) return undefined;
+    const onKey = (event) => {
+      if (event.key === "Escape") dismiss();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [first, dismiss]);
+
   if (!first) return null;
 
   const kind = first.kind;
   const theme = resolveAlertTheme(first);
 
-  const dismiss = () => onDismissShowcasePopups([first.id]);
   const tradeQueueIds = visiblePopups.filter(isTradePopup).map((p) => p.id).filter(Boolean);
   const dismissAllTrades = () => {
     if (tradeQueueIds.length) onDismissShowcasePopups(tradeQueueIds);
@@ -1096,12 +1114,22 @@ export function ShowcasePopupLayer() {
     <>
       <ShowcasePopupStyles />
       <div className="showcase-popup">
-      <div className="showcase-popup__backdrop" aria-hidden />
+      <div
+        className="showcase-popup__backdrop"
+        aria-hidden
+        onClick={dismiss}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") dismiss();
+        }}
+        role="button"
+        tabIndex={-1}
+      />
       <div
         className={`showcase-popup__panel ${isMediaAlert ? "showcase-popup__panel--media" : ""} ${isTradeAlert ? "showcase-popup__panel--trade-wire" : ""} showcase-popup__panel--${theme}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="showcase-popup-title"
+        onMouseDown={(event) => event.stopPropagation()}
       >
         {!isMediaAlert ? (
           <header className="showcase-popup__head">

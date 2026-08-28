@@ -434,6 +434,48 @@ def enrich_prospect_row_from_player(player: Any, row: Dict[str, Any]) -> None:
     _emit("physical", phys_keys)
     _emit("hockey_iq", iq_keys)
 
+    def _trait_100(val: Any) -> Optional[int]:
+        if val is None:
+            return None
+        try:
+            v = float(val)
+        except (TypeError, ValueError):
+            return None
+        if v <= 0:
+            return None
+        return int(round(v * 100 if v <= 1.0 else v))
+
+    psych = getattr(player, "psychology", None)
+    traits = getattr(player, "traits", None)
+    trait_src = psych or traits
+    if trait_src is not None:
+        for key in (
+            "coachability",
+            "competitiveness",
+            "work_ethic",
+            "leadership",
+            "confidence",
+            "maturity",
+            "pressure_response",
+            "mental_toughness",
+            "sociability",
+        ):
+            raw = getattr(trait_src, key, None)
+            scaled = _trait_100(raw)
+            if scaled is not None:
+                row.setdefault(key, scaled)
+        coach = _trait_100(getattr(trait_src, "coachability", None))
+        work = _trait_100(getattr(trait_src, "work_ethic", None))
+        mature = _trait_100(getattr(trait_src, "maturity", None) or getattr(trait_src, "mental_toughness", None))
+        if coach is not None or work is not None or mature is not None:
+            composite = round(
+                0.35 * (coach or 62)
+                + 0.35 * (work or 62)
+                + 0.30 * (mature or 58),
+            )
+            row.setdefault("character_score", composite)
+            row.setdefault("character", composite)
+
 
 def infer_prospect_role(row: Mapping[str, Any]) -> str:
     pos = str(row.get("position") or "").upper()

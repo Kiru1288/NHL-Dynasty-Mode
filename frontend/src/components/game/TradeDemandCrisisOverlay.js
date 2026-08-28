@@ -17,7 +17,7 @@ function stageLabel(stage) {
 }
 
 export function TradeDemandCrisisOverlay() {
-  const { franchiseState, refreshFranchise, setScreen } = useGameUI();
+  const { franchiseState, refreshFranchise, setScreen, setFranchiseState } = useGameUI();
   const crisis = franchiseState?.trade_demand_crisis || null;
   const [localRemaining, setLocalRemaining] = useState(null);
 
@@ -45,6 +45,10 @@ export function TradeDemandCrisisOverlay() {
   const openTradeHub = useCallback(() => {
     setScreen?.("tradehub");
   }, [setScreen]);
+
+  const dismissCrisis = useCallback(() => {
+    setFranchiseState?.((prev) => (prev ? { ...prev, trade_demand_crisis: null } : prev));
+  }, [setFranchiseState]);
 
   const displayRemaining = useMemo(() => {
     if (localRemaining == null && crisis) return Number(crisis.remaining_seconds) || 0;
@@ -102,6 +106,9 @@ export function TradeDemandCrisisOverlay() {
         {crisis.body ? <p className="trade-crisis-overlay__body">{crisis.body}</p> : null}
 
         <div className="trade-crisis-overlay__actions">
+          <button type="button" className="trade-crisis-overlay__dismiss" onClick={dismissCrisis}>
+            Continue
+          </button>
           <button type="button" className="trade-crisis-overlay__cta" onClick={openTradeHub}>
             Open Trade Hub
           </button>
@@ -216,6 +223,19 @@ export function TradeDemandCrisisOverlay() {
           margin-top: 18px;
           display: flex;
           justify-content: flex-end;
+          gap: 10px;
+        }
+        .trade-crisis-overlay__dismiss {
+          border: 1px solid rgba(255, 255, 255, 0.18);
+          border-radius: 999px;
+          padding: 11px 16px;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+          font-size: 12px;
+          cursor: pointer;
+          color: #e8edf5;
+          background: transparent;
         }
         .trade-crisis-overlay__cta {
           border: none;

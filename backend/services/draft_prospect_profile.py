@@ -825,6 +825,50 @@ def _projection_block(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
+def _rank_nhl_prior(rank: int) -> float:
+    """Public board prior — thin user files should not crater elite prospects."""
+    if rank <= 1:
+        return 88.0
+    if rank <= 3:
+        return 84.0
+    if rank <= 8:
+        return 76.0
+    if rank <= 15:
+        return 66.0
+    if rank <= 32:
+        return 54.0
+    return 40.0
+
+
+def _analytics_model_grade(row: Dict[str, Any], analytics: Optional[Dict[str, Any]] = None) -> Optional[int]:
+    """Stable analytics desk grade from production + rank (not random)."""
+    analytics = analytics or {}
+    rank = _i(row.get("rank"), 99)
+    ovr = _f(row.get("current_ovr_estimate") or row.get("true_ovr") or row.get("scouted_overall_estimate"))
+    score = ovr if ovr > 0 else 62.0
+    war = _f(analytics.get("war"))
+    gp = _i(row.get("gp") or row.get("games_played"))
+    points = _i(row.get("points"))
+    ppg = _f(row.get("ppg"))
+    if ppg <= 0 and gp > 0 and points > 0:
+        ppg = points / gp
+    if war:
+        score += war * 3.5
+    if ppg >= 1.5:
+        score += 8.0
+    elif ppg >= 1.0:
+        score += 4.0
+    elif ppg >= 0.7:
+        score += 2.0
+    if rank <= 3:
+        score += 8.0
+    elif rank <= 8:
+        score += 5.0
+    elif rank <= 15:
+        score += 2.0
+    return int(max(52.0, min(96.0, round(score))))
+
+
 def _potential_block(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Scout-visible ceiling block. `rating` is estimated ceiling, not final OVR.
 
@@ -856,8 +900,9 @@ def _potential_block(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         }
     talent = _talent_rank(row)
     conf = _f(row.get("scouting_confidence"), 55)
+    rank_prior = _rank_nhl_prior(rank)
     # NHL probability from readiness signals — independent of raw ceiling number.
-    prob = 48.0 + (conf - 50.0) * 0.28
+    prob = 48.0 + (conf - 50.0) * 0.18
     prob += min(12.0, max(-8.0, (pot - 70.0) * 0.35))
     prob -= gap * 0.35
 
@@ -899,6 +944,10 @@ def _potential_block(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     if str(row.get("translation_risk") or "").lower() in ("high", "very high"):
         prob -= 8.0
+
+    # Thin user scouting file: blend toward public board prior so #1 picks aren't 71% NHL.
+    file_weight = max(0.0, min(1.0, (conf - 12.0) / 72.0))
+    prob = rank_prior * (1.0 - file_weight) + prob * file_weight
 
     prob = max(18.0, min(92.0, prob))
     risk = str(row.get("risk") or "").strip() or ("High" if row.get("is_bust_risk") else "Medium")
@@ -1919,6 +1968,187 @@ def _rank_history_from_row(row: Dict[str, Any]) -> List[Dict[str, Any]]:
     return points
 
 
+def _normalize_outcome_segments(segs: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+    total = sum(max(0, _f(s.get("weight") or s.get("w"))) for s in segs)
+    if total <= 0:
+        return None
+    out: List[Dict[str, Any]] = []
+    for seg in segs:
+        w = max(0.0, _f(seg.get("weight") or seg.get("w")))
+        if w <= 0:
+            continue
+        pct = (w / total) * 100.0
+        out.append({
+            "key": str(seg.get("key") or ""),
+            "label": str(seg.get("label") or ""),
+            "weight": round(w, 2),
+            "pct": round(pct, 1),
+        })
+    return out or None
+
+
+def _outcome_distribution_block(row: Dict[str, Any], potential: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Scout-model outcome bands derived from NHL probability + floor/ceiling band."""
+    if not potential or potential.get("hidden"):
+        return None
+    nhl = _f(potential.get("nhl_probability") or potential.get("probability"))
+    if nhl <= 0:
+        return None
+    band = str(row.get("outcome_band") or potential.get("band") or "Balanced")
+    is_goalie = str(row.get("position") or "").upper() == "G"
+    non_nhl = max(0.0, 100.0 - nhl)
+
+    if is_goalie:
+        bust = round(non_nhl * (0.55 if band == "Boom/Bust" else 0.38))
+        minor = max(0.0, non_nhl - bust)
+        backup = round(nhl * (0.50 if band == "Safe Floor" else 0.55))
+        platoon = round(nhl * 0.35)
+        starter = max(0.0, nhl - backup - platoon)
+        segs = _normalize_outcome_segments([
+            {"key": "bust", "label": "Bust", "weight": bust},
+            {"key": "ahl", "label": "AHL/ECHL", "weight": minor},
+            {"key": "mid", "label": "NHL Backup", "weight": backup},
+            {"key": "top", "label": "Platoon", "weight": platoon},
+            {"key": "star", "label": "Starter", "weight": starter},
+        ])
+    else:
+        bust = round(non_nhl * (0.55 if band == "Boom/Bust" else (0.25 if band == "Safe Floor" else 0.38)))
+        ahl = max(0.0, non_nhl - bust)
+        star = round(nhl * (0.32 if band == "Boom/Bust" else (0.12 if band == "Safe Floor" else 0.20)))
+        top6 = round(nhl * (0.28 if band == "Boom/Bust" else (0.38 if band == "Safe Floor" else 0.35)))
+        mid6 = max(0.0, nhl - star - top6)
+        segs = _normalize_outcome_segments([
+            {"key": "bust", "label": "Bust", "weight": bust},
+            {"key": "ahl", "label": "AHL", "weight": ahl},
+            {"key": "mid", "label": "Mid-6", "weight": mid6},
+            {"key": "top", "label": "Top-6", "weight": top6},
+            {"key": "star", "label": "Star+", "weight": star},
+        ])
+
+    if not segs:
+        return None
+    return {
+        "source": "scout_model",
+        "nhl_probability": round(nhl, 1),
+        "outcome_band": band or None,
+        "outcome_volatility": row.get("outcome_volatility"),
+        "label": f"Scout model · {band or 'Standard'} · {round(nhl)}% NHL",
+        "segments": segs,
+    }
+
+
+def _scouting_history_block(row: Dict[str, Any], character_read: Optional[Dict[str, Any]], analytics: Optional[Dict[str, Any]] = None) -> Optional[List[Dict[str, Any]]]:
+    """Serialize real scouting notes / interviews into dossier desk rows."""
+    entries: List[Dict[str, Any]] = []
+    assigned = str(row.get("assigned_scout") or row.get("assignedScout") or "").strip()
+    conf = _f(row.get("scouting_confidence"), 55)
+    viewings = _i(row.get("scout_viewings") or row.get("viewing_count"))
+    if viewings <= 0:
+        gp = _i(row.get("gp") or row.get("games_played"))
+        viewings = max(1, min(8, int(round(conf / 14) + min(3, gp // 12))))
+
+    grade = row.get("scouted_overall_estimate") or row.get("true_ovr") or row.get("current_ovr_estimate")
+    if assigned:
+        quote = str(row.get("scout_summary") or row.get("projection_notes") or row.get("micro_summary") or "").strip()
+        if not quote:
+            strengths = row.get("strengths") or []
+            if isinstance(strengths, list) and strengths:
+                quote = str(strengths[0])
+        entries.append({
+            "scout": assigned,
+            "meta": f"Assigned · {viewings} viewing{'s' if viewings != 1 else ''}",
+            "viewings": viewings,
+            "hit_rate": round(min(88, max(52, conf - 4)), 0),
+            "quote": quote or "File in progress — no written summary on record yet.",
+            "grade": round(_f(grade), 0) if grade is not None else None,
+            "grade_label": "HIS GRADE",
+            "tone": "green",
+            "locked": False,
+        })
+
+    notes = row.get("notes") or row.get("scout_reports") or row.get("reports") or []
+    if isinstance(notes, list):
+        for idx, note in enumerate(notes[:3]):
+            text = note if isinstance(note, str) else str((note or {}).get("text") or (note or {}).get("summary") or "")
+            text = text.strip()
+            if not text:
+                continue
+            entries.append({
+                "scout": str((note or {}).get("scout") if isinstance(note, dict) else f"Regional scout {idx + 1}"),
+                "meta": str((note or {}).get("region") if isinstance(note, dict) else "Regional file"),
+                "viewings": (note or {}).get("viewings") if isinstance(note, dict) else None,
+                "hit_rate": (note or {}).get("hit_rate") if isinstance(note, dict) else None,
+                "quote": text,
+                "grade": (note or {}).get("grade") if isinstance(note, dict) else None,
+                "grade_label": "HIS GRADE",
+                "tone": "amber" if idx % 2 else "cyan",
+                "locked": False,
+            })
+
+    interview_done = str(row.get("interview_status") or "").lower() in ("completed", "done", "finished")
+    interview_notes = (character_read or {}).get("interview_notes")
+    if interview_notes:
+        entries.append({
+            "scout": "Character interview",
+            "meta": "Combine / private setting",
+            "viewings": 1,
+            "hit_rate": (character_read or {}).get("confidence"),
+            "quote": str(interview_notes),
+            "grade": None,
+            "grade_label": "READ",
+            "tone": "green",
+            "locked": False,
+        })
+    elif not interview_done:
+        entries.append({
+            "scout": "Psych. interview",
+            "meta": "Not commissioned",
+            "viewings": None,
+            "hit_rate": None,
+            "quote": None,
+            "grade": None,
+            "grade_label": "",
+            "tone": "muted",
+            "locked": True,
+        })
+
+    stock_reason = str(row.get("stock_reason") or row.get("movement_catalyst") or "").strip()
+    gp = _i(row.get("gp") or row.get("games_played"))
+    points = _i(row.get("points"))
+    ppg = _f(row.get("ppg"))
+    if ppg <= 0 and gp > 0 and points > 0:
+        ppg = points / gp
+    model_grade = _analytics_model_grade(row, analytics)
+    if stock_reason and len(entries) < 4:
+        entries.append({
+            "scout": "Analytics dept.",
+            "meta": "Stock & movement",
+            "viewings": None,
+            "hit_rate": round(min(88, max(52, conf)), 0),
+            "quote": stock_reason,
+            "grade": model_grade,
+            "grade_label": "MODEL",
+            "tone": "cyan",
+            "locked": False,
+        })
+    elif (analytics or gp > 0) and len(entries) < 4:
+        war = _f((analytics or {}).get("war"))
+        quote = f"{points}P in {gp} GP · {ppg:.2f} PPG" if gp > 0 and ppg > 0 else "Production model on file."
+        entries.append({
+            "scout": "Analytics dept.",
+            "meta": "Production model",
+            "viewings": None,
+            "hit_rate": round(min(88, max(52, 50 + war * 8))) if war else round(min(88, max(52, conf)), 0),
+            "quote": quote,
+            "grade": model_grade,
+            "grade_label": "MODEL",
+            "tone": "cyan",
+            "locked": False,
+        })
+
+    return entries or None
+
+
 def _prospect_character_read(row: Dict[str, Any]) -> Dict[str, Any]:
     """Scouting-based character read — never expose exact hidden morality or diagnoses."""
     scout_conf = round(_f(row.get("scouting_confidence"), 55), 1)
@@ -2113,6 +2343,7 @@ def build_prospect_profile(
             "ppg": round(pop / max(1, pog), 2) if pop else None,
         }
 
+    character_read = _prospect_character_read(row)
     profile: Dict[str, Any] = {
         "id": str(row.get("key") or row.get("id") or ""),
         "playerId": str(row.get("key") or row.get("id") or ""),
@@ -2264,7 +2495,17 @@ def build_prospect_profile(
             translation=translation_label,
             comparison=comparison,
         ),
-        "character_read": _prospect_character_read(row),
+        "character_read": character_read,
+        "play_style": str(
+            row.get("play_style")
+            or row.get("playstyle")
+            or (comparison or {}).get("archetype")
+            or row.get("player_type")
+            or row.get("archetype")
+            or ""
+        ).strip() or None,
+        "scouting_history": _scouting_history_block(row, character_read, analytics),
+        "outcome_distribution": _outcome_distribution_block(row, potential),
     }
     if is_transcendent:
         # Narrative metadata stays server-side / storyline only. Do not ship

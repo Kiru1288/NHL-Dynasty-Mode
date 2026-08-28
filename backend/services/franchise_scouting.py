@@ -175,8 +175,9 @@ def _register_coverage_deployment(
     state["active_deployments"] = deployments[-MAX_ACTIVE_DEPLOYMENTS:]
 
 
-def apply_passive_scouting_progress(session: FranchiseSession) -> bool:
-    """Apply one calendar day of passive dedicated-file growth for assigned/shortlist/deployed targets."""
+def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1) -> bool:
+    """Apply passive dedicated-file growth for assigned/shortlist/deployed targets."""
+    step_days = max(1, int(days or 1))
     state = _ensure_scouting_state(session)
     ctx = _draft_franchise_date_context(session)
     month = ctx.get("month")
@@ -245,6 +246,8 @@ def apply_passive_scouting_progress(session: FranchiseSession) -> bool:
 
         if gain <= 0.0:
             continue
+
+        gain *= float(step_days)
 
         cap = PASSIVE_MAX_WITHOUT_ACTION
         if is_target or assigned:
@@ -538,6 +541,11 @@ def _normalize_prospect(
 
 def _draft_entries(session: FranchiseSession) -> List[Dict[str, Any]]:
     sim = getattr(session, "sim", None)
+    rev = int(getattr(session, "_prospect_revision", 0) or 0)
+    cached = getattr(session, "_cached_draft_class_rankings", None)
+    cached_rev = int(getattr(session, "_cached_draft_class_rankings_rev", -1) or -1)
+    if isinstance(cached, dict) and cached.get("entries") and cached_rev == rev:
+        return list(cached.get("entries") or [])
     board = get_cached_draft_class_rankings(session, sim)
     return list(board.get("entries") or [])
 

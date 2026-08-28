@@ -3,23 +3,6 @@ import { GameUIProvider, useGameUI } from "./game/GameUIContext";
 import { SCREENS } from "./game/constants";
 import setupTheme from "./soundtrack/JJ's Energy - Felix Weber (FIFA 2014 World Cup Brazil OST).mp3";
 import { GameCanvas } from "./components/game/GameCanvas";
-import { HubScreen } from "./screens/HubScreen";
-import { RosterScreen } from "./screens/RosterScreen";
-import { StatsCentralScreen } from "./screens/StatsCentralScreen";
-import CalendarScreen from "./screens/CalendarScreen";
-import { SettingsScreen } from "./screens/SettingsScreen";
-import { OfficeScreen } from "./screens/OfficeScreen";
-import TradeHub from "./screens/TradeHub";
-import DraftClass from "./screens/DraftClass";
-import DraftLottery from "./screens/DraftLottery";
-import TeamNeeds from "./screens/TeamNeeds";
-import StorylinesScreen from "./screens/StorylinesScreen";
-import ChemistryScreen from "./screens/ChemistryScreen";
-import EditLines from "./screens/editLines";
-import Scouting from "./screens/Scouting";
-import CapLedger from "./screens/CapLedger";
-import FreeAgency from "./screens/FreeAgency";
-import LeagueOperations from "./screens/LeagueOperations";
 
 /** TEMP: remove with frontend/src/dev/EventMenuReplay.js after menu QA */
 import EventMenuReplay from "./dev/EventMenuReplay";
@@ -27,8 +10,35 @@ import EventMenuReplay from "./dev/EventMenuReplay";
 const SetupScreen = React.lazy(() =>
   import("./screens/SetupScreen").then((m) => ({ default: m.SetupScreen }))
 );
+const HubScreen = React.lazy(() =>
+  import("./screens/HubScreen").then((m) => ({ default: m.HubScreen }))
+);
+const RosterScreen = React.lazy(() =>
+  import("./screens/RosterScreen").then((m) => ({ default: m.RosterScreen }))
+);
+const StatsCentralScreen = React.lazy(() =>
+  import("./screens/StatsCentralScreen").then((m) => ({ default: m.StatsCentralScreen }))
+);
+const CalendarScreen = React.lazy(() => import("./screens/CalendarScreen"));
+const SettingsScreen = React.lazy(() =>
+  import("./screens/SettingsScreen").then((m) => ({ default: m.SettingsScreen }))
+);
+const OfficeScreen = React.lazy(() =>
+  import("./screens/OfficeScreen").then((m) => ({ default: m.OfficeScreen }))
+);
+const TradeHub = React.lazy(() => import("./screens/TradeHub"));
+const DraftClass = React.lazy(() => import("./screens/DraftClass"));
+const DraftLottery = React.lazy(() => import("./screens/DraftLottery"));
+const TeamNeeds = React.lazy(() => import("./screens/TeamNeeds"));
+const StorylinesScreen = React.lazy(() => import("./screens/StorylinesScreen"));
+const ChemistryScreen = React.lazy(() => import("./screens/ChemistryScreen"));
+const EditLines = React.lazy(() => import("./screens/editLines"));
+const Scouting = React.lazy(() => import("./screens/Scouting"));
+const CapLedger = React.lazy(() => import("./screens/CapLedger"));
+const FreeAgency = React.lazy(() => import("./screens/FreeAgency"));
+const LeagueOperations = React.lazy(() => import("./screens/LeagueOperations"));
 
-function SetupScreenFallback() {
+function ScreenLoadingFallback({ label = "Loading…" }) {
   return (
     <div
       style={{
@@ -44,9 +54,13 @@ function SetupScreenFallback() {
         fontWeight: 800,
       }}
     >
-      Loading franchise setup…
+      {label}
     </div>
   );
+}
+
+function SetupScreenFallback() {
+  return <ScreenLoadingFallback label="Loading franchise setup…" />;
 }
 
 const isEventMenuReplay =
@@ -167,32 +181,34 @@ function GameRoot() {
 
   return (
     <GameCanvas>
-      {screen === SCREENS.SETUP && (
-        <Suspense fallback={<SetupScreenFallback />}>
-          <SetupScreen />
-        </Suspense>
-      )}
-      {screen === SCREENS.HUB && <HubScreen />}
-      {screen === SCREENS.ROSTER && <RosterScreen />}
-      {screen === SCREENS.CALENDAR && <CalendarScreen />}
-      {screen === SCREENS.STORYLINES && <StorylinesScreen />}
-      {screen === SCREENS.CHEMISTRY && <ChemistryScreen />}
-      {screen === SCREENS.EDIT_LINES && <EditLines />}
-      {screen === SCREENS.POWER_PLAY && <EditLines />}
-      {screen === SCREENS.PENALTY_KILL && <EditLines />}
-      {screen === SCREENS.STATS && <StatsCentralScreen />}
-      {screen === SCREENS.TRADE && <TradeHub />}
-      {screen === SCREENS.DRAFT_CLASS && <DraftClass />}
-      {screen === SCREENS.DRAFT_LOTTERY && <DraftLottery />}
-      {screen === SCREENS.TEAM_NEEDS && <TeamNeeds />}
-      {screen === SCREENS.SCOUTING && <Scouting />}
-      {screen === SCREENS.OFFICE && <OfficeScreen />}
-      {screen === SCREENS.LEAGUE_OPERATIONS && <LeagueOperations />}
-      {screen === SCREENS.GM_WORLD && <LeagueOperations />}
-      {screen === SCREENS.CAP_LEDGER && <CapLedger />}
-      {screen === SCREENS.FREE_AGENCY && <FreeAgency />}
-      {screen === SCREENS.SETTINGS && <SettingsScreen />}
-      {screen === SCREENS.PLACEHOLDER && <CommandPlaceholderScreen />}
+      <Suspense fallback={<ScreenLoadingFallback label="Loading screen…" />}>
+        {screen === SCREENS.SETUP && (
+          <Suspense fallback={<SetupScreenFallback />}>
+            <SetupScreen />
+          </Suspense>
+        )}
+        {screen === SCREENS.HUB && <HubScreen />}
+        {screen === SCREENS.ROSTER && <RosterScreen />}
+        {screen === SCREENS.CALENDAR && <CalendarScreen />}
+        {screen === SCREENS.STORYLINES && <StorylinesScreen />}
+        {screen === SCREENS.CHEMISTRY && <ChemistryScreen />}
+        {screen === SCREENS.EDIT_LINES && <EditLines />}
+        {screen === SCREENS.POWER_PLAY && <EditLines />}
+        {screen === SCREENS.PENALTY_KILL && <EditLines />}
+        {screen === SCREENS.STATS && <StatsCentralScreen />}
+        {screen === SCREENS.TRADE && <TradeHub />}
+        {screen === SCREENS.DRAFT_CLASS && <DraftClass />}
+        {screen === SCREENS.DRAFT_LOTTERY && <DraftLottery />}
+        {screen === SCREENS.TEAM_NEEDS && <TeamNeeds />}
+        {screen === SCREENS.SCOUTING && <Scouting />}
+        {screen === SCREENS.OFFICE && <OfficeScreen />}
+        {screen === SCREENS.LEAGUE_OPERATIONS && <LeagueOperations />}
+        {screen === SCREENS.GM_WORLD && <LeagueOperations />}
+        {screen === SCREENS.CAP_LEDGER && <CapLedger />}
+        {screen === SCREENS.FREE_AGENCY && <FreeAgency />}
+        {screen === SCREENS.SETTINGS && <SettingsScreen />}
+        {screen === SCREENS.PLACEHOLDER && <CommandPlaceholderScreen />}
+      </Suspense>
     </GameCanvas>
   );
 }

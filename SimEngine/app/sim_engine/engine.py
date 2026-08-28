@@ -14867,7 +14867,11 @@ class SimEngine:
             seen_ids = set(seen_ids or [])
             market_state["seen_trade_ids"] = seen_ids
         season_cpu_trades = int(market_state.get("season_cpu_trades", 0) or 0)
-        for row in list(getattr(self.league, "trade_history", None) or []):
+        history = list(getattr(self.league, "trade_history", None) or [])
+        scan_from = int(market_state.get("trade_history_scan_idx", 0) or 0)
+        if scan_from < 0 or scan_from > len(history):
+            scan_from = 0
+        for row in history[scan_from:]:
             if not isinstance(row, dict):
                 continue
             if bool(row.get("user_involved")):
@@ -14877,6 +14881,7 @@ class SimEngine:
                 continue
             seen_ids.add(tid)
             season_cpu_trades += 1
+        market_state["trade_history_scan_idx"] = len(history)
         market_state["season_cpu_trades"] = int(season_cpu_trades)
 
         day_ratio = max(0.0, min(1.0, float(day) / max(1.0, float(max_day))))
@@ -14947,10 +14952,11 @@ class SimEngine:
         rm = RosterManager()
         tbl = standings.league_table()
         n_t = max(1, len(tbl))
+        rank_by_tid = {str(getattr(x, "team_id", "") or ""): i for i, x in enumerate(tbl)}
         for tm in teams:
             tid = str(getattr(tm, "team_id", getattr(tm, "id", "")))
             rec = standings.records.get(tid)
-            rank = next((i for i, x in enumerate(tbl) if x.team_id == tid), n_t)
+            rank = int(rank_by_tid.get(tid, n_t))
             inj_ct = sum(1 for p in self._gm_skaters(tm) if self._injury_sidelined(p))
             if inj_ct < 2 and rank <= int(0.42 * n_t):
                 continue

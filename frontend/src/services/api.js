@@ -1,26 +1,48 @@
 import axios from "axios";
 import { record as perfRecord } from "./perfProfiler";
 
-const API_CANDIDATES = [
-  process.env.REACT_APP_API_URL,
-  "http://127.0.0.1:8000",
-  "http://127.0.0.1:8001",
-  "http://localhost:8000",
-  "http://localhost:8001",
-].filter(Boolean);
+const DEV_SAME_ORIGIN = "";
+
+function buildApiCandidates() {
+  return uniqueOrigins(
+    [
+      process.env.REACT_APP_API_URL,
+      process.env.NODE_ENV === "development" ? DEV_SAME_ORIGIN : null,
+      "http://127.0.0.1:8000",
+      "http://127.0.0.1:8001",
+      "http://localhost:8000",
+      "http://localhost:8001",
+    ].filter((url) => url !== null && url !== undefined)
+  );
+}
 
 function uniqueOrigins(urls) {
   const seen = new Set();
   return urls
     .map((url) => String(url).replace(/\/$/, ""))
     .filter((url) => {
-      if (seen.has(url)) return false;
-      seen.add(url);
+      const key = url || DEV_SAME_ORIGIN;
+      if (seen.has(key)) return false;
+      seen.add(key);
       return true;
     });
 }
 
-export let baseURL = uniqueOrigins(API_CANDIDATES)[0];
+function healthCheckUrl(origin) {
+  return origin ? `${origin}/api/health` : "/api/health";
+}
+
+export function formatApiDisplayUrl(origin = baseURL) {
+  if (!origin) {
+    if (typeof window !== "undefined" && window.location?.origin) {
+      return `${window.location.origin}/api (dev proxy -> 127.0.0.1:8000)`;
+    }
+    return "dev proxy -> 127.0.0.1:8000";
+  }
+  return origin;
+}
+
+export let baseURL = buildApiCandidates()[0];
 
 let resolveInFlight = null;
 let apiResolved = false;
@@ -42,22 +64,27 @@ export async function resolveApiBaseUrl({ force = false } = {}) {
   }
 
   resolveInFlight = (async () => {
-    for (const origin of uniqueOrigins(API_CANDIDATES)) {
+    for (const origin of buildApiCandidates()) {
       try {
         const controller = new AbortController();
         const timer = window.setTimeout(() => controller.abort(), 1600);
-        const res = await fetch(`${origin}/api/health`, {
+        const res = await fetch(healthCheckUrl(origin), {
           method: "GET",
           cache: "no-store",
           signal: controller.signal,
         });
         window.clearTimeout(timer);
-        if (res.ok) {
-          baseURL = origin;
-          api.defaults.baseURL = origin;
-          apiResolved = true;
-          return origin;
+        if (!res.ok) {
+          continue;
         }
+        const body = await res.json().catch(() => null);
+        if (body?.mode !== "interactive_franchise") {
+          continue;
+        }
+        baseURL = origin;
+        api.defaults.baseURL = origin;
+        apiResolved = true;
+        return origin;
       } catch {
         /* try the next local port */
       }
@@ -78,6 +105,7 @@ export async function resolveApiBaseUrl({ force = false } = {}) {
 export const SESSION_STORAGE_KEY = "nhl_franchise_session_id";
 export const API_INSTANCE_STORAGE_KEY = "nhl_franchise_api_instance_id";
 export const API_CODE_REVISION_STORAGE_KEY = "nhl_franchise_api_code_revision";
+export const HUB_SNAPSHOT_STORAGE_KEY = "nhl_franchise_hub_snapshot_v1";
 
 /** Frontend expects these /api/health code.features — missing means stale uvicorn. */
 export const REQUIRED_BACKEND_FEATURES = [
@@ -159,6 +187,56 @@ export function clearFranchiseClientCaches() {
 
 export function clearFranchiseSession() {
   clearFranchiseClientCaches();
+  clearFranchiseHubSnapshot();
+}
+
+/** Lean hub identity for instant paint after browser refresh while /state loads. */
+export function readFranchiseHubSnapshot() {
+  try {
+    const sid = getFranchiseSessionId();
+    if (!sid) return null;
+    const raw = sessionStorage.getItem(HUB_SNAPSHOT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    if (String(parsed.session_id || "") !== String(sid)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function writeFranchiseHubSnapshot(state) {
+  try {
+    const sid = getFranchiseSessionId();
+    if (!sid || !state || typeof state !== "object") return;
+    const team = state.team;
+    if (!team || typeof team !== "object") return;
+    const snap = {
+      session_id: sid,
+      team,
+      record: state.record ?? team.record,
+      nhl_today: state.nhl_today,
+      nhl_season_label: state.nhl_season_label,
+      phase: state.phase,
+      season_phase: state.season_phase,
+      flags: state.flags,
+      user_team_id: state.user_team_id,
+      standings: state.standings,
+      stats_revision: state.stats_revision,
+    };
+    sessionStorage.setItem(HUB_SNAPSHOT_STORAGE_KEY, JSON.stringify(snap));
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+export function clearFranchiseHubSnapshot() {
+  try {
+    sessionStorage.removeItem(HUB_SNAPSHOT_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
 }
 
 export function lineupStorageKey(kind, sessionId) {
@@ -222,16 +300,12 @@ export async function syncFranchiseSessionWithBackend() {
     const { data } = await api.get("/api/health", { timeout: 8000 });
     const instanceId = String(data?.instance_id || "").trim();
     const codeRevision = String(data?.code_revision || data?.code?.revision || "").trim();
-    const features = data?.code?.features || {};
     const prevInstance = localStorage.getItem(API_INSTANCE_STORAGE_KEY);
     const prevRevision = localStorage.getItem(API_CODE_REVISION_STORAGE_KEY);
-    const missingFeatures = REQUIRED_BACKEND_FEATURES.filter((f) => !features?.[f]);
-    // Old uvicorn still serving yesterday's process has no revision / new features.
-    const staleBackend = !codeRevision || missingFeatures.length > 0;
-
     const sid = getFranchiseSessionId();
+    // Only invalidate when the backend process or code fingerprint actually changed —
+    // not on every refresh when health is slow or features are temporarily missing.
     const backendChanged =
-      staleBackend ||
       (instanceId && prevInstance && prevInstance !== instanceId) ||
       (codeRevision && prevRevision && prevRevision !== codeRevision);
 
@@ -361,7 +435,7 @@ export function formatFranchiseApiError(err) {
   }
   if (isNetworkError(err)) {
     return (
-      `Lost connection to the franchise API (${baseURL}). ` +
+      `Lost connection to the franchise API (${formatApiDisplayUrl()}). ` +
       "If the backend was just reloading code, refresh and try again. " +
       "If health is down, start backend/start_api.ps1."
     );
@@ -372,9 +446,9 @@ export function formatFranchiseApiError(err) {
       return "";
     }
     return (
-      `404 from ${baseURL} — often an old API without /api/franchise. ` +
+      `404 from ${formatApiDisplayUrl()} — often an old API without /api/franchise. ` +
       `Stop uvicorn/Python on port 8000, then run backend/start_api.ps1. ` +
-      `Check ${baseURL}/api/health for mode: interactive_franchise.`
+      `Check ${formatApiDisplayUrl()}/api/health for mode: interactive_franchise.`
     );
   }
   const data = err.response?.data;

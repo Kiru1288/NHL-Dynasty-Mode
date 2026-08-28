@@ -34,6 +34,19 @@ import {
   weeklyStockMovers,
   weeklyTrajectoryPoints,
 } from "./draftWarRoom";
+import {
+  resolveArchetype,
+  resolvePlayStyleTag,
+  resolveProjectedRangeLabel,
+  resolveCreaseZoneGrades,
+  resolveGoalieToolRows,
+  resolveBottomStatStrip,
+  developmentTrajectoryNarrative,
+  buildScoutingDeskEntries,
+  outcomeRibbonSegmentsForPosition,
+  zoneGradeWord,
+  formatDeskGrade,
+} from "./prospectDossierHelpers";
 
 let TRANSCENDENT_BOSS_AUDIO_URL = null;
 try {
@@ -1335,8 +1348,18 @@ function mapBackendDraftBoard(entries, dateContext) {
       coachability: attrFromBackend(row, base, "coachability", "coachability"),
       consistency: attrFromBackend(row, base, "consistency", "consistency"),
       poise: attrFromBackend(row, base, "poise", "poise"),
+      glove: attrFromBackend(row, base, "glove", "glove"),
+      blocker: attrFromBackend(row, base, "blocker", "blocker"),
+      reflexes: attrFromBackend(row, base, "reflexes", "reflexes"),
+      reboundControl: attrFromBackend(row, base, "rebound_control", "reboundControl"),
+      positioning: attrFromBackend(row, base, "positioning", "positioning"),
+      puckHandling: attrFromBackend(row, base, "puck_handling", "puckHandling"),
+      athleticism: attrFromBackend(row, base, "athleticism", "athleticism"),
       morale: base.morale,
-      character: base.character,
+      character: attrFromBackend(row, base, "character_score", "character"),
+      coachability: attrFromBackend(row, base, "coachability", "coachability"),
+      competitiveness: attrFromBackend(row, base, "competitiveness", "competitiveness"),
+      sociability: attrFromBackend(row, base, "sociability", "sociability"),
       fit: base.fit,
       watchlist: Boolean(row?.watchlist),
       target: Boolean(row?.target),
@@ -2879,40 +2902,83 @@ function estimateNumericMid(text) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function outcomeRibbonSegments(outcomes) {
-  if (!outcomes) return null;
-  const keys = ["peak", "expected", "worst", "nhlOdds", "hitPeakPct", "shootPastPct"];
-  if (keys.some((k) => outcomes[k] == null || !Number.isFinite(Number(outcomes[k])))) return null;
-  const nhl = Math.max(0, Math.min(100, Number(outcomes.nhlOdds)));
-  const non = Math.max(0, 100 - nhl);
-  const bust = Math.round(non * 0.42);
-  const ahl = Math.max(0, non - bust);
-  const star = Math.min(Number(outcomes.shootPastPct), Math.round(nhl * 0.28));
-  const top6 = Math.min(Number(outcomes.hitPeakPct), Math.max(0, nhl - star));
-  const mid6 = Math.max(0, nhl - star - top6);
-  const segs = [
-    { key: "bust", label: "Bust", w: bust },
-    { key: "ahl", label: "AHL", w: ahl },
-    { key: "mid", label: "Mid-6", w: mid6 },
-    { key: "top", label: "Top-6", w: top6 },
-    { key: "star", label: "Star+", w: star },
-  ];
-  const sum = segs.reduce((s, x) => s + x.w, 0);
-  if (sum <= 0) return null;
-  return segs.map((x) => ({ ...x, pct: (x.w / sum) * 100 }));
+function outcomeRibbonSegments(outcomes, isGoalie = false, outcomeDistribution = null) {
+  return outcomeRibbonSegmentsForPosition(outcomes, isGoalie, outcomeDistribution);
 }
 
-function zoneGradeWord(n) {
-  if (n == null || !Number.isFinite(n)) return "Unknown";
-  if (n >= 85) return "Elite";
-  if (n >= 75) return "High-end";
-  if (n >= 62) return "Serviceable";
-  return "Limited";
+function ProspectZoneMap({ tools, position, isGoalie }) {
+  if (isGoalie || String(position || "").toUpperCase() === "G") {
+    return <ProspectCreaseZoneMap tools={tools} />;
+  }
+  return <ProspectRinkZoneMap tools={tools} position={position} />;
+}
+
+function ProspectCreaseZoneMap({ tools }) {
+  const zones = resolveCreaseZoneGrades({}, {}, tools);
+  const numClass = (v) => wrNumClassForTier(v >= 85 ? "elite" : v >= 75 ? "high" : "depth");
+  const barPct = (v) => `${Math.max(8, Math.min(100, Math.round(v || 0)))}%`;
+  return (
+    <div className="wr-rink wr-rink--crease">
+      <span className="dc-profile-tags__label">
+        Crease grades <span className="wr-muted">//</span> where the game gets decided
+      </span>
+      <svg className="wr-rink__svg wr-rink__svg--crease" viewBox="0 0 640 270" aria-hidden="true">
+        <defs>
+          <linearGradient id="wrCreaseIn" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#f4b467" stopOpacity="0.5" />
+            <stop offset="1" stopColor="#f4b467" stopOpacity="0.08" />
+          </linearGradient>
+          <linearGradient id="wrCreaseMid" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#ffc94d" stopOpacity="0.46" />
+            <stop offset="1" stopColor="#ffc94d" stopOpacity="0.07" />
+          </linearGradient>
+          <linearGradient id="wrCreaseOut" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#3d6e8c" stopOpacity="0.38" />
+            <stop offset="1" stopColor="#3d6e8c" stopOpacity="0.06" />
+          </linearGradient>
+        </defs>
+        <rect x="2" y="2" width="636" height="266" fill="#081827" />
+        <path d="M 120 62 A 200 200 0 0 1 520 62 L 450 62 A 130 130 0 0 0 190 62 Z" fill="url(#wrCreaseOut)" />
+        <path d="M 190 62 A 130 130 0 0 1 450 62 L 380 62 A 60 60 0 0 0 260 62 Z" fill="url(#wrCreaseMid)" />
+        <path d="M 260 62 A 60 60 0 0 1 380 62 Z" fill="url(#wrCreaseIn)" />
+        <path d="M 120 62 A 200 200 0 0 1 520 62" fill="none" stroke="#5aa8d9" strokeWidth="1.5" opacity="0.5" />
+        <path d="M 190 62 A 130 130 0 0 1 450 62" fill="none" stroke="#5aa8d9" strokeWidth="1.5" opacity="0.6" />
+        <path d="M 260 62 A 60 60 0 0 1 380 62" fill="none" stroke="#5aa8d9" strokeWidth="1.5" opacity="0.7" />
+        <rect x="278" y="8" width="84" height="8" fill="#8fa8bd" />
+        <rect x="278" y="8" width="6" height="56" fill="#8fa8bd" />
+        <rect x="356" y="8" width="6" height="56" fill="#8fa8bd" />
+        <line x1="180" y1="62" x2="460" y2="62" stroke="#e0555f" strokeWidth="2.5" opacity="0.85" />
+        {!zones.rebound.locked ? (
+          <>
+            <text x="320" y="96" fill="#ffe3b0" fontSize="10" letterSpacing="2.6" textAnchor="middle" fontWeight="600">REBOUND CONTROL</text>
+            <text x="320" y="128" fill="#f4b467" fontSize="42" textAnchor="middle" className="wr-svg-num">{Math.round(zones.rebound.value)}</text>
+            <text x="320" y="143" fill="#f4b467" fontSize="12" textAnchor="middle" letterSpacing="1.5">{zoneGradeWord(zones.rebound.value).toUpperCase()}</text>
+          </>
+        ) : null}
+        {!zones.angles.locked ? (
+          <>
+            <text x="320" y="178" fill="#f4c66e" fontSize="11" letterSpacing="3" textAnchor="middle" fontWeight="600">ANGLES &amp; POSITIONING</text>
+            <text x="320" y="205" fill="#ffc94d" fontSize="52" textAnchor="middle" className="wr-svg-num">{Math.round(zones.angles.value)}</text>
+            <text x="320" y="222" fill="#f4c66e" fontSize="13" textAnchor="middle" letterSpacing="1.5">{zoneGradeWord(zones.angles.value).toUpperCase()}</text>
+            <rect x="264" y="232" width="112" height="4" fill="#12293a" />
+            <rect x="264" y="232" width={112 * (zones.angles.value / 100)} height="4" fill="#ffc94d" />
+          </>
+        ) : null}
+        {!zones.range.locked ? (
+          <text x="320" y="252" fill="#8fa3b3" fontSize="10" letterSpacing="2.4" textAnchor="middle" fontWeight="600">
+            {`PUCK-HANDLING RANGE — ${Math.round(zones.range.value)} · ${zoneGradeWord(zones.range.value).toUpperCase()}`}
+          </text>
+        ) : (
+          <text x="320" y="252" fill="#8fa3b3" fontSize="10" textAnchor="middle">PUCK-HANDLING RANGE — WITHHELD</text>
+        )}
+      </svg>
+      <p className="wr-rink__caption">Brighter paint means more of his value lives there. He plays big close to the net — the range game is still unlearned.</p>
+    </div>
+  );
 }
 
 function ProspectRinkZoneMap({ tools, position }) {
   const pos = String(position || "").toUpperCase();
-  if (pos === "G") return null;
   const byLabel = Object.fromEntries((tools || []).map((t) => [t.label, t]));
   const composite = (parts) => {
     const rows = parts.map((label) => byLabel[label]).filter(Boolean);
@@ -2935,7 +3001,9 @@ function ProspectRinkZoneMap({ tools, position }) {
 
   return (
     <div className="wr-rink">
-      <span className="dc-profile-tags__label">Zone map</span>
+      <span className="dc-profile-tags__label">
+        Zone grades <span className="wr-muted">//</span> where he wins the ice
+      </span>
       <div className="wr-rink__board">
         <svg className="wr-rink__svg" viewBox="0 0 360 160" aria-hidden="true">
           <rect x="8" y="8" width="344" height="144" rx="72" fill="rgba(4,14,24,0.9)" stroke="rgba(118,200,245,0.4)" />
@@ -2963,6 +3031,150 @@ function ProspectRinkZoneMap({ tools, position }) {
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+function OffIceFrameStrip({ player, tools, profile }) {
+  const charRead = profile?.character_read;
+  const traitMap = {};
+  (Array.isArray(charRead?.traits) ? charRead.traits : []).forEach((t) => {
+    if (t?.label) traitMap[String(t.label).toLowerCase()] = t;
+  });
+  const traitScore = (labels, fallback) => {
+    for (const label of labels) {
+      const row = traitMap[String(label).toLowerCase()];
+      if (!row || row.tier === "Unknown") continue;
+      const tier = String(row.tier || "").toLowerCase();
+      if (tier === "elite") return 90;
+      if (tier === "very high") return 82;
+      if (tier === "high") return 74;
+      if (tier === "above average") return 66;
+      if (tier === "average") return 58;
+      if (tier === "below average") return 48;
+      if (tier === "mixed reports") return null;
+    }
+    return fallback;
+  };
+
+  const physicalTool = tools?.find((t) => t.label === "Physical");
+  const mentalTool = tools?.find((t) => t.label === "IQ") || tools?.find((t) => t.label === "Positioning");
+  const physical = physicalTool?.locked
+    ? null
+    : Number(player?.physical ?? physicalTool?.mid ?? traitScore(["competitive drive"], null));
+  const mental = mentalTool?.locked
+    ? null
+    : Number(player?.poise ?? player?.hockeyIQ ?? mentalTool?.mid ?? traitScore(["coachability", "social adjustment"], null));
+  const character = Number(
+    player?.character
+    ?? player?.characterScore
+    ?? traitScore(["competitive drive", "coachability"], null),
+  );
+  const leadership = Number(
+    player?.leadership
+    ?? traitScore(["leadership"], null),
+  );
+  const pips = (v) => {
+    if (!Number.isFinite(v) || v <= 0) return 0;
+    return Math.max(0, Math.min(10, Math.round(v / 10)));
+  };
+  const phrase = (label, v) => {
+    const trait = traitMap[String(label).toLowerCase()]
+      || (label === "Physical" ? traitMap["competitive drive"] : null)
+      || (label === "Mental" ? (traitMap["coachability"] || traitMap["social adjustment"]) : null)
+      || (label === "Character" ? traitMap["competitive drive"] : null)
+      || (label === "Leadership" ? traitMap["leadership"] : null);
+    if (trait?.tier && trait.tier !== "Unknown") return trait.tier;
+    if (!Number.isFinite(v) || v <= 0) return label === "Leadership" ? "Interview locked" : "Unscouted";
+    if (v >= 82) return label === "Physical" ? "Elite frame" : label === "Mental" ? "Composed" : "Strong reports";
+    if (v >= 70) return label === "Physical" ? "Solid frame" : label === "Mental" ? "Reads pressure" : "Positive reports";
+    if (v >= 58) return label === "Mental" ? "Composure unproven" : "Needs work";
+    return "Below peer norm";
+  };
+  const rows = [
+    ["Physical", physical, "#f4b467"],
+    ["Mental", mental, "#2be4ff"],
+    ["Character", character, "#6cf7a6"],
+    ["Leadership", leadership, "#4f6d84", leadership <= 0],
+  ];
+  return (
+    <div className="wr-office-strip wr-office-strip--frame">
+      <span className="dc-profile-tags__label">
+        Off-ice &amp; frame <span className="wr-muted">//</span> what tape doesn&apos;t show
+      </span>
+      <div className="wr-office-strip__grid">
+        {rows.map(([label, value, color, locked]) => (
+          <div className={`wr-office-strip__row${locked ? " is-locked" : ""}`} key={label}>
+            <span className="wr-office-strip__label">{label}</span>
+            <div className={`wr-office-pips${locked ? " wr-hatch" : ""}`} aria-label={`${label} ${pips(value)} of 10`}>
+              {locked ? null : Array.from({ length: 10 }, (_, i) => (
+                <i key={i} className={i < pips(value) ? "is-on" : ""} style={i < pips(value) ? { background: color } : undefined} />
+              ))}
+            </div>
+            <em>{phrase(label, value)}</em>
+            <strong className={locked ? "is-locked-grade" : ""} style={!locked && value ? { color } : undefined}>
+              {locked ? "??" : (Number.isFinite(value) ? Math.round(value) : "—")}
+            </strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProspectScoutingDesk({ desk, confPct }) {
+  const entries = desk?.entries || [];
+  const returned = entries.filter((e) => !e.locked).length;
+  const total = entries.length;
+  return (
+    <section className="wr-scout-desk">
+      <span className="dc-profile-tags__label">
+        The scouting desk <span className="wr-muted">//</span> {returned} of {total} reports returned
+      </span>
+      <div className="wr-scout-desk__list">
+        {entries.map((row) => (
+          <article
+            key={`${row.scout}-${row.gradeLabel}`}
+            className={`wr-scout-desk__row is-${row.tone}${row.locked ? " is-locked" : ""}`}
+          >
+            <div className="wr-scout-desk__meta">
+              <div className="wr-scout-desk__name">{row.scout}</div>
+              <div className="wr-scout-desk__sub">{row.meta}</div>
+              {row.hitRate != null ? (
+                <div className="wr-scout-desk__hit">HIT RATE {Math.round(row.hitRate)}%</div>
+              ) : null}
+            </div>
+            <div className="wr-scout-desk__quote">
+              {row.locked ? (
+                <span className="wr-hatch wr-scout-desk__redact" aria-hidden="true" />
+              ) : (
+                <p>{row.quote ? `"${row.quote}"` : "—"}</p>
+              )}
+            </div>
+            <div className="wr-scout-desk__grade">
+              <strong>{formatDeskGrade(row)}</strong>
+              {row.gradeLabel ? <span>{row.gradeLabel}</span> : null}
+            </div>
+          </article>
+        ))}
+      </div>
+      {confPct != null ? (
+        <small className="wr-scout-desk__conf">{confPct}% scouting confidence on file</small>
+      ) : null}
+    </section>
+  );
+}
+
+function ProspectStatGradeStrip({ rows }) {
+  if (!rows?.length) return null;
+  return (
+    <div className="wr-stat-strip" role="group" aria-label="Tool letter grades">
+      {rows.map((row) => (
+        <div key={row.label} className={`wr-stat-strip__cell is-${row.tone || "gold"}`}>
+          <span>{row.label}</span>
+          <strong className={`wr-num-${row.tone || "gold"}`}>{row.grade}</strong>
+        </div>
+      ))}
     </div>
   );
 }
@@ -3066,7 +3278,7 @@ function ProspectBoardRow({ player, index, selected, expanded, onSelect, meta, s
           <span className="dc-prospect-row__sub">
             {player.teamDisplay || player.team || league} · {player.age || "—"} yrs
             {player.overager ? <em className="dc-overage-pill">Overager</em> : null}
-            {player.characterFile?.flagged ? <em className="dc-char-pill">Character</em> : null}
+            {player.characterConcerns ? <em className="dc-char-pill">Character</em> : null}
             {reasonLabel ? <em className="wr-reason-chip">{reasonLabel}</em> : null}
             {divergence ? (
               <em className="wr-div-chip">YOU #{divergence.scoutRank} · PUBLIC #{divergence.publicRank}</em>
@@ -3672,22 +3884,23 @@ function weightWithKg(weight) {
 }
 
 function resolveToolRows(player, profile) {
-  const lift = prospectAttributeLift(profile);
   const ceilingHidden = Boolean(profile?.ceilingHidden || profile?.potential?.hidden);
   const dedicatedFile = Boolean(profile?.dedicatedScoutFile);
   const wideFog = ceilingHidden && !dedicatedFile;
   const ambient = Number(profile?.scout_confidence ?? player?.scoutingConfidence ?? player?.completion);
   const userScout = Number(profile?.userScoutPct ?? player?.scoutedPercentage);
-  // Prefer ambient board confidence so Skill DNA is never blanked by scouted_percentage=0.
   let completion = Math.max(
     Number.isFinite(ambient) ? ambient : 0,
     (Number.isFinite(userScout) && userScout > 0) ? userScout : 0,
-    52
   );
-  if (wideFog) {
-    // Keep preliminary ranges visible under ceiling fog; do not collapse to "?".
-    completion = Math.min(Math.max(completion, 52), 66);
+  if (completion <= 0) completion = 28;
+  if (wideFog) completion = Math.min(Math.max(completion, 18), 66);
+
+  if (isGoaliePosition(player?.position)) {
+    return resolveGoalieToolRows(player, profile, completion, wideFog);
   }
+
+  const lift = prospectAttributeLift(profile);
   const bump = (val) => {
     const n = Number(val);
     if (!Number.isFinite(n)) return val;
@@ -4103,7 +4316,7 @@ function buildProspectPublicImage(player, profile, characterFile, stock) {
   if (player?.isTranscendent || profile?.transcendent_talent || hype === "mythic") {
     labels.push("Generational draft obsession");
   }
-  if (characterFile?.flagged) labels.push("Character questions circulating");
+  if (player?.characterConcerns || player?.character_concerns) labels.push("Character questions circulating");
   if (player?.pyramidTier?.key === "transcendent" || player?.pyramidTier?.key === "generational") {
     labels.push("Lottery-night name");
   }
@@ -4146,6 +4359,49 @@ function buildPublicationMentions(player, allProspects) {
   return mentions.sort((a, b) => Math.abs(b.spread) - Math.abs(a.spread)).slice(0, 4);
 }
 
+function prospectSocialKeys(player) {
+  const id = String(player?.id || player?.key || "").trim();
+  const name = prospectDisplayName(player);
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  return [...new Set([id, slug, name.toLowerCase()].filter(Boolean))];
+}
+
+function postMatchesProspect(post, player) {
+  const keys = prospectSocialKeys(player);
+  const authorId = String(post?.author_id || post?.prospect_key || post?.player_id || "").toLowerCase();
+  const authorName = String(post?.author_name || post?.author || "").toLowerCase();
+  const blob = `${post?.related_headline || ""} ${post?.text || ""}`.toLowerCase();
+  const last = prospectDisplayName(player).toLowerCase().split(/\s+/).pop() || "";
+  if (keys.some((k) => k && authorId === String(k).toLowerCase())) return true;
+  if (last.length > 2 && authorName.includes(last)) return true;
+  if (last.length > 2 && blob.includes(last)) return true;
+  return false;
+}
+
+function resolveProspectSocialProfile(narrativeUniverse, player) {
+  const profiles = narrativeUniverse?.prospect_social_profiles || {};
+  for (const key of prospectSocialKeys(player)) {
+    if (profiles[key]) return profiles[key];
+    const slugHit = Object.entries(profiles).find(([k]) => k.toLowerCase() === key.toLowerCase());
+    if (slugHit) return slugHit[1];
+  }
+  return null;
+}
+
+function collectProspectRedditThreads(narrativeUniverse, player) {
+  const threads = Array.isArray(narrativeUniverse?.reddit_threads) ? narrativeUniverse.reddit_threads : [];
+  const last = prospectDisplayName(player).toLowerCase().split(/\s+/).pop() || "";
+  return threads.filter((thread) => {
+    const title = String(thread?.title || thread?.headline || "").toLowerCase();
+    const body = String(thread?.body || thread?.text || thread?.summary || "").toLowerCase();
+    const related = String(thread?.related_player_id || thread?.player_id || "").toLowerCase();
+    const keys = prospectSocialKeys(player);
+    if (keys.some((k) => related && related === String(k).toLowerCase())) return true;
+    if (last.length > 2 && (title.includes(last) || body.includes(last))) return true;
+    return false;
+  }).slice(0, 4);
+}
+
 function buildProspectMediaBundle(franchiseState, player, profile, allProspects) {
   const storylines = collectProspectStorylines(franchiseState, player);
   const narrativeUniverse = franchiseState?.narrative_universe || {};
@@ -4175,32 +4431,38 @@ function buildProspectMediaBundle(franchiseState, player, profile, allProspects)
   );
   const stockNote = movementDisplayText(stock) || null;
   const socialPosts = Array.isArray(narrativeUniverse?.social_posts)
-    ? narrativeUniverse.social_posts.filter((p) => {
-        const blob = `${p?.related_headline || ""} ${p?.text || ""}`.toLowerCase();
-        const name = prospectDisplayName(player).toLowerCase();
-        const last = name.split(/\s+/).pop() || "";
-        return last && blob.includes(last);
-      }).slice(0, 4)
+    ? narrativeUniverse.social_posts.filter((p) => postMatchesProspect(p, player)).slice(0, 6)
     : [];
-  const prospectProfiles = narrativeUniverse?.prospect_social_profiles || {};
-  const prospectKey = String(player?.id || player?.prospect_id || prospectDisplayName(player));
-  const socialProfile = prospectProfiles[prospectKey] || prospectProfiles[String(player?.id || "")] || null;
+  const socialProfile = resolveProspectSocialProfile(narrativeUniverse, player);
+  const redditThreads = collectProspectRedditThreads(narrativeUniverse, player);
+  const puckrPosts = socialPosts.filter((p) => String(p?.platform || p?.source || "").toLowerCase() !== "reddit");
+  const redditFromSocial = socialPosts.filter((p) => /reddit|icehole|r\//i.test(String(p?.platform || p?.source || p?.subreddit || "")));
 
   return {
     storylines: storylines.slice(-12).reverse(),
     arcs,
     publicImage,
     publications,
-    socialPosts,
+    socialPosts: puckrPosts,
+    redditThreads: [...redditThreads, ...redditFromSocial.map((p) => ({
+      title: p.related_headline || "Prospect chatter",
+      body: p.text,
+      subreddit: p.subreddit || "r/hockey",
+      calendar_iso: p.calendar_iso,
+      score: p.likes,
+    }))].slice(0, 4),
     socialProfile,
     mediaPressure: mediaHeatPhrase(maxHeat),
     stockNarrative: stockNote,
     hasCoverage:
-      storylines.length > 0 ||
-      publications.length > 0 ||
-      characterFile?.flagged ||
-      memTags.length > 0 ||
-      Boolean(socialProfile),
+      storylines.length > 0
+      || publications.length > 0
+      || player?.characterConcerns
+      || player?.character_concerns
+      || memTags.length > 0
+      || Boolean(socialProfile)
+      || socialPosts.length > 0
+      || redditThreads.length > 0,
   };
 }
 
@@ -4328,13 +4590,30 @@ function ProspectMediaUniverse({ bundle }) {
 
       {bundle.socialPosts?.length ? (
         <article className="dc-media-card dc-media-card--wide">
-          <h4>Social pulse</h4>
+          <h4>Puckr / Twitter pulse</h4>
           <ul className="dc-media-wire">
             {bundle.socialPosts.map((post, i) => (
               <li key={post.id || i}>
-                <strong>{post.author_name}{post.verified ? " ✓" : ""}</strong>
+                <strong>{post.author_name || post.handle}{post.verified ? " ✓" : ""}</strong>
                 <time>{post.calendar_iso || "—"}</time>
                 <p>{post.text}</p>
+              </li>
+            ))}
+          </ul>
+        </article>
+      ) : null}
+
+      {bundle.redditThreads?.length ? (
+        <article className="dc-media-card dc-media-card--wide">
+          <h4>IceHole / Reddit</h4>
+          <ul className="dc-media-wire">
+            {bundle.redditThreads.map((thread, i) => (
+              <li key={thread.id || thread.thread_id || i}>
+                <strong>{thread.subreddit || "r/hockey"}</strong>
+                <time>{thread.calendar_iso || thread.date || "—"}</time>
+                <p>{thread.title || thread.headline || "Thread"}</p>
+                {thread.body || thread.text ? <p>{thread.body || thread.text}</p> : null}
+                {thread.score != null ? <em>{Number(thread.score).toLocaleString()} score</em> : null}
               </li>
             ))}
           </ul>
@@ -4438,7 +4717,6 @@ function ProspectProfileModal({
   const currentOvr = Number(profile?.scoutedOverall ?? profile?.currentOvrEstimate);
   const readinessLabel = nhlReadinessLabel(rank, ceilingRating, currentOvr, profile);
   const sampleThin = Boolean(profile?.sampleThin || stats?.sampleThin || (gp > 0 && gp < 15));
-  const playStyle = comparison?.archetype || player.playerType || null;
   const riskLabel = gem?.label || player.riskLabel || null;
   const volatility = profile?.developmentVolatility || null;
   const currentEstimate = resolveCurrentEstimate(player, profile, ceilingHidden, dedicatedFile);
@@ -4447,8 +4725,20 @@ function ProspectProfileModal({
   const tools = resolveToolRows(player, profile);
   const skillNotes = skillDevelopmentNotes(tools, player);
   const toolsWithNotes = skillNotes.rows;
+  const archetype = resolveArchetype(player, profile, toolsWithNotes, isGoalie);
+  const playStyleTag = resolvePlayStyleTag(player, profile, toolsWithNotes, isGoalie);
+  const playStyle = profile?.play_style || profile?.playStyle || playStyleTag?.label || comparison?.archetype || player.playerType || null;
+  const projectedRange = resolveProjectedRangeLabel(player, profile, ceilingHidden);
+  const devTrajectory = developmentTrajectoryNarrative(player, profile, toolsWithNotes, skillNotes, isGoalie);
+  const scoutingDesk = buildScoutingDeskEntries(player, profile, { gp, analytics });
+  const statStrip = resolveBottomStatStrip(player, profile, toolsWithNotes, isGoalie);
   const outcomes = projectionOutcomes(player, profile, skillNotes.developOdds);
-  const ribbonSegs = outcomeRibbonSegments(outcomes);
+  const outcomeDistribution = profile?.outcome_distribution || profile?.outcomeDistribution || null;
+  const ribbonSegs = outcomeRibbonSegments(outcomes, isGoalie, outcomeDistribution);
+  const outcomeRibbonLabel = outcomeDistribution?.label
+    || (outcomes?.source === "backend" && outcomes?.nhlOdds != null
+      ? `Scout model · ${outcomes.band || "Standard"} · ${outcomes.nhlOdds}% NHL`
+      : "Career outcome bands");
   const currentMid = estimateNumericMid(currentEstimate.text);
   const headroom = currentMid != null && outcomes?.peak != null
     ? Math.round(Number(outcomes.peak) - currentMid)
@@ -4456,6 +4746,7 @@ function ProspectProfileModal({
   const overageNote = overageStockNote(player);
   const strengthLines = strengthCopy(player, toolsWithNotes);
   const weaknessLines = weaknessCopy(player, toolsWithNotes, skillNotes.skatingWeak);
+  const characterRead = profile?.character_read;
   const characterFile = player.characterFile;
   const pyramid = player.pyramidTier;
   const mediaBundle = buildProspectMediaBundle(franchiseState, player, profile, allProspects);
@@ -4531,135 +4822,112 @@ function ProspectProfileModal({
       aria-label={`${player.firstName} ${player.lastName} scouting profile`}
     >
       <button type="button" className="dc-profile-modal__backdrop" onClick={onClose} aria-label="Close" />
-      <article className={`dc-signal-panel dc-signal-panel--premium dc-brochure${isTranscendent ? " aura-gold shake-on-open" : ""}`}>
+      <article className={`dc-signal-panel dc-signal-panel--premium dc-brochure dc-brochure--deep${isTranscendent ? " aura-gold shake-on-open" : ""}`}>
         <ModalCloseButton onClick={onClose} label="Close prospect profile" />
-        <header className="dc-signal-banner">
-          <span>{pyramid ? pyramid.label : "Franchise Intelligence"}</span>
-          <strong>{player.firstName} {player.lastName} · scouting brochure</strong>
+        <header className="dc-signal-banner dc-signal-banner--file">
+          <div className="dc-signal-banner__left">
+            <span className="dc-file-stamp">{ceilingHidden && !dedicatedFile ? "LONGSHOT" : "CONFIDENTIAL"}</span>
+            <span className="dc-file-id">
+              FILE {boardYear || "—"}-{String(rank).padStart(4, "0")} · OPENED {new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" }).replace(/\//g, ".")}
+            </span>
+          </div>
+          <span className="dc-file-lead">LEAD: {player.assignedScout || scoutMeta?.assignedScout || "E. LINDHOLM"}</span>
         </header>
 
         {!profile ? (
           <p className="dc-empty-note dc-profile-modal__loading">Scouting profile loading…</p>
         ) : (
-          <>
-            <aside className="dc-signal-identity">
-              <div className="dc-signal-portrait">
-                <DraftClassHeadshot player={player} size="lg" />
-                <SignalNationFlag country={countryLabel} size={64} className="dc-signal-portrait__flag" />
-                <div className={`dc-signal-portrait__stock is-${trendTone || "muted"}`}>
-                  <strong className={wrNumClassForRank(rank)}>#{rank}</strong>
-                  <span>{trend}</span>
-                </div>
-              </div>
-
-              <div className="dc-signal-identity__title">
-                <h2>{player.firstName} {player.lastName}</h2>
-                <p className="dc-signal-identity__pos">{posName}{pyramid ? ` · ${pyramid.label}` : ""}</p>
-              </div>
-
-              <ul className="dc-signal-bio">
-                <li>
-                  <SignalNationFlag country={countryLabel} size={32} />
-                  <div>
-                    <span>Nation</span>
-                    <strong>{String(countryLabel || "—").toUpperCase()}</strong>
-                  </div>
-                </li>
-                <li>
-                  <div>
-                    <span>Handedness</span>
-                    <strong>{shoots}</strong>
-                  </div>
-                </li>
-                <li>
-                  <div>
-                    <span>Age</span>
-                    <strong>{ageNum !== "—" ? `AGE ${ageNum}` : "—"}{player.overager ? " · OVERAGER" : ""}</strong>
-                  </div>
-                </li>
-                <li>
-                  <div>
-                    <span>Height</span>
-                    <strong>{ht.imperial}{ht.metric ? ` / ${ht.metric}` : ""}</strong>
-                  </div>
-                </li>
-                <li>
-                  <div>
-                    <span>Weight</span>
-                    <strong>{wt.lbs}{wt.kg ? ` / ${wt.kg}` : ""}</strong>
-                  </div>
-                </li>
-              </ul>
-
-              <div className="dc-signal-board-card">
-                <strong className={wrNumClassForRank(rank)}>#{rank}</strong>
-                <span>{boardYear ? `${boardYear} Scout Board` : "Scout Board"}</span>
-                <em className={`is-${trendTone || "muted"}`}>{trend}</em>
-              </div>
-
-              <div className="dc-signal-club-card dc-signal-club-card--text">
-                <div>
-                  <strong>{team && team !== "—" ? team : "—"}</strong>
-                  <span>{league || "—"}</span>
-                </div>
-              </div>
-            </aside>
-
-            <section className="dc-brochure-dna">
-              <div>
-                <ProspectRinkZoneMap tools={toolsWithNotes} position={player.position} />
-                <SkillDnaRadar
-                  tools={toolsWithNotes}
-                  compositeText={currentEstimate.text}
-                  developOdds={skillNotes.developOdds}
-                  skatingWeak={skillNotes.skatingWeak}
-                />
-                <OffIcePipStrip player={player} tools={toolsWithNotes} />
-              </div>
-              <div className="dc-proj-plain">
-                <span className="dc-profile-tags__label">Now → Peak</span>
-                <div className="wr-now-peak">
-                  <div className="wr-now-peak__chip">
-                    <span>Current OVR</span>
-                    <strong className={currentEstimate.exact ? "wr-num-cyan" : "wr-num-slate"}>{currentEstimate.text}</strong>
-                  </div>
-                  <span className="wr-now-peak__delta wr-num-gold">
-                    {headroom == null ? "—" : (headroom >= 0 ? `+${headroom}` : String(headroom))}
-                  </span>
-                  <div className={`wr-now-peak__chip is-peak${ceilingHidden ? " is-hidden" : ""}`}>
-                    <span>Peak</span>
-                    <strong className={ceilingHidden ? "" : "wr-num-gold"}>{ceilingHidden ? "" : (outcomes?.peak ?? "—")}</strong>
+          <div className="dc-brochure-scroll">
+            <section className="dc-brochure-hero">
+              <aside className="dc-signal-identity dc-signal-identity--compact">
+                <div className="dc-signal-portrait">
+                  <DraftClassHeadshot player={player} size="lg" />
+                  <SignalNationFlag country={countryLabel} size={64} className="dc-signal-portrait__flag" />
+                  <div className={`dc-signal-portrait__stock is-${trendTone || "muted"}`}>
+                    <strong className={wrNumClassForRank(rank)}>#{rank}</strong>
+                    <span>{trend}</span>
                   </div>
                 </div>
-                {player.consensusFloorApplied ? (
-                  <p className="wr-now-peak__note">Consensus floor applied</p>
-                ) : null}
-                <span className="dc-profile-tags__label">Outcome distribution</span>
-                {ribbonSegs ? (
-                  <>
-                    <div className="wr-outcome-ribbon" role="img" aria-label="Outcome distribution">
-                      {ribbonSegs.map((seg) => (
-                        <span
-                          key={seg.key}
-                          className={`wr-outcome-ribbon__seg is-${seg.key}`}
-                          style={{ width: `${seg.pct}%` }}
-                          title={`${seg.label} ${Math.round(seg.pct)}%`}
-                        />
-                      ))}
+                <div className="dc-signal-identity__title">
+                  <h2>{player.firstName} {player.lastName}</h2>
+                  <p className="dc-signal-identity__pos">{posName}{pyramid ? ` · ${pyramid.label}` : ""}</p>
+                </div>
+                <ul className="dc-signal-bio dc-signal-bio--compact">
+                  <li><div><span>Nation</span><strong>{String(countryLabel || "—").toUpperCase()}</strong></div></li>
+                  <li><div><span>Shoots</span><strong>{shoots}</strong></div></li>
+                  <li><div><span>Frame</span><strong>{ht.imperial}{wt.lbs !== "—" ? ` · ${wt.lbs}` : ""}</strong></div></li>
+                  <li><div><span>Club</span><strong>{team && team !== "—" ? team : "—"}</strong><span className="dc-signal-bio__sub">{league || "—"}</span></div></li>
+                </ul>
+                <div className="dc-file-depth">
+                  <span className="dc-profile-tags__label">File depth</span>
+                  <div className="dc-file-depth__bar"><i style={{ width: `${confPct ?? 0}%` }} /></div>
+                  <strong>{confPct ?? "—"}% scouting confidence</strong>
+                  {projectedRange.text ? <em>{projectedRange.text}</em> : null}
+                  {confNote ? <small>{confNote}</small> : null}
+                </div>
+              </aside>
+
+              <div className="dc-brochure-hero__main">
+                <div className="dc-archetype-head">
+                  <div>
+                    <span className="dc-profile-tags__label">Archetype</span>
+                    <h3 className="wr-num-gold dc-archetype-head__title">{archetype.label}</h3>
+                    <p className="dc-archetype-head__blurb">{archetype.blurb}</p>
+                    {playStyle ? (
+                      <ProfileChip tone="accent">Play style · {String(playStyle).toUpperCase()}</ProfileChip>
+                    ) : null}
+                  </div>
+                  <div className="wr-now-peak wr-now-peak--wide">
+                    <div className="wr-now-peak__chip">
+                      <span className="wr-now-peak__label">Now</span>
+                      <strong className={currentEstimate.exact ? "wr-num-cyan" : "wr-num-slate"}>{currentEstimate.text}</strong>
                     </div>
-                    <div className="wr-outcome-legend">
-                      {ribbonSegs.map((seg) => (
-                        <span key={`leg-${seg.key}`}><i className={`is-${seg.key}`} />{seg.label}</span>
-                      ))}
+                    <div className="wr-now-peak__arrow">
+                      <span aria-hidden="true">▸</span>
+                      <em className="wr-num-gold">{headroom == null ? "—" : (headroom >= 0 ? `+${headroom}` : String(headroom))}</em>
                     </div>
-                  </>
-                ) : (
-                  <div className="wr-outcome-ribbon is-unavailable" title={outcomes?.note || "Distribution unavailable"} />
-                )}
+                    <div className={`wr-now-peak__chip is-peak${ceilingHidden ? " is-hidden" : ""}`}>
+                      <span className="wr-now-peak__label">Peak</span>
+                      <strong className={ceilingHidden ? "" : "wr-num-gold"}>{ceilingHidden ? "—" : (outcomes?.peak ?? "—")}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <p className="dc-dev-trajectory">{devTrajectory}</p>
               </div>
             </section>
 
-            <aside className="dc-brochure-reports">
+            <ProspectZoneMap tools={toolsWithNotes} position={player.position} isGoalie={isGoalie} />
+
+            <section className="dc-brochure-block">
+              <span className="dc-profile-tags__label">Career outcome distribution <span className="wr-muted">//</span> {outcomeRibbonLabel}</span>
+              {ribbonSegs ? (
+                <>
+                  <div className="wr-outcome-ribbon" role="img" aria-label="Outcome distribution">
+                    {ribbonSegs.map((seg) => (
+                      <span
+                        key={seg.key}
+                        className={`wr-outcome-ribbon__seg is-${seg.key}`}
+                        style={{ width: `${seg.pct}%` }}
+                        title={`${seg.label} ${Math.round(seg.pct)}%`}
+                      >
+                        {Math.round(seg.pct)}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="wr-outcome-legend">
+                    {ribbonSegs.map((seg) => (
+                      <span key={`leg-${seg.key}`} style={{ width: `${seg.pct}%` }}>{seg.label}</span>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="wr-outcome-ribbon is-unavailable" title={outcomes?.note || "Distribution unavailable"} />
+              )}
+            </section>
+
+            <div className="dc-brochure-split-panels">
+              <OffIceFrameStrip player={player} tools={toolsWithNotes} profile={profile} />
               <div className="dc-report-stack">
                 <article className="dc-report-card">
                   <h4>Strengths</h4>
@@ -4675,36 +4943,37 @@ function ProspectProfileModal({
                     <p>{overageNote}</p>
                   </article>
                 ) : null}
-                <article className={`dc-report-card${characterFile?.flagged ? " is-concern" : ""}`}>
-                  <h4>{characterFile?.flagged ? `Character · ${characterFile.title}` : "Character"}</h4>
-                  <p>{characterFile?.story || "No material character flags in the current report."}</p>
+                <article className={`dc-report-card${player.characterConcerns ? " is-concern" : ""}`}>
+                  <h4>{player.characterConcerns ? "Character · flagged on file" : "Life & character"}</h4>
+                  <p>
+                    {characterRead?.interview_notes
+                      || (player.characterConcerns ? characterFile?.story : null)
+                      || (characterRead?.headline ? `Scout read — ${characterRead.headline}.` : null)
+                      || "No material character flags in the current report."}
+                  </p>
+                  {Array.isArray(characterRead?.traits) && characterRead.traits.length ? (
+                    <ul className="dc-char-traits">
+                      {characterRead.traits.map((trait) => (
+                        <li key={trait.label}>{trait.label}: {trait.tier}</li>
+                      ))}
+                    </ul>
+                  ) : null}
                 </article>
-                <div className="dc-signal-actionbar dc-signal-actionbar--icon">
-                  <button
-                    type="button"
-                    className={`dc-shortlist-icon${scoutMeta.watchlist ? " is-active" : ""}`}
-                    onClick={onToggleWatchlist}
-                    disabled={!onToggleWatchlist}
-                    aria-label={scoutMeta.watchlist ? "Remove from shortlist" : "Add to shortlist"}
-                    title={scoutMeta.watchlist ? "Remove from shortlist" : "Add to shortlist"}
-                  >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M6 3.5h12a1 1 0 0 1 1 1V21l-7-4.2L5 21V4.5a1 1 0 0 1 1-1z" />
-                    </svg>
-                  </button>
-                </div>
               </div>
-            </aside>
+            </div>
 
-            <section className="dc-brochure-analytics">
+            <ProspectScoutingDesk desk={scoutingDesk} confPct={confPct} />
+
+            <ProspectMediaUniverse bundle={mediaBundle} />
+
+            <section className="dc-brochure-analytics dc-brochure-analytics--inline">
               <div className="dc-signal-footer__stock">
-                <ValueTrajectoryChart points={trajectory} />
+                <ValueTrajectoryChart points={trajectory} compact />
               </div>
               <div className="dc-signal-season">
                 <div className="dc-signal-season__head">
-                  <span className="dc-profile-tags__label">Season & analytics</span>
+                  <span className="dc-profile-tags__label">Season &amp; analytics</span>
                   {sampleThin ? <span className="dc-signal-sample">Thin sample</span> : null}
-                  {playStyle ? <ProfileChip tone="accent">{String(playStyle).toUpperCase()}</ProfileChip> : null}
                 </div>
                 <div className="dc-signal-metrics dc-signal-metrics--focus">
                   {analyticsTiles.map((tile) => (
@@ -4714,8 +4983,21 @@ function ProspectProfileModal({
               </div>
             </section>
 
-            <ProspectMediaUniverse bundle={mediaBundle} />
-          </>
+            <ProspectStatGradeStrip rows={statStrip} />
+
+            <footer className="dc-signal-actionbar dc-signal-actionbar--dossier" aria-label="Dossier actions">
+              <button
+                type="button"
+                className={`dc-shortlist-icon${scoutMeta.watchlist ? " is-active" : ""}`}
+                onClick={onToggleWatchlist}
+                disabled={!onToggleWatchlist}
+                aria-label={scoutMeta.watchlist ? "Remove from shortlist" : "Add to shortlist"}
+                title={scoutMeta.watchlist ? "Remove from shortlist" : "Add to shortlist"}
+              >
+                ★ SHORTLIST
+              </button>
+            </footer>
+          </div>
         )}
       </article>
     </div>
@@ -7802,6 +8084,17 @@ export default function DraftClass() {
               "identity core decision"
               "footer footer footer";
             gap: 0;
+          }
+          .dc-signal-panel.dc-brochure--deep {
+            width: min(1120px, 98vw);
+            height: min(92vh, 920px);
+            height: min(92dvh, 920px);
+            display: flex;
+            flex-direction: column;
+            grid-template-columns: unset;
+            grid-template-rows: unset;
+            grid-template-areas: unset;
+            overflow: hidden;
           }
           .dc-signal-panel.dc-brochure {
             width: min(1480px, 98vw);

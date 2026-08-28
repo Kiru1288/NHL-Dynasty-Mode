@@ -434,6 +434,7 @@ function collectHubRosterPlayers(franchiseState) {
 export function HubScreen() {
   const {
     franchiseState,
+    sessionBootstrapping,
     setScreen,
     setHubMenuIndex,
     setCapLedgerTab,
@@ -575,6 +576,28 @@ export function HubScreen() {
       simActions,
     ]
   );
+
+  if (sessionBootstrapping && !franchiseState?.team?.name && !franchiseState?.team?.team_name) {
+    return (
+      <div className="game-screen hub-screen">
+        <div
+          style={{
+            minHeight: "100%",
+            display: "grid",
+            placeItems: "center",
+            color: "rgba(201,168,106,0.85)",
+            fontFamily: 'var(--font-office-display, "Archivo Black", sans-serif)',
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+            fontSize: 12,
+            fontWeight: 800,
+          }}
+        >
+          Restoring franchise…
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="game-screen hub-screen">
