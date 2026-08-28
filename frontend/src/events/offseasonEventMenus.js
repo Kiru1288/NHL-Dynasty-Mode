@@ -41,6 +41,11 @@ import {
   safeArray,
 } from "./shared/eventHelpers";
 
+function computeOfferCapHitM(aav, years, signingBonus = 0) {
+  const y = Math.max(1, Number(years) || 1);
+  return Math.round(((Number(aav) || 0) * y + (Number(signingBonus) || 0)) / y * 1000) / 1000;
+}
+
 function seasonLabel(franchiseState) {
   const y = franchiseState?.season_year || franchiseState?.seasonYear;
   return y ? `${y}–${Number(y) + 1}` : "";
@@ -265,6 +270,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
   const [offerAav, setOfferAav] = React.useState("");
   const [offerYears, setOfferYears] = React.useState("2");
   const [offerNtc, setOfferNtc] = React.useState(false);
+  const [offerNtcMode, setOfferNtcMode] = React.useState("NONE");
   const [offerNmc, setOfferNmc] = React.useState(false);
   const [offerTwoWay, setOfferTwoWay] = React.useState(false);
   const [offerBonus, setOfferBonus] = React.useState("0");
@@ -366,7 +372,9 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
           player_id: selected.player_id,
           aav_m: Number(offerAav) || 0,
           years: Math.max(1, parseInt(offerYears, 10) || 1),
-          ntc: offerNtc,
+          ntc: offerNtcMode === "FULL" || offerNtcMode === "MODIFIED",
+          ntc_mode: offerNtcMode,
+          m_ntc: offerNtcMode === "MODIFIED",
           nmc: offerNmc,
           two_way: offerTwoWay,
           signing_bonus_m: Number(offerBonus) || 0,
@@ -383,7 +391,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
       window.clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [panelMode, selectedId, offerAav, offerYears, offerNtc, offerNmc, offerBonus, offerContractType]);
+  }, [panelMode, selectedId, offerAav, offerYears, offerNtc, offerNtcMode, offerNmc, offerBonus, offerContractType]);
 
   const contracts = safeArray(payload?.contracts);
   const expiring = safeArray(payload?.expiring_contracts || payload?.expiring);
@@ -423,6 +431,9 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
     setOfferAav(String(Number(ask).toFixed(3)));
     setOfferYears(String(years));
     setOfferNtc(Boolean(selected.clause_ask === "NTC" || selected.clause_ask === "NMC"));
+    setOfferNtcMode(
+      selected.clause_ask === "M-NTC" ? "MODIFIED" : selected.clause_ask === "NTC" ? "FULL" : "NONE"
+    );
     setOfferNmc(Boolean(selected.clause_ask === "NMC"));
     setOfferTwoWay(Boolean(selected.two_way));
     setOfferBonus("0");
@@ -536,7 +547,9 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
   );
   const offerAavNum = Number(offerAav) || 0;
   const offerYearsNum = Math.max(1, parseInt(offerYears, 10) || 1);
-  const projectedSpace = Number.isFinite(capSpace) ? capSpace - offerAavNum : null;
+  const offerBonusNum = Number(offerBonus) || 0;
+  const offerCapHitNum = computeOfferCapHitM(offerAavNum, offerYearsNum, offerBonusNum);
+  const projectedSpace = Number.isFinite(capSpace) ? capSpace - offerCapHitNum : null;
   const askAav = Number(
     selected?.player_ask_aav_m ??
       selected?.requested_cap_hit ??
@@ -617,10 +630,12 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
           player_id: selected.player_id,
           aav_m: offerAavNum,
           years: offerYearsNum,
-          ntc: offerNtc,
+          ntc: offerNtcMode === "FULL" || offerNtcMode === "MODIFIED",
+          ntc_mode: offerNtcMode,
+          m_ntc: offerNtcMode === "MODIFIED",
           nmc: offerNmc,
           two_way: category === "nhl_two_way" || offerTwoWay,
-          signing_bonus_m: Number(offerBonus) || 0,
+          signing_bonus_m: offerBonusNum,
           contract_category: category,
           contract_type: isNhl ? undefined : category,
           context: "re_sign",
@@ -637,10 +652,12 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
         player_id: selected.player_id,
         aav_m: offerAavNum,
         years: offerYearsNum,
-        ntc: offerNtc,
+        ntc: offerNtcMode === "FULL" || offerNtcMode === "MODIFIED",
+        ntc_mode: offerNtcMode,
+        m_ntc: offerNtcMode === "MODIFIED",
         nmc: offerNmc,
         two_way: category === "nhl_two_way" || offerTwoWay,
-        signing_bonus_m: Number(offerBonus) || 0,
+        signing_bonus_m: offerBonusNum,
         contract_category: category,
         context: "re_sign",
       })
@@ -655,7 +672,10 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
     setOfferAav(String(aav));
     setOfferYears(String(years));
     if (counter.counter_ntc != null || counter.ntc != null) {
-      setOfferNtc(Boolean(counter.counter_ntc ?? counter.ntc));
+      const hasNtc = Boolean(counter.counter_ntc ?? counter.ntc);
+      setOfferNtc(hasNtc);
+      const mode = String(counter.ntc_mode || "").toUpperCase();
+      setOfferNtcMode(mode === "MODIFIED" || mode === "M-NTC" ? "MODIFIED" : hasNtc ? "FULL" : "NONE");
     }
     if (counter.counter_nmc != null || counter.nmc != null) {
       setOfferNmc(Boolean(counter.counter_nmc ?? counter.nmc));
@@ -669,7 +689,9 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
           player_id: selected.player_id,
           aav_m: Number(aav),
           years: Number(years),
-          ntc: Boolean(counter.counter_ntc ?? counter.ntc ?? offerNtc),
+          ntc: Boolean(counter.counter_ntc ?? counter.ntc ?? offerNtcMode !== "NONE"),
+          ntc_mode: counter.ntc_mode || offerNtcMode,
+          m_ntc: (counter.ntc_mode || offerNtcMode) === "MODIFIED",
           nmc: Boolean(counter.counter_nmc ?? counter.nmc ?? offerNmc),
           signing_bonus_m: Number(
             counter.counter_signing_bonus_m ?? counter.signing_bonus_m ?? offerBonus ?? 0
@@ -1330,7 +1352,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
 
                           <div className={`${prefix}-slider-block`}>
                             <div className={`${prefix}-slider-head`}>
-                              <span>Annual salary</span>
+                              <span>Annual salary (AAV)</span>
                               <strong>{formatMoney(offerAavNum)}</strong>
                             </div>
                             <input
@@ -1370,15 +1392,46 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                           </div>
 
                           <div className={`${prefix}-check-row is-clauses`}>
-                            <label className={offerNtc ? "is-on" : ""}>
+                            <label className={offerNtcMode === "FULL" ? "is-on" : ""}>
                               <input
-                                type="checkbox"
-                                checked={offerNtc}
+                                type="radio"
+                                name={`${prefix}-ntc-mode`}
+                                checked={offerNtcMode === "FULL"}
                                 disabled={busy || offerNmc}
-                                onChange={(e) => setOfferNtc(e.target.checked)}
+                                onChange={() => {
+                                  setOfferNtcMode("FULL");
+                                  setOfferNtc(true);
+                                }}
                               />
                               NTC
                               {selected.clause_ask === "NTC" ? <em>asked</em> : null}
+                            </label>
+                            <label className={offerNtcMode === "MODIFIED" ? "is-on" : ""}>
+                              <input
+                                type="radio"
+                                name={`${prefix}-ntc-mode`}
+                                checked={offerNtcMode === "MODIFIED"}
+                                disabled={busy || offerNmc}
+                                onChange={() => {
+                                  setOfferNtcMode("MODIFIED");
+                                  setOfferNtc(true);
+                                }}
+                              />
+                              M-NTC
+                              {selected.clause_ask === "M-NTC" ? <em>asked</em> : null}
+                            </label>
+                            <label className={offerNtcMode === "NONE" && !offerNmc ? "is-on" : ""}>
+                              <input
+                                type="radio"
+                                name={`${prefix}-ntc-mode`}
+                                checked={offerNtcMode === "NONE" && !offerNmc}
+                                disabled={busy || offerNmc}
+                                onChange={() => {
+                                  setOfferNtcMode("NONE");
+                                  setOfferNtc(false);
+                                }}
+                              />
+                              None
                             </label>
                             <label className={offerNmc ? "is-on" : ""}>
                               <input
@@ -1387,7 +1440,10 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                                 disabled={busy}
                                 onChange={(e) => {
                                   setOfferNmc(e.target.checked);
-                                  if (e.target.checked) setOfferNtc(true);
+                                  if (e.target.checked) {
+                                    setOfferNtcMode("NONE");
+                                    setOfferNtc(false);
+                                  }
                                 }}
                               />
                               NMC
@@ -1448,6 +1504,21 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                                   ? ` · ${response.reason}`
                                   : ""}
                             </strong>
+                            {response?.evaluation?.interest != null ? (
+                              <p className={`${prefix}-context`} style={{ margin: "0.35rem 0 0" }}>
+                                Interest {response.evaluation.interest}
+                                {response.evaluation.accept_cut != null
+                                  ? ` — needs ≥${response.evaluation.accept_cut} to accept`
+                                  : ""}
+                                {response.evaluation.agent_mood
+                                  ? ` · ${response.evaluation.agent_mood}`
+                                  : ""}
+                              </p>
+                            ) : null}
+                            <p className={`${prefix}-context`} style={{ margin: "0.25rem 0 0" }}>
+                              Cap hit {formatMoney(offerCapHitNum)} (AAV {formatMoney(offerAavNum)}
+                              {offerBonusNum > 0 ? ` + ${formatMoney(offerBonusNum)} bonus` : ""})
+                            </p>
                           </div>
                         ) : null}
                         {error ? <p className={`${prefix}-warn`}>{error}</p> : null}
@@ -1719,6 +1790,7 @@ export function FreeAgencyEventMenu({
   const [offerAav, setOfferAav] = React.useState("");
   const [offerYears, setOfferYears] = React.useState("2");
   const [offerNtc, setOfferNtc] = React.useState(false);
+  const [offerNtcMode, setOfferNtcMode] = React.useState("NONE");
   const [offerNmc, setOfferNmc] = React.useState(false);
   const [offerBonus, setOfferBonus] = React.useState("0");
   const [contractCategory, setContractCategory] = React.useState("nhl_one_way");
@@ -1805,7 +1877,8 @@ export function FreeAgencyEventMenu({
   const offerAavNum = Number(offerAav) || 0;
   const offerYearsNum = Math.max(1, parseInt(offerYears, 10) || 1);
   const offerBonusNum = Number(offerBonus) || 0;
-  const projectedSpace = Number.isFinite(capSpace) ? capSpace - offerAavNum : null;
+  const offerCapHitNum = computeOfferCapHitM(offerAavNum, offerYearsNum, offerBonusNum);
+  const projectedSpace = Number.isFinite(capSpace) ? capSpace - offerCapHitNum : null;
   const negoInterest = Number(response?.evaluation?.interest ?? response?.player_response?.interest ?? 0) || 0;
   const negoFeedback =
     response?.player_response?.feedback ||
@@ -1822,7 +1895,9 @@ export function FreeAgencyEventMenu({
           player_id: selected.player_id || selected.id,
           aav_m: offerAavNum,
           years: offerYearsNum,
-          ntc: offerNtc,
+          ntc: offerNtcMode === "FULL" || offerNtcMode === "MODIFIED",
+          ntc_mode: offerNtcMode,
+          m_ntc: offerNtcMode === "MODIFIED",
           nmc: offerNmc,
           signing_bonus_m: offerBonusNum,
           contract_category: contractCategory,
@@ -1839,7 +1914,7 @@ export function FreeAgencyEventMenu({
       window.clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, offerAav, offerYears, offerNtc, offerNmc, offerBonus, contractCategory]);
+  }, [selectedId, offerAav, offerYears, offerNtcMode, offerNmc, offerBonus, contractCategory]);
 
   const filtered = React.useMemo(() => {
     let list = [...rows];
@@ -2036,7 +2111,9 @@ export function FreeAgencyEventMenu({
         player_id: pid,
         aav_m: offerAavNum,
         years: offerYearsNum,
-        ntc: offerNtc,
+        ntc: offerNtcMode === "FULL" || offerNtcMode === "MODIFIED",
+        ntc_mode: offerNtcMode,
+        m_ntc: offerNtcMode === "MODIFIED",
         nmc: offerNmc,
         signing_bonus_m: offerBonusNum,
         contract_category: contractCategory,

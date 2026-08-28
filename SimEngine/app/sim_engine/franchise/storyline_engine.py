@@ -2855,6 +2855,7 @@ def _spawn_social_posts(session: Any, sl: Dict[str, Any]) -> None:
     from app.sim_engine.franchise.social_copy_engine import (  # noqa: WPS433
         build_evidence_context,
         compose_ambient_fan_post,
+        compose_dynasty_tweet,
         compose_reporter_post,
     )
 
@@ -2901,7 +2902,7 @@ def _spawn_social_posts(session: Any, sl: Dict[str, Any]) -> None:
                 "author_name": f"{pname.split()[-1]} Sicko",
                 "handle": f"@Fan{abs(hash(pname)) % 9000 + 1000}",
                 "verified": False,
-                "text": compose_ambient_fan_post(sentiment, ctx, rng, sl, reporter),
+                "text": compose_ambient_fan_post(sentiment, ctx, rng, sl),
                 "related_headline": str(sl.get("headline") or ""),
                 "calendar_iso": iso,
                 "heat": max(10, heat - 15),
@@ -2909,6 +2910,30 @@ def _spawn_social_posts(session: Any, sl: Dict[str, Any]) -> None:
                 "likes": int(heat * 45 + random.randint(20, 400)),
                 "reposts": int(heat * 8),
                 "replies": int(heat * 5),
+            }
+        )
+
+    if heat >= 22 and rng.random() < 0.55:
+        ctx = build_evidence_context(sl, session)
+        meme = heat < 45 and rng.random() < 0.35
+        dynasty_handles = ["@DynastyGM", "@CapTableGM", "@RebuildOrDie", "@LinesAndLogic", "@ProspectHive"]
+        posts.append(
+            {
+                "id": f"soc_{uuid.uuid4().hex[:10]}",
+                "arc_id": sl.get("arc_id"),
+                "storyline_id": story_id,
+                "author_type": "fan",
+                "author_name": "Franchise Mode GM",
+                "handle": rng.choice(dynasty_handles),
+                "verified": False,
+                "text": compose_dynasty_tweet(sl, ctx, rng, meme=meme),
+                "related_headline": str(sl.get("headline") or ""),
+                "calendar_iso": iso,
+                "heat": max(8, heat - 10),
+                "platform": "twitter_style_feed",
+                "likes": int(heat * 38 + random.randint(30, 520)),
+                "reposts": int(heat * 10),
+                "replies": int(heat * 6),
             }
         )
 
@@ -4648,7 +4673,14 @@ def _team_from_subreddit(subreddit: str) -> str:
     return slug
 
 
-def _reddit_thread_title(sl: Dict[str, Any], rng: random.Random) -> str:
+def _reddit_thread_title(sl: Dict[str, Any], rng: random.Random, session: Any = None) -> str:
+    from app.sim_engine.franchise.social_copy_engine import build_evidence_context, compose_reddit_thread_from_template  # noqa: WPS433
+
+    ctx = build_evidence_context(sl, session)
+    if rng.random() < 0.72:
+        title, _ = compose_reddit_thread_from_template(sl, ctx, rng)
+        if title:
+            return title[:120]
     headline = str(sl.get("headline") or "Thread")
     ktype = str(sl.get("knowledge_type") or "")
     if ktype in ("claim", "speculation"):
@@ -4659,10 +4691,22 @@ def _reddit_thread_title(sl: Dict[str, Any], rng: random.Random) -> str:
     return f"Discussion: {headline}"[:120]
 
 
-def _reddit_op_body(sl: Dict[str, Any], archetype: str, rng: random.Random) -> str:
-    from app.sim_engine.franchise.social_copy_engine import build_evidence_context, compose_ambient_fan_post  # noqa: WPS433
+def _reddit_op_body(sl: Dict[str, Any], archetype: str, rng: random.Random, session: Any = None) -> str:
+    from app.sim_engine.franchise.social_copy_engine import (  # noqa: WPS433
+        build_evidence_context,
+        compose_ambient_fan_post,
+        compose_reddit_thread_from_template,
+    )
 
-    ctx = build_evidence_context(sl)
+    ctx = build_evidence_context(sl, session)
+    if rng.random() < 0.68:
+        _, body = compose_reddit_thread_from_template(sl, ctx, rng)
+        if body:
+            if archetype == "stats_nerd" and "[OC]" not in body:
+                return f"{body} [OC] PPG {ctx.get('ppg')} through {ctx.get('games_played')} GP."[:900]
+            if archetype == "old_guard":
+                return f"{body} Back in my day we didn't need headlines for this."[:900]
+            return body[:900]
     tone_map = {
         "diehard_optimist": "hype",
         "diehard_doomer": "outrage",
@@ -4670,7 +4714,7 @@ def _reddit_op_body(sl: Dict[str, Any], archetype: str, rng: random.Random) -> s
         "old_guard": "concern",
         "rival_troll": "outrage",
     }
-    base = compose_ambient_fan_post(tone_map.get(archetype, "concern"), ctx, rng)
+    base = compose_ambient_fan_post(tone_map.get(archetype, "concern"), ctx, rng, sl)
     if archetype == "stats_nerd":
         return f"{base} [OC] PPG {ctx.get('ppg')} through {ctx.get('games_played')} GP."
     if archetype == "old_guard":
@@ -4681,7 +4725,7 @@ def _reddit_op_body(sl: Dict[str, Any], archetype: str, rng: random.Random) -> s
 def _reddit_top_comments(session: Any, sl: Dict[str, Any], subreddit: str, rng: random.Random) -> Tuple[List[Dict[str, Any]], float]:
     from app.sim_engine.franchise.social_copy_engine import build_evidence_context, compose_ambient_fan_post  # noqa: WPS433
 
-    ctx = build_evidence_context(sl)
+    ctx = build_evidence_context(sl, session)
     utid = str(getattr(session, "user_team_id") or "")
     is_user_team = subreddit != "r/hockey" and _team_subreddit_name(session, utid).lower() in subreddit.lower()
     comments: List[Dict[str, Any]] = []
@@ -4761,11 +4805,11 @@ def _u_add_reddit_thread(session: Any, sl: Dict[str, Any], rng: Optional[random.
     thread = {
         "thread_id": f"ih_{uuid.uuid4().hex[:10]}",
         "subreddit": subreddit,
-        "title": _reddit_thread_title(sl, r),
+        "title": _reddit_thread_title(sl, r, session),
         "op_author": op_author,
         "op_archetype": arch_key,
         "flair": flair,
-        "body": _reddit_op_body(sl, arch_key, r),
+        "body": _reddit_op_body(sl, arch_key, r, session),
         "upvotes": int(heat * 18 + r.randint(40, 800)),
         "upvote_ratio": upvote_ratio,
         "comment_count": len(comments) + r.randint(3, 40),
@@ -5788,9 +5832,15 @@ def team_locker_room_profile(session: Any, team_id: str) -> Dict[str, Any]:
 
 def player_universe_profile(session: Any, player_id: str) -> Dict[str, Any]:
     migrate_session_storyline_state(session)
-    _u_sync_player_entities(session)
+    entities_pre = getattr(session, "universe_players", None) or {}
+    entity_pre = dict(entities_pre.get(str(player_id)) or {})
+    team_id = str(entity_pre.get("team_id") or "")
+    if team_id:
+        _u_sync_player_entities(session, team_id=team_id)
+    else:
+        _u_sync_player_entities(session, player_id=str(player_id))
     entity = dict((getattr(session, "universe_players", None) or {}).get(str(player_id)) or {})
-    team_id = str(entity.get("team_id") or "")
+    team_id = str(entity.get("team_id") or team_id or "")
     room = _u_rebuild_locker_room(session, team_id) if team_id else {}
     relationships: List[Dict[str, Any]] = []
     entities = getattr(session, "universe_players", None) or {}
@@ -6684,12 +6734,42 @@ def _u_migrate_v2(session: Any) -> None:
     session.universe_engine_version = UNIVERSE_ENGINE_VERSION
 
 
-def _u_sync_player_entities(session: Any) -> Dict[str, Dict[str, Any]]:
-    """Sync real players into Universe state while preserving V3 mental/life ledgers."""
+def _u_sync_player_entities(
+    session: Any,
+    *,
+    player_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Sync real players into Universe state while preserving V3 mental/life ledgers.
+
+    Optional player_id / team_id scopes avoid syncing the entire league on single-player reads.
+    """
     _u_migrate_v2(session)
     entities = dict(getattr(session, "universe_players", None) or {})
     active_ids: List[str] = []
-    for team_id, player in _u_all_players(session):
+    scope_player = str(player_id or "").strip()
+    scope_team = str(team_id or "").strip()
+    player_rows: List[Tuple[str, Any]] = []
+    if scope_player:
+        player = _player_from_roster(session, scope_player)
+        if player is not None:
+            found_team = scope_team
+            if not found_team:
+                for tid, p in _u_all_players(session):
+                    if str(getattr(p, "id", "") or "") == scope_player:
+                        found_team = str(tid)
+                        break
+            if found_team:
+                player_rows = [(found_team, player)]
+    elif scope_team:
+        for player in _u_team_players(session, scope_team):
+            pid = str(getattr(player, "id", "") or "")
+            if pid:
+                player_rows.append((scope_team, player))
+    else:
+        player_rows = list(_u_all_players(session))
+    full_sync = not scope_player and not scope_team
+    for team_id, player in player_rows:
         player_id = str(getattr(player, "id", "") or "")
         active_ids.append(player_id)
         entity = dict(entities.get(player_id) or {})
@@ -6751,8 +6831,13 @@ def _u_sync_player_entities(session: Any) -> Dict[str, Dict[str, Any]]:
         room = (getattr(session, "universe_locker_rooms", None) or {}).get(str(team_id)) or {}
         entity["human_pressure"] = _u_compute_human_pressure(entity, room=room, agent_org_trust=agent_trust)
         entities[player_id] = entity
-    for player_id, entity in entities.items():
-        entity["active_roster"] = player_id in active_ids
+    if full_sync:
+        for player_id, entity in entities.items():
+            entity["active_roster"] = player_id in active_ids
+    else:
+        for player_id in active_ids:
+            if player_id in entities:
+                entities[player_id]["active_roster"] = True
     session.universe_players = entities
     return entities
 
@@ -8463,7 +8548,7 @@ def _gm_user_org_players(session: Any) -> List[Tuple[str, Any, str]]:
 
 def _gm_entity(session: Any, player_id: str) -> Dict[str, Any]:
     migrate_session_storyline_state(session)
-    _u_sync_player_entities(session)
+    _u_sync_player_entities(session, player_id=str(player_id))
     entities = getattr(session, "universe_players", None) or {}
     entity = entities.get(str(player_id))
     if entity is None:
@@ -9123,8 +9208,9 @@ def build_player_meetings_payload(session: Any) -> Dict[str, Any]:
     """Full Player Meetings office payload for frontend."""
     _ensure_gm_meeting_state(session)
     migrate_session_storyline_state(session)
-    _u_sync_player_entities(session)
     utid = str(getattr(session, "user_team_id", "") or "")
+    # V3 narrative build already full-syncs entities; scope to user org only.
+    _u_sync_player_entities(session, team_id=utid or None)
     day, iso, _ = _u_current_meta(session)
     roster_rows: List[Dict[str, Any]] = []
     needs_attention: List[Dict[str, Any]] = []
@@ -9188,12 +9274,19 @@ def build_player_meetings_payload(session: Any) -> Dict[str, Any]:
 def get_player_meeting_detail(session: Any, player_id: str) -> Dict[str, Any]:
     ctx = _gm_build_context(session, player_id)
     profile = player_universe_profile(session, player_id)
+    day, _, _ = _u_current_meta(session)
+    cache = dict(getattr(session, "_gm_interactions_cache", None) or {})
+    cache_key = f"{player_id}:{day}"
+    if cache_key in cache:
+        available = list(cache[cache_key])
+    else:
+        available = get_available_gm_interactions(session, player_id)
     return {
         "player_id": player_id,
         "profile": profile,
         "relationship": ctx.get("relationship"),
         "ovr_explanation": ctx.get("ovr_trend"),
-        "available_interactions": get_available_gm_interactions(session, player_id),
+        "available_interactions": available,
         "memories": list((ctx.get("entity") or {}).get("memories") or [])[-12:],
         "promises": [p for p in (getattr(session, "universe_promises", None) or []) if str(p.get("player_id") or "") == str(player_id)],
         "history": [h for h in (getattr(session, "gm_meeting_history", None) or []) if str(h.get("player_id") or "") == str(player_id)][-15:],

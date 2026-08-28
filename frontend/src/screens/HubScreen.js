@@ -493,7 +493,28 @@ export function HubScreen() {
   const activeStorylines = countStorylines(franchiseState);
   const rosterPlayers = useMemo(
     () => collectHubRosterPlayers(franchiseState),
-    [franchiseState]
+    [franchiseState?.roster, franchiseState?.roster_browser, franchiseState?.stats_revision]
+  );
+
+  const hubOfficeSnapshot = useMemo(
+    () => ({
+      phase: franchiseState?.phase,
+      season_phase: franchiseState?.season_phase,
+      stats_revision: franchiseState?.stats_revision,
+      calendar_summary: franchiseState?.calendar_summary,
+      flags: franchiseState?.flags,
+      storyline_events: franchiseState?.storyline_events,
+      notifications: franchiseState?.notifications,
+    }),
+    [
+      franchiseState?.phase,
+      franchiseState?.season_phase,
+      franchiseState?.stats_revision,
+      franchiseState?.calendar_summary,
+      franchiseState?.flags,
+      franchiseState?.storyline_events,
+      franchiseState?.notifications,
+    ]
   );
 
   const simActions = useMemo(
@@ -614,7 +635,7 @@ export function HubScreen() {
         unreadMessages={unreadMessages}
         pendingTasks={pendingTasks}
         activeStorylines={activeStorylines}
-        franchiseState={franchiseState}
+        franchiseState={hubOfficeSnapshot}
         team={team}
         players={rosterPlayers}
         onOpenPanel={handleOpenPanel}

@@ -302,7 +302,6 @@ export default function FanReactionFeed({
     eventType,
     awardKey,
     reactions,
-    localFallbackTweets,
     onEnabledChange,
   ]);
 

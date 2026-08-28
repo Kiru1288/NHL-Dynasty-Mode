@@ -1,8 +1,14 @@
-"""Franchise scouting API — draft-class prospects, assignments, and GM-driven coverage."""
+"""Franchise scouting API — draft-class prospects, assignments, and GM-driven coverage.
+
+CANONICAL PATH for live franchise scouting overlay (scouted_percentage, assignments):
+this module + franchise_sim.build_draft_class_rankings(). Legacy SimEngine prospect.py
+and draft_class_generator.py are not used for live board intel.
+"""
 
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import uuid
 from datetime import date, datetime, timezone
@@ -13,6 +19,7 @@ from services.franchise_session import FranchiseSession
 from services.franchise_sim import invalidate_session_payload_caches
 
 DRAFT_OVR_REVEAL_THRESHOLD = 72.0
+PUBLIC_INTEL_CLEAR_THROUGH_RANK = 45
 
 DEFAULT_SCOUTING_BUDGET = 2_500_000
 
@@ -27,8 +34,22 @@ PASSIVE_TOP_RANK_CUTOFF = 120
 PASSIVE_MAX_WITHOUT_ACTION = 62.0
 PASSIVE_TARGET_CAP = 78.0
 PASSIVE_ASSIGN_KICKSTART = 3.0
-MAX_ACTIVE_DEPLOYMENTS = 3
-MAX_ASSIGNED_PASSIVE_TARGETS = 18
+PASSIVE_FULL_FILE_DAYS = 14
+MAX_ACTIVE_DEPLOYMENTS = 4
+MAX_ASSIGNED_PASSIVE_TARGETS = 64
+ASSIGNMENT_FREE_SLOTS = 12
+ASSIGNMENT_CAP_SLOTS_DEFAULT = 5
+SPOTLIGHT_MAX_TARGETS = 5
+SPOTLIGHT_PASSIVE_DAILY_BONUS = 10.0
+SPOTLIGHT_MIN_RANK = 100
+HIDDEN_CEILING_POOL_SIZE = 20
+CEILING_FOG_DECAY_MONTH = 10
+PUBLIC_OVR_DISAGREEMENT_SPAN = 5.0
+FILM_STUDY_GAIN = 12.0
+FILM_STUDY_HOURS = 4
+DEPLOYMENT_SALARY_PER_WEEK = 48_000
+DISCOVERY_REP_LATE_BLOOMER = 8
+DISCOVERY_REP_EARLY_FLAMER = 5
 
 
 def _draft_franchise_date_context(session: FranchiseSession) -> Dict[str, Any]:
@@ -109,6 +130,7 @@ ACTION_SCOUTED_GAIN: Dict[str, float] = {
     "combine": 12.0,
     "private_workout": 15.0,
     "medical_review": 10.0,
+    "film_study": FILM_STUDY_GAIN,
 }
 
 INTENSITY_MULT = {
@@ -130,6 +152,8 @@ POST_ROUTE_ACTION = {
     "request-medical": "medical_review",
     "medical_review": "medical_review",
     "focus": "player_focus",
+    "film-study": "film_study",
+    "film_study": "film_study",
 }
 
 
@@ -149,7 +173,168 @@ def _ensure_scouting_state(session: FranchiseSession) -> Dict[str, Any]:
     raw.setdefault("assignments", [])
     raw.setdefault("watchlist", [])
     raw.setdefault("active_deployments", [])
+    raw.setdefault("scout_spotlight", [])
+    raw.setdefault("scout_reputation", 50.0)
+    raw.setdefault("hidden_ceiling_pool", [])
+    raw.setdefault("public_miss_markers", {})
+    raw.setdefault("assignment_cap_slots", ASSIGNMENT_CAP_SLOTS_DEFAULT)
+    raw.setdefault("discoveries", [])
     return raw
+
+
+def _assignment_slot_limit(state: Mapping[str, Any]) -> int:
+    slots = int(state.get("assignment_cap_slots") or ASSIGNMENT_CAP_SLOTS_DEFAULT)
+    return min(MAX_ASSIGNED_PASSIVE_TARGETS, ASSIGNMENT_FREE_SLOTS + max(0, slots) * 10)
+
+
+def _count_assigned_prospects(state: Mapping[str, Any]) -> int:
+    prospects = state.get("prospects") if isinstance(state.get("prospects"), dict) else {}
+    return sum(
+        1
+        for ov in prospects.values()
+        if isinstance(ov, dict) and str(ov.get("assigned_scout") or "").strip()
+    )
+
+
+def _spotlight_ids(state: Mapping[str, Any]) -> List[str]:
+    return [str(x) for x in (state.get("scout_spotlight") or []) if str(x).strip()]
+
+
+def get_hidden_ceiling_pool(session: FranchiseSession) -> set:
+    state = _ensure_scouting_state(session)
+    return {str(x) for x in (state.get("hidden_ceiling_pool") or []) if str(x).strip()}
+
+
+def ensure_scouting_markers(session: FranchiseSession, entries: List[Mapping[str, Any]]) -> None:
+    """Seed hidden-ceiling sleepers (~20) and public-miss tags for the draft class."""
+    state = _ensure_scouting_state(session)
+    sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    if state.get("markers_season") == sy and state.get("hidden_ceiling_pool"):
+        return
+
+    pool_candidates: List[Tuple[float, int, str]] = []
+    misses: Dict[str, str] = {}
+    for e in entries:
+        key = str(e.get("key") or e.get("id") or "")
+        if not key:
+            continue
+        rank = int(e.get("rank") or 999)
+        true_pot = float(e.get("true_potential_score") or e.get("potential_score") or 0)
+        consensus = float(e.get("consensus_potential_score") or true_pot * 0.82)
+        gap = true_pot - consensus
+        bust = bool(e.get("is_bust_risk") or e.get("character_concerns"))
+
+        if rank >= PUBLIC_INTEL_CLEAR_THROUGH_RANK + 1 and (
+            gap >= 5.0 or (_scouting_rng(session, key, "hid") > 0.9 and gap >= 2.5)
+        ):
+            pool_candidates.append((gap, rank, key))
+
+        if rank >= 130 and gap >= 7.0 and true_pot >= 78.0:
+            misses[key] = "late_bloomer"
+        elif 12 <= rank <= 38 and (bust or gap <= -5.0):
+            misses[key] = "early_flamer"
+
+    pool_candidates.sort(key=lambda x: (-x[0], x[1]))
+    state["hidden_ceiling_pool"] = [k for _, _, k in pool_candidates[:HIDDEN_CEILING_POOL_SIZE]]
+    state["public_miss_markers"] = misses
+    state["markers_season"] = sy
+
+    for key, mtype in misses.items():
+        ov = _prospect_overlay(state, key)
+        if not ov.get("public_miss_type"):
+            _set_prospect_overlay(state, key, {"public_miss_type": mtype})
+
+
+def _film_study_eligible(state: Mapping[str, Any], prospect_id: str) -> bool:
+    watchlist = {str(x) for x in (state.get("watchlist") or [])}
+    overlay = _prospect_overlay(state, prospect_id)
+    if bool(overlay.get("watchlist")) or prospect_id in watchlist:
+        return True
+    return bool(str(overlay.get("assigned_scout") or "").strip())
+
+
+def _apply_film_study_reveals(entry: Mapping[str, Any], patch: Dict[str, Any]) -> None:
+    """Reveal off-sheet traits from tape — decision-making, maturity, system fit."""
+    reveals: List[str] = []
+    iq = entry.get("iq_rating") or entry.get("hockey_iq")
+    coach = entry.get("coachability")
+    compete = entry.get("compete") or entry.get("competitiveness")
+    if iq is not None:
+        reveals.append(f"Hockey IQ reads as {float(iq):.0f} on tape")
+    if coach is not None:
+        reveals.append(f"Coachability grade {float(coach):.0f}")
+    if compete is not None:
+        reveals.append(f"Compete level {float(compete):.0f}")
+    role = str(entry.get("player_type") or entry.get("projection") or "").strip()
+    if role:
+        reveals.append(f"System fit: {role}")
+    patch["film_study_complete"] = True
+    patch["film_study_hours"] = FILM_STUDY_HOURS
+    traits = list(patch.get("traits") or [])
+    for line in reveals:
+        if line not in traits:
+            traits.append(line)
+    patch["traits"] = traits[-10:]
+    notes = list(patch.get("notes") or [])
+    notes.append(f"Film study ({FILM_STUDY_HOURS}h) — off-ice traits unlocked.")
+    patch["notes"] = notes[-12:]
+
+
+def _maybe_award_discovery(
+    session: FranchiseSession,
+    state: Dict[str, Any],
+    prospect_id: str,
+    overlay: Mapping[str, Any],
+    entry: Mapping[str, Any],
+    new_pct: float,
+) -> None:
+    if new_pct < DRAFT_OVR_REVEAL_THRESHOLD:
+        return
+    if overlay.get("miss_discovered"):
+        return
+    mtype = str(overlay.get("public_miss_type") or (state.get("public_miss_markers") or {}).get(prospect_id) or "")
+    if not mtype:
+        return
+    rep = float(state.get("scout_reputation") or 50.0)
+    bonus = DISCOVERY_REP_LATE_BLOOMER if mtype == "late_bloomer" else DISCOVERY_REP_EARLY_FLAMER
+    state["scout_reputation"] = round(min(99.0, rep + bonus), 1)
+    discoveries = list(state.get("discoveries") or [])
+    discoveries.append(
+        {
+            "prospect_id": prospect_id,
+            "name": str(entry.get("name") or ""),
+            "type": mtype,
+            "rep_bonus": bonus,
+            "rank": int(entry.get("rank") or 0),
+        }
+    )
+    state["discoveries"] = discoveries[-24:]
+    _set_prospect_overlay(state, prospect_id, {"miss_discovered": True})
+
+
+def _deployment_cost_multiplier(state: Mapping[str, Any]) -> float:
+    n = len(list(state.get("active_deployments") or []))
+    return 1.0 + max(0, n) * 0.14
+
+
+def _charge_deployment_salary(
+    session: FranchiseSession,
+    state: Dict[str, Any],
+    *,
+    cur_cursor: int,
+) -> bool:
+    deployments = list(state.get("active_deployments") or [])
+    if not deployments:
+        return False
+    week_bucket = int(cur_cursor) // 7
+    last_bucket = int(state.get("deployment_salary_week") or -1)
+    if week_bucket <= last_bucket:
+        return False
+    weekly = len(deployments) * DEPLOYMENT_SALARY_PER_WEEK
+    state["used_budget"] = float(state.get("used_budget") or 0.0) + float(weekly)
+    state["deployment_salary_week"] = week_bucket
+    state["deployment_salary_last"] = weekly
+    return True
 
 
 def _register_coverage_deployment(
@@ -175,21 +360,223 @@ def _register_coverage_deployment(
     state["active_deployments"] = deployments[-MAX_ACTIVE_DEPLOYMENTS:]
 
 
+def _weeks_until_draft(month: Optional[int]) -> Optional[float]:
+    if month is None:
+        return None
+    if month in (6, 7):
+        return 0.0
+    if month < 6:
+        return round((6 - month) * 4.3, 1)
+    return round((12 - month + 6) * 4.3, 1)
+
+
+def _passive_cap_for_overlay(
+    overlay: Mapping[str, Any],
+    *,
+    assigned: bool,
+    is_target: bool,
+    cur_cursor: int,
+) -> float:
+    """Cap for dedicated-file passive growth; assigned scouts unlock 100% after 14 days."""
+    if assigned:
+        assigned_at = overlay.get("assigned_at_cursor")
+        if assigned_at is not None:
+            try:
+                if max(0, cur_cursor - int(assigned_at)) >= PASSIVE_FULL_FILE_DAYS:
+                    return 100.0
+            except (TypeError, ValueError):
+                pass
+        return PASSIVE_TARGET_CAP
+    if is_target:
+        return PASSIVE_TARGET_CAP
+    return PASSIVE_MAX_WITHOUT_ACTION
+
+
+def _passive_daily_rate(
+    entry: Mapping[str, Any],
+    overlay: Mapping[str, Any],
+    *,
+    assigned: bool,
+    on_watchlist: bool,
+    is_target: bool,
+    in_deployed_region: bool,
+    assigned_under_cap: bool,
+) -> float:
+    rate = 0.0
+    if assigned and assigned_under_cap:
+        rate += PASSIVE_ASSIGNED_DAILY
+    if on_watchlist:
+        rate += PASSIVE_WATCHLIST_DAILY
+    if is_target:
+        rate += PASSIVE_TARGET_BONUS
+    if in_deployed_region:
+        rate += PASSIVE_REGION_DAILY
+    rank = int(entry.get("rank") or 999)
+    try:
+        current = float(overlay.get("scouted_percentage") or 0.0)
+    except (TypeError, ValueError):
+        current = 0.0
+    if current <= 0.0 and rank <= PASSIVE_TOP_RANK_CUTOFF:
+        rate += PASSIVE_TOP_RANK_DAILY
+    return rate
+
+
+def _scout_file_timeline(
+    session: FranchiseSession,
+    entry: Mapping[str, Any],
+    overlay: Mapping[str, Any],
+    state: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Project days to OVR reveal (72%) and full file (100%) from passive growth."""
+    ctx = _draft_franchise_date_context(session)
+    month = ctx.get("month")
+    cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
+    try:
+        current = float(overlay.get("scouted_percentage") or 0.0)
+    except (TypeError, ValueError):
+        current = 0.0
+
+    assigned = bool(str(overlay.get("assigned_scout") or "").strip())
+    watchlist = {str(x) for x in (state.get("watchlist") or [])}
+    pid = str(entry.get("key") or entry.get("id") or "")
+    on_watchlist = bool(overlay.get("watchlist")) or pid in watchlist
+    is_target = bool(overlay.get("target"))
+    deployments = list(state.get("active_deployments") or [])
+    deployed_regions = {
+        _slug(str(d.get("id") or ""))
+        for d in deployments
+        if str(d.get("kind") or "") == "region"
+    }
+    deployed_countries = {
+        _slug(str(d.get("id") or ""))
+        for d in deployments
+        if str(d.get("kind") or "") == "country"
+    }
+    country_slug = _slug(str(entry.get("country") or ""))
+    region_slug = _slug(str(entry.get("region") or ""))
+    if not region_slug:
+        region_slug = _slug(_region_for_country(str(entry.get("country") or "")))
+    in_deployed = country_slug in deployed_countries or region_slug in deployed_regions
+
+    prospects = state.get("prospects") if isinstance(state.get("prospects"), dict) else {}
+    assigned_count = sum(
+        1
+        for ov in prospects.values()
+        if isinstance(ov, dict) and str(ov.get("assigned_scout") or "").strip()
+    )
+    assigned_under_cap = assigned_count <= _assignment_slot_limit(state)
+    spotlight = set(_spotlight_ids(state))
+    pid_key = str(entry.get("key") or entry.get("id") or "")
+
+    daily = _passive_daily_rate(
+        entry,
+        overlay,
+        assigned=assigned,
+        on_watchlist=on_watchlist,
+        is_target=is_target,
+        in_deployed_region=in_deployed,
+        assigned_under_cap=assigned_under_cap,
+    )
+    if pid_key in spotlight and assigned:
+        daily += SPOTLIGHT_PASSIVE_DAILY_BONUS
+    if month == 7:
+        daily *= 0.35
+
+    cap = _passive_cap_for_overlay(
+        overlay, assigned=assigned, is_target=is_target, cur_cursor=cur_cursor
+    )
+    weeks_draft = _weeks_until_draft(month)
+
+    def _days_to(target: float) -> Optional[int]:
+        if daily <= 0.0 or current >= min(target, cap):
+            return 0 if current >= target else None
+        need = min(target, cap) - current
+        if need <= 0:
+            return 0
+        return int(math.ceil(need / daily))
+
+    days_72 = _days_to(DRAFT_OVR_REVEAL_THRESHOLD)
+    days_100 = _days_to(100.0) if cap >= 100.0 else None
+    days_full_cap = _days_to(cap) if cap < 100.0 else days_100
+
+    assigned_at = overlay.get("assigned_at_cursor")
+    days_until_full_unlock = None
+    if assigned and assigned_at is not None:
+        try:
+            days_until_full_unlock = max(0, PASSIVE_FULL_FILE_DAYS - (cur_cursor - int(assigned_at)))
+        except (TypeError, ValueError):
+            days_until_full_unlock = PASSIVE_FULL_FILE_DAYS
+
+    return {
+        "dedicated_pct": round(current, 1),
+        "passive_daily_pct": round(daily, 2),
+        "passive_cap_pct": round(cap, 1),
+        "days_to_ovr_reveal": days_72,
+        "days_to_full_file": days_100,
+        "days_to_passive_cap": days_full_cap,
+        "weeks_until_draft": weeks_draft,
+        "ovr_reveal_before_draft": (
+            days_72 is not None and weeks_draft is not None and days_72 <= weeks_draft * 7
+        ) if days_72 is not None and weeks_draft is not None else None,
+        "full_file_before_draft": (
+            days_100 is not None and weeks_draft is not None and days_100 <= weeks_draft * 7
+        ) if days_100 is not None and weeks_draft is not None else None,
+        "days_until_passive_full_unlock": days_until_full_unlock,
+        "passive_cap_tooltip": (
+            "Passive files cap at 62% without an assigned scout. "
+            "Assign a scout — after 14 days on file, passive growth can reach 100%. "
+            "Deep-dive actions (interview, medical) still accelerate locked reads."
+        ),
+    }
+
+
+def _scouting_intel_rules() -> Dict[str, Any]:
+    return {
+        "public_ceiling_clear_through_rank": PUBLIC_INTEL_CLEAR_THROUGH_RANK,
+        "public_ceiling_label": (
+            f"Public ceiling intel is clear through pick ~{PUBLIC_INTEL_CLEAR_THROUGH_RANK}. "
+            "Later picks need your dedicated file (YOU column) to reopen ceiling fog."
+        ),
+        "passive_cap_without_assign": PASSIVE_MAX_WITHOUT_ACTION,
+        "passive_cap_assigned": PASSIVE_TARGET_CAP,
+        "passive_full_file_days": PASSIVE_FULL_FILE_DAYS,
+        "passive_cap_tooltip": (
+            "Passive files cap at 62% without an assigned scout. "
+            "Assign a scout — after 14 days on file, passive growth can reach 100%. "
+            "Deep-dive actions (interview, medical) still accelerate locked reads."
+        ),
+        "ovr_reveal_threshold": DRAFT_OVR_REVEAL_THRESHOLD,
+        "max_active_deployments": MAX_ACTIVE_DEPLOYMENTS,
+        "region_sweep_gain_pct": ACTION_SCOUTED_GAIN["region_sweep"],
+        "region_passive_daily_pct": PASSIVE_REGION_DAILY,
+        "spotlight_max_targets": SPOTLIGHT_MAX_TARGETS,
+        "spotlight_daily_bonus_pct": SPOTLIGHT_PASSIVE_DAILY_BONUS,
+        "hidden_ceiling_pool_size": HIDDEN_CEILING_POOL_SIZE,
+        "ceiling_fog_decay_month": CEILING_FOG_DECAY_MONTH,
+        "public_ovr_disagreement_span": PUBLIC_OVR_DISAGREEMENT_SPAN,
+        "film_study_hours": FILM_STUDY_HOURS,
+        "deployment_salary_per_week": DEPLOYMENT_SALARY_PER_WEEK,
+        "assignment_free_slots": ASSIGNMENT_FREE_SLOTS,
+        "assignment_cap_slots_default": ASSIGNMENT_CAP_SLOTS_DEFAULT,
+    }
+
+
 def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1) -> bool:
     """Apply passive dedicated-file growth for assigned/shortlist/deployed targets."""
     step_days = max(1, int(days or 1))
     state = _ensure_scouting_state(session)
     ctx = _draft_franchise_date_context(session)
     month = ctx.get("month")
-    if month == 7:
-        return False
+    offseason_gain_mult = 0.35 if month == 7 else 1.0
 
     entries = _draft_entries(session)
     if not entries:
         return False
+    ensure_scouting_markers(session, entries)
 
     prospects = state.get("prospects") if isinstance(state.get("prospects"), dict) else {}
     watchlist = {str(x) for x in (state.get("watchlist") or [])}
+    spotlight = set(_spotlight_ids(state))
     deployments = list(state.get("active_deployments") or [])
     deployed_regions = {
         _slug(str(d.get("id") or ""))
@@ -202,13 +589,11 @@ def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1)
         if str(d.get("kind") or "") == "country"
     }
 
-    assigned_count = sum(
-        1
-        for ov in prospects.values()
-        if isinstance(ov, dict) and str(ov.get("assigned_scout") or "").strip()
-    )
+    assigned_limit = _assignment_slot_limit(state)
+    assigned_count = _count_assigned_prospects(state)
+    cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
 
-    changed = False
+    changed = _charge_deployment_salary(session, state, cur_cursor=cur_cursor)
     for entry in entries:
         pid = str(entry.get("key") or entry.get("id") or "")
         if not pid:
@@ -226,8 +611,10 @@ def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1)
         on_watchlist = bool(overlay.get("watchlist")) or pid in watchlist
         is_target = bool(overlay.get("target"))
 
-        if assigned and assigned_count <= MAX_ASSIGNED_PASSIVE_TARGETS:
+        if assigned and assigned_count <= assigned_limit:
             gain += PASSIVE_ASSIGNED_DAILY
+        if pid in spotlight and assigned:
+            gain += SPOTLIGHT_PASSIVE_DAILY_BONUS
         if on_watchlist:
             gain += PASSIVE_WATCHLIST_DAILY
         if is_target:
@@ -247,21 +634,26 @@ def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1)
         if gain <= 0.0:
             continue
 
-        gain *= float(step_days)
+        gain *= float(step_days) * offseason_gain_mult
 
-        cap = PASSIVE_MAX_WITHOUT_ACTION
-        if is_target or assigned:
-            cap = PASSIVE_TARGET_CAP
+        cap = _passive_cap_for_overlay(
+            overlay,
+            assigned=bool(assigned),
+            is_target=is_target,
+            cur_cursor=int(getattr(session, "calendar_cursor", 0) or 0),
+        )
 
         new_pct = min(cap, current + gain)
         if new_pct <= current + 0.005:
             continue
 
         _set_prospect_overlay(state, pid, {"scouted_percentage": round(new_pct, 1)})
+        _maybe_award_discovery(session, state, pid, overlay, entry, new_pct)
         changed = True
 
     if changed:
-        invalidate_session_payload_caches(session, "passive_scouting")
+        session._cached_scouting_prospects_payload = None
+        session._cached_scouting_world_payload = None
     return changed
 
 
@@ -318,9 +710,19 @@ def _scout_pool(session: FranchiseSession) -> List[Dict[str, Any]]:
         ("Goaltending", "G"),
     ]
     scouts: List[Dict[str, Any]] = []
+    spec_map = {
+        "North America": "USA / CHL / NCAA",
+        "Europe": "Europe / CIS",
+        "Scandinavia": "Scandinavia",
+        "Russia / CIS": "Russia / CIS",
+        "Goaltending": "Goaltending",
+    }
     for i, (region, code) in enumerate(regions):
         sid = f"scout-{code.lower()}"
         quality = 68 + ((seed + i * 17) % 28)
+        speed_mult = 0.82 + (quality - 68) / 35.0
+        days_to_72 = int(round(DRAFT_OVR_REVEAL_THRESHOLD / max(0.15, PASSIVE_ASSIGNED_DAILY * speed_mult)))
+        tier = "Elite" if quality >= 88 else "Strong" if quality >= 78 else "Average"
         scouts.append(
             {
                 "id": sid,
@@ -331,8 +733,14 @@ def _scout_pool(session: FranchiseSession) -> List[Dict[str, Any]]:
                 "country": "",
                 "quality": quality,
                 "rating": quality,
+                "accuracy": quality,
+                "evaluation_accuracy": quality,
                 "workload": 0,
                 "specialty": region,
+                "specialization": spec_map.get(region, region),
+                "speed_days_to_72": days_to_72,
+                "scout_tier": tier,
+                "character_evaluation": min(95, quality + 4 + (seed % 7)),
             }
         )
     return scouts
@@ -467,6 +875,11 @@ def _normalize_prospect(
         "target": bool(overlay.get("target") or entry.get("target")),
         "do_not_draft": bool(overlay.get("do_not_draft") or entry.get("do_not_draft")),
         "assigned_scout": str(overlay.get("assigned_scout") or entry.get("assigned_scout") or ""),
+        "spotlight": bool(overlay.get("spotlight"))
+        or (session is not None and pid in _spotlight_ids(_ensure_scouting_state(session))),
+        "public_miss_type": str(overlay.get("public_miss_type") or ""),
+        "film_study_complete": bool(overlay.get("film_study_complete")),
+        "miss_discovered": bool(overlay.get("miss_discovered")),
         "draft_stock": stock,
         "combine_status": str(overlay.get("combine_status") or "Not started"),
         "interview_status": str(overlay.get("interview_status") or "Not interviewed"),
@@ -536,6 +949,14 @@ def _normalize_prospect(
             traits.append(ctx)
     out["traits"] = traits
     out["red_flags"] = red_flags
+    if session is not None:
+        state = _ensure_scouting_state(session)
+        try:
+            dedicated = float(overlay.get("scouted_percentage") or 0.0)
+        except (TypeError, ValueError):
+            dedicated = 0.0
+        out["dedicated_scouted_percentage"] = round(dedicated, 1)
+        out["scout_timeline"] = _scout_file_timeline(session, entry, overlay, state)
     return out
 
 
@@ -571,6 +992,7 @@ def get_scouting_prospects(session: FranchiseSession) -> Dict[str, Any]:
     ctx = _draft_franchise_date_context(session)
     month = ctx.get("month")
     entries = _draft_entries(session)
+    ensure_scouting_markers(session, entries)
     prospects = [
         _normalize_prospect(e, _prospect_overlay(state, str(e.get("key") or "")), month, session)
         for e in entries
@@ -596,6 +1018,8 @@ def get_scouting_state(session: FranchiseSession) -> Dict[str, Any]:
         "scouting_phase": _scouting_phase(session),
         "period_label": _draft_period_label(ctx.get("month")),
         "draft_year": ctx.get("draft_year"),
+        "weeks_until_draft": _weeks_until_draft(ctx.get("month")),
+        "intel_rules": _scouting_intel_rules(),
         "scouts": scouts,
         "staff": scouts,
         "budget": float(state.get("budget") or DEFAULT_SCOUTING_BUDGET),
@@ -603,6 +1027,14 @@ def get_scouting_state(session: FranchiseSession) -> Dict[str, Any]:
         "budget_remaining": float(state.get("budget") or DEFAULT_SCOUTING_BUDGET)
         - float(state.get("used_budget") or 0.0),
         "active_deployments": list(state.get("active_deployments") or []),
+        "scout_spotlight": _spotlight_ids(state),
+        "scout_reputation": round(float(state.get("scout_reputation") or 50.0), 1),
+        "assignment_slot_limit": _assignment_slot_limit(state),
+        "assignment_slots_used": _count_assigned_prospects(state),
+        "assignment_cap_slots": int(state.get("assignment_cap_slots") or ASSIGNMENT_CAP_SLOTS_DEFAULT),
+        "hidden_ceiling_pool_size": len(list(state.get("hidden_ceiling_pool") or [])),
+        "discoveries": list(state.get("discoveries") or [])[-8:],
+        "deployment_salary_per_week": DEPLOYMENT_SALARY_PER_WEEK,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -628,20 +1060,28 @@ def _aggregate_world(prospects: List[Dict[str, Any]]) -> Dict[str, Any]:
         cnt = max(1, row["prospect_count"])
         avg = row["scouted_sum"] / cnt
         seed = abs(hash(cid)) % 1000
+        sweep_gain = float(ACTION_SCOUTED_GAIN["region_sweep"])
+        passive_daily = float(PASSIVE_REGION_DAILY)
+        pc = int(row["prospect_count"])
         countries.append(
             {
                 "id": cid,
                 "name": row["name"],
                 "region": row["region"],
-                "prospect_count": row["prospect_count"],
+                "prospect_count": pc,
                 "scouted_average": round(avg, 1),
-                "cost": 35_000 + row["prospect_count"] * 4_500 + (seed % 12) * 1_000,
-                "effort": min(95, 40 + row["prospect_count"] * 3 + (seed % 20)),
+                "cost": 35_000 + pc * 4_500 + (seed % 12) * 1_000,
+                "effort": min(95, 40 + pc * 3 + (seed % 20)),
                 "difficulty": min(90, 25 + (seed % 40)),
                 "safety_risk": 0,
                 "political_risk": 0,
                 "corruption_risk": min(35, seed % 30),
                 "travel_notes": [],
+                "deploy_sweep_gain_pct": sweep_gain,
+                "deploy_passive_daily_pct": passive_daily,
+                "deploy_roi_label": (
+                    f"{pc} prospects · +{sweep_gain:.0f}% each now · +{passive_daily:.2f}%/day passive"
+                ),
             }
         )
 
@@ -664,13 +1104,21 @@ def _aggregate_world(prospects: List[Dict[str, Any]]) -> Dict[str, Any]:
     regions: List[Dict[str, Any]] = []
     for rid, row in sorted(by_region.items(), key=lambda x: -x[1]["prospect_count"]):
         cnt = max(1, row["prospect_count"])
+        sweep_gain = float(ACTION_SCOUTED_GAIN["region_sweep"])
+        passive_daily = float(PASSIVE_REGION_DAILY)
+        pc = int(row["prospect_count"])
         regions.append(
             {
                 "id": rid,
                 "name": row["name"],
-                "prospect_count": row["prospect_count"],
+                "prospect_count": pc,
                 "country_count": row["country_count"],
                 "scouted_average": round(row["scouted_sum"] / cnt, 1),
+                "deploy_sweep_gain_pct": sweep_gain,
+                "deploy_passive_daily_pct": passive_daily,
+                "deploy_roi_label": (
+                    f"{pc} prospects · +{sweep_gain:.0f}% each now · +{passive_daily:.2f}%/day passive"
+                ),
             }
         )
 
@@ -687,6 +1135,7 @@ def get_scouting_world(session: FranchiseSession) -> Dict[str, Any]:
     ctx = _draft_franchise_date_context(session)
     world["generated_at"] = ctx.get("generated_at")
     world["message"] = prospects_payload.get("message")
+    world["intel_rules"] = _scouting_intel_rules()
     session._cached_scouting_world_payload = world
     return world
 
@@ -712,7 +1161,7 @@ def _resolve_action(body: Mapping[str, Any], route_action: str) -> str:
     return "player_focus"
 
 
-def _estimate_cost(body: Mapping[str, Any], action: str) -> float:
+def _estimate_cost(body: Mapping[str, Any], action: str, state: Optional[Mapping[str, Any]] = None) -> float:
     explicit = body.get("estimated_cost")
     if explicit is not None:
         try:
@@ -720,7 +1169,10 @@ def _estimate_cost(body: Mapping[str, Any], action: str) -> float:
         except (TypeError, ValueError):
             pass
     base = 18_000.0 + ACTION_SCOUTED_GAIN.get(action, 8.0) * 2_200.0
-    return base * _intensity_mult(str(body.get("intensity") or "normal"))
+    cost = base * _intensity_mult(str(body.get("intensity") or "normal"))
+    if state is not None:
+        cost *= _deployment_cost_multiplier(state)
+    return cost
 
 
 def _apply_to_targets(
@@ -770,8 +1222,15 @@ def _apply_to_targets(
     if not affected and target_id and target_id in entry_by_key:
         affected = [target_id]
 
-    cost = 0.0 if cancel else _estimate_cost(body, action)
+    cost = 0.0 if cancel else _estimate_cost(body, action, state)
     gain = 0.0 if cancel else ACTION_SCOUTED_GAIN.get(action, 8.0) * _intensity_mult(str(body.get("intensity") or "normal"))
+
+    if action == "film_study" and not cancel:
+        if target_type in ("player", "prospect") and target_id:
+            if not _film_study_eligible(state, target_id):
+                return [], 0.0
+        else:
+            return [], 0.0
 
     for pid in affected:
         entry = entry_by_key.get(pid) or {}
@@ -804,8 +1263,11 @@ def _apply_to_targets(
             traits = list(overlay.get("traits") or [])
             traits.append("Character profile updated")
             patch["traits"] = traits[-8:]
+        elif action == "film_study":
+            _apply_film_study_reveals(entry, patch)
 
         _set_prospect_overlay(state, pid, patch)
+        _maybe_award_discovery(session, state, pid, {**overlay, **patch}, entry, new_pct)
 
     if action == "region_sweep":
         if target_type == "country" and country_id:
@@ -883,6 +1345,7 @@ def _apply_scouting_meta_patch(
     allowed = {
         "watchlist",
         "target",
+        "spotlight",
         "do_not_draft",
         "assigned_scout",
         "requested_reports",
@@ -899,8 +1362,41 @@ def _apply_scouting_meta_patch(
         return {"ok": False, "message": "meta_patch contained no allowed fields."}
 
     overlay_before = _prospect_overlay(state, pid)
+    if patch.get("spotlight"):
+        rank = 999
+        for e in _draft_entries(session):
+            if str(e.get("key") or "") == pid:
+                rank = int(e.get("rank") or 999)
+                break
+        if rank < SPOTLIGHT_MIN_RANK:
+            return {
+                "ok": False,
+                "message": f"Scout Spotlight is for rank {SPOTLIGHT_MIN_RANK}+ sleepers only.",
+            }
+        spotlight = _spotlight_ids(state)
+        if pid not in spotlight and len(spotlight) >= SPOTLIGHT_MAX_TARGETS:
+            return {
+                "ok": False,
+                "message": f"Scout Spotlight full ({SPOTLIGHT_MAX_TARGETS} slots). Remove one first.",
+            }
+        if pid not in spotlight:
+            spotlight.append(pid)
+        state["scout_spotlight"] = spotlight[:SPOTLIGHT_MAX_TARGETS]
+        patch["spotlight"] = True
+    elif patch.get("spotlight") is False:
+        state["scout_spotlight"] = [x for x in _spotlight_ids(state) if x != pid]
+        patch["spotlight"] = False
+
     if patch.get("assigned_scout") and str(patch.get("assigned_scout") or "").strip():
         if not str(overlay_before.get("assigned_scout") or "").strip():
+            if _count_assigned_prospects(state) >= _assignment_slot_limit(state):
+                return {
+                    "ok": False,
+                    "message": (
+                        "Assignment cap reached — each extra slot beyond the free tier "
+                        "consumes a prospect cap slot. Clear a scout or raise cap slots."
+                    ),
+                }
             try:
                 current = float(overlay_before.get("scouted_percentage") or 0.0)
             except (TypeError, ValueError):
@@ -928,6 +1424,8 @@ def _apply_scouting_meta_patch(
         "message": "Scouting metadata updated.",
         "prospects": get_scouting_prospects(session).get("prospects"),
         "used_budget": float(state.get("used_budget") or 0.0),
+        "scout_reputation": round(float(state.get("scout_reputation") or 50.0), 1),
+        "scout_spotlight": _spotlight_ids(state),
     }
 
 
@@ -943,6 +1441,20 @@ def apply_scouting_command(
 
     action = _resolve_action(body, POST_ROUTE_ACTION.get(route_action, route_action))
 
+    if action == "film_study":
+        pid = str(
+            body.get("prospect_id")
+            or body.get("player_id")
+            or body.get("target_id")
+            or (body.get("context") or {}).get("prospect_id")
+            or ""
+        )
+        if not pid or not _film_study_eligible(state, pid):
+            return {
+                "ok": False,
+                "message": "Film study requires an assigned scout or watchlist slot (4 hours).",
+            }
+
     if route_action == "cancel":
         aid = str(body.get("assignment_id") or "")
         for a in state.get("assignments") or []:
@@ -955,6 +1467,11 @@ def apply_scouting_command(
         }
 
     affected, cost = _apply_to_targets(session, state, body, action)
+    if action == "film_study" and not affected:
+        return {
+            "ok": False,
+            "message": "Film study requires an assigned scout or watchlist slot (4 hours).",
+        }
     budget = float(state.get("budget") or DEFAULT_SCOUTING_BUDGET)
     used = float(state.get("used_budget") or 0.0)
     if used + cost > budget and cost > 0:

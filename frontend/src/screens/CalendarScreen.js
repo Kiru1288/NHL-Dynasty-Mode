@@ -1281,7 +1281,25 @@ function CalendarScreen(props = {}) {
     selectedTeamId,
     teamId,
     gmTeamId,
+    hydrateFranchiseHeavyState = gameUI?.hydrateFranchiseHeavyState,
   } = props;
+
+  useEffect(() => {
+    if (typeof hydrateFranchiseHeavyState !== "function") return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        await hydrateFranchiseHeavyState({ includeNhlCalendarFull: true, includeRosterBrowser: false, includeDraftClassRankings: false, includeDraftClassHud: false });
+      } catch {
+        if (!cancelled) {
+          // Calendar falls back to lean window from franchise state.
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrateFranchiseHeavyState, franchiseState?.session_id]);
 
   const rootState = useMemo(() => {
     return franchiseState || state || gameState || data || EMPTY_OBJECT;
@@ -1815,8 +1833,10 @@ function CalendarScreen(props = {}) {
       try {
         const result = await advanceFranchise(payload);
 
-        if (typeof gameUI?.setFranchiseState === "function" && result?.state) {
-          gameUI.setFranchiseState(result.state);
+        if (typeof gameUI?.mergeFranchiseState === "function" && result?.state) {
+          gameUI.mergeFranchiseState(result.state);
+        } else if (typeof gameUI?.setFranchiseState === "function" && result?.state) {
+          gameUI.setFranchiseState((prev) => ({ ...(prev || {}), ...result.state }));
         } else if (typeof gameUI?.refreshFranchise === "function") {
           await gameUI.refreshFranchise();
         }

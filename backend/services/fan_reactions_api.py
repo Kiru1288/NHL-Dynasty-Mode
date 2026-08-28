@@ -657,7 +657,7 @@ def register_fan_reactions_routes(app: Any, session_or_404: Callable[[Optional[s
         fan_count: int = 24,
         seed: Optional[str] = None,
         award_key: Optional[str] = None,
-        use_external_fans: bool = True,
+        use_external_fans: bool = False,
         event_type: Optional[str] = None,
     ) -> dict[str, Any]:
         session = session_or_404(session_id)

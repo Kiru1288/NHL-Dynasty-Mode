@@ -3898,11 +3898,252 @@ def _accumulate_franchise_game_stats(
 def _bump_stats_revision(session: FranchiseSession) -> None:
     session._stats_revision = int(getattr(session, "_stats_revision", 0) or 0) + 1
     session._stats_central_cache = None
+    session._cached_state_roster_rows = None
+    session._cached_injuries_payload = None
+    session._cached_chemistry_report = None
 
 
 def _bump_prospect_revision(session: FranchiseSession) -> None:
     session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
     session._draft_class_detail_cache = None
+
+
+_NARRATIVE_UNIVERSE_CACHE_VERSION = 1
+
+
+def _narrative_cache_revision(session: FranchiseSession) -> int:
+    return int(getattr(session, "_narrative_revision", 0) or 0)
+
+
+def _bump_narrative_revision(session: FranchiseSession) -> None:
+    session._narrative_revision = _narrative_cache_revision(session) + 1
+    session._cached_narrative_universe_payload = None
+
+
+def get_cached_narrative_universe_payload(session: FranchiseSession, *, force: bool = False) -> Dict[str, Any]:
+    """Build narrative_universe once per revision — dominant cost in GET /state."""
+    rev = _narrative_cache_revision(session)
+    cached = getattr(session, "_cached_narrative_universe_payload", None)
+    if (
+        not force
+        and isinstance(cached, dict)
+        and int(cached.get("revision", -1)) == rev
+        and int(cached.get("version", 0) or 0) == _NARRATIVE_UNIVERSE_CACHE_VERSION
+    ):
+        payload = cached.get("payload")
+        if isinstance(payload, dict):
+            return dict(payload)
+    from app.sim_engine.franchise.storyline_engine import build_narrative_universe_payload  # noqa: WPS433
+
+    payload = build_narrative_universe_payload(session)
+    rev = _narrative_cache_revision(session)
+    session._cached_narrative_universe_payload = {
+        "revision": rev,
+        "version": _NARRATIVE_UNIVERSE_CACHE_VERSION,
+        "payload": payload,
+    }
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _peek_cached_narrative_universe_payload(session: FranchiseSession) -> Dict[str, Any]:
+    """Return warm narrative cache without rebuilding (used for crisis timer polls)."""
+    rev = _narrative_cache_revision(session)
+    cached = getattr(session, "_cached_narrative_universe_payload", None)
+    if (
+        isinstance(cached, dict)
+        and int(cached.get("revision", -1)) == rev
+        and int(cached.get("version", 0) or 0) == _NARRATIVE_UNIVERSE_CACHE_VERSION
+    ):
+        payload = cached.get("payload")
+        if isinstance(payload, dict):
+            return dict(payload)
+    return {}
+
+
+def _interaction_cache_revision(session: FranchiseSession) -> int:
+    return int(getattr(session, "_interaction_revision", 0) or 0)
+
+
+def _bump_interaction_revision(session: FranchiseSession) -> None:
+    session._interaction_revision = _interaction_cache_revision(session) + 1
+    session._cached_lean_state_payload = None
+    session._cached_lean_state_key = None
+
+
+def _build_narrative_summary(session: FranchiseSession) -> Dict[str, Any]:
+    """Slim narrative slice for lean /state — no full universe rebuild."""
+    pending = len(
+        [
+            row
+            for row in (getattr(session, "universe_interaction_queue", None) or [])
+            if str(row.get("status") or "") == "pending"
+        ]
+    )
+    cached = _peek_cached_narrative_universe_payload(session)
+    alerts = list(cached.get("breaking_alerts") or [])[:8]
+    return {
+        "narrative_revision": _narrative_cache_revision(session),
+        "pending_interactions": pending,
+        "breaking_alerts": alerts,
+        "social_post_count": len(getattr(session, "social_posts", None) or []),
+        "reddit_thread_count": len(getattr(session, "reddit_threads", None) or []),
+    }
+
+
+def _get_cached_state_roster_rows(session: FranchiseSession, user_team: Any) -> List[Dict[str, Any]]:
+    stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
+    cached = getattr(session, "_cached_state_roster_rows", None)
+    if (
+        isinstance(cached, dict)
+        and int(cached.get("revision", -1)) == stats_rev
+        and cached.get("payload") is not None
+    ):
+        return list(cached.get("payload") or [])
+    roster_rows: List[Dict[str, Any]] = []
+    if user_team is not None:
+        for p in getattr(user_team, "roster", None) or []:
+            if getattr(p, "retired", False):
+                continue
+            roster_rows.append(
+                _serialize_player_row(p, include_ratings=True, session=session, _team=user_team)
+            )
+        roster_rows.sort(key=lambda x: -float(x.get("ovr") or 0))
+    session._cached_state_roster_rows = {"revision": stats_rev, "payload": roster_rows}
+    return roster_rows
+
+
+def _get_cached_injuries_payload(session: FranchiseSession, *, limit: int = 200) -> List[Dict[str, Any]]:
+    stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
+    injury_len = len(getattr(session, "injury_log_all", None) or [])
+    cached = getattr(session, "_cached_injuries_payload", None)
+    if (
+        isinstance(cached, dict)
+        and int(cached.get("stats_revision", -1)) == stats_rev
+        and int(cached.get("injury_log_len", -1)) == injury_len
+        and cached.get("payload") is not None
+    ):
+        return list(cached.get("payload") or [])
+    payload = _build_injuries_payload(session, limit=limit)
+    session._cached_injuries_payload = {
+        "stats_revision": stats_rev,
+        "injury_log_len": injury_len,
+        "payload": payload,
+    }
+    return payload
+
+
+def _lean_state_cache_key(session: FranchiseSession) -> str:
+    return "|".join(
+        [
+            str(int(getattr(session, "_stats_revision", 0) or 0)),
+            str(int(getattr(session, "_prospect_revision", 0) or 0)),
+            str(_narrative_cache_revision(session)),
+            str(_interaction_cache_revision(session)),
+            str(int(getattr(session, "calendar_cursor", 0) or 0)),
+            str(getattr(session, "phase", "") or ""),
+            str(int(getattr(session, "season_calendar_year", 0) or 0)),
+        ]
+    )
+
+
+def _get_cached_nhl_calendar_full(
+    session: FranchiseSession,
+    *,
+    cursor_window: Optional[Tuple[int, int]] = None,
+    full: bool = False,
+) -> List[Dict[str, Any]]:
+    stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
+    cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    if full or cursor_window is None:
+        mode = "full"
+    else:
+        mode = f"win_{int(cursor_window[0])}_{int(cursor_window[1])}"
+    cache = getattr(session, "_cached_nhl_calendar_slices", None) or {}
+    entry = cache.get(mode) if isinstance(cache, dict) else None
+    if isinstance(entry, dict) and int(entry.get("revision", -1)) == stats_rev and int(entry.get("cursor", -1)) == cur:
+        payload = entry.get("payload")
+        if isinstance(payload, list):
+            return list(payload)
+    payload = _nhl_calendar_full_with_slates(session, cursor_window=None if full else cursor_window)
+    if not isinstance(getattr(session, "_cached_nhl_calendar_slices", None), dict):
+        session._cached_nhl_calendar_slices = {}
+    session._cached_nhl_calendar_slices[mode] = {"revision": stats_rev, "cursor": cur, "payload": payload}
+    return payload
+
+
+def _get_cached_user_cap_snapshot(
+    session: FranchiseSession,
+    user_team: Any,
+    sim: Any,
+    sy_cap: int,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    default_info = {"salary_cap": 95.5, "cap_hit": 0.0, "cap_space": 95.5}
+    if user_team is None:
+        return {}, default_info
+    rev = int(getattr(session, "_stats_revision", 0) or 0)
+    cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    cached = getattr(session, "_cached_user_cap_snapshot", None)
+    if (
+        isinstance(cached, dict)
+        and int(cached.get("revision", -1)) == rev
+        and int(cached.get("cursor", -1)) == cur
+    ):
+        full = dict(cached.get("full") or {})
+        info = dict(cached.get("info") or default_info)
+        return full, info
+    league_for_cap = getattr(sim, "league", None)
+    cap_snapshot_full: Dict[str, Any] = {}
+    try:
+        from services.contract_economy import get_team_cap_snapshot_full, sync_team_cap_fields
+
+        cap_snapshot_full = sync_team_cap_fields(
+            user_team,
+            league_for_cap,
+            sim,
+            season_year=sy_cap,
+            calendar_cursor=cur,
+            regular_season_last_index=int(getattr(session, "nhl_regular_season_last_index", 192) or 192),
+        )
+        if not cap_snapshot_full:
+            cap_snapshot_full = get_team_cap_snapshot_full(
+                user_team,
+                league_for_cap,
+                sim,
+                season_year=sy_cap,
+                calendar_cursor=cur,
+                regular_season_last_index=int(getattr(session, "nhl_regular_season_last_index", 192) or 192),
+            )
+    except Exception:
+        cap_snapshot_full = {}
+    if cap_snapshot_full:
+        cap_info = {
+            "salary_cap": float(cap_snapshot_full.get("upper_limit_m") or 95.5),
+            "cap_hit": float(cap_snapshot_full.get("total_cap_hit_m") or 0.0),
+            "cap_space": float(cap_snapshot_full.get("usable_cap_space_m") or 0.0),
+        }
+    else:
+        cap_info = _team_cap_snapshot(user_team, sim, season_year=sy_cap)
+    session._cached_user_cap_snapshot = {
+        "revision": rev,
+        "cursor": cur,
+        "full": cap_snapshot_full,
+        "info": cap_info,
+    }
+    return cap_snapshot_full, cap_info
+
+
+def get_cached_trade_market_payload(session: FranchiseSession) -> Dict[str, Any]:
+    rev = int(getattr(session, "_stats_revision", 0) or 0)
+    cached = getattr(session, "_cached_trade_market_payload", None)
+    if isinstance(cached, dict) and int(cached.get("revision", -1)) == rev:
+        payload = cached.get("payload")
+        if isinstance(payload, dict):
+            return dict(payload)
+    from services.trade_service import build_trade_market_payload  # noqa: WPS433
+
+    payload = build_trade_market_payload(session)
+    session._cached_trade_market_payload = {"revision": rev, "payload": payload}
+    return dict(payload) if isinstance(payload, dict) else {}
 
 
 def _purge_synthetic_universe_artifacts(session: FranchiseSession) -> bool:
@@ -4633,20 +4874,24 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
     """
     StatsCentral payload via canonical player_analytics enrichment.
     """
-    try:
-        _purge_synthetic_universe_artifacts(session)
-    except Exception:
-        logging.getLogger(__name__).exception("Synthetic universe purge failed")
+    stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
+    skip_backfill = int(getattr(session, "_stats_backfill_revision", -1) or -1) == stats_rev
+    if not skip_backfill:
+        try:
+            _purge_synthetic_universe_artifacts(session)
+        except Exception:
+            logging.getLogger(__name__).exception("Synthetic universe purge failed")
 
-    try:
-        _backfill_missing_toi_from_game_boxes(session)
-    except Exception:
-        logging.getLogger(__name__).exception("Player TOI backfill failed")
+        try:
+            _backfill_missing_toi_from_game_boxes(session)
+        except Exception:
+            logging.getLogger(__name__).exception("Player TOI backfill failed")
 
-    try:
-        _backfill_player_analytics_from_game_boxes(session)
-    except Exception:
-        logging.getLogger(__name__).exception("Player analytics backfill failed")
+        try:
+            _backfill_player_analytics_from_game_boxes(session)
+        except Exception:
+            logging.getLogger(__name__).exception("Player analytics backfill failed")
+        session._stats_backfill_revision = stats_rev
 
     try:
         from app.sim_engine.gameplay.game_analytics_ledger import league_assist_health_metrics
@@ -7396,8 +7641,15 @@ def _draft_country_iso(raw: str) -> str:
 
 
 def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str, Any]:
-    """Draft board built from real development-league players: stats, nationality,
-    league difficulty, goalie positional realism, and stock movement."""
+    """Assemble the live franchise draft board from dev-league players.
+
+    CANONICAL PATH: league_hierarchy_bootstrap (spawn) -> this function (board) ->
+    draft_ranking_logic (scores/ETA) -> franchise_scouting (GM overlay). Do not use
+    SimEngine prospect.py or draft_class_generator.py for live franchise rankings.
+
+    Draft board built from real development-league players: stats, nationality,
+    league difficulty, goalie positional realism, and stock movement.
+    """
     league = getattr(sim, "league", None)
     if league is None:
         return {"entries": [], "subtitle": "", "total": 0}
@@ -7502,9 +7754,10 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                     continue
                 ident = getattr(p, "identity", None)
                 age = int(getattr(ident, "age", 99) or 99) if ident else 99
-                # Draft class matches bootstrap shaping cohort (17–20). Age 16
-                # kids are next-year depth, not this year's board.
-                if age < 17 or age > 20:
+                # Draft class matches bootstrap shaping cohort (17–20; NCAA up to 24).
+                # Age 16 kids are next-year depth, not this year's board.
+                max_draft_age = 24 if str(code).upper() == "NCAA" else 20
+                if age < 17 or age > max_draft_age:
                     continue
                 pk = str(getattr(p, "id", "") or "")
                 if not pk:
@@ -7677,6 +7930,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         calculate_prospect_eta,
         compose_live_draft_board,
         compute_ceiling_visibility,
+        compute_public_ovr_band,
         compute_consensus_potential_evaluation,
         compute_enhanced_draft_score,
         compute_prospect_outcome_band,
@@ -7714,7 +7968,6 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
     prospects.sort(key=lambda x: -float(x["_score"]))
     apply_hard_ranking_floor_pass(prospects)
     apply_goalie_class_rank_caps(prospects, goalie_class_strength=goalie_class_strength)
-    apply_hard_ranking_floor_pass(prospects)
     apply_potential_band_enforcement(prospects, band_size=32)
 
     ranking_pool_goalies = sum(1 for r in prospects if str(r.get("position") or "").upper() == "G")
@@ -7806,12 +8059,6 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
             _min_ceiling = 86.0 - (_rank - 1) * (86.0 - 70.0) / 31.0
             if float(_brow.get("potential_score") or 0) < _min_ceiling:
                 _brow["potential_score"] = round(_min_ceiling, 1)
-                if float(_brow.get("true_potential_score") or 0) < _min_ceiling:
-                    _brow["true_potential_score"] = round(_min_ceiling, 1)
-                try:
-                    _brow["consensus_potential_score"] = compute_consensus_potential_evaluation(_brow)
-                except Exception:
-                    pass
         try:
             _brow.update(compute_prospect_outcome_band(_brow))
         except Exception:
@@ -7857,6 +8104,19 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
     }.get(draft_class_depth, "")
     class_strength = f"{class_strength}{depth_suffix}"
 
+    from services.franchise_scouting import ensure_scouting_markers, get_hidden_ceiling_pool
+
+    ensure_scouting_markers(session, board_prospects)
+    hidden_ceiling_pool = get_hidden_ceiling_pool(session)
+    _scout_month = None
+    try:
+        _cal = getattr(session, "nhl_calendar", None) or []
+        _cur = int(getattr(session, "calendar_cursor", 0) or 0)
+        if _cal and 0 <= _cur < len(_cal) and isinstance(_cal[_cur], dict):
+            _scout_month = _cal[_cur].get("month")
+    except Exception:
+        _scout_month = None
+
     # --- Weekly stock movement (rank change since last week snapshot) ---
     prev = dict(getattr(session, "draft_rank_prev", None) or {})
     preseason = dict(getattr(session, "draft_preseason_rank", None) or prev)
@@ -7889,6 +8149,21 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         if key not in prev:
             trend = "NEW"
             stock_label = str(row.get("weekly_stock_label") or row.get("stock_label") or "New")
+        elif stock_mode == "weekly_heat":
+            if signed_delta >= 4:
+                trend, stock_label = "UP", "Hot Week"
+            elif signed_delta >= 2:
+                trend, stock_label = "UP", "Heating Up"
+            elif signed_delta >= 1:
+                trend, stock_label = "UP", "Warming"
+            elif signed_delta <= -4:
+                trend, stock_label = "DOWN", "Cold Week"
+            elif signed_delta <= -2:
+                trend, stock_label = "DOWN", "Cooling Off"
+            elif signed_delta <= -1:
+                trend, stock_label = "DOWN", "Fading"
+            else:
+                trend, stock_label = "SAME", "Holding"
         elif signed_delta >= 5:
             trend, stock_label = "UP", "Rocketing"
         elif signed_delta >= 3:
@@ -7923,17 +8198,9 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         goalie_penalized = bool(row.get("_goalie_penalized"))
         base_conf = float(row.get("scouting_confidence") or 50)
         conf = scouting_confidence_for_entry(row, session, base_conf=base_conf)
-        # The displayed scout estimate is a FOGGED read of the prospect's real
-        # ceiling: centre on true potential, then apply a persistent per-prospect
-        # evaluation miss (seed_key) so scouts disagree and can be wrong — rather
-        # than a widening band that always straddles the hidden centre. (Ranking /
-        # band decisions use the observable consensus_potential_score elsewhere.)
-        display_center = float(
-            row.get("true_potential_score")
-            or row.get("potential_score")
-            or row.get("consensus_potential_score")
-            or 0
-        )
+        # Public ceiling intel is fogged from observable consensus only — never
+        # the hidden true_potential_score. Ranking uses the same consensus path.
+        display_center = float(row.get("consensus_potential_score") or row.get("potential_score") or 0)
         pot_seed = str(row.get("key") or row.get("name") or "")
         # Ceiling readability is gated by draft position: obvious for early picks, fading
         # to a vague range and then vanishing (floor-only) the deeper the prospect sits.
@@ -7949,14 +8216,21 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                     scout_overlay_pct = float(_ov["scouted_percentage"])
                 except (TypeError, ValueError):
                     scout_overlay_pct = 0.0
-        _cv = compute_ceiling_visibility(rank, scout_overlay_pct)
+        _cv = compute_ceiling_visibility(
+            rank,
+            scout_overlay_pct,
+            prospect_key=key,
+            hidden_ceiling_pool=hidden_ceiling_pool,
+            month=_scout_month,
+        )
         ceiling_visibility = float(_cv["visibility"])
         ceiling_state = str(_cv["state"])
         ceiling_hidden = bool(_cv["ceiling_hidden"])
-        # Lower visibility widens the scout's ceiling band (less certainty on upside).
-        ceiling_conf = conf * (0.5 + 0.5 * ceiling_visibility)
+        # GM dedicated scouting (overlay %) gates ceiling/OVR reveals — not ambient GP confidence.
+        gm_scout_pct = scout_overlay_pct if scout_overlay_pct > 0 else conf * 0.35
+        ceiling_conf = gm_scout_pct * (0.5 + 0.5 * ceiling_visibility)
         intel = build_potential_intel(
-            display_center, ceiling_conf, overlay_pct=ceiling_conf, include_true=False, seed_key=pot_seed,
+            display_center, ceiling_conf, overlay_pct=gm_scout_pct, include_true=False, seed_key=pot_seed,
         )
         entry = {k: v for k, v in row.items() if not k.startswith("_")}
         # Strip hidden truth fields before public serialization.
@@ -7968,12 +8242,24 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
             t_ovr = float(raw_true_ovr if raw_true_ovr is not None else row.get("true_ovr") or 0)
         except (TypeError, ValueError):
             t_ovr = 0.0
-        ovr_gap = max(2.0, (100.0 - conf) * 0.2)
-        ovr_bias = ((int(conf) % 11) - 5) * 0.15
+        scout_for_ovr = scout_overlay_pct if scout_overlay_pct > 0 else conf
+        ovr_gap = max(2.0, (100.0 - scout_for_ovr) * 0.2)
+        ovr_bias = ((int(scout_for_ovr) % 11) - 5) * 0.15
         ovr_lo = max(40.0, t_ovr - ovr_gap + ovr_bias)
         ovr_hi = min(95.0, t_ovr + ovr_gap * 0.45 + ovr_bias)
         ovr_est = round((ovr_lo + ovr_hi) / 2.0, 1)
-        ovr_revealed = bool(row.get("ovr_revealed")) or conf >= 88.0
+        from services.franchise_scouting import DRAFT_OVR_REVEAL_THRESHOLD
+
+        ovr_revealed = bool(row.get("ovr_revealed")) or scout_overlay_pct >= float(DRAFT_OVR_REVEAL_THRESHOLD)
+        pub_ovr = compute_public_ovr_band(
+            t_ovr,
+            scout_overlay_pct,
+            seed_key=key,
+            reveal_threshold=float(DRAFT_OVR_REVEAL_THRESHOLD),
+        )
+        if ovr_revealed and scout_overlay_pct >= float(DRAFT_OVR_REVEAL_THRESHOLD):
+            ovr_lo = ovr_hi = round(t_ovr, 1)
+            ovr_est = ovr_lo
         entry.update(
             {
                 "rank": rank,
@@ -8014,9 +8300,23 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                 # Exact ability only when revealed; otherwise omit misleading true_ovr key.
                 "current_ovr_estimate": ovr_est,
                 "current_ovr_range": [round(ovr_lo, 1), round(ovr_hi, 1)],
+                "public_ovr_low": pub_ovr["low"],
+                "public_ovr_high": pub_ovr["high"],
+                "public_ovr_spread": pub_ovr["spread"],
+                "scout_disagreement_narrowing": pub_ovr["spread"],
                 "eta": calculate_prospect_eta(row, final_rank=rank),
             }
         )
+        _ov = _scout_prospects.get(key) if isinstance(_scout_prospects, dict) else None
+        if isinstance(_ov, dict):
+            if _ov.get("public_miss_type"):
+                entry["public_miss_type"] = str(_ov.get("public_miss_type"))
+            if _ov.get("spotlight"):
+                entry["spotlight"] = True
+            if _ov.get("film_study_complete"):
+                entry["film_study_complete"] = True
+            if _ov.get("miss_discovered"):
+                entry["miss_discovered"] = True
         if ovr_revealed:
             entry["true_ovr"] = round(t_ovr, 1)
         else:
@@ -8118,7 +8418,7 @@ def snapshot_draft_rank_prev(session: FranchiseSession, sim: Any, *, force: bool
     if not force and week_key and getattr(session, "draft_rank_snapshot_week", "") == week_key:
         return
 
-    board = build_draft_class_rankings(session, sim)
+    board = get_cached_draft_class_rankings(session, sim)
     entries = board.get("entries") or []
     ranks = {str(e.get("key")): int(e.get("rank", i + 1)) for i, e in enumerate(entries) if e.get("key")}
     cal_iso = _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0))
@@ -9790,12 +10090,14 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
     bulk_light = bool(getattr(session, "_bulk_calendar_advance", False)) and bool(
         getattr(session, "_light_game_stat_accumulation", False)
     )
+    manual_hybrid = bool(getattr(session, "_manual_hybrid_light_cpu", False))
 
     # team_by_id is keyed by str(team_id); slots may carry int ids (dataclasses do not enforce types).
     hid = _safe_slot_team_id(slot, "home_id")
     aid = _safe_slot_team_id(slot, "away_id")
     is_user_game = user_tid in (hid, aid)
-    cpu_only_bulk = bulk_light and not is_user_game
+    cpu_only_light = (bulk_light or manual_hybrid) and not is_user_game
+    cpu_only_bulk = cpu_only_light
     home = session.team_by_id.get(hid)
     away = session.team_by_id.get(aid)
     if home is None or away is None:
@@ -9957,7 +10259,9 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         # Bulk/light season accumulation must use one counting model for every club.
         # Forcing the user onto full event sim while CPU–CPU stays light systematically
         # under-scored the controlled team vs the rest of the league.
-        use_light = bool(getattr(session, "_light_game_stat_accumulation", False))
+        use_light = bool(getattr(session, "_light_game_stat_accumulation", False)) or (
+            manual_hybrid and not is_user_game
+        )
         try:
             hg, ag, ot = sim._simulate_game(
                 r,
@@ -10685,6 +10989,7 @@ def _finalize_regular_calendar_day(
             pass
 
         _maybe_enqueue_post_day_decisions(session, user_lines)
+        _bump_narrative_revision(session)
     elif not light_bulk and bulk:
         # Legacy path (non-light bulk) — narrative throttled every 3rd day.
         if int(session.calendar_days_finished) % 3 == 0:
@@ -10701,6 +11006,7 @@ def _finalize_regular_calendar_day(
             except Exception:
                 pass
             _maybe_enqueue_post_day_decisions(session, user_lines)
+            _bump_narrative_revision(session)
     # Bulk light advance: skip narrative/trade-demand passes (ledger stats unchanged).
     try:
         from app.sim_engine.league_hierarchy_bootstrap import tick_extra_league_development
@@ -11127,6 +11433,78 @@ def _wjc_hud_event_extras(session: FranchiseSession, now_iso: str, season_year: 
     }
 
 
+def _apply_wjc_development_to_prospects(
+    session: FranchiseSession,
+    prospects_stocked: List[Dict[str, Any]],
+) -> None:
+    """Apply a small post-tournament attribute bump to live dev-league draft prospects."""
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is None:
+        return
+
+    by_id: Dict[str, Any] = {}
+    for block in getattr(league, "development_leagues", None) or []:
+        for tm in block.get("teams") or []:
+            for p in tm.get("players") or []:
+                pid = str(getattr(p, "id", "") or "")
+                if pid:
+                    by_id[pid] = p
+
+    try:
+        from app.sim_engine.entities.player import persist_recomputed_ovr
+    except Exception:
+        return
+
+    skill_keys = (
+        "skating", "shooting", "passing", "defense", "physical", "hockey_iq",
+        "handling", "wrist_shot", "slap_shot", "deking", "faceoffs",
+    )
+
+    for row in prospects_stocked:
+        if str(row.get("prospect_classification") or "") != "draft_eligible":
+            continue
+        if bool(row.get("is_npc")):
+            continue
+        try:
+            stock_delta = int(row.get("stock_delta") or 0)
+        except (TypeError, ValueError):
+            stock_delta = 0
+        gp = int(row.get("tournament_gp") or 0)
+        if stock_delta == 0 and gp <= 0:
+            continue
+        pid = str(row.get("player_id") or row.get("draft_prospect_id") or "")
+        player = by_id.get(pid)
+        if player is None:
+            continue
+        ratings = getattr(player, "ratings", None)
+        if not isinstance(ratings, dict) or not ratings:
+            continue
+        goals = int(row.get("tournament_g") or 0)
+        if stock_delta > 0:
+            bump = min(2.5, 0.12 * stock_delta + 0.08 * goals)
+        elif stock_delta < 0:
+            bump = max(-1.2, 0.06 * stock_delta)
+        else:
+            bump = 0.15 if goals >= 2 else 0.0
+        if abs(bump) < 0.05:
+            continue
+        touched = False
+        for k in skill_keys:
+            if k not in ratings:
+                continue
+            try:
+                cur = float(ratings[k])
+            except (TypeError, ValueError):
+                continue
+            ratings[k] = round(max(35.0, min(99.0, cur + bump)), 1)
+            touched = True
+        if touched:
+            try:
+                persist_recomputed_ovr(player)
+            except Exception:
+                pass
+
+
 def _persist_wjc_stock_to_draft_class(
     session: FranchiseSession,
     sim: Any,
@@ -11174,7 +11552,7 @@ def _persist_wjc_stock_to_draft_class(
         if stock_delta == 0:
             continue
         rank_before = int(entries_before.get(key) or p.get("stock_rank_before") or 999)
-        boosts[key] = float(boosts.get(key, 0.0)) + float(stock_delta) * 0.35
+        boosts[key] = float(boosts.get(key, 0.0)) + float(stock_delta) * 1.0
         rank_changes[key] = {"before": rank_before, "stock_delta": stock_delta}
 
     if not rank_changes:
@@ -11184,6 +11562,7 @@ def _persist_wjc_stock_to_draft_class(
         return {}
 
     session.wjc_draft_score_boosts = boosts
+    _apply_wjc_development_to_prospects(session, prospects_stocked)
     evaluated.add(int(season_sy))
     session.wjc_stock_evaluated_seasons = evaluated
     bundle["stock_evaluated"] = True
@@ -11214,6 +11593,9 @@ def _persist_wjc_stock_to_draft_class(
         if entry_row:
             hist_row = dict(entry_row)
             hist_row["rank"] = after
+            hist_row["stock_mode"] = "rank_change"
+            hist_row["stock_unit"] = "rank"
+            hist_row["stock_delta"] = delta
             if delta > 0:
                 hist_row["stock_label"] = "Rocketing" if delta >= 5 else "Rising"
                 hist_row["stock_reason"] = f"World Juniors breakout — up {delta} spots"
@@ -11658,6 +12040,8 @@ def _apply_wjc_stock_after(
     out: List[Dict[str, Any]] = []
     for p in prospects:
         row = dict(p)
+        if bool(row.get("is_npc")) or str(row.get("prospect_classification") or "") == "tournament_npc":
+            continue
         if str(row.get("prospect_classification") or "") == "drafted_user":
             row["stock_rank_after"] = None
             row["stock_delta"] = None
@@ -11670,15 +12054,10 @@ def _apply_wjc_stock_after(
         except (TypeError, ValueError):
             base_rank = None
         if base_rank is None:
-            if bool(row.get("is_npc")) or str(row.get("prospect_classification") or "") == "tournament_npc":
-                try:
-                    base_rank = int(before) if before is not None else 120
-                except (TypeError, ValueError):
-                    base_rank = 120
-            else:
-                out.append(row)
-                continue
+            out.append(row)
+            continue
         st = stats_by_id.get(pid) or {}
+        gp = int(st.get("gp") or 0)
         pts = int(st.get("pts") or 0)
         goals = int(st.get("g") or 0)
         plus = int(st.get("plus_minus") or 0)
@@ -11689,17 +12068,18 @@ def _apply_wjc_stock_after(
         team_losses = int(team_row.get("l") or 0)
 
         delta = 0
-        delta -= goals * 3
-        delta -= max(0, pts - goals) * 2
-        delta -= max(0, plus) * 1
-        delta -= team_wins * 2
-        delta += team_losses * 2
-        if nat_label and medal_map.get(nat_label) == "gold":
-            delta -= 18
-        elif nat_label and medal_map.get(nat_label) == "silver":
-            delta -= 12
-        elif nat_label and medal_map.get(nat_label) == "bronze":
-            delta -= 8
+        if gp > 0:
+            delta -= goals * 3
+            delta -= max(0, pts - goals) * 2
+            delta -= plus * 1
+            delta -= team_wins * 2
+            delta += team_losses * 2
+            if nat_label and medal_map.get(nat_label) == "gold":
+                delta -= 18
+            elif nat_label and medal_map.get(nat_label) == "silver":
+                delta -= 12
+            elif nat_label and medal_map.get(nat_label) == "bronze":
+                delta -= 8
 
         delta = int(round(delta * max(1.0, float(day_multiplier))))
         after = max(1, base_rank + delta)
@@ -11707,7 +12087,7 @@ def _apply_wjc_stock_after(
         row["stock_delta"] = base_rank - after
         row["tournament_pts"] = pts
         row["tournament_g"] = goals
-        row["tournament_gp"] = int(st.get("gp") or 0)
+        row["tournament_gp"] = gp
         row["team_wins"] = team_wins
         row["team_losses"] = team_losses
         out.append(row)
@@ -13321,7 +13701,11 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
         )
 
     # 5. Sim the actual day.
-    user_lines, league_lines = _simulate_slots_for_day(session, idx, slots)
+    session._manual_hybrid_light_cpu = True
+    try:
+        user_lines, league_lines = _simulate_slots_for_day(session, idx, slots)
+    finally:
+        session._manual_hybrid_light_cpu = False
 
     # 6. Only after successful simulation do we clear the slate and move the cursor.
     session.by_day[idx] = []
@@ -13538,7 +13922,6 @@ def advance_franchise_bulk(
                 pass
         if not prior_defer_inv:
             invalidate_session_payload_caches(session, reason="bulk_complete")
-            _bump_stats_revision(session)
 
     last = steps[-1] if steps else {
         "status": "blocked" if getattr(session, "pending_decisions", None) else "noop",
@@ -17281,8 +17664,20 @@ def _build_gm_world_payload(session: FranchiseSession) -> Dict[str, Any]:
 def build_state_payload(session: FranchiseSession, *, include_heavy: bool = False, crisis_tick: bool = False) -> Dict[str, Any]:
     from services.perf_profiler import span
 
+    if not include_heavy and not crisis_tick:
+        key = _lean_state_cache_key(session)
+        cached = getattr(session, "_cached_lean_state_payload", None)
+        if isinstance(cached, dict) and str(cached.get("key") or "") == key:
+            payload = cached.get("payload")
+            if isinstance(payload, dict):
+                return dict(payload)
+
     with span("state.build", heavy=bool(include_heavy)):
-        return _build_state_payload_impl(session, include_heavy=include_heavy, crisis_tick=crisis_tick)
+        payload = _build_state_payload_impl(session, include_heavy=include_heavy, crisis_tick=crisis_tick)
+
+    if not include_heavy and not crisis_tick:
+        session._cached_lean_state_payload = {"key": _lean_state_cache_key(session), "payload": payload}
+    return payload
 
 
 def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool = False, crisis_tick: bool = False) -> Dict[str, Any]:
@@ -17306,12 +17701,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
 
     roster_rows: List[Dict[str, Any]] = []
     if user_team is not None:
-        for p in getattr(user_team, "roster", None) or []:
-            if getattr(p, "retired", False):
-                continue
-            row = _serialize_player_row(p, include_ratings=True, session=session, _team=user_team)
-            roster_rows.append(row)
-        roster_rows.sort(key=lambda x: -float(x.get("ovr") or 0))
+        roster_rows = _get_cached_state_roster_rows(session, user_team)
 
     cal_rec = _user_team_record_from_game_results(session)
     uid_s = str(session.user_team_id or "")
@@ -17348,42 +17738,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
 
     ensure_session_nhl_salary_cap(session)
     sy_cap = int(getattr(session, "season_calendar_year", 2025) or 2025)
-    league_for_cap = getattr(sim, "league", None)
-    cap_snapshot_full: Dict[str, Any] = {}
-    if user_team is not None:
-        try:
-            from services.contract_economy import get_team_cap_snapshot_full, sync_team_cap_fields
-
-            cap_snapshot_full = sync_team_cap_fields(
-                user_team,
-                league_for_cap,
-                sim,
-                season_year=sy_cap,
-                calendar_cursor=int(getattr(session, "calendar_cursor", 0) or 0),
-                regular_season_last_index=int(getattr(session, "nhl_regular_season_last_index", 192) or 192),
-            )
-            if not cap_snapshot_full:
-                cap_snapshot_full = get_team_cap_snapshot_full(
-                    user_team,
-                    league_for_cap,
-                    sim,
-                    season_year=sy_cap,
-                    calendar_cursor=int(getattr(session, "calendar_cursor", 0) or 0),
-                    regular_season_last_index=int(getattr(session, "nhl_regular_season_last_index", 192) or 192),
-                )
-        except Exception:
-            cap_snapshot_full = {}
-
-    if cap_snapshot_full:
-        cap_info = {
-            "salary_cap": float(cap_snapshot_full.get("upper_limit_m") or 95.5),
-            "cap_hit": float(cap_snapshot_full.get("total_cap_hit_m") or 0.0),
-            "cap_space": float(cap_snapshot_full.get("usable_cap_space_m") or 0.0),
-        }
-    elif user_team is not None:
-        cap_info = _team_cap_snapshot(user_team, sim, season_year=sy_cap)
-    else:
-        cap_info = {"salary_cap": 95.5, "cap_hit": 0.0, "cap_space": 95.5}
+    cap_snapshot_full, cap_info = _get_cached_user_cap_snapshot(session, user_team, sim, sy_cap)
     cap_hint = str(getattr(user_team, "cap_pressure", "moderate") if user_team else "?")
     strat = str(getattr(user_team, "strategy", "balanced") if user_team else "?")
 
@@ -17423,12 +17778,13 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
     notifications_norm = [_normalize_notification_payload(n, i) for i, n in enumerate(notifications_raw)]
     storylines_norm = [_normalize_storyline_payload(ev if isinstance(ev, dict) else {"headline": str(ev or "")}) for ev in list(getattr(session, "storyline_events", None) or [])[-120:]]
     storyline_choices = _storyline_choices_payload(session)
-    try:
-        from app.sim_engine.franchise.storyline_engine import build_narrative_universe_payload  # noqa: WPS433
-
-        narrative_universe = build_narrative_universe_payload(session)
-    except Exception:
-        narrative_universe = {}
+    narrative_summary = _build_narrative_summary(session)
+    narrative_universe: Dict[str, Any] = {}
+    if include_heavy:
+        try:
+            narrative_universe = get_cached_narrative_universe_payload(session)
+        except Exception:
+            narrative_universe = {}
     try:
         from services.trade_demand_engine import (  # noqa: WPS433
             build_trade_demand_crisis_payload,
@@ -17440,7 +17796,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
     except Exception:
         trade_demand_crisis = None
         trade_deadline = {}
-    injuries_payload = _build_injuries_payload(session)
+    injuries_payload = _get_cached_injuries_payload(session)
     injury_history_payload = _build_injury_history_payload(session)
 
     draft_class_board: Dict[str, Any] = {}
@@ -17460,10 +17816,9 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
     if postseason_lean:
         nhl_calendar_full: List[Dict[str, Any]] = []
     elif include_heavy:
-        nhl_calendar_full = _nhl_calendar_full_with_slates(session)
+        nhl_calendar_full = _get_cached_nhl_calendar_full(session, full=True)
     else:
-        # Advance/day response: tighter window — Calendar screen can refetch full.
-        nhl_calendar_full = _nhl_calendar_full_with_slates(session, cursor_window=(21, 14))
+        nhl_calendar_full = _get_cached_nhl_calendar_full(session, cursor_window=(21, 14))
 
     # Build once — both keys must reference the SAME list so GameUIContext cannot
     # double-concat snake+camel into a 2x pending queue / 2x wire cost.
@@ -17533,7 +17888,8 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         "timeline": list(session.timeline[-80:]),
         "storyline_events": storylines_norm,
         "active_storylines": len(storylines_norm),
-        "narrative_universe": narrative_universe,
+        "narrative_summary": narrative_summary,
+        "narrative_universe": narrative_universe if include_heavy else {},
         "trade_demand_crisis": trade_demand_crisis,
         "trade_deadline": trade_deadline,
         "trade_stability_roster_flags": dict(getattr(session, "trade_stability_roster_flags", None) or {}),
@@ -17547,6 +17903,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         "standings": standings_rows[:32],
         "stats_revision": int(getattr(session, "_stats_revision", 0) or 0),
         "prospect_revision": int(getattr(session, "_prospect_revision", 0) or 0),
+        "narrative_revision": _narrative_cache_revision(session),
         "cpu_franchise_profiles": dict(getattr(session, "cpu_franchise_profiles", None) or {}),
         "schedule_upcoming": _build_schedule_upcoming(session, limit=14),
         "flags": {
@@ -17595,7 +17952,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
     try:
         from services.franchise_offseason import build_offseason_state_extras
 
-        extras = build_offseason_state_extras(session)
+        extras = build_offseason_state_extras(session, lean=not include_heavy, hydrate_stages=False)
         extra_flags = dict(extras.pop("flags", {}) or {})
         payload.update(extras)
         payload["flags"] = {**payload.get("flags", {}), **extra_flags}
@@ -17634,13 +17991,22 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         from services.franchise_scouting import _ensure_scouting_state, DEFAULT_SCOUTING_BUDGET
 
         ss = _ensure_scouting_state(session)
-        payload["scouting_state"] = {
-            "budget": float(ss.get("budget") or DEFAULT_SCOUTING_BUDGET),
-            "used_budget": float(ss.get("used_budget") or 0.0),
-            "watchlist": list(ss.get("watchlist") or []),
-            "active_deployments": list(ss.get("active_deployments") or []),
-            "prospects": dict(ss.get("prospects") or {}),
-        }
+        if include_heavy:
+            payload["scouting_state"] = {
+                "budget": float(ss.get("budget") or DEFAULT_SCOUTING_BUDGET),
+                "used_budget": float(ss.get("used_budget") or 0.0),
+                "watchlist": list(ss.get("watchlist") or []),
+                "active_deployments": list(ss.get("active_deployments") or []),
+                "prospects": dict(ss.get("prospects") or {}),
+            }
+        else:
+            payload["scouting_state"] = {
+                "budget": float(ss.get("budget") or DEFAULT_SCOUTING_BUDGET),
+                "used_budget": float(ss.get("used_budget") or 0.0),
+                "watchlist": list(ss.get("watchlist") or []),
+                "active_deployments": list(ss.get("active_deployments") or []),
+                "prospect_count": len(dict(ss.get("prospects") or {})),
+            }
     except Exception:
         payload["scouting_state"] = {}
     try:
@@ -17688,13 +18054,14 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
 
 def build_state_payload_safe(session: FranchiseSession, *, include_heavy: bool = False, crisis_tick: bool = False) -> Dict[str, Any]:
     """Never fail Cup/offseason advances on a state-serialize bug — return a lean shell."""
-    from services.json_safe import json_safe
     from services.perf_profiler import span
 
     with span("state.build_safe", heavy=bool(include_heavy)):
         try:
-            return json_safe(build_state_payload(session, include_heavy=include_heavy, crisis_tick=crisis_tick))
+            # Lean builders emit JSON-safe primitives; skip expensive deep-walk.
+            return build_state_payload(session, include_heavy=include_heavy, crisis_tick=crisis_tick)
         except Exception as exc:  # noqa: BLE001
+            from services.json_safe import json_safe
             try:
                 from services.franchise_offseason import slim_awards_payload_for_client
 
@@ -17836,8 +18203,8 @@ def invalidate_session_payload_caches(session: FranchiseSession, reason: str = "
     # Also: do NOT bump `_prospect_revision` on draft_pick. Rankings/HUD caches are
     # keyed on that revision, so bumping it silently defeated the rankings-cache
     # keep-alive above and forced a full rebuild after every selection.
-    if reason == "draft_pick":
-        # Selection only mutates rights / drafted set. Clear roster/scouting views
+    if reason == "draft_pick" or reason == "draft_pick_trade":
+        # Selection / pick trade only mutates rights / drafted set. Clear roster/scouting views
         # that list undrafted prospects, but leave rankings + trade market warm.
         session._cached_scouting_prospects_payload = None
         session._cached_roster_browser_payload = None
@@ -17854,6 +18221,25 @@ def invalidate_session_payload_caches(session: FranchiseSession, reason: str = "
     session._cached_league_operations_key = None
     session._cached_lean_state_payload = None
     session._cached_lean_state_key = None
+    narrative_reasons = {
+        "bulk_complete",
+        "player_meeting_resolve",
+        "player_meeting_start",
+        "player_meeting_advance",
+        "storyline_choice",
+        "trade_exec",
+        "burner_post",
+        "narrative_tick",
+    }
+    if reason in narrative_reasons:
+        _bump_narrative_revision(session)
+        session._cached_narrative_universe_payload = None
+    elif reason not in ("advance_day", "game_stats", "player_stats", "season_reset"):
+        session._cached_narrative_universe_payload = None
+    session._cached_nhl_calendar_slices = None
+    session._cached_user_cap_snapshot = None
+    session._cached_trade_market_payload = None
+    session._cached_contract_office_payload = None
     if reason in (
         "trade_exec",
         "game_stats",
@@ -18580,7 +18966,18 @@ def advance_season_phase(session, target=None):
 def get_franchise_chemistry_report(session: FranchiseSession) -> Dict[str, Any]:
     from app.sim_engine.systems.chemistry import build_public_chemistry_report
 
-    return build_public_chemistry_report(session)
+    stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
+    lines_blob = getattr(session, "lines", None) or {}
+    lines_key = str(hash(repr(lines_blob)))
+    cache_key = f"{stats_rev}|{lines_key}"
+    cached = getattr(session, "_cached_chemistry_report", None)
+    if isinstance(cached, dict) and str(cached.get("key") or "") == cache_key:
+        payload = cached.get("payload")
+        if isinstance(payload, dict):
+            return dict(payload)
+    payload = build_public_chemistry_report(session)
+    session._cached_chemistry_report = {"key": cache_key, "payload": payload}
+    return payload
 
 
 def enter_franchise_playoffs(session: FranchiseSession) -> Dict[str, Any]:

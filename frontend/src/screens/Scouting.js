@@ -88,6 +88,7 @@ import React, {
     COMBINE: "combine",
     PRIVATE_WORKOUT: "private_workout",
     MEDICAL: "medical",
+    FILM_STUDY: "film_study",
   });
   
   const SCOUTING_INTENSITY = Object.freeze({
@@ -134,6 +135,7 @@ import React, {
     privateWorkout: "/api/franchise/scouting/private-workout",
     medical: "/api/franchise/scouting/request-medical",
     focus: "/api/franchise/scouting/focus",
+    filmStudy: "/api/franchise/scouting/film-study",
   });
   
   const VIEW_TABS = [
@@ -444,30 +446,53 @@ import React, {
   function actionLabel(action) {
     switch (action) {
       case SCOUTING_ACTIONS.PLAYER_FOCUS:
-        return "Player Focus";
+        return "Deep Dive: Player Focus";
       case SCOUTING_ACTIONS.REGION_SWEEP:
-        return "Region Sweep";
+        return "Deploy Coverage (bulk)";
       case SCOUTING_ACTIONS.LIVE_VIEWING:
-        return "Live View";
+        return "Deploy: Live Viewing";
       case SCOUTING_ACTIONS.VIDEO_REVIEW:
-        return "Video";
+        return "Deploy: Video Sweep";
       case SCOUTING_ACTIONS.CHARACTER_CHECK:
-        return "Character";
+        return "Deep Dive: Character";
       case SCOUTING_ACTIONS.ANALYTICS:
-        return "Analytics";
+        return "Deep Dive: Analytics";
       case SCOUTING_ACTIONS.INTERVIEW:
-        return "Interview";
+        return "Deep Dive: Interview";
       case SCOUTING_ACTIONS.DINNER:
-        return "Dinner";
+        return "Deep Dive: Dinner";
       case SCOUTING_ACTIONS.COMBINE:
-        return "Combine";
+        return "Deep Dive: Combine";
       case SCOUTING_ACTIONS.PRIVATE_WORKOUT:
-        return "Workout";
+        return "Deep Dive: Workout";
       case SCOUTING_ACTIONS.MEDICAL:
-        return "Medical";
+        return "Deep Dive: Medical";
+      case SCOUTING_ACTIONS.FILM_STUDY:
+        return "Film Study (4h)";
       default:
         return titleCase(action || "Scout");
     }
+  }
+
+  function formatScoutTimelineLine(timeline, weeksUntilDraft) {
+    const tl = safeObject(timeline);
+    if (!tl.dedicated_pct && !tl.passive_daily_pct) return "";
+    const parts = [];
+    if (tl.days_to_ovr_reveal != null && tl.passive_daily_pct > 0) {
+      const w72 = Math.max(1, Math.ceil(tl.days_to_ovr_reveal / 7));
+      parts.push(`72% in ~${w72} wk`);
+    }
+    if (tl.days_to_full_file != null && tl.passive_daily_pct > 0) {
+      const w100 = Math.max(1, Math.ceil(tl.days_to_full_file / 7));
+      parts.push(`100% in ~${w100} wk`);
+    } else if (tl.days_to_passive_cap != null && tl.passive_daily_pct > 0) {
+      const wCap = Math.max(1, Math.ceil(tl.days_to_passive_cap / 7));
+      parts.push(`cap ${tl.passive_cap_pct}% in ~${wCap} wk`);
+    }
+    if (weeksUntilDraft != null && Number.isFinite(Number(weeksUntilDraft))) {
+      parts.push(`draft in ~${weeksUntilDraft} wk`);
+    }
+    return parts.join(" · ");
   }
   
   function intensityLabel(value) {
@@ -960,6 +985,17 @@ import React, {
           "scouting.flagged",
         ])
       );
+
+    const scoutTimeline = safeObject(
+      getNested(player, ["scout_timeline", "scoutTimeline", "scouting.scout_timeline"])
+    );
+    const rawDedicated = getNested(player, [
+      "dedicated_scouted_percentage",
+      "dedicatedScoutedPercentage",
+      "scouting.dedicated_scouted_percentage",
+    ]);
+    const dedicatedScouted =
+      rawDedicated == null || rawDedicated === "" ? null : percentage(rawDedicated, 0);
   
     return {
       raw: player,
@@ -998,6 +1034,14 @@ import React, {
       interviewStatus,
       dinnerStatus,
       needsWork,
+      dedicatedScouted,
+      scoutTimeline,
+      spotlight: Boolean(getNested(player, ["spotlight", "scout_spotlight"])),
+      publicMissType: stringOr(getNested(player, ["public_miss_type", "publicMissType"]), ""),
+      filmStudyComplete: Boolean(getNested(player, ["film_study_complete", "filmStudyComplete"])),
+      publicOvrLow: numberOr(getNested(player, ["public_ovr_low", "publicOvrLow"]), null),
+      publicOvrHigh: numberOr(getNested(player, ["public_ovr_high", "publicOvrHigh"]), null),
+      publicOvrSpread: numberOr(getNested(player, ["public_ovr_spread", "publicOvrSpread", "scout_disagreement_narrowing"]), null),
     };
   }
   
@@ -1081,6 +1125,21 @@ import React, {
       getNested(scout, ["analytics", "analytics_score", "analyticsScore", "profile.analytics"]),
       50
     );
+
+    const specialization = stringOr(
+      getNested(scout, ["specialization", "specialty", "profile.specialization"]),
+      region || "General"
+    );
+
+    const speedDaysTo72 = numberOr(
+      getNested(scout, ["speed_days_to_72", "speedDaysTo72", "profile.speed_days_to_72"]),
+      null
+    );
+
+    const scoutTier = stringOr(
+      getNested(scout, ["scout_tier", "scoutTier", "tier", "profile.tier"]),
+      ""
+    );
   
     return {
       raw: scout,
@@ -1098,6 +1157,9 @@ import React, {
       regionKnowledge,
       character,
       analytics,
+      specialization,
+      speedDaysTo72,
+      scoutTier,
     };
   }
   
@@ -1206,6 +1268,15 @@ import React, {
   
     const x = numberOr(getNested(country, ["x", "map_x", "mapX", "geo.x"]), null);
     const y = numberOr(getNested(country, ["y", "map_y", "mapY", "geo.y"]), null);
+
+    const deployRoiLabel = stringOr(
+      getNested(country, ["deploy_roi_label", "deployRoiLabel"]),
+      ""
+    );
+    const deploySweepGain = numberOr(
+      getNested(country, ["deploy_sweep_gain_pct", "deploySweepGainPct"]),
+      6
+    );
   
     return {
       raw: country,
@@ -1227,6 +1298,8 @@ import React, {
       lon,
       x,
       y,
+      deployRoiLabel,
+      deploySweepGain,
     };
   }
   
@@ -1637,17 +1710,17 @@ import React, {
       }
     };
   
-    const [stateRaw, worldRaw, prospectsRaw, assignmentsRaw] = await Promise.all([
-      safeFetch(ENDPOINTS.state),
+    const [worldRaw, prospectsRaw, assignmentsRaw, stateRaw] = await Promise.all([
       safeFetch(ENDPOINTS.world),
       safeFetch(ENDPOINTS.prospects),
       safeFetch(ENDPOINTS.assignments),
+      safeFetch(ENDPOINTS.state),
     ]);
-  
+
     const state = {
       ...safeObject(real.state),
       ...safeObject(real.realData?.state),
-      ...safeObject(stateRaw?.state || stateRaw?.data || stateRaw),
+      ...safeObject(stateRaw),
     };
   
     const prospectSource =
@@ -1666,15 +1739,11 @@ import React, {
     const prospects = safeArray(prospectSource).map(normalizeProspect);
   
     const scoutSource =
-      safeArray(stateRaw?.scouts).length > 0
-        ? stateRaw.scouts
-        : safeArray(stateRaw?.staff).length > 0
-          ? stateRaw.staff
-          : safeArray(state?.scouts).length > 0
-            ? state.scouts
-            : safeArray(state?.staff).length > 0
-              ? state.staff
-              : real.scouts;
+      safeArray(state?.scouts).length > 0
+        ? state.scouts
+        : safeArray(state?.staff).length > 0
+          ? state.staff
+          : real.scouts;
   
     const scouts = safeArray(scoutSource).map(normalizeScout);
   
@@ -1716,7 +1785,6 @@ import React, {
     const regions = explicitRegions.length ? explicitRegions : deriveRegionsFromCountries(countries);
   
     const metaNotes = [
-      stateRaw?.__error,
       worldRaw?.__error,
       prospectsRaw?.__error,
       assignmentsRaw?.__error,
@@ -1731,6 +1799,8 @@ import React, {
       assignments,
       countries,
       regions,
+      intelRules: safeObject(worldRaw?.intel_rules || stateRaw?.intel_rules),
+      weeksUntilDraft: numberOr(worldRaw?.weeks_until_draft ?? stateRaw?.weeks_until_draft, null),
       meta: {
         notes: metaNotes,
         source: explicitCountries.length ? "backend" : "derived",
@@ -1922,7 +1992,7 @@ import React, {
   
     const [selectedAction, setSelectedAction] = useLocalStorageState(
       `${STORAGE_PREFIX}:action`,
-      SCOUTING_ACTIONS.PLAYER_FOCUS
+      SCOUTING_ACTIONS.REGION_SWEEP
     );
   
     const [selectedIntensity, setSelectedIntensity] = useLocalStorageState(
@@ -1964,6 +2034,10 @@ import React, {
     const regions = payload.regions || EMPTY_ARRAY;
     const state = payload.state || EMPTY_OBJECT;
     const meta = payload.meta || EMPTY_OBJECT;
+    const intelRules = payload.intelRules || safeObject(state.intel_rules);
+    const weeksUntilDraft = payload.weeksUntilDraft;
+    const scoutReputation = numberOr(state.scout_reputation, 50);
+    const scoutSpotlight = safeArray(state.scout_spotlight);
   
     const debouncedSearch = useDebouncedValue(filters.search, 160);
   
@@ -2332,7 +2406,7 @@ import React, {
           showToast("danger", "Pick a prospect.");
           return;
         }
-  
+
         const pathMap = {
           [SCOUTING_ACTIONS.INTERVIEW]: ENDPOINTS.interview,
           [SCOUTING_ACTIONS.DINNER]: ENDPOINTS.dinner,
@@ -2340,6 +2414,7 @@ import React, {
           [SCOUTING_ACTIONS.PRIVATE_WORKOUT]: ENDPOINTS.privateWorkout,
           [SCOUTING_ACTIONS.MEDICAL]: ENDPOINTS.medical,
           [SCOUTING_ACTIONS.PLAYER_FOCUS]: ENDPOINTS.focus,
+          [SCOUTING_ACTIONS.FILM_STUDY]: ENDPOINTS.filmStudy,
         };
   
         runCommand(actionLabel(action), pathMap[action] || ENDPOINTS.focus, {
@@ -2376,7 +2451,20 @@ import React, {
       },
       [runCommand]
     );
-  
+
+    const toggleSpotlight = useCallback(
+      (prospect) => {
+        if (!prospect?.id) return;
+        runCommand("spotlight", ENDPOINTS.assign, {
+          meta_only: true,
+          prospect_id: prospect.id,
+          player_id: prospect.id,
+          meta_patch: { spotlight: !prospect.spotlight },
+        });
+      },
+      [runCommand]
+    );
+
     const goBack = useCallback(() => {
       if (SCREENS.HUB) setScreen(SCREENS.HUB);
     }, [setScreen]);
@@ -2436,6 +2524,12 @@ import React, {
           </section>
   
           <section className="scout-top-strip" aria-label="Scouting operations summary">
+            {intelRules.public_ceiling_label ? (
+              <div className="scout-intel-banner" title={intelRules.passive_cap_tooltip || ""}>
+                <strong>Public intel</strong>
+                <span>{intelRules.public_ceiling_label}</span>
+              </div>
+            ) : null}
             <StatTile
               label="Board"
               value={dashboardStats.total || "—"}
@@ -2453,6 +2547,12 @@ import React, {
               value={dashboardStats.scouts || "—"}
               sub={`${dashboardStats.activeAssignments} active assignments`}
               tone="cyan"
+            />
+            <StatTile
+              label="Scout Rep"
+              value={`${Math.round(scoutReputation)}`}
+              sub={`${scoutSpotlight.length}/${intelRules.spotlight_max_targets || 5} spotlight slots`}
+              tone={scoutReputation >= 65 ? "green" : "cyan"}
             />
             <StatTile
               label="Budget"
@@ -2515,6 +2615,10 @@ import React, {
                       countries={countries}
                       regions={regions}
                       assignments={assignmentRows}
+                      intelRules={intelRules}
+                      scoutReputation={scoutReputation}
+                      scoutSpotlight={scoutSpotlight}
+                      onToggleSpotlight={toggleSpotlight}
                       onSelectProspect={selectProspect}
                       onSelectCountry={selectCountry}
                       setViewMode={setViewMode}
@@ -2594,8 +2698,10 @@ import React, {
                       country={selectedProspectCountry}
                       prospects={filteredProspects}
                       phase={phase}
+                      intelRules={intelRules}
                       onSelectProspect={selectProspect}
                       runProspectAction={runProspectAction}
+                      onToggleSpotlight={toggleSpotlight}
                       busyAction={busyAction}
                     />
                   )}
@@ -2618,6 +2724,8 @@ import React, {
                   selectedProspect={selectedProspect}
                   estimatedCost={estimatedCost}
                   phase={phase}
+                  weeksUntilDraft={weeksUntilDraft}
+                  intelRules={intelRules}
                   busyAction={busyAction}
                   assignScouting={assignScouting}
                 />
@@ -2795,16 +2903,20 @@ import React, {
 /* -------------------------------------------------------------------------- */
 
 function OverviewView({
-    phase,
-    stats,
-    prospects,
-    countries,
-    regions,
-    assignments,
-    onSelectProspect,
-    onSelectCountry,
-    setViewMode,
-  }) {
+  phase,
+  stats,
+  prospects,
+  countries,
+  regions,
+  assignments,
+  intelRules,
+  scoutReputation,
+  scoutSpotlight,
+  onToggleSpotlight,
+  onSelectProspect,
+  onSelectCountry,
+  setViewMode,
+}) {
     const topProspects = useMemo(() => {
       return prospects
         .slice()
@@ -2832,14 +2944,28 @@ function OverviewView({
   
     const boardNeeds = useMemo(() => {
       const map = new Map();
-  
+
       prospects.forEach((prospect) => {
         const key = prospect.position || "—";
         map.set(key, (map.get(key) || 0) + 1);
       });
-  
+
       return [...map.entries()]
         .sort((a, b) => compareText(a[0], b[0]))
+        .slice(0, 8);
+    }, [prospects]);
+
+    const spotlightProspects = useMemo(() => {
+      const ids = new Set(scoutSpotlight || []);
+      return prospects
+        .filter((p) => p.spotlight || ids.has(p.id))
+        .sort((a, b) => numberOr(a.rank, 9999) - numberOr(b.rank, 9999));
+    }, [prospects, scoutSpotlight]);
+
+    const sleeperCandidates = useMemo(() => {
+      return prospects
+        .filter((p) => numberOr(p.rank, 999) >= 100)
+        .sort((a, b) => numberOr(a.rank, 9999) - numberOr(b.rank, 9999))
         .slice(0, 8);
     }, [prospects]);
   
@@ -2849,6 +2975,15 @@ function OverviewView({
           <div>
             <span>Overview</span>
             <h2>{phaseCue(phase)}</h2>
+            {intelRules?.public_ceiling_label ? (
+              <p className="scout-intel-note">{intelRules.public_ceiling_label}</p>
+            ) : null}
+            <p className="scout-efficiency-note">
+              Fastest path: <strong>Deploy Coverage</strong> on a country/region (bulk +6% each), then assign scouts to your shortlist for passive daily growth.
+            </p>
+            <p className="scout-rep-note">
+              Scout reputation: <strong>{Math.round(scoutReputation)}</strong> — discover public misses (late bloomers / early flamers) for bonus rep.
+            </p>
           </div>
   
           <button type="button" onClick={() => setViewMode(VIEW_MODES.BOARD)}>
@@ -2906,6 +3041,35 @@ function OverviewView({
             </div>
           </article>
   
+          <article className="scout-card scout-card--wide">
+            <div className="scout-card-head">
+              <h3>Scout Spotlight</h3>
+              <span>
+                {spotlightProspects.length}/{intelRules?.spotlight_max_targets || 5} · +10%/day when assigned
+              </span>
+            </div>
+            {spotlightProspects.length ? (
+              <div className="spotlight-list">
+                {spotlightProspects.map((p) => (
+                  <button key={p.id} type="button" className="spotlight-row" onClick={() => onSelectProspect(p.id)}>
+                    <strong>#{p.rank}</strong>
+                    <span>{p.name}</span>
+                    <small>{Math.round(p.dedicatedScouted ?? p.scouted)}% file</small>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="spotlight-candidates">
+                <p>Pick up to {intelRules?.spotlight_max_targets || 5} rank-100+ sleepers for +10% daily passive when assigned.</p>
+                {sleeperCandidates.map((p) => (
+                  <button key={p.id} type="button" className="spotlight-add" onClick={() => onToggleSpotlight(p)}>
+                    + #{p.rank} {p.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </article>
+
           <article className="scout-card scout-card--wide">
             <div className="scout-card-head">
               <h3>Top Prospects</h3>
@@ -3886,9 +4050,25 @@ function OverviewView({
                   </div>
   
                   <div className="staff-card__bars">
-                    <LabeledBar label="Load" value={scout.workload} tone="gold" />
                     <LabeledBar label="Accuracy" value={scout.accuracy} tone="blue" />
+                    <LabeledBar
+                      label="Speed"
+                      value={
+                        scout.speedDaysTo72
+                          ? clamp(100 - scout.speedDaysTo72, 35, 95)
+                          : 60
+                      }
+                      tone="green"
+                    />
                     <LabeledBar label="Character" value={scout.character} tone="purple" />
+                  </div>
+
+                  <div className="staff-card__spec">
+                    <span>{scout.specialization || scout.region || "General"}</span>
+                    {scout.scoutTier ? <em>{scout.scoutTier}</em> : null}
+                    {scout.speedDaysTo72 ? (
+                      <small>~{scout.speedDaysTo72} days to 72% (assigned)</small>
+                    ) : null}
                   </div>
   
                   <div className="staff-card__footer">
@@ -3915,8 +4095,10 @@ function OverviewView({
     country,
     prospects,
     phase,
+    intelRules,
     onSelectProspect,
     runProspectAction,
+    onToggleSpotlight,
     busyAction,
   }) {
     if (!prospect) {
@@ -3965,6 +4147,12 @@ function OverviewView({
                 <span>{prospect.projection}</span>
                 <span>{prospectNeedLabel(prospect)}</span>
                 <span>{prospect.draftStock}</span>
+                {prospect.spotlight ? <span className="is-spotlight">Spotlight</span> : null}
+                {prospect.publicMissType ? (
+                  <span className="is-miss" title="Public board may be wrong — scout to confirm">
+                    Public miss?
+                  </span>
+                ) : null}
               </div>
             </div>
           </div>
@@ -3993,6 +4181,12 @@ function OverviewView({
               <ProgressRing value={prospect.floor} label="Floor" tone="green" />
               <ProgressRing value={prospect.volatility} label="Volatility" tone="gold" />
             </div>
+            {prospect.publicOvrLow != null && prospect.publicOvrHigh != null ? (
+              <p className="scout-disagreement-note" title="Public consensus disagrees ±5 OVR until your file narrows it">
+                Public OVR band: <strong>{prospect.publicOvrLow}–{prospect.publicOvrHigh}</strong>
+                {prospect.publicOvrSpread != null ? ` (±${prospect.publicOvrSpread} narrowing)` : ""}
+              </p>
+            ) : null}
           </article>
   
           <article className="scout-card">
@@ -4081,48 +4275,69 @@ function OverviewView({
   
           <article className="scout-card player-card-wide">
             <div className="scout-card-head">
-              <h3>Draft Actions</h3>
-              <span>Interactive</span>
+              <h3>Deep Dive Actions</h3>
+              <span>Single prospect — use Deploy Coverage for bulk</span>
             </div>
   
             <div className="draft-action-grid">
               <DraftActionButton
-                title="Interview"
+                title="Deep Dive: Focus"
+                label="Priority file bump"
+                disabled={busyAction}
+                onClick={() => runProspectAction(SCOUTING_ACTIONS.PLAYER_FOCUS)}
+              />
+              <DraftActionButton
+                title="Deep Dive: Interview"
                 label="Personality read"
                 disabled={busyAction}
                 onClick={() => runProspectAction(SCOUTING_ACTIONS.INTERVIEW)}
               />
               <DraftActionButton
-                title="Dinner"
+                title="Deep Dive: Dinner"
                 label="Final fit check"
                 disabled={busyAction}
                 onClick={() => runProspectAction(SCOUTING_ACTIONS.DINNER)}
               />
               <DraftActionButton
-                title="Combine"
+                title="Deep Dive: Combine"
                 label="Testing data"
                 disabled={busyAction}
                 onClick={() => runProspectAction(SCOUTING_ACTIONS.COMBINE)}
               />
               <DraftActionButton
-                title="Workout"
+                title="Deep Dive: Workout"
                 label="One more look"
                 disabled={busyAction}
                 onClick={() => runProspectAction(SCOUTING_ACTIONS.PRIVATE_WORKOUT)}
               />
               <DraftActionButton
-                title="Medical"
+                title="Deep Dive: Medical"
                 label="Risk review"
                 disabled={busyAction}
                 onClick={() => runProspectAction(SCOUTING_ACTIONS.MEDICAL)}
               />
               <DraftActionButton
-                title="Focus"
-                label="Priority file"
-                disabled={busyAction}
-                onClick={() => runProspectAction(SCOUTING_ACTIONS.PLAYER_FOCUS)}
+                title="Film Study (4h)"
+                label="Tape — assigned/watchlist only"
+                disabled={busyAction || prospect.filmStudyComplete}
+                onClick={() => runProspectAction(SCOUTING_ACTIONS.FILM_STUDY)}
               />
             </div>
+            <div className="player-spotlight-row">
+              <button
+                type="button"
+                className={prospect.spotlight ? "is-active" : ""}
+                disabled={busyAction || (!prospect.spotlight && numberOr(prospect.rank, 0) < 100)}
+                onClick={() => onToggleSpotlight?.(prospect)}
+              >
+                {prospect.spotlight ? "Remove Scout Spotlight" : "Add Scout Spotlight (+10%/day)"}
+              </button>
+            </div>
+            {prospect.scoutTimeline?.passive_cap_tooltip ? (
+              <p className="scout-passive-cap-note" title={prospect.scoutTimeline.passive_cap_tooltip}>
+                {prospect.scoutTimeline.passive_cap_tooltip}
+              </p>
+            ) : null}
           </article>
   
           <article className="scout-card player-card-wide">
@@ -4204,6 +4419,8 @@ function OverviewView({
     selectedProspect,
     estimatedCost,
     phase,
+    weeksUntilDraft,
+    intelRules,
     busyAction,
     assignScouting,
   }) {
@@ -4266,7 +4483,22 @@ function OverviewView({
   
             <LabeledBar label="Load" value={selectedScout.workload} tone="gold" />
             <LabeledBar label="Accuracy" value={selectedScout.accuracy} tone="blue" />
+            <LabeledBar
+              label="Speed"
+              value={
+                selectedScout.speedDaysTo72
+                  ? clamp(100 - selectedScout.speedDaysTo72, 35, 95)
+                  : 60
+              }
+              tone="green"
+            />
             <LabeledBar label="Character" value={selectedScout.character} tone="purple" />
+            <p className="scout-spec-line">
+              {selectedScout.specialization || selectedScout.region}
+              {selectedScout.speedDaysTo72
+                ? ` · ~${selectedScout.speedDaysTo72} days to 72% when assigned`
+                : ""}
+            </p>
   
             <div className="selected-scout__chips">
               {selectedScout.region ? <span>{selectedScout.region}</span> : null}
@@ -4285,19 +4517,45 @@ function OverviewView({
           value={selectedAction}
           onChange={setSelectedAction}
           options={[
-            makeOption(SCOUTING_ACTIONS.PLAYER_FOCUS, "Player Focus"),
-            makeOption(SCOUTING_ACTIONS.REGION_SWEEP, "Region Sweep"),
-            makeOption(SCOUTING_ACTIONS.LIVE_VIEWING, "Live View"),
-            makeOption(SCOUTING_ACTIONS.VIDEO_REVIEW, "Video"),
-            makeOption(SCOUTING_ACTIONS.CHARACTER_CHECK, "Character"),
-            makeOption(SCOUTING_ACTIONS.ANALYTICS, "Analytics"),
-            makeOption(SCOUTING_ACTIONS.INTERVIEW, "Interview"),
-            makeOption(SCOUTING_ACTIONS.DINNER, "Dinner"),
-            makeOption(SCOUTING_ACTIONS.COMBINE, "Combine"),
-            makeOption(SCOUTING_ACTIONS.PRIVATE_WORKOUT, "Workout"),
-            makeOption(SCOUTING_ACTIONS.MEDICAL, "Medical"),
+            makeOption(SCOUTING_ACTIONS.REGION_SWEEP, "Deploy Coverage (bulk +6% each)"),
+            makeOption(SCOUTING_ACTIONS.LIVE_VIEWING, "Deploy: Live Viewing"),
+            makeOption(SCOUTING_ACTIONS.VIDEO_REVIEW, "Deploy: Video Sweep"),
+            makeOption(SCOUTING_ACTIONS.PLAYER_FOCUS, "Deep Dive: Player Focus"),
+            makeOption(SCOUTING_ACTIONS.CHARACTER_CHECK, "Deep Dive: Character"),
+            makeOption(SCOUTING_ACTIONS.ANALYTICS, "Deep Dive: Analytics"),
+            makeOption(SCOUTING_ACTIONS.INTERVIEW, "Deep Dive: Interview"),
+            makeOption(SCOUTING_ACTIONS.DINNER, "Deep Dive: Dinner"),
+            makeOption(SCOUTING_ACTIONS.COMBINE, "Deep Dive: Combine"),
+            makeOption(SCOUTING_ACTIONS.PRIVATE_WORKOUT, "Deep Dive: Workout"),
+            makeOption(SCOUTING_ACTIONS.MEDICAL, "Deep Dive: Medical"),
+            makeOption(SCOUTING_ACTIONS.FILM_STUDY, "Film Study (4h, assigned)"),
           ]}
         />
+
+        {selectedCountry &&
+        (selectedAction === SCOUTING_ACTIONS.REGION_SWEEP ||
+          selectedAction === SCOUTING_ACTIONS.LIVE_VIEWING ||
+          selectedAction === SCOUTING_ACTIONS.VIDEO_REVIEW) ? (
+          <p className="deploy-efficiency-hint">
+            <strong>Deploy efficiency:</strong>{" "}
+            {selectedCountry.deployRoiLabel ||
+              `${selectedCountry.prospectCount} prospects × +${selectedCountry.deploySweepGain || 6}% instant`}
+            {intelRules?.max_active_deployments
+              ? ` · max ${intelRules.max_active_deployments} active deployments`
+              : ""}
+          </p>
+        ) : null}
+
+        {selectedProspect && selectedProspect.scoutTimeline ? (
+          <p
+            className="scout-timeline-hint"
+            title={intelRules?.passive_cap_tooltip || selectedProspect.scoutTimeline.passive_cap_tooltip}
+          >
+            <strong>Passive timeline:</strong>{" "}
+            {formatScoutTimelineLine(selectedProspect.scoutTimeline, weeksUntilDraft) ||
+              "Assign a scout or deploy coverage to start passive growth."}
+          </p>
+        ) : null}
   
         <div className="intensity-picker">
           <span>Intensity</span>
@@ -4688,13 +4946,106 @@ function OverviewView({
   
         .scout-top-strip {
           display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns: repeat(5, minmax(0, 1fr));
           gap: 0;
           margin-bottom: 12px;
           border: 1px solid var(--scout-line);
           border-radius: var(--radius-control);
           overflow: hidden;
           background: rgba(6, 21, 34, 0.72);
+        }
+
+        .scout-intel-banner {
+          grid-column: 1 / -1;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px 14px;
+          align-items: baseline;
+          padding: 8px 12px;
+          border-bottom: 1px solid rgba(156, 218, 236, 0.1);
+          background: rgba(34, 226, 239, 0.06);
+          font-size: 12px;
+          color: var(--scout-muted);
+        }
+
+        .scout-intel-banner strong {
+          color: var(--scout-cyan);
+          font-size: 11px;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+
+        .scout-intel-note,
+        .scout-efficiency-note {
+          margin: 6px 0 0;
+          font-size: 12px;
+          color: var(--scout-muted);
+          max-width: 52rem;
+        }
+
+        .deploy-efficiency-hint,
+        .scout-timeline-hint,
+        .scout-passive-cap-note,
+        .scout-spec-line {
+          margin: 8px 0 0;
+          font-size: 12px;
+          line-height: 1.45;
+          color: var(--scout-muted);
+        }
+
+        .staff-card__spec {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          margin-top: 8px;
+          font-size: 11px;
+          color: var(--scout-muted);
+        }
+
+        .staff-card__spec em {
+          font-style: normal;
+          color: var(--scout-cyan);
+          font-weight: 700;
+        }
+
+        .scout-rep-note,
+        .scout-disagreement-note {
+          margin: 8px 0 0;
+          font-size: 12px;
+          color: var(--scout-muted);
+        }
+
+        .spotlight-list,
+        .spotlight-candidates {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+
+        .spotlight-row,
+        .spotlight-add {
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          text-align: left;
+          padding: 8px 10px;
+          border: 1px solid rgba(156, 218, 236, 0.12);
+          border-radius: 8px;
+          background: rgba(6, 21, 34, 0.5);
+          color: inherit;
+        }
+
+        .player-spotlight-row {
+          margin-top: 10px;
+        }
+
+        .player-spotlight-row button.is-active {
+          border-color: rgba(34, 226, 239, 0.45);
+        }
+
+        .player-tags .is-spotlight,
+        .player-tags .is-miss {
+          color: var(--scout-cyan);
         }
 
         .scout-ops-metric {

@@ -715,6 +715,10 @@ def compute_consensus_potential_evaluation(row: Dict[str, Any]) -> float:
 
     if prod >= 1.35 or ppg >= 1.15:
         market += 2.5
+    elif ovr >= 86 and (prod >= 1.25 or ppg >= 1.1):
+        market += 4.0
+    elif ovr >= 82 and prod >= 1.45:
+        market += 2.5
     elif prod < 0.32 and ppg < 0.42:
         market -= 3.5
     if code.startswith("EU_J") and code not in ("EU_J_SHL", "EU_J_LIIGA", "EU_J_DEL"):
@@ -917,7 +921,14 @@ def compute_prospect_outcome_band(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def compute_ceiling_visibility(rank: Any, scout_overlay_pct: Any = 0.0) -> Dict[str, Any]:
+def compute_ceiling_visibility(
+    rank: Any,
+    scout_overlay_pct: Any = 0.0,
+    *,
+    prospect_key: str = "",
+    hidden_ceiling_pool: Optional[Any] = None,
+    month: Optional[int] = None,
+) -> Dict[str, Any]:
     """How readable a prospect's CEILING is, driven by draft position.
 
     Design goal: an early-round pick is under a national spotlight, so its ceiling is
@@ -925,6 +936,9 @@ def compute_ceiling_visibility(rank: Any, scout_overlay_pct: Any = 0.0) -> Dict[
     ceiling fades — first to a vague range ("fogged"), then vanishes entirely ("hidden")
     leaving only the reliable floor. It is then up to the user to project the ceiling from
     production, draft-year analytics, age, size and raw attributes.
+
+    Only ~20 true sleepers per class retain hidden ceilings past mid-season; everyone
+  else naturally clears by October (week ~8) as public film accumulates.
 
     ``scout_overlay_pct`` is the user's OWN dedicated scouting progress on this prospect
     (0 when they haven't scouted him). Only that effort — never the ambient/public
@@ -935,6 +949,9 @@ def compute_ceiling_visibility(rank: Any, scout_overlay_pct: Any = 0.0) -> Dict[
     Returns ``visibility`` (0..1), a ``state`` of ``clear``/``fogged``/``hidden`` and a
     convenience ``ceiling_hidden`` boolean.
     """
+    _PUBLIC_CLEAR_RANK = 45
+    _FOG_DECAY_MONTH = 10
+
     try:
         r = int(rank or 0)
     except (TypeError, ValueError):
@@ -946,9 +963,20 @@ def compute_ceiling_visibility(rank: Any, scout_overlay_pct: Any = 0.0) -> Dict[
     except (TypeError, ValueError):
         overlay = 0.0
 
+    pool = set(hidden_ceiling_pool or [])
+    key = str(prospect_key or "")
+    in_hidden_pool = bool(key and pool and key in pool)
+
     # Public attention decays with draft position. Non-linear so all of round 1 stays
     # clear and the fade bites through the middle rounds (≈clear R1, fogged R2-3, hidden R4+).
     attention = max(0.0, min(1.0, (160.0 - r) / 150.0)) ** 1.3
+    if r <= _PUBLIC_CLEAR_RANK:
+        attention = max(attention, 0.72)
+
+    # Non-sleeper prospects: public film clears fog by mid-season (October).
+    if month is not None and int(month) >= _FOG_DECAY_MONTH and not in_hidden_pool:
+        attention = max(attention, 0.58 if r <= 90 else 0.48)
+
     # Only the user's dedicated scouting effort re-opens a late prospect's ceiling.
     scout = max(0.0, min(1.0, (overlay - 20.0) / 70.0))
     vis = max(attention, attention * 0.35 + scout * 0.85)
@@ -964,6 +992,40 @@ def compute_ceiling_visibility(rank: Any, scout_overlay_pct: Any = 0.0) -> Dict[
         "visibility": round(vis, 3),
         "state": state,
         "ceiling_hidden": state == "hidden",
+        "in_hidden_ceiling_pool": in_hidden_pool,
+    }
+
+
+def compute_public_ovr_band(
+    true_ovr: float,
+    scout_overlay_pct: float,
+    *,
+    seed_key: str = "",
+    reveal_threshold: float = 72.0,
+    max_span: float = 5.0,
+) -> Dict[str, Any]:
+    """Public consensus OVR band with ±span disagreement; YOUR file narrows it."""
+    try:
+        t = float(true_ovr or 0)
+    except (TypeError, ValueError):
+        t = 0.0
+    try:
+        scout = float(scout_overlay_pct or 0.0)
+    except (TypeError, ValueError):
+        scout = 0.0
+    hsh = _stable_int(1000, seed_key or "pub", "ovr")
+    public_bias = ((hsh % 11) - 5) * 0.45
+    center = t + public_bias * max(0.0, 1.0 - scout / max(1.0, reveal_threshold))
+    span = max(0.8, float(max_span) * (1.0 - min(1.0, scout / max(1.0, reveal_threshold))))
+    lo = max(35.0, center - span)
+    hi = min(99.0, center + span * 0.65)
+    if scout >= reveal_threshold:
+        lo = hi = round(t, 1)
+    return {
+        "low": round(lo, 1),
+        "high": round(hi, 1),
+        "spread": round(span, 1),
+        "center": round(center, 1),
     }
 
 
@@ -1060,7 +1122,8 @@ def scouting_confidence_for_entry(
         if isinstance(ov, dict) and ov.get("scouted_percentage") is not None:
             overlay_pct = float(ov["scouted_percentage"])
     if overlay_pct is not None:
-        return max(0.0, min(100.0, overlay_pct))
+        merged = float(base_conf) * 0.35 + float(overlay_pct) * 0.65
+        return max(0.0, min(100.0, merged))
     return float(base_conf)
 
 
@@ -1154,6 +1217,13 @@ def _goalie_is_special(row: Dict[str, Any], goalie_class_strength: str = "normal
     if row.get("generational_goalie"):
         return True
     if str(row.get("pipeline_tier") or "").lower() in ("franchise", "transcendent"):
+        return True
+    gclass = str(goalie_class_strength or "normal").lower()
+    ovr = float(row.get("true_ovr") or 0)
+    pot = float(row.get("true_potential_score") or row.get("potential_score") or 0)
+    if gclass in ("elite", "generational") and ovr >= 78 and pot >= 82:
+        return True
+    if gclass == "strong" and ovr >= 80 and pot >= 84:
         return True
     return False
 

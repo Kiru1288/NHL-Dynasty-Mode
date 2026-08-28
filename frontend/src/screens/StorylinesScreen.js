@@ -1642,11 +1642,17 @@ export default function StorylinesScreen() {
     onResolveStorylineChoice,
     setScreen,
     refreshFranchise,
+    hydrateFranchiseNarrative,
+    setFranchiseState,
     pendingMeetingPlayerId,
     setPendingMeetingPlayerId,
     pendingSocialNav,
     setPendingSocialNav,
   } = useGameUI();
+
+  useEffect(() => {
+    hydrateFranchiseNarrative?.();
+  }, [franchiseState?.narrative_revision, franchiseState?.session_id, hydrateFranchiseNarrative]);
 
   const [department, setDepartment] = useState(
     pendingMeetingPlayerId ? "player_meetings" : pendingSocialNav ? "social" : "front_page"
@@ -1688,8 +1694,14 @@ export default function StorylinesScreen() {
     [sessionId]
   );
 
-  const stories = useMemo(() => collectStories(franchiseState), [franchiseState]);
-  const choicesMap = useMemo(() => buildChoicesMap(franchiseState), [franchiseState]);
+  const stories = useMemo(
+    () => collectStories(franchiseState),
+    [franchiseState?.storyline_events, franchiseState?.stats_revision, franchiseState?.narrative_revision]
+  );
+  const choicesMap = useMemo(
+    () => buildChoicesMap(franchiseState),
+    [franchiseState?.storyline_choices, franchiseState?.pending_decisions]
+  );
 
   const openStory = useCallback((id) => {
     if (!id) return;
@@ -1907,6 +1919,18 @@ export default function StorylinesScreen() {
     [onResolveStorylineChoice]
   );
 
+  const mergeMeetingState = useCallback(
+    (res) => {
+      const next = res?.state;
+      if (next && typeof next === "object") {
+        setFranchiseState?.((prev) => (prev ? { ...prev, ...next } : next));
+        return true;
+      }
+      return false;
+    },
+    [setFranchiseState]
+  );
+
   const handleMeetingRefresh = useCallback(async () => {
     await refreshFranchise?.();
   }, [refreshFranchise]);
@@ -1915,14 +1939,14 @@ export default function StorylinesScreen() {
     async (interactionId, choiceId) => {
       setMeetingBusy(true);
       try {
-        await resolvePlayerMeeting(interactionId, choiceId);
-        await refreshFranchise?.();
+        const res = await resolvePlayerMeeting(interactionId, choiceId);
+        if (!mergeMeetingState(res)) await refreshFranchise?.();
         if (pendingMeetingPlayerId) setPendingMeetingPlayerId?.(null);
       } finally {
         setMeetingBusy(false);
       }
     },
-    [refreshFranchise, pendingMeetingPlayerId, setPendingMeetingPlayerId]
+    [mergeMeetingState, refreshFranchise, pendingMeetingPlayerId, setPendingMeetingPlayerId]
   );
 
   const handleStartPlayerMeeting = useCallback(
@@ -1930,13 +1954,13 @@ export default function StorylinesScreen() {
       setMeetingBusy(true);
       try {
         const res = await startPlayerMeeting(playerId, interactionType);
-        await refreshFranchise?.();
+        if (!mergeMeetingState(res)) await refreshFranchise?.();
         return res;
       } finally {
         setMeetingBusy(false);
       }
     },
-    [refreshFranchise]
+    [mergeMeetingState, refreshFranchise]
   );
 
   const handleAdvancePlayerMeeting = useCallback(
@@ -1944,13 +1968,13 @@ export default function StorylinesScreen() {
       setMeetingBusy(true);
       try {
         const res = await advancePlayerMeeting(meetingId, choiceId);
-        await refreshFranchise?.();
+        if (!mergeMeetingState(res)) await refreshFranchise?.();
         return res;
       } finally {
         setMeetingBusy(false);
       }
     },
-    [refreshFranchise]
+    [mergeMeetingState, refreshFranchise]
   );
 
   const meetingAlertCount =

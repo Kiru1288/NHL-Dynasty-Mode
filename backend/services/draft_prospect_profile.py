@@ -2407,7 +2407,7 @@ def build_prospect_profile(
         "potential_range": None if ceiling_hidden else row.get("potential_range"),
         # Current ability stays visible — fog only hides ceiling / true upside.
         "scoutedOverall": None if (ceiling_hidden and not dedicated_file and not (
-            bool(row.get("ovr_revealed")) or scout_conf >= 88.0
+            bool(row.get("ovr_revealed")) or user_scout >= 72.0
         )) else (ovr_v or None),
         "overallRangeLow": ovr_low,
         "overallRangeHigh": ovr_high,

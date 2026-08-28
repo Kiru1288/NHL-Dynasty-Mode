@@ -167,17 +167,15 @@ function GameRoot() {
       SCREENS.EDIT_LINES,
       SCREENS.POWER_PLAY,
       SCREENS.PENALTY_KILL,
-      SCREENS.SCOUTING,
-      SCREENS.HUB,
     ].includes(screen);
-    const needsDraft = [SCREENS.DRAFT_CLASS, SCREENS.SCOUTING].includes(screen);
+    const needsDraft = screen === SCREENS.DRAFT_CLASS;
     if (!needsRosterBrowser && !needsDraft) return;
     hydrateFranchiseHeavyState({
       includeRosterBrowser: needsRosterBrowser,
       includeDraftClassRankings: needsDraft,
       includeDraftClassHud: needsDraft,
     });
-  }, [screen, hydrateFranchiseHeavyState, franchiseState?.stats_revision, franchiseState?.prospect_revision]);
+  }, [screen, hydrateFranchiseHeavyState]);
 
   return (
     <GameCanvas>

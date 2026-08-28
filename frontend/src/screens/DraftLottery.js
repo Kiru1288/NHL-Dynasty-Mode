@@ -238,12 +238,11 @@ function readLocalUniverse() {
 
 async function fetchFirstWorkingEndpoint() {
   const endpoints = [
-    "/api/franchise/state",
+    "/api/standings",
+    "/standings",
     "/api/franchise/universe",
     "/api/sim/universe",
     "/api/universe",
-    "/api/standings",
-    "/standings",
   ];
 
   for (const endpoint of endpoints) {

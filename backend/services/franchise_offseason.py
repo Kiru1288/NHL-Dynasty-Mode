@@ -5802,6 +5802,13 @@ def advance_free_agency_day(session: FranchiseSession, *, days: int = 1) -> Dict
         days = remaining
 
     user_resolve = resolve_user_fa_pending_offers(session, days=days)
+    try:
+        from services.contract_economy import run_cpu_offer_sheet_pass, tick_offer_sheets
+
+        run_cpu_offer_sheet_pass(session, max_sheets=2)
+        tick_offer_sheets(session)
+    except Exception:
+        pass
     tick = tick_free_agency_market(session, days=days)
     session._last_fa_market_tick = tick
     refreshed = _open_free_agency(session, force=False)
@@ -6975,10 +6982,11 @@ def slim_awards_payload_for_client(payload: Optional[Dict[str, Any]]) -> Dict[st
     }
 
 
-def build_offseason_state_extras(session: FranchiseSession) -> Dict[str, Any]:
+def build_offseason_state_extras(session: FranchiseSession, *, lean: bool = False, hydrate_stages: bool = False) -> Dict[str, Any]:
     """Extra payload fields for build_state_payload."""
     _sync_phase_fields(session)
-    _ensure_offseason_stage_hydrated(session)
+    if hydrate_stages:
+        _ensure_offseason_stage_hydrated(session)
     phase = str(session.phase)
     stage = getattr(session, "offseason_stage", None)
     completed = list(getattr(session, "offseason_completed_stages", None) or [])
@@ -7061,7 +7069,7 @@ def build_offseason_state_extras(session: FranchiseSession) -> Dict[str, Any]:
         "is_complete": str(stage or "") in completed,
     }
 
-    return {
+    payload = {
         "offseason_stage": stage,
         "offseason_timeline": timeline,
         "playoffs_done": bool(getattr(session, "playoffs_done", session.playoffs_simulated)),
@@ -7074,8 +7082,6 @@ def build_offseason_state_extras(session: FranchiseSession) -> Dict[str, Any]:
         "draft": session.draft_payload,
         "draft_review": getattr(session, "draft_review_payload", None),
         "prospect_rights": getattr(session, "prospect_rights_payload", None),
-        "free_agents": session.free_agents_payload,
-        "free_agency_market": getattr(session, "free_agency_market_payload", None),
         "free_agency_open": bool(getattr(session, "free_agency_open", False)),
         "fa_market_day": int(getattr(session, "fa_market_day", 0) or 0),
         "contracts": session.resign_payload,
@@ -7094,3 +7100,20 @@ def build_offseason_state_extras(session: FranchiseSession) -> Dict[str, Any]:
             "is_terminal_dead_end": is_terminal,
         },
     }
+    if lean:
+        fa_market = getattr(session, "free_agency_market_payload", None) or {}
+        fa_agents = session.free_agents_payload or {}
+        if isinstance(fa_agents, dict):
+            agent_list = fa_agents.get("agents") or fa_agents.get("free_agents") or []
+            payload["free_agents_count"] = len(agent_list) if isinstance(agent_list, list) else 0
+        else:
+            payload["free_agents_count"] = 0
+        payload["free_agency_market_summary"] = {
+            "day": int(getattr(session, "fa_market_day", 0) or 0),
+            "open": bool(getattr(session, "free_agency_open", False)),
+            "available_count": len(list((fa_market or {}).get("available") or (fa_market or {}).get("free_agents") or [])),
+        }
+        return payload
+    payload["free_agents"] = session.free_agents_payload
+    payload["free_agency_market"] = getattr(session, "free_agency_market_payload", None)
+    return payload

@@ -379,6 +379,30 @@ def get_franchise_state(
     return franchise_sim.build_state_payload_safe(s, include_heavy=False, crisis_tick=bool(crisis_tick))
 
 
+@app.get("/api/franchise/crisis")
+def get_franchise_crisis(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Lightweight trade-demand timer sync — avoids full GET /state every 2s."""
+    s = _session_or_404(x_franchise_session)
+    from services.trade_demand_engine import build_trade_demand_crisis_payload  # noqa: WPS433
+
+    return {
+        "trade_demand_crisis": build_trade_demand_crisis_payload(s, tick_timers=True),
+        "stats_revision": int(getattr(s, "_stats_revision", 0) or 0),
+        "narrative_revision": int(getattr(s, "_narrative_revision", 0) or 0),
+    }
+
+
+@app.get("/api/franchise/narrative")
+def get_franchise_narrative(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.franchise_sim import get_cached_narrative_universe_payload, _narrative_cache_revision  # noqa: WPS433
+
+    s = _session_or_404(x_franchise_session)
+    return {
+        "narrative_revision": _narrative_cache_revision(s),
+        "narrative_universe": get_cached_narrative_universe_payload(s),
+    }
+
+
 @app.get("/api/franchise/stats-central")
 def get_franchise_stats_central(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
     from services.json_safe import json_safe
@@ -429,7 +453,7 @@ def get_franchise_state_heavy(
             (draft_board or {}).get("entries"),
         )
     if include_nhl_calendar_full:
-        out["nhl_calendar_full"] = franchise_sim._nhl_calendar_full_with_slates(s)
+        out["nhl_calendar_full"] = franchise_sim._get_cached_nhl_calendar_full(s, full=True)
     return out
 
 
@@ -443,8 +467,10 @@ def get_franchise_league_operations(x_franchise_session: Optional[str] = Header(
 
 @app.get("/api/franchise/contract-office")
 def get_franchise_contract_office(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.contract_economy import get_cached_contract_office
+
     s = _session_or_404(x_franchise_session)
-    return get_contract_office(s)
+    return get_cached_contract_office(s)
 
 
 @app.get("/api/franchise/free-agents/{player_id}")
@@ -456,7 +482,7 @@ def get_franchise_free_agent_detail(player_id: str, x_franchise_session: Optiona
 
 
 def _contract_action_route(action: str, body: dict[str, Any], session_header: Optional[str]) -> dict[str, Any]:
-    from services.contract_economy import build_contract_office, handle_contract_action
+    from services.contract_economy import handle_contract_action
 
     payload = body or {}
     s = _session_or_404(session_header)
@@ -467,8 +493,9 @@ def _contract_action_route(action: str, body: dict[str, Any], session_header: Op
 
     # Previews must not persist or rebuild negotiation/office side-effects.
     if read_only:
-        office = build_contract_office(s)
-        result["office"] = office
+        from services.contract_economy import get_cached_contract_office
+
+        result["office"] = get_cached_contract_office(s)
         return result
 
     save_session(s)
@@ -489,7 +516,10 @@ def _contract_action_route(action: str, body: dict[str, Any], session_header: Op
             save_session(s)
         except Exception:
             pass
-    office = build_contract_office(s)
+    from services.contract_economy import get_cached_contract_office
+
+    s._cached_contract_office_payload = None
+    office = get_cached_contract_office(s)
     result["office"] = office
     return result
 
@@ -856,12 +886,7 @@ def get_franchise_free_agency_desk(
         desk = build_free_agency_desk(s)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    state = franchise_sim.build_state_payload_safe(s, include_heavy=False)
-    try:
-        save_session(s)
-    except Exception:
-        pass
-    return json_safe({**desk, "state": state})
+    return json_safe(desk)
 
 
 @app.post("/api/franchise/free-agency/advance-day")
@@ -946,6 +971,7 @@ def post_franchise_storyline_choice(
         apply_storyline_choice(s, body.storyline_id, body.choice_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    franchise_sim.invalidate_session_payload_caches(s, "storyline_choice")
     save_session(s)
     return {"state": franchise_sim.build_state_payload(s, include_heavy=False)}
 
@@ -957,8 +983,11 @@ def post_franchise_popup_dismiss(
 ) -> dict[str, Any]:
     s = _session_or_404(x_franchise_session)
     dismiss_franchise_popups(s, list(body.ids or []))
+    from services.franchise_sim import _bump_interaction_revision  # noqa: WPS433
+
+    _bump_interaction_revision(s)
     save_session(s)
-    return {"state": franchise_sim.build_state_payload_safe(s, include_heavy=False)}
+    return {"ok": True, "dismissed": list(body.ids or [])}
 
 
 @app.post("/api/franchise/trade")
@@ -986,7 +1015,6 @@ def post_franchise_trade_evaluate(
         evaluation = evaluate_franchise_trade(s, assets_by_team=dict(body.assets_by_team or {}))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    save_session(s)
     return {"evaluation": evaluation}
 
 
@@ -1070,7 +1098,7 @@ def get_entry_draft_state_route(
     from services.franchise_entry_draft import get_entry_draft_state
 
     s = _session_or_404(x_franchise_session)
-    return {"draft": get_entry_draft_state(s), "state": franchise_sim.build_state_payload(s, include_heavy=False)}
+    return {"draft": get_entry_draft_state(s)}
 
 
 @app.post("/api/franchise/entry-draft/start")
@@ -1198,7 +1226,6 @@ def get_draft_combine_state(
     s = _session_or_404(x_franchise_session)
     return {
         "draft_combine": get_draft_combine_payload(s),
-        "state": franchise_sim.build_state_payload(s, include_heavy=False),
     }
 
 
@@ -1225,7 +1252,7 @@ def get_franchise_trade_market(
     x_franchise_session: Optional[str] = Header(default=None),
 ) -> dict[str, Any]:
     s = _session_or_404(x_franchise_session)
-    return build_trade_market_payload(s)
+    return franchise_sim.get_cached_trade_market_payload(s)
 
 
 class ScoutingCommandBody(BaseModel):
@@ -1349,6 +1376,14 @@ def post_franchise_scouting_focus(
     return _scouting_post("focus", body, x_franchise_session)
 
 
+@app.post("/api/franchise/scouting/film-study")
+def post_franchise_scouting_film_study(
+    body: ScoutingCommandBody,
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    return _scouting_post("film-study", body, x_franchise_session)
+
+
 class PlayerMeetingResolveBody(BaseModel):
     interaction_id: Optional[str] = None
     meeting_id: Optional[str] = None
@@ -1400,7 +1435,9 @@ def get_player_meeting_detail(
 ) -> dict[str, Any]:
     s = _session_or_404(x_franchise_session)
     detail = franchise_sim.get_player_meeting_detail_payload(s, player_id)
-    return {"detail": detail, "state": franchise_sim.build_state_payload(s, include_heavy=False)}
+    # Detail-only response — frontend reads `detail` only; attaching full state
+    # forced a full narrative_universe rebuild on every player click (multi-second).
+    return {"detail": detail}
 
 
 from services.fan_reactions_api import register_fan_reactions_routes
@@ -1422,7 +1459,6 @@ class BurnerPreviewBody(BaseModel):
 def get_social_feed(session_id: str) -> dict[str, Any]:
     s = _session_or_404(session_id)
     from datetime import datetime, timedelta
-    from app.sim_engine.franchise.storyline_engine import build_narrative_universe_payload  # noqa: WPS433
     from services.franchise_sim import _calendar_iso_for_day  # noqa: WPS433
 
     def _parse_iso(raw: str) -> datetime | None:
@@ -1456,12 +1492,13 @@ def get_social_feed(session_id: str) -> dict[str, Any]:
             return True
         return False
 
-    payload = build_narrative_universe_payload(s)
+    payload = {
+        "social_posts": list(getattr(s, "social_posts", None) or []),
+        "reddit_threads": list(getattr(s, "reddit_threads", None) or []),
+    }
     current_iso = _calendar_iso_for_day(s, int(getattr(s, "calendar_idx", 0) or 0))
     posts = list(
         payload.get("social_posts")
-        or payload.get("twitter_feed")
-        or payload.get("social_feed")
         or []
     )
     posts = [p for p in posts if _is_recent(p, current_iso) and not _is_broken_social_text(str(p.get("text") or ""))]
@@ -1505,6 +1542,7 @@ def post_burner(session_id: str, body: BurnerPostBody) -> dict[str, Any]:
 
     mk = body.market_key or _market_key_for_team(s, str(getattr(s, "user_team_id", "") or ""))
     result = submit_burner_post(s, body.text, mk, random.Random())
+    franchise_sim.invalidate_session_payload_caches(s, "burner_post")
     save_session(s)
     return {**result, "state": franchise_sim.build_state_payload(s, include_heavy=False)}
 

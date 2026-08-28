@@ -3348,11 +3348,13 @@ function CoverageDeployPanel({ prospects, activeDeployments, onDeploy, busy, not
       {open ? (
         <div className="dc-coverage-deploy__menu">
           <p className="dc-coverage-deploy__hint">
-            Sweep a region now (+6% each) and keep scouts on passive coverage. Max 3 active deployments.
+            Sweep a region now (+6% each) and keep scouts on passive coverage. Max 4 active deployments.
+            Assign scouts to your shortlist for passive daily growth — full file after 14 days assigned.
           </p>
           {COVERAGE_DEPLOY_TARGETS.map((target) => {
             const count = countDeployTargets(prospects, target);
             const active = activeKeys.has(`${target.kind}:${slugifyCoverageId(target.id)}`);
+            const sweepTotal = count * 6;
             return (
               <button
                 key={`${target.kind}-${target.id}`}
@@ -3360,10 +3362,12 @@ function CoverageDeployPanel({ prospects, activeDeployments, onDeploy, busy, not
                 className={`dc-coverage-deploy__opt${active ? " is-active" : ""}`}
                 disabled={busy || count <= 0}
                 onClick={() => onDeploy(target)}
-                title={`Region sweep — ${count} prospect${count === 1 ? "" : "s"}`}
+                title={`Deploy coverage — ${count} prospect${count === 1 ? "" : "s"} · +6% each (${sweepTotal}% total)`}
               >
                 <strong>{target.label}</strong>
-                <span>{count} on board{active ? " · active" : ""}</span>
+                <span>
+                  {count} on board · +6% ea ({sweepTotal}% total){active ? " · active" : ""}
+                </span>
               </button>
             );
           })}
@@ -3408,7 +3412,12 @@ function ProspectBoardPanel({
   return (
     <section className={`dc-prospect-board${showConsensus ? " is-consensus" : ""}`}>
       <header className="dc-prospect-board__head">
-        <h2>{sourceCaption(boardSource)}</h2>
+        <div>
+          <h2>{sourceCaption(boardSource)}</h2>
+          <p className="dc-public-intel-note" title="Dedicated YOU file reopens ceiling fog on later picks">
+            Public ceiling intel clear through pick ~45 · later picks need Deploy coverage or assigned scouts
+          </p>
+        </div>
         <span>
           {prospects.length} prospect{prospects.length === 1 ? "" : "s"}
           {filterLabel ? ` · ${filterLabel}` : ""}
@@ -5553,7 +5562,9 @@ function ScoutingPanel({ player, meta, onAssignScout, showAssign, setShowAssign 
         <div><span>Next Report</span><strong>{nextReportDue(prospectEffectivePct(player) ?? 0)}</strong></div>
       </div>
       {!meta.assignedScout && (
-        <p className="dc-scout-prompt">Assign a scout to build a dedicated file passively (~3%/week). Use Deploy coverage for regional sweeps.</p>
+        <p className="dc-scout-prompt" title="Passive files cap at 62% without an assigned scout. After 14 days assigned, passive growth can reach 100%.">
+          Assign a scout for passive file growth (~3%/week). Use <strong>Deploy coverage</strong> for bulk regional sweeps (+6% each).
+        </p>
       )}
       {meta.assignedScout ? (
         <p className="dc-scout-prompt dc-scout-prompt--active">Scout assigned — file grows daily while they stay on your shortlist.</p>
@@ -6135,11 +6146,10 @@ export default function DraftClass() {
     }));
     try {
       await patchScoutingMeta(prospectId, apiPatch || localPatch);
-      await refreshFranchise();
     } catch {
       // Keep optimistic UI; board refresh will reconcile later.
     }
-  }, [refreshFranchise]);
+  }, []);
 
   const toggleProspectWatchlist = useCallback((prospectId) => {
     const current = getScoutingMeta(scoutingStore, prospectId);
@@ -6856,6 +6866,15 @@ export default function DraftClass() {
             letter-spacing: 0.1em;
             text-transform: uppercase;
             color: var(--dc-cyan);
+          }
+          .dc-public-intel-note {
+            margin: 4px 0 0;
+            font-size: 0.625rem;
+            line-height: 1.35;
+            color: var(--dc-muted);
+            letter-spacing: 0.02em;
+            text-transform: none;
+            max-width: 28rem;
           }
           .dc-prospect-board__head span {
             color: var(--dc-muted);

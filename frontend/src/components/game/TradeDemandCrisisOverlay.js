@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { SCREENS } from "../../game/constants";
 import { useGameUI } from "../../game/GameUIContext";
 
 function formatCountdown(totalSeconds) {
@@ -17,21 +18,9 @@ function stageLabel(stage) {
 }
 
 export function TradeDemandCrisisOverlay() {
-  const { franchiseState, refreshFranchise, setScreen, setFranchiseState } = useGameUI();
+  const { franchiseState, setScreen, setFranchiseState } = useGameUI();
   const crisis = franchiseState?.trade_demand_crisis || null;
   const [localRemaining, setLocalRemaining] = useState(null);
-
-  useEffect(() => {
-    if (!crisis) {
-      setLocalRemaining(null);
-      return undefined;
-    }
-    setLocalRemaining(Number(crisis.remaining_seconds) || 0);
-    const sync = setInterval(() => {
-      refreshFranchise?.();
-    }, 2000);
-    return () => clearInterval(sync);
-  }, [crisis?.demand_id, crisis?.remaining_seconds, refreshFranchise]);
 
   useEffect(() => {
     if (!crisis) return undefined;
@@ -43,7 +32,7 @@ export function TradeDemandCrisisOverlay() {
   }, [crisis?.demand_id, crisis?.remaining_seconds]);
 
   const openTradeHub = useCallback(() => {
-    setScreen?.("tradehub");
+    setScreen?.(SCREENS.TRADE);
   }, [setScreen]);
 
   const dismissCrisis = useCallback(() => {

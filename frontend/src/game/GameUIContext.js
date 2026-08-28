@@ -6,6 +6,8 @@ import {
   continueOffseason,
   dismissFranchisePopups,
   generateNextSeason,
+  getFranchiseCrisis,
+  getFranchiseNarrative,
   getFranchiseState,
   getFranchiseStateHeavy,
   listTeams,
@@ -46,6 +48,11 @@ import WorldJuniorsEvent from "../events/worldJuniors/WorldJuniorsEvent";
 import { resolveWorldJuniorsPayload } from "../events/worldJuniors/WorldJuniorsMenu";
 
 const GameUIContext = createContext(null);
+export const FranchiseStateContext = createContext(null);
+
+export function useFranchiseState() {
+  return useContext(FranchiseStateContext);
+}
 
 export const INJURIES_STORAGE_KEY = "nhl_franchise_injuries_enabled";
 
@@ -278,6 +285,49 @@ function HubBootstrapScreen({ label = "Restoring franchise…" }) {
   );
 }
 
+function leanStateIdentity(prev, next) {
+  if (!prev || !next) return false;
+  return (
+    prev.stats_revision === next.stats_revision &&
+    prev.narrative_revision === next.narrative_revision &&
+    prev.prospect_revision === next.prospect_revision &&
+    prev.calendar_cursor === next.calendar_cursor &&
+    prev.phase === next.phase &&
+    prev.session_id === next.session_id
+  );
+}
+
+function mergeFranchisePayload(prev, incoming) {
+  if (!incoming || typeof incoming !== "object") return prev;
+  const prior = prev && typeof prev === "object" ? prev : {};
+  if (leanStateIdentity(prior, incoming)) {
+    const merged = {
+      ...prior,
+      trade_demand_crisis: incoming.trade_demand_crisis ?? prior.trade_demand_crisis,
+      pending_decisions: incoming.pending_decisions ?? prior.pending_decisions,
+      pendingDecisions: incoming.pendingDecisions ?? prior.pendingDecisions,
+      pending_ui_popups: incoming.pending_ui_popups ?? prior.pending_ui_popups,
+      narrative_summary: incoming.narrative_summary ?? prior.narrative_summary,
+      flags: incoming.flags ?? prior.flags,
+    };
+    return merged;
+  }
+  const revisionChanged =
+    incoming?.stats_revision != null && incoming.stats_revision !== prior.stats_revision;
+  return {
+    ...prior,
+    ...incoming,
+    roster: incoming?.roster ?? prior.roster,
+    lines: incoming?.lines ?? prior.lines,
+    roster_browser: incoming?.roster_browser ?? (revisionChanged ? undefined : prior.roster_browser),
+    draft_class_rankings: incoming?.draft_class_rankings ?? prior.draft_class_rankings,
+    draft_class_hud: incoming?.draft_class_hud ?? prior.draft_class_hud,
+    narrative_universe: incoming?.narrative_universe?.social_posts
+      ? incoming.narrative_universe
+      : prior.narrative_universe,
+  };
+}
+
 function BreakingNewsLayer({ franchiseState, screen, setScreen }) {
   const sessionId = String(franchiseState?.session_id || getFranchiseSessionId() || "anon");
   const [dismissedBreaking, setDismissedBreaking] = useState(() =>
@@ -285,7 +335,9 @@ function BreakingNewsLayer({ franchiseState, screen, setScreen }) {
   );
   const alerts = Array.isArray(franchiseState?.narrative_universe?.breaking_alerts)
     ? franchiseState.narrative_universe.breaking_alerts
-    : [];
+    : Array.isArray(franchiseState?.narrative_summary?.breaking_alerts)
+      ? franchiseState.narrative_summary.breaking_alerts
+      : [];
   const pending = activeBreakingAlerts(alerts, dismissedBreaking);
   const active = pending[0] || null;
 
@@ -479,17 +531,7 @@ export function GameUIProvider({ children }) {
           writeFranchiseHubSnapshot(s);
           return s;
         }
-        const revisionChanged =
-          s?.stats_revision != null && s.stats_revision !== prev.stats_revision;
-        const merged = {
-          ...prev,
-          ...s,
-          roster: s?.roster ?? prev.roster,
-          lines: s?.lines ?? prev.lines,
-          roster_browser: s?.roster_browser ?? (revisionChanged ? undefined : prev.roster_browser),
-          draft_class_rankings: s?.draft_class_rankings ?? prev.draft_class_rankings,
-          draft_class_hud: s?.draft_class_hud ?? prev.draft_class_hud,
-        };
+        const merged = mergeFranchisePayload(prev, s);
         writeFranchiseHubSnapshot(merged);
         return merged;
       });
@@ -502,9 +544,18 @@ export function GameUIProvider({ children }) {
 
   useEffect(() => {
     if (!franchiseState?.trade_demand_crisis) return undefined;
-    const tick = () => {
+    const tick = async () => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      refreshFranchise({ crisisTick: true });
+      try {
+        const res = await getFranchiseCrisis();
+        if (res?.trade_demand_crisis !== undefined) {
+          setFranchiseState((prev) =>
+            prev ? { ...prev, trade_demand_crisis: res.trade_demand_crisis } : prev
+          );
+        }
+      } catch {
+        // Ignore transient crisis poll failures.
+      }
     };
     tick();
     const timer = setInterval(tick, 2000);
@@ -516,42 +567,67 @@ export function GameUIProvider({ children }) {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [franchiseState?.trade_demand_crisis?.demand_id, refreshFranchise]);
+  }, [franchiseState?.trade_demand_crisis?.demand_id]);
 
   const mergeFranchiseState = useCallback((nextState) => {
     if (!nextState || typeof nextState !== "object") return;
     setFranchiseState((prev) => {
-      const prior = prev && typeof prev === "object" ? prev : {};
-      const revisionChanged =
-        nextState?.stats_revision != null &&
-        nextState.stats_revision !== prior.stats_revision;
-      const merged = {
-        ...prior,
-        ...nextState,
-        roster: nextState?.roster ?? prior.roster,
-        lines: nextState?.lines ?? prior.lines,
-        roster_browser:
-          nextState?.roster_browser ?? (revisionChanged ? undefined : prior.roster_browser),
-        draft_class_rankings: nextState?.draft_class_rankings ?? prior.draft_class_rankings,
-        draft_class_hud: nextState?.draft_class_hud ?? prior.draft_class_hud,
-      };
+      const merged = mergeFranchisePayload(prev, nextState);
       writeFranchiseHubSnapshot(merged);
       return merged;
     });
   }, []);
+
+  const hydrateFranchiseNarrative = useCallback(async () => {
+    if (!getFranchiseSessionId()) return null;
+    try {
+      const data = await getFranchiseNarrative();
+      setFranchiseState((prev) => {
+        if (!prev) return prev;
+        const merged = {
+          ...prev,
+          narrative_revision: data?.narrative_revision ?? prev.narrative_revision,
+          narrative_universe: data?.narrative_universe ?? prev.narrative_universe,
+        };
+        writeFranchiseHubSnapshot(merged);
+        return merged;
+      });
+      return data;
+    } catch (e) {
+      handleFranchiseApiError(e);
+      return null;
+    }
+  }, [handleFranchiseApiError]);
 
   const hydrateFranchiseHeavyState = useCallback(
     async ({
       includeRosterBrowser = true,
       includeDraftClassRankings = true,
       includeDraftClassHud = true,
+      includeNhlCalendarFull = false,
     } = {}) => {
       if (!getFranchiseSessionId()) return null;
+      let skipRoster = false;
+      let skipDraft = false;
+      let skipCalendar = false;
+      setFranchiseState((prev) => {
+        if (includeRosterBrowser && prev?.roster_browser) skipRoster = true;
+        if (includeDraftClassRankings && prev?.draft_class_rankings) skipDraft = true;
+        if (includeNhlCalendarFull && Array.isArray(prev?.nhl_calendar_full) && prev.nhl_calendar_full.length > 120) {
+          skipCalendar = true;
+        }
+        return prev;
+      });
+      const needRoster = includeRosterBrowser && !skipRoster;
+      const needDraft = (includeDraftClassRankings || includeDraftClassHud) && !skipDraft;
+      const needCalendar = includeNhlCalendarFull && !skipCalendar;
+      if (!needRoster && !needDraft && !needCalendar) return null;
       try {
         const heavy = await getFranchiseStateHeavy({
-          includeRosterBrowser,
-          includeDraftClassRankings,
-          includeDraftClassHud,
+          includeRosterBrowser: needRoster,
+          includeDraftClassRankings: needDraft && includeDraftClassRankings,
+          includeDraftClassHud: needDraft && includeDraftClassHud,
+          includeNhlCalendarFull: needCalendar,
         });
         setFranchiseState((prev) => {
           const merged = { ...(prev || {}), ...(heavy || {}) };
@@ -597,13 +673,11 @@ export function GameUIProvider({ children }) {
       setScreen(SCREENS.HUB);
       try {
         await refreshFranchise();
-        if (!cancelled) {
-          await hydrateFranchiseHeavyState({
-            includeRosterBrowser: true,
-            includeDraftClassRankings: false,
-            includeDraftClassHud: false,
-          });
-        }
+        await hydrateFranchiseHeavyState({
+          includeRosterBrowser: true,
+          includeDraftClassRankings: false,
+          includeDraftClassHud: false,
+        });
       } finally {
         if (!cancelled) setSessionBootstrapping(false);
       }
@@ -1073,12 +1147,11 @@ export function GameUIProvider({ children }) {
     });
     if (!cleanIds.length) return;
     try {
-      const res = await dismissFranchisePopups(cleanIds);
-      mergeFranchiseState(res.state);
+      await dismissFranchisePopups(cleanIds);
     } catch (e) {
       handleFranchiseApiError(e);
     }
-  }, [handleFranchiseApiError, mergeFranchiseState]);
+  }, [handleFranchiseApiError]);
 
   const closeWorldJuniors = useCallback(async () => {
     setWorldJuniorsOpen(false);
@@ -1196,6 +1269,8 @@ export function GameUIProvider({ children }) {
       adjustSlider,
       refreshFranchise,
       hydrateFranchiseHeavyState,
+      hydrateFranchiseNarrative,
+      mergeFranchiseState,
       expireFranchiseSession,
       beginFranchise,
       onAdvanceDay,
@@ -1258,6 +1333,8 @@ export function GameUIProvider({ children }) {
       adjustSlider,
       refreshFranchise,
       hydrateFranchiseHeavyState,
+      hydrateFranchiseNarrative,
+      mergeFranchiseState,
       expireFranchiseSession,
       beginFranchise,
       onAdvanceDay,
@@ -1297,8 +1374,9 @@ export function GameUIProvider({ children }) {
   );
 
   return (
-    <GameUIContext.Provider value={value}>
-      {children}
+    <FranchiseStateContext.Provider value={franchiseState}>
+      <GameUIContext.Provider value={value}>
+        {children}
       {advancing ? <AdvancingOverlay /> : null}
       <BreakingNewsLayer franchiseState={franchiseState} screen={screen} setScreen={setScreen} />
       <ShowcasePopupLayer />
@@ -1316,6 +1394,7 @@ export function GameUIProvider({ children }) {
           />
         </div>
       ) : null}
-    </GameUIContext.Provider>
+      </GameUIContext.Provider>
+    </FranchiseStateContext.Provider>
   );
 }

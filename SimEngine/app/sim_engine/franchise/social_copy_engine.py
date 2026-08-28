@@ -6,6 +6,13 @@ import random
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.sim_engine.franchise.social_templates import (
+    DYNASTY_TWEET_TEMPLATES,
+    MEME_TWEET_TEMPLATES,
+    REDDIT_THREAD_TEMPLATES,
+    filter_templates,
+)
+
 # ---------------------------------------------------------------------------
 # Reporter fragments — opener / clause / closer per narrative_angle
 # ---------------------------------------------------------------------------
@@ -426,6 +433,133 @@ def _lookup_session_evidence(session: Any, storyline: Dict[str, Any]) -> Dict[st
     return {k: v for k, v in out.items() if v not in (None, "")}
 
 
+def _resolve_team_cap_context(session: Any, team_id: str) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    if not session or not team_id:
+        return out
+    team = (getattr(session, "team_by_id", None) or {}).get(str(team_id))
+    sim = getattr(session, "sim", None)
+    if team is not None and sim is not None:
+        try:
+            from services.franchise_sim import _team_cap_snapshot  # noqa: WPS433
+
+            snap = _team_cap_snapshot(team, sim)
+            if isinstance(snap, dict):
+                for key in ("salary_cap", "cap_space", "cap_hit"):
+                    val = snap.get(key)
+                    if val not in (None, "", 0):
+                        out[key] = round(float(val), 2)
+        except Exception:
+            pass
+    if "cap_space" not in out and team is not None:
+        cap = float(getattr(team, "cap_space_m", 0) or getattr(team, "cap_space", 0) or 0)
+        if cap:
+            out["cap_space"] = round(cap, 2)
+        sal = float(getattr(team, "salary_cap_m", 0) or getattr(team, "salary_cap", 0) or 88.0)
+        if sal:
+            out["salary_cap"] = round(sal, 2)
+    return out
+
+
+def _resolve_locker_room_context(session: Any, team_id: str) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    if not session or not team_id:
+        return out
+    room = (getattr(session, "universe_locker_rooms", None) or {}).get(str(team_id)) or {}
+    culture = dict(room.get("culture") or {})
+    if culture:
+        out["locker_unity"] = round(float(culture.get("unity") or 55), 0)
+        out["morale"] = round(float(culture.get("morale") or culture.get("confidence") or 55), 0)
+    return out
+
+
+def _resolve_rival_team(session: Any, team_id: str, rng: random.Random) -> str:
+    teams = list((getattr(session, "team_by_id", None) or {}).keys()) if session else []
+    rivals = [str(tid) for tid in teams if str(tid) != str(team_id)]
+    if not rivals:
+        return "a rival club"
+    rival_id = rng.choice(rivals)
+    tm = (getattr(session, "team_by_id", None) or {}).get(rival_id)
+    if tm is not None:
+        return str(getattr(tm, "name", "") or getattr(tm, "city", "") or rival_id)
+    return rival_id
+
+
+def _resolve_player_entity_psych(session: Any, player_id: str) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    if not session or not player_id:
+        return out
+    entity = dict((getattr(session, "universe_players", None) or {}).get(str(player_id)) or {})
+    state = dict(entity.get("state") or {})
+    if state:
+        if state.get("morale") not in (None, ""):
+            out["morale"] = round(float(state.get("morale")), 0)
+        if state.get("confidence") not in (None, ""):
+            out["confidence"] = round(float(state.get("confidence")), 0)
+    return out
+
+
+def enrich_dynasty_context(
+    session: Any,
+    storyline: Dict[str, Any],
+    ctx: Dict[str, Any],
+    rng: Optional[random.Random] = None,
+) -> Dict[str, Any]:
+    """Bind franchise-session fields used by dynasty social templates."""
+    r = rng or random.Random()
+    merged = dict(ctx)
+    tid = str(storyline.get("team_id") or getattr(session, "user_team_id", "") or "")
+    pid = str(storyline.get("player_id") or "")
+
+    merged.update(_resolve_team_cap_context(session, tid))
+    merged.update(_resolve_locker_room_context(session, tid))
+    merged.update(_resolve_player_entity_psych(session, pid))
+
+    merged["headline"] = str(storyline.get("headline") or merged.get("headline") or "").strip()
+    merged["summary"] = str(storyline.get("summary") or merged.get("summary") or "").strip()
+    merged["prospect_name"] = str(
+        storyline.get("prospect_name") or storyline.get("player_name") or merged.get("name") or "this prospect"
+    ).strip()
+    prospect_ovr = storyline.get("prospect_overall") or storyline.get("player_overall") or merged.get("overall")
+    if prospect_ovr not in (None, "", 0):
+        merged["prospect_overall"] = round(float(prospect_ovr), 1)
+
+    prior = storyline.get("prior_overall") or storyline.get("previous_overall")
+    if prior not in (None, "", 0):
+        merged["prior_overall"] = round(float(prior), 1)
+    elif merged.get("overall"):
+        merged["prior_overall"] = max(55.0, round(float(merged["overall"]) - r.uniform(2.0, 5.0), 1))
+
+    years = storyline.get("years_remaining") or storyline.get("contract_years")
+    if years not in (None, ""):
+        merged["years_remaining"] = int(float(years))
+    else:
+        merged["years_remaining"] = r.randint(1, 3)
+
+    merged["draft_pick"] = str(storyline.get("draft_pick") or storyline.get("pick_label") or f"round {r.randint(1, 3)}")
+    merged["rival_team"] = str(storyline.get("rival_team") or _resolve_rival_team(session, tid, r))
+    merged["rival_player"] = str(storyline.get("rival_player") or merged.get("name") or "their star")
+    merged["rival_cap_hit"] = round(float(storyline.get("rival_cap_hit") or merged.get("cap_hit") or r.uniform(4.5, 9.5)), 2)
+    merged["rival_term"] = int(storyline.get("rival_term") or r.randint(5, 8))
+
+    if "confidence" not in merged and merged.get("morale"):
+        merged["confidence"] = merged["morale"]
+    if "morale" not in merged and merged.get("confidence"):
+        merged["morale"] = merged["confidence"]
+
+    for key, default in (
+        ("cap_space", 2.5),
+        ("salary_cap", 88.0),
+        ("locker_unity", 55),
+        ("morale", 55),
+        ("confidence", 55),
+    ):
+        if merged.get(key) in (None, "", 0):
+            merged[key] = default
+
+    return merged
+
+
 _BROKEN_SOCIAL_PATTERNS = (
     re.compile(r"\bthe player\b", re.I),
     re.compile(r"\(\s*0\s*ovr\s*\)", re.I),
@@ -489,6 +623,8 @@ def build_evidence_context(storyline: Dict[str, Any], session: Any = None) -> Di
     for k, v in list(ctx.items()):
         if isinstance(v, float):
             ctx[k] = round(v, 3) if k in ("ppg", "save_pct", "expected_save_pct", "gaa") else round(v, 2)
+    if session is not None:
+        ctx = enrich_dynasty_context(session, storyline, ctx)
     return ctx
 
 
@@ -669,6 +805,62 @@ def compose_player_post(entity: Dict[str, Any], mood: str, rng: random.Random) -
     return voice_filter(raw[:240], style)
 
 
+def compose_dynasty_tweet(
+    storyline: Dict[str, Any],
+    ctx: Dict[str, Any],
+    rng: random.Random,
+    *,
+    meme: bool = False,
+) -> str:
+    angle = str(storyline.get("narrative_angle") or "league_wire")
+    if meme:
+        candidates = filter_templates(MEME_TWEET_TEMPLATES, angle=angle, ctx=ctx)
+        pool = MEME_TWEET_TEMPLATES
+    else:
+        candidates = filter_templates(DYNASTY_TWEET_TEMPLATES, angle=angle, ctx=ctx)
+        pool = DYNASTY_TWEET_TEMPLATES
+    if not candidates:
+        candidates = filter_templates(pool, angle="league_wire", ctx=ctx)
+    if not candidates:
+        candidates = list(pool)
+    for _ in range(8):
+        template = rng.choice(candidates)
+        text = _safe_format(str(template.get("text") or ""), ctx).strip()
+        if text and not _looks_like_broken_social_text(text):
+            return text[:280]
+    headline = str(storyline.get("headline") or "").strip()
+    if headline:
+        return headline[:280]
+    name = str(ctx.get("name") or "This player")
+    team = str(ctx.get("team") or "the club")
+    return f"{name} is all over the {team} conversation right now."[:280]
+
+
+def compose_reddit_thread_from_template(
+    storyline: Dict[str, Any],
+    ctx: Dict[str, Any],
+    rng: random.Random,
+) -> Tuple[str, str]:
+    angle = str(storyline.get("narrative_angle") or "league_wire")
+    candidates = filter_templates(REDDIT_THREAD_TEMPLATES, angle=angle, ctx=ctx)
+    if not candidates:
+        candidates = filter_templates(REDDIT_THREAD_TEMPLATES, angle="league_wire", ctx=ctx)
+    if not candidates:
+        candidates = list(REDDIT_THREAD_TEMPLATES)
+    for _ in range(8):
+        template = rng.choice(candidates)
+        title = _safe_format(str(template.get("title") or ""), ctx).strip()
+        body = _safe_format(str(template.get("body") or ""), ctx).strip()
+        if title and body and not _looks_like_broken_social_text(title) and not _looks_like_broken_social_text(body):
+            if merged := str(storyline.get("summary") or "").strip():
+                if merged.lower() not in body.lower():
+                    body = f"{body}\n\nContext: {merged}"[:900]
+            return title[:120], body[:900]
+    headline = str(storyline.get("headline") or "Discussion thread")
+    body = compose_ambient_fan_post("concern", ctx, rng, storyline)
+    return headline[:120], body[:900]
+
+
 def compose_ambient_fan_post(
     sentiment: str,
     ctx: Dict[str, Any],
@@ -676,6 +868,11 @@ def compose_ambient_fan_post(
     storyline: Optional[Dict[str, Any]] = None,
     reporter: Optional[Dict[str, Any]] = None,
 ) -> str:
+    angle = str((storyline or {}).get("narrative_angle") or "league_wire")
+    if storyline and rng.random() < 0.62:
+        dynasty = compose_dynasty_tweet(storyline, ctx, rng, meme=(sentiment == "meme" or rng.random() < 0.12))
+        if dynasty and not _looks_like_broken_social_text(dynasty):
+            return dynasty[:260]
     pool = AMBIENT_FAN.get(sentiment) or AMBIENT_FAN["concern"]
     for _ in range(6):
         line = rng.choice(pool)

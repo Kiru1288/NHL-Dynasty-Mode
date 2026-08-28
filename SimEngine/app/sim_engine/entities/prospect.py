@@ -9,6 +9,9 @@ Core idea:
 - Scouting reports are *perception* of ceiling/floor/certainty, not truth.
 - Conversion to a Player happens only at (or after) the draft via a projection roll.
 
+Live franchise mode does NOT use this entity for the draft board — see
+league_hierarchy_bootstrap (spawn) and backend franchise_sim.build_draft_class_rankings.
+
 Hard rules:
 ❌ Prospects do NOT have NHL ratings
 ❌ No deterministic outcomes

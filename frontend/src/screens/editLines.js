@@ -680,7 +680,7 @@ function EvenStrengthLines(props) {
     setChemLoading(true);
     getFranchiseChemistry().then((data) => { if (active) setChemReport(data || null); }).catch(() => { if (active) setChemReport(null); }).finally(() => { if (active) setChemLoading(false); });
     return () => { active = false; };
-  }, [franchiseState?.lines, franchiseState?.stats_revision]);
+  }, [franchiseState?.session_id]);
 
   const players = useMemo(() => {
     const lean = Array.isArray(franchiseState?.roster) ? franchiseState.roster : [];

@@ -15,6 +15,11 @@ export default function FreeAgency() {
   const [loading, setLoading] = useState(true);
 
   const loadDesk = useCallback(async () => {
+    if (franchiseState?.free_agency_market?.free_agents?.length) {
+      setDesk(franchiseState.free_agency_market);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError("");
     try {
@@ -22,20 +27,21 @@ export default function FreeAgency() {
       const market = res?.free_agency_market || res?.market || null;
       if (market) {
         setDesk(market);
-        setFranchiseState((prev) => ({
-          ...(prev || {}),
-          free_agency_market: market,
-          free_agents: market.free_agents || res?.free_agents || prev?.free_agents,
-        }));
-      } else if (typeof refreshFranchise === "function") {
-        await refreshFranchise();
+        setFranchiseState((prev) => {
+          if (prev?.free_agency_market === market) return prev;
+          return {
+            ...(prev || {}),
+            free_agency_market: market,
+            free_agents: market.free_agents || res?.free_agents || prev?.free_agents,
+          };
+        });
       }
     } catch (e) {
       setError(String(e?.message || e || "Free agency desk unavailable"));
     } finally {
       setLoading(false);
     }
-  }, [refreshFranchise, setFranchiseState]);
+  }, [franchiseState?.free_agency_market, setFranchiseState]);
 
   useEffect(() => {
     loadDesk();

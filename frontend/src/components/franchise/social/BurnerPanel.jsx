@@ -103,7 +103,7 @@ export default function BurnerPanel({ sessionId, marketProfiles, defaultMarketKe
       } catch {
         setPreviewRisk(0);
       }
-    }, 400);
+    }, 900);
     return () => clearTimeout(t);
   }, [text, marketKey, sessionId]);
 

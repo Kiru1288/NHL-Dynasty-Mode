@@ -6597,8 +6597,16 @@ function buildTradeDecisionToast({
 }
 
 export default function TradeHub() {
-  const { setScreen, franchiseState, setFranchiseState, setPendingSocialNav } = useGameUI();
-  const iceholeByPlayerId = useMemo(() => buildIceholeBuzzMap(franchiseState), [franchiseState]);
+  const { setScreen, franchiseState, setFranchiseState, setPendingSocialNav, hydrateFranchiseNarrative } = useGameUI();
+
+  useEffect(() => {
+    hydrateFranchiseNarrative?.();
+  }, [franchiseState?.narrative_revision, franchiseState?.session_id, hydrateFranchiseNarrative]);
+
+  const iceholeByPlayerId = useMemo(
+    () => buildIceholeBuzzMap(franchiseState),
+    [franchiseState?.narrative_universe?.reddit_threads, franchiseState?.narrative_revision]
+  );
   const openIceholeThread = useCallback(
     (thread) => {
       setPendingSocialNav({
@@ -7299,7 +7307,9 @@ export default function TradeHub() {
         const gotLine = partnerOutgoing.map(assetToastLabel).filter(Boolean).join(" · ");
 
         const res = await submitTradePackage({ assets_by_team: assetsPayload });
-        if (res?.state) setFranchiseState(res.state);
+        if (res?.state) {
+          setFranchiseState((prev) => (prev ? { ...prev, ...res.state } : res.state));
+        }
 
         const execFan = res?.trade_result?.fan_reaction || ev?.fan_reaction;
         const acceptedFan = execFan

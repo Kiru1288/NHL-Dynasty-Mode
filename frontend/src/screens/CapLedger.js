@@ -958,6 +958,11 @@ function RfaSheetsTab({
               <strong>{safeText(sheet.name || sheet.player_id)}</strong>
               <span>{formatMoneyM(sheet.aav_m)} × {sheet.years || 1}yr</span>
               <span>{safeText(sheet.compensation_label || sheet.compensation_tier)}</span>
+              {sheet.days_remaining != null || sheet.expires_day != null ? (
+                <span className="cap-chip cap-chip--warn">
+                  Match in {Math.max(0, Number(sheet.days_remaining ?? 0))}d
+                </span>
+              ) : null}
               <button type="button" className="cap-action-btn" disabled={busy} onClick={() => onResolveSheet("match", sheet)}>
                 Match
               </button>
@@ -1254,7 +1259,7 @@ export default function CapLedger() {
     } finally {
       setLoading(false);
     }
-  }, [franchiseState]);
+  }, [franchiseState?.stats_revision, franchiseState?.session_id]);
 
   useEffect(() => {
     loadData();

@@ -256,6 +256,16 @@ def evaluate_franchise_trade(
     assets_by_team: Dict[str, List[Dict[str, Any]]],
     record_rumor_fallout: bool = False,
 ) -> Dict[str, Any]:
+    import hashlib
+
+    stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
+    assets_key = hashlib.sha256(repr(sorted((assets_by_team or {}).items())).encode()).hexdigest()[:24]
+    cache_key = f"{stats_rev}|{assets_key}"
+    cached = getattr(session, "_trade_eval_cache", None)
+    if isinstance(cached, dict) and str(cached.get("key") or "") == cache_key:
+        payload = cached.get("payload")
+        if isinstance(payload, dict):
+            return dict(payload)
     _ensure_trade_infrastructure(session)
     ctx = _trade_context(session)
     try:
@@ -342,6 +352,7 @@ def evaluate_franchise_trade(
             )
         except Exception:
             pass
+    session._trade_eval_cache = {"key": cache_key, "payload": public}
     return public
 
 

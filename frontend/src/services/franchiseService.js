@@ -4,6 +4,9 @@ import { api, baseURL, getFranchiseSessionId, isNetworkError, isTimeoutError } f
 const FRANCHISE_START_TIMEOUT_MS = 900_000;
 let inflightFranchiseStatePromise = null;
 let inflightFranchiseStateSessionId = null;
+let inflightFranchiseStateHeavyPromise = null;
+let inflightFranchiseStateHeavyKey = null;
+let inflightFranchiseNarrativePromise = null;
 
 export function resetFranchiseStateCache() {
   inflightFranchiseStatePromise = null;
@@ -182,6 +185,26 @@ export async function getFranchiseState({ crisisTick = false } = {}) {
   return inflightFranchiseStatePromise;
 }
 
+export async function getFranchiseCrisis() {
+  const { data } = await api.get("/api/franchise/crisis");
+  return data;
+}
+
+export async function getFranchiseNarrative() {
+  const sid = getFranchiseSessionId();
+  if (!sid) throw new Error("No franchise session");
+  if (inflightFranchiseNarrativePromise) {
+    return inflightFranchiseNarrativePromise;
+  }
+  inflightFranchiseNarrativePromise = api
+    .get("/api/franchise/narrative")
+    .then((res) => res.data)
+    .finally(() => {
+      inflightFranchiseNarrativePromise = null;
+    });
+  return inflightFranchiseNarrativePromise;
+}
+
 export async function getStatsCentral() {
   const { data } = await api.get("/api/franchise/stats-central");
   return data;
@@ -201,8 +224,21 @@ export async function getFranchiseStateHeavy(options = {}) {
   if (options.includeNhlCalendarFull) {
     params.include_nhl_calendar_full = true;
   }
-  const { data } = await api.get("/api/franchise/state/heavy", { params, timeout: 180000 });
-  return data;
+  const cacheKey = JSON.stringify(params);
+  if (inflightFranchiseStateHeavyPromise && inflightFranchiseStateHeavyKey === cacheKey) {
+    return inflightFranchiseStateHeavyPromise;
+  }
+  inflightFranchiseStateHeavyKey = cacheKey;
+  inflightFranchiseStateHeavyPromise = api
+    .get("/api/franchise/state/heavy", { params, timeout: 180000 })
+    .then((res) => res.data)
+    .finally(() => {
+      if (inflightFranchiseStateHeavyKey === cacheKey) {
+        inflightFranchiseStateHeavyPromise = null;
+        inflightFranchiseStateHeavyKey = null;
+      }
+    });
+  return inflightFranchiseStateHeavyPromise;
 }
 
 export async function getContractOffice() {

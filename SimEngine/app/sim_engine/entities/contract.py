@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+# DEPRECATED for franchise mode — Source of truth: backend/services/contract_economy.py
+# (evaluate_contract_offer / sign_player_to_team). This module remains for the
+# standalone SimEngine runner's multi-week PCDS negotiation loop only.
+
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
