@@ -81,6 +81,8 @@ const FILTER_EMPTY = {
 const DEPARTMENTS = [
   { id: "front_page", label: "Newsroom", glyph: "◉" },
   { id: "player_meetings", label: "Meetings", glyph: "◫" },
+  { id: "locker_room", label: "Locker Room", glyph: "◍" },
+  { id: "consequences", label: "Fallout", glyph: "⚠" },
   { id: "social", label: "Social", glyph: "◈" },
   { id: "insiders", label: "Insiders", glyph: "◇" },
   { id: "press_room", label: "Press Room", glyph: "▤" },
@@ -231,6 +233,280 @@ function effectPillClass(val) {
 }
 function formatEffectLabel(key) {
   return str(key).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatMeetingReceiptLines(receipts) {
+  const raw =
+    receipts && typeof receipts === "object" && receipts.receipts && !receipts.profiles
+      ? receipts.receipts
+      : receipts;
+  if (!raw || typeof raw !== "object") return [];
+  const lines = [];
+  asArray(raw.profiles).forEach((r) => {
+    const label = formatEffectLabel(r.field || "profile");
+    if (r.before != null && r.after != null) {
+      const delta = Number(r.delta);
+      const sign = Number.isFinite(delta) && delta > 0 ? "+" : "";
+      lines.push(`${label}: ${r.before} → ${r.after}${Number.isFinite(delta) ? ` (${sign}${delta})` : ""}`);
+    } else if (r.delta != null) {
+      const delta = Number(r.delta);
+      lines.push(`${label}: ${delta > 0 ? "+" : ""}${delta}`);
+    }
+  });
+  asArray(raw.team).forEach((r) => {
+    lines.push(`Room ${formatEffectLabel(r.field)}: ${r.before} → ${r.after}`);
+  });
+  asArray(raw.relationships).forEach((r) => {
+    if (r.summary) lines.push(r.summary);
+    else if (r.field) lines.push(`${formatEffectLabel(r.field)}: ${r.before} → ${r.after}`);
+  });
+  asArray(raw.attributes).forEach((r) => {
+    if (r.field) lines.push(`${formatEffectLabel(r.field)}: ${r.before} → ${r.after}`);
+  });
+  asArray(raw.readiness).forEach((r) => {
+    if (r.ovr_delta) lines.push(`Readiness: ${r.ovr_delta > 0 ? "+" : ""}${r.ovr_delta} OVR (${r.reason || "meeting"})`);
+  });
+  if (raw.promise_id) lines.push("Promise logged with the player.");
+  return lines;
+}
+
+function deriveDataPassBreakdown(story) {
+  const raw = story?.raw || story;
+  const effects = asObject(story?.effects);
+  const entries = Object.entries(effects);
+  const isDataPass = str(raw?.source) === "data_storyline_engine";
+  if (!isDataPass && !entries.length) return null;
+  const ev = asObject(story?.evidence);
+  let triggerStat = "";
+  let triggerDelta = null;
+  if (ev.points != null && ev.expected_points != null) {
+    triggerStat = "points vs expected";
+    triggerDelta = Number(ev.points) - Number(ev.expected_points);
+  } else if (ev.points_per_game != null) {
+    triggerStat = "points per game";
+    triggerDelta = Number(ev.points_per_game);
+  } else if (story.cause) {
+    triggerStat = "trigger";
+    triggerDelta = story.cause;
+  }
+  const [effectType, magnitude] = entries.sort((a, b) => Math.abs(Number(b[1])) - Math.abs(Number(a[1])))[0] || ["", 0];
+  if (!triggerStat && !effectType) return null;
+  return { triggerStat, triggerDelta, effectType, magnitude };
+}
+
+function StoryEffectBreakdown({ story, compact = false }) {
+  const [open, setOpen] = useState(false);
+  const breakdown = useMemo(() => deriveDataPassBreakdown(story), [story]);
+  if (!breakdown) return null;
+  const { triggerStat, triggerDelta, effectType, magnitude } = breakdown;
+  return (
+    <div className={`sl-effect-breakdown${compact ? " is-compact" : ""}`} onClick={(e) => e.stopPropagation()}>
+      <button type="button" className="sl-effect-breakdown__toggle" onClick={() => setOpen((v) => !v)}>
+        {open ? "Hide breakdown" : "Show breakdown"}
+      </button>
+      {open ? (
+        <div className="sl-effect-breakdown__body">
+          {triggerStat ? (
+            <p>
+              <em>Trigger</em>{" "}
+              {triggerStat}
+              {typeof triggerDelta === "number" && Number.isFinite(triggerDelta)
+                ? ` Δ${triggerDelta > 0 ? "+" : ""}${triggerDelta.toFixed(1)}`
+                : triggerDelta
+                  ? `: ${triggerDelta}`
+                  : ""}
+            </p>
+          ) : null}
+          {effectType ? (
+            <p>
+              <em>Effect</em> {formatEffectLabel(effectType)} {Number(magnitude) > 0 ? "+" : ""}
+              {magnitude}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MeetingOutcomePanel({ outcome, onDismiss }) {
+  if (!outcome) return null;
+  const lines = formatMeetingReceiptLines(outcome.receipts);
+  const rel = outcome.relationship || outcome.history?.relationship_snapshot;
+  return (
+    <div className="sl-meeting-outcome">
+      <h4>{str(outcome.message || outcome.choice_label || "Meeting recorded")}</h4>
+      {outcome.summary ? <p className="sl-muted">{str(outcome.summary)}</p> : null}
+      {rel?.label ? (
+        <p className="sl-muted">
+          Relationship: <strong>{rel.label}</strong>
+          {rel.detail ? ` — ${rel.detail}` : ""}
+        </p>
+      ) : null}
+      {lines.length ? (
+        <ul className="sl-meeting-outcome__list">
+          {lines.map((line, i) => (
+            <li key={i}>{line}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="sl-muted">No measurable stat shifts from this choice.</p>
+      )}
+      {onDismiss ? (
+        <button type="button" className="sl-back" onClick={onDismiss}>
+          Dismiss
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function LockerRoomDashboard({ narrativeUniverse, franchiseState }) {
+  const hallmark = asObject(narrativeUniverse?.hallmark_panels);
+  const culture = asObject(hallmark.room_pulse || narrativeUniverse?.locker_room?.culture);
+  const risks = asArray(hallmark.character_risks);
+  const leaders = asArray(hallmark.unheralded_leaders);
+  const hasCultureData = Object.keys(culture).length > 0;
+  const pulseParts = [culture.unity, culture.confidence, culture.belonging].filter((v) => v != null && v !== "");
+  const pulseScore = pulseParts.length
+    ? Math.round(pulseParts.reduce((sum, v) => sum + Number(v), 0) / pulseParts.length)
+    : null;
+  const clubLabel = teamLabel(franchiseState);
+
+  if (!hasCultureData && !risks.length && !leaders.length) {
+    return (
+      <EmptyPanel
+        kicker="Locker room"
+        title="No culture data yet"
+        body="Advance the calendar to sync locker-room metrics. If you just completed a meeting, refresh or sim a day to reload narrative data."
+      />
+    );
+  }
+
+  return (
+    <div className="sl-locker-dash">
+      <header className="sl-locker-dash__head">
+        <p className="sl-room__kicker">Culture · {clubLabel}</p>
+        <h2>Locker room pulse</h2>
+      </header>
+      <div className="sl-locker-dash__pulse">
+        {pulseScore != null ? (
+          <div className="sl-locker-dash__gauge" style={{ "--pulse": `${pulseScore}%` }}>
+            <strong>{pulseScore}</strong>
+            <span>Room pulse</span>
+          </div>
+        ) : null}
+        <div className="sl-locker-dash__culture">
+          {Object.entries(culture).map(([key, val]) => (
+            <div key={key} className="sl-num">
+              <span>{formatEffectLabel(key)}</span>
+              <strong>{Math.round(Number(val) || 0)}</strong>
+            </div>
+          ))}
+        </div>
+      </div>
+      {risks.length ? (
+        <section className="sl-locker-dash__section">
+          <h3>Character risks</h3>
+          <div className="sl-locker-dash__cards">
+            {risks.map((row) => (
+              <article key={str(row.player_id)} className="sl-locker-card">
+                <strong>{str(row.player_name || "Player")}</strong>
+                <span>Disruption risk {Math.round(Number(row.disruption_risk) || 0)}</span>
+                {asArray(row.niche_abilities).map((n) => (
+                  <em key={str(n.id)} className="sl-niche-badge">{str(n.label || n.id)}</em>
+                ))}
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {leaders.length ? (
+        <section className="sl-locker-dash__section">
+          <h3>Unheralded leaders</h3>
+          <div className="sl-locker-dash__cards">
+            {leaders.map((row) => (
+              <article key={str(row.player_id)} className="sl-locker-card">
+                <strong>{str(row.player_name || "Player")}</strong>
+                <span>Room value {Math.round(Number(row.room_value) || 0)}</span>
+                {asArray(row.niche_abilities).map((n) => (
+                  <em key={str(n.id)} className="sl-niche-badge">{str(n.label || n.id)}</em>
+                ))}
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function ConsequencesPanel({ narrativeUniverse, stories, onOpenStory }) {
+  const sanctions = asArray(narrativeUniverse?.team_sanctions).filter((s) => s.active !== false);
+  const capPenalties = asObject(narrativeUniverse?.cap_penalties);
+  const forfeited = asArray(narrativeUniverse?.forfeited_picks);
+  const availability = asObject(narrativeUniverse?.player_availability);
+  const budget = asObject(narrativeUniverse?.major_event_budget);
+
+  if (!sanctions.length) {
+    return (
+      <EmptyPanel
+        kicker="League fallout"
+        title="No active sanctions"
+        body="Major conduct incidents and cap violations will appear here with fines, pick forfeitures, and player availability."
+      />
+    );
+  }
+
+  return (
+    <div className="sl-consequences">
+      {budget.target ? (
+        <p className="sl-muted">
+          Major events this season: {budget.generated || 0} / {budget.target}
+        </p>
+      ) : null}
+      {sanctions.map((s) => {
+        const sid = str(s.id);
+        const capHit = capPenalties[str(s.team_id)] || s.cap_penalty_m;
+        const picks = forfeited.filter((p) => str(p.source_event_id) === str(s.source_event_id));
+        const linkedStory = stories.find(
+          (st) => str(st.causeEventId) === str(s.source_event_id) || str(st.raw?.cause_event_id) === str(s.source_event_id)
+        );
+        const playerRows = Object.entries(availability).filter(([, row]) =>
+          str(row?.source_event_id) === str(s.source_event_id)
+        );
+        return (
+          <article key={sid} className="sl-consequence-card">
+            <header>
+              <strong>{formatEffectLabel(s.event_type || "sanction")}</strong>
+              <span className={`sl-status is-${s.active ? "active" : "resolved"}`}>
+                {s.active ? "Active" : "Resolved"}
+              </span>
+            </header>
+            {s.season ? <p>Season {s.season}</p> : null}
+            {Number(s.fine_m) > 0 ? <p>Fine: ${Number(s.fine_m).toFixed(2)}M</p> : null}
+            {Number(capHit) > 0 ? <p>Cap penalty: ${Number(capHit).toFixed(2)}M</p> : null}
+            {picks.length ? (
+              <p>
+                Forfeited picks:{" "}
+                {picks.map((p) => `${p.draft_year} R${p.round}`).join(", ")}
+              </p>
+            ) : null}
+            {playerRows.map(([pid, row]) => (
+              <p key={pid}>
+                {str(row.player_name || pid)} — {str(row.status || "unavailable")}
+              </p>
+            ))}
+            {linkedStory ? (
+              <button type="button" className="sl-link" onClick={() => onOpenStory(linkedStory.id)}>
+                View originating story →
+              </button>
+            ) : null}
+          </article>
+        );
+      })}
+    </div>
+  );
 }
 
 function sortStories(list, sortId) {
@@ -1084,6 +1360,7 @@ function StoryCard({ story, socialCount, onOpen, index }) {
         <div className="sl-card__text">
           <h3>{story.headline}</h3>
           {story.summary ? <p>{story.summary}</p> : null}
+          <StoryEffectBreakdown story={story} compact />
         </div>
       </div>
       <div className="sl-card__foot">
@@ -1119,6 +1396,7 @@ function LeadStory({ story, socialCount, onOpen, choiceOptions, onResolve, busyC
         </div>
         <h2 className="sl-lead__headline">{story.headline}</h2>
         {story.summary ? <p className="sl-lead__summary">{story.summary}</p> : null}
+        <StoryEffectBreakdown story={story} />
         <div className="sl-lead__meta">
           {story.playerName ? <span><em>Subject</em>{story.playerName}</span> : null}
           {story.teamName ? <span><em>Club</em>{story.teamName}</span> : null}
@@ -1178,6 +1456,7 @@ function PlayerMeetingsPanel({
   const detailCacheRef = useRef(new Map());
   const [activeMeeting, setActiveMeeting] = useState(null);
   const [notice, setNotice] = useState("");
+  const [lastOutcome, setLastOutcome] = useState(null);
   const [rosterQuery, setRosterQuery] = useState("");
 
   useEffect(() => {
@@ -1257,9 +1536,16 @@ function PlayerMeetingsPanel({
   const handleResolveRequest = useCallback(
     async (interactionId, choiceId) => {
       setNotice("");
+      setLastOutcome(null);
       try {
-        await onResolvePlayerRequest(interactionId, choiceId);
-        setNotice("Meeting resolved.");
+        const res = await onResolvePlayerRequest(interactionId, choiceId);
+        const gm = res?.state?.last_gm_result || {};
+        setLastOutcome({
+          message: gm.headline || res?.message || "Meeting resolved.",
+          summary: gm.summary,
+          receipts: res?.receipts,
+          relationship: res?.relationship,
+        });
         setActiveMeeting(null);
         onRefresh?.();
       } catch (err) {
@@ -1272,9 +1558,17 @@ function PlayerMeetingsPanel({
   const handleAdvance = useCallback(
     async (meetingId, choiceId) => {
       setNotice("");
+      setLastOutcome(null);
       try {
         const res = await onAdvanceMeeting(meetingId, choiceId);
-        setNotice(res?.message || "Conversation recorded.");
+        const gm = res?.state?.last_gm_result || {};
+        setLastOutcome({
+          message: gm.headline || res?.message || res?.history?.choice_label || "Conversation recorded.",
+          summary: gm.summary,
+          receipts: res?.receipts,
+          relationship: res?.relationship,
+          history: res?.history,
+        });
         setActiveMeeting(null);
         setView("player");
         onRefresh?.();
@@ -1346,6 +1640,7 @@ function PlayerMeetingsPanel({
             </button>
           ))}
         </div>
+        <MeetingOutcomePanel outcome={lastOutcome} onDismiss={() => setLastOutcome(null)} />
         {notice ? <p className="sl-notice">{notice}</p> : null}
       </div>
     );
@@ -1443,6 +1738,9 @@ function PlayerMeetingsPanel({
                   <div>
                     <strong>{formatEffectLabel(h.interaction_type)}</strong>
                     <p>{str(h.choice_label || h.choice_id)}</p>
+                    {formatMeetingReceiptLines(h.receipts).map((line, i) => (
+                      <p key={i} className="sl-muted sl-histrow__effect">{line}</p>
+                    ))}
                   </div>
                 </div>
               ))}
@@ -1454,6 +1752,7 @@ function PlayerMeetingsPanel({
           </div>
         ) : (
           <div className="sl-topics">
+            <MeetingOutcomePanel outcome={lastOutcome} onDismiss={() => setLastOutcome(null)} />
             {playerDetail?.ovr_explanation?.factors?.length ? (
               <div className="sl-ovr">
                 <h4>{str(playerDetail.ovr_explanation.headline)}</h4>
@@ -1643,7 +1942,7 @@ export default function StorylinesScreen() {
     setScreen,
     refreshFranchise,
     hydrateFranchiseNarrative,
-    setFranchiseState,
+    mergeFranchiseState,
     pendingMeetingPlayerId,
     setPendingMeetingPlayerId,
     pendingSocialNav,
@@ -1668,6 +1967,7 @@ export default function StorylinesScreen() {
   const [openCaseId, setOpenCaseId] = useState(null);
   const [activeTab, setActiveTab] = useState("details");
   const [busyChoice, setBusyChoice] = useState("");
+  const [actionNotice, setActionNotice] = useState("");
   const caseRef = useRef(null);
 
   const sessionId = str(franchiseState?.session_id || getFranchiseSessionId() || "anon");
@@ -1896,7 +2196,11 @@ export default function StorylinesScreen() {
       if (!onResolveStorylineChoice) return;
       setBusyChoice(`${storylineId}:${choiceId}`);
       try {
-        await onResolveStorylineChoice(storylineId, choiceId);
+        const res = await onResolveStorylineChoice(storylineId, choiceId);
+        const result = res?.state?.last_gm_result || {};
+        setActionNotice(str(result.headline || result.summary || "Decision recorded. Check the wire for fallout."));
+      } catch (err) {
+        setActionNotice(err?.message || "That choice did not land. Try again.");
       } finally {
         setBusyChoice("");
       }
@@ -1908,10 +2212,14 @@ export default function StorylinesScreen() {
     async (pressItem, questionId, responseId) => {
       if (!onResolveStorylineChoice || !pressItem) return;
       const choiceId = `${questionId}:${responseId}`;
-      const storylineId = str(pressItem.storyline_id || pressItem.storylineId);
+      const storylineId = str(pressItem.storyline_id || pressItem.id || pressItem.storylineId);
       setBusyChoice(`${storylineId}:${choiceId}`);
       try {
-        await onResolveStorylineChoice(storylineId, choiceId);
+        const res = await onResolveStorylineChoice(storylineId, choiceId);
+        const result = res?.state?.last_gm_result || {};
+        setActionNotice(str(result.headline || result.summary || "Press answer recorded. A follow-up beat is on the wire."));
+      } catch (err) {
+        setActionNotice(err?.message || "The press room did not take that answer.");
       } finally {
         setBusyChoice("");
       }
@@ -1920,15 +2228,16 @@ export default function StorylinesScreen() {
   );
 
   const mergeMeetingState = useCallback(
-    (res) => {
+    async (res) => {
       const next = res?.state;
       if (next && typeof next === "object") {
-        setFranchiseState?.((prev) => (prev ? { ...prev, ...next } : next));
+        mergeFranchiseState?.(next);
+        await hydrateFranchiseNarrative?.({ force: true });
         return true;
       }
       return false;
     },
-    [setFranchiseState]
+    [mergeFranchiseState, hydrateFranchiseNarrative]
   );
 
   const handleMeetingRefresh = useCallback(async () => {
@@ -1942,6 +2251,7 @@ export default function StorylinesScreen() {
         const res = await resolvePlayerMeeting(interactionId, choiceId);
         if (!mergeMeetingState(res)) await refreshFranchise?.();
         if (pendingMeetingPlayerId) setPendingMeetingPlayerId?.(null);
+        return res;
       } finally {
         setMeetingBusy(false);
       }
@@ -2196,6 +2506,15 @@ export default function StorylinesScreen() {
           font-size: 11.5px; font-weight: 800; color: #f0cf93;
         }
         .sl-market em { font-style: normal; font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--brass); }
+        .sl-action-notice {
+          display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+          margin: 0 0 10px; padding: 10px 14px; border-radius: 10px;
+          border: 1px solid rgba(46,230,240,.28); background: rgba(10,42,52,.72);
+          color: #d8f7fb; font-size: 13px; font-weight: 700; line-height: 1.35;
+        }
+        .sl-action-notice button {
+          border: 0; background: transparent; color: #7fe9f2; cursor: pointer; font-weight: 900;
+        }
 
         /* ------------- lead story ------------- */
         .sl-lead {
@@ -2774,6 +3093,21 @@ export default function StorylinesScreen() {
           background: linear-gradient(180deg, #2ee6f0, #12b9c9); color: #041018; }
 
         /* ------------- debug ------------- */
+        .sl-effect-breakdown { margin-top: 8px; font-size: 12px; }
+        .sl-effect-breakdown__toggle { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 12px; }
+        .sl-effect-breakdown__body { margin-top: 6px; padding: 8px 10px; border-radius: 8px; background: rgba(255,255,255,0.04); }
+        .sl-effect-breakdown__body p { margin: 4px 0; }
+        .sl-meeting-outcome { margin: 12px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: rgba(126,224,176,0.06); }
+        .sl-meeting-outcome__list { margin: 8px 0 0; padding-left: 18px; font-size: 13px; }
+        .sl-locker-dash__pulse { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+        .sl-locker-dash__gauge { width: 120px; height: 120px; border-radius: 50%; border: 4px solid var(--accent); display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .sl-locker-dash__culture { display: flex; flex-wrap: wrap; gap: 8px; flex: 1; }
+        .sl-locker-dash__cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+        .sl-locker-card { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; gap: 4px; }
+        .sl-niche-badge { font-size: 11px; font-style: normal; padding: 2px 8px; border-radius: 999px; background: rgba(126,224,176,0.15); width: fit-content; }
+        .sl-consequences { display: grid; gap: 12px; }
+        .sl-consequence-card { padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+        .sl-consequence-card header { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
         .sl-debug { border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-top: 14px; }
         .sl-debug summary { cursor: pointer; font-size: 11px; font-weight: 800; color: var(--muted); }
         .sl-debug pre { font-size: 11px; overflow: auto; max-height: 240px; color: var(--muted-2); }
@@ -2920,6 +3254,7 @@ export default function StorylinesScreen() {
           {DEPARTMENTS.map((d) => {
             let count = 0;
             if (d.id === "player_meetings") count = meetingAlertCount;
+            if (d.id === "consequences") count = asArray(narrativeUniverse?.team_sanctions).filter((s) => s.active !== false).length;
             if (d.id === "press_room") count = pressQueue.length;
             if (d.id === "front_page") count = pendingDecisions.length;
             return (
@@ -2936,6 +3271,13 @@ export default function StorylinesScreen() {
             );
           })}
         </nav>
+
+        {actionNotice ? (
+          <div className="sl-action-notice" role="status">
+            <span>{actionNotice}</span>
+            <button type="button" onClick={() => setActionNotice("")}>Dismiss</button>
+          </div>
+        ) : null}
 
         {userMarket?.label && department === "front_page" ? (
           <p className="sl-market">
@@ -2963,6 +3305,10 @@ export default function StorylinesScreen() {
             onRefresh={handleMeetingRefresh}
             initialPlayerId={pendingMeetingPlayerId}
           />
+        ) : department === "locker_room" ? (
+          <LockerRoomDashboard narrativeUniverse={narrativeUniverse} franchiseState={franchiseState} />
+        ) : department === "consequences" ? (
+          <ConsequencesPanel narrativeUniverse={narrativeUniverse} stories={stories} onOpenStory={openStory} />
         ) : department === "social" ? (
           <div className="sl-two">
             <div>

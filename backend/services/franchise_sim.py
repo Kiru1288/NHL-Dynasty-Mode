@@ -17,7 +17,7 @@ import uuid
 from dataclasses import is_dataclass, replace
 from collections import Counter, defaultdict
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from services.franchise_paths import ensure_simengine_path
 
@@ -2290,6 +2290,14 @@ def start_franchise(
         _schedule_draft_class_cache_warm(session)
     except Exception:
         pass
+    try:
+        from app.sim_engine.systems.chemistry import materialize_roster_chemistry_profiles  # noqa: WPS433
+
+        user_team = (getattr(session, "team_by_id", None) or {}).get(str(getattr(session, "user_team_id", "") or ""))
+        if user_team is not None:
+            materialize_roster_chemistry_profiles(user_team)
+    except Exception:
+        pass
     _franchise_startup_stage("start_franchise complete; returning session")
     return session
 
@@ -3906,6 +3914,9 @@ def _bump_stats_revision(session: FranchiseSession) -> None:
 def _bump_prospect_revision(session: FranchiseSession) -> None:
     session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
     session._draft_class_detail_cache = None
+    session._cached_draft_class_rankings = None
+    session._cached_draft_class_hud_payload = None
+    session._prospect_profile_by_id_cache = None
 
 
 _NARRATIVE_UNIVERSE_CACHE_VERSION = 1
@@ -4033,6 +4044,11 @@ def _get_cached_injuries_payload(session: FranchiseSession, *, limit: int = 200)
 
 
 def _lean_state_cache_key(session: FranchiseSession) -> str:
+    draft_state = getattr(session, "draft_state", None) or {}
+    draft_started = bool(draft_state.get("draft_started"))
+    draft_overall = int(draft_state.get("overall_pick") or 0) if draft_started else 0
+    draft_done = int(bool(draft_state.get("draft_completed"))) if draft_started else 0
+    draft_picks = len(draft_state.get("completed_picks") or draft_state.get("draft_results") or []) if draft_started else 0
     return "|".join(
         [
             str(int(getattr(session, "_stats_revision", 0) or 0)),
@@ -4042,6 +4058,9 @@ def _lean_state_cache_key(session: FranchiseSession) -> str:
             str(int(getattr(session, "calendar_cursor", 0) or 0)),
             str(getattr(session, "phase", "") or ""),
             str(int(getattr(session, "season_calendar_year", 0) or 0)),
+            str(draft_overall),
+            str(draft_picks),
+            str(draft_done),
         ]
     )
 
@@ -6277,7 +6296,14 @@ def _serialize_player_row(
         ov = float(ovr_f() if callable(ovr_f) else ovr_f)
     except Exception:
         ov = 0.0
-    pid = str(getattr(p, "id", "") or "")
+    try:
+        from app.sim_engine.systems.chemistry import _canonical_player_id  # noqa: WPS433
+    except Exception:
+        def _canonical_player_id(player: Any) -> str:  # type: ignore[misc]
+            raw = getattr(player, "id", None) or getattr(player, "player_id", None) or ""
+            s = str(raw or "").strip()
+            return f"NHL_{s}" if s.isdigit() else s
+    pid = _canonical_player_id(p) or str(getattr(p, "id", "") or "")
     pos_raw = getattr(ident, "position", None) if ident else None
     pos_str = str(getattr(pos_raw, "value", pos_raw) or "?")
     hcm = clamp_height_cm_for_position(getattr(ident, "height_cm", 0) if ident else 0, pos_str)
@@ -6298,6 +6324,7 @@ def _serialize_player_row(
         pass
     row: Dict[str, Any] = {
         "player_id": pid,
+        "id": pid,
         "name": display_name,
         "position": pos_str,
         "handedness": str(getattr(ident, "shoots", "") or "") if ident else "",
@@ -6367,10 +6394,24 @@ def _serialize_player_row(
         prof["leadership"] = int(prof.get("leadership", 50) or 50)
         prof["coach_system_fit"] = int(round(coach_system_fit_score(p, _team)))
         prof["usage_satisfaction"] = int(round(usage_satisfaction_score(p)))
+        prof["personality"] = prof.get("personality") or getattr(p, "personality", None)
+        prof["playstyle"] = prof.get("playstyle") or getattr(p, "playstyle", None)
+        rels = dict(getattr(p, "chemistry_relationships", None) or {})
+        canon_rels: Dict[str, float] = {}
+        for k, v in rels.items():
+            if k is None:
+                continue
+            ck = str(k)
+            if ck.isdigit():
+                ck = f"NHL_{ck}"
+            canon_rels[ck] = float(v)
+        row["chemistry_relationships"] = canon_rels
         row["morale"] = morale100
         row["confidence"] = conf100
         row["role_satisfaction"] = role100
         row["coach_trust"] = coach100
+        row["personality"] = prof.get("personality")
+        row["playstyle"] = prof.get("playstyle")
         row["chemistry_profile"] = prof
     except Exception:
         m_raw = float(getattr(getattr(p, "psych", None), "morale", 0.5) or 0.5)
@@ -7691,7 +7732,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         scoring_available = False
 
     rng = getattr(sim, "rng", None)
-    calendar_iso = _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0))
+    calendar_iso = _scouting_calendar_iso(session)
     season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
     stat_keys = (
         "gp", "games_played", "goals", "assists", "points", "ppg", "points_per_game",
@@ -7927,6 +7968,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         apply_potential_band_enforcement,
         enforce_goalie_scatter_final,
         build_potential_intel,
+        cap_public_peak_range_for_rank,
         calculate_prospect_eta,
         compose_live_draft_board,
         compute_ceiling_visibility,
@@ -8059,6 +8101,11 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
             _min_ceiling = 86.0 - (_rank - 1) * (86.0 - 70.0) / 31.0
             if float(_brow.get("potential_score") or 0) < _min_ceiling:
                 _brow["potential_score"] = round(_min_ceiling, 1)
+            _true_pot = float(_brow.get("true_potential_score") or _brow.get("potential_score") or 0)
+            _consensus = float(_brow.get("consensus_potential_score") or 0)
+            _lifted = max(_min_ceiling, _true_pot * (0.96 if _rank <= 5 else 0.90))
+            if _consensus < _lifted:
+                _brow["consensus_potential_score"] = round(_lifted, 1)
         try:
             _brow.update(compute_prospect_outcome_band(_brow))
         except Exception:
@@ -8200,7 +8247,18 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         conf = scouting_confidence_for_entry(row, session, base_conf=base_conf)
         # Public ceiling intel is fogged from observable consensus only — never
         # the hidden true_potential_score. Ranking uses the same consensus path.
-        display_center = float(row.get("consensus_potential_score") or row.get("potential_score") or 0)
+        _rank_slot = int(rank or 0)
+        _min_display_ceiling = 0.0
+        if _rank_slot <= 32:
+            _min_display_ceiling = 86.0 - (_rank_slot - 1) * (86.0 - 70.0) / 31.0
+        _true_pot = float(row.get("true_potential_score") or row.get("potential_score") or 0)
+        _consensus = float(row.get("consensus_potential_score") or 0)
+        display_center = max(
+            _consensus,
+            _true_pot * (0.96 if _rank_slot <= 5 else 0.90 if _rank_slot <= 15 else 0.85),
+            _min_display_ceiling,
+            float(row.get("potential_score") or 0),
+        )
         pot_seed = str(row.get("key") or row.get("name") or "")
         # Ceiling readability is gated by draft position: obvious for early picks, fading
         # to a vague range and then vanishing (floor-only) the deeper the prospect sits.
@@ -8228,10 +8286,17 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         ceiling_hidden = bool(_cv["ceiling_hidden"])
         # GM dedicated scouting (overlay %) gates ceiling/OVR reveals — not ambient GP confidence.
         gm_scout_pct = scout_overlay_pct if scout_overlay_pct > 0 else conf * 0.35
-        ceiling_conf = gm_scout_pct * (0.5 + 0.5 * ceiling_visibility)
+        ceiling_conf = max(
+            gm_scout_pct * (0.5 + 0.5 * ceiling_visibility),
+            float(conf) * max(0.42, ceiling_visibility) * 0.72,
+        )
         intel = build_potential_intel(
             display_center, ceiling_conf, overlay_pct=gm_scout_pct, include_true=False, seed_key=pot_seed,
         )
+        intel = cap_public_peak_range_for_rank(intel, rank, display_center)
+        from services.draft_ranking_logic import _enforce_peak_range_span
+
+        intel = _enforce_peak_range_span(intel, rank)
         entry = {k: v for k, v in row.items() if not k.startswith("_")}
         # Strip hidden truth fields before public serialization.
         raw_true_ovr = entry.pop("true_ovr", None)
@@ -8321,6 +8386,20 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
             entry["true_ovr"] = round(t_ovr, 1)
         else:
             entry.pop("true_ovr", None)
+        try:
+            from services.draft_ranking_logic import fog_public_chapter_profile
+
+            cp = entry.get("chapter_profile")
+            if isinstance(cp, dict):
+                entry["chapter_profile"] = fog_public_chapter_profile(
+                    cp,
+                    rank=rank,
+                    scout_overlay_pct=scout_overlay_pct,
+                    ceiling_hidden=ceiling_hidden,
+                    seed_key=key,
+                )
+        except Exception:
+            pass
         if ceiling_hidden:
             # Late/low-attention: strip every graded ceiling/floor number from the public
             # board. The user projects upside from production, age, size and attributes.
@@ -8346,11 +8425,14 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
             if derived:
                 existing = entry.get("analytics") if isinstance(entry.get("analytics"), dict) else {}
                 merged = dict(existing or {})
-                merged.update(derived)
-                entry["analytics"] = merged
-                for k in ("war", "offensive_war", "defensive_war", "xgf_pct", "cf_pct", "shot_rate", "primary_points", "toi"):
-                    if derived.get(k) is not None:
-                        entry[k] = derived[k]
+                for k, v in derived.items():
+                    if merged.get(k) is None and v is not None:
+                        merged[k] = v
+                if merged:
+                    entry["analytics"] = merged
+                for k in ("war", "offensive_war", "defensive_war", "xgf_pct", "cf_pct", "shot_rate", "primary_points", "gsax", "quality_starts"):
+                    if entry.get(k) is None and merged.get(k) is not None:
+                        entry[k] = merged[k]
         except Exception:
             pass
         entries.append(entry)
@@ -8397,6 +8479,9 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         "goalie_class_strength": str(getattr(league, "goalie_class_strength", "normal") or "normal"),
         "draft_class_depth": draft_class_depth,
         "goalie_pipeline": pipeline_stats,
+        "stats_as_of_iso": str(cal_iso or calendar_iso or ""),
+        "calendar_cursor": int(getattr(session, "calendar_cursor", 0) or 0),
+        "scouting_as_of_iso": str(calendar_iso or cal_iso or ""),
     }
 
 
@@ -8623,6 +8708,11 @@ def _normalize_storyline_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         "market_descriptor",
         "breaking_level",
         "press_conference_id",
+        "ephemeral",
+        "expires_calendar_index",
+        "storyline_ttl_days",
+        "calendar_index",
+        "brady_tkachuk_chaos",
     ):
         if raw.get(key) is not None:
             out[key] = raw.get(key)
@@ -8860,6 +8950,69 @@ def _build_injury_history_payload(session: FranchiseSession, *, limit: int = 80)
         row["team_abbrev"] = ta
         out.append(row)
     return out
+
+
+def _storyline_is_expired(ev: Dict[str, Any], session: FranchiseSession, calendar_idx: int) -> bool:
+    """True when a short-lived feed item (Brady chaos arcs, ephemeral news) should drop off."""
+    if not isinstance(ev, dict):
+        return False
+    try:
+        exp_idx = ev.get("expires_calendar_index")
+        if exp_idx is not None and int(calendar_idx) >= int(exp_idx):
+            return True
+    except (TypeError, ValueError):
+        pass
+
+    sk = str(ev.get("stable_key") or "")
+    is_brady = sk.startswith("brady:") or bool(ev.get("brady_tkachuk_chaos"))
+    is_ephemeral = bool(ev.get("ephemeral")) or is_brady
+    if not is_ephemeral:
+        return False
+
+    ttl = int(ev.get("storyline_ttl_days") or (3 if is_brady else 0) or 0)
+    if ttl <= 0:
+        return False
+
+    created_idx = ev.get("calendar_index")
+    if created_idx is not None:
+        try:
+            return int(calendar_idx) >= int(created_idx) + ttl
+        except (TypeError, ValueError):
+            pass
+
+    iso = str(ev.get("calendar_iso") or ev.get("date") or "")[:10]
+    if len(iso) >= 10:
+        try:
+            from datetime import date
+
+            start = date.fromisoformat(iso[:10])
+            cur_iso = str(_calendar_iso_for_day(session, int(calendar_idx)) or "")[:10]
+            if len(cur_iso) >= 10:
+                cur = date.fromisoformat(cur_iso[:10])
+                return (cur - start).days >= ttl
+        except Exception:
+            pass
+    return False
+
+
+def _prune_expired_storylines(session: FranchiseSession, calendar_idx: int) -> int:
+    """Remove expired ephemeral storylines from the active feed."""
+    rows = list(getattr(session, "storyline_events", None) or [])
+    if not rows:
+        return 0
+    kept: List[Dict[str, Any]] = []
+    removed = 0
+    for ev in rows:
+        if not isinstance(ev, dict):
+            continue
+        if _storyline_is_expired(ev, session, int(calendar_idx)):
+            removed += 1
+            continue
+        kept.append(ev)
+    if removed:
+        session.storyline_events = kept[-400:]
+        session._cached_narrative_universe_payload = None
+    return removed
 
 
 def _storyline_dedupe_key(ev: Dict[str, Any]) -> str:
@@ -10001,6 +10154,7 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
             apply_daily_chemistry_tick(user_team, session=session, rng=rng)
     except Exception:
         pass
+    _prune_expired_storylines(session, int(calendar_idx))
     setattr(session, "_last_socio_tick_idx", int(calendar_idx))
 
 
@@ -10659,11 +10813,15 @@ def _purge_retired_from_extra_pools(session: FranchiseSession, player: Any) -> N
                 pass
 
 
-PROSPECT_SYNC_THROTTLE_DAYS = 7
+PROSPECT_SYNC_THROTTLE_DAYS = 1
 
 
 def _prospect_sync_should_run(session: FranchiseSession, *, force: bool = False) -> bool:
-    """Return True when draft-age prospect stats should advance for this calendar step."""
+    """Return True when draft-age prospect stats should advance for this calendar step.
+
+    Bulk sim defers via `_defer_prospect_sync` and catch-up-syncs once at the end.
+    Interactive day advances always run so junior GP/points move with the calendar.
+    """
     if force:
         return True
     if bool(getattr(session, "_defer_prospect_sync", False)):
@@ -10676,24 +10834,99 @@ def _prospect_sync_should_run(session: FranchiseSession, *, force: bool = False)
     return (cur - int(last_idx)) >= max(1, throttle)
 
 
-def ensure_prospect_stats_current_for_scouting(session: FranchiseSession) -> None:
-    """Bring prospect stats current for scouting/draft UI without always force-syncing.
+def _draft_eve_iso(session: FranchiseSession) -> str:
+    sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    return f"{sy + 1}-06-26"
 
-    Force only when the board is meaningfully behind the calendar (or never synced).
-    Same-day / within-throttle opens reuse the last sync — huge win after bulk season.
-    """
+
+def _entry_draft_is_live(session: FranchiseSession) -> bool:
+    stage = str(getattr(session, "offseason_stage", "") or "").lower()
+    if stage == "draft":
+        return True
+    for attr in ("draft_state", "draft_payload"):
+        block = getattr(session, attr, None) or {}
+        if isinstance(block, dict) and block.get("draft_started") and not block.get("draft_completed"):
+            return True
+    return False
+
+
+def _should_use_draft_eve_scouting_iso(session: FranchiseSession) -> bool:
+    if _entry_draft_is_live(session):
+        return True
+    stage = str(getattr(session, "offseason_stage", "") or "").lower()
+    if stage in (
+        "draft",
+        "draft_combine",
+        "draft_review",
+        "draft_lottery",
+        "entry_draft",
+        "draft_prep",
+    ):
+        return True
+    if getattr(session, "playoffs_simulated", False):
+        phase = str(getattr(session, "phase", "") or "").lower()
+        if phase in ("offseason", "post_cup", "complete"):
+            return True
+    return False
+
+
+def _scouting_calendar_iso(session: FranchiseSession) -> str:
+    """ISO date for junior stat sync and draft-class HUD — not always calendar cursor."""
+    if _should_use_draft_eve_scouting_iso(session):
+        return _draft_eve_iso(session)
     iso = _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0))
+    if iso:
+        return iso
+    return _today_iso(session) or str(getattr(session, "current_date", "") or "")
+
+
+def _draft_class_hud_calendar_slice(
+    session: FranchiseSession,
+    user_team: Any,
+    cal_record: Dict[str, Any],
+    roster_rows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Calendar-sensitive HUD fields (countdowns, team status) — cheap to rebuild every read."""
+    now_iso = _scouting_calendar_iso(session)
+    season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    team_status = _team_status_payload(session, user_team, cal_record, roster_rows)
+    wjc_event = _event_days_payload("wjc_start", "WJC", now_iso, season_year)
+    wjc_event.update(_wjc_hud_event_extras(session, now_iso, season_year))
+    if wjc_event.get("display_override"):
+        wjc_event["display"] = str(wjc_event["display_override"])
+    lottery_event = _event_days_payload("draft_lottery", "Lottery", now_iso, season_year)
+    draft_event = _event_days_payload("draft", "Draft", now_iso, season_year)
+    if _entry_draft_is_live(session):
+        draft_event = {**draft_event, "days_until": 0, "display": "LIVE"}
+        if str(lottery_event.get("display") or "") not in ("PASSED", "TODAY", "LIVE"):
+            lottery_event = {**lottery_event, "days_until": -1, "display": "PASSED"}
+    elif str(getattr(session, "offseason_stage", "") or "").lower() == "draft":
+        draft_event = {**draft_event, "days_until": 0, "display": "LIVE"}
+    franchise_iso = _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0))
+    return {
+        "team_status": team_status,
+        "events": {
+            "wjc": wjc_event,
+            "lottery": lottery_event,
+            "draft": draft_event,
+        },
+        "calendar_cursor": int(getattr(session, "calendar_cursor", 0) or 0),
+        "scouting_as_of_iso": str(now_iso or ""),
+        "franchise_today_iso": str(franchise_iso or now_iso or ""),
+    }
+
+
+def ensure_prospect_stats_current_for_scouting(session: FranchiseSession) -> None:
+    """Bring prospect stats current for scouting/draft UI.
+
+    Re-sync when the scouting calendar ISO or franchise calendar cursor moves so
+    the draft board does not keep early-season GP after a sim.
+    """
+    iso = _scouting_calendar_iso(session)
     last_iso = str(getattr(session, "_prospect_stats_synced_iso", "") or "")
-    if last_iso and iso and last_iso == str(iso):
-        return
-    # If we synced within the normal throttle window, don't re-run the full pool.
-    last_idx = getattr(session, "_prospect_sync_throttle_index", None)
-    cur = int(getattr(session, "calendar_cursor", 0) or 0)
-    throttle = int(
-        getattr(session, "_prospect_sync_throttle_days", PROSPECT_SYNC_THROTTLE_DAYS)
-        or PROSPECT_SYNC_THROTTLE_DAYS
-    )
-    if last_idx is not None and (cur - int(last_idx)) < max(1, throttle) and last_iso:
+    cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
+    last_cursor = int(getattr(session, "_prospect_stats_synced_cursor", -1) or -1)
+    if last_iso and iso and last_iso == str(iso) and last_cursor == cur_cursor:
         return
     _sync_prospect_stats_to_calendar(session, force=True)
 
@@ -10734,7 +10967,7 @@ def _sync_prospect_stats_to_calendar(session: FranchiseSession, *, force: bool =
         pass
     if not _prospect_sync_should_run(session, force=force):
         return 0
-    iso = _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0))
+    iso = _scouting_calendar_iso(session)
     if not iso:
         return 0
     last_iso = str(getattr(session, "_prospect_stats_synced_iso", "") or "")
@@ -10797,9 +11030,13 @@ def _sync_prospect_stats_to_calendar(session: FranchiseSession, *, force: bool =
             rng=getattr(sim, "rng", None),
             prospect_rows=rows,
         )
+        cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
+        last_cursor = int(getattr(session, "_prospect_stats_synced_cursor", -1) or -1)
+        cursor_advanced = cur_cursor != last_cursor
         session._prospect_stats_synced_iso = str(iso)
-        session._prospect_sync_throttle_index = int(getattr(session, "calendar_cursor", 0) or 0)
-        if last_iso != str(iso) or needs_scoring_retune:
+        session._prospect_stats_synced_cursor = cur_cursor
+        session._prospect_sync_throttle_index = cur_cursor
+        if last_iso != str(iso) or needs_scoring_retune or cursor_advanced or int(n or 0) > 0:
             session._prospect_retune_v4_applied = True
             if bool(getattr(session, "_defer_payload_invalidation", False)):
                 session._pending_prospect_revision_bump = True
@@ -13555,6 +13792,18 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
             message="Resolve pending decisions before advancing.",
         )
 
+    lineup_gaps = _even_strength_lineup_gaps(session)
+    if lineup_gaps:
+        return _advance_blocked_result(
+            session,
+            reason="incomplete_lines",
+            message=(
+                "Fill every even-strength slot before simulating. "
+                f"Open: {', '.join(lineup_gaps[:8])}"
+                + ("…" if len(lineup_gaps) > 8 else "")
+            ),
+        )
+
     _sync_nhl_calendar_bounds(session)
 
     if session.phase == "complete":
@@ -13976,6 +14225,86 @@ def _find_storyline_event(session: FranchiseSession, storyline_id: str) -> Optio
     return None
 
 
+def _even_strength_lineup_gaps(session: FranchiseSession) -> List[str]:
+    """Return empty even-strength slots if the user has a saved lineup."""
+    root = getattr(session, "lines", None)
+    if not isinstance(root, dict):
+        return []
+    even = root.get("even_strength")
+    if not isinstance(even, dict):
+        return []
+    payload = even.get("lines") if isinstance(even.get("lines"), dict) else even
+    if not isinstance(payload, dict):
+        return []
+    if not (payload.get("forwards") or payload.get("defense") or payload.get("goalies")):
+        return []
+    gaps: List[str] = []
+    for index, line in enumerate(list(payload.get("forwards") or [])[:4], start=1):
+        slots = (line or {}).get("slots") if isinstance(line, dict) else {}
+        for slot in ("LW", "C", "RW"):
+            if not str((slots or {}).get(slot) or "").strip():
+                gaps.append(f"Line {index} {slot}")
+    for index, pair in enumerate(list(payload.get("defense") or [])[:3], start=1):
+        slots = (pair or {}).get("slots") if isinstance(pair, dict) else {}
+        for slot in ("LD", "RD"):
+            if not str((slots or {}).get(slot) or "").strip():
+                gaps.append(f"Pair {index} {slot}")
+    for gline in list(payload.get("goalies") or [])[:1]:
+        slots = (gline or {}).get("slots") if isinstance(gline, dict) else {}
+        for slot in ("Starter", "Backup"):
+            if not str((slots or {}).get(slot) or "").strip():
+                gaps.append(f"Goalie {slot}")
+    return gaps
+
+
+def _apply_press_storyline_choice(session: FranchiseSession, storyline_id: str, choice_id: str) -> bool:
+    """Resolve a press-room answer even when the parent storyline options were cleared."""
+    if ":" not in str(choice_id or ""):
+        return False
+    qid, rid = str(choice_id).split(":", 1)
+    if not qid or not rid:
+        return False
+    sid = str(storyline_id or "").strip()
+    queue = list(getattr(session, "press_conference_queue", None) or [])
+    entry = next(
+        (
+            press
+            for press in queue
+            if isinstance(press, dict)
+            and sid
+            and sid in {
+                str(press.get("storyline_id") or ""),
+                str(press.get("id") or ""),
+                str(press.get("press_conference_id") or ""),
+            }
+        ),
+        None,
+    )
+    if entry is None:
+        return False
+    from app.sim_engine.franchise.storyline_engine import apply_press_conference_response  # noqa: WPS433
+
+    result = apply_press_conference_response(session, str(entry.get("id") or ""), qid, rid)
+    session.last_gm_result = {
+        "kind": "press",
+        "headline": str(result.get("headline") or "You addressed the media."),
+        "summary": (
+            f"The room heard your answer ({result.get('tone') or 'neutral'}). "
+            "A follow-up beat is now on the storylines wire."
+        ),
+    }
+    ev = _find_storyline_event(session, sid) or _find_storyline_event(session, str(entry.get("storyline_id") or ""))
+    if ev:
+        ev["requires_action"] = False
+        ev["status"] = "resolved"
+    try:
+        _bump_interaction_revision(session)
+    except Exception:
+        pass
+    session.timeline.append(f"Press response: {sid} -> {choice_id}")
+    return True
+
+
 def _apply_storyline_event_choice(
     session: FranchiseSession,
     storyline_id: str,
@@ -14072,6 +14401,11 @@ def _apply_storyline_event_choice(
             continue
         next_popups.append(popup)
     session.pending_ui_popups = next_popups
+    session.last_gm_result = {
+        "kind": "storyline",
+        "headline": headline,
+        "summary": summary,
+    }
     session.timeline.append(f"Storyline choice: {sid} -> {choice_id}")
     return True
 
@@ -14090,6 +14424,9 @@ def apply_storyline_choice(session: FranchiseSession, storyline_id: str, choice_
 
     if not cid:
         raise ValueError("Choice id is required.")
+
+    if _apply_press_storyline_choice(session, sid, cid):
+        return
 
     match_ids = {sid}
     if sid.startswith("dec_"):
@@ -15175,52 +15512,134 @@ def _build_draft_class_hud_payload(
     cal_record: Dict[str, Any],
     roster_rows: List[Dict[str, Any]],
     draft_entries: Optional[List[Dict[str, Any]]] = None,
+    *,
+    include_profiles: bool = False,
 ) -> Dict[str, Any]:
-    now_iso = (
-        _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0))
-        or _today_iso(session)
-        or str(getattr(session, "current_date", "") or "")
+    payload: Dict[str, Any] = _draft_class_hud_calendar_slice(
+        session, user_team, cal_record, roster_rows
     )
-    season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
-    team_status = _team_status_payload(session, user_team, cal_record, roster_rows)
-    wjc_event = _event_days_payload("wjc_start", "WJC", now_iso, season_year)
-    wjc_event.update(_wjc_hud_event_extras(session, now_iso, season_year))
-    if wjc_event.get("display_override"):
-        wjc_event["display"] = str(wjc_event["display_override"])
-    payload: Dict[str, Any] = {
-        "team_status": team_status,
-        "events": {
-            "wjc": wjc_event,
-            "lottery": _event_days_payload("draft_lottery", "Lottery", now_iso, season_year),
-            "draft": _event_days_payload("draft", "Draft", now_iso, season_year),
-        },
-    }
-    if draft_entries is not None:
-        try:
-            from services.draft_prospect_profile import build_prospect_profiles_by_id
+    if not include_profiles or draft_entries is None:
+        payload["prospect_profiles_by_id"] = {}
+        return payload
+    try:
+        from services.draft_prospect_profile import build_prospect_profiles_by_id
 
-            payload["prospect_profiles_by_id"] = build_prospect_profiles_by_id(
-                draft_entries,
-                roster_rows=roster_rows,
-                team_status=team_status,
-            )
-            hist = getattr(session, "draft_stock_history", None) or {}
-            for pid, prof in (payload.get("prospect_profiles_by_id") or {}).items():
-                rows = hist.get(str(pid))
-                synthesized = list(prof.get("rankHistory") or prof.get("stock_history") or [])
-                live = list(rows) if isinstance(rows, list) else []
-                # Prefer a live trail whenever it has at least two samples; frontend
-                # compresses flat tails so early rises still fill the chart.
-                if len(live) >= 2:
-                    prof["stock_history"] = live
-                    prof["rankHistory"] = live
-                elif live and not synthesized:
-                    prof["stock_history"] = live
-                    prof["rankHistory"] = live
-                # else keep synthesized Preseason/Midseason/Current checkpoints.
-        except Exception:
-            payload["prospect_profiles_by_id"] = {}
+        payload["prospect_profiles_by_id"] = build_prospect_profiles_by_id(
+            draft_entries,
+            roster_rows=roster_rows,
+            team_status=team_status,
+            prospect_revision=int(getattr(session, "_prospect_revision", 0) or 0),
+        )
+        hist = getattr(session, "draft_stock_history", None) or {}
+        for pid, prof in (payload.get("prospect_profiles_by_id") or {}).items():
+            rows = hist.get(str(pid))
+            live = list(rows) if isinstance(rows, list) else []
+            if live:
+                prof["stock_history"] = live
+                prof["rankHistory"] = live
+    except Exception:
+        payload["prospect_profiles_by_id"] = {}
     return payload
+
+
+def _rebuild_draft_board_entry_index(
+    session: FranchiseSession,
+    board: Mapping[str, Any],
+) -> Dict[str, Dict[str, Any]]:
+    rev = int(getattr(session, "_prospect_revision", 0) or 0)
+    index: Dict[str, Dict[str, Any]] = {}
+    for entry in board.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        pid = str(entry.get("key") or entry.get("id") or "")
+        if pid:
+            index[pid] = entry
+    session._draft_board_entry_by_id = index
+    session._draft_board_entry_by_id_rev = rev
+    return index
+
+
+def _get_draft_board_entry(
+    session: FranchiseSession,
+    sim: Any,
+    prospect_id: str,
+) -> Optional[Dict[str, Any]]:
+    pid = str(prospect_id or "").strip()
+    if not pid:
+        return None
+    rev = int(getattr(session, "_prospect_revision", 0) or 0)
+    index = getattr(session, "_draft_board_entry_by_id", None)
+    index_rev = int(getattr(session, "_draft_board_entry_by_id_rev", -1) or -1)
+    if isinstance(index, dict) and index_rev == rev:
+        row = index.get(pid)
+        if isinstance(row, dict):
+            return row
+    board = get_cached_draft_class_rankings(session, sim)
+    index = getattr(session, "_draft_board_entry_by_id", None)
+    index_rev = int(getattr(session, "_draft_board_entry_by_id_rev", -1) or -1)
+    if not isinstance(index, dict) or index_rev != rev:
+        index = _rebuild_draft_board_entry_index(session, board)
+    row = index.get(pid) if isinstance(index, dict) else None
+    return row if isinstance(row, dict) else None
+
+
+def _attach_stock_history_to_profile(session: FranchiseSession, prospect_id: str, profile: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(profile, dict):
+        return profile
+    hist = getattr(session, "draft_stock_history", None) or {}
+    rows = hist.get(str(prospect_id))
+    live = list(rows) if isinstance(rows, list) else []
+    if live:
+        profile["stock_history"] = live
+        profile["rankHistory"] = live
+    return profile
+
+
+def get_draft_prospect_profile_payload(
+    session: FranchiseSession,
+    sim: Any,
+    prospect_id: str,
+) -> Dict[str, Any]:
+    """Build one dossier profile on demand — avoids ~320-profile HUD rebuilds."""
+    pid = str(prospect_id or "").strip()
+    if not pid:
+        return {}
+    try:
+        ensure_prospect_stats_current_for_scouting(session)
+    except Exception:
+        pass
+    rev = int(getattr(session, "_prospect_revision", 0) or 0)
+    cache = getattr(session, "_prospect_profile_by_id_cache", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        session._prospect_profile_by_id_cache = cache
+    cache_key = f"{rev}:{pid}"
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict) and cached:
+        return cached
+
+    row = _get_draft_board_entry(session, sim, pid)
+    if not isinstance(row, dict):
+        return {}
+
+    from services.draft_prospect_profile import build_prospect_profile
+
+    user_team = session.team_by_id.get(str(session.user_team_id))
+    team_status = _team_status_payload(
+        session,
+        user_team,
+        _user_team_record_from_game_results(session),
+        [],
+    )
+    profile = build_prospect_profile(dict(row), roster_rows=[], team_status=team_status)
+    profile = _attach_stock_history_to_profile(session, pid, profile)
+    if isinstance(profile, dict):
+        profile["prospect_revision"] = rev
+    cache[cache_key] = profile
+    if len(cache) > 160:
+        cache.clear()
+        cache[cache_key] = profile
+    return profile
 
 
 def get_franchise_game_detail(session: FranchiseSession, game_id: str) -> Optional[Dict[str, Any]]:
@@ -17776,7 +18195,21 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
 
     notifications_raw = list(session.notifications[-56:])
     notifications_norm = [_normalize_notification_payload(n, i) for i, n in enumerate(notifications_raw)]
-    storylines_norm = [_normalize_storyline_payload(ev if isinstance(ev, dict) else {"headline": str(ev or "")}) for ev in list(getattr(session, "storyline_events", None) or [])[-120:]]
+    storylines_raw = list(getattr(session, "storyline_events", None) or [])
+    cur_idx = int(getattr(session, "calendar_cursor", 0) or 0)
+    try:
+        _prune_expired_storylines(session, cur_idx)
+        storylines_raw = list(getattr(session, "storyline_events", None) or [])
+    except Exception:
+        pass
+    storylines_active = [
+        ev for ev in storylines_raw
+        if isinstance(ev, dict) and not _storyline_is_expired(ev, session, cur_idx)
+    ]
+    storylines_norm = [
+        _normalize_storyline_payload(ev if isinstance(ev, dict) else {"headline": str(ev or "")})
+        for ev in storylines_active[-120:]
+    ]
     storyline_choices = _storyline_choices_payload(session)
     narrative_summary = _build_narrative_summary(session)
     narrative_universe: Dict[str, Any] = {}
@@ -17835,6 +18268,12 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         "progress": prog,
         "nhl_season_label": season_lbl,
         "nhl_today": nhl_today,
+        "calendar_cursor": int(getattr(session, "calendar_cursor", 0) or 0),
+        "franchise_today_iso": (
+            _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0))
+            or _scouting_calendar_iso(session)
+        ),
+        "scouting_as_of_iso": _scouting_calendar_iso(session),
         "nhl_calendar_strip": nhl_strip,
         "nhl_calendar_full": nhl_calendar_full,
         "season_anchor_events": season_anchor_event_markers(int(session.season_calendar_year)),
@@ -17908,8 +18347,14 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         "schedule_upcoming": _build_schedule_upcoming(session, limit=14),
         "flags": {
             "playoffs_done": session.playoffs_simulated,
-            "can_advance": len(session.pending_decisions) == 0 and session.phase != "complete",
+            "can_advance": (
+                len(session.pending_decisions) == 0
+                and session.phase != "complete"
+                and not _even_strength_lineup_gaps(session)
+            ),
+            "lineup_gaps": _even_strength_lineup_gaps(session),
         },
+        "last_gm_result": dict(getattr(session, "last_gm_result", None) or {}),
         "showcase_archive": list(getattr(session, "showcase_archive", None) or [])[-24:],
         "lines": dict(getattr(session, "lines", None) or {}),
         "financials_status": str(getattr(session, "financials_status", "") or ""),
@@ -18156,24 +18601,41 @@ def save_franchise_lines(session: FranchiseSession, payload: Dict[str, Any]) -> 
     if not isinstance(session.lines, dict):
         session.lines = {}
     prev_saved = dict(session.lines.get(unit_type) or {})
+    lineup_storylines: List[Dict[str, Any]] = []
     try:
         from app.sim_engine.franchise.storyline_engine import record_lineup_save_decisions  # noqa: WPS433
 
-        record_lineup_save_decisions(
+        lineup_storylines = record_lineup_save_decisions(
             session,
             new_lines=lines,
             unit_type=unit_type,
             previous_lines=prev_saved.get("lines"),
         )
     except Exception:
-        pass
+        lineup_storylines = []
     session.lines[unit_type] = {
         "lines": lines,
         "warnings": warnings,
         "last_saved": _today_iso(session),
         "source": "user",
     }
-    return {"ok": True, "unit_type": unit_type, "warnings": warnings, "lines": session.lines}
+    session._cached_chemistry_report = None
+    storyline_events = [
+        {
+            "id": str(s.get("id") or s.get("storyline_id") or ""),
+            "storyline_id": str(s.get("storyline_id") or s.get("id") or ""),
+            "headline": str(s.get("headline") or s.get("title") or "Lineup reaction"),
+        }
+        for s in lineup_storylines
+        if isinstance(s, dict)
+    ]
+    return {
+        "ok": True,
+        "unit_type": unit_type,
+        "warnings": warnings,
+        "lines": session.lines,
+        "storyline_events": storyline_events,
+    }
 
 
 def _today_iso(session: FranchiseSession) -> str:
@@ -18208,7 +18670,8 @@ def invalidate_session_payload_caches(session: FranchiseSession, reason: str = "
         # that list undrafted prospects, but leave rankings + trade market warm.
         session._cached_scouting_prospects_payload = None
         session._cached_roster_browser_payload = None
-        session.draft_payload = None
+        session._cached_lean_state_payload = None
+        session._cached_lean_state_key = None
         return
 
     if reason != "draft_pick":
@@ -18261,6 +18724,10 @@ def invalidate_session_payload_caches(session: FranchiseSession, reason: str = "
         "combine_meeting",
     ):
         _bump_prospect_revision(session)
+    if reason in ("bulk_complete", "prospect_stats", "season_reset"):
+        session._cached_draft_class_rankings = None
+        session._cached_draft_class_hud_payload = None
+        session._draft_class_detail_cache = None
     if _fr_dbg_enabled():
         try:
             from app.sim_engine.trades.trade_pick_registry import audit_pick_registry_integrity
@@ -18318,11 +18785,27 @@ def get_cached_draft_class_detail_payload(session: FranchiseSession, sim: Any) -
     except Exception:
         pass
     rev = int(getattr(session, "_prospect_revision", 0) or 0)
+    cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
     cached = getattr(session, "_draft_class_detail_cache", None)
-    if isinstance(cached, dict) and int(cached.get("revision", -1)) == rev:
+    if (
+        isinstance(cached, dict)
+        and int(cached.get("revision", -1)) == rev
+        and int(cached.get("calendar_cursor", -1)) == cur_cursor
+    ):
         payload = cached.get("payload")
         if isinstance(payload, dict):
             payload = dict(payload)
+            user_team = session.team_by_id.get(str(session.user_team_id))
+            hud = dict(payload.get("draft_class_hud") or {})
+            hud.update(
+                _draft_class_hud_calendar_slice(
+                    session,
+                    user_team,
+                    _user_team_record_from_game_results(session),
+                    [],
+                )
+            )
+            payload["draft_class_hud"] = hud
             payload["cache_hit"] = True
             return payload
     board = get_cached_draft_class_rankings(session, sim)
@@ -18332,11 +18815,17 @@ def get_cached_draft_class_detail_payload(session: FranchiseSession, sim: Any) -
         _user_team_record_from_game_results(session),
         [],
         draft_entries=board.get("entries"),
+        include_profiles=True,
     )
     # Re-read after sync/retune may bump prospect revision.
     rev = int(getattr(session, "_prospect_revision", 0) or 0)
+    cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
     payload = {"draft_class_rankings": board, "draft_class_hud": hud, "prospect_revision": rev}
-    session._draft_class_detail_cache = {"revision": rev, "payload": payload}
+    session._draft_class_detail_cache = {
+        "revision": rev,
+        "calendar_cursor": cur_cursor,
+        "payload": payload,
+    }
     payload["cache_hit"] = False
     return payload
 
@@ -18355,6 +18844,65 @@ def get_cached_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict
         session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
         setattr(session, "_draft_board_ovr_floors_v3", True)
         setattr(session, "_draft_pipeline_ovr_repaired", False)
+    # Bust boards cached before full chapter-profile enrichment reached the draft UI.
+    if not getattr(session, "_draft_board_chapter_profile_v1", False):
+        session._cached_draft_class_rankings = None
+        session._cached_draft_class_hud_payload = None
+        session._draft_class_detail_cache = None
+        session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
+        setattr(session, "_draft_board_chapter_profile_v1", True)
+    # Bust boards that still carry early-season stats after calendar catch-up sync.
+    if not getattr(session, "_draft_board_stats_cursor_v1", False):
+        session._cached_draft_class_rankings = None
+        session._cached_draft_class_hud_payload = None
+        session._draft_class_detail_cache = None
+        session._prospect_stats_synced_iso = ""
+        session._prospect_stats_synced_cursor = -1
+        session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
+        setattr(session, "_draft_board_stats_cursor_v1", True)
+    # Bust boards built before character chapter stopped mirroring personality ~55.
+    if not getattr(session, "_draft_board_character_v2", False):
+        session._cached_draft_class_rankings = None
+        session._cached_draft_class_hud_payload = None
+        session._draft_class_detail_cache = None
+        session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
+        setattr(session, "_draft_board_character_v2", True)
+    # Bust boards where character_concerns tag did not depress character score below 50.
+    if not getattr(session, "_draft_board_character_v3", False):
+        session._cached_draft_class_rankings = None
+        session._cached_draft_class_hud_payload = None
+        session._draft_class_detail_cache = None
+        session._prospect_profile_by_id_cache = None
+        session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
+        setattr(session, "_draft_board_character_v3", True)
+    if not getattr(session, "_draft_dossier_backend_v4", False):
+        session._cached_draft_class_rankings = None
+        session._cached_draft_class_hud_payload = None
+        session._draft_class_detail_cache = None
+        session._prospect_profile_by_id_cache = None
+        session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
+        setattr(session, "_draft_dossier_backend_v4", True)
+    if not getattr(session, "_draft_ceiling_v5", False):
+        session._cached_draft_class_rankings = None
+        session._cached_draft_class_hud_payload = None
+        session._draft_class_detail_cache = None
+        session._prospect_profile_by_id_cache = None
+        session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
+        setattr(session, "_draft_ceiling_v5", True)
+    if not getattr(session, "_draft_ceiling_v6", False):
+        session._cached_draft_class_rankings = None
+        session._cached_draft_class_hud_payload = None
+        session._draft_class_detail_cache = None
+        session._prospect_profile_by_id_cache = None
+        session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
+        setattr(session, "_draft_ceiling_v6", True)
+    if not getattr(session, "_prospect_scoring_retune_v6", False):
+        session._cached_draft_class_rankings = None
+        session._cached_draft_class_hud_payload = None
+        session._draft_class_detail_cache = None
+        session._prospect_profile_by_id_cache = None
+        session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
+        setattr(session, "_prospect_scoring_retune_v6", True)
     try:
         if league is not None and not getattr(session, "_draft_pipeline_ovr_repaired", False):
             from app.sim_engine.league_hierarchy_bootstrap import repair_undervalued_draft_pipeline_stars
@@ -18392,11 +18940,20 @@ def get_cached_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict
     except Exception:
         setattr(session, "_draft_age_reanchored", True)
 
+    try:
+        ensure_prospect_stats_current_for_scouting(session)
+    except Exception:
+        pass
+
     rev = int(getattr(session, "_prospect_revision", 0) or 0)
+    cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
     cached = getattr(session, "_cached_draft_class_rankings", None)
     cached_rev = int(getattr(session, "_cached_draft_class_rankings_rev", -1) or -1)
     if isinstance(cached, dict) and cached and cached_rev == rev:
-        return cached
+        cached_cursor = int(cached.get("calendar_cursor", -1) or -1)
+        if cached_cursor == cur_cursor:
+            _rebuild_draft_board_entry_index(session, cached)
+            return cached
 
     # Single-flight: Draft Class opens heavy + scouting/prospects in parallel; without
     # a lock both miss cache and rebuild the entire board (~20–30s) twice.
@@ -18408,14 +18965,21 @@ def get_cached_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict
             _DRAFT_RANKINGS_LOCKS[sid] = lock
     with lock:
         rev = int(getattr(session, "_prospect_revision", 0) or 0)
+        cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
         cached = getattr(session, "_cached_draft_class_rankings", None)
         cached_rev = int(getattr(session, "_cached_draft_class_rankings_rev", -1) or -1)
         if isinstance(cached, dict) and cached and cached_rev == rev:
-            return cached
+            cached_cursor = int(cached.get("calendar_cursor", -1) or -1)
+            if cached_cursor == cur_cursor:
+                _rebuild_draft_board_entry_index(session, cached)
+                return cached
         payload = build_draft_class_rankings(session, sim)
+        if isinstance(payload, dict):
+            payload["prospect_revision"] = int(getattr(session, "_prospect_revision", 0) or 0)
         session._cached_draft_class_rankings = payload
         session._cached_draft_class_rankings_rev = int(getattr(session, "_prospect_revision", 0) or 0)
         session._draft_rankings_cache_state = "valid"
+        _rebuild_draft_board_entry_index(session, payload)
         return payload
 
 
@@ -18427,12 +18991,13 @@ def get_cached_draft_class_hud(
     draft_entries: Any,
 ) -> Dict[str, Any]:
     """Revision-keyed cache for the (expensive) HUD prospect profiles so the ~320-profile
-    build isn't repeated on every Draft Class open. Rebuilds only when prospects change."""
+    build isn't repeated on every Draft Class open. Calendar/countdown slices refresh every read."""
     rev = int(getattr(session, "_prospect_revision", 0) or 0)
     cached = getattr(session, "_cached_draft_class_hud_payload", None)
     cached_rev = int(getattr(session, "_cached_draft_class_hud_rev", -1) or -1)
+    cal_slice = _draft_class_hud_calendar_slice(session, user_team, cal_rec, roster_rows)
     if isinstance(cached, dict) and cached and cached_rev == rev:
-        return cached
+        return {**cached, **cal_slice}
     payload = _build_draft_class_hud_payload(
         session, user_team, cal_rec, roster_rows, draft_entries=draft_entries
     )
@@ -18969,7 +19534,7 @@ def get_franchise_chemistry_report(session: FranchiseSession) -> Dict[str, Any]:
     stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
     lines_blob = getattr(session, "lines", None) or {}
     lines_key = str(hash(repr(lines_blob)))
-    cache_key = f"{stats_rev}|{lines_key}"
+    cache_key = f"{stats_rev}|{lines_key}|chem_v4"
     cached = getattr(session, "_cached_chemistry_report", None)
     if isinstance(cached, dict) and str(cached.get("key") or "") == cache_key:
         payload = cached.get("payload")
@@ -19635,6 +20200,13 @@ def resolve_player_meeting(session: FranchiseSession, interaction_id: str, choic
     from app.sim_engine.franchise.storyline_engine import resolve_player_meeting_interaction
 
     result = resolve_player_meeting_interaction(session, str(interaction_id), str(choice_id))
+    session.last_gm_result = {
+        "kind": "meeting",
+        "headline": str((result or {}).get("message") or "Meeting resolved."),
+        "summary": str((result or {}).get("effect_summary") or (result or {}).get("summary") or "The conversation landed. Check the locker-room pulse and storylines for the fallout."),
+    }
+    if isinstance(result, dict):
+        result["last_gm_result"] = dict(session.last_gm_result)
     invalidate_session_payload_caches(session, "player_meeting_resolve")
     return result
 
@@ -19653,6 +20225,13 @@ def advance_player_meeting(session: FranchiseSession, meeting_id: str, choice_id
     from app.sim_engine.franchise.storyline_engine import resolve_gm_player_meeting
 
     result = resolve_gm_player_meeting(session, str(meeting_id), str(choice_id))
+    session.last_gm_result = {
+        "kind": "meeting",
+        "headline": str((result or {}).get("message") or (result or {}).get("history", {}).get("choice_label") or "Conversation recorded."),
+        "summary": str((result or {}).get("effect_summary") or (result or {}).get("summary") or "The player heard you. Relationship and room notes updated."),
+    }
+    if isinstance(result, dict):
+        result["last_gm_result"] = dict(session.last_gm_result)
     invalidate_session_payload_caches(session, "player_meeting_advance")
     return result
 

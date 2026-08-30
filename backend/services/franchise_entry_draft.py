@@ -232,6 +232,15 @@ def _apply_registry_to_slot(
     return apply_registry_owner_to_slot(session, slot, draft_year)
 
 
+def _clock_team_for_slot(session: FranchiseSession, slot: Optional[Dict[str, Any]]) -> str:
+    """Who is on the clock for this slot — always via pick registry, not stale team_id."""
+    if not slot:
+        return ""
+    from services.draft_pick_ownership import resolve_slot_owner
+
+    return str(resolve_slot_owner(session, slot) or slot.get("team_id") or "")
+
+
 def _mark_pick_resolved(session: FranchiseSession, slot: Dict[str, Any], prospect_id: str) -> None:
     pick_id = slot.get("pick_id")
     league = getattr(session.sim, "league", None)
@@ -385,6 +394,8 @@ def append_stock_history_snapshot(
         "risk_score": entry.get("risk_score"),
         "production_score": entry.get("production_adjusted_score"),
         "event_source": event_source,
+        "injured": bool(entry.get("prospect_injured") or entry.get("injured") or entry.get("injury_status")),
+        "injury": entry.get("injury_note") or entry.get("injury_status") or "",
     }
     if prev_list and prev_list[-1].get("rank") == rank and prev_list[-1].get("event_source") == event_source:
         return
@@ -1246,6 +1257,101 @@ def _lookup_prospect_player(
     return _find_prospect_player(session, pid)
 
 
+def _sync_row_live_stats(
+    session: FranchiseSession,
+    row: Dict[str, Any],
+    player: Any,
+    block: Optional[Dict] = None,
+) -> Dict[str, Any]:
+    """Refresh counting stats on a draft row from the live junior ledger."""
+    out = dict(row or {})
+    if player is None:
+        return out
+    code = str(
+        out.get("league_code")
+        or (block or {}).get("league_code")
+        or getattr(getattr(player, "context", None), "league_code", "")
+        or ""
+    ).strip()
+    if not code:
+        return out
+    try:
+        from app.sim_engine.generation.prospect_league_scoring import (
+            ensure_prospect_season_stats,
+            prospect_stats_for_api,
+        )
+
+        cal_iso = None
+        season_year = None
+        try:
+            from services.franchise_sim import _calendar_iso_for_day
+
+            cal_iso = _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0))
+            season_year = int(getattr(session, "season_calendar_year", 0) or 0) or None
+        except Exception:
+            pass
+        rng = getattr(getattr(session, "sim", None), "rng", None)
+        actual = ensure_prospect_season_stats(
+            player,
+            code,
+            rng=rng,
+            calendar_iso=cal_iso,
+            season_year=season_year,
+        )
+        gp_now = int(actual.get("gp") or actual.get("games_played") or 0)
+        pts_now = int(actual.get("points") or 0)
+        ppg_now = actual.get("ppg")
+        if ppg_now is None and gp_now > 0:
+            ppg_now = round(pts_now / float(gp_now), 3)
+        for sk, val in (
+            ("gp", gp_now),
+            ("games_played", gp_now),
+            ("goals", actual.get("goals")),
+            ("assists", actual.get("assists")),
+            ("points", pts_now),
+            ("ppg", ppg_now),
+            ("points_per_game", ppg_now),
+            ("wins", actual.get("wins")),
+            ("losses", actual.get("losses")),
+            ("save_pct", actual.get("save_pct")),
+            ("gaa", actual.get("gaa")),
+            ("shutouts", actual.get("shutouts")),
+            ("production_adjusted_score", actual.get("production_adjusted_score")),
+        ):
+            if val is not None:
+                out[sk] = val
+        out["actual_stats"] = {
+            "gp": gp_now,
+            "games_played": gp_now,
+            "goals": out.get("goals"),
+            "assists": out.get("assists"),
+            "points": pts_now,
+            "ppg": ppg_now,
+        }
+        try:
+            full = prospect_stats_for_api(
+                player,
+                code,
+                rng=rng,
+                calendar_iso=cal_iso,
+                season_year=season_year,
+            )
+            if isinstance(full, dict):
+                analytics = full.get("analytics") if isinstance(full.get("analytics"), dict) else {}
+                if analytics:
+                    merged = dict(out.get("analytics") or {})
+                    merged.update({k: v for k, v in analytics.items() if v is not None})
+                    out["analytics"] = merged
+                    for k in ("war", "offensive_war", "defensive_war", "xgf_pct", "cf_pct", "shot_rate", "primary_points"):
+                        if out.get(k) is None and merged.get(k) is not None:
+                            out[k] = merged[k]
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return out
+
+
 def _development_path_for(entry: Dict[str, Any], block: Optional[Dict]) -> str:
     from services.draft_rights_engine import development_path_for
 
@@ -1666,14 +1772,14 @@ def initialize_entry_draft(session: FranchiseSession) -> Dict[str, Any]:
         "current_round": 1,
         "current_pick": 1,
         "overall_pick": 1,
-        "current_team_id": order[0]["team_id"] if order else "",
+        "current_team_id": _clock_team_for_slot(session, order[0]) if order else "",
         "draft_order": order,
         "pick_ownership": order,
         "completed_picks": [],
         "available_prospects": [e.get("key") for e in board.get("entries") or [] if e.get("key")],
         "drafted_prospect_ids": [],
         "user_team_id": str(session.user_team_id),
-        "is_user_pick": str(order[0]["team_id"]) == str(session.user_team_id) if order else False,
+        "is_user_pick": _clock_team_for_slot(session, order[0]) == str(session.user_team_id) if order else False,
         "draft_started": True,
         "draft_completed": False,
         "event_status": "live",
@@ -1776,7 +1882,7 @@ def get_entry_draft_payload(
     overall = int(state.get("overall_pick") or 1)
     order = list(state.get("draft_order") or [])
     current_slot = order[overall - 1] if overall <= len(order) else None
-    current_team = str(current_slot.get("team_id") if current_slot else state.get("current_team_id") or "")
+    current_team = _clock_team_for_slot(session, current_slot) or str(state.get("current_team_id") or "")
     user_id = str(session.user_team_id)
 
     offers = generate_draft_day_trade_offers(
@@ -1840,7 +1946,9 @@ def get_entry_draft_payload(
                     session, user_id, row, ov, user_phil
                 )
                 overlay_cache[pid] = notes
-            player, _, _ = _lookup_prospect_player(session, pid, home_index)
+            player, block, _tm = _lookup_prospect_player(session, pid, home_index)
+            if player is not None:
+                row = _sync_row_live_stats(session, row, player, block)
             rights = rights_card_payload(player) if player is not None else {}
             try:
                 scouted = enrich_board_entry_with_team_scouting(
@@ -2194,7 +2302,7 @@ def _execute_pick_locked(
             "overall_pick": next_overall if not done else overall,
             "current_round": int(next_slot.get("round") if next_slot else prev_round),
             "current_pick": int(next_slot.get("pick_in_round") if next_slot else 0),
-            "current_team_id": str(next_slot.get("team_id") if next_slot else ""),
+            "current_team_id": _clock_team_for_slot(session, next_slot) if next_slot else "",
             "completed_picks": completed,
             "draft_results": completed,
             "drafted_prospect_ids": drafted_ids,
@@ -2203,7 +2311,9 @@ def _execute_pick_locked(
             "round_recaps": round_recaps,
             "updated_at": _now_iso(),
             "is_user_pick": (
-                str(next_slot.get("team_id")) == str(session.user_team_id) if next_slot and not done else False
+                _clock_team_for_slot(session, next_slot) == str(session.user_team_id)
+                if next_slot and not done
+                else False
             ),
             "trade_offers": [],
             "draft_day_trade_offers": [],
@@ -2276,21 +2386,25 @@ def execute_cpu_draft_pick(session: FranchiseSession) -> Dict[str, Any]:
         raise ValueError("Draft complete")
     slot = order[overall - 1]
     owner = resolve_slot_owner(session, slot)
-    if owner == str(session.user_team_id):
-        raise ValueError("User team on the clock — make a selection")
 
     from services.franchise_sim import get_cached_draft_class_rankings
 
     board = get_cached_draft_class_rankings(session, session.sim)
     cache = _ensure_draft_cache(session, board)
-    # Select from the SAME pool that execution validates against, so the CPU can
-    # never choose a player it is then not allowed to draft.
     available = _draft_live_eligible(session, state, board)
     if not available:
         _raise_impossible_draft_state(session, state, board)
 
+    # Sim-next / Advance Pick from the floor must still move the clock even when
+    # the user owns the slot (client can be stale on is_user_pick).
+    user_slot = owner == str(session.user_team_id)
     chosen = _cpu_select_prospect(session, owner, overall, available, cache)
-    return _execute_pick(session, _prospect_entry_key(chosen), team_id=owner, user_initiated=False)
+    return _execute_pick(
+        session,
+        _prospect_entry_key(chosen),
+        team_id=owner,
+        user_initiated=user_slot,
+    )
 
 
 def build_known_pick_slots(session: FranchiseSession) -> Dict[str, int]:
@@ -2828,7 +2942,7 @@ def _batch_cpu_picks(
         if start_round is None:
             start_round = int(slot.get("round") or 1)
 
-        if until_user and not complete_all and str(slot.get("team_id")) == str(session.user_team_id):
+        if until_user and not complete_all and _clock_team_for_slot(session, slot) == str(session.user_team_id):
             break
         if until_round_end and int(slot.get("round") or 1) != start_round:
             break
@@ -2839,7 +2953,7 @@ def _batch_cpu_picks(
         available = _draft_live_eligible(session, state, board)
         if not available:
             _raise_impossible_draft_state(session, state, board)
-        owner = str(slot.get("team_id") or "")
+        owner = _clock_team_for_slot(session, slot)
         chosen = _cpu_select_prospect(session, owner, overall, available, cache)
         res = _execute_pick(session, _prospect_entry_key(chosen), team_id=owner, defer_payload=True)
         picks.append(res.get("pick_result") or {})
@@ -2874,7 +2988,7 @@ def _build_batch_summary(session: FranchiseSession, picks: List[Dict[str, Any]])
     next_user = None
     order = list(state.get("draft_order") or [])
     overall = int(state.get("overall_pick") or 1)
-    if overall <= len(order) and str(order[overall - 1].get("team_id")) == uid:
+    if overall <= len(order) and _clock_team_for_slot(session, order[overall - 1]) == uid:
         next_user = order[overall - 1]
     best_avail = avail[0] if avail else None
     return {
@@ -2894,7 +3008,7 @@ def _build_batch_summary(session: FranchiseSession, picks: List[Dict[str, Any]])
 def sim_entry_draft_to_user_pick(session: FranchiseSession) -> Dict[str, Any]:
     picks = _batch_cpu_picks(session, until_user=True)
     summary = _build_batch_summary(session, picks)
-    payload = get_entry_draft_payload(session, refresh_ownership=False)
+    payload = get_entry_draft_payload(session, refresh_ownership=True)
     payload["recap"] = get_draft_recap(session)
     return {
         "ok": True,

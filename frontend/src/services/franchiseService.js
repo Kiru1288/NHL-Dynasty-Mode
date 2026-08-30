@@ -8,9 +8,14 @@ let inflightFranchiseStateHeavyPromise = null;
 let inflightFranchiseStateHeavyKey = null;
 let inflightFranchiseNarrativePromise = null;
 
+const prospectProfileCache = new Map();
+const inflightProspectProfiles = new Map();
+
 export function resetFranchiseStateCache() {
   inflightFranchiseStatePromise = null;
   inflightFranchiseStateSessionId = null;
+  prospectProfileCache.clear();
+  inflightProspectProfiles.clear();
 }
 
 export async function listTeams() {
@@ -213,6 +218,39 @@ export async function getStatsCentral() {
 export async function getDraftClassDetail() {
   const { data } = await api.get("/api/franchise/draft-class/detail");
   return data;
+}
+
+export async function getDraftProspectProfile(prospectId, options = {}) {
+  const id = String(prospectId || "").trim();
+  if (!id) return null;
+  const rev = options.prospectRevision;
+  const cached = prospectProfileCache.get(id);
+  if (cached && (!rev || cached.rev === rev)) {
+    return cached.profile;
+  }
+  const inflight = inflightProspectProfiles.get(id);
+  if (inflight) return inflight;
+  const promise = api
+    .get(`/api/franchise/draft-class/prospect/${encodeURIComponent(id)}/profile`, { timeout: 60000 })
+    .then((res) => {
+      const profile = res.data?.profile || null;
+      if (profile) {
+        prospectProfileCache.set(id, {
+          rev: rev ?? profile.prospect_revision ?? null,
+          profile,
+        });
+      }
+      return profile;
+    })
+    .finally(() => {
+      inflightProspectProfiles.delete(id);
+    });
+  inflightProspectProfiles.set(id, promise);
+  return promise;
+}
+
+export function prefetchDraftProspectProfile(prospectId, options = {}) {
+  return getDraftProspectProfile(prospectId, options).catch(() => null);
 }
 
 export async function getFranchiseStateHeavy(options = {}) {

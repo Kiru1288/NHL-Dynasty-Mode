@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useCallback } from "react";
+import React, { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import "../styles/game-ui.css";
 import "../styles/draft-war-room.css";
 import { useGameUI } from "../game/GameUIContext";
@@ -6,6 +6,7 @@ import { SCREENS } from "../game/constants";
 import PlayerHeadshot from "../components/PlayerHeadshot";
 import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { api } from "../services/api";
+import { getDraftProspectProfile, prefetchDraftProspectProfile } from "../services/franchiseService";
 import { formatProspectLeague, formatProspectTeam } from "../events/prospectDevelopment/prospectDevelopmentHelpers";
 import { applyProspectLeagueTeamFix } from "../data/prospectLeagueTeams";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
@@ -25,27 +26,26 @@ import {
   enrichProspectsForWarRoom,
   groupByPyramid,
   overageStockNote,
-  projectionOutcomes,
   rankProspectsForSource,
   skillDevelopmentNotes,
   sourceCaption,
-  strengthCopy,
-  weaknessCopy,
   weeklyStockMovers,
   weeklyTrajectoryPoints,
 } from "./draftWarRoom";
 import {
-  resolveArchetype,
-  resolvePlayStyleTag,
   resolveProjectedRangeLabel,
+  resolveOvrBands,
   resolveCreaseZoneGrades,
   resolveGoalieToolRows,
   resolveBottomStatStrip,
-  developmentTrajectoryNarrative,
   buildScoutingDeskEntries,
   outcomeRibbonSegmentsForPosition,
   zoneGradeWord,
   formatDeskGrade,
+  dossierFileNotes,
+  zoneTierMeta,
+  humanizePlayStyleLabel,
+  buildStubProspectProfile,
 } from "./prospectDossierHelpers";
 
 let TRANSCENDENT_BOSS_AUDIO_URL = null;
@@ -173,7 +173,8 @@ const OVR_REVEAL_THRESHOLD = 72;
 const SCOUTING_ENDPOINTS = Object.freeze({
   prospects: "/api/franchise/scouting/prospects",
   focus: "/api/franchise/scouting/focus",
-  interview: "/api/franchise/scouting/interview",
+  assign: "/api/franchise/scouting/assign",
+  filmStudy: "/api/franchise/scouting/film-study",
 });
 
 const COVERAGE_DEPLOY_TARGETS = Object.freeze([
@@ -750,14 +751,76 @@ function parseMonthFromDate(raw) {
 }
 
 function getFranchiseDateRaw(franchiseState) {
+  const stage = String(franchiseState?.offseason_stage || "").toLowerCase();
+  const draftLive =
+    stage === "draft" ||
+    franchiseState?.draft?.draft_started ||
+    franchiseState?.draft_payload?.draft_started;
+  if (draftLive) {
+    const sy = Number(franchiseState?.season_year || 0);
+    if (sy) return `${sy + 1}-06-27`;
+  }
   return (
+    franchiseState?.franchise_today_iso ||
     franchiseState?.nhl_today?.iso ||
+    franchiseState?.scouting_as_of_iso ||
     franchiseState?.nhl_today?.date_label ||
     franchiseState?.current_date ||
     franchiseState?.currentDate ||
     franchiseState?.calendar?.current_date ||
     ""
   );
+}
+
+function formatStatsThroughLabel(raw, month, periodLabel) {
+  if (!raw) {
+    if (month >= 4 && month <= 6) return "End of Season";
+    return periodLabel?.replace(/ Draft Board$/i, "") || "Early Season";
+  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(String(raw))) {
+    if (month >= 4 && month <= 6) return "End of Season";
+    if (month >= 9 && month <= 10) return "Early Season";
+    if (month === 11) return "November";
+    if (month === 12 || month === 1) return "Midseason";
+    if (month === 2 || month === 3) return "Late Season";
+  }
+  return String(raw);
+}
+
+function isDraftLive(franchiseState) {
+  const stage = String(franchiseState?.offseason_stage || "").toLowerCase();
+  return (
+    stage === "draft" ||
+    franchiseState?.draft?.draft_started ||
+    franchiseState?.draft_payload?.draft_started ||
+    franchiseState?.draft_class_hud?.events?.draft?.display === "LIVE"
+  );
+}
+
+function draftHudCalendarStale(franchiseState, hud = franchiseState?.draft_class_hud) {
+  if (!hud || typeof hud !== "object") return false;
+  const liveIso = String(
+    franchiseState?.scouting_as_of_iso
+    || franchiseState?.franchise_today_iso
+    || franchiseState?.nhl_today?.iso
+    || ""
+  );
+  if (!liveIso) return false;
+  const hudIso = String(hud.scouting_as_of_iso || hud.franchise_today_iso || "");
+  if (hudIso && hudIso !== liveIso) return true;
+  const hudCursor = Number(hud.calendar_cursor ?? NaN);
+  const liveCursor = Number(franchiseState?.calendar_cursor ?? NaN);
+  return Number.isFinite(hudCursor) && Number.isFinite(liveCursor) && hudCursor !== liveCursor;
+}
+
+function resolveHudEventDisplay(franchiseState, hud, { eventKey, hudRow, draftLive = false } = {}) {
+  if (draftLive) return "LIVE";
+  if (!draftHudCalendarStale(franchiseState, hud) && hudRow) {
+    if (hudRow.display) return hudRow.display;
+    const formatted = formatDaysUntil(hudRow.days_until);
+    if (formatted && formatted !== "—") return formatted;
+  }
+  return inferEventDaysFallback(franchiseState, eventKey);
 }
 
 function getGPRangeForMonth(month) {
@@ -800,22 +863,46 @@ function maxCompletionForRank(rank, monthMax) {
   return Math.min(70, monthMax - 14);
 }
 
+function formatFranchiseFileDate(franchiseState) {
+  const raw = getFranchiseDateRaw(franchiseState);
+  if (/^\d{4}-\d{2}-\d{2}/.test(String(raw))) {
+    const d = new Date(`${String(raw).slice(0, 10)}T12:00:00`);
+    if (!Number.isNaN(d.getTime())) {
+      return d.toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" }).replace(/\//g, ".");
+    }
+  }
+  return new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" }).replace(/\//g, ".");
+}
+
+function chapterScoreFromPlayer(player, key, fallback = null) {
+  const chapters = player?.chapterProfile?.chapters;
+  if (chapters?.[key] != null && Number.isFinite(Number(chapters[key]))) {
+    return Math.round(Number(chapters[key]));
+  }
+  if (player?.[key] != null && Number.isFinite(Number(player[key]))) {
+    return Math.round(Number(player[key]));
+  }
+  return fallback;
+}
+
 function buildDateContext(franchiseState) {
   const raw = getFranchiseDateRaw(franchiseState);
   const month = parseMonthFromDate(raw);
   const monthMax = getMaxCompletionForMonth(month);
   const [gpMin, gpMax] = getGPRangeForMonth(month);
   const seasonYear = Number(franchiseState?.season_year) || new Date().getFullYear();
+  const periodLabel = getScoutingPeriodLabel(month);
   return {
     raw,
     month,
     monthMax,
     gpMin,
     gpMax,
-    statsThrough: raw || "Early Season",
-    periodLabel: getScoutingPeriodLabel(month),
+    statsThrough: formatStatsThroughLabel(raw, month, periodLabel),
+    periodLabel,
     draftYear: seasonYear + 1,
     isPartialSeason: !month || month < 4 || month > 6,
+    draftLive: isDraftLive(franchiseState),
   };
 }
 
@@ -1025,6 +1112,24 @@ async function patchScoutingMeta(prospectId, metaPatch) {
   return res?.data || {};
 }
 
+async function runProspectScoutAction(prospectId, action, extra = {}) {
+  const endpoints = {
+    film_study: SCOUTING_ENDPOINTS.filmStudy,
+    player_focus: SCOUTING_ENDPOINTS.focus,
+    assign: SCOUTING_ENDPOINTS.assign,
+  };
+  const path = endpoints[action] || SCOUTING_ENDPOINTS.focus;
+  const res = await api.post(path, {
+    prospect_id: prospectId,
+    player_id: prospectId,
+    target_id: prospectId,
+    target_type: "player",
+    action,
+    ...extra,
+  });
+  return res?.data || {};
+}
+
 function coalesce(...values) {
   for (const value of values) {
     if (value !== undefined && value !== null && value !== "") return value;
@@ -1135,6 +1240,34 @@ function attrFromBackend(row, base, snakeKey, camelKey) {
     return Math.round(Number(raw));
   }
   return base[camelKey];
+}
+
+function characterScoreFromRow(row, base) {
+  const chapters = row?.chapter_profile?.chapters;
+  if (chapters?.character != null && Number.isFinite(Number(chapters.character))) {
+    return Math.round(Number(chapters.character));
+  }
+  if (row?.character_score != null && Number.isFinite(Number(row.character_score))) {
+    return Math.round(Number(row.character_score));
+  }
+  if (row?.characterScore != null && Number.isFinite(Number(row.characterScore))) {
+    return Math.round(Number(row.characterScore));
+  }
+  const mental = chapterScoreFromRow(row, "mental", null);
+  if (mental != null) return mental;
+  return null;
+}
+
+function chapterScoreFromRow(row, key, fallback = null) {
+  const chapters = row?.chapter_profile?.chapters;
+  if (chapters?.[key] != null && Number.isFinite(Number(chapters[key]))) {
+    return Math.round(Number(chapters[key]));
+  }
+  const flat = row?.[key];
+  if (flat != null && Number.isFinite(Number(flat))) {
+    return Math.round(Number(flat));
+  }
+  return fallback;
 }
 
 function resolveWeightLbs(row, base) {
@@ -1250,9 +1383,19 @@ function mapBackendDraftBoard(entries, dateContext) {
     const completion = dedicatedScoutingPct ?? publicScoutingConfidence ?? (Number(base.completion) || 40);
     const ovrRevealed = completion >= OVR_REVEAL_THRESHOLD || Boolean(row?.ovr_revealed);
     const rawRange = row?.ovr_range;
-    const ovrRange = rawRange && rawRange.low != null && rawRange.high != null
+    let ovrRange = rawRange && rawRange.low != null && rawRange.high != null
       ? { low: Number(rawRange.low), high: Number(rawRange.high) }
       : null;
+    if (!ovrRange) {
+      const cur = row?.current_ovr_range;
+      if (Array.isArray(cur) && cur.length >= 2) {
+        ovrRange = { low: Number(cur[0]), high: Number(cur[1]) };
+      } else if (cur && cur.low != null && cur.high != null) {
+        ovrRange = { low: Number(cur.low), high: Number(cur.high) };
+      } else if (row?.public_ovr_low != null && row?.public_ovr_high != null) {
+        ovrRange = { low: Number(row.public_ovr_low), high: Number(row.public_ovr_high) };
+      }
+    }
 
     const country = coalesce(row?.country, row?.nationality, base.country);
     const region = coalesce(row?.region, regionForCountry(country), base.region);
@@ -1304,7 +1447,8 @@ function mapBackendDraftBoard(entries, dateContext) {
       hometown: coalesce(row?.hometown, row?.birth_city, row?.birthCity),
       birthday: coalesce(row?.birthday, base.birthday),
       birthCity: coalesce(row?.hometown, row?.birth_city, row?.birthCity, country),
-      height: coalesce(row?.height, base.height),
+      height: coalesce(row?.height, row?.height_display, base.height),
+      heightCm: row?.height_cm != null ? Number(row.height_cm) : (row?.heightCm != null ? Number(row.heightCm) : null),
       weight: weightLbs,
       handedness: coalesce(row?.handedness, base.handedness),
       ceilingHidden: Boolean(row?.ceiling_hidden ?? row?.ceilingHidden),
@@ -1356,8 +1500,9 @@ function mapBackendDraftBoard(entries, dateContext) {
       puckHandling: attrFromBackend(row, base, "puck_handling", "puckHandling"),
       athleticism: attrFromBackend(row, base, "athleticism", "athleticism"),
       morale: base.morale,
-      character: attrFromBackend(row, base, "character_score", "character"),
-      coachability: attrFromBackend(row, base, "coachability", "coachability"),
+      character: characterScoreFromRow(row, base),
+      characterScore: characterScoreFromRow(row, base),
+      chapterProfile: row?.chapter_profile || null,
       competitiveness: attrFromBackend(row, base, "competitiveness", "competitiveness"),
       sociability: attrFromBackend(row, base, "sociability", "sociability"),
       fit: base.fit,
@@ -1652,10 +1797,13 @@ function recommendedAction(player, meta) {
 }
 
 function ratingLabel(value) {
-  if (value >= 90) return "Elite";
-  if (value >= 82) return "Excellent";
-  if (value >= 74) return "Good";
-  if (value >= 64) return "Average";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  if (n < 50) return "Disastrous attitude";
+  if (n >= 90) return "Elite";
+  if (n >= 82) return "Excellent";
+  if (n >= 74) return "Good";
+  if (n >= 64) return "Average";
   return "Concern";
 }
 
@@ -1967,6 +2115,16 @@ function leaderPct(v) {
   return Number(n.toFixed(1));
 }
 
+function leaderPctFromSources(sources, keys) {
+  for (const key of keys) {
+    for (const src of sources) {
+      if (!src || typeof src !== "object") continue;
+      if (src[key] != null && src[key] !== "") return leaderPct(src[key]);
+    }
+  }
+  return null;
+}
+
 function extractProspectAnalytics(player, profile) {
   const embedded = player?.analytics && typeof player.analytics === "object" ? player.analytics : null;
   const profileAnalytics = profile?.analytics && typeof profile.analytics === "object" ? profile.analytics : null;
@@ -1978,9 +2136,18 @@ function extractProspectAnalytics(player, profile) {
   const gp = Number(player?.gp) || 0;
   const shots = leaderNum(pick("shots", "sog", "shots_on_goal"));
   const shotRateRaw = leaderNum(pick("shot_rate", "shots_per_game", "sog_per_game"));
+  const xgf_pct = leaderPctFromSources(sources, ["xgf_pct", "xGF_pct", "expected_goals_pct"]);
+  let cf_pct = leaderPctFromSources(sources, ["cf_pct", "corsi_pct", "corsi_percentage"]);
+  // Avoid mirroring xGF% into CF% when Corsi was never supplied on the payload.
+  if (cf_pct != null && xgf_pct != null && cf_pct === xgf_pct) {
+    const hasCf = sources.some((src) => src && (
+      src.cf_pct != null || src.corsi_pct != null || src.corsi_percentage != null
+    ));
+    if (!hasCf) cf_pct = null;
+  }
   return {
-    xgf_pct: leaderPct(pick("xgf_pct", "xGF_pct", "expected_goals_pct")),
-    cf_pct: leaderPct(pick("cf_pct", "corsi_pct", "corsi_percentage")),
+    xgf_pct,
+    cf_pct,
     ff_pct: leaderPct(pick("ff_pct", "fenwick_pct", "fenwick_percentage")),
     war: leaderNum(pick("war", "WAR", "player_war")),
     offensive_war: leaderNum(pick("offensive_war", "off_war", "owar")),
@@ -2643,10 +2810,12 @@ function TopHeader({ onBack, dateContext, franchiseState }) {
   const record = resolveRecord(franchiseState);
   const ownedPickCount = resolveOwnedPickCount(franchiseState, dateContext?.draftYear);
   const hud = franchiseState?.draft_class_hud || {};
-  const draftValue =
-    hud?.events?.draft?.display ||
-    formatDaysUntil(hud?.events?.draft?.days_until) ||
-    inferEventDaysFallback(franchiseState, "draft");
+  const draftLive = dateContext?.draftLive || isDraftLive(franchiseState);
+  const draftValue = resolveHudEventDisplay(franchiseState, hud, {
+    eventKey: "draft",
+    hudRow: hud?.events?.draft,
+    draftLive,
+  });
   const coverage = hud?.coverage_label || hud?.scouting_coverage || dateContext?.periodLabel;
   return (
     <header className="dc-topbar dc-topbar--draft-hud dc-topbar--war">
@@ -2729,12 +2898,18 @@ function formatDaysUntil(rawDays) {
 }
 
 function inferEventDaysFallback(franchiseState, eventKey) {
-  const nowRaw = franchiseState?.nhl_today?.iso || franchiseState?.current_date || "";
+  const nowRaw =
+    franchiseState?.scouting_as_of_iso ||
+    franchiseState?.franchise_today_iso ||
+    franchiseState?.nhl_today?.iso ||
+    franchiseState?.current_date ||
+    "";
   const now = parseIsoDate(nowRaw);
   const markers = Array.isArray(franchiseState?.season_anchor_events) ? franchiseState.season_anchor_events : [];
   const row = markers.find((m) => String(m?.key || "") === eventKey);
   const event = parseIsoDate(row?.date);
   if (!now || !event) return "—";
+  if (eventKey === "draft" && isDraftLive(franchiseState)) return "LIVE";
   const delta = Math.floor((event.getTime() - now.getTime()) / 86400000);
   return formatDaysUntil(delta);
 }
@@ -2757,13 +2932,20 @@ function CommandStatStrip({ franchiseState, onOpenWjc }) {
   };
   const events = hud?.events || {};
   const wjcEvent = events?.wjc || {};
-  const wjcValue =
-    wjcEvent.display ||
-    formatDaysUntil(wjcEvent.days_until) ||
-    inferEventDaysFallback(franchiseState, "wjc_start");
+  const wjcValue = resolveHudEventDisplay(franchiseState, hud, {
+    eventKey: "wjc_start",
+    hudRow: wjcEvent,
+  });
   const wjcClickable = typeof onOpenWjc === "function" && wjcValue && wjcValue !== "—";
-  const lotValue = events?.lottery?.display || formatDaysUntil(events?.lottery?.days_until) || inferEventDaysFallback(franchiseState, "draft_lottery");
-  const draftValue = events?.draft?.display || formatDaysUntil(events?.draft?.days_until) || inferEventDaysFallback(franchiseState, "draft");
+  const lotValue = resolveHudEventDisplay(franchiseState, hud, {
+    eventKey: "draft_lottery",
+    hudRow: events?.lottery,
+  });
+  const draftValue = resolveHudEventDisplay(franchiseState, hud, {
+    eventKey: "draft",
+    hudRow: events?.draft,
+    draftLive: isDraftLive(franchiseState),
+  });
 
   const items = [
     { key: "status", icon: statusIconForKey(teamStatus?.key), label: "TEAM STATUS", value: teamStatus?.label || "Middling", clickable: false },
@@ -2906,19 +3088,32 @@ function outcomeRibbonSegments(outcomes, isGoalie = false, outcomeDistribution =
   return outcomeRibbonSegmentsForPosition(outcomes, isGoalie, outcomeDistribution);
 }
 
-function ProspectZoneMap({ tools, position, isGoalie }) {
+function ProspectZoneMap({ tools, profile, position, isGoalie, compact = false }) {
   if (isGoalie || String(position || "").toUpperCase() === "G") {
-    return <ProspectCreaseZoneMap tools={tools} />;
+    return <ProspectCreaseZoneMap tools={tools} profile={profile} compact={compact} />;
   }
-  return <ProspectRinkZoneMap tools={tools} position={position} />;
+  return <ProspectRinkZoneMap tools={tools} profile={profile} position={position} compact={compact} />;
 }
 
-function ProspectCreaseZoneMap({ tools }) {
-  const zones = resolveCreaseZoneGrades({}, {}, tools);
+function ProspectCreaseZoneMap({ tools, profile, compact = false }) {
+  const backendZones = profile?.zone_map?.type === "crease" ? profile.zone_map.zones : null;
+  const zones = backendZones
+    ? {
+        rebound: backendZones.rebound?.value != null
+          ? { locked: false, value: Number(backendZones.rebound.value) }
+          : { locked: true, value: null },
+        angles: backendZones.angles?.value != null
+          ? { locked: false, value: Number(backendZones.angles.value) }
+          : { locked: true, value: null },
+        range: backendZones.range?.value != null
+          ? { locked: false, value: Number(backendZones.range.value) }
+          : { locked: true, value: null },
+      }
+    : resolveCreaseZoneGrades({}, profile, tools);
   const numClass = (v) => wrNumClassForTier(v >= 85 ? "elite" : v >= 75 ? "high" : "depth");
   const barPct = (v) => `${Math.max(8, Math.min(100, Math.round(v || 0)))}%`;
   return (
-    <div className="wr-rink wr-rink--crease">
+    <div className={`wr-rink wr-rink--crease${compact ? " wr-rink--dossier-compact" : ""}`}>
       <span className="dc-profile-tags__label">
         Crease grades <span className="wr-muted">//</span> where the game gets decided
       </span>
@@ -2972,25 +3167,34 @@ function ProspectCreaseZoneMap({ tools }) {
           <text x="320" y="252" fill="#8fa3b3" fontSize="10" textAnchor="middle">PUCK-HANDLING RANGE — WITHHELD</text>
         )}
       </svg>
-      <p className="wr-rink__caption">Brighter paint means more of his value lives there. He plays big close to the net — the range game is still unlearned.</p>
+      {!compact ? (
+        <p className="wr-rink__caption">Brighter paint means more of his value lives there. He plays big close to the net — the range game is still unlearned.</p>
+      ) : null}
     </div>
   );
 }
 
-function ProspectRinkZoneMap({ tools, position }) {
+function ProspectRinkZoneMap({ tools, profile, position, compact = false }) {
   const pos = String(position || "").toUpperCase();
+  const backendZones = profile?.zone_map?.zones;
   const byLabel = Object.fromEntries((tools || []).map((t) => [t.label, t]));
-  const composite = (parts) => {
-    const rows = parts.map((label) => byLabel[label]).filter(Boolean);
+  const composite = (labels) => {
+    const rows = labels.map((label) => byLabel[label]).filter(Boolean);
     if (!rows.length) return { locked: true, value: null };
     if (rows.some((t) => t.locked)) return { locked: true, value: null };
     const vals = rows.map((t) => t.mid ?? t.raw).filter((n) => Number.isFinite(n));
     if (!vals.length) return { locked: true, value: null };
     return { locked: false, value: vals.reduce((a, b) => a + b, 0) / vals.length };
   };
-  const offensive = composite(["Shot", "Vision"]);
-  const transition = composite(["Skating", "IQ"]);
-  const defensive = composite(["Defense"]);
+  const resolveZone = (key, fallbackLabels) => {
+    if (backendZones?.[key]?.value != null) {
+      return { locked: false, value: Number(backendZones[key].value) };
+    }
+    return composite(fallbackLabels);
+  };
+  const offensive = resolveZone("offensive", ["Shot", "Vision"]);
+  const transition = resolveZone("transition", ["Skating", "IQ"]);
+  const defensive = resolveZone("defensive", ["Defense"]);
   const isD = pos === "D" || pos === "LD" || pos === "RD";
   const zones = [
     { key: "def", label: "Defensive", data: defensive, large: isD },
@@ -3000,7 +3204,7 @@ function ProspectRinkZoneMap({ tools, position }) {
   const numClass = (v) => wrNumClassForTier(v >= 85 ? "elite" : v >= 75 ? "high" : "depth");
 
   return (
-    <div className="wr-rink">
+    <div className={`wr-rink${compact ? " wr-rink--dossier-compact" : ""}`}>
       <span className="dc-profile-tags__label">
         Zone grades <span className="wr-muted">//</span> where he wins the ice
       </span>
@@ -3012,19 +3216,19 @@ function ProspectRinkZoneMap({ tools, position }) {
         </svg>
         <div className="wr-rink__zones">
           {zones.map((z) => {
-            const opacity = z.data.locked ? 0 : Math.max(0.12, Math.min(0.72, (Number(z.data.value) || 0) / 100));
+            const tier = zoneTierMeta(z.data.locked ? null : z.data.value);
             return (
               <div
                 key={z.key}
-                className={`wr-rink__cell${z.data.locked ? " is-fog" : ""}${z.large ? " is-hero" : ""}`}
-                style={z.data.locked ? undefined : { "--wr-zone-fill": opacity }}
+                className={`wr-rink__cell is-tier-${tier.tier}${z.data.locked ? " is-fog" : ""}${z.large ? " is-hero" : ""}`}
+                style={z.data.locked ? undefined : { "--wr-zone-fill": tier.fill }}
+                title={z.data.locked ? `${z.label} withheld` : `${z.label} · ${zoneGradeWord(z.data.value)} (${Math.round(z.data.value)})`}
               >
                 {z.data.locked ? (
                   <strong className="wr-rink__fog" aria-label={`${z.label} withheld`}>??</strong>
                 ) : (
                   <strong className={numClass(z.data.value)}>{Math.round(z.data.value)}</strong>
                 )}
-                <em>{z.data.locked ? "Withheld" : zoneGradeWord(z.data.value)}</em>
                 <span>{z.label}</span>
               </div>
             );
@@ -3036,113 +3240,53 @@ function ProspectRinkZoneMap({ tools, position }) {
 }
 
 function OffIceFrameStrip({ player, tools, profile }) {
-  const charRead = profile?.character_read;
-  const traitMap = {};
-  (Array.isArray(charRead?.traits) ? charRead.traits : []).forEach((t) => {
-    if (t?.label) traitMap[String(t.label).toLowerCase()] = t;
-  });
-  const traitScore = (labels, fallback) => {
-    for (const label of labels) {
-      const row = traitMap[String(label).toLowerCase()];
-      if (!row || row.tier === "Unknown") continue;
-      const tier = String(row.tier || "").toLowerCase();
-      if (tier === "elite") return 90;
-      if (tier === "very high") return 82;
-      if (tier === "high") return 74;
-      if (tier === "above average") return 66;
-      if (tier === "average") return 58;
-      if (tier === "below average") return 48;
-      if (tier === "mixed reports") return null;
-    }
-    return fallback;
-  };
-
-  const physicalTool = tools?.find((t) => t.label === "Physical");
-  const mentalTool = tools?.find((t) => t.label === "IQ") || tools?.find((t) => t.label === "Positioning");
-  const physical = physicalTool?.locked
-    ? null
-    : Number(player?.physical ?? physicalTool?.mid ?? traitScore(["competitive drive"], null));
-  const mental = mentalTool?.locked
-    ? null
-    : Number(player?.poise ?? player?.hockeyIQ ?? mentalTool?.mid ?? traitScore(["coachability", "social adjustment"], null));
-  const character = Number(
-    player?.character
-    ?? player?.characterScore
-    ?? traitScore(["competitive drive", "coachability"], null),
-  );
-  const leadership = Number(
-    player?.leadership
-    ?? traitScore(["leadership"], null),
-  );
-  const pips = (v) => {
-    if (!Number.isFinite(v) || v <= 0) return 0;
-    return Math.max(0, Math.min(10, Math.round(v / 10)));
-  };
-  const phrase = (label, v) => {
-    const trait = traitMap[String(label).toLowerCase()]
-      || (label === "Physical" ? traitMap["competitive drive"] : null)
-      || (label === "Mental" ? (traitMap["coachability"] || traitMap["social adjustment"]) : null)
-      || (label === "Character" ? traitMap["competitive drive"] : null)
-      || (label === "Leadership" ? traitMap["leadership"] : null);
-    if (trait?.tier && trait.tier !== "Unknown") return trait.tier;
-    if (!Number.isFinite(v) || v <= 0) return label === "Leadership" ? "Interview locked" : "Unscouted";
-    if (v >= 82) return label === "Physical" ? "Elite frame" : label === "Mental" ? "Composed" : "Strong reports";
-    if (v >= 70) return label === "Physical" ? "Solid frame" : label === "Mental" ? "Reads pressure" : "Positive reports";
-    if (v >= 58) return label === "Mental" ? "Composure unproven" : "Needs work";
-    return "Below peer norm";
-  };
-  const rows = [
-    ["Physical", physical, "#f4b467"],
-    ["Mental", mental, "#2be4ff"],
-    ["Character", character, "#6cf7a6"],
-    ["Leadership", leadership, "#4f6d84", leadership <= 0],
-  ];
-  return (
-    <div className="wr-office-strip wr-office-strip--frame">
-      <span className="dc-profile-tags__label">
-        Off-ice &amp; frame <span className="wr-muted">//</span> what tape doesn&apos;t show
-      </span>
-      <div className="wr-office-strip__grid">
-        {rows.map(([label, value, color, locked]) => (
-          <div className={`wr-office-strip__row${locked ? " is-locked" : ""}`} key={label}>
-            <span className="wr-office-strip__label">{label}</span>
-            <div className={`wr-office-pips${locked ? " wr-hatch" : ""}`} aria-label={`${label} ${pips(value)} of 10`}>
-              {locked ? null : Array.from({ length: 10 }, (_, i) => (
-                <i key={i} className={i < pips(value) ? "is-on" : ""} style={i < pips(value) ? { background: color } : undefined} />
-              ))}
+  const backend = profile?.off_ice_frame || profile?.offIceFrame;
+  const frameRows = Array.isArray(backend?.rows) ? backend.rows : [];
+  if (frameRows.length && frameRows[0]?.label) {
+    return (
+      <div className="wr-office-strip wr-office-strip--frame">
+        <span className="dc-profile-tags__label">
+          Off-ice &amp; frame <span className="wr-muted">//</span> chapter scores
+        </span>
+        <div className="wr-office-strip__grid">
+          {frameRows.map((row) => (
+            <div className="wr-office-strip__row" key={row.label}>
+              <span className="wr-office-strip__label">{row.label}</span>
+              <div className="wr-office-pips" aria-label={`${row.label} ${row.pips ?? 0} of 10`}>
+                {Array.from({ length: 10 }, (_, i) => (
+                  <i key={i} className={i < (row.pips ?? 0) ? "is-on" : ""} />
+                ))}
+              </div>
+              <em>{row.detail}</em>
+              <strong>{row.score ?? "—"}</strong>
             </div>
-            <em>{phrase(label, value)}</em>
-            <strong className={locked ? "is-locked-grade" : ""} style={!locked && value ? { color } : undefined}>
-              {locked ? "??" : (Number.isFinite(value) ? Math.round(value) : "—")}
-            </strong>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
+  return null;
 }
 
-function ProspectScoutingDesk({ desk, confPct }) {
-  const entries = desk?.entries || [];
-  const returned = entries.filter((e) => !e.locked).length;
-  const total = entries.length;
+function ProspectScoutingDesk({ desk, confPct, compact = false, maxEntries = null }) {
+  const allEntries = desk?.entries || [];
+  const entries = maxEntries != null ? allEntries.slice(0, maxEntries) : allEntries;
+  const returned = allEntries.filter((e) => !e.locked).length;
+  const total = allEntries.length;
   return (
-    <section className="wr-scout-desk">
+    <section className={`wr-scout-desk${compact ? " wr-scout-desk--compact" : ""}`}>
       <span className="dc-profile-tags__label">
         The scouting desk <span className="wr-muted">//</span> {returned} of {total} reports returned
       </span>
       <div className="wr-scout-desk__list">
         {entries.map((row) => (
           <article
-            key={`${row.scout}-${row.gradeLabel}`}
+            key={`${row.scout}-${row.gradeLabel}-${row.meta || ""}`}
             className={`wr-scout-desk__row is-${row.tone}${row.locked ? " is-locked" : ""}`}
           >
             <div className="wr-scout-desk__meta">
               <div className="wr-scout-desk__name">{row.scout}</div>
               <div className="wr-scout-desk__sub">{row.meta}</div>
-              {row.hitRate != null ? (
-                <div className="wr-scout-desk__hit">HIT RATE {Math.round(row.hitRate)}%</div>
-              ) : null}
             </div>
             <div className="wr-scout-desk__quote">
               {row.locked ? (
@@ -3212,7 +3356,7 @@ function OffIcePipStrip({ player, tools }) {
   );
 }
 
-function ProspectBoardRow({ player, index, selected, expanded, onSelect, meta, showConsensus }) {
+function ProspectBoardRow({ player, index, selected, expanded, onSelect, onPrefetch, meta, showConsensus }) {
   const rank = player.boardRank || prospectRank(player, index);
   const countryCode = normalizeCountryCode(player);
   const scoutPct = prospectEffectivePct(player);
@@ -3221,6 +3365,7 @@ function ProspectBoardRow({ player, index, selected, expanded, onSelect, meta, s
   const ceilingHidden = Boolean(player?.ceilingHidden);
   const profile = player?.profile || null;
   const ovr = resolveCurrentEstimate(player, profile, ceilingHidden, Boolean(profile?.dedicatedScoutFile));
+  const ovrBands = resolveOvrBands(profile, player, ceilingHidden);
   const pot = resolvePotentialEstimate(player);
   const league = player.leagueDisplay || player.league || "—";
   const pos = player.position || "—";
@@ -3229,6 +3374,10 @@ function ProspectBoardRow({ player, index, selected, expanded, onSelect, meta, s
   const stock = player.draftStock || {};
   const delta = Number(stock.deltaRank) || 0;
   const topFive = rank <= 5;
+  const boardOvrText = ovr.text !== "—" ? ovr.text : "—";
+  const boardOvrTitle = ovrBands.peakText && !ceilingHidden && ovr.text !== "—"
+    ? `Now ${ovr.text} · Peak ${ovrBands.peakText}`
+    : (ovr.detail || "Present ability");
   const lo = pot.exact ? pot.value : (player?.potentialRange?.low ?? null);
   const hi = pot.exact ? pot.value : (player?.potentialRange?.high ?? null);
   const mid = pot.value;
@@ -3250,6 +3399,7 @@ function ProspectBoardRow({ player, index, selected, expanded, onSelect, meta, s
       type="button"
       className={`dc-prospect-row${selected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${meta?.doNotDraft ? " is-dnd" : ""}${player?.isTranscendent ? " prospect-card--transcendent" : ""}${rank > 32 ? " is-late-round" : ""}${topFive ? " is-top5" : ""}${player.overager ? " is-overager" : ""}`}
       onClick={onSelect}
+      onMouseEnter={() => onPrefetch?.(player)}
       style={tier ? { "--tier-color": tier.color } : undefined}
     >
       <div className={`dc-prospect-row__rank ${rankNumClass}`} aria-label={`Rank ${rank}`}>
@@ -3273,7 +3423,14 @@ function ProspectBoardRow({ player, index, selected, expanded, onSelect, meta, s
         <span className="dc-prospect-row__identity">
           <span className="dc-prospect-row__name-row">
             <strong className="dc-prospect-row__name">{player.firstName} {player.lastName}</strong>
-            {topFive ? <b className={`dc-prospect-row__ovr ${ovr.exact ? "wr-num-gold" : "wr-num-slate"}`}>{ovr.text !== "—" ? ovr.text : "—"}</b> : null}
+            {topFive ? (
+              <b
+                className={`dc-prospect-row__ovr ${(ovr.exact || (ovrBands.peakText && !ceilingHidden)) ? "wr-num-gold" : "wr-num-slate"}`}
+                title={boardOvrTitle}
+              >
+                {boardOvrText}
+              </b>
+            ) : null}
           </span>
           <span className="dc-prospect-row__sub">
             {player.teamDisplay || player.team || league} · {player.age || "—"} yrs
@@ -3381,6 +3538,7 @@ function ProspectBoardPanel({
   prospects,
   selectedProspectId,
   onOpenProspect,
+  onPrefetchProspect,
   scoutingStore,
   activeBoardView,
   boardSource,
@@ -3404,6 +3562,7 @@ function ProspectBoardPanel({
       selected={player.id === selectedProspectId}
       expanded={player.id === selectedProspectId}
       onSelect={() => onOpenProspect(player)}
+      onPrefetch={onPrefetchProspect}
       meta={getScoutingMeta(scoutingStore, player.id)}
       showConsensus={showConsensus}
     />
@@ -3698,7 +3857,7 @@ function compressTrajectoryPoints(points) {
   return kept;
 }
 
-/** Weekly value trail — backend history when it actually moves, else a season+week skeleton. */
+/** Weekly value trail — stored board history only. */
 function buildValueTrajectoryPoints(profile, player) {
   return weeklyTrajectoryPoints(profile, player);
 }
@@ -3758,6 +3917,22 @@ function ValueTrajectoryChart({ points, compact = false }) {
       </div>
     );
   }
+  if (points.length === 1) {
+    const pt = points[0];
+    return (
+      <div className={`dc-signal-chart dc-signal-chart--single${compact ? " is-compact" : ""}`}>
+        <div className="dc-signal-chart__head">
+          <span className="dc-profile-tags__label">Weekly value trajectory</span>
+          <strong className="is-flat">CURRENT SLOT</strong>
+        </div>
+        <div className="dc-signal-chart__single-rank">
+          <strong className="wr-num-gold">#{pt.rank}</strong>
+          <span>{pt.label || "Board position"}</span>
+        </div>
+        <p className="dc-signal-chart__single-note">No prior weekly samples on file yet.</p>
+      </div>
+    );
+  }
   const ranks = points.map((p) => p.rank);
   const minR = Math.min(...ranks);
   const maxR = Math.max(...ranks);
@@ -3796,7 +3971,7 @@ function ValueTrajectoryChart({ points, compact = false }) {
         </strong>
         <span className="dc-signal-chart__delta">#{last.rank}</span>
       </div>
-      <svg className="dc-signal-chart__svg" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden="true">
+      <svg className="dc-signal-chart__svg" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
         <defs>
           <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="0">
             <stop offset="0%" stopColor="rgba(43,228,255,0.55)" />
@@ -3831,10 +4006,13 @@ function ValueTrajectoryChart({ points, compact = false }) {
   );
 }
 
-function SignalMetricTile({ label, value, tone }) {
+function SignalMetricTile({ label, value, tone, hint }) {
   const empty = value == null || value === "" || value === "—";
   return (
-    <div className={`dc-signal-metric${empty ? " is-empty" : ""}${tone ? ` is-${tone}` : ""}`}>
+    <div
+      className={`dc-signal-metric${empty ? " is-empty" : ""}${tone ? ` is-${tone}` : ""}`}
+      title={hint || undefined}
+    >
       <span>{label}</span>
       <strong>{empty ? "—" : value}</strong>
     </div>
@@ -3877,10 +4055,18 @@ function positionDisplayName(pos) {
   return p || "—";
 }
 
-function heightWithCm(height) {
+function heightWithCm(height, heightCm = null) {
+  if (heightCm != null && Number.isFinite(Number(heightCm)) && Number(heightCm) > 0) {
+    const totalIn = Math.round(Number(heightCm) / 2.54);
+    const ft = Math.floor(totalIn / 12);
+    const inch = totalIn % 12;
+    const cm = Math.round(Number(heightCm));
+    return { imperial: `${ft}'${inch}"`, metric: `${cm} CM` };
+  }
   const raw = String(height || "").trim();
   if (!raw) return { imperial: "—", metric: null };
-  const m = raw.match(/(\d)\s*['′]\s*(\d{1,2})/);
+  let m = raw.match(/(\d{1,2})\s*['′]\s*(\d{1,2})/);
+  if (!m) m = raw.match(/(\d{1,2})\s*[-]\s*(\d{1,2})/);
   if (!m) return { imperial: raw, metric: null };
   const cm = Math.round((Number(m[1]) * 12 + Number(m[2])) * 2.54);
   return { imperial: `${m[1]}'${m[2]}"`, metric: Number.isFinite(cm) ? `${cm} CM` : null };
@@ -3893,6 +4079,19 @@ function weightWithKg(weight) {
 }
 
 function resolveToolRows(player, profile) {
+  const backendTools = Array.isArray(profile?.tools) ? profile.tools : null;
+  if (backendTools?.length) {
+    return backendTools.map((t) => ({
+      label: t.label,
+      text: t.text || String(t.score ?? t.grade ?? "—"),
+      locked: Boolean(t.locked),
+      raw: Number(t.score ?? t.raw ?? t.grade),
+      mid: Number(t.score ?? t.raw ?? t.grade),
+      low: t.low ?? null,
+      high: t.high ?? null,
+      tier: t.tier,
+    }));
+  }
   const ceilingHidden = Boolean(profile?.ceilingHidden || profile?.potential?.hidden);
   const dedicatedFile = Boolean(profile?.dedicatedScoutFile);
   const wideFog = ceilingHidden && !dedicatedFile;
@@ -4414,7 +4613,6 @@ function collectProspectRedditThreads(narrativeUniverse, player) {
 function buildProspectMediaBundle(franchiseState, player, profile, allProspects) {
   const storylines = collectProspectStorylines(franchiseState, player);
   const narrativeUniverse = franchiseState?.narrative_universe || {};
-  const playerMem = narrativeUniverse?.player_narrative_memory?.[player?.id] || null;
   const backendArcs = Array.isArray(narrativeUniverse?.story_arcs)
     ? narrativeUniverse.story_arcs.filter((a) => String(a?.player_id || "") === String(player?.id || ""))
     : [];
@@ -4427,17 +4625,10 @@ function buildProspectMediaBundle(franchiseState, player, profile, allProspects)
         stage: arc.phase || arc.status || "Active",
       }))
     : groupProspectStoryArcs(storylines);
+  const intelTags = Array.isArray(profile?.intel_desk_tags || profile?.intelDeskTags)
+    ? (profile.intel_desk_tags || profile.intelDeskTags)
+    : [];
   const stock = player?.draftStock || null;
-  const characterFile = player?.characterFile;
-  const memTags = Array.isArray(playerMem?.reputation_tags) ? playerMem.reputation_tags : [];
-  const publicImage = memTags.length
-    ? memTags
-    : buildProspectPublicImage(player, profile, characterFile, stock);
-  const publications = buildPublicationMentions(player, allProspects);
-  const maxHeat = Math.max(
-    storylines.reduce((m, s) => Math.max(m, Number(s?.heat) || 0), 0),
-    Number(playerMem?.media_heat) || 0
-  );
   const stockNote = movementDisplayText(stock) || null;
   const socialPosts = Array.isArray(narrativeUniverse?.social_posts)
     ? narrativeUniverse.social_posts.filter((p) => postMatchesProspect(p, player)).slice(0, 6)
@@ -4450,8 +4641,8 @@ function buildProspectMediaBundle(franchiseState, player, profile, allProspects)
   return {
     storylines: storylines.slice(-12).reverse(),
     arcs,
-    publicImage,
-    publications,
+    publicImage: intelTags,
+    publications: [],
     socialPosts: puckrPosts,
     redditThreads: [...redditThreads, ...redditFromSocial.map((p) => ({
       title: p.related_headline || "Prospect chatter",
@@ -4461,42 +4652,24 @@ function buildProspectMediaBundle(franchiseState, player, profile, allProspects)
       score: p.likes,
     }))].slice(0, 4),
     socialProfile,
-    mediaPressure: mediaHeatPhrase(maxHeat),
+    mediaPressure: null,
     stockNarrative: stockNote,
     hasCoverage:
       storylines.length > 0
-      || publications.length > 0
-      || player?.characterConcerns
-      || player?.character_concerns
-      || memTags.length > 0
+      || intelTags.length > 0
       || Boolean(socialProfile)
       || socialPosts.length > 0
       || redditThreads.length > 0,
   };
 }
 
-function ProspectMediaUniverse({ bundle }) {
+function ProspectMediaUniverse({ bundle, compact = false }) {
   if (!bundle?.hasCoverage && !bundle?.publicImage?.length) {
-    return (
-      <section className="dc-brochure-media">
-        <header className="dc-media-head">
-          <span>Media universe</span>
-          <strong>Narrative file</strong>
-        </header>
-        <p className="dc-media-empty">No league coverage tied to this prospect yet. Draft chatter builds as stock moves and publications publish boards.</p>
-        {bundle?.publicImage?.length ? (
-          <div className="dc-media-tags">
-            {bundle.publicImage.map((tag) => (
-              <span key={tag} className="dc-media-tag">{tag}</span>
-            ))}
-          </div>
-        ) : null}
-      </section>
-    );
+    return null;
   }
 
   return (
-    <section className="dc-brochure-media">
+    <section className={`dc-brochure-media${compact ? " dc-brochure-media--compact" : ""}`}>
       <header className="dc-media-head">
         <span>Media universe</span>
         <strong>Narrative file</strong>
@@ -4504,15 +4677,17 @@ function ProspectMediaUniverse({ bundle }) {
       </header>
 
       <div className="dc-media-grid">
-        <article className="dc-media-card">
-          <h4>Public image</h4>
-          <div className="dc-media-tags">
-            {bundle.publicImage.map((tag) => (
-              <span key={tag} className="dc-media-tag">{tag}</span>
-            ))}
-          </div>
-          {bundle.stockNarrative ? <p className="dc-media-note">{bundle.stockNarrative}</p> : null}
-        </article>
+        {bundle.publicImage?.length ? (
+          <article className="dc-media-card">
+            <h4>Intel tags</h4>
+            <div className="dc-media-tags">
+              {bundle.publicImage.map((tag) => (
+                <span key={tag} className="dc-media-tag">{tag}</span>
+              ))}
+            </div>
+            {bundle.stockNarrative ? <p className="dc-media-note">{bundle.stockNarrative}</p> : null}
+          </article>
+        ) : null}
 
         {bundle.publications.length ? (
           <article className="dc-media-card">
@@ -4635,6 +4810,8 @@ function ProspectMediaUniverse({ bundle }) {
 function ProspectProfileModal({
   player,
   profile,
+  profileLoading = false,
+  profileEnriching = false,
   meta,
   franchiseState,
   allProspects = [],
@@ -4645,7 +4822,18 @@ function ProspectProfileModal({
   onToggleDND,
   onToggleCompare,
   onAssignScout,
+  onRunScoutAction,
+  scoutActionBusy = false,
+  scoutActionNote = "",
 }) {
+  const [dossierTab, setDossierTab] = useState("file");
+  const [showAssignPanel, setShowAssignPanel] = useState(false);
+
+  useEffect(() => {
+    setDossierTab("file");
+    setShowAssignPanel(false);
+  }, [player?.id]);
+
   useEffect(() => {
     function onKey(e) {
       if (e.key === "Escape") onClose();
@@ -4653,6 +4841,17 @@ function ProspectProfileModal({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  useEffect(() => {
+    const prevHtml = document.documentElement.style.overflow;
+    const prevBody = document.body.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.documentElement.style.overflow = prevHtml;
+      document.body.style.overflow = prevBody;
+    };
+  }, []);
 
   const isTranscendent = Boolean(profile?.is_transcendent || profile?.transcendent_talent || player?.isTranscendent);
 
@@ -4670,12 +4869,34 @@ function ProspectProfileModal({
 
   if (!player) return null;
 
+  if (profileLoading && !profile) {
+    return (
+      <div
+        className="dc-profile-modal dc-profile-modal--prospect dc-profile-modal--loading"
+        role="dialog"
+        aria-modal="true"
+        aria-busy="true"
+        aria-label={`Loading ${player.firstName} ${player.lastName} scouting profile`}
+      >
+        <button type="button" className="dc-profile-modal__backdrop" onClick={onClose} aria-label="Close" />
+        <article className="dc-signal-panel dc-signal-panel--premium dc-signal-panel--dossier dc-dossier-shell dc-dossier-shell--loading">
+          <ModalCloseButton onClick={onClose} label="Close prospect profile" />
+          <div className="dc-dossier-loading">
+            <DraftClassHeadshot player={player} size="lg" />
+            <strong>{player.firstName} {player.lastName}</strong>
+            <p>Opening scout file…</p>
+          </div>
+        </article>
+      </div>
+    );
+  }
+
   const scoutMeta = meta || EMPTY_SCOUTING_META;
   const stats = profile?.stats || {};
-  const gp = Number(stats.games ?? player.gp) || 0;
-  const pts = Number(stats.points ?? player.points) || 0;
-  const goals = Number(stats.goals ?? player.goals) || 0;
-  const assists = Number(stats.assists ?? player.assists) || 0;
+  const gp = Number(player.gp ?? stats.games) || 0;
+  const pts = Number(player.points ?? stats.points) || 0;
+  const goals = Number(player.goals ?? stats.goals) || 0;
+  const assists = Number(player.assists ?? stats.assists) || 0;
   const ppg = stats.ppg != null ? Number(stats.ppg) : (gp > 0 ? prospectPpgValue(player) : null);
   const isGoalie = isGoaliePosition(player.position);
 
@@ -4709,6 +4930,7 @@ function ProspectProfileModal({
     : (fit?.label ? `${fit.label} organizational match` : null);
   const ceilingHidden = Boolean(profile?.ceilingHidden || pot?.hidden || player?.ceilingHidden);
   const dedicatedFile = Boolean(profile?.dedicatedScoutFile);
+  const ovrBands = resolveOvrBands(profile, player, ceilingHidden);
   const confNote = confPct == null
     ? null
     : ceilingHidden && !dedicatedFile
@@ -4720,7 +4942,6 @@ function ProspectProfileModal({
           : "LIMITED LOOKS";
   const compareFull = (compareIds || []).length >= 3;
   const inCompare = (compareIds || []).includes(player.id);
-  const reportBlurb = truncateScoutLine(scoutSummary(player, profile), 168);
 
   const ceilingRating = Number(pot?.rating);
   const currentOvr = Number(profile?.scoutedOverall ?? profile?.currentOvrEstimate);
@@ -4728,38 +4949,53 @@ function ProspectProfileModal({
   const sampleThin = Boolean(profile?.sampleThin || stats?.sampleThin || (gp > 0 && gp < 15));
   const riskLabel = gem?.label || player.riskLabel || null;
   const volatility = profile?.developmentVolatility || null;
-  const currentEstimate = resolveCurrentEstimate(player, profile, ceilingHidden, dedicatedFile);
+  const currentEstimate = ovrBands.nowText
+    ? { text: ovrBands.nowText, detail: ceilingHidden ? "Present ability" : "Range", exact: false }
+    : resolveCurrentEstimate(player, profile, ceilingHidden, dedicatedFile);
   const trajectory = buildValueTrajectoryPoints(profile, player);
   const analytics = extractProspectAnalytics(player, profile);
   const tools = resolveToolRows(player, profile);
   const skillNotes = skillDevelopmentNotes(tools, player);
   const toolsWithNotes = skillNotes.rows;
-  const archetype = resolveArchetype(player, profile, toolsWithNotes, isGoalie);
-  const playStyleTag = resolvePlayStyleTag(player, profile, toolsWithNotes, isGoalie);
-  const playStyle = profile?.play_style || profile?.playStyle || playStyleTag?.label || comparison?.archetype || player.playerType || null;
+  const archetype = profile?.archetype?.label
+    ? { label: String(profile.archetype.label).toUpperCase(), blurb: profile.scout_report || profile.development_trajectory || "", source: "backend" }
+    : { label: "—", blurb: profile?.scout_report || "", source: "backend" };
+  const playStyleTag = profile?.play_style_block?.label
+    ? { label: profile.play_style_block.label, source: "backend" }
+    : (profile?.play_style ? { label: profile.play_style, source: "backend" } : null);
+  const playStyle = playStyleTag?.label || null;
+  const devTrajectory = profile?.development_trajectory || profile?.developmentTrajectory || "";
+  const reportBlurb = truncateScoutLine(profile?.scout_report || profile?.micro_summary || "", 168);
   const projectedRange = resolveProjectedRangeLabel(player, profile, ceilingHidden);
-  const devTrajectory = developmentTrajectoryNarrative(player, profile, toolsWithNotes, skillNotes, isGoalie);
   const scoutingDesk = buildScoutingDeskEntries(player, profile, { gp, analytics });
   const statStrip = resolveBottomStatStrip(player, profile, toolsWithNotes, isGoalie);
-  const outcomes = projectionOutcomes(player, profile, skillNotes.developOdds);
   const outcomeDistribution = profile?.outcome_distribution || profile?.outcomeDistribution || null;
-  const ribbonSegs = outcomeRibbonSegments(outcomes, isGoalie, outcomeDistribution);
+  const ribbonSegs = outcomeRibbonSegments(null, isGoalie, outcomeDistribution);
   const outcomeRibbonLabel = outcomeDistribution?.label
-    || (outcomes?.source === "backend" && outcomes?.nhlOdds != null
-      ? `Scout model · ${outcomes.band || "Standard"} · ${outcomes.nhlOdds}% NHL`
+    || (profile?.potential?.nhl_probability != null
+      ? `Career model · ${profile.potential.band || "Standard"} · ${Math.round(profile.potential.nhl_probability)}% NHL`
       : "Career outcome bands");
-  const currentMid = estimateNumericMid(currentEstimate.text);
-  const headroom = currentMid != null && outcomes?.peak != null
-    ? Math.round(Number(outcomes.peak) - currentMid)
-    : null;
+  const headroom = ovrBands.headroom;
   const overageNote = overageStockNote(player);
-  const strengthLines = strengthCopy(player, toolsWithNotes);
-  const weaknessLines = weaknessCopy(player, toolsWithNotes, skillNotes.skatingWeak);
+  const strengthLines = (Array.isArray(profile?.strengths) && profile.strengths.length)
+    ? profile.strengths
+    : (Array.isArray(profile?.strengthsEvidence) ? profile.strengthsEvidence.map((e) => (typeof e === "string" ? e : `${e.title} — ${e.fact}`)) : []);
+  const weaknessLines = (Array.isArray(profile?.concerns) && profile.concerns.length)
+    ? profile.concerns
+    : (Array.isArray(profile?.weaknessesEvidence) ? profile.weaknessesEvidence.map((e) => (typeof e === "string" ? e : `${e.title} — ${e.fact}`)) : []);
   const characterRead = profile?.character_read;
   const characterFile = player.characterFile;
+  const charReadConf = Number(characterRead?.confidence ?? 0);
+  const traitsKnown = (Array.isArray(characterRead?.traits) ? characterRead.traits : []).some(
+    (t) => t?.tier && t.tier !== "Unknown",
+  );
+  const characterReadUnlocked = traitsKnown || charReadConf >= 45;
+  const offIceEstimated = !characterReadUnlocked
+    && ((Number(player?.character ?? player?.characterScore) > 0));
+  const fileNotes = dossierFileNotes(player, profile, scoutingDesk, { offIceEstimated });
   const pyramid = player.pyramidTier;
   const mediaBundle = buildProspectMediaBundle(franchiseState, player, profile, allProspects);
-  const ht = heightWithCm(badges.height || player.height);
+  const ht = heightWithCm(badges.height || player.height, player.heightCm ?? profile?.height_cm);
   const wt = weightWithKg(badges.weight || player.weight);
   const handRaw = badges.handedness || formatHandedness(player.handedness);
   const shoots = handRaw
@@ -4831,24 +5067,44 @@ function ProspectProfileModal({
       aria-label={`${player.firstName} ${player.lastName} scouting profile`}
     >
       <button type="button" className="dc-profile-modal__backdrop" onClick={onClose} aria-label="Close" />
-      <article className={`dc-signal-panel dc-signal-panel--premium dc-brochure dc-brochure--deep${isTranscendent ? " aura-gold shake-on-open" : ""}`}>
+      <article className={`dc-signal-panel dc-signal-panel--premium dc-signal-panel--dossier dc-dossier-shell${isTranscendent ? " aura-gold shake-on-open" : ""}`}>
         <ModalCloseButton onClick={onClose} label="Close prospect profile" />
         <header className="dc-signal-banner dc-signal-banner--file">
-          <div className="dc-signal-banner__left">
-            <span className="dc-file-stamp">{ceilingHidden && !dedicatedFile ? "LONGSHOT" : "CONFIDENTIAL"}</span>
-            <span className="dc-file-id">
-              FILE {boardYear || "—"}-{String(rank).padStart(4, "0")} · OPENED {new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" }).replace(/\//g, ".")}
-            </span>
-          </div>
-          <span className="dc-file-lead">LEAD: {player.assignedScout || scoutMeta?.assignedScout || "E. LINDHOLM"}</span>
+          {profileEnriching ? (
+            <p className="dc-dossier-enriching" aria-live="polite">Syncing full scout file…</p>
+          ) : null}
+          <nav className="dc-dossier-nav" aria-label="Dossier sections">
+            <button
+              type="button"
+              className={`dc-dossier-nav__btn${dossierTab === "file" ? " is-active" : ""}`}
+              onClick={() => setDossierTab("file")}
+              aria-pressed={dossierTab === "file"}
+            >
+              <svg className="dc-dossier-nav__icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7 4h7l3 3v13H7V4zm2 2v11h6V8h-4V6H9zm1 4h4v2h-4v-2zm0 3h4v2h-4v-2z" fill="currentColor" />
+              </svg>
+              <span>Scout file</span>
+            </button>
+            <button
+              type="button"
+              className={`dc-dossier-nav__btn${dossierTab === "intel" ? " is-active" : ""}`}
+              onClick={() => setDossierTab("intel")}
+              aria-pressed={dossierTab === "intel"}
+            >
+              <svg className="dc-dossier-nav__icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 18h16v2H4v-2zm2-4h3v3H6v-3zm5 0h3v3h-3v-3zm5-3h3v6h-3v-6zM4 8h3v3H4V8zm5-3h3v6H9V5zm5 2h3v4h-3V7z" fill="currentColor" />
+              </svg>
+              <span>Intel desk</span>
+            </button>
+          </nav>
         </header>
 
         {!profile ? (
           <p className="dc-empty-note dc-profile-modal__loading">Scouting profile loading…</p>
         ) : (
-          <div className="dc-brochure-scroll">
-            <section className="dc-brochure-hero">
-              <aside className="dc-signal-identity dc-signal-identity--compact">
+          <div className="dc-dossier-body">
+            <div className="dc-dossier-split">
+              <aside className="dc-dossier-identity-rail dc-signal-identity dc-signal-identity--compact">
                 <div className="dc-signal-portrait">
                   <DraftClassHeadshot player={player} size="lg" />
                   <SignalNationFlag country={countryLabel} size={64} className="dc-signal-portrait__flag" />
@@ -4869,132 +5125,204 @@ function ProspectProfileModal({
                 </ul>
                 <div className="dc-file-depth">
                   <span className="dc-profile-tags__label">File depth</span>
-                  <div className="dc-file-depth__bar"><i style={{ width: `${confPct ?? 0}%` }} /></div>
+                  <div className="dc-file-depth__bar" role="meter" aria-valuenow={confPct ?? 0} aria-valuemin={0} aria-valuemax={100} aria-label={`${confPct ?? 0}% scouting confidence`}>
+                    <i style={{ width: `${confPct ?? 0}%` }} />
+                  </div>
                   <strong>{confPct ?? "—"}% scouting confidence</strong>
                   {projectedRange.text ? <em>{projectedRange.text}</em> : null}
+                  {ovrBands.peakRangeLabel ? <em>{ovrBands.peakRangeLabel}</em> : null}
                   {confNote ? <small>{confNote}</small> : null}
                 </div>
               </aside>
 
-              <div className="dc-brochure-hero__main">
-                <div className="dc-archetype-head">
-                  <div>
-                    <span className="dc-profile-tags__label">Archetype</span>
-                    <h3 className="wr-num-gold dc-archetype-head__title">{archetype.label}</h3>
-                    <p className="dc-archetype-head__blurb">{archetype.blurb}</p>
-                    {playStyle ? (
-                      <ProfileChip tone="accent">Play style · {String(playStyle).toUpperCase()}</ProfileChip>
-                    ) : null}
+              <div className="dc-dossier-main-scroll">
+                <section className="dc-brochure-hero dc-brochure-hero--dossier dc-brochure-hero--rail">
+                  <div className="dc-archetype-head">
+                    <div className="dc-archetype-head__copy">
+                      <span className="dc-profile-tags__label">Archetype</span>
+                      <h3 className="wr-num-gold dc-archetype-head__title">{archetype.label}</h3>
+                      <p className="dc-archetype-head__blurb">{archetype.blurb}</p>
+                      {reportBlurb ? <p className="dc-archetype-head__report">{reportBlurb}</p> : null}
+                      <div className="dc-archetype-head__chips">
+                        {playStyle ? (
+                          <ProfileChip tone="accent">Play style · {String(playStyle).toUpperCase()}</ProfileChip>
+                        ) : null}
+                        {readinessLabel ? (
+                          <ProfileChip tone="muted">{readinessLabel}</ProfileChip>
+                        ) : null}
+                        {fitNote ? (
+                          <ProfileChip tone="good">{fitNote}</ProfileChip>
+                        ) : null}
+                        {trend ? (
+                          <ProfileChip tone={trendTone || "muted"}>{trend}</ProfileChip>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="dc-archetype-head__metrics">
+                      <div className="wr-now-peak wr-now-peak--wide">
+                        <div className="wr-now-peak__chip">
+                          <span className="wr-now-peak__label">Now</span>
+                          <strong className={currentEstimate.exact ? "wr-num-cyan" : "wr-num-slate"}>{currentEstimate.text}</strong>
+                        </div>
+                        <div className="wr-now-peak__arrow">
+                          <span aria-hidden="true">▸</span>
+                          <em className="wr-num-gold">{headroom == null ? "—" : (headroom >= 0 ? `+${headroom}` : String(headroom))}</em>
+                        </div>
+                        <div className={`wr-now-peak__chip is-peak${ceilingHidden ? " is-hidden" : ""}`}>
+                          <span className="wr-now-peak__label">Peak</span>
+                          <strong className={ceilingHidden ? "" : "wr-num-gold"}>{ceilingHidden ? "—" : (ovrBands.peakText ?? "—")}</strong>
+                        </div>
+                      </div>
+                      <p className="dc-dev-trajectory">{devTrajectory}</p>
+                    </div>
                   </div>
-                  <div className="wr-now-peak wr-now-peak--wide">
-                    <div className="wr-now-peak__chip">
-                      <span className="wr-now-peak__label">Now</span>
-                      <strong className={currentEstimate.exact ? "wr-num-cyan" : "wr-num-slate"}>{currentEstimate.text}</strong>
-                    </div>
-                    <div className="wr-now-peak__arrow">
-                      <span aria-hidden="true">▸</span>
-                      <em className="wr-num-gold">{headroom == null ? "—" : (headroom >= 0 ? `+${headroom}` : String(headroom))}</em>
-                    </div>
-                    <div className={`wr-now-peak__chip is-peak${ceilingHidden ? " is-hidden" : ""}`}>
-                      <span className="wr-now-peak__label">Peak</span>
-                      <strong className={ceilingHidden ? "" : "wr-num-gold"}>{ceilingHidden ? "—" : (outcomes?.peak ?? "—")}</strong>
-                    </div>
+                </section>
+
+            {dossierTab === "file" ? (
+              <div className="dc-dossier-pane dc-dossier-pane--file">
+                <ProspectZoneMap tools={toolsWithNotes} profile={profile} position={player.position} isGoalie={isGoalie} compact />
+                <section className="dc-brochure-block dc-brochure-block--compact">
+                  <span className="dc-profile-tags__label">Career outcome distribution <span className="wr-muted">//</span> {outcomeRibbonLabel}</span>
+                  {ribbonSegs ? (
+                    <>
+                      <div className="wr-outcome-ribbon" role="img" aria-label="Outcome distribution">
+                        {ribbonSegs.map((seg) => (
+                          <span
+                            key={seg.key}
+                            className={`wr-outcome-ribbon__seg is-${seg.key}`}
+                            style={{ flex: `${Math.max(0.5, seg.pct)} 1 0%` }}
+                            title={`${seg.label} ${Math.round(seg.pct)}%`}
+                          >
+                            {seg.pct >= 8 ? Math.round(seg.pct) : ""}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="wr-outcome-legend">
+                        {ribbonSegs.map((seg) => (
+                          <span key={`leg-${seg.key}`}>{seg.label} {Math.round(seg.pct)}%</span>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="wr-outcome-ribbon is-unavailable" title="Distribution unavailable — backend model pending" />
+                  )}
+                </section>
+                <div className="dc-brochure-split-panels dc-brochure-split-panels--compact">
+                  <OffIceFrameStrip player={player} tools={toolsWithNotes} profile={profile} />
+                  <div className="dc-report-stack dc-report-stack--compact">
+                    <article className="dc-report-card">
+                      <h4>Strengths</h4>
+                      <ul>{(strengths.filter(Boolean).length ? strengths.filter(Boolean) : strengthLines).map((line) => <li key={line}>{line}</li>)}</ul>
+                    </article>
+                    <article className="dc-report-card">
+                      <h4>Weaknesses</h4>
+                      <ul>{(weaknessLines.length ? weaknessLines : []).map((line) => <li key={line}>{line}</li>)}</ul>
+                    </article>
+                    {overageNote ? (
+                      <article className="dc-report-card is-overage">
+                        <h4>Overage file</h4>
+                        <p>{overageNote}</p>
+                      </article>
+                    ) : null}
+                    <article className={`dc-report-card${player.characterConcerns ? " is-concern" : ""}`}>
+                      <h4>{player.characterConcerns ? "Character · flagged on file" : "Life & character"}</h4>
+                      <p>
+                        {characterRead?.headline
+                          ? `Scout read — ${characterRead.headline}.`
+                          : "No material character flags in the current report."}
+                      </p>
+                      {Array.isArray(characterRead?.traits) && characterRead.traits.length ? (
+                        <ul className="dc-char-traits">
+                          {characterRead.traits.map((trait) => (
+                            <li key={trait.label}>{trait.label}: {trait.tier}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </article>
                   </div>
                 </div>
-
-                <p className="dc-dev-trajectory">{devTrajectory}</p>
+                <ProspectStatGradeStrip rows={statStrip} />
               </div>
-            </section>
-
-            <ProspectZoneMap tools={toolsWithNotes} position={player.position} isGoalie={isGoalie} />
-
-            <section className="dc-brochure-block">
-              <span className="dc-profile-tags__label">Career outcome distribution <span className="wr-muted">//</span> {outcomeRibbonLabel}</span>
-              {ribbonSegs ? (
-                <>
-                  <div className="wr-outcome-ribbon" role="img" aria-label="Outcome distribution">
-                    {ribbonSegs.map((seg) => (
-                      <span
-                        key={seg.key}
-                        className={`wr-outcome-ribbon__seg is-${seg.key}`}
-                        style={{ width: `${seg.pct}%` }}
-                        title={`${seg.label} ${Math.round(seg.pct)}%`}
-                      >
-                        {Math.round(seg.pct)}
-                      </span>
-                    ))}
+            ) : (
+              <div className="dc-dossier-pane dc-dossier-pane--intel">
+                <ProspectScoutingDesk desk={scoutingDesk} confPct={confPct} compact maxEntries={4} />
+                <ProspectMediaUniverse bundle={mediaBundle} compact />
+                <section className="dc-brochure-analytics dc-brochure-analytics--inline dc-brochure-analytics--dossier">
+                  <div className="dc-signal-footer__stock">
+                    <ValueTrajectoryChart points={trajectory} compact />
                   </div>
-                  <div className="wr-outcome-legend">
-                    {ribbonSegs.map((seg) => (
-                      <span key={`leg-${seg.key}`} style={{ width: `${seg.pct}%` }}>{seg.label}</span>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <div className="wr-outcome-ribbon is-unavailable" title={outcomes?.note || "Distribution unavailable"} />
-              )}
-            </section>
-
-            <div className="dc-brochure-split-panels">
-              <OffIceFrameStrip player={player} tools={toolsWithNotes} profile={profile} />
-              <div className="dc-report-stack">
-                <article className="dc-report-card">
-                  <h4>Strengths</h4>
-                  <ul>{(strengths.filter(Boolean).length ? strengths.filter(Boolean) : strengthLines).map((line) => <li key={line}>{line}</li>)}</ul>
-                </article>
-                <article className="dc-report-card">
-                  <h4>Weaknesses</h4>
-                  <ul>{weaknessLines.map((line) => <li key={line}>{line}</li>)}</ul>
-                </article>
-                {overageNote ? (
-                  <article className="dc-report-card is-overage">
-                    <h4>Overage file</h4>
-                    <p>{overageNote}</p>
-                  </article>
-                ) : null}
-                <article className={`dc-report-card${player.characterConcerns ? " is-concern" : ""}`}>
-                  <h4>{player.characterConcerns ? "Character · flagged on file" : "Life & character"}</h4>
-                  <p>
-                    {characterRead?.interview_notes
-                      || (player.characterConcerns ? characterFile?.story : null)
-                      || (characterRead?.headline ? `Scout read — ${characterRead.headline}.` : null)
-                      || "No material character flags in the current report."}
-                  </p>
-                  {Array.isArray(characterRead?.traits) && characterRead.traits.length ? (
-                    <ul className="dc-char-traits">
-                      {characterRead.traits.map((trait) => (
-                        <li key={trait.label}>{trait.label}: {trait.tier}</li>
+                  <div className="dc-signal-season">
+                    <div className="dc-signal-season__head">
+                      <span className="dc-profile-tags__label">Season &amp; analytics</span>
+                      {sampleThin ? <span className="dc-signal-sample">Thin sample</span> : null}
+                    </div>
+                    <div className="dc-signal-metrics dc-signal-metrics--focus dc-signal-metrics--dossier">
+                      {analyticsTiles.map((tile) => (
+                        <SignalMetricTile key={tile.label} label={tile.label} value={tile.value} tone={tile.tone} hint={tile.hint} />
                       ))}
-                    </ul>
-                  ) : null}
-                </article>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            )}
+
               </div>
             </div>
 
-            <ProspectScoutingDesk desk={scoutingDesk} confPct={confPct} />
-
-            <ProspectMediaUniverse bundle={mediaBundle} />
-
-            <section className="dc-brochure-analytics dc-brochure-analytics--inline">
-              <div className="dc-signal-footer__stock">
-                <ValueTrajectoryChart points={trajectory} compact />
-              </div>
-              <div className="dc-signal-season">
-                <div className="dc-signal-season__head">
-                  <span className="dc-profile-tags__label">Season &amp; analytics</span>
-                  {sampleThin ? <span className="dc-signal-sample">Thin sample</span> : null}
-                </div>
-                <div className="dc-signal-metrics dc-signal-metrics--focus">
-                  {analyticsTiles.map((tile) => (
-                    <SignalMetricTile key={tile.label} label={tile.label} value={tile.value} tone={tile.tone} />
+            <footer className="dc-signal-actionbar dc-signal-actionbar--dossier" aria-label="Dossier actions">
+              {fileNotes.length ? (
+                <div className="dc-dossier-notes" role="note" aria-label="File caveats">
+                  {fileNotes.map((note) => (
+                    <p key={note}>{note}</p>
                   ))}
                 </div>
+              ) : null}
+              {scoutActionNote ? <p className="dc-dossier-scout-note">{scoutActionNote}</p> : null}
+              <div className="dc-dossier-scout-actions">
+                <button
+                  type="button"
+                  className="dc-btn dc-btn--secondary"
+                  disabled={scoutActionBusy || !onRunScoutAction}
+                  onClick={() => onRunScoutAction?.("player_focus")}
+                >
+                  {scoutActionBusy ? "Scouting…" : "Scout player"}
+                </button>
+                <button
+                  type="button"
+                  className="dc-btn dc-btn--secondary"
+                  disabled={scoutActionBusy || !onRunScoutAction || !(scoutMeta.watchlist || scoutMeta.assignedScout)}
+                  title={(scoutMeta.watchlist || scoutMeta.assignedScout) ? "4-hour film study" : "Shortlist or assign a scout first"}
+                  onClick={() => onRunScoutAction?.("film_study")}
+                >
+                  Film study
+                </button>
+                <button
+                  type="button"
+                  className={`dc-btn dc-btn--secondary${showAssignPanel ? " is-active" : ""}`}
+                  disabled={scoutActionBusy || !onAssignScout}
+                  onClick={() => setShowAssignPanel((v) => !v)}
+                >
+                  {scoutMeta.assignedScout ? `Scout: ${scoutMeta.assignedScout}` : "Assign scout"}
+                </button>
               </div>
-            </section>
-
-            <ProspectStatGradeStrip rows={statStrip} />
-
-            <footer className="dc-signal-actionbar dc-signal-actionbar--dossier" aria-label="Dossier actions">
+              {showAssignPanel ? (
+                <div className="dc-dossier-scout-assign">
+                  {SCOUT_NAMES.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      className={scoutMeta.assignedScout === name ? "is-active" : ""}
+                      disabled={scoutActionBusy}
+                      onClick={() => {
+                        onAssignScout?.(name);
+                        setShowAssignPanel(false);
+                      }}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               <button
                 type="button"
                 className={`dc-shortlist-icon${scoutMeta.watchlist ? " is-active" : ""}`}
@@ -6005,7 +6333,6 @@ function CharacterTab({ player, meta, profile }) {
               {trait.confidence != null ? <em>{trait.confidence}%</em> : <em />}
             </div>
           ))}
-          {read.interview_notes ? <p className="nhlrost-muted-text">{read.interview_notes}</p> : null}
         </div>
         <div className="dc-character-card">
           <h3>MORALE & FIT</h3>
@@ -6025,7 +6352,7 @@ function CharacterTab({ player, meta, profile }) {
       <div className="dc-character-layout">
         <div className="dc-character-card dc-character-card--locked">
           <h3>CHARACTER REPORT</h3>
-          <p>Character report not complete. Request a character/interview report or raise scouting completion.</p>
+          <p>Character report not complete. Raise scouting completion to unlock the backend character read.</p>
         </div>
       </div>
     );
@@ -6118,8 +6445,30 @@ export default function DraftClass() {
     pendingDraftProspectId,
     setPendingDraftProspectId,
     refreshFranchise,
+    hydrateFranchiseHeavyState,
+    hydrateFranchiseNarrative,
   } = useGameUI();
   const dateContext = useMemo(() => buildDateContext(franchiseState), [franchiseState]);
+
+  useEffect(() => {
+    hydrateFranchiseNarrative?.();
+  }, [hydrateFranchiseNarrative]);
+
+  useEffect(() => {
+    if (typeof hydrateFranchiseHeavyState !== "function") return undefined;
+    hydrateFranchiseHeavyState({
+      includeRosterBrowser: false,
+      includeDraftClassRankings: true,
+      includeDraftClassHud: true,
+    });
+  }, [
+    hydrateFranchiseHeavyState,
+    franchiseState?.session_id,
+    franchiseState?.prospect_revision,
+    franchiseState?.franchise_today_iso,
+    franchiseState?.calendar_cursor,
+    franchiseState?.scouting_as_of_iso,
+  ]);
   const [activeBoardView, setActiveBoardView] = useState("rank");
   const [boardSource, setBoardSource] = useState("scout");
   const [showConsensus, setShowConsensus] = useState(false);
@@ -6130,8 +6479,15 @@ export default function DraftClass() {
   const [scoutingStore, setScoutingStore] = useState({});
   const [compareIds, setCompareIds] = useState([]);
   const [selectedProspect, setSelectedProspect] = useState(null);
+  const [profileCache, setProfileCache] = useState({});
+  const [profileLoadingId, setProfileLoadingId] = useState(null);
+  const profileFetchRef = useRef(0);
+  const profileCacheRef = useRef({});
+  profileCacheRef.current = profileCache;
   const [deployBusy, setDeployBusy] = useState(false);
   const [deployNotice, setDeployNotice] = useState("");
+  const [scoutActionBusy, setScoutActionBusy] = useState(false);
+  const [scoutActionNote, setScoutActionNote] = useState("");
 
   const activeDeployments = useMemo(
     () => franchiseState?.scouting_state?.active_deployments || [],
@@ -6172,6 +6528,84 @@ export default function DraftClass() {
   const assignProspectScout = useCallback((prospectId, scoutName) => {
     patchProspectMeta(prospectId, { assignedScout: scoutName }, { assigned_scout: scoutName });
   }, [patchProspectMeta]);
+
+  const requestProspectProfile = useCallback((prospectId) => {
+    if (!prospectId) return Promise.resolve(null);
+    const hudProfiles = franchiseState?.draft_class_hud?.prospect_profiles_by_id || {};
+    if (hudProfiles[prospectId] || profileCacheRef.current[prospectId]) {
+      return Promise.resolve(hudProfiles[prospectId] || profileCacheRef.current[prospectId]);
+    }
+    const fetchId = profileFetchRef.current + 1;
+    profileFetchRef.current = fetchId;
+    setProfileLoadingId(prospectId);
+    return getDraftProspectProfile(prospectId, {
+      prospectRevision: franchiseState?.prospect_revision,
+    })
+      .then((loaded) => {
+        if (profileFetchRef.current !== fetchId || !loaded) return loaded;
+        setProfileCache((prev) => ({ ...prev, [prospectId]: loaded }));
+        return loaded;
+      })
+      .catch(() => null)
+      .finally(() => {
+        if (profileFetchRef.current === fetchId) {
+          setProfileLoadingId((cur) => (cur === prospectId ? null : cur));
+        }
+      });
+  }, [franchiseState?.draft_class_hud?.prospect_profiles_by_id, franchiseState?.prospect_revision]);
+
+  const prefetchProspectProfile = useCallback((player) => {
+    if (!player?.id) return;
+    const hudProfiles = franchiseState?.draft_class_hud?.prospect_profiles_by_id || {};
+    if (player.profile || hudProfiles[player.id] || profileCacheRef.current[player.id]) return;
+    prefetchDraftProspectProfile(player.id, { prospectRevision: franchiseState?.prospect_revision });
+  }, [franchiseState?.draft_class_hud?.prospect_profiles_by_id, franchiseState?.prospect_revision]);
+
+  const openProspect = useCallback((player) => {
+    if (!player?.id) return;
+    const transcendent = Boolean(player.isTranscendent || player?.profile?.is_transcendent);
+    if (transcendent) {
+      playTranscendentBossSting();
+    }
+    setSelectedProspect(player);
+    requestProspectProfile(player.id);
+  }, [requestProspectProfile]);
+
+  const runDossierScoutAction = useCallback(async (action) => {
+    const prospectId = selectedProspect?.id;
+    if (!prospectId || scoutActionBusy) return;
+    setScoutActionBusy(true);
+    setScoutActionNote("");
+    try {
+      const result = await runProspectScoutAction(prospectId, action, { intensity: "normal" });
+      if (result?.ok === false) {
+        setScoutActionNote(result.message || "Scouting action failed.");
+      } else {
+        setScoutActionNote(result.message || "Scouting file updated.");
+        if (Array.isArray(result?.prospects)) {
+          setScoutingStore((prev) => mergeScoutingStores(prev, scoutingStoreFromApiProspects(result.prospects)));
+        }
+      }
+      await refreshFranchise();
+      if (selectedProspect?.id) {
+        profileFetchRef.current += 1;
+        const rev = profileFetchRef.current;
+        setProfileLoadingId(prospectId);
+        try {
+          const profilePayload = await requestProspectProfile(prospectId);
+          if (profileFetchRef.current === rev && profilePayload) {
+            setProfileCache((prev) => ({ ...prev, [prospectId]: profilePayload }));
+          }
+        } finally {
+          if (profileFetchRef.current === rev) setProfileLoadingId(null);
+        }
+      }
+    } catch (err) {
+      setScoutActionNote(err?.response?.data?.detail || err?.message || "Scouting action failed.");
+    } finally {
+      setScoutActionBusy(false);
+    }
+  }, [selectedProspect?.id, scoutActionBusy, refreshFranchise, requestProspectProfile]);
 
   const handleDeployCoverage = useCallback(async (target) => {
     if (!target || deployBusy) return;
@@ -6260,15 +6694,6 @@ export default function DraftClass() {
     }
   }, [filteredProspects, selectedProspectId]);
 
-  const openProspect = useCallback((player) => {
-    if (!player) return;
-    const transcendent = Boolean(player.isTranscendent || player?.profile?.is_transcendent);
-    if (transcendent) {
-      playTranscendentBossSting();
-    }
-    setSelectedProspect(player);
-  }, []);
-
   useEffect(() => {
     if (!selectedProspect?.id) return;
     const stamp = dateContext.statsThrough || "Today";
@@ -6281,8 +6706,19 @@ export default function DraftClass() {
   const activeProfile = useMemo(() => {
     if (!selectedProspect) return null;
     const profiles = franchiseState?.draft_class_hud?.prospect_profiles_by_id || {};
-    return selectedProspect.profile || profiles[selectedProspect.id] || null;
-  }, [selectedProspect, franchiseState?.draft_class_hud?.prospect_profiles_by_id]);
+    const cached = selectedProspect.profile
+      || profiles[selectedProspect.id]
+      || profileCache[selectedProspect.id];
+    if (cached) return cached;
+    return buildStubProspectProfile(selectedProspect);
+  }, [selectedProspect, franchiseState?.draft_class_hud?.prospect_profiles_by_id, profileCache]);
+
+  const profileLoading = false;
+  const profileEnriching = Boolean(
+    selectedProspect?.id
+    && profileLoadingId === selectedProspect.id
+    && activeProfile?._stub
+  );
 
   useEffect(() => {
     if (!pendingDraftProspectId || !filteredProspects.length) return;
@@ -6377,6 +6813,7 @@ export default function DraftClass() {
                 prospects={filteredProspects}
                 selectedProspectId={selectedProspectId}
                 onOpenProspect={openProspect}
+                onPrefetchProspect={prefetchProspectProfile}
                 scoutingStore={scoutingStore}
                 activeBoardView={activeBoardView}
                 boardSource={boardSource}
@@ -6400,6 +6837,8 @@ export default function DraftClass() {
           <ProspectProfileModal
             player={selectedProspect}
             profile={activeProfile}
+            profileLoading={profileLoading}
+            profileEnriching={profileEnriching}
             meta={getScoutingMeta(scoutingStore, selectedProspect.id)}
             franchiseState={franchiseState}
             allProspects={filteredProspects}
@@ -6410,6 +6849,9 @@ export default function DraftClass() {
             onToggleDND={() => toggleProspectDnd(selectedProspect.id)}
             onToggleCompare={() => toggleProspectCompare(selectedProspect.id)}
             onAssignScout={(name) => assignProspectScout(selectedProspect.id, name)}
+            onRunScoutAction={runDossierScoutAction}
+            scoutActionBusy={scoutActionBusy}
+            scoutActionNote={scoutActionNote}
           />
         ) : null}
 
@@ -8033,13 +8475,35 @@ export default function DraftClass() {
             position: fixed;
             inset: 0;
             z-index: var(--z-modal, 1200);
-            display: grid;
-            place-items: center;
-            padding: clamp(8px, 1.2vh, 16px);
+            display: flex;
+            align-items: stretch;
+            justify-content: stretch;
+            padding: 0;
             pointer-events: none;
+            background: rgba(2, 8, 16, 0.96);
           }
 
-          .dc-profile-modal--prospect .dc-signal-panel {
+          .dc-profile-modal--prospect .dc-signal-panel.dc-dossier-shell {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            height: 100%;
+            max-height: 100%;
+            margin: 0;
+            flex: 1;
+            border-radius: 0;
+            border-color: var(--ops-grid-2);
+            background:
+              var(--wr-scan),
+              linear-gradient(180deg, rgba(6, 21, 34, 0.98), rgba(4, 13, 22, 0.98));
+          }
+
+          .dc-profile-modal--prospect .dc-signal-panel:not(.dc-dossier-shell) {
+            width: min(1120px, 98vw);
+            height: min(92dvh, 920px);
+            max-height: 92dvh;
+            margin: auto;
+            flex-shrink: 0;
             border-color: var(--ops-grid-2);
             background:
               var(--wr-scan),
@@ -8052,6 +8516,32 @@ export default function DraftClass() {
 
           .dc-profile-modal--prospect .dc-signal-banner span {
             color: var(--ops-cyan);
+          }
+
+          .dc-dossier-shell--loading .dc-dossier-loading {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 24px;
+            color: var(--dc-muted);
+            text-align: center;
+          }
+
+          .dc-dossier-shell--loading .dc-dossier-loading strong {
+            font-family: var(--dc-font-title);
+            font-size: 1.35rem;
+            letter-spacing: 0.04em;
+            color: var(--dc-text);
+          }
+
+          .dc-dossier-shell--loading .dc-dossier-loading p {
+            margin: 0;
+            font-size: 0.85rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
           }
 
           .dc-profile-modal--uncertain .dc-signal-panel {
@@ -8076,7 +8566,7 @@ export default function DraftClass() {
             pointer-events: auto;
             cursor: pointer;
           }
-          .dc-signal-panel {
+          .dc-signal-panel:not(.dc-dossier-shell) {
             position: relative;
             width: min(1360px, 97vw);
             height: min(94vh, 900px);
@@ -8104,18 +8594,24 @@ export default function DraftClass() {
               "footer footer footer";
             gap: 0;
           }
-          .dc-signal-panel.dc-brochure--deep {
-            width: min(1120px, 98vw);
-            height: min(92vh, 920px);
-            height: min(92dvh, 920px);
+          .dc-signal-panel.dc-dossier-shell,
+          .dc-signal-panel--dossier {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            max-height: 100%;
             display: flex;
             flex-direction: column;
+            overflow: hidden;
+            pointer-events: auto;
+            border: 1px solid rgba(118, 200, 245, 0.42);
+            border-radius: 0;
+            clip-path: var(--wr-cut);
             grid-template-columns: unset;
             grid-template-rows: unset;
             grid-template-areas: unset;
-            overflow: hidden;
           }
-          .dc-signal-panel.dc-brochure {
+          .dc-signal-panel.dc-brochure:not(.dc-brochure--deep):not(.dc-dossier-shell) {
             width: min(1480px, 98vw);
             height: min(96vh, 980px);
             height: min(96dvh, 980px);
@@ -8772,6 +9268,39 @@ export default function DraftClass() {
             font-size: 0.7rem;
             color: var(--dc-muted);
           }
+          .dc-signal-actionbar--dossier {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: stretch;
+          }
+          .dc-dossier-scout-actions {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+          }
+          .dc-dossier-scout-note {
+            margin: 0;
+            font-size: 0.72rem;
+            color: var(--dc-cyan);
+          }
+          .dc-dossier-scout-assign {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+          }
+          .dc-dossier-scout-assign button {
+            border: 1px solid var(--dc-line);
+            background: rgba(8, 21, 34, 0.8);
+            color: var(--dc-text);
+            font-size: 0.65rem;
+            padding: 6px 8px;
+            cursor: pointer;
+          }
+          .dc-dossier-scout-assign button.is-active {
+            border-color: var(--dc-cyan);
+            color: var(--dc-cyan);
+          }
           .dc-signal-actionbar {
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -8803,7 +9332,7 @@ export default function DraftClass() {
             gap: 6px;
           }
 
-          .dc-signal-identity {
+          .dc-signal-panel:not(.dc-dossier-shell) .dc-signal-identity {
             grid-area: identity;
             padding: 12px 12px 10px;
             border-right: 1px solid rgba(118, 200, 245, 0.14);
@@ -8813,6 +9342,13 @@ export default function DraftClass() {
             min-height: 0;
             overflow: hidden;
             background: linear-gradient(180deg, rgba(12,36,58,0.95), rgba(6,18,32,0.72));
+          }
+          .dc-dossier-shell .dc-signal-identity {
+            grid-area: unset;
+            padding: 0;
+            border-right: none;
+            overflow: visible;
+            background: transparent;
           }
           .dc-signal-club-card {
             margin-top: auto;

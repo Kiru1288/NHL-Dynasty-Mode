@@ -230,28 +230,110 @@ export function resolveArchetype(player, profile, tools, isGoalie) {
     const pick = pool[idx];
     return { label: pick.label, blurb: pick.blurb, source: "derived" };
   }
+
   const bucket = posBucket(player?.position);
   const pool = bucket === "D" ? SKATER_ARCHETYPES.D : SKATER_ARCHETYPES.F;
   const skating = num(tools?.find((t) => t.label === "Skating")?.mid);
   const shot = num(tools?.find((t) => t.label === "Shot")?.mid);
   const vision = num(tools?.find((t) => t.label === "Vision")?.mid);
+  const defense = num(tools?.find((t) => t.label === "Defense")?.mid);
+
+  const roleRaw = String(
+    player?.prospectRole
+    || profile?.prospect_role
+    || profile?.play_style
+    || profile?.playStyle
+    || comparison?.play_style
+    || player?.playstyle
+    || player?.play_style
+    || "",
+  ).trim();
+  const roleKey = roleRaw.toLowerCase().replace(/[\s-]+/g, "_");
+
+  const roleToArchetypeKey = {
+    defensive_defenseman: "shutdown_d",
+    shutdown_defenseman: "shutdown_d",
+    offensive_defenseman: "offensive_d",
+    two_way_defenseman: "two_way_d",
+    power_forward: "power_forward",
+    sniper: "sniper",
+    playmaker: "playmaker",
+    two_way_forward: "two_way_forward",
+    two_way_center: "two_way_forward",
+    two_way_winger: "two_way_forward",
+  };
+
+  const mappedKey = roleToArchetypeKey[roleKey]
+    || (roleKey.includes("defensive") || roleKey.includes("shutdown") ? "shutdown_d" : null)
+    || (roleKey.includes("offensive") || roleKey.includes("puck_moving") ? "offensive_d" : null)
+    || (roleKey.includes("two_way") || roleKey.includes("two-way") ? (bucket === "D" ? "two_way_d" : "two_way_forward") : null);
+  if (mappedKey) {
+    const roleIdx = pool.findIndex((a) => a.key === mappedKey);
+    if (roleIdx >= 0) {
+      const pick = pool[roleIdx];
+      return { label: pick.label, blurb: pick.blurb, source: "backend" };
+    }
+  }
+
   let idx = seed % pool.length;
-  if (skating != null && skating >= 80 && vision != null && vision >= 76) idx = 0;
-  else if (shot != null && shot >= 82) idx = pool.findIndex((a) => a.key === "sniper");
-  else if (vision != null && vision >= 82) idx = pool.findIndex((a) => a.key === "playmaker");
-  else if (bucket === "D" && shot != null && shot >= 76) idx = pool.findIndex((a) => a.key === "offensive_d");
+  if (bucket === "D") {
+    if (defense != null && defense >= 78 && (skating == null || defense >= skating + 2)) {
+      idx = pool.findIndex((a) => a.key === "shutdown_d");
+    } else if (shot != null && shot >= 76 && (defense == null || shot >= defense)) {
+      idx = pool.findIndex((a) => a.key === "offensive_d");
+    } else if (skating != null && skating >= 80 && vision != null && vision >= 76 && (defense == null || skating >= defense)) {
+      idx = pool.findIndex((a) => a.key === "transition_playdriver");
+    } else if (skating != null && skating >= 78) {
+      idx = pool.findIndex((a) => a.key === "mobile_d");
+    }
+  } else if (skating != null && skating >= 80 && vision != null && vision >= 76) {
+    idx = pool.findIndex((a) => a.key === "transition_playdriver");
+  } else if (shot != null && shot >= 82) {
+    idx = pool.findIndex((a) => a.key === "sniper");
+  } else if (vision != null && vision >= 82) {
+    idx = pool.findIndex((a) => a.key === "playmaker");
+  }
   if (idx < 0) idx = seed % pool.length;
   const pick = pool[idx] || SKATER_ARCHETYPES.default[0];
   return { label: pick.label, blurb: pick.blurb, source: comparison?.archetype ? "backend" : "derived" };
 }
 
+export function humanizePlayStyleLabel(raw) {
+  if (raw == null || raw === "") return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const key = s.toUpperCase().replace(/[\s-]+/g, "_");
+  const lookup = {
+    TWO_WAY_F: "Two-way forward",
+    TWO_WAY_D: "Two-way defenseman",
+    TWO_WAY_W: "Two-way winger",
+    POWER_FORWARD: "Power forward",
+    SNIPER: "Sniper",
+    PLAYMAKER: "Playmaker",
+    GRINDER: "Grinder",
+    OFFENSIVE_D: "Offensive defenseman",
+    SHUTDOWN_D: "Shutdown defenseman",
+    PUCK_MOVING_G: "Puck-moving goalie",
+    BUTTERFLY: "Butterfly",
+    HYBRID: "Hybrid",
+    ATHLETIC: "Athletic",
+  };
+  if (lookup[key]) return lookup[key];
+  if (key.includes("_") || (s === s.toUpperCase() && s.length > 2)) {
+    return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+  return s;
+}
+
 export function resolvePlayStyleTag(player, profile, tools, isGoalie) {
-  const backend = profile?.player_comparison?.play_style
+  const backendRaw = profile?.player_comparison?.play_style
     || profile?.play_style
     || profile?.playStyle
     || player?.goalieStyle
     || player?.analytics?.goalie_style;
-  if (backend) return { label: String(backend), source: "backend" };
+  if (backendRaw) {
+    return { label: humanizePlayStyleLabel(backendRaw), source: "backend" };
+  }
   const seed = hashSeed(`${player?.id}-style`);
   if (isGoalie) {
     const positioning = num(tools?.find((t) => t.label === "Positioning")?.mid) || 0;
@@ -267,23 +349,58 @@ export function resolvePlayStyleTag(player, profile, tools, isGoalie) {
   return { label: pool[seed % pool.length], source: "derived" };
 }
 
+export function resolveOvrBands(profile, player, ceilingHidden) {
+  const hidden = Boolean(ceilingHidden || profile?.peak_range?.hidden);
+  const nowLow = num(profile?.now_range?.low ?? profile?.overallRangeLow ?? player?.ovrRange?.low);
+  const nowHigh = num(profile?.now_range?.high ?? profile?.overallRangeHigh ?? player?.ovrRange?.high);
+  const peakLow = num(
+    profile?.peak_range?.low
+    ?? profile?.scoutedPotentialLow
+    ?? player?.potentialRange?.low
+  );
+  const peakHigh = num(
+    profile?.peak_range?.high
+    ?? profile?.scoutedPotentialHigh
+    ?? player?.potentialRange?.high
+  );
+
+  const nowText = nowLow != null && nowHigh != null
+    ? `${Math.round(nowLow)}–${Math.round(nowHigh)}`
+    : null;
+  const peakText = !hidden && peakHigh != null ? String(Math.round(peakHigh)) : null;
+
+  let headroom = num(profile?.headroom_delta ?? profile?.headroomDelta);
+  if (headroom == null && !hidden && nowHigh != null && peakHigh != null) {
+    headroom = Math.round(peakHigh - nowHigh);
+  }
+
+  const fileDepthLabel = profile?.file_depth_label
+    || (nowText ? `Now ${nowText} OVR` : null);
+  const peakRangeLabel = !hidden && peakLow != null && peakHigh != null
+    ? `Peak ${Math.round(peakLow)}–${Math.round(peakHigh)} OVR`
+    : null;
+
+  return {
+    nowLow,
+    nowHigh,
+    nowText,
+    peakLow,
+    peakHigh,
+    peakText,
+    headroom,
+    fileDepthLabel,
+    peakRangeLabel,
+    hidden,
+  };
+}
+
 export function resolveProjectedRangeLabel(player, profile, ceilingHidden) {
-  const conf = num(profile?.scout_confidence ?? player?.scoutingConfidence ?? player?.completion);
-  const ovrLow = num(profile?.overallRangeLow ?? player?.ovrRange?.low);
-  const ovrHigh = num(profile?.overallRangeHigh ?? player?.ovrRange?.high);
-  const potLow = num(profile?.scoutedPotentialLow ?? player?.potentialRange?.low);
-  const potHigh = num(profile?.scoutedPotentialHigh ?? player?.potentialRange?.high);
-  if (ceilingHidden) {
-    if (ovrLow != null && ovrHigh != null) {
-      return { text: `${Math.round(ovrLow)}–${Math.round(ovrHigh)} OVR floor/now`, source: "range" };
-    }
-    return { text: null, source: "missing" };
+  const bands = resolveOvrBands(profile, player, ceilingHidden);
+  if (bands.fileDepthLabel) {
+    return { text: bands.fileDepthLabel, source: "backend" };
   }
-  if (potLow != null && potHigh != null) {
-    return { text: `${Math.round(potLow)}–${Math.round(potHigh)} OVR ceiling/floor`, source: "backend" };
-  }
-  if (ovrLow != null && ovrHigh != null) {
-    return { text: `${Math.round(ovrLow)}–${Math.round(ovrHigh)} OVR range`, source: "derived" };
+  if (bands.hidden && bands.nowText) {
+    return { text: `Now ${bands.nowText} OVR`, source: "range" };
   }
   return { text: null, source: "missing" };
 }
@@ -313,6 +430,33 @@ export function zoneGradeWord(n) {
   if (n >= 62) return "Serviceable";
   if (n >= 52) return "Shaky";
   return "Raw";
+}
+
+/** Tier key + fill intensity for zone map tiles — drives color differentiation. */
+export function zoneTierMeta(value) {
+  const n = num(value);
+  if (n == null) return { tier: "fog", fill: 0.1 };
+  if (n >= 85) return { tier: "elite", fill: 0.78 };
+  if (n >= 75) return { tier: "high", fill: 0.58 };
+  if (n >= 62) return { tier: "solid", fill: 0.42 };
+  if (n >= 52) return { tier: "developing", fill: 0.28 };
+  return { tier: "raw", fill: 0.18 };
+}
+
+/** In-universe file caveats — player-facing, not dev QA copy. */
+export function dossierFileNotes(player, profile, scoutingDesk, { offIceEstimated = false } = {}) {
+  const notes = [];
+  if (offIceEstimated) {
+    notes.push("Limited off-ice reads on file — character tiers still developing.");
+  }
+  if (scoutingDesk?.source === "empty") {
+    notes.push("No scouting desk entries on file yet — backend will populate as the season progresses.");
+  }
+  const conf = num(profile?.scout_confidence ?? player?.scoutingConfidence);
+  if (conf != null && conf < 45) {
+    notes.push("File depth remains thin — ceiling and usage projection may shift with more looks.");
+  }
+  return notes;
 }
 
 export function resolveBottomStatStrip(player, profile, tools, isGoalie) {
@@ -422,144 +566,16 @@ export function buildScoutingDeskEntries(player, profile, { gp = 0, analytics = 
       entries: backend.map((row) => ({
         scout: row.scout || row.name || "Scout",
         meta: row.meta || row.region || row.league || "",
-        viewings: row.viewings ?? row.viewing_count ?? null,
-        hitRate: row.hit_rate ?? row.hitRate ?? null,
         quote: row.quote || row.note || row.summary || "",
         grade: row.grade ?? row.rating ?? null,
-        gradeLabel: row.grade_label || row.gradeLabel || "HIS GRADE",
+        gradeLabel: row.grade_label || row.gradeLabel || "GRADE",
         tone: row.tone || "neutral",
         locked: Boolean(row.locked),
       })),
       source: "backend",
-      psychLocked: backend.every((r) => !String(r.scout || r.name || "").toLowerCase().includes("psych")),
     };
   }
-
-  const conf = num(profile?.scout_confidence ?? player?.scoutingConfidence ?? player?.completion) || 52;
-  const entries = [];
-  const assigned = player?.assignedScout || profile?.assigned_scout || profile?.assignedScout;
-  const gradeBase = num(
-    profile?.scoutedOverall
-    ?? profile?.scouted_overall_estimate
-    ?? player?.ovrHint
-    ?? player?.trueOvr
-  ) || null;
-  const modelGrade = deriveModelGradeFromAnalytics(player, profile, analytics);
-
-  if (assigned || profile?.projectionNotes || profile?.micro_summary) {
-    entries.push({
-      scout: assigned || "Lead scout",
-      meta: assigned ? "Assigned file" : "Central scouting",
-      viewings: gp > 0 ? Math.max(1, Math.min(8, Math.round(conf / 14))) : null,
-      hitRate: Math.round(conf),
-      quote: profile?.projectionNotes || profile?.micro_summary || profile?.microSummary || "File in progress.",
-      grade: gradeBase,
-      gradeLabel: "HIS GRADE",
-      tone: "green",
-      locked: false,
-    });
-  }
-
-  const strengthEvidence = profile?.strengthsEvidence || profile?.strengths_evidence || [];
-  (Array.isArray(strengthEvidence) ? strengthEvidence : []).slice(0, 1).forEach((ev) => {
-    const title = typeof ev === "string" ? ev : (ev?.title || ev?.label || "");
-    const detail = typeof ev === "object" ? (ev?.detail || ev?.note || "") : "";
-    if (!title) return;
-    entries.push({
-      scout: "Skills desk",
-      meta: "Strengths read",
-      viewings: null,
-      hitRate: null,
-      quote: detail ? `${title} — ${detail}` : title,
-      grade: gradeBase,
-      gradeLabel: "TOOLS",
-      tone: "cyan",
-      locked: false,
-    });
-  });
-
-  const weaknessEvidence = profile?.weaknessesEvidence || profile?.weaknesses_evidence || [];
-  (Array.isArray(weaknessEvidence) ? weaknessEvidence : []).slice(0, 1).forEach((ev) => {
-    const title = typeof ev === "string" ? ev : (ev?.title || ev?.label || "");
-    const detail = typeof ev === "object" ? (ev?.detail || ev?.note || "") : "";
-    if (!title) return;
-    entries.push({
-      scout: "Regional scout",
-      meta: "Development gap",
-      viewings: null,
-      hitRate: null,
-      quote: detail ? `${title} — ${detail}` : title,
-      grade: gradeBase != null ? Math.max(45, gradeBase - 6) : null,
-      gradeLabel: "HIS GRADE",
-      tone: "amber",
-      locked: false,
-    });
-  });
-
-  const charRead = profile?.character_read;
-  if (charRead?.interview_notes) {
-    entries.push({
-      scout: "Character interview",
-      meta: "Private setting",
-      viewings: 1,
-      hitRate: charRead.confidence ?? null,
-      quote: charRead.interview_notes,
-      grade: null,
-      gradeLabel: "READ",
-      tone: "green",
-      locked: false,
-    });
-  } else {
-    entries.push({
-      scout: "Psych. interview",
-      meta: "Not commissioned",
-      viewings: null,
-      hitRate: null,
-      quote: null,
-      grade: null,
-      gradeLabel: "",
-      tone: "muted",
-      locked: true,
-    });
-  }
-
-  if (profile?.stockReason || player?.stockReason) {
-    entries.push({
-      scout: "Analytics dept.",
-      meta: "Stock movement",
-      viewings: null,
-      hitRate: Math.round(conf),
-      quote: profile?.stockReason || player?.stockReason,
-      grade: modelGrade,
-      gradeLabel: "MODEL",
-      tone: "cyan",
-      locked: false,
-    });
-  } else if (analytics && (analytics.war != null || analytics.ppg != null || player?.gp > 0)) {
-    const gp = num(player?.gp) || 0;
-    const pts = num(player?.points) || 0;
-    const ppg = num(analytics.ppg ?? (gp > 0 ? pts / gp : null));
-    const quote = gp > 0 && ppg != null
-      ? `${pts}P in ${gp} GP · ${ppg.toFixed(2)} PPG`
-      : "Production model on file.";
-    entries.push({
-      scout: "Analytics dept.",
-      meta: "Production model",
-      viewings: null,
-      hitRate: analytics.war != null ? Math.round(clamp(50 + Number(analytics.war) * 8, 45, 88)) : Math.round(conf),
-      quote,
-      grade: modelGrade,
-      gradeLabel: "MODEL",
-      tone: "cyan",
-      locked: false,
-    });
-  }
-
-  if (!entries.length) {
-    return { entries: [], source: "empty", psychLocked: true };
-  }
-
-  return { entries, source: "profile", psychLocked: entries.some((e) => e.locked) };
+  return { entries: [], source: "empty" };
 }
 
 function isGoaliePosition(pos) {
@@ -576,56 +592,73 @@ export function outcomeRibbonSegmentsForPosition(outcomes, isGoalie = false, out
       pct: seg.pct ?? seg.weight ?? seg.w,
     }));
   }
-  if (!outcomes) return null;
-  const nhl = Math.max(0, Math.min(100, Number(outcomes.nhlOdds) || 0));
-  if (isGoalie) {
-    const non = Math.max(0, 100 - nhl);
-    const bust = Math.round(non * 0.38);
-    const minor = Math.max(0, non - bust);
-    const backup = Math.min(Math.round(nhl * 0.55), nhl);
-    const platoon = Math.max(0, Math.min(Math.round(nhl * 0.35), nhl - backup));
-    const starter = Math.max(0, nhl - backup - platoon);
-    const segs = [
-      { key: "bust", label: "Bust", w: bust },
-      { key: "ahl", label: "AHL/ECHL", w: minor },
-      { key: "mid", label: "NHL Backup", w: backup },
-      { key: "top", label: "Platoon", w: platoon },
-      { key: "star", label: "Starter", w: starter },
-    ];
-    const sum = segs.reduce((s, x) => s + x.w, 0);
-    if (sum <= 0) return null;
-    return segs.map((x) => ({ ...x, pct: (x.w / sum) * 100 }));
-  }
-  const keys = ["peak", "expected", "worst", "nhlOdds", "hitPeakPct", "shootPastPct"];
-  if (keys.some((k) => outcomes[k] == null || !Number.isFinite(Number(outcomes[k])))) return null;
-  const non = Math.max(0, 100 - nhl);
-  const bust = Math.round(non * 0.42);
-  const ahl = Math.max(0, non - bust);
-  const star = Math.min(Number(outcomes.shootPastPct), Math.round(nhl * 0.28));
-  const top6 = Math.min(Number(outcomes.hitPeakPct), Math.max(0, nhl - star));
-  const mid6 = Math.max(0, nhl - star - top6);
-  const segs = [
-    { key: "bust", label: "Bust", w: bust },
-    { key: "ahl", label: "AHL", w: ahl },
-    { key: "mid", label: "Mid-6", w: mid6 },
-    { key: "top", label: "Top-6", w: top6 },
-    { key: "star", label: "Star+", w: star },
-  ];
-  const sum = segs.reduce((s, x) => s + x.w, 0);
-  if (sum <= 0) return null;
-  return segs.map((x) => ({ ...x, pct: (x.w / sum) * 100 }));
+  return null;
 }
 
 /** Fields the UI expects but the backend may not yet expose. */
-export function dossierBackendGaps(player, profile, scoutingDesk) {
+export function dossierBackendGaps(player, profile, scoutingDesk, { ovrBands = null, offIceEstimated = false } = {}) {
   const gaps = [];
   if (isGoaliePosition(player?.position)) {
     const attrs = ["glove", "blocker", "reflexes", "rebound_control", "positioning", "puck_handling"];
     const missing = attrs.filter((k) => pickAttr(player, k, `${k}_score`) == null && pickAttr(profile, k) == null);
     if (missing.length) gaps.push(`Goalie sub-attributes not on API (${missing.join(", ")}) — grades are estimated from OVR.`);
   }
-  if (scoutingDesk?.source === "empty") gaps.push("Scouting desk — assign a scout or commission interviews to populate reports.");
-  if (!profile?.outcome_distribution && !profile?.outcomeDistribution) gaps.push("Outcome distribution ribbon — derived from NHL probability until backend ships outcome_distribution.");
-  if (!profile?.development_trajectory && !profile?.developmentTrajectory) gaps.push("Development trajectory narrative — built from projectionNotes/micro_summary.");
+  if (offIceEstimated) {
+    gaps.push("Off-ice character/leadership numbers are estimated — character_read tiers are still fogged.");
+  }
+  if (scoutingDesk?.source === "empty") gaps.push("Scouting desk — awaiting backend scouting_history rows.");
+  if (!profile?.outcome_distribution && !profile?.outcomeDistribution) {
+    gaps.push("Outcome distribution ribbon — derived from NHL probability until backend ships outcome_distribution.");
+  }
+  if (!profile?.development_trajectory && !profile?.developmentTrajectory) {
+    gaps.push("Development trajectory narrative — built from projectionNotes/micro_summary.");
+  }
+  const playRaw = profile?.play_style || profile?.playStyle;
+  if (playRaw && /[A-Z_]{3,}/.test(String(playRaw)) && process.env.NODE_ENV === "development") {
+    gaps.push(`Play style enum "${playRaw}" was not humanized by backend — using client fallback.`);
+  }
+  if (ovrBands?.headroom == null && !ovrBands?.hidden && ovrBands?.nowHigh != null && ovrBands?.peakHigh == null) {
+    gaps.push("Peak OVR band missing — headroom delta unavailable.");
+  }
   return gaps;
+}
+
+/** Fast client-side profile from board row — opens dossier instantly while API enriches. */
+export function buildStubProspectProfile(player) {
+  if (!player?.id) return null;
+  const potLow = player.potentialRange?.low ?? player.potentialScore;
+  const potHigh = player.potentialRange?.high ?? player.potentialScore;
+  const dedicatedPct = player.dedicatedScoutingPct ?? null;
+  return {
+    _stub: true,
+    stats: {
+      games: player.gp,
+      goals: player.goals,
+      assists: player.assists,
+      points: player.points,
+      ppg: player.ppg,
+    },
+    overallRangeLow: player.ovrRange?.low,
+    overallRangeHigh: player.ovrRange?.high,
+    scoutedOverall: player.ovrHint,
+    scoutedPotentialLow: potLow,
+    scoutedPotentialHigh: potHigh,
+    scout_confidence: player.scoutingConfidence ?? player.completion,
+    dedicatedScoutFile: dedicatedPct != null ? dedicatedPct >= 20 : (Number(player.completion) || 0) >= 20,
+    ceilingHidden: Boolean(player.ceilingHidden),
+    character_score: player.characterScore ?? player.character,
+    character_concerns: Boolean(player.characterConcerns),
+    chapter_profile: player.chapterProfile || null,
+    analytics: player.analytics || null,
+    is_transcendent: Boolean(player.isTranscendent),
+    prospect_role: player.prospectRole,
+    play_style: player.playerType,
+    potential: player.potentialScore != null
+      ? { rating: player.potentialScore, hidden: Boolean(player.ceilingHidden) }
+      : (player.ceilingHidden ? { hidden: true } : null),
+    archetype: player.prospectRole ? { label: player.prospectRole } : null,
+    rank: player.rank,
+    intel_label: player.intelLabel,
+    risk: player.riskLabel,
+  };
 }

@@ -672,16 +672,48 @@ def _prospect_role_multiplier(prospect: Any, league: Any) -> float:
     age = _player_age(prospect)
     mult = 0.82 + offensive * 0.28
     if age <= 17:
-        mult *= 0.90
+        mult *= 0.94
     elif age == 18:
-        mult *= 0.96
+        mult *= 0.98
     elif age >= 20:
         mult *= 1.04
+    try:
+        profile = get_league_scoring_profile(league)
+        pk = str(profile.get("profile_key") or "").upper()
+        if pk in ("CHL", "OHL", "WHL", "QMJHL", "JUNIOR"):
+            mult *= 1.08
+        elif pk in ("SHL", "LIIGA", "EUROPE_JUNIOR", "DEL"):
+            mult *= 0.86
+        elif pk == "NCAA":
+            mult *= 0.94
+    except Exception:
+        pass
     if getattr(prospect, "pp1_usage", False) or str(getattr(prospect, "pp_role", "") or "").upper() in ("PP1", "PP1"):
         mult *= 1.08
     if str(getattr(prospect, "line_role", "") or "").lower() in ("top", "top_line", "first"):
         mult *= 1.06
     return _clamp(mult, 0.55, 1.12)
+
+
+def _league_junior_stat_multiplier(profile: Dict[str, Any]) -> float:
+    """League-relative scoring scale — CHL high, NCAA moderate, SHL/Euro lower."""
+    key = str(profile.get("profile_key") or profile.get("league_key") or "JUNIOR").upper()
+    table = {
+        "QMJHL": 1.24,
+        "OHL": 1.22,
+        "CHL": 1.20,
+        "WHL": 1.18,
+        "JUNIOR": 1.14,
+        "USHL": 1.08,
+        "NCAA": 0.94,
+        "EUROPE_JUNIOR": 0.84,
+        "SHL": 0.72,
+        "LIIGA": 0.78,
+        "DEL": 0.80,
+        "AHL": 0.88,
+        "ECHL": 0.92,
+    }
+    return float(table.get(key, 1.0))
 
 
 def _volatility_factor(prospect: Any) -> float:
@@ -1443,13 +1475,13 @@ def _maybe_retune_underproduced_prospect_line(
     """
     if _is_goalie(prospect):
         return
-    if bool(getattr(prospect, "_prospect_scoring_retune_v4", False)):
+    if bool(getattr(prospect, "_prospect_scoring_retune_v5", False)):
         return
     gp = _safe_int(actual.get("gp"), 0)
     pts = _safe_int(actual.get("points"), 0)
     if gp < 10 or target_ppg <= 0.05:
         try:
-            setattr(prospect, "_prospect_scoring_retune_v4", True)
+            setattr(prospect, "_prospect_scoring_retune_v5", True)
         except Exception:
             pass
         return
@@ -1457,7 +1489,7 @@ def _maybe_retune_underproduced_prospect_line(
     desired = float(target_ppg) * 0.96
     if cur_ppg >= desired * 0.94:
         try:
-            setattr(prospect, "_prospect_scoring_retune_v4", True)
+            setattr(prospect, "_prospect_scoring_retune_v5", True)
         except Exception:
             pass
         return
@@ -1467,7 +1499,7 @@ def _maybe_retune_underproduced_prospect_line(
     new_pts = min(new_pts, max_pts)
     if new_pts <= pts:
         try:
-            setattr(prospect, "_prospect_scoring_retune_v4", True)
+            setattr(prospect, "_prospect_scoring_retune_v5", True)
         except Exception:
             pass
         return
@@ -1485,6 +1517,49 @@ def _maybe_retune_underproduced_prospect_line(
         setattr(prospect, "_prospect_season_stats", dict(actual))
     except Exception:
         pass
+
+
+def _prospect_injury_games(prospect: Any, delta_gp: int, rng: random.Random) -> int:
+    """Return GP lost to injury this advance window."""
+    if delta_gp <= 0:
+        return 0
+    remaining = _safe_int(getattr(prospect, "_prospect_injury_games_remaining", 0), 0)
+    if remaining > 0:
+        missed = min(delta_gp, remaining)
+        left = max(0, remaining - missed)
+        try:
+            setattr(prospect, "_prospect_injury_games_remaining", left)
+            if left <= 0:
+                setattr(prospect, "prospect_injured", False)
+                setattr(prospect, "injury_status", None)
+                setattr(prospect, "injury_note", None)
+            else:
+                setattr(prospect, "prospect_injured", True)
+                setattr(prospect, "injury_status", f"Out {left} GP")
+                setattr(prospect, "injury_note", f"Missed {missed} GP this week — {left} remaining")
+        except Exception:
+            pass
+        return missed
+    injury_risk = 0.014
+    traits = getattr(prospect, "traits", None)
+    if traits is not None:
+        mod = getattr(traits, "injury_risk_mod", None) if not isinstance(traits, dict) else traits.get("injury_risk_mod")
+        if mod is not None:
+            injury_risk += _safe_float(mod, 0.0)
+    if rng.random() > injury_risk:
+        return 0
+    missed = rng.randint(1, min(8, max(1, delta_gp)))
+    note = f"Injury — expected to miss {missed} GP"
+    try:
+        setattr(prospect, "_prospect_injury_games_remaining", missed)
+        setattr(prospect, "prospect_injured", True)
+        setattr(prospect, "injured", True)
+        setattr(prospect, "injury_status", note)
+        setattr(prospect, "injury_note", note)
+        setattr(prospect, "weekly_stock_reason", note)
+    except Exception:
+        pass
+    return missed
 
 
 def advance_prospect_stats_to_date(
@@ -1661,10 +1736,12 @@ def advance_prospect_stats_to_date(
     _sync_prospect_week_baseline(prospect, actual, week_key)
 
     if delta_gp > 0:
+        injury_gp = _prospect_injury_games(prospect, delta_gp, rng)
+        playable_gp = max(0, delta_gp - injury_gp)
         if _is_goalie(prospect):
-            _simulate_goalie_games(prospect, league, delta_gp, rng, actual, projected)
+            _simulate_goalie_games(prospect, league, playable_gp, rng, actual, projected)
         else:
-            _simulate_skater_games(prospect, league, delta_gp, rng, actual, target_ppg)
+            _simulate_skater_games(prospect, league, playable_gp, rng, actual, target_ppg)
 
     actual["stat_source"] = "calendar_sim"
     week_delta = _week_stat_delta(prospect, actual)
@@ -1910,10 +1987,9 @@ def calculate_prospect_ppg_scale(
 
     base *= rng.uniform(0.94, 1.10)
 
-    mult = _safe_float(profile.get("scoring_multiplier"), 1.0)
+    league_mult = _league_junior_stat_multiplier(profile)
     diff = _safe_float(profile.get("difficulty"), 0.7)
-    # Make league multiplier meaningful (OHL 1.37 → ~1.15x).
-    base *= (0.75 + mult * 0.25) * (1.0 + (0.62 - diff) * 0.10)
+    base *= league_mult * (1.0 + (0.62 - diff) * 0.06)
 
     if defense:
         base *= _safe_float(profile.get("defensive_translation_penalty"), 0.90)
@@ -1938,7 +2014,7 @@ def calculate_prospect_ppg_scale(
     elif age == 19:
         base *= rng.uniform(0.96, 1.04)
     elif age <= 17:
-        base *= rng.uniform(0.86, 0.96)
+        base *= rng.uniform(0.92, 0.98)
 
     if _is_boom_bust(prospect):
         base *= rng.uniform(0.88, 1.12)
@@ -2419,8 +2495,8 @@ def derive_prospect_analytics(
     scorer_def_gap = max(0.0, off_talent - def_talent - 0.12)
     # Per-prospect jitter so similar late picks don't print identical possession cookies.
     try:
-        pid = str(getattr(getattr(prospect, "identity", None), "name", None) or id(prospect))
-        jitter = ((sum(ord(c) for c in pid) % 97) / 97.0 - 0.5) * 4.2
+        pid = str(getattr(getattr(prospect, "identity", None), "name", None) or getattr(prospect, "id", None) or id(prospect))
+        jitter = ((sum(ord(c) for c in pid) % 97) / 97.0 - 0.5) * 8.5
     except Exception:
         jitter = 0.0
     poss_base = 50.0 + offense_drive * 0.95 + defense_drive * 0.72 - scorer_def_gap * 7.5 + jitter
@@ -2469,7 +2545,7 @@ def derive_prospect_analytics(
     surplus = ppg - expected_ppg
     if surplus > 0:
         off_war += surplus * 1.85 * max(0.35, gp_factor)
-    off_war = round(_clamp(off_war, -1.8, 3.6), 2)
+    off_war = round(_clamp(off_war, -1.2, 1.35), 2)
 
     def_war = (
         (def_talent - 0.46) * 1.25
@@ -2480,12 +2556,16 @@ def derive_prospect_analytics(
     )
     if style in ("two_way",) and def_talent >= 0.58:
         def_war += 0.12
-    def_war = round(_clamp(def_war, -1.2, 2.6), 2)
+    def_war = round(_clamp(def_war, -0.8, 0.95), 2)
 
-    # Ability-weighted WAR: higher current tools → higher WAR. Gem surplus already
-    # in off_war; drop draft-mid potential bonus so board WAR matches scouting use.
-    ability_war = ((off_talent + def_talent) / 2.0 - 0.50) * 1.8 * max(0.4, gp_factor)
-    war = round(_clamp(off_war + def_war + ability_war, -2.0, 4.8), 2)
+    # Ability-weighted WAR: junior scale — top draft-age producers land ~1.6–2.2,
+    # not NHL starter territory. Diminishing returns keep elites separated.
+    ability_war = ((off_talent + def_talent) / 2.0 - 0.50) * 0.95 * max(0.4, gp_factor)
+    raw_war = off_war + def_war + ability_war
+    # Soft cap with headroom so only a handful of true outliers touch the ceiling.
+    if raw_war > 1.85:
+        raw_war = 1.85 + (raw_war - 1.85) * 0.42
+    war = round(_clamp(raw_war, -1.5, 2.35), 2)
 
     # Publish earlier so WAR is usable for gem hunting before the 15 GP wall.
     sample_ready = gp >= 5

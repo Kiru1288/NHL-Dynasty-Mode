@@ -375,6 +375,109 @@ def _rating_key_buckets(ratings: Mapping[str, Any]) -> Dict[str, List[str]]:
     return buckets
 
 
+def _derive_dossier_identity(row: Dict[str, Any], player: Any) -> None:
+    """Ensure archetype and play style exist on the row from ratings + junior production."""
+    if row.get("dossier_archetype"):
+        row.setdefault("archetype", row.get("dossier_archetype"))
+    else:
+        pos = str(row.get("position") or getattr(player, "position", "") or "").upper()
+        dev_arch = str(getattr(player, "_dev_archetype", "") or "").strip()
+        if dev_arch:
+            row.setdefault("dossier_archetype", dev_arch)
+            row.setdefault("archetype", dev_arch)
+        elif pos == "G":
+            reflex = float(row.get("reflexes") or row.get("reflex_score") or 0)
+            puck = float(row.get("puck_handling") or row.get("puck_handling_score") or 0)
+            if puck >= 72:
+                arch = "PUCK_MOVING_G"
+            elif reflex >= 80:
+                arch = "ATHLETIC_G"
+            else:
+                arch = "BUTTERFLY_G"
+            row["dossier_archetype"] = arch
+            row.setdefault("archetype", arch)
+        elif pos in ("D", "LD", "RD"):
+            defense = float(row.get("def_rating") or row.get("defense") or 0)
+            shot = float(row.get("shooting") or row.get("shooting_rating") or 0)
+            skate = float(row.get("skating_rating") or row.get("skating") or 0)
+            if defense >= 78 and defense >= shot + 2:
+                arch = "SHUTDOWN_D"
+            elif shot >= 76 and shot >= defense:
+                arch = "OFFENSIVE_D"
+            elif skate >= 78:
+                arch = "TWO_WAY_D"
+            else:
+                arch = "MOBILE_D"
+            row["dossier_archetype"] = arch
+            row.setdefault("archetype", arch)
+        else:
+            shot = float(row.get("shooting") or row.get("shooting_rating") or 0)
+            vision = float(row.get("passing") or row.get("iq_rating") or row.get("hockey_iq") or 0)
+            skate = float(row.get("skating_rating") or row.get("skating") or 0)
+            phys = float(row.get("physical_rating") or row.get("physical") or 0)
+            defense = float(row.get("def_rating") or row.get("defense") or 0)
+            if shot >= 82:
+                arch = "SNIPER"
+            elif vision >= 82:
+                arch = "PLAYMAKER"
+            elif phys >= 78 and phys >= shot:
+                arch = "POWER_FORWARD"
+            elif skate >= 76 and defense >= 72:
+                arch = "TWO_WAY_F"
+            else:
+                arch = "TWO_WAY_F"
+            row["dossier_archetype"] = arch
+            row.setdefault("archetype", arch)
+
+    if row.get("dossier_play_style") or row.get("playstyle"):
+        if not row.get("dossier_play_style"):
+            ps = str(row.get("playstyle") or "")
+            row["dossier_play_style"] = ps.replace("_", " ").title() if ps else None
+        return
+
+    arch_key = str(row.get("dossier_archetype") or row.get("archetype") or "").upper()
+    gp = int(row.get("gp") or row.get("games_played") or 0)
+    goals = int(row.get("goals") or 0)
+    assists = int(row.get("assists") or 0)
+    points = int(row.get("points") or 0) or (goals + assists)
+    ppg = float(row.get("ppg") or 0)
+    if ppg <= 0 and gp > 0 and points > 0:
+        ppg = points / gp
+    pos = str(row.get("position") or "").upper()
+
+    style = None
+    arch_styles = {
+        "SNIPER": "North-south finisher",
+        "PLAYMAKER": "East-west distributor",
+        "POWER_FORWARD": "Power north-south",
+        "TWO_WAY_F": "Two-way detail",
+        "TWO_WAY_D": "Two-way defense",
+        "OFFENSIVE_D": "Puck-moving defense",
+        "SHUTDOWN_D": "Shutdown defense",
+        "MOBILE_D": "Transition defense",
+        "PUCK_MOVING_G": "Puck-moving",
+        "ATHLETIC_G": "Athletic",
+        "BUTTERFLY_G": "Butterfly",
+    }
+    for prefix, label in arch_styles.items():
+        if arch_key.startswith(prefix) or prefix in arch_key:
+            style = label
+            break
+    if gp >= 10 and pos != "G":
+        if goals >= assists * 1.15 and goals >= 12:
+            style = "Volume shooter"
+        elif assists >= goals * 1.2 and assists >= 14:
+            style = "Playmaking pace"
+        elif ppg >= 0.95:
+            style = "Primary scorer"
+        elif ppg <= 0.35 and pos in ("D", "LD", "RD"):
+            style = "Stay-at-home defense"
+    if not style:
+        style = "Balanced"
+    row["dossier_play_style"] = style
+    row.setdefault("playstyle", style.lower().replace(" ", "_"))
+
+
 def enrich_prospect_row_from_player(player: Any, row: Dict[str, Any]) -> None:
     """Attach playstyle, archetype, and rating summaries for role-aware ranking."""
     chem = getattr(player, "chemistry_profile", None)
@@ -390,7 +493,15 @@ def enrich_prospect_row_from_player(player: Any, row: Dict[str, Any]) -> None:
         row.setdefault("pipeline_tier", tier)
 
     ratings = getattr(player, "ratings", None)
-    if not isinstance(ratings, dict) or not ratings:
+    if not isinstance(ratings, dict):
+        ratings = {}
+    if not ratings:
+        _attach_chapter_profile_to_row(player, row, {})
+        _derive_dossier_identity(row, player)
+        try:
+            _apply_character_integrity(row, player)
+        except Exception:
+            pass
         return
 
     def _avg_keys(keys: List[str]) -> float:
@@ -473,8 +584,394 @@ def enrich_prospect_row_from_player(player: Any, row: Dict[str, Any]) -> None:
                 + 0.35 * (work or 62)
                 + 0.30 * (mature or 58),
             )
-            row.setdefault("character_score", composite)
-            row.setdefault("character", composite)
+            # Do not mirror player.personality `character` (~55 default) into chapter scoring.
+            personality_char = getattr(player, "character", None)
+            if personality_char is None or int(round(float(composite))) != int(round(float(personality_char))):
+                if not bool(getattr(player, "character_concerns", False)):
+                    row.setdefault("character_score", composite)
+
+    _attach_chapter_profile_to_row(player, row, ratings if isinstance(ratings, dict) else {})
+
+    arch_raw = getattr(player, "archetype", None)
+    if arch_raw is not None:
+        arch_str = str(getattr(arch_raw, "value", arch_raw) or "").strip()
+        if arch_str:
+            row.setdefault("dossier_archetype", arch_str)
+            row.setdefault("archetype", arch_str)
+    chem = getattr(player, "chemistry_profile", None)
+    if isinstance(chem, dict):
+        ps = chem.get("playstyle")
+        if ps:
+            row.setdefault("playstyle", str(ps))
+            row.setdefault("chemistry_playstyle", str(ps))
+            row.setdefault("dossier_play_style", str(ps).replace("_", " ").title())
+    if getattr(player, "prospect_injured", False) or getattr(player, "_prospect_injury_games_remaining", 0):
+        row["prospect_injured"] = True
+        row["injured"] = True
+        row["injury_status"] = getattr(player, "injury_status", None) or "Injured"
+        row["injury_note"] = getattr(player, "injury_note", None) or row.get("injury_status")
+    _derive_dossier_identity(row, player)
+    try:
+        _apply_character_integrity(row, player)
+    except Exception:
+        pass
+
+
+_SKATER_CHAPTER_IDS: Tuple[str, ...] = (
+    "overall",
+    "offence",
+    "defence",
+    "character",
+    "mental",
+    "transition",
+    "physical",
+    "potential",
+)
+_GOALIE_CHAPTER_IDS: Tuple[str, ...] = (
+    "overall",
+    "glove",
+    "blocker",
+    "stick",
+    "potential",
+)
+
+
+def _rating_to_100(raw: Any) -> Optional[float]:
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if v <= 0:
+        return None
+    if v <= 1.0:
+        v *= 100.0
+    return v
+
+
+def _player_type_for_position(pos: str) -> str:
+    return "goalie" if str(pos or "").upper() == "G" else "skater"
+
+
+def _player_psych_trait_100(player: Any, key: str) -> Optional[float]:
+    """Read a psychology trait as 0–100; never use player.personality `character`."""
+    for src in (getattr(player, "psychology", None), getattr(player, "traits", None)):
+        if src is None:
+            continue
+        raw = src.get(key) if isinstance(src, dict) else getattr(src, key, None)
+        scaled = _rating_to_100(raw)
+        if scaled is not None:
+            return scaled
+    return None
+
+
+def _resolve_character_chapter_score(
+    row: Mapping[str, Any],
+    player: Any = None,
+    *,
+    mental: int,
+    ovr: int,
+) -> int:
+    """Character chapter score — attribute profile + psych traits, never personality `character`."""
+    if bool(row.get("character_concerns")) or (
+        player is not None and bool(getattr(player, "character_concerns", False))
+    ):
+        return _character_concern_score(row, player)
+
+    if player is not None:
+        profile = getattr(player, "attribute_profile", None)
+        if isinstance(profile, dict):
+            hidden = profile.get("hidden") or {}
+            pos = str(row.get("position") or getattr(player, "position", "F") or "F")
+            ptype = str(profile.get("player_type") or _player_type_for_position(pos))
+            try:
+                from app.sim_engine.entities.chapter_attributes import aggregate_chapter_score  # noqa: WPS433
+
+                agg = aggregate_chapter_score("character", hidden, player_type=ptype)
+                if agg is not None and float(agg) > 0:
+                    return int(round(float(agg)))
+            except Exception:
+                pass
+
+    trait_keys = (
+        "coachability",
+        "work_ethic",
+        "maturity",
+        "mental_toughness",
+        "competitiveness",
+        "sociability",
+    )
+    trait_vals: List[float] = []
+    if player is not None:
+        for key in trait_keys:
+            v = _player_psych_trait_100(player, key)
+            if v is not None:
+                trait_vals.append(v)
+    for key in trait_keys:
+        raw = row.get(key)
+        if raw is None:
+            continue
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if v <= 0:
+            continue
+        trait_vals.append(v * 100.0 if v <= 1.0 else v)
+
+    anchor = float(max(mental or 0, ovr or 0) or 62)
+    if trait_vals:
+        trait_avg = sum(trait_vals) / len(trait_vals)
+        # Blend trait reads with mental/ovr so uniform ~55 psych defaults don't flatten the class.
+        return int(round(max(48.0, min(92.0, 0.45 * trait_avg + 0.35 * anchor + 0.20 * float(ovr or mental or 62)))))
+    return int(round(max(48.0, min(92.0, anchor))))
+
+
+def _character_concerns_flag(row: Mapping[str, Any], player: Any = None) -> bool:
+    if bool(row.get("character_concerns")):
+        return True
+    if player is not None:
+        if bool(getattr(player, "character_concerns", False)):
+            return True
+        if bool(getattr(player, "pipeline_bust", False)):
+            return True
+        psych = getattr(player, "psychology", None)
+        if psych is not None:
+            try:
+                coach = float(getattr(psych, "coachability", 0.55) or 0.55)
+                anx = float(getattr(psych, "anxiety", 0.35) or 0.35)
+                if coach <= 1.0:
+                    coach *= 100.0
+                if anx <= 1.0:
+                    anx *= 100.0
+                if coach < 38.0 or anx > 62.0:
+                    return True
+            except (TypeError, ValueError):
+                pass
+    try:
+        score = float(
+            row.get("character_score")
+            or (row.get("chapter_profile") or {}).get("chapters", {}).get("character")
+            or 0
+        )
+        if 0 < score < 50:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
+def _character_concern_score(row: Mapping[str, Any], player: Any = None) -> int:
+    """Deterministic sub-50 character for flagged prospects."""
+    seed = str(row.get("key") or row.get("id") or getattr(player, "id", "") or row.get("name") or "")
+    unit = _stable_unit(seed, "character_concern")
+    return int(round(28.0 + unit * 19.0))
+
+
+def _apply_character_integrity(row: Dict[str, Any], player: Any = None) -> None:
+    """Keep character_concerns, character_score, and chapter character in sync."""
+    concerns = _character_concerns_flag(row, player)
+    if concerns:
+        score = _character_concern_score(row, player)
+        score = int(max(22, min(49, score)))
+        row["character_concerns"] = True
+        row["character_score"] = score
+        row["character"] = score
+        row["character_attitude"] = "disastrous"
+        row["attitude_label"] = "Disastrous attitude"
+        row.setdefault(
+            "scout_character_note",
+            "Multiple teams flagged attitude, coachability, and off-ice reliability concerns.",
+        )
+        for key, val in (
+            ("coachability", max(22.0, float(score) - 8.0)),
+            ("maturity", max(20.0, float(score) - 12.0)),
+            ("work_ethic", max(24.0, float(score) - 6.0)),
+            ("sociability", max(18.0, float(score) - 14.0)),
+            ("competitiveness", max(26.0, float(score) - 4.0)),
+        ):
+            try:
+                cur = float(row.get(key) or 0)
+            except (TypeError, ValueError):
+                cur = 0.0
+            if cur <= 0 or cur >= 50.0:
+                row[key] = round(val, 1)
+        payload = row.get("chapter_profile")
+        if isinstance(payload, dict):
+            chapters = dict(payload.get("chapters") or {})
+            chapters["character"] = score
+            row["chapter_profile"] = {**payload, "chapters": chapters}
+        if player is not None:
+            setattr(player, "character_concerns", True)
+        return
+
+    row["character_concerns"] = False
+    chapter_char = None
+    if isinstance(row.get("chapter_profile"), dict):
+        try:
+            chapter_char = int(round(float((row["chapter_profile"].get("chapters") or {}).get("character") or 0)))
+        except (TypeError, ValueError):
+            chapter_char = None
+    score_raw = row.get("character_score")
+    if (score_raw is None or score_raw == 0) and chapter_char and chapter_char > 0:
+        score_raw = chapter_char
+    elif chapter_char and chapter_char > 0:
+        try:
+            existing = int(round(float(score_raw or 0)))
+        except (TypeError, ValueError):
+            existing = 0
+        # Chapter scoring blends psych + OVR; prefer it over stale personality mirrors (~55).
+        if existing <= 0 or (existing < 58 and chapter_char > existing):
+            score_raw = chapter_char
+    if score_raw is None and isinstance(row.get("chapter_profile"), dict):
+        score_raw = (row["chapter_profile"].get("chapters") or {}).get("character")
+    try:
+        score = int(round(float(score_raw or row.get("character") or 0)))
+    except (TypeError, ValueError):
+        score = 0
+    if score > 0:
+        row["character_score"] = score
+        row["character"] = score
+
+
+def _rating_avg_matching(ratings: Mapping[str, Any], *needles: str) -> Optional[int]:
+    vals: List[float] = []
+    for key, raw in ratings.items():
+        kl = str(key).lower()
+        if not any(n in kl for n in needles):
+            continue
+        v = _rating_to_100(raw)
+        if v is not None:
+            vals.append(v)
+    if not vals:
+        return None
+    return int(round(sum(vals) / len(vals)))
+
+
+def _infer_chapter_payload(player: Any, row: Dict[str, Any], ratings: Mapping[str, Any]) -> Dict[str, Any]:
+    pos = str(row.get("position") or getattr(player, "position", "F") or "F")
+    ptype = _player_type_for_position(pos)
+    try:
+        ovr = int(round(float(
+            row.get("true_ovr")
+            or row.get("overall")
+            or row.get("effective_ovr")
+            or getattr(player, "overall", 0)
+            or 0
+        )))
+    except (TypeError, ValueError):
+        ovr = 0
+    try:
+        pot = int(round(float(
+            row.get("potential_score")
+            or row.get("dev_potential")
+            or getattr(player, "potential", 0)
+            or (ovr + 4 if ovr else 0)
+        )))
+    except (TypeError, ValueError):
+        pot = ovr + 4 if ovr else 0
+
+    buckets = _rating_key_buckets(dict(ratings or {}))
+
+    def _bucket_avg(name: str) -> Optional[int]:
+        keys = buckets.get(name) or []
+        if not keys:
+            return None
+        vals = [_rating_to_100(ratings[k]) for k in keys if ratings.get(k) is not None]
+        vals = [v for v in vals if v is not None]
+        if not vals:
+            return None
+        return int(round(sum(vals) / len(vals)))
+
+    if ptype == "goalie":
+        glove = _rating_avg_matching(ratings, "glove", "reflex") or _bucket_avg("skate") or ovr
+        blocker = (
+            _rating_avg_matching(ratings, "blocker")
+            or _rating_avg_matching(ratings, "position")
+            or ovr
+        )
+        stick = _rating_avg_matching(ratings, "stick", "rebound", "puck") or max(0, ovr - 2)
+        chapters = {
+            "overall": ovr,
+            "glove": int(glove),
+            "blocker": int(blocker),
+            "stick": int(stick),
+            "potential": pot,
+        }
+    else:
+        shoot = _bucket_avg("shoot")
+        passing = _bucket_avg("pass")
+        offence_parts = [v for v in (shoot, passing) if v is not None]
+        offence = int(round(sum(offence_parts) / len(offence_parts))) if offence_parts else ovr
+        defence = _bucket_avg("def") or max(0, ovr - 2)
+        transition = _bucket_avg("skate") or ovr
+        mental = _bucket_avg("iq") or ovr
+        physical = _bucket_avg("phys") or max(0, ovr - 1)
+        character = _resolve_character_chapter_score(row, player, mental=mental, ovr=ovr)
+        chapters = {
+            "overall": ovr,
+            "offence": offence,
+            "defence": defence,
+            "character": character,
+            "mental": mental,
+            "transition": transition,
+            "physical": physical,
+            "potential": pot,
+        }
+    return {
+        "schema_version": 1,
+        "player_type": ptype,
+        "chapters": {k: int(v) for k, v in chapters.items()},
+        "overall_source": "inferred",
+    }
+
+
+def _merge_chapter_payloads(primary: Optional[Dict[str, Any]], fallback: Dict[str, Any]) -> Dict[str, Any]:
+    inferred = dict(fallback or {})
+    if not primary:
+        return inferred
+    merged = dict(primary)
+    chapters = dict(merged.get("chapters") or {})
+    for key, val in (inferred.get("chapters") or {}).items():
+        chapters.setdefault(str(key), int(val))
+    merged["chapters"] = chapters
+    if not merged.get("player_type"):
+        merged["player_type"] = inferred.get("player_type")
+    return merged
+
+
+def _attach_chapter_profile_to_row(player: Any, row: Dict[str, Any], ratings: Mapping[str, Any]) -> None:
+    """Expose chapter-based ratings (overall/offence/defence/...) for draft UI."""
+    inferred = _infer_chapter_payload(player, row, ratings)
+    payload: Optional[Dict[str, Any]] = None
+    try:
+        from app.sim_engine.entities.chapter_attributes import serialize_chapter_profile_for_api  # noqa: WPS433
+
+        payload = serialize_chapter_profile_for_api(player)
+    except Exception:
+        payload = None
+
+    payload = _merge_chapter_payloads(payload, inferred)
+    chapters = dict(payload.get("chapters") or {})
+    ptype = str(payload.get("player_type") or inferred.get("player_type") or "skater")
+    required = _GOALIE_CHAPTER_IDS if ptype == "goalie" else _SKATER_CHAPTER_IDS
+    fallback_chapters = dict(inferred.get("chapters") or {})
+    for key in required:
+        if key not in chapters or chapters.get(key) in (None, 0):
+            if key in fallback_chapters:
+                chapters[key] = fallback_chapters[key]
+    if ptype != "goalie" and "character" in required:
+        mental = int(chapters.get("mental") or fallback_chapters.get("mental") or 0)
+        ovr = int(chapters.get("overall") or fallback_chapters.get("overall") or 0)
+        chapters["character"] = _resolve_character_chapter_score(row, player, mental=mental, ovr=ovr)
+    payload["chapters"] = {k: int(v) for k, v in chapters.items() if v is not None}
+
+    row["chapter_profile"] = payload
+    for key, val in payload["chapters"].items():
+        try:
+            row[str(key)] = int(val)
+        except (TypeError, ValueError):
+            pass
+    _apply_character_integrity(row, player)
 
 
 def infer_prospect_role(row: Mapping[str, Any]) -> str:
@@ -996,6 +1493,109 @@ def compute_ceiling_visibility(
     }
 
 
+def _peak_range_max_span(rank: int) -> float:
+    """Tight public ceiling bands — even spotlight picks stay readable."""
+    r = max(1, int(rank or 999))
+    if r <= 3:
+        return 5.0
+    if r <= 10:
+        return 6.0
+    if r <= 20:
+        return 5.0
+    if r <= 32:
+        return 4.0
+    if r <= 64:
+        return 3.0
+    return 2.5
+
+
+def _enforce_peak_range_span(intel: Dict[str, Any], rank: int) -> Dict[str, Any]:
+    """Clamp potential/ceiling range width after other intel passes."""
+    if not isinstance(intel, dict):
+        return intel
+    pr = dict(intel.get("potential_range") or intel.get("ceiling_range") or {})
+    try:
+        lo = float(pr.get("low") or 0)
+        hi = float(pr.get("high") or 0)
+    except (TypeError, ValueError):
+        return intel
+    if hi <= 0 or hi <= lo:
+        return intel
+    max_span = _peak_range_max_span(rank)
+    span = hi - lo
+    if span <= max_span:
+        return intel
+    center = (lo + hi) / 2.0
+    lo = max(50.0, center - max_span * 0.48)
+    hi = min(99.0, center + max_span * 0.52)
+    if hi <= lo:
+        hi = lo + max(1.0, max_span * 0.5)
+    out = dict(intel)
+    pr["low"] = round(lo, 1)
+    pr["high"] = round(hi, 1)
+    out["potential_range"] = pr
+    cr = dict(out.get("ceiling_range") or pr)
+    cr["low"] = pr["low"]
+    cr["high"] = pr["high"]
+    out["ceiling_range"] = cr
+    visible = round((float(pr["low"]) + float(pr["high"])) / 2.0, 1)
+    out["potential_score"] = round(min(99.0, visible), 1)
+    out["expected_ceiling_estimate"] = out["potential_score"]
+    out["uncertainty"] = round(max(1.0, float(pr["high"]) - float(pr["low"])), 1)
+    return out
+
+
+def fog_public_chapter_profile(
+    chapter_profile: Optional[Dict[str, Any]],
+    *,
+    rank: Any = 999,
+    scout_overlay_pct: Any = 0.0,
+    ceiling_hidden: bool = False,
+    seed_key: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Hide or band chapter ratings until the user builds a real scouting file."""
+    if not isinstance(chapter_profile, dict):
+        return chapter_profile
+    chapters = chapter_profile.get("chapters")
+    if not isinstance(chapters, dict) or not chapters:
+        return chapter_profile
+    try:
+        r = int(rank or 999)
+    except (TypeError, ValueError):
+        r = 999
+    try:
+        scout = float(scout_overlay_pct or 0.0)
+    except (TypeError, ValueError):
+        scout = 0.0
+    if scout >= 72.0:
+        return chapter_profile
+    if ceiling_hidden and scout < 20.0:
+        return {**chapter_profile, "chapters": {}, "fogged": True, "hidden": True}
+    if r > 64 and scout < 55.0:
+        return {**chapter_profile, "chapters": {}, "fogged": True, "hidden": True}
+    if r > 32 and scout < 45.0:
+        return {**chapter_profile, "chapters": {}, "fogged": True, "hidden": True}
+    if r > 15 and scout < 35.0:
+        return {**chapter_profile, "chapters": {}, "fogged": True, "hidden": True}
+    band = 10 if scout < 25 else 8 if scout < 45 else 6
+    if r > 32:
+        band += 2
+    fogged: Dict[str, Any] = {}
+    for key, raw in chapters.items():
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            continue
+        jitter = (_stable_int(100, seed_key or "ch", str(key)) % 7) - 3
+        mid = val + jitter * 0.2
+        fogged[str(key)] = {
+            "low": int(round(max(35.0, mid - band))),
+            "high": int(round(min(99.0, mid + band * 0.65))),
+            "band": True,
+        }
+    return {**chapter_profile, "chapters": fogged, "fogged": True, "hidden": False}
+
+
 def compute_public_ovr_band(
     true_ovr: float,
     scout_overlay_pct: float,
@@ -1052,7 +1652,7 @@ def build_potential_intel(
     conf = float(overlay_pct if overlay_pct is not None else confidence)
     conf = max(0.0, min(100.0, conf))
     # Gradual fog: higher confidence narrows band and reduces bias, never zeros uncertainty.
-    gap = max(2.5, (100.0 - conf) * 0.28)
+    gap = max(2.0, (100.0 - conf) * 0.12)
     # Persistent evaluation miss — magnitude scales with fog.
     bias_span = max(0.0, (100.0 - conf) * 0.055)
     if seed_key is not None:
@@ -1103,6 +1703,78 @@ def build_potential_intel(
     if include_true:
         # Server-only — never attach on public draft-board serialization.
         out["true_potential_score"] = round(float(true_pot), 1)
+    return out
+
+
+def cap_public_peak_range_for_rank(
+    intel: Dict[str, Any],
+    rank: int,
+    center_pot: float,
+) -> Dict[str, Any]:
+    """Keep lottery-board peak highs differentiated — not every top pick at 99."""
+    if not isinstance(intel, dict):
+        return intel
+    pr = dict(intel.get("potential_range") or {})
+    try:
+        hi = float(pr.get("high") or 0)
+        lo = float(pr.get("low") or 0)
+    except (TypeError, ValueError):
+        return intel
+    if hi <= 0:
+        return intel
+    rank_n = max(0, int(rank or 0))
+    if rank_n == 1:
+        cap = 99.0
+    elif rank_n <= 3:
+        cap = 97.0
+    elif rank_n <= 5:
+        cap = 95.0
+    elif rank_n <= 10:
+        cap = 93.0
+    elif rank_n <= 20:
+        cap = 90.0
+    else:
+        cap = 99.0
+    try:
+        center = float(center_pot or intel.get("potential_score") or 0)
+    except (TypeError, ValueError):
+        center = 0.0
+    if center > 0 and rank_n <= 5:
+        cap = max(cap, center + 10.0)
+    elif center > 0 and rank_n <= 15:
+        cap = max(cap, center + 7.0)
+    elif center > 0:
+        cap = min(cap, center + 4.0 + max(0.0, (11 - min(rank_n or 99, 10)) * 0.35))
+    if hi <= cap:
+        if rank_n <= 10 and lo > 0 and (hi - lo) > (6.0 if rank_n <= 3 else 8.0):
+            max_span = 6.0 if rank_n <= 3 else 8.0
+            pr = dict(intel.get("potential_range") or {})
+            pr["low"] = round(max(50.0, hi - max_span), 1)
+            out = dict(intel)
+            out["potential_range"] = pr
+            cr = dict(out.get("ceiling_range") or pr)
+            cr["low"] = pr["low"]
+            cr["high"] = hi
+            out["ceiling_range"] = cr
+            visible = round((float(pr["low"]) + float(hi)) / 2.0, 1)
+            out["potential_score"] = round(min(99.0, visible), 1)
+            out["expected_ceiling_estimate"] = out["potential_score"]
+            out["uncertainty"] = round(max(1.0, hi - float(pr["low"])), 1)
+            return out
+        return intel
+    out = dict(intel)
+    pr["high"] = round(cap, 1)
+    if lo >= pr["high"]:
+        pr["low"] = round(max(50.0, pr["high"] - 6.0), 1)
+    out["potential_range"] = pr
+    cr = dict(out.get("ceiling_range") or pr)
+    cr["high"] = pr["high"]
+    cr["low"] = pr["low"]
+    out["ceiling_range"] = cr
+    visible = round((float(pr["low"]) + float(pr["high"])) / 2.0, 1)
+    out["potential_score"] = round(min(99.0, visible), 1)
+    out["expected_ceiling_estimate"] = out["potential_score"]
+    out["uncertainty"] = round(max(1.0, float(pr["high"]) - float(pr["low"])), 1)
     return out
 
 

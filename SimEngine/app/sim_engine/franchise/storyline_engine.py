@@ -2849,6 +2849,8 @@ def _append_story_arc_beat(session: Any, sl: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _spawn_social_posts(session: Any, sl: Dict[str, Any]) -> None:
+    """Auto social/reddit generation disabled — static templates served via payload."""
+    return
     heat = int(sl.get("heat") or 0)
     if heat < 12 and str(sl.get("priority") or "") not in ("CRITICAL", "HIGH"):
         return
@@ -3042,6 +3044,117 @@ def enrich_storyline_for_narrative_universe(session: Any, event: Dict[str, Any])
     return sl
 
 
+def _static_social_feed_templates() -> List[Dict[str, Any]]:
+    """Placeholder Puckr posts — customize template_key win/loss/neutral in engine."""
+    return [
+        {
+            "id": "tpl_puckr_win",
+            "template_key": "win",
+            "platform": "twitter_style_feed",
+            "author_type": "fan",
+            "author_name": "Puckr Fan",
+            "handle": "@TemplateWin",
+            "verified": False,
+            "text": "Big win tonight — the room looks locked in. #NHLDynasty",
+            "related_headline": "",
+            "calendar_iso": "",
+            "heat": 20,
+            "likes": 120,
+            "reposts": 18,
+            "replies": 6,
+            "is_template": True,
+        },
+        {
+            "id": "tpl_puckr_loss",
+            "template_key": "loss",
+            "platform": "twitter_style_feed",
+            "author_type": "fan",
+            "author_name": "Puckr Fan",
+            "handle": "@TemplateLoss",
+            "verified": False,
+            "text": "Tough loss. Need a response next game — the effort wasn't there.",
+            "related_headline": "",
+            "calendar_iso": "",
+            "heat": 18,
+            "likes": 95,
+            "reposts": 12,
+            "replies": 22,
+            "is_template": True,
+        },
+        {
+            "id": "tpl_puckr_neutral",
+            "template_key": "neutral",
+            "platform": "twitter_style_feed",
+            "author_type": "fan",
+            "author_name": "Puckr Fan",
+            "handle": "@TemplateNeutral",
+            "verified": False,
+            "text": "Even game tonight. Both teams had chances — on to the next one.",
+            "related_headline": "",
+            "calendar_iso": "",
+            "heat": 12,
+            "likes": 64,
+            "reposts": 8,
+            "replies": 5,
+            "is_template": True,
+        },
+    ]
+
+
+def _static_reddit_thread_templates() -> List[Dict[str, Any]]:
+    """Placeholder IceHole threads — customize template_key win/loss/neutral in engine."""
+    return [
+        {
+            "thread_id": "tpl_icehole_win",
+            "template_key": "win",
+            "subreddit": "r/hockey",
+            "title": "[Template] Post-game thread — W",
+            "op_author": "u/TemplateWin",
+            "flair": "Discussion",
+            "body": "Solid win. What stood out to you tonight?",
+            "upvotes": 240,
+            "upvote_ratio": 0.91,
+            "comment_count": 18,
+            "top_comments": [],
+            "knowledge_type": "report",
+            "sentiment_score": 0.45,
+            "is_template": True,
+        },
+        {
+            "thread_id": "tpl_icehole_loss",
+            "template_key": "loss",
+            "subreddit": "r/hockey",
+            "title": "[Template] Post-game thread — L",
+            "op_author": "u/TemplateLoss",
+            "flair": "Discussion",
+            "body": "Rough night. What needs to change before the next one?",
+            "upvotes": 310,
+            "upvote_ratio": 0.78,
+            "comment_count": 42,
+            "top_comments": [],
+            "knowledge_type": "report",
+            "sentiment_score": -0.35,
+            "is_template": True,
+        },
+        {
+            "thread_id": "tpl_icehole_neutral",
+            "template_key": "neutral",
+            "subreddit": "r/hockey",
+            "title": "[Template] Game thread — even battle",
+            "op_author": "u/TemplateNeutral",
+            "flair": "Discussion",
+            "body": "Close game either way. Thoughts on how it played out?",
+            "upvotes": 180,
+            "upvote_ratio": 0.85,
+            "comment_count": 24,
+            "top_comments": [],
+            "knowledge_type": "report",
+            "sentiment_score": 0.05,
+            "is_template": True,
+        },
+    ]
+
+
 def build_narrative_universe_payload(session: Any) -> Dict[str, Any]:
     """API payload for Storylines UI + player dossier media tabs."""
     migrate_session_storyline_state(session)
@@ -3057,8 +3170,8 @@ def build_narrative_universe_payload(session: Any) -> Dict[str, Any]:
         "reporters": list(MEDIA_REPORTERS),
         "agents": list(PLAYER_AGENTS),
         "story_arcs": list(getattr(session, "story_arcs", None) or [])[-40:],
-        "social_posts": list(getattr(session, "social_posts", None) or [])[-120:],
-        "reddit_threads": list(getattr(session, "reddit_threads", None) or [])[-100:],
+        "social_posts": _static_social_feed_templates(),
+        "reddit_threads": _static_reddit_thread_templates(),
         "reddit_engagement_pulse": list(getattr(session, "reddit_engagement_pulse", None) or [])[-20:],
         "world_events": list(getattr(session, "decision_event_log", None) or [])[-30:],
         "knowledge_graph": list(getattr(session, "knowledge_graph", None) or [])[-80:],
@@ -3544,6 +3657,11 @@ def _ensure_prospect_social_profile(session: Any, prospect_key: str, prospect_na
 
 
 def generate_prospect_social_posts(session: Any, rng: Optional[random.Random] = None) -> int:
+    """Prospect social auto-generation disabled — use static feed templates."""
+    return 0
+
+
+def _generate_prospect_social_posts_legacy(session: Any, rng: Optional[random.Random] = None) -> int:
     """Draft-season prospect Twitter — first-class social entities."""
     r = rng or random.Random()
     phase = str(getattr(session, "phase", "") or "").lower()
@@ -4822,6 +4940,7 @@ def _u_add_reddit_thread(session: Any, sl: Dict[str, Any], rng: Optional[random.
         "heat": heat,
         "player_id": sl.get("player_id"),
         "player_name": sl.get("player_name"),
+        "source_trade_id": str(sl.get("source_trade_id") or sl.get("trade_id") or ""),
     }
     threads = list(getattr(session, "reddit_threads", None) or [])
     threads.append(thread)
@@ -4858,6 +4977,11 @@ def _u_add_social_post(session: Any, post: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _u_social_burst(session: Any, storyline: Dict[str, Any], event: Dict[str, Any], rng: random.Random) -> None:
+    """Auto social burst disabled — static templates served via payload."""
+    return
+
+
+def _u_social_burst_legacy(session: Any, storyline: Dict[str, Any], event: Dict[str, Any], rng: random.Random) -> None:
     if not storyline:
         return
     from app.sim_engine.franchise.social_copy_engine import (  # noqa: WPS433
@@ -5911,8 +6035,8 @@ def build_narrative_universe_v2_payload(session: Any) -> Dict[str, Any]:
     active_promises = [row for row in (getattr(session, "universe_promises", None) or []) if str(row.get("status") or "") == "active"]
     user_players = [row for row in entities.values() if str(row.get("team_id") or "") == user_team_id and bool(row.get("active_roster", True))]
     user_players.sort(key=lambda row: (-float(row.get("room_value", 0)), str(row.get("player_name") or "")))
-    feed = list(getattr(session, "social_posts", None) or [])[-120:]
-    reddit = list(getattr(session, "reddit_threads", None) or [])[-100:]
+    feed = _static_social_feed_templates()
+    reddit = _static_reddit_thread_templates()
     burner: Dict[str, Any] = {}
     try:
         from app.sim_engine.franchise.burner_engine import burner_state_payload  # noqa: WPS433
@@ -6537,8 +6661,13 @@ def build_human_dossier_payload(
     mw = dict(entity.get("mental_wellbeing") or {}) if include_private else {}
     base_ovr = float(entity.get("overall") or _player_ovr99(player or object()))
     readiness_delta = 0.0
-    for mod in _u_active_modifiers(session, str(entity.get("player_id") or "")):
-        readiness_delta += float(mod.get("ovr_delta") or 0)
+    mods = _u_active_modifiers(session, str(entity.get("player_id") or ""))
+    if isinstance(mods, dict):
+        readiness_delta += float(mods.get("ovr") or mods.get("overall") or mods.get("ovr_delta") or 0)
+    elif isinstance(mods, list):
+        for mod in mods:
+            if isinstance(mod, dict):
+                readiness_delta += float(mod.get("ovr_delta") or 0)
     current_ovr = round(_u_clip(base_ovr + readiness_delta, 1, 99), 1)
 
     char_tier = _u_tier_label(float(personality.get("character", 55)))
@@ -7690,6 +7819,7 @@ def _build_trade_rejected_storyline(
     cause_event_id: str,
     calendar_iso: str,
     cur_day: int,
+    trade_id: str = "",
 ) -> Optional[Dict[str, Any]]:
     tname = _team_display(session, team_id)
     partner = _team_display(session, partner_team_id)
@@ -7751,6 +7881,8 @@ def _build_trade_rejected_storyline(
         "visibility": "team_only",
         "knowledge_type": "fact",
         "public_knowledge_level": "private",
+        "trade_id": str(trade_id or ""),
+        "source_trade_id": str(trade_id or ""),
     }
 
 
@@ -7782,6 +7914,10 @@ def record_trade_hub_evaluation(
                 break
     generated: List[Dict[str, Any]] = []
     cur, iso, season = _u_current_meta(session)
+    trade_id = str(evaluation.get("trade_id") or "")
+    if not trade_id:
+        trade_id = f"trade_{cur}_{uuid.uuid4().hex[:8]}"
+        evaluation["trade_id"] = trade_id
     rejection_kind = _classify_trade_rumor_verdict(evaluation)
     for pid, pname, player in _outgoing_user_players(session, assets_by_team):
         pst = _ensure_player_storyline_state(player)
@@ -7805,7 +7941,7 @@ def record_trade_hub_evaluation(
         pst["last_trade_rumor_week"] = cur // 7
         pst["last_trade_rumor_season"] = season
         attempt_n = int(pst["trade_attempt_count"])
-        sl = _build_trade_rejected_storyline(session, player=player, player_id=pid, player_name=pname, team_id=utid, partner_team_id=partner_id, attempt_count=attempt_n, cause_event_id=eid, calendar_iso=iso, cur_day=cur)
+        sl = _build_trade_rejected_storyline(session, player=player, player_id=pid, player_name=pname, team_id=utid, partner_team_id=partner_id, attempt_count=attempt_n, cause_event_id=eid, calendar_iso=iso, cur_day=cur, trade_id=trade_id)
         if not sl:
             continue
         _apply_storyline_effects(session, utid, pid, dict(sl.get("effects") or {}))
@@ -8779,7 +8915,8 @@ def _gm_apply_meeting_outcome(session: Any, ctx: Dict[str, Any], interaction_typ
         "player_name": str(entity.get("player_name") or "Player"),
         "summary": str(choice.get("label") or interaction_type),
     }
-    receipts = _u_apply_outcome(session, fake_interaction, choice)
+    applied = _u_apply_outcome(session, fake_interaction, choice)
+    receipts = dict((applied or {}).get("receipts") or applied or {})
     _gm_set_cooldown(entity, interaction_type, day)
     rel = entity.setdefault("gm_relationship", {})
     for key, delta in (outcome.get("relationship") or {}).items():

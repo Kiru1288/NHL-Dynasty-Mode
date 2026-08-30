@@ -100,12 +100,20 @@ import React, {
    * off-axis rest pose spent most of its right-hand travel before the player
    * touched the mouse, which left the right wall unreachable.
    */
+  function officeFovForWindow(width = window.innerWidth, height = window.innerHeight) {
+    const aspect = Number(width) / Math.max(1, Number(height));
+    if (aspect < 1.45) return 66;
+    if (aspect < 1.65) return 60;
+    if (aspect < 1.9) return 54;
+    return 50;
+  }
+
   const OFFICE_CAMERA = {
-    position: [0, 1.96, 4.05],
-    target: [0, 1.62, -1.15],
-    fov: 46,
-    minDistance: 2.4,
-    maxDistance: 6.8,
+    position: [0, 2.02, 5.15],
+    target: [0, 1.58, -1.15],
+    fov: officeFovForWindow(),
+    minDistance: 2.8,
+    maxDistance: 7.4,
   };
 
   /** League Ops diorama focal point — used for hover/click camera nudge */
@@ -2284,6 +2292,18 @@ import React, {
     }, [leagueOpsClickToken]);
 
     useEffect(() => {
+      const applyFov = () => {
+        if (activePanel) return;
+        camera.fov = officeFovForWindow();
+        camera.updateProjectionMatrix();
+        focusRef.current.fov = camera.fov;
+      };
+      applyFov();
+      window.addEventListener("resize", applyFov);
+      return () => window.removeEventListener("resize", applyFov);
+    }, [activePanel, camera]);
+
+    useEffect(() => {
       const snap = prefersReducedMotion || lowPowerMode;
       const panelTarget = activePanel ? PANEL_CAMERA_TARGETS[activePanel] : null;
       const nextPos = panelTarget?.position || OFFICE_CAMERA.position;
@@ -2326,7 +2346,7 @@ import React, {
       const panelTarget = activePanel ? PANEL_CAMERA_TARGETS[activePanel] : null;
       const basePos = new THREE.Vector3(...(panelTarget?.position || OFFICE_CAMERA.position));
       const baseTarget = new THREE.Vector3(...(panelTarget?.target || OFFICE_CAMERA.target));
-      const baseFov = panelTarget?.fov || OFFICE_CAMERA.fov;
+      const baseFov = panelTarget?.fov || officeFovForWindow();
 
       let destPos = basePos;
       let destTarget = baseTarget;

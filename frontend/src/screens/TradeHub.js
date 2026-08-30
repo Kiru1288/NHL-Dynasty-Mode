@@ -37,6 +37,19 @@ function buildIceholeBuzzMap(franchiseState) {
   return map;
 }
 
+function buildTradeRumorGroups(franchiseState, exploredTradeIds) {
+  const threads = safeArray(franchiseState?.narrative_universe?.reddit_threads);
+  const explored = Array.isArray(exploredTradeIds) ? exploredTradeIds : [];
+  const groups = new Map();
+  threads.forEach((t) => {
+    const tid = String(t?.source_trade_id || "");
+    if (!tid) return;
+    if (!groups.has(tid)) groups.set(tid, []);
+    groups.get(tid).push(t);
+  });
+  return [...groups.entries()].filter(([tid]) => explored.includes(tid));
+}
+
 const SLOTS = 5;
 const DRAG_MIME = "application/x-nhl-trade-asset";
 
@@ -6607,6 +6620,7 @@ export default function TradeHub() {
     () => buildIceholeBuzzMap(franchiseState),
     [franchiseState?.narrative_universe?.reddit_threads, franchiseState?.narrative_revision]
   );
+
   const openIceholeThread = useCallback(
     (thread) => {
       setPendingSocialNav({
@@ -6647,12 +6661,18 @@ export default function TradeHub() {
   const [selectedTeamDetail, setSelectedTeamDetail] = useState(null);
   const [selectedTradeReview, setSelectedTradeReview] = useState(false);
   const [hasProposed, setHasProposed] = useState(false);
+  const [exploredTradeIds, setExploredTradeIds] = useState([]);
   const [comparedAssets, setComparedAssets] = useState([]);
   const [teamPlayersMenu, setTeamPlayersMenu] = useState(null);
   const [waiveBusy, setWaiveBusy] = useState(false);
   const [waiveResult, setWaiveResult] = useState(null);
 
   const decisionToastTimer = useRef(null);
+
+  const tradeRumorGroups = useMemo(
+    () => buildTradeRumorGroups(franchiseState, exploredTradeIds),
+    [franchiseState?.narrative_universe?.reddit_threads, franchiseState?.narrative_revision, exploredTradeIds]
+  );
 
   const meta = useMemo(
     () => buildTeamsMeta(franchiseState, tradeAssets || franchiseState?.trade_assets, tradeMarket),
@@ -7278,6 +7298,9 @@ export default function TradeHub() {
       const evalRes = await evaluateTradePackage({ assets_by_team: assetsPayload });
       ev = evalRes?.evaluation || evalRes;
       setEvaluation(ev);
+      if (ev?.trade_id) {
+        setExploredTradeIds((prev) => (prev.includes(ev.trade_id) ? prev : [...prev, ev.trade_id]));
+      }
       setEvaluating(false);
 
       const reactionScore = resolveFanReaction({
@@ -7299,6 +7322,7 @@ export default function TradeHub() {
         });
         showDecisionToast(rejectedToast);
         setSubmitStatus("rejected");
+        hydrateFranchiseNarrative?.({ force: true });
         return;
       }
 
@@ -7429,6 +7453,7 @@ export default function TradeHub() {
     franchiseState,
     partnerTeam,
     showDecisionToast,
+    hydrateFranchiseNarrative,
   ]);
 
   if (assetsLoading && !meta) {
@@ -7603,6 +7628,26 @@ export default function TradeHub() {
               userTeamId={meta?.userTeamId || ""}
               partnerId={partnerId || ""}
             />
+
+            {tradeRumorGroups.length ? (
+              <section className="trade-rumor-groups">
+                <h4>Rumors tied to deals you&apos;ve explored</h4>
+                {tradeRumorGroups.map(([tradeId, threads]) => (
+                  <div key={tradeId} className="trade-rumor-group">
+                    <strong>{tradeId}</strong>
+                    <ul>
+                      {threads.map((t) => (
+                        <li key={t.thread_id}>
+                          <button type="button" className="trade-rumor-link" onClick={() => openIceholeThread(t)}>
+                            {t.title}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </section>
+            ) : null}
 
             <div className="trade-hub-propose-wrap">
               {proposeOutcomeBadge && !shortReason ? (

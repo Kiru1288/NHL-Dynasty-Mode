@@ -527,6 +527,7 @@ export default function PlayoffStartMenu({
 }) {
   const { mergeFranchiseState, setFranchiseState, openFranchiseEvent } = useGameUI() || {};
   const [busy, setBusy] = useState(false);
+  const [simStatus, setSimStatus] = useState("");
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState(null);
   const [justSetIds, setJustSetIds] = useState(() => new Set());
@@ -537,7 +538,7 @@ export default function PlayoffStartMenu({
   const phase = String(franchiseState?.season_phase || franchiseState?.phase || "").toLowerCase();
   const live = franchiseState?.playoff_live || playoffData?.live_state || null;
   const isLive = Boolean(live?.started) && (phase === "playoffs" || phase === "playoff_ready");
-  const uid = userTeamId(franchiseState);
+  const uid = String(live?.user_team_id || userTeamId(franchiseState) || "");
   const payload = playoffData || franchiseState?.playoff_payload || {};
 
   const lookup = useMemo(
@@ -549,10 +550,9 @@ export default function PlayoffStartMenu({
     if (isLive && Array.isArray(live?.series) && live.series.length) {
       return live.series.map((s) => ({
         ...s,
-        is_user_series:
-          Boolean(s.is_user_series) ||
-          (uid &&
-            (String(s.team_high_id) === uid || String(s.team_low_id) === uid)),
+        is_user_series: Boolean(
+          uid && (String(s.team_high_id) === uid || String(s.team_low_id) === uid)
+        ),
       }));
     }
     return buildPreviewSeries(payload, uid);
@@ -651,6 +651,15 @@ export default function PlayoffStartMenu({
     async (action, body = {}) => {
       setBusy(true);
       setError("");
+      setSimStatus(
+        action === "sim_rest"
+          ? "Simming remaining playoff games…"
+          : action === "advance_day"
+            ? "Simming tonight's slate…"
+            : action === "sim_series"
+              ? "Simming series…"
+              : "Working…"
+      );
       try {
         if (!isLive && !cupComplete) {
           await runEnter();
@@ -683,6 +692,7 @@ export default function PlayoffStartMenu({
         return null;
       } finally {
         setBusy(false);
+        setSimStatus("");
       }
     },
     [isLive, cupComplete, runEnter, applyState, handoffToOffseason]
@@ -709,6 +719,7 @@ export default function PlayoffStartMenu({
   const runFastForwardPlayoffs = useCallback(async () => {
     setBusy(true);
     setError("");
+    setSimStatus("Starting playoff sim…");
     try {
       if (!isLive && !cupComplete) {
         await runEnter();
@@ -716,9 +727,12 @@ export default function PlayoffStartMenu({
       const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
       let finished = Boolean(cupComplete);
       for (let i = 0; i < 220 && !finished; i += 1) {
+        setSimStatus(`Simming playoffs · Day ${playoffDay + i + 1}…`);
         const res = await playoffAction("advance_day");
         applyState(res);
         const st = res?.state || {};
+        const day = Number(st?.playoff_live?.playoff_day ?? playoffDay + i + 1);
+        setSimStatus(`Simming playoffs · Day ${day + 1}…`);
         finished =
           Boolean(st?.playoff_live?.completed) ||
           Boolean(st?.champion_id) ||
@@ -730,10 +744,11 @@ export default function PlayoffStartMenu({
           await handoffToOffseason(res);
           break;
         }
-        // Sped-up visual: pause briefly so the bracket can paint between days.
-        await sleep(55);
+        // Let React paint bracket updates between day requests.
+        await sleep(80);
       }
       if (!finished) {
+        setSimStatus("Finishing Cup run + awards…");
         const res = await playoffAction("sim_rest");
         applyState(res);
         await handoffToOffseason(res);
@@ -747,27 +762,37 @@ export default function PlayoffStartMenu({
       );
     } finally {
       setBusy(false);
+      setSimStatus("");
     }
-  }, [isLive, cupComplete, runEnter, applyState, handoffToOffseason]);
+  }, [isLive, cupComplete, runEnter, applyState, handoffToOffseason, playoffDay]);
 
   const runContinueOffseason = useCallback(async () => {
     setBusy(true);
     setError("");
+    setSimStatus("Wrapping postseason…");
     try {
-      // If Cup not finished yet, finish remaining games first.
-      if (!cupComplete && isLive) {
-        const res = await playoffAction("sim_rest");
+      // Cup can look complete in the UI while backend phase is still "playoffs".
+      // Always finish live playoffs first, then continue into awards.
+      if (isLive || phase === "playoffs" || phase === "playoff_ready") {
+        const action = cupComplete ? "finish" : "sim_rest";
+        const res = await playoffAction(action);
         applyState(res);
         await handoffToOffseason(res);
-        if (res?.state?.season_phase === "post_cup" || res?.result?.finish?.status === "post_cup") {
+        const st = res?.state || {};
+        if (
+          st.season_phase === "post_cup" ||
+          st.phase === "post_cup" ||
+          st.season_phase === "offseason" ||
+          res?.result?.finish?.status === "post_cup"
+        ) {
+          const next = await continueOffseason({ from_stage: "awards" });
+          applyState(next);
+          if (typeof openFranchiseEvent === "function") openFranchiseEvent();
           return;
         }
       }
       const res = await continueOffseason({
-        from_stage: String(
-          /* post-cup / awards handoff into offseason timeline */
-          "awards"
-        ),
+        from_stage: String("awards"),
       });
       applyState(res);
       if (typeof openFranchiseEvent === "function") openFranchiseEvent();
@@ -779,6 +804,7 @@ export default function PlayoffStartMenu({
       );
     } finally {
       setBusy(false);
+      setSimStatus("");
     }
   }, [cupComplete, isLive, applyState, handoffToOffseason, openFranchiseEvent]);
 
@@ -988,7 +1014,7 @@ export default function PlayoffStartMenu({
               </button>
             </>
           )}
-          {busy ? <span className="po-hub-busy">Simming…</span> : null}
+          {busy ? <span className="po-hub-busy">{simStatus || "Simming…"}</span> : null}
         </footer>
       </main>
     </div>

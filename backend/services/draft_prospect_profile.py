@@ -20,6 +20,35 @@ def _i(v: Any, default: int = 0) -> int:
         return default
 
 
+def _parse_score_range(raw: Any) -> tuple[Optional[float], Optional[float]]:
+    """Normalize board range payloads (dict, list, tuple) to (low, high)."""
+    if raw is None:
+        return None, None
+    if isinstance(raw, dict):
+        lo = raw.get("low")
+        hi = raw.get("high")
+        try:
+            low_v = float(lo) if lo is not None else None
+            high_v = float(hi) if hi is not None else None
+        except (TypeError, ValueError):
+            return None, None
+        if low_v is None or high_v is None:
+            return None, None
+        if high_v < low_v:
+            low_v, high_v = high_v, low_v
+        return low_v, high_v
+    if isinstance(raw, (list, tuple)) and len(raw) >= 2:
+        try:
+            low_v = float(raw[0])
+            high_v = float(raw[1])
+        except (TypeError, ValueError):
+            return None, None
+        if high_v < low_v:
+            low_v, high_v = high_v, low_v
+        return low_v, high_v
+    return None, None
+
+
 def _first_present(row: Dict[str, Any], keys: List[str]) -> Any:
     """Return the first non-empty value from known real row fields."""
     for key in keys:
@@ -27,6 +56,37 @@ def _first_present(row: Dict[str, Any], keys: List[str]) -> Any:
         if value is not None and value != "":
             return value
     return None
+
+
+_PLAY_STYLE_LABELS = {
+    "TWO_WAY_F": "Two-way forward",
+    "TWO_WAY_D": "Two-way defenseman",
+    "TWO_WAY_W": "Two-way winger",
+    "POWER_FORWARD": "Power forward",
+    "SNIPER": "Sniper",
+    "PLAYMAKER": "Playmaker",
+    "GRINDER": "Grinder",
+    "OFFENSIVE_D": "Offensive defenseman",
+    "SHUTDOWN_D": "Shutdown defenseman",
+    "PUCK_MOVING_G": "Puck-moving goalie",
+    "BUTTERFLY": "Butterfly",
+    "HYBRID": "Hybrid",
+    "ATHLETIC": "Athletic",
+}
+
+
+def _humanize_play_style(raw: Any) -> Optional[str]:
+    if raw is None or raw == "":
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    key = s.upper().replace(" ", "_").replace("-", "_")
+    if key in _PLAY_STYLE_LABELS:
+        return _PLAY_STYLE_LABELS[key]
+    if "_" in s or (s.isupper() and len(s) > 2):
+        return s.replace("_", " ").title()
+    return s
 
 
 def _pos_bucket(pos: str) -> str:
@@ -498,7 +558,7 @@ def _evidence_strengths(row: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         seen.add(t)
         clean.append(item)
-        if len(clean) >= 3:
+        if len(clean) >= 6:
             break
     return clean
 
@@ -615,9 +675,392 @@ def _evidence_weaknesses(row: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         seen.add(t)
         clean.append(item)
-        if len(clean) >= 3:
+        if len(clean) >= 6:
             break
     return clean
+
+
+def _score_tier(score: float) -> str:
+    if score >= 88:
+        return "Elite"
+    if score >= 78:
+        return "Very High"
+    if score >= 68:
+        return "High"
+    if score >= 58:
+        return "Above Average"
+    if score >= 50:
+        return "Average"
+    if score >= 42:
+        return "Below Average"
+    return "Disastrous"
+
+
+def _attr_val(row: Dict[str, Any], *keys: str) -> Optional[float]:
+    chapters = (row.get("chapter_profile") or {}).get("chapters") or {}
+    for key in keys:
+        for src in (row, chapters):
+            raw = src.get(key) if isinstance(src, dict) else None
+            if raw is not None:
+                try:
+                    v = float(raw)
+                except (TypeError, ValueError):
+                    continue
+                if v > 0:
+                    return v
+    return None
+
+
+def _dossier_archetype_block(row: Dict[str, Any]) -> Dict[str, Any]:
+    raw = (
+        row.get("dossier_archetype")
+        or row.get("prospect_archetype")
+        or row.get("archetype")
+        or (row.get("player_comparison") or {}).get("archetype")
+    )
+    label = str(raw or "").strip()
+    if not label:
+        pos = _pos_bucket(str(row.get("position") or ""))
+        label = "Goaltender" if pos == "G" else ("Defenseman" if pos == "D" else "Forward")
+    human = label.replace("_", " ").title()
+    if label.isupper() and len(label) > 3:
+        human = label.replace("_", " ").title()
+    return {"key": str(raw or label).upper().replace(" ", "_"), "label": human, "source": "player_creation"}
+
+
+def _dossier_play_style_block(row: Dict[str, Any], archetype: Dict[str, Any]) -> Dict[str, Any]:
+    raw = row.get("dossier_play_style") or row.get("play_style") or row.get("playstyle")
+    if not raw:
+        chem = row.get("chemistry_playstyle")
+        raw = chem or row.get("play_style_bucket")
+    label = _humanize_play_style(raw)
+    if not label:
+        arch_key = str(archetype.get("key") or "").upper()
+        arch_map = {
+            "SNIPER": "North-south finisher",
+            "PLAYMAKER": "East-west distributor",
+            "POWER_FORWARD": "Power north-south",
+            "TWO_WAY_F": "Two-way detail",
+            "TWO_WAY_D": "Two-way defense",
+            "OFFENSIVE_D": "Puck-moving defense",
+            "SHUTDOWN_D": "Shutdown defense",
+            "DEFENSIVE_D": "Shutdown defense",
+            "BUTTERFLY_G": "Butterfly",
+            "HYBRID_G": "Hybrid",
+        }
+        for prefix, style in arch_map.items():
+            if arch_key.startswith(prefix) or prefix in arch_key:
+                label = style
+                break
+    gp = _i(row.get("gp") or row.get("games_played"))
+    goals = _i(row.get("goals"))
+    assists = _i(row.get("assists"))
+    points = _i(row.get("points")) or (goals + assists)
+    ppg = _f(row.get("ppg"))
+    if ppg <= 0 and gp > 0 and points > 0:
+        ppg = points / gp
+    if not label and gp >= 10:
+        if goals >= assists * 1.15 and goals >= 12:
+            label = "Volume shooter"
+        elif assists >= goals * 1.2 and assists >= 14:
+            label = "Playmaking pace"
+        elif ppg >= 0.95:
+            label = "Primary scorer"
+        elif ppg <= 0.35 and _pos_bucket(str(row.get("position") or "")) == "D":
+            label = "Stay-at-home defense"
+    return {"label": label or "Balanced", "source": "player_creation"}
+
+
+def _dossier_tools_block(row: Dict[str, Any]) -> List[Dict[str, Any]]:
+    pos = _pos_bucket(str(row.get("position") or ""))
+    if pos == "G":
+        keys = [
+            ("Glove", "glove", "glove_score"),
+            ("Blocker", "blocker", "blocker_score"),
+            ("Reflexes", "reflexes", "reflex_score"),
+            ("Rebound", "rebound_control", "rebound_score"),
+            ("Positioning", "positioning", "positioning_score"),
+            ("Puck-handling", "puck_handling", "puck_handling_score"),
+        ]
+    else:
+        keys = [
+            ("Skating", "skating", "skating_rating"),
+            ("Shot", "shooting", "shooting_rating"),
+            ("Vision", "passing", "passing_rating", "hockey_iq", "iq_rating"),
+            ("Defense", "defense", "def_rating"),
+            ("Physical", "physical", "physical_rating"),
+            ("IQ", "hockey_iq", "iq_rating"),
+        ]
+    out: List[Dict[str, Any]] = []
+    for label, *fields in keys:
+        val = _attr_val(row, *fields)
+        if val is None:
+            continue
+        score = int(round(val))
+        out.append({
+            "label": label,
+            "score": score,
+            "grade": score,
+            "tier": _score_tier(float(score)),
+            "text": str(score),
+            "locked": False,
+        })
+    return out
+
+
+def _zone_map_from_tools(row: Dict[str, Any], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+    pos = _pos_bucket(str(row.get("position") or ""))
+    by_label = {t["label"]: t for t in tools if t.get("label")}
+    if pos == "G":
+        def _avg(labels: List[str]) -> Optional[float]:
+            vals = [float(by_label[l]["score"]) for l in labels if l in by_label]
+            return sum(vals) / len(vals) if vals else None
+        zones = {
+            "rebound": _avg(["Rebound", "Reflexes"]),
+            "angles": _avg(["Positioning"]),
+            "range": _avg(["Puck-handling", "Glove"]),
+        }
+        return {"type": "crease", "zones": {k: {"value": round(v), "tier": _score_tier(v)} for k, v in zones.items() if v is not None}}
+    def _avg(labels: List[str]) -> Optional[float]:
+        vals = [float(by_label[l]["score"]) for l in labels if l in by_label]
+        return sum(vals) / len(vals) if vals else None
+    offensive = _avg(["Shot", "Vision"])
+    transition = _avg(["Skating", "IQ"])
+    defensive = _avg(["Defense"])
+    play_style = str(row.get("dossier_play_style") or row.get("playstyle") or "").lower()
+    if offensive and "shutdown" in play_style:
+        offensive = offensive * 0.82
+        defensive = (defensive or offensive or 0) * 1.08 if defensive else None
+    if transition and "transition" in play_style:
+        transition = min(99.0, transition * 1.06)
+    zones = {}
+    if defensive is not None:
+        zones["defensive"] = {"value": round(defensive), "tier": _score_tier(defensive)}
+    if transition is not None:
+        zones["transition"] = {"value": round(transition), "tier": _score_tier(transition)}
+    if offensive is not None:
+        zones["offensive"] = {"value": round(offensive), "tier": _score_tier(offensive)}
+    hero = "defensive" if pos == "D" and defensive and (not offensive or defensive >= offensive) else "offensive"
+    return {"type": "rink", "hero_zone": hero, "zones": zones}
+
+
+def _off_ice_frame_block(row: Dict[str, Any]) -> Dict[str, Any]:
+    chapters = (row.get("chapter_profile") or {}).get("chapters") or {}
+    char_score = _f(row.get("character_score") or chapters.get("character"))
+    rows = []
+    for label, key in (("Physical", "physical"), ("Mental", "mental"), ("Character", "character"), ("Transition", "transition")):
+        val = _f(chapters.get(key) or row.get(key))
+        if val <= 0 and label == "Character":
+            val = char_score
+        if val <= 0:
+            continue
+        detail = f"{label} {int(round(val))} — {_score_tier(val)}"
+        if label == "Character" and char_score >= 82:
+            detail = f"Character {int(round(val))} — recognized leader on file"
+        elif label == "Character" and char_score > 0 and char_score < 50:
+            detail = f"Character {int(round(val))} — disastrous attitude flagged"
+        rows.append({"label": label, "score": int(round(val)), "pips": max(0, min(10, int(round(val / 10)))), "detail": detail})
+    return {"rows": rows}
+
+
+def _attribute_strength_weakness_entries(row: Dict[str, Any]) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    strengths: List[Dict[str, Any]] = []
+    weaknesses: List[Dict[str, Any]] = []
+    pos = _pos_bucket(str(row.get("position") or ""))
+    tools = _dossier_tools_block(row)
+    for tool in tools:
+        score = float(tool.get("score") or 0)
+        label = str(tool.get("label") or "")
+        if score >= 82:
+            strengths.append({
+                "title": f"{label} tool",
+                "fact": f"{label} grades {int(round(score))} — {_score_tier(score)} for his age group",
+                "context": "Carrying attribute on the scouting card",
+                "confidence": "High",
+            })
+        elif score > 0 and score < 62:
+            weaknesses.append({
+                "title": f"{label} lag",
+                "fact": f"{label} at {int(round(score))} — {_score_tier(score)} relative to draft peers",
+                "context": "Development gap tied to on-ice tools",
+                "confidence": "High",
+            })
+    hcm = _i(row.get("height_cm"), 0)
+    weight = _f(row.get("weight"))
+    if pos == "D" and hcm >= 193:
+        strengths.append({
+            "title": "Defensive frame",
+            "fact": f"{_fmt_height(row)} frame with {int(weight)} lb listed weight" if weight else _fmt_height(row),
+            "context": "Size profile matches modern NHL defense usage",
+            "confidence": "High",
+        })
+    elif pos in ("C", "W") and weight >= 205 and hcm >= 185:
+        strengths.append({
+            "title": "Power frame",
+            "fact": f"{int(weight)} lb on a {_fmt_height(row) or f'{hcm} cm'} frame",
+            "context": "Physical profile supports net-front and board work",
+            "confidence": "High",
+        })
+    char_score = _f(row.get("character_score"))
+    if char_score >= 84:
+        strengths.append({
+            "title": "Leadership makeup",
+            "fact": f"Character score {int(round(char_score))} — high coachability and room presence",
+            "context": "Projects as a culture add through development",
+            "confidence": "High",
+        })
+    elif char_score > 0 and char_score < 50:
+        weaknesses.append({
+            "title": "Character risk",
+            "fact": f"Character score {int(round(char_score))} with attitude concerns on file",
+            "context": "Off-ice reliability is a draft-day factor",
+            "confidence": "High",
+        })
+    analytics = row.get("analytics") if isinstance(row.get("analytics"), dict) else {}
+    war = _f(analytics.get("war"))
+    if war >= 1.4:
+        strengths.append({
+            "title": "Analytics surplus",
+            "fact": f"WAR {war:+.2f} relative to junior production baseline",
+            "context": "Stat profile supports recent stock movement",
+            "confidence": "High",
+        })
+    elif war <= -0.35 and _i(row.get("gp")) >= 15:
+        weaknesses.append({
+            "title": "Analytics drag",
+            "fact": f"WAR {war:+.2f} — production and process trail draft slot",
+            "context": "Stat ledger is a headwind on the public board",
+            "confidence": "High",
+        })
+    return strengths, weaknesses
+
+
+def _full_strengths_weaknesses(row: Dict[str, Any]) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    base_s = _evidence_strengths(row)
+    base_w = _evidence_weaknesses(row)
+    attr_s, attr_w = _attribute_strength_weakness_entries(row)
+    seen_s: set = set()
+    seen_w: set = set()
+    strengths: List[Dict[str, Any]] = []
+    weaknesses: List[Dict[str, Any]] = []
+    for item in base_s + attr_s:
+        title = str(item.get("title") or "")
+        if not title or title in seen_s:
+            continue
+        seen_s.add(title)
+        strengths.append(item)
+        if len(strengths) >= 6:
+            break
+    for item in base_w + attr_w:
+        title = str(item.get("title") or "")
+        if not title or title in seen_w:
+            continue
+        seen_w.add(title)
+        weaknesses.append(item)
+        if len(weaknesses) >= 6:
+            break
+    return strengths, weaknesses
+
+
+def _scout_report_narrative(
+    row: Dict[str, Any],
+    *,
+    archetype: Dict[str, Any],
+    play_style: Dict[str, Any],
+    potential: Optional[Dict[str, Any]],
+    projection: Optional[Dict[str, Any]],
+) -> str:
+    name = str(row.get("name") or "Prospect").strip()
+    age = _i(row.get("age"), 18)
+    gp = _i(row.get("gp") or row.get("games_played"))
+    goals = _i(row.get("goals"))
+    assists = _i(row.get("assists"))
+    points = _i(row.get("points")) or (goals + assists)
+    ppg = _f(row.get("ppg"))
+    if ppg <= 0 and gp > 0 and points > 0:
+        ppg = points / gp
+    league = str(row.get("league_display") or row.get("league") or "junior")
+    arch = archetype.get("label") or "prospect"
+    style = play_style.get("label") or "balanced"
+    ovr = _f(row.get("current_ovr_estimate") or row.get("true_ovr") or row.get("scouted_overall_estimate"))
+    peak = _f((potential or {}).get("rating") or row.get("potential_score"))
+    floor = _f((potential or {}).get("floor"))
+    role = str((projection or {}).get("label") or "")
+    parts = [f"{name} ({age}Y) profiles as a {arch.lower()} with a {style.lower()} game in {league}."]
+    if gp > 0:
+        if _pos_bucket(str(row.get("position") or "")) == "G":
+            sv = row.get("save_pct") or row.get("sv_pct")
+            parts.append(f"Season line: {gp} GP, {row.get('wins', 0)} W, {sv} SV%.")
+        else:
+            parts.append(f"Season line: {goals}G-{assists}A-{points}P in {gp} GP ({ppg:.2f} PPG).")
+    if ovr > 0:
+        parts.append(f"Present ability grades near {int(round(ovr))} OVR.")
+    if peak > 0 and not row.get("ceiling_hidden"):
+        parts.append(f"Peak projection {int(round(peak))} OVR{f' with floor near {int(round(floor))}' if floor > 0 else ''}.")
+    if role:
+        parts.append(f"Projects as {role.lower()}.")
+    return " ".join(parts)
+
+
+def _development_trajectory_line(
+    row: Dict[str, Any],
+    *,
+    potential: Optional[Dict[str, Any]],
+    projection: Optional[Dict[str, Any]],
+    ovr_v: float,
+    pot_v: float,
+    nhl_prob: float,
+) -> str:
+    if row.get("ceiling_hidden"):
+        if ovr_v > 0:
+            return f"Ceiling withheld — present ability {int(round(ovr_v))} OVR; upside must be inferred from production and tools."
+        return "Ceiling withheld — trajectory depends on production, age, and tools."
+    floor = _f((potential or {}).get("floor"))
+    peak = _f((potential or {}).get("rating") or pot_v)
+    likely = str((projection or {}).get("label") or (potential or {}).get("band") or "")
+    gap = max(0.0, peak - ovr_v) if peak > 0 and ovr_v > 0 else 0.0
+    bits = []
+    if ovr_v > 0:
+        bits.append(f"Now {int(round(ovr_v))} OVR")
+    if peak > 0:
+        bits.append(f"peak {int(round(peak))}")
+    if floor > 0:
+        bits.append(f"floor {int(round(floor))}")
+    if likely:
+        bits.append(f"likely outcome {likely.lower()}")
+    if nhl_prob > 0:
+        bits.append(f"{int(round(nhl_prob))}% NHL probability")
+    if gap >= 14:
+        bits.append("wide runway remaining")
+    elif gap <= 6 and ovr_v >= 68:
+        bits.append("narrow gap to peak")
+    return " · ".join(bits) + "." if bits else "Development path still forming from backend grades."
+
+
+def _intel_desk_tags(row: Dict[str, Any]) -> List[str]:
+    tags: List[str] = []
+    public_rank = _i(row.get("public_rank") or row.get("central_rank"))
+    team_rank = _i(row.get("team_board_rank") or row.get("user_rank"))
+    scout_rank = _i(row.get("rank"))
+    if public_rank > 0 and team_rank > 0 and abs(public_rank - team_rank) >= 12:
+        tags.append("Public vs personal board split")
+    elif public_rank > 0 and scout_rank > 0 and abs(public_rank - scout_rank) >= 12:
+        tags.append("Public vs personal board split")
+    if bool(row.get("character_concerns")):
+        tags.append("Character concern")
+    if bool(row.get("is_overager") or row.get("overager")) or _i(row.get("age"), 18) >= 20:
+        tags.append("Overager")
+    stock_delta = _i(row.get("stock_delta") or row.get("stock_change"))
+    if stock_delta == 0:
+        nested = row.get("draft_stock") if isinstance(row.get("draft_stock"), dict) else {}
+        stock_delta = _i(nested.get("delta_rank") or nested.get("deltaRank") or nested.get("weekly_stock_delta"))
+    if stock_delta >= 50:
+        tags.append("Stock surge (+50)")
+    elif stock_delta <= -50:
+        tags.append("Stock collapse (-50)")
+    if bool(row.get("injured") or row.get("injury_status") or row.get("prospect_injured")):
+        tags.append("Injury")
+    return tags
 
 
 def _projection_notes(row: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -875,6 +1318,11 @@ def _potential_block(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     `probability` is NHL outcome odds derived from rank/tools/risk — not a renamed potential score.
     """
     pot = _f(row.get("expected_ceiling_estimate") or row.get("potential_score"))
+    pr_lo, pr_hi = _parse_score_range(row.get("potential_range") or row.get("ceiling_range"))
+    if pr_hi is not None and pr_hi > 0:
+        pot = pr_hi
+    elif pr_lo is not None and pr_lo > 0:
+        pot = max(pot, pr_lo)
     ovr = _f(row.get("current_ovr_estimate") or row.get("true_ovr"))
     if pot <= 0:
         return None
@@ -1607,140 +2055,19 @@ def _micro_summary(
 
 
 def _analytics_from_row_stats(row: Dict[str, Any]) -> Dict[str, Any]:
-    """Fill prospect analytics from season totals.
-
-    WAR / possession are intentional scouting signals:
-    - Scale with *current* ability (OVR) so higher-overall kids print higher WAR
-    - Reward production that exceeds what that OVR normally produces (gem finder)
-    - Never use hidden true potential — late-round ceiling fog stays intact, but
-      over-productive tools still light up WAR so users can hunt gems.
-    """
+    """Prospect analytics come from prospect_league_scoring.derive_prospect_analytics only."""
     existing = row.get("analytics") if isinstance(row.get("analytics"), dict) else {}
-    out: Dict[str, Any] = dict(existing or {})
-    gp = _i(row.get("gp") or row.get("games_played"))
-    goals = _i(row.get("goals"))
-    assists = _i(row.get("assists"))
-    points = _i(row.get("points"))
-    if points <= 0:
-        points = goals + assists
-    pos = str(row.get("position") or "").upper()
-    is_goalie = pos == "G" or "GOAL" in pos
-    is_d = pos in ("D", "LD", "RD") or pos.startswith("D")
-    ceiling_hidden = bool(row.get("ceiling_hidden"))
-
-    if is_goalie:
-        if out.get("gsax") is None and gp > 0:
-            sv = _f(row.get("save_pct") or row.get("sv_pct"), 0.0)
-            if sv > 1.5:
-                sv = sv / 100.0
-            if sv > 0:
-                shots_against = gp * 28.0
-                out["gsax"] = round((sv - 0.905) * shots_against, 2)
-        if out.get("quality_starts") is None and gp > 0:
-            wins = _i(row.get("wins"))
-            out["quality_starts"] = max(wins // 2, min(gp, int(round(gp * 0.45))))
-        return {k: v for k, v in out.items() if v is not None}
-
-    shots = _i(out.get("shots") or row.get("shots") or row.get("sog") or row.get("shots_on_goal"))
-    if shots <= 0 and gp > 0:
-        expected_sh = 0.12 if pos in ("C", "LW", "RW", "F", "W") else 0.07
-        shots = max(goals * 6, int(round(goals / max(0.04, expected_sh)))) if goals else max(gp * 2, points * 2)
-        shots = max(gp, shots)
-    if shots > 0:
-        out.setdefault("shots", shots)
-        if gp > 0:
-            out.setdefault("shot_rate", round(shots / float(gp), 2))
-        if goals >= 0 and shots > 0:
-            out.setdefault("shooting_pct", round((goals / float(shots)) * 100.0, 1))
-
-    if out.get("primary_points") is None and points > 0:
-        prim = int(round(goals + assists * 0.55))
-        out["primary_points"] = max(goals, min(points, prim))
-
-    if out.get("plus_minus") is None and row.get("plus_minus") is not None:
-        out["plus_minus"] = _i(row.get("plus_minus"))
-    elif out.get("plus_minus") is None and row.get("plusMinus") is not None:
-        out["plus_minus"] = _i(row.get("plusMinus"))
-
-    if gp >= 3:
-        ppg = _f(row.get("ppg"))
-        if ppg <= 0 and gp > 0:
-            ppg = points / float(gp)
-        # Observable ability only. When ceiling is fogged, ignore potential_score so
-        # WAR cannot leak the hidden ceiling — gems must show up via production vs OVR.
-        ovr = _f(row.get("true_ovr") or row.get("current_ovr_estimate") or row.get("scouted_overall"))
-        if ovr <= 0:
-            ovr = 58.0
-        ability = max(0.40, min(0.92, ovr / 99.0))
-        if not ceiling_hidden:
-            pot = _f(row.get("potential_score") or row.get("expected_ceiling_estimate"))
-            # Mild visible-ceiling blend only — never the sole driver.
-            if pot >= 70:
-                ability = min(0.92, ability * 0.82 + (pot / 99.0) * 0.18)
-
-        shot_rate = _f(out.get("shot_rate"))
-        if shot_rate <= 0 and gp > 0 and shots > 0:
-            shot_rate = shots / float(gp)
-        sh_pct = _f(out.get("shooting_pct"))
-        plus_minus = out.get("plus_minus")
-        pm_rate = (float(plus_minus) / float(gp)) if plus_minus is not None and gp > 0 else 0.0
-
-        # What PPG this current ability typically posts in junior (CHL-ish).
-        if is_d:
-            expected_ppg = 0.18 + ability * 0.72
-        else:
-            expected_ppg = 0.22 + ability * 1.05
-        surplus = ppg - expected_ppg
-
-        # Reliability scales with sample; still usable early (gem hunting before GP 15).
-        sample = min(1.0, (gp / 22.0) ** 0.65)
-
-        # Ability floor: a 72 OVR kid clears ~+1.0 WAR baseline at full sample.
-        ability_war = (ability - 0.52) * 5.4 * sample
-        prod_war = (ppg - (0.35 if is_d else 0.48)) * (2.1 if is_d else 2.6) * sample
-        # Overproduction vs ability = late-round gem signal (does not need potential).
-        gem_war = max(0.0, surplus) * (3.2 if is_d else 3.8) * sample
-        # Underproduction soft penalty so empty-calorie low-OVR points don't dominate.
-        under_pen = min(0.0, surplus) * 1.1 * sample
-        pm_war = pm_rate * 0.45 * sample
-        shot_war = max(-0.35, min(0.55, (shot_rate - (1.6 if is_d else 2.2)) * 0.14)) * sample
-        sh_war = 0.0
-        if sh_pct > 0:
-            sh_war = max(-0.25, min(0.35, (sh_pct - (7.5 if is_d else 10.0)) * 0.03)) * sample
-
-        off_share = 0.42 if is_d else 0.68
-        raw_war = ability_war + prod_war + gem_war + under_pen + pm_war + shot_war + sh_war
-        war = round(max(-1.8, min(4.8, raw_war)), 2)
-        off_war = round(max(-1.5, min(3.6, war * off_share + gem_war * 0.35)), 2)
-        def_war = round(max(-1.2, min(2.6, war - off_war)), 2)
-
-        # Possession tracks ability + surplus so high-OVR / gem kids don't all sit at 50%.
-        poss = 50.0 + (ability - 0.58) * 22.0 + surplus * 6.5 + pm_rate * 1.8
-        if is_d:
-            poss += (ability - 0.55) * 4.0
-        xgf = round(max(41.0, min(62.0, poss)), 1)
-        cf = round(max(40.0, min(63.0, xgf + (ability - 0.60) * 3.0 + (0.8 if is_d else -0.4))), 1)
-
-        # Always publish the scouting-signal WAR (overwrite stale thin-sample cookies).
-        out["war"] = war
-        out["offensive_war"] = off_war
-        out["defensive_war"] = def_war
-        out["xgf_pct"] = xgf
-        out["cf_pct"] = cf
-        out["analytics_signal"] = "gem_finder" if (ceiling_hidden and surplus >= 0.18 and war >= 1.15) else "standard"
-
-    if out.get("toi") is None and gp > 0:
-        ppg = _f(row.get("ppg"))
-        if ppg <= 0:
-            ppg = points / float(gp)
-        ovr = _f(row.get("true_ovr") or row.get("current_ovr_estimate"))
-        ability = (ovr / 99.0) if ovr > 0 else 0.58
-        if is_d:
-            toi = 17.5 + ability * 6.5 + min(3.0, ppg * 2.8)
-        else:
-            toi = 13.5 + ability * 7.0 + min(4.5, ppg * 3.5)
-        out["toi"] = round(min(24.0 if not is_d else 26.0, toi), 1)
-
+    if existing:
+        return {k: v for k, v in existing.items() if v is not None}
+    out: Dict[str, Any] = {}
+    for key in (
+        "war", "offensive_war", "defensive_war", "xgf_pct", "cf_pct", "ff_pct",
+        "shooting_pct", "plus_minus", "primary_points", "shot_rate", "shots",
+        "gsax", "quality_starts", "defensive_impact", "quality_of_competition",
+        "quality_of_teammates", "toi",
+    ):
+        if row.get(key) is not None:
+            out[key] = row.get(key)
     return {k: v for k, v in out.items() if v is not None}
 
 
@@ -1863,109 +2190,48 @@ def _fog_projection_notes(row: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _rank_history_from_row(row: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Prefer stored stock trail; otherwise build checkpoints from real board ranks."""
+    """Only stored weekly board history — never synthesize preseason arcs."""
     raw = row.get("rank_history") or row.get("stock_history") or []
-    if isinstance(raw, list) and len(raw) >= 2:
-        return list(raw)
-    points: List[Dict[str, Any]] = []
-    for label, keys in (
-        ("Preseason", ("preseason_rank", "preseasonRank")),
-        ("Midseason", ("midseason_rank", "midseasonRank")),
-        ("Current", ("rank", "central_rank", "public_rank")),
-    ):
-        rank = None
-        for k in keys:
-            if row.get(k) is not None:
-                try:
-                    rank = int(row.get(k))
-                except Exception:
-                    rank = None
-                if rank:
-                    break
-        if not rank:
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for entry in raw:
+        if entry is None:
             continue
-        if points and int(points[-1].get("rank") or 0) == rank:
-            if label != "Current":
-                continue
-        points.append({
+        if isinstance(entry, (int, float)) and int(entry) > 0:
+            out.append({
+                "date_label": f"Week {len(out) + 1}",
+                "label": f"Week {len(out) + 1}",
+                "rank": int(entry),
+                "event_source": "stored",
+            })
+            continue
+        if not isinstance(entry, dict):
+            continue
+        rank = _i(entry.get("rank") or entry.get("public_rank") or entry.get("board_rank") or entry.get("value"))
+        if rank <= 0:
+            continue
+        label = str(
+            entry.get("date_label")
+            or entry.get("label")
+            or entry.get("week_label")
+            or entry.get("date")
+            or entry.get("event")
+            or f"Week {len(out) + 1}"
+        )
+        out.append({
             "date_label": label,
-            "date": label,
+            "date": entry.get("date") or entry.get("calendar_iso") or label,
             "label": label,
             "rank": rank,
-            "event_source": "board_checkpoint",
+            "previous_rank": entry.get("previous_rank") or entry.get("prev_rank"),
+            "movement": entry.get("movement") or entry.get("delta_rank") or entry.get("delta"),
+            "reason": entry.get("reason") or entry.get("stock_reason"),
+            "event_source": entry.get("event_source") or "weekly_board",
+            "gp": entry.get("gp"),
+            "injury": entry.get("injury") or entry.get("injured"),
         })
-    # If history is thin/flat, backfill a season arc from stock delta / preseason gap.
-    ranks = [int(p.get("rank") or 0) for p in points]
-    flat = (not points) or len(points) < 2 or (len(set(ranks)) <= 1)
-    if flat:
-        current = None
-        for k in ("rank", "central_rank", "public_rank"):
-            if row.get(k) is not None:
-                try:
-                    current = int(row.get(k))
-                except Exception:
-                    current = None
-                if current:
-                    break
-        pre = _i(row.get("preseason_rank") or row.get("preseasonRank"))
-        delta = row.get("stock_change")
-        if delta is None:
-            delta = row.get("stock_delta")
-        if delta is None:
-            nested = row.get("draft_stock") if isinstance(row.get("draft_stock"), dict) else {}
-            delta = nested.get("delta_rank") or nested.get("deltaRank") or nested.get("stock_heat")
-        try:
-            delta_n = int(delta) if delta is not None else 0
-        except Exception:
-            delta_n = 0
-        if current and pre and pre != current:
-            delta_n = int(pre) - int(current)
-        if current and delta_n:
-            earlier = max(1, int(current) + int(delta_n))
-            mid = max(1, int(round((earlier + current) / 2.0)))
-            points = [
-                {
-                    "date_label": "Preseason",
-                    "date": "Preseason",
-                    "label": "Preseason",
-                    "rank": earlier,
-                    "event_source": "stock_delta",
-                },
-                {
-                    "date_label": "Midseason",
-                    "date": "Midseason",
-                    "label": "Midseason",
-                    "rank": mid,
-                    "event_source": "stock_delta",
-                },
-                {
-                    "date_label": "Current",
-                    "date": "Current",
-                    "label": "Current",
-                    "rank": int(current),
-                    "event_source": "board_checkpoint",
-                },
-            ]
-        elif current:
-            points = [
-                {
-                    "date_label": "Preseason",
-                    "date": "Preseason",
-                    "label": "Preseason",
-                    "rank": int(pre or current),
-                    "event_source": "board_checkpoint",
-                },
-                {
-                    "date_label": "Current",
-                    "date": "Current",
-                    "label": "Current",
-                    "rank": int(current),
-                    "event_source": "board_checkpoint",
-                },
-            ]
-        elif isinstance(raw, list) and raw:
-            return list(raw)
-    return points
+    return out
 
 
 def _normalize_outcome_segments(segs: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
@@ -1988,22 +2254,61 @@ def _normalize_outcome_segments(segs: List[Dict[str, Any]]) -> Optional[List[Dic
 
 
 def _outcome_distribution_block(row: Dict[str, Any], potential: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Scout-model outcome bands derived from NHL probability + floor/ceiling band."""
+    """Career outcome split from rank, OVR, peak, floor, character, and analytics."""
     if not potential or potential.get("hidden"):
         return None
     nhl = _f(potential.get("nhl_probability") or potential.get("probability"))
     if nhl <= 0:
         return None
+    rank = _i(row.get("rank"), 120)
+    ovr = _f(row.get("current_ovr_estimate") or row.get("true_ovr") or row.get("scouted_overall_estimate"))
+    peak = _f(potential.get("rating") or row.get("potential_score"))
+    floor = _f(potential.get("floor"))
+    gap = max(0.0, peak - ovr) if peak > 0 and ovr > 0 else 0.0
     band = str(row.get("outcome_band") or potential.get("band") or "Balanced")
     is_goalie = str(row.get("position") or "").upper() == "G"
+    analytics = row.get("analytics") if isinstance(row.get("analytics"), dict) else {}
+    war = _f(analytics.get("war"))
+    char = _f(row.get("character_score"))
+    bust_risk = 0.08
+    if rank <= 5:
+        bust_risk = 0.04
+    elif rank <= 15:
+        bust_risk = 0.06
+    elif rank >= 120:
+        bust_risk = 0.22
+    if band == "Boom/Bust":
+        bust_risk += 0.08
+    if bool(row.get("character_concerns")):
+        bust_risk += 0.06
+    if war <= -0.4:
+        bust_risk += 0.05
+    elif war >= 1.5:
+        bust_risk -= 0.03
+    if gap >= 16:
+        bust_risk += 0.04
+    bust_risk = max(0.03, min(0.35, bust_risk))
+    star_share = 0.10
+    if rank <= 3 and peak >= 88:
+        star_share = 0.38
+    elif rank <= 8 and peak >= 84:
+        star_share = 0.28
+    elif rank <= 15 and peak >= 80:
+        star_share = 0.20
+    elif rank <= 32:
+        star_share = 0.14
+    if char >= 84:
+        star_share += 0.04
+    if war >= 1.8:
+        star_share += 0.03
+    star_share = max(0.05, min(0.45, star_share))
     non_nhl = max(0.0, 100.0 - nhl)
-
+    bust = round(non_nhl * bust_risk)
     if is_goalie:
-        bust = round(non_nhl * (0.55 if band == "Boom/Bust" else 0.38))
         minor = max(0.0, non_nhl - bust)
-        backup = round(nhl * (0.50 if band == "Safe Floor" else 0.55))
-        platoon = round(nhl * 0.35)
-        starter = max(0.0, nhl - backup - platoon)
+        starter = round(nhl * star_share)
+        platoon = round(nhl * 0.32)
+        backup = max(0.0, nhl - starter - platoon)
         segs = _normalize_outcome_segments([
             {"key": "bust", "label": "Bust", "weight": bust},
             {"key": "ahl", "label": "AHL/ECHL", "weight": minor},
@@ -2012,10 +2317,9 @@ def _outcome_distribution_block(row: Dict[str, Any], potential: Optional[Dict[st
             {"key": "star", "label": "Starter", "weight": starter},
         ])
     else:
-        bust = round(non_nhl * (0.55 if band == "Boom/Bust" else (0.25 if band == "Safe Floor" else 0.38)))
         ahl = max(0.0, non_nhl - bust)
-        star = round(nhl * (0.32 if band == "Boom/Bust" else (0.12 if band == "Safe Floor" else 0.20)))
-        top6 = round(nhl * (0.28 if band == "Boom/Bust" else (0.38 if band == "Safe Floor" else 0.35)))
+        star = round(nhl * star_share)
+        top6 = round(nhl * (0.34 if floor >= 68 else 0.28))
         mid6 = max(0.0, nhl - star - top6)
         segs = _normalize_outcome_segments([
             {"key": "bust", "label": "Bust", "weight": bust},
@@ -2024,164 +2328,159 @@ def _outcome_distribution_block(row: Dict[str, Any], potential: Optional[Dict[st
             {"key": "top", "label": "Top-6", "weight": top6},
             {"key": "star", "label": "Star+", "weight": star},
         ])
-
     if not segs:
         return None
     return {
-        "source": "scout_model",
+        "source": "backend_model",
         "nhl_probability": round(nhl, 1),
         "outcome_band": band or None,
         "outcome_volatility": row.get("outcome_volatility"),
-        "label": f"Scout model · {band or 'Standard'} · {round(nhl)}% NHL",
+        "label": f"Career model · {band or 'Standard'} · {round(nhl)}% NHL",
         "segments": segs,
     }
 
 
 def _scouting_history_block(row: Dict[str, Any], character_read: Optional[Dict[str, Any]], analytics: Optional[Dict[str, Any]] = None) -> Optional[List[Dict[str, Any]]]:
-    """Serialize real scouting notes / interviews into dossier desk rows."""
+    """Backend scouting desk rows — only stored reports and stat-backed notes."""
+    stored = row.get("scouting_desk") or row.get("scouting_history") or row.get("scout_reports")
+    if isinstance(stored, list) and stored:
+        return stored[:6]
+
     entries: List[Dict[str, Any]] = []
-    assigned = str(row.get("assigned_scout") or row.get("assignedScout") or "").strip()
-    conf = _f(row.get("scouting_confidence"), 55)
-    viewings = _i(row.get("scout_viewings") or row.get("viewing_count"))
-    if viewings <= 0:
-        gp = _i(row.get("gp") or row.get("games_played"))
-        viewings = max(1, min(8, int(round(conf / 14) + min(3, gp // 12))))
-
     grade = row.get("scouted_overall_estimate") or row.get("true_ovr") or row.get("current_ovr_estimate")
-    if assigned:
-        quote = str(row.get("scout_summary") or row.get("projection_notes") or row.get("micro_summary") or "").strip()
-        if not quote:
-            strengths = row.get("strengths") or []
-            if isinstance(strengths, list) and strengths:
-                quote = str(strengths[0])
-        entries.append({
-            "scout": assigned,
-            "meta": f"Assigned · {viewings} viewing{'s' if viewings != 1 else ''}",
-            "viewings": viewings,
-            "hit_rate": round(min(88, max(52, conf - 4)), 0),
-            "quote": quote or "File in progress — no written summary on record yet.",
-            "grade": round(_f(grade), 0) if grade is not None else None,
-            "grade_label": "HIS GRADE",
-            "tone": "green",
-            "locked": False,
-        })
-
     notes = row.get("notes") or row.get("scout_reports") or row.get("reports") or []
     if isinstance(notes, list):
-        for idx, note in enumerate(notes[:3]):
+        for idx, note in enumerate(notes[:4]):
             text = note if isinstance(note, str) else str((note or {}).get("text") or (note or {}).get("summary") or "")
             text = text.strip()
             if not text:
                 continue
             entries.append({
-                "scout": str((note or {}).get("scout") if isinstance(note, dict) else f"Regional scout {idx + 1}"),
+                "scout": str((note or {}).get("scout") if isinstance(note, dict) else "Regional scout"),
                 "meta": str((note or {}).get("region") if isinstance(note, dict) else "Regional file"),
-                "viewings": (note or {}).get("viewings") if isinstance(note, dict) else None,
-                "hit_rate": (note or {}).get("hit_rate") if isinstance(note, dict) else None,
                 "quote": text,
-                "grade": (note or {}).get("grade") if isinstance(note, dict) else None,
-                "grade_label": "HIS GRADE",
-                "tone": "amber" if idx % 2 else "cyan",
+                "grade": (note or {}).get("grade") if isinstance(note, dict) else round(_f(grade), 0) if grade else None,
+                "grade_label": "GRADE",
+                "tone": "cyan" if idx % 2 else "green",
                 "locked": False,
             })
 
-    interview_done = str(row.get("interview_status") or "").lower() in ("completed", "done", "finished")
-    interview_notes = (character_read or {}).get("interview_notes")
-    if interview_notes:
-        entries.append({
-            "scout": "Character interview",
-            "meta": "Combine / private setting",
-            "viewings": 1,
-            "hit_rate": (character_read or {}).get("confidence"),
-            "quote": str(interview_notes),
-            "grade": None,
-            "grade_label": "READ",
-            "tone": "green",
-            "locked": False,
-        })
-    elif not interview_done:
-        entries.append({
-            "scout": "Psych. interview",
-            "meta": "Not commissioned",
-            "viewings": None,
-            "hit_rate": None,
-            "quote": None,
-            "grade": None,
-            "grade_label": "",
-            "tone": "muted",
-            "locked": True,
-        })
-
-    stock_reason = str(row.get("stock_reason") or row.get("movement_catalyst") or "").strip()
+    stock_reason = str(row.get("stock_reason") or row.get("movement_catalyst") or row.get("weekly_stock_reason") or "").strip()
     gp = _i(row.get("gp") or row.get("games_played"))
     points = _i(row.get("points"))
     ppg = _f(row.get("ppg"))
     if ppg <= 0 and gp > 0 and points > 0:
         ppg = points / gp
-    model_grade = _analytics_model_grade(row, analytics)
-    if stock_reason and len(entries) < 4:
+    war = _f((analytics or {}).get("war"))
+    if stock_reason:
         entries.append({
-            "scout": "Analytics dept.",
-            "meta": "Stock & movement",
-            "viewings": None,
-            "hit_rate": round(min(88, max(52, conf)), 0),
+            "scout": "Board movement",
+            "meta": "Weekly stock",
             "quote": stock_reason,
-            "grade": model_grade,
-            "grade_label": "MODEL",
-            "tone": "cyan",
+            "grade": round(_f(grade), 0) if grade else None,
+            "grade_label": "BOARD",
+            "tone": "amber" if "fall" in stock_reason.lower() or "drop" in stock_reason.lower() else "green",
             "locked": False,
         })
-    elif (analytics or gp > 0) and len(entries) < 4:
-        war = _f((analytics or {}).get("war"))
-        quote = f"{points}P in {gp} GP · {ppg:.2f} PPG" if gp > 0 and ppg > 0 else "Production model on file."
+    if gp > 0 and ppg > 0:
+        stat_line = f"{points}P in {gp} GP · {ppg:.2f} PPG"
+        if war:
+            stat_line += f" · WAR {war:+.2f}"
         entries.append({
-            "scout": "Analytics dept.",
-            "meta": "Production model",
-            "viewings": None,
-            "hit_rate": round(min(88, max(52, 50 + war * 8))) if war else round(min(88, max(52, conf)), 0),
-            "quote": quote,
-            "grade": model_grade,
+            "scout": "Stat ledger",
+            "meta": "Season production",
+            "quote": stat_line,
+            "grade": _analytics_model_grade(row, analytics),
             "grade_label": "MODEL",
             "tone": "cyan",
             "locked": False,
         })
-
+    if bool(row.get("injured") or row.get("prospect_injured") or row.get("injury_status")):
+        inj_note = str(row.get("injury_note") or row.get("injury_status") or "Missed time this season")
+        entries.append({
+            "scout": "Medical file",
+            "meta": "Injury",
+            "quote": inj_note,
+            "grade": None,
+            "grade_label": "STATUS",
+            "tone": "amber",
+            "locked": False,
+        })
+    char_headline = (character_read or {}).get("headline")
+    if char_headline and bool(row.get("character_concerns")):
+        entries.append({
+            "scout": "Character file",
+            "meta": "Off-ice",
+            "quote": str(char_headline),
+            "grade": row.get("character_score"),
+            "grade_label": "CHAR",
+            "tone": "amber",
+            "locked": False,
+        })
     return entries or None
 
 
 def _prospect_character_read(row: Dict[str, Any]) -> Dict[str, Any]:
-    """Scouting-based character read — never expose exact hidden morality or diagnoses."""
-    scout_conf = round(_f(row.get("scouting_confidence"), 55), 1)
-    user_scout = _f(row.get("scouted_percentage") or row.get("user_scouted_percentage") or row.get("team_scout_pct"), 0.0)
-    if user_scout >= 20.0:
-        scout_conf = max(scout_conf, min(95.0, user_scout + 15.0))
-    interviews = _i(row.get("interview_count") or row.get("scout_interviews"))
-    pid = str(row.get("key") or row.get("id") or row.get("name") or "")
-    seed = sum(ord(c) for c in pid) % 97
+    """Character read from backend character_score and psych traits — no interviews."""
+    concerns = bool(row.get("character_concerns"))
+    char_score = _f(
+        row.get("character_score")
+        or (row.get("chapter_profile") or {}).get("chapters", {}).get("character"),
+    )
+    if char_score <= 0:
+        char_score = 0.0
 
-    def _blur(base: float, label: str) -> Dict[str, Any]:
-        conf = min(95.0, scout_conf + interviews * 4.0)
-        if conf < 45:
-            return {"label": label, "tier": "Unknown", "confidence": int(conf)}
-        if conf < 58:
-            return {"label": label, "tier": "Mixed reports", "confidence": int(conf)}
-        val = base + (seed % 11) - 5
-        tier = "Elite" if val >= 88 else "Very High" if val >= 78 else "High" if val >= 68 else "Above Average" if val >= 58 else "Average" if val >= 48 else "Below Average"
-        return {"label": label, "tier": tier, "confidence": int(conf)}
+    def _trait(label: str, key: str, fallback_delta: float = 0.0) -> Dict[str, Any]:
+        val = _f(row.get(key))
+        if val <= 0 and char_score > 0:
+            try:
+                from services.draft_ranking_logic import _stable_unit  # noqa: WPS433
 
-    character_base = _f(row.get("character_score") or row.get("character"), 62 + (seed % 18))
+                spread = (_stable_unit(
+                    str(row.get("key") or row.get("id") or row.get("name") or ""),
+                    f"char_trait_{key}",
+                ) - 0.5) * 22.0
+            except Exception:
+                spread = 0.0
+            val = max(20.0, min(99.0, char_score + fallback_delta + spread))
+        tier = _score_tier(val) if val > 0 else "Unknown"
+        return {"label": label, "tier": tier, "score": int(round(val)) if val > 0 else None}
+
+    if concerns:
+        return {
+            "headline": str(row.get("attitude_label") or "Disastrous attitude"),
+            "confidence": int(min(95, max(40, _f(row.get("scouting_confidence"), 55)))),
+            "traits": [
+                _trait("Competitive Drive", "competitiveness", -4),
+                _trait("Coachability", "coachability", -10),
+                _trait("Leadership", "maturity", -12),
+                _trait("Work Ethic", "work_ethic", -6),
+                _trait("Social Adjustment", "sociability", -14),
+            ],
+            "character_concerns": True,
+            "attitude": "disastrous",
+            "leader": False,
+        }
+
+    leader = char_score >= 84 or _f(row.get("leadership")) >= 82
+    headline = "Recognized leader" if leader else (
+        "Strong character" if char_score >= 74 else (
+            "Average makeup" if char_score >= 58 else "Character questions" if char_score >= 50 else "Below average makeup"
+        )
+    )
     return {
-        "headline": _blur(character_base, "Character")["tier"] if scout_conf >= 50 else "Mixed reports",
-        "confidence": int(min(95.0, scout_conf + interviews * 3)),
+        "headline": headline,
+        "confidence": int(min(95, max(40, _f(row.get("scouting_confidence"), 55)))),
         "traits": [
-            _blur(_f(row.get("competitiveness"), 70 + seed % 15), "Competitive Drive"),
-            _blur(_f(row.get("coachability"), 58 + (seed % 20)), "Coachability"),
-            _blur(_f(row.get("leadership"), 50 + (seed % 25)), "Leadership"),
-            _blur(_f(row.get("sociability"), 52 + (seed % 22)), "Social Adjustment"),
-            _blur(_f(row.get("family_priority"), 60 + (seed % 18)), "Family / Relocation"),
+            _trait("Competitive Drive", "competitiveness"),
+            _trait("Coachability", "coachability"),
+            _trait("Leadership", "leadership", -2),
+            _trait("Work Ethic", "work_ethic"),
+            _trait("Social Adjustment", "sociability", -4),
         ],
-        "interview_notes": str(row.get("interview_notes") or row.get("scout_character_note") or "").strip() or None,
-        "private_diagnosis_hidden": True,
+        "character_concerns": False,
+        "attitude": "leader" if leader else "standard",
+        "leader": leader,
     }
 
 
@@ -2192,10 +2491,19 @@ def build_prospect_profile(
     team_status: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Normalize one draft board entry into modal profile payload."""
-    gp = _i(row.get("gp") or row.get("games_played"))
-    goals = _i(row.get("goals"))
-    assists = _i(row.get("assists"))
-    points = _i(row.get("points"))
+    row = dict(row or {})
+    try:
+        from services.draft_ranking_logic import _apply_character_integrity, _derive_dossier_identity
+
+        _derive_dossier_identity(row, row.get("_player"))
+        _apply_character_integrity(row, row.get("_player"))
+    except Exception:
+        pass
+    actual = row.get("actual_stats") if isinstance(row.get("actual_stats"), dict) else {}
+    gp = _i(actual.get("gp") or actual.get("games_played") or row.get("gp") or row.get("games_played"))
+    goals = _i(actual.get("goals") if actual else row.get("goals"))
+    assists = _i(actual.get("assists") if actual else row.get("assists"))
+    points = _i(actual.get("points") if actual else row.get("points"))
     if points <= 0 and (goals or assists):
         points = goals + assists
 
@@ -2251,8 +2559,7 @@ def build_prospect_profile(
     intel_label = str(row.get("intel_label") or "")
     if ceiling_hidden and not dedicated_file:
         intel_label = "Limited"
-    evidence_strengths = _evidence_strengths(row)
-    evidence_weaknesses = _evidence_weaknesses(row)
+    evidence_strengths, evidence_weaknesses = _full_strengths_weaknesses(row)
     projection_notes = _fog_projection_notes(row) if ceiling_hidden else _projection_notes(row)
     translation_note = _translation_note(row)
     readiness_label = ready
@@ -2292,20 +2599,60 @@ def build_prospect_profile(
 
     ovr_low = row.get("overall_range_low") or row.get("scouted_overall_low")
     ovr_high = row.get("overall_range_high") or row.get("scouted_overall_high")
+    if ovr_low is None or ovr_high is None:
+        cur_lo, cur_hi = _parse_score_range(row.get("current_ovr_range"))
+        if cur_lo is not None and cur_hi is not None:
+            ovr_low = ovr_low if ovr_low is not None else cur_lo
+            ovr_high = ovr_high if ovr_high is not None else cur_hi
+    if ovr_low is None or ovr_high is None:
+        pub_lo, pub_hi = _parse_score_range(
+            {
+                "low": row.get("public_ovr_low"),
+                "high": row.get("public_ovr_high"),
+            }
+        )
+        if pub_lo is not None and pub_hi is not None:
+            ovr_low = ovr_low if ovr_low is not None else pub_lo
+            ovr_high = ovr_high if ovr_high is not None else pub_hi
     if ovr_low is None and ovr_v > 0:
         spread = max(1, int(round((100 - scout_conf) / 25)))
         ovr_low = max(40, int(round(ovr_v)) - spread)
         ovr_high = min(99, int(round(ovr_v)) + spread)
     pot_range = row.get("potential_range")
-    pot_low = pot_high = None
+    if pot_range is None:
+        pot_range = row.get("ceiling_range")
+    pot_low, pot_high = _parse_score_range(pot_range)
     if ceiling_hidden:
         pot_low = pot_high = None
-    elif isinstance(pot_range, (list, tuple)) and len(pot_range) >= 2:
-        pot_low, pot_high = pot_range[0], pot_range[1]
-    elif pot_v > 0:
+    elif pot_low is None and pot_v > 0:
         spread = max(2, int(round((100 - scout_conf) / 20)))
         pot_low = max(50, int(round(pot_v)) - spread)
         pot_high = min(99, int(round(pot_v)) + spread)
+    if pot_low is not None and pot_high is not None and not ceiling_hidden:
+        try:
+            from services.draft_ranking_logic import _peak_range_max_span
+
+            rank_n = _i(row.get("rank")) or 999
+            max_span = _peak_range_max_span(rank_n)
+            if float(pot_high) - float(pot_low) > max_span:
+                center = (float(pot_low) + float(pot_high)) / 2.0
+                pot_low = int(round(max(50.0, center - max_span * 0.48)))
+                pot_high = int(round(min(99.0, center + max_span * 0.52)))
+        except Exception:
+            pass
+
+    headroom_delta = None
+    if not ceiling_hidden and ovr_high is not None and pot_high is not None:
+        try:
+            headroom_delta = int(round(float(pot_high) - float(ovr_high)))
+        except (TypeError, ValueError):
+            headroom_delta = None
+
+    file_depth_label = None
+    if ovr_low is not None and ovr_high is not None:
+        file_depth_label = f"Now {int(ovr_low)}–{int(ovr_high)} OVR"
+
+    prospect_revision = _i(row.get("_prospect_revision") or row.get("prospect_revision")) or None
 
     preseason = _i(row.get("preseason_rank")) or None
     current_rank = _i(row.get("rank")) or None
@@ -2344,6 +2691,27 @@ def build_prospect_profile(
         }
 
     character_read = _prospect_character_read(row)
+    archetype_block = _dossier_archetype_block(row)
+    play_style_block = _dossier_play_style_block(row, archetype_block)
+    tools_block = _dossier_tools_block(row)
+    zone_map = _zone_map_from_tools(row, tools_block)
+    off_ice_frame = _off_ice_frame_block(row)
+    intel_tags = _intel_desk_tags(row)
+    scout_report = _scout_report_narrative(
+        row,
+        archetype=archetype_block,
+        play_style=play_style_block,
+        potential=potential,
+        projection=projection,
+    )
+    development_trajectory = _development_trajectory_line(
+        row,
+        potential=potential,
+        projection=projection,
+        ovr_v=ovr_v,
+        pot_v=pot_v,
+        nhl_prob=nhl_prob,
+    )
     profile: Dict[str, Any] = {
         "id": str(row.get("key") or row.get("id") or ""),
         "playerId": str(row.get("key") or row.get("id") or ""),
@@ -2413,6 +2781,19 @@ def build_prospect_profile(
         "overallRangeHigh": ovr_high,
         "scoutedPotentialLow": pot_low,
         "scoutedPotentialHigh": pot_high,
+        "now_range": (
+            {"low": ovr_low, "high": ovr_high}
+            if ovr_low is not None and ovr_high is not None
+            else None
+        ),
+        "peak_range": (
+            {"low": pot_low, "high": pot_high, "hidden": False}
+            if not ceiling_hidden and pot_low is not None and pot_high is not None
+            else {"low": None, "high": None, "hidden": True}
+        ),
+        "headroom_delta": headroom_delta,
+        "file_depth_label": file_depth_label,
+        "prospect_revision": prospect_revision,
         "nhlProbability": nhl_prob or None,
         "ceilingHidden": ceiling_hidden,
         "ceilingVisibility": row.get("ceiling_visibility"),
@@ -2439,19 +2820,11 @@ def build_prospect_profile(
             else "Low" if gap_v < 8 else "Medium" if gap_v < 14 else "High"
         ),
         "tags": tags,
-        "strengths": (
-            [e.get("title") for e in evidence_strengths if isinstance(e, dict) and e.get("title")][:3]
-            if ceiling_hidden
-            else _strengths_list(row)
-        ),
-        "strengthsEvidence": evidence_strengths[:3] if ceiling_hidden else evidence_strengths,
-        "weaknessesEvidence": evidence_weaknesses[:3] if ceiling_hidden else evidence_weaknesses,
+        "strengths": [f"{e['title']} — {e['fact']}" for e in evidence_strengths if e.get("title")],
+        "strengthsEvidence": evidence_strengths,
+        "weaknessesEvidence": evidence_weaknesses,
         "projectionNotes": projection_notes,
-        "concerns": (
-            [e.get("title") for e in evidence_weaknesses if isinstance(e, dict) and e.get("title")][:3]
-            if ceiling_hidden
-            else _concerns_list(row)
-        ),
+        "concerns": [f"{e['title']} — {e['fact']}" for e in evidence_weaknesses if e.get("title")],
         "translation": translation_label,
         "stats": {
             "games": gp,
@@ -2486,24 +2859,32 @@ def build_prospect_profile(
             eta=eta,
         ),
         "ui_priority": _ui_priority(row, gem),
-        "micro_summary": _micro_summary(
-            row=row,
-            tags=tags,
-            projection=projection,
-            potential=potential,
-            eta=eta,
-            translation=translation_label,
-            comparison=comparison,
-        ),
+        "micro_summary": scout_report,
+        "scout_report": scout_report,
+        "development_trajectory": development_trajectory,
+        "developmentTrajectory": development_trajectory,
+        "archetype": archetype_block,
+        "play_style_block": play_style_block,
+        "tools": tools_block,
+        "zone_map": zone_map,
+        "off_ice_frame": off_ice_frame,
+        "intel_desk_tags": intel_tags,
+        "intelDeskTags": intel_tags,
         "character_read": character_read,
-        "play_style": str(
+        "character_score": _i(row.get("character_score")) or None,
+        "character_concerns": bool(row.get("character_concerns")),
+        "attitude_label": row.get("attitude_label"),
+        "chapter_profile": row.get("chapter_profile"),
+        "chapterProfileFogged": bool((row.get("chapter_profile") or {}).get("fogged")),
+        "chapterProfileHidden": bool((row.get("chapter_profile") or {}).get("hidden")),
+        "scouted_percentage": _f(row.get("scouted_percentage"), 0.0) or None,
+        "play_style": play_style_block.get("label") or _humanize_play_style(
             row.get("play_style")
             or row.get("playstyle")
-            or (comparison or {}).get("archetype")
-            or row.get("player_type")
+            or row.get("dossier_play_style")
             or row.get("archetype")
-            or ""
-        ).strip() or None,
+        ),
+        "prospect_role": row.get("prospect_role") or row.get("prospectRole"),
         "scouting_history": _scouting_history_block(row, character_read, analytics),
         "outcome_distribution": _outcome_distribution_block(row, potential),
     }
@@ -2530,11 +2911,15 @@ def build_prospect_profiles_by_id(
     *,
     roster_rows: Optional[List[Dict[str, Any]]] = None,
     team_status: Optional[Dict[str, Any]] = None,
+    prospect_revision: Optional[int] = None,
 ) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
     for row in entries or []:
         pid = str(row.get("key") or row.get("id") or "")
         if not pid:
             continue
-        out[pid] = build_prospect_profile(row, roster_rows=roster_rows, team_status=team_status)
+        row_payload = dict(row)
+        if prospect_revision is not None and not row_payload.get("_prospect_revision"):
+            row_payload["_prospect_revision"] = int(prospect_revision)
+        out[pid] = build_prospect_profile(row_payload, roster_rows=roster_rows, team_status=team_status)
     return out

@@ -1,0 +1,116 @@
+/*
+  Resolution-relative layout. No CSS zoom / transform scale.
+  html[data-display] is set from the real window size.
+*/
+
+html.ui-fluid,
+html.ui-fluid body,
+html.ui-fluid #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+html.ui-fluid #root {
+  position: relative;
+}
+
+html.ui-fluid .game-root,
+html.ui-fluid .game-canvas {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+html.ui-fluid .game-canvas > * {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+}
+
+html.ui-fluid .game-screen,
+html.ui-fluid .linebuilder-root,
+html.ui-fluid .nhlcal-root,
+html.ui-fluid .nhlcal-sl-root,
+html.ui-fluid .nhlrost-root,
+html.ui-fluid .scout-root,
+html.ui-fluid .trade-hub-root,
+html.ui-fluid .teamneeds-root,
+html.ui-fluid .setup-root,
+html.ui-fluid .dc-root,
+html.ui-fluid .dc-screen,
+html.ui-fluid .office-hub,
+html.ui-fluid .dc-profile-modal,
+html.ui-fluid .dc-dossier-shell,
+html.ui-fluid .command-placeholder-screen {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+}
+
+html.ui-fluid .dc-profile-modal {
+  position: absolute;
+}
+
+/* Display class → type and spacing. Same relationships, different resolution. */
+html[data-display="compact"] {
+  font-size: 13px;
+  --space-1: 3px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --type-office-display-size: 1.15rem;
+  --type-broadcast-display-size: 1.05rem;
+  --type-ops-heading-size: 0.86rem;
+  --type-body-size: 0.8rem;
+  --type-compact-size: 0.74rem;
+}
+
+html[data-display="hd"] {
+  font-size: 14px;
+  --space-1: 4px;
+  --space-2: 7px;
+  --space-3: 10px;
+  --space-4: 14px;
+  --type-office-display-size: 1.22rem;
+  --type-broadcast-display-size: 1.1rem;
+  --type-ops-heading-size: 0.9rem;
+  --type-body-size: 0.84rem;
+  --type-compact-size: 0.78rem;
+}
+
+html[data-display="fhd"] {
+  font-size: 16px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+}
+
+html[data-display="qhd"] {
+  font-size: 17px;
+  --space-1: 5px;
+  --space-2: 10px;
+  --space-3: 14px;
+  --space-4: 18px;
+  --type-office-display-size: 1.42rem;
+  --type-broadcast-display-size: 1.28rem;
+  --type-ops-heading-size: 1rem;
+  --type-body-size: 0.92rem;
+  --type-compact-size: 0.84rem;
+}
+
+html[data-display="uhd"] {
+  font-size: 18px;
+  --space-1: 6px;
+  --space-2: 12px;
+  --space-3: 16px;
+  --space-4: 22px;
+  --type-office-display-size: 1.5rem;
+  --type-broadcast-display-size: 1.35rem;
+  --type-ops-heading-size: 1.05rem;
+  --type-body-size: 0.95rem;
+  --type-compact-size: 0.88rem;
+}

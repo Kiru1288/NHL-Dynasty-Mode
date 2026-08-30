@@ -179,15 +179,16 @@ def refresh_draft_order_ownership(session: Any) -> List[Dict[str, Any]]:
     state["draft_order"] = refreshed
     state["pick_ownership"] = refreshed
     if current and not state.get("draft_completed"):
-        state["current_team_id"] = str(current.get("team_id") or "")
+        clock_team = resolve_slot_owner(session, current)
+        state["current_team_id"] = clock_team
         state["current_round"] = int(current.get("round") or state.get("current_round") or 1)
         state["current_pick"] = int(current.get("pick_in_round") or state.get("current_pick") or 1)
-        state["is_user_pick"] = str(current.get("team_id") or "") == user_id
+        state["is_user_pick"] = clock_team == user_id
         to_user = None
         for i, s in enumerate(refreshed):
             if i + 1 < overall:
                 continue
-            if str(s.get("team_id") or "") == user_id:
+            if resolve_slot_owner(session, s) == user_id:
                 to_user = (i + 1) - overall
                 break
         state["picks_until_user"] = to_user

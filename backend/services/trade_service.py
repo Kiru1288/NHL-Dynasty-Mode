@@ -265,7 +265,11 @@ def evaluate_franchise_trade(
     if isinstance(cached, dict) and str(cached.get("key") or "") == cache_key:
         payload = cached.get("payload")
         if isinstance(payload, dict):
-            return dict(payload)
+            out = dict(payload)
+            if not out.get("trade_id"):
+                cur = int(getattr(session, "calendar_cursor", 0) or 0)
+                out["trade_id"] = f"trade_{cur}_{assets_key[:8]}"
+            return out
     _ensure_trade_infrastructure(session)
     ctx = _trade_context(session)
     try:
@@ -300,6 +304,8 @@ def evaluate_franchise_trade(
         user_team_id=ctx["user_team_id"],
     )
     public = {k: v for k, v in result.items() if not str(k).startswith("_")}
+    cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    public["trade_id"] = f"trade_{cur}_{assets_key[:8]}"
     # Always expose human-readable rejection reasons + dual-team cap impact for Trade Hub.
     reasons = public.get("rejection_reasons")
     if not isinstance(reasons, list):

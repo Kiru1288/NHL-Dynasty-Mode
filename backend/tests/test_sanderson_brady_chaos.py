@@ -78,10 +78,6 @@ def test_brady_forced_55_and_cancer_name():
     assert override["total"] < 0
 
 
-def test_brady_r4_target_is_55():
-    assert abs(BRADY_TARGET_OVR * 99.0 - 55.0) < 0.05
-
-
 def test_brady_teammate_hit_spares_star_targets():
     from services.brady_tkachuk_chaos import degrade_teammates_for_brady
     from app.sim_engine import engine as eng
@@ -127,3 +123,32 @@ def test_brady_teammate_hit_spares_star_targets():
     assert "Star" not in scaled
     assert "Depth" in scaled
     assert n >= 1
+
+
+def test_brady_r4_target_is_55():
+    assert abs(BRADY_TARGET_OVR * 99.0 - 55.0) < 0.05
+
+
+def test_brady_storylines_expire_after_three_days():
+    from services.brady_tkachuk_chaos import BRADY_STORYLINE_TTL_DAYS, brady_storyline_events
+    from services.franchise_sim import _prune_expired_storylines, _storyline_is_expired
+
+    events = brady_storyline_events(
+        team_abbr="OTT",
+        calendar_iso="2025-10-01",
+        calendar_index=10,
+    )
+    assert len(events) == 3
+    assert all(ev.get("expires_calendar_index") == 10 + BRADY_STORYLINE_TTL_DAYS for ev in events)
+
+    session = SimpleNamespace(
+        storyline_events=list(events),
+        calendar_cursor=12,
+        nhl_calendar=[{"iso": f"2025-10-{i:02d}"} for i in range(1, 32)],
+    )
+    assert not _storyline_is_expired(events[0], session, 12)
+    assert _storyline_is_expired(events[0], session, 13)
+    assert _prune_expired_storylines(session, 12) == 0
+    assert len(session.storyline_events) == 3
+    assert _prune_expired_storylines(session, 13) == 3
+    assert session.storyline_events == []

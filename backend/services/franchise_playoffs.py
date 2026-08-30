@@ -60,6 +60,47 @@ def _home_is_high(game_number: int) -> bool:
     return int(game_number) in (1, 2, 5, 7)
 
 
+def _normalize_playoff_conference(conf: Any) -> str:
+    text = str(conf or "").strip().lower()
+    if "west" in text:
+        return "West"
+    if "east" in text:
+        return "East"
+    return str(conf).strip() if conf else "League"
+
+
+def sanitize_first_round_matchups(matchups: Any) -> List[Dict[str, Any]]:
+    """Keep only round-1 pairings and one series per team (no conference duplicates)."""
+    rows: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in list(matchups or []):
+        if not isinstance(raw, dict):
+            continue
+        try:
+            rnd = int(raw.get("round_index") or 1)
+        except (TypeError, ValueError):
+            rnd = 1
+        if rnd not in (0, 1):
+            continue
+        hi = str(raw.get("team_high_id") or raw.get("home_id") or "").strip()
+        lo = str(raw.get("team_low_id") or raw.get("away_id") or "").strip()
+        if not hi or not lo or hi == lo:
+            continue
+        if hi in seen or lo in seen:
+            continue
+        seen.add(hi)
+        seen.add(lo)
+        row = dict(raw)
+        row["team_high_id"] = hi
+        row["team_low_id"] = lo
+        row["home_id"] = hi
+        row["away_id"] = lo
+        row["round_index"] = 1
+        row["conference"] = _normalize_playoff_conference(raw.get("conference"))
+        rows.append(row)
+    return rows
+
+
 def ensure_playoff_live(session: FranchiseSession) -> Dict[str, Any]:
     live = getattr(session, "playoff_live", None)
     if isinstance(live, dict) and live.get("started"):
@@ -300,33 +341,41 @@ def _play_series_game(
 
 def start_live_playoffs(session: FranchiseSession) -> Dict[str, Any]:
     """Enter interactive playoffs from playoff_ready (does not crown a champion yet)."""
+    existing = getattr(session, "playoff_live", None)
+    if isinstance(existing, dict) and existing.get("started"):
+        session.phase = "playoffs" if not session.playoffs_simulated else session.phase
+        session.season_phase = session.phase
+        return existing
     if session.playoffs_simulated and str(getattr(session, "phase", "")) in (
         "post_cup",
         "offseason",
         "preseason",
         "complete",
     ):
-        return getattr(session, "playoff_live", None) or {
+        return existing or {
             "started": True,
             "completed": True,
             "champion_id": session.champion_id,
         }
 
     payload = dict(getattr(session, "playoff_payload", None) or {})
-    if not payload.get("first_round") and not payload.get("matchups"):
+    if not payload.get("first_round") and not payload.get("first_round_matchups"):
         from services.franchise_offseason import _build_playoff_payload
 
         payload = _build_playoff_payload(session)
         session.playoff_payload = payload
 
-    r1 = list(payload.get("first_round") or payload.get("matchups") or payload.get("series") or [])
+    # Never fall back to payload["series"] — after live sync that list includes R2/R3/Cup.
+    r1 = sanitize_first_round_matchups(
+        payload.get("first_round") or payload.get("first_round_matchups") or payload.get("matchups")
+    )
     user_id = str(getattr(session, "user_team_id", "") or "")
     series_rows: List[Dict[str, Any]] = []
 
     # Split by conference for bracket slots
     by_conf: Dict[str, List[Dict[str, Any]]] = {}
     for i, m in enumerate(r1):
-        conf = str(m.get("conference") or "League")
+        conf = _normalize_playoff_conference(m.get("conference"))
         by_conf.setdefault(conf, []).append(dict(m))
 
     conf_names = sorted(by_conf.keys())

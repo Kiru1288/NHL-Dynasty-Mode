@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useGameUI } from "../../game/GameUIContext";
 import { SCREENS } from "../../game/constants";
 import FranchiseEventOverlay, {
@@ -57,23 +57,31 @@ export function FranchiseEventLayer() {
     setFranchiseEventForceOpen(false);
   }, [franchiseEventForceOpen, setFranchiseEventForceOpen]);
 
+  const stickyEventRef = useRef(event);
+  if (event) stickyEventRef.current = event;
+
   const phaseAllowsAuto =
     ["playoff_ready", "post_cup", "offseason", "playoffs"].includes(phase) ||
     (phase === "complete" && playoffsAreComplete(franchiseState));
   const inSeasonCinematic = ["opening_night", "trade_deadline"].includes(eventKey);
 
   const shouldShow =
-    Boolean(event) && !dismissed && (pinnedOpen || phaseAllowsAuto || inSeasonCinematic);
+    Boolean(event || stickyEventRef.current) &&
+    !dismissed &&
+    (pinnedOpen || phaseAllowsAuto || inSeasonCinematic);
+
+  const shownEvent = event || stickyEventRef.current;
 
   const handleLeaveToHub = () => {
     setDismissed(true);
     setPinnedOpen(false);
+    stickyEventRef.current = null;
     if (typeof setScreen === "function") {
       setScreen(SCREENS.HUB);
     }
   };
 
-  if (!shouldShow || !event) return null;
+  if (!shouldShow || !shownEvent) return null;
 
   return (
     <div className="franchise-event-layer register-ops" data-register="ops" role="presentation">

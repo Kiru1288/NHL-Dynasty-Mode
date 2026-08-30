@@ -512,8 +512,14 @@ export function projectionOutcomes(player, profile, developOdds = 60) {
 
   const rating = Number(pot.rating ?? player?.potentialScore);
   const floorRaw = Number(pot.floor ?? player?.floorScore);
-  const lo = Number(range?.low);
-  const hi = Number(range?.high);
+  const profilePeakHigh = Number(profile?.scoutedPotentialHigh ?? profile?.peak_range?.high);
+  const profilePeakLow = Number(profile?.scoutedPotentialLow ?? profile?.peak_range?.low);
+  const lo = Number.isFinite(profilePeakLow) && profilePeakLow > 0
+    ? profilePeakLow
+    : Number(range?.low);
+  const hi = Number.isFinite(profilePeakHigh) && profilePeakHigh > 0
+    ? profilePeakHigh
+    : Number(range?.high);
   const hasLo = Number.isFinite(lo) && lo > 0;
   const hasHi = Number.isFinite(hi) && hi > 0;
   const hasRating = Number.isFinite(rating) && rating > 0;
@@ -616,7 +622,7 @@ export function weeklyTrajectoryPoints(profile, player) {
       x: points.length,
       rank: r,
       value: value != null && Number.isFinite(Number(value)) ? Number(value) : null,
-      label: String(label || `Wk ${points.length + 1}`),
+      label: String(label || `Week ${points.length + 1}`),
     });
   };
 
@@ -624,51 +630,26 @@ export function weeklyTrajectoryPoints(profile, player) {
     raw.forEach((entry, i) => {
       if (entry == null) return;
       if (typeof entry === "number" && Number.isFinite(entry)) {
-        push(entry, `Wk ${i + 1}`);
+        push(entry, `Week ${i + 1}`);
         return;
       }
       if (typeof entry !== "object") return;
-      const rank = Number(entry.rank ?? entry.public_rank ?? entry.board_rank ?? entry.central_rank ?? entry.value);
-      const label = entry.date_label || entry.label || entry.event || entry.phase || entry.date || `Wk ${i + 1}`;
-      const heat = entry.stock_heat ?? entry.stockHeat ?? entry.delta ?? entry.delta_rank;
+      const rank = Number(entry.rank ?? entry.public_rank ?? entry.board_rank ?? entry.value);
+      const label = entry.date_label || entry.label || entry.event || entry.phase || entry.date || `Week ${i + 1}`;
+      const heat = entry.stock_heat ?? entry.stockHeat ?? entry.delta ?? entry.delta_rank ?? entry.movement;
       push(rank, label, heat);
     });
   }
 
-  const current = Number(
-    player?.scoutRank ?? player?.rank ?? profile?.currentRank ?? profile?.rank ?? 0
-  );
-  const weekly = Number(player?.weeklyDelta ?? player?.draftStock?.deltaRank) || 0;
-  const pre = Number(profile?.preseasonRank ?? player?.preseasonRank);
-  const mid = Number(profile?.midseasonRank ?? player?.midseasonRank);
-
-  const uniqueRanks = new Set(points.map((p) => p.rank));
-  const usable = points.filter((p) => Number.isFinite(p.rank) && p.rank > 0);
-  if (usable.length < 3 || uniqueRanks.size <= 1) {
-    const start = Number.isFinite(pre) && pre > 0
-      ? pre
-      : Math.max(1, Math.round(current + (weekly !== 0 ? weekly * 2 : (current > 8 ? 6 : 2))));
-    const middle = Number.isFinite(mid) && mid > 0
-      ? mid
-      : Math.max(1, Math.round((start + current) / 2));
-    const weekAgo = Math.max(1, Math.round(current + (weekly !== 0 ? weekly : (start > current ? 1 : -1))));
-    const now = Math.max(1, Math.round(current || start));
-    return [
-      { x: 0, rank: start, label: "Preseason" },
-      { x: 1, rank: middle, label: "Midseason" },
-      { x: 2, rank: weekAgo, label: "Last week" },
-      { x: 3, rank: now, label: "This week" },
-    ];
+  if (points.length >= 2) {
+    const current = Number(player?.scoutRank ?? player?.rank ?? profile?.currentRank ?? profile?.rank ?? 0);
+    const last = points[points.length - 1];
+    if (current > 0 && last) {
+      points[points.length - 1] = { ...last, rank: current, label: last.label || "This week" };
+    }
+    return points.map((p, i) => ({ ...p, x: i }));
   }
-
-  if (points[0]) points[0] = { ...points[0], label: points[0].label || "Preseason" };
-  const last = points[points.length - 1];
-  if (last) points[points.length - 1] = { ...last, rank: current || last.rank, label: "This week" };
-  if (weekly !== 0 && points.length >= 2) {
-    const prev = points[points.length - 2];
-    points[points.length - 2] = { ...prev, rank: Math.max(1, Math.round((current || prev.rank) + weekly)), label: prev.label || "Last week" };
-  }
-  return points.map((p, i) => ({ ...p, x: i }));
+  return points;
 }
 
 export function sourceCaption(sourceId) {

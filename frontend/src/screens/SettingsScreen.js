@@ -1,4 +1,9 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
+import {
+  readUiScalePreference,
+  writeUiScalePreference,
+  UI_SCALE_PRESETS,
+} from "../utils/fluidUiScale";
 import { useGameUI } from "../game/GameUIContext";
 import { SETTINGS_ROWS, SCREENS } from "../game/constants";
 import { GameFooter } from "../components/game/GameFooter";
@@ -22,6 +27,7 @@ export function SettingsScreen() {
     adjustSlider,
     setScreen,
   } = useGameUI();
+  const [uiScalePref, setUiScalePref] = useState(() => readUiScalePreference());
 
   useEffect(() => {
     function onKey(e) {
@@ -62,6 +68,31 @@ export function SettingsScreen() {
             Adjust local slider values for penalty emphasis. These controls are not yet bound to the simulation engine.
           </p>
         </header>
+
+        <section className="settings-category">
+          <div className="settings-category__head">
+            <span className="settings-category__label">Display</span>
+            <span className="settings-category__status fcn-stamp">Live</span>
+          </div>
+          <div className="settings-scale-row">
+            {UI_SCALE_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className={`settings-scale-btn ${uiScalePref === preset.id ? "is-active" : ""}`}
+                onClick={() => {
+                  setUiScalePref(preset.id);
+                  writeUiScalePreference(preset.id);
+                }}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <p className="settings-note">
+            Match display picks spacing and type from the real window (laptop / 1080p / 1440p / 4K). It does not zoom the page.
+          </p>
+        </section>
 
         {SETTINGS_CATEGORIES.map((category) => (
           <section key={category.id} className="settings-category">
@@ -259,6 +290,30 @@ const SETTINGS_SCREEN_CSS = `
   font-size: var(--type-compact-size, 0.8125rem);
 }
 
+.settings-scale-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.settings-scale-btn {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(3,5,12,0.55);
+  color: var(--shell-text, #eef0f5);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 11px;
+  cursor: pointer;
+}
+.settings-scale-btn.is-active {
+  border-color: var(--shell-neon, #38bdf8);
+  color: #041018;
+  background: var(--shell-neon, #38bdf8);
+}
 .settings-screen .settings-note {
   margin: var(--space-2, 8px) 0 0;
   font-family: var(--font-shell-body, "IBM Plex Sans", sans-serif);

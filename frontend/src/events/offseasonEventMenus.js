@@ -760,7 +760,6 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
   const bonusElig = payload?.signing_bonus || {};
   const bonusAllowed = Boolean(bonusElig.eligible);
   const bonusMaxPct = Number(bonusElig.max_bonus_pct || 0);
-  const offerBonusNum = Number(offerBonus) || 0;
   const negoInterest =
     Number(
       response?.evaluation?.interest ??

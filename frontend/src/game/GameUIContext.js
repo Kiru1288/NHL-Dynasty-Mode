@@ -292,9 +292,82 @@ function leanStateIdentity(prev, next) {
     prev.narrative_revision === next.narrative_revision &&
     prev.prospect_revision === next.prospect_revision &&
     prev.calendar_cursor === next.calendar_cursor &&
+    prev.franchise_today_iso === next.franchise_today_iso &&
+    prev.scouting_as_of_iso === next.scouting_as_of_iso &&
     prev.phase === next.phase &&
+    prev.season_phase === next.season_phase &&
+    prev.offseason_stage === next.offseason_stage &&
+    prev.next_important_event === next.next_important_event &&
     prev.session_id === next.session_id
   );
+}
+
+const LEAN_MERGE_PROGRESS_KEYS = [
+  "playoff_live",
+  "playoff_payload",
+  "champion_id",
+  "phase",
+  "season_phase",
+  "offseason_stage",
+  "next_important_event",
+  "awards_payload",
+  "awards",
+  "retirements_payload",
+  "retirements",
+  "salary_cap_payload",
+  "salary_cap",
+  "development_report_payload",
+  "development_report",
+  "draft_lottery_payload",
+  "draft_lottery",
+  "draft_combine_payload",
+  "draft_combine",
+  "draft_state",
+  "draft_payload",
+  "draft",
+  "draft_review_payload",
+  "draft_review",
+  "prospect_rights_payload",
+  "prospect_rights",
+  "resign_payload",
+  "contracts",
+  "free_agency_market_payload",
+  "free_agency_market",
+  "free_agents",
+  "roster_cleanup_payload",
+  "roster_cleanup",
+  "draft_state",
+  "draft",
+  "draft_completed",
+  "draft_started",
+  "next_season_generated",
+];
+
+function applyLeanProgressFields(merged, incoming) {
+  for (const key of LEAN_MERGE_PROGRESS_KEYS) {
+    if (incoming[key] !== undefined && incoming[key] !== null) {
+      merged[key] = incoming[key];
+    }
+  }
+  return merged;
+}
+
+function isNonemptyNarrativeUniverse(nu) {
+  return nu && typeof nu === "object" && !Array.isArray(nu) && Object.keys(nu).length > 0;
+}
+
+function mergeNarrativeUniverse(prior, incoming) {
+  if (!incoming || typeof incoming !== "object" || !("narrative_universe" in incoming)) {
+    return prior?.narrative_universe;
+  }
+  const next = incoming.narrative_universe;
+  if (!next || typeof next !== "object" || Array.isArray(next)) {
+    return next ?? prior?.narrative_universe;
+  }
+  if (!isNonemptyNarrativeUniverse(next) && isNonemptyNarrativeUniverse(prior?.narrative_universe)) {
+    return prior.narrative_universe;
+  }
+  return next;
 }
 
 function mergeFranchisePayload(prev, incoming) {
@@ -310,21 +383,33 @@ function mergeFranchisePayload(prev, incoming) {
       narrative_summary: incoming.narrative_summary ?? prior.narrative_summary,
       flags: incoming.flags ?? prior.flags,
     };
-    return merged;
+    return applyLeanProgressFields(merged, incoming);
   }
   const revisionChanged =
     incoming?.stats_revision != null && incoming.stats_revision !== prior.stats_revision;
+  const prospectRevChanged =
+    incoming?.prospect_revision != null && incoming.prospect_revision !== prior.prospect_revision;
+  const calendarChanged =
+    incoming?.franchise_today_iso != null && incoming.franchise_today_iso !== prior.franchise_today_iso;
+  const cursorChanged =
+    incoming?.calendar_cursor != null && incoming.calendar_cursor !== prior.calendar_cursor;
+  const scoutingChanged =
+    incoming?.scouting_as_of_iso != null && incoming.scouting_as_of_iso !== prior.scouting_as_of_iso;
+  const draftStale = prospectRevChanged || calendarChanged || cursorChanged || scoutingChanged;
   return {
     ...prior,
     ...incoming,
     roster: incoming?.roster ?? prior.roster,
     lines: incoming?.lines ?? prior.lines,
     roster_browser: incoming?.roster_browser ?? (revisionChanged ? undefined : prior.roster_browser),
-    draft_class_rankings: incoming?.draft_class_rankings ?? prior.draft_class_rankings,
-    draft_class_hud: incoming?.draft_class_hud ?? prior.draft_class_hud,
-    narrative_universe: incoming?.narrative_universe?.social_posts
-      ? incoming.narrative_universe
-      : prior.narrative_universe,
+    draft_class_rankings: incoming?.draft_class_rankings ?? (draftStale ? undefined : prior.draft_class_rankings),
+    draft_class_hud: incoming?.draft_class_hud ?? (draftStale ? undefined : prior.draft_class_hud),
+    offseason_stage: incoming.offseason_stage ?? prior.offseason_stage,
+    playoff_live: incoming.playoff_live ?? prior.playoff_live,
+    playoff_payload: incoming.playoff_payload ?? prior.playoff_payload,
+    draft: incoming.draft ?? prior.draft,
+    draft_state: incoming.draft_state ?? prior.draft_state,
+    narrative_universe: mergeNarrativeUniverse(prior, incoming),
   };
 }
 
@@ -487,6 +572,11 @@ export function GameUIProvider({ children }) {
     [HUB_WARMUP_STAGES.OPERATIONS]: "waiting",
   }));
   const hubWarmupRef = useRef({ started: new Set(), promises: [] });
+  const narrativeHydratedRef = useRef(false);
+
+  useEffect(() => {
+    narrativeHydratedRef.current = false;
+  }, [franchiseState?.session_id]);
 
   const [ruleSliders, setRuleSliders] = useState({
     roughing: 50,
@@ -578,8 +668,11 @@ export function GameUIProvider({ children }) {
     });
   }, []);
 
-  const hydrateFranchiseNarrative = useCallback(async () => {
+  const hydrateFranchiseNarrative = useCallback(async (options = {}) => {
+    const force = options?.force === true;
     if (!getFranchiseSessionId()) return null;
+    if (!force && narrativeHydratedRef.current) return null;
+    narrativeHydratedRef.current = true;
     try {
       const data = await getFranchiseNarrative();
       setFranchiseState((prev) => {
@@ -594,6 +687,7 @@ export function GameUIProvider({ children }) {
       });
       return data;
     } catch (e) {
+      narrativeHydratedRef.current = false;
       handleFranchiseApiError(e);
       return null;
     }
@@ -612,7 +706,30 @@ export function GameUIProvider({ children }) {
       let skipCalendar = false;
       setFranchiseState((prev) => {
         if (includeRosterBrowser && prev?.roster_browser) skipRoster = true;
-        if (includeDraftClassRankings && prev?.draft_class_rankings) skipDraft = true;
+        if (includeDraftClassRankings && prev?.draft_class_rankings) {
+          const boardRev = Number(
+            prev.draft_class_rankings.prospect_revision ?? prev.draft_class_rankings.revision ?? NaN
+          );
+          const liveRev = Number(prev.prospect_revision ?? NaN);
+          const boardIso = String(prev.draft_class_rankings.stats_as_of_iso || prev.draft_class_rankings.scouting_as_of_iso || "");
+          const liveIso = String(
+            prev.franchise_today_iso
+            || prev.scouting_as_of_iso
+            || prev.nhl_today?.iso
+            || ""
+          );
+          const boardCursor = Number(prev.draft_class_rankings.calendar_cursor ?? NaN);
+          const liveCursor = Number(prev.calendar_cursor ?? NaN);
+          const hudIso = String(prev.draft_class_hud?.scouting_as_of_iso || prev.draft_class_hud?.franchise_today_iso || "");
+          const revMatch = Number.isFinite(boardRev) && Number.isFinite(liveRev) && boardRev === liveRev;
+          const isoMatch = !boardIso || !liveIso || boardIso === liveIso;
+          const cursorMatch =
+            !Number.isFinite(boardCursor) ||
+            !Number.isFinite(liveCursor) ||
+            boardCursor === liveCursor;
+          const hudMatch = !hudIso || !liveIso || hudIso === liveIso || hudIso === String(prev.scouting_as_of_iso || "");
+          skipDraft = revMatch && isoMatch && cursorMatch && hudMatch;
+        }
         if (includeNhlCalendarFull && Array.isArray(prev?.nhl_calendar_full) && prev.nhl_calendar_full.length > 120) {
           skipCalendar = true;
         }
@@ -1121,10 +1238,13 @@ export function GameUIProvider({ children }) {
     try {
       const res = await submitStorylineChoice(storylineId, choiceId);
       mergeFranchiseState(res.state);
+      await hydrateFranchiseNarrative?.({ force: true });
+      return res;
     } catch (e) {
       handleFranchiseApiError(e);
+      throw e;
     }
-  }, [handleFranchiseApiError]);
+  }, [handleFranchiseApiError, hydrateFranchiseNarrative]);
 
   const onDismissShowcasePopups = useCallback(async (ids) => {
     const rawIds = ids || [];

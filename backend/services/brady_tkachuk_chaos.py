@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 BRADY_NHL_ID = 8480801
 BRADY_TARGET_OVR = 55.0 / 99.0  # display 55
+BRADY_STORYLINE_TTL_DAYS = 3
 CANCER_SUFFIX = " ☢ CANCER"
 TEAMMATE_RATING_SCALE = 0.945  # ~5.5% attribute hit for teammates
 TRADE_VALUE_TOTAL = -42.0
@@ -195,13 +196,29 @@ def brady_trade_value_override(player: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-def brady_storyline_events(*, team_abbr: str = "OTT", calendar_iso: str = "") -> List[Dict[str, Any]]:
-    """Opening-night / ongoing Brady rehab + drinking arcs."""
+def brady_storyline_events(
+    *,
+    team_abbr: str = "OTT",
+    calendar_iso: str = "",
+    calendar_index: int = 0,
+    ttl_days: int = BRADY_STORYLINE_TTL_DAYS,
+) -> List[Dict[str, Any]]:
+    """Opening-night / ongoing Brady rehab + drinking arcs (short-lived news feed)."""
     day = calendar_iso or "2025-09-15"
     abbr = (team_abbr or "OTT").upper()
     name = f"Brady Tkachuk{CANCER_SUFFIX}"
+    created_idx = int(calendar_index or 0)
+    expires_idx = created_idx + max(1, int(ttl_days or BRADY_STORYLINE_TTL_DAYS))
+    common = {
+        "ephemeral": True,
+        "brady_tkachuk_chaos": True,
+        "calendar_index": created_idx,
+        "expires_calendar_index": expires_idx,
+        "storyline_ttl_days": int(ttl_days or BRADY_STORYLINE_TTL_DAYS),
+    }
     return [
         {
+            **common,
             "type": "locker_room",
             "tone": "crisis",
             "priority": "CRITICAL",
@@ -222,6 +239,7 @@ def brady_storyline_events(*, team_abbr: str = "OTT", calendar_iso: str = "") ->
             "effect_summary": "Morale crater; teammates play worse; trade value deeply negative.",
         },
         {
+            **common,
             "type": "conduct",
             "tone": "crisis",
             "priority": "CRITICAL",
@@ -242,6 +260,7 @@ def brady_storyline_events(*, team_abbr: str = "OTT", calendar_iso: str = "") ->
             "effect_summary": "Focal storyline pressure; availability and leadership compromised.",
         },
         {
+            **common,
             "type": "locker_room",
             "tone": "negative",
             "priority": "HIGH",
@@ -267,11 +286,13 @@ def brady_storyline_events(*, team_abbr: str = "OTT", calendar_iso: str = "") ->
 def inject_brady_storylines(session: Any, *, team_abbr: str = "OTT") -> int:
     """Push Brady arcs into the franchise storyline feed."""
     cal = ""
+    cal_idx = int(getattr(session, "calendar_cursor", 0) or getattr(session, "calendar_index", 0) or 0)
     try:
-        idx = int(getattr(session, "calendar_index", 0) or 0)
+        idx = int(getattr(session, "calendar_index", cal_idx) or cal_idx)
         days = list(getattr(session, "nhl_calendar", None) or [])
         if 0 <= idx < len(days):
             cal = str(days[idx].get("iso") or days[idx].get("date") or "")
+        cal_idx = idx
     except Exception:
         cal = ""
     n = 0
@@ -279,7 +300,7 @@ def inject_brady_storylines(session: Any, *, team_abbr: str = "OTT") -> int:
     if events is None:
         session.storyline_events = []
         events = session.storyline_events
-    for ev in brady_storyline_events(team_abbr=team_abbr, calendar_iso=cal):
+    for ev in brady_storyline_events(team_abbr=team_abbr, calendar_iso=cal, calendar_index=cal_idx):
         try:
             # Prefer franchise normalizer when available (avoids circular import at module load).
             try:

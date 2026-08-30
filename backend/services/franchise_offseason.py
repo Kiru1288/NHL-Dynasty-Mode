@@ -481,6 +481,12 @@ def _build_playoff_payload(session: FranchiseSession) -> Dict[str, Any]:
         )
 
     matchups = [_serialize_playoff_series(s) for s in first_round]
+    try:
+        from services.franchise_playoffs import sanitize_first_round_matchups
+
+        matchups = sanitize_first_round_matchups(matchups)
+    except Exception:
+        pass
     return {
         "first_round": matchups,
         "first_round_matchups": matchups,
@@ -1022,6 +1028,24 @@ def continue_offseason(
 
     _sync_phase_fields(session)
     client_stage = str(from_stage or "").strip().lower()
+
+    # Playoff hub "Continue to Awards" used to call this while phase was still
+    # "playoffs" (Cup decided in live state, finish/awards not yet committed).
+    if str(session.phase) in ("playoffs", "playoff_ready"):
+        live = getattr(session, "playoff_live", None)
+        try:
+            from services.franchise_playoffs import handle_playoff_action, finish_live_playoffs
+
+            if isinstance(live, dict) and live.get("started"):
+                if live.get("completed") or live.get("champion_id"):
+                    finish_live_playoffs(session)
+                else:
+                    handle_playoff_action(session, "sim_rest")
+            else:
+                complete_playoffs(session)
+        except Exception:
+            complete_playoffs(session)
+        _sync_phase_fields(session)
 
     # Awards Night is shown while phase is still post_cup. Continue from that screen
     # must move into offseason and advance past awards → retirements.

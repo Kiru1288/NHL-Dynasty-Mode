@@ -1,7 +1,7 @@
 import React from "react";
 
 /**
- * Full-viewport shell (no fixed-resolution scaling).
+ * Full-viewport shell. Window fit is applied globally via fluid UI scale.
  */
 export function GameCanvas({ children }) {
   return (

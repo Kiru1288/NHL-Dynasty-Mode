@@ -1,4 +1,5 @@
 import React, { Suspense, useEffect, useRef } from "react";
+import { useFluidUiScale } from "./hooks/useFluidUiScale";
 import { GameUIProvider, useGameUI } from "./game/GameUIContext";
 import { SCREENS } from "./game/constants";
 import setupTheme from "./soundtrack/JJ's Energy - Felix Weber (FIFA 2014 World Cup Brazil OST).mp3";
@@ -175,7 +176,7 @@ function GameRoot() {
       includeDraftClassRankings: needsDraft,
       includeDraftClassHud: needsDraft,
     });
-  }, [screen, hydrateFranchiseHeavyState]);
+  }, [screen, hydrateFranchiseHeavyState, franchiseState?.prospect_revision, franchiseState?.franchise_today_iso, franchiseState?.calendar_cursor, franchiseState?.scouting_as_of_iso]);
 
   return (
     <GameCanvas>
@@ -350,14 +351,25 @@ function CommandPlaceholderScreen() {
   );
 }
 
+function FluidUiApp({ children }) {
+  useFluidUiScale();
+  return children;
+}
+
 export default function App() {
   if (isEventMenuReplay) {
-    return <EventMenuReplay />;
+    return (
+      <FluidUiApp>
+        <EventMenuReplay />
+      </FluidUiApp>
+    );
   }
 
   return (
-    <GameUIProvider>
-      <GameRoot />
-    </GameUIProvider>
+    <FluidUiApp>
+      <GameUIProvider>
+        <GameRoot />
+      </GameUIProvider>
+    </FluidUiApp>
   );
 }

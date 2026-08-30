@@ -409,7 +409,7 @@ LEAGUE_NATIONALITY_WEIGHTS: Dict[str, List[Tuple[str, float]]] = {
     ],
     "EU_J_KHL_JR": [
         ("Russia", 0.52), ("Belarus", 0.12), ("Kazakhstan", 0.11), ("Latvia", 0.08),
-        ("Czechia", 0.04), ("Finland", 0.03), ("USA", 0.025), ("Canada", 0.02),
+        ("Czechia", 0.04), ("Finland", 0.03), ("USA", 0.025),
         ("Germany", 0.015), ("Sweden", 0.01),
     ],
     "EU_J_NOR": [
@@ -430,7 +430,7 @@ LEAGUE_NATIONALITY_WEIGHTS: Dict[str, List[Tuple[str, float]]] = {
 NATIONALITY_LEAGUE_WEIGHTS: Dict[str, List[Tuple[str, float]]] = {
     "Canada": [
         ("CHL_OHL", 0.34), ("CHL_WHL", 0.33), ("CHL_QMJHL", 0.28), ("USHL", 0.03),
-        ("NCAA", 0.015), ("EU_J_SHL", 0.002), ("EU_J_KHL_JR", 0.001),
+        ("NCAA", 0.017), ("EU_J_SHL", 0.002),
     ],
     "USA": [
         ("USHL", 0.38), ("NCAA", 0.32), ("CHL_WHL", 0.12), ("CHL_OHL", 0.10),

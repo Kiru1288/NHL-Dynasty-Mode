@@ -1282,7 +1282,12 @@ function CalendarScreen(props = {}) {
     teamId,
     gmTeamId,
     hydrateFranchiseHeavyState = gameUI?.hydrateFranchiseHeavyState,
+    hydrateFranchiseNarrative = gameUI?.hydrateFranchiseNarrative,
   } = props;
+
+  useEffect(() => {
+    hydrateFranchiseNarrative?.();
+  }, [hydrateFranchiseNarrative]);
 
   useEffect(() => {
     if (typeof hydrateFranchiseHeavyState !== "function") return undefined;
@@ -1370,6 +1375,11 @@ function CalendarScreen(props = {}) {
 
   const calendarRootRef = useRef(null);
   const isAdvancing = advanceBusy || Boolean(gameUI?.advancing);
+  const lineupGaps = useMemo(() => {
+    const flags = rootState?.flags || {};
+    const raw = flags.lineup_gaps || flags.lineupGaps || [];
+    return Array.isArray(raw) ? raw.filter(Boolean) : [];
+  }, [rootState]);
 
   const worldJuniorsEventData = useMemo(() => getWorldJuniorsEventPayload(rootState), [rootState]);
 
@@ -1847,6 +1857,10 @@ function CalendarScreen(props = {}) {
         const nextState = result?.state || gameUI?.franchiseState || rootState;
 
         if (status === "blocked") {
+          const reason = String(lastStep?.reason || step?.reason || "").toLowerCase();
+          if (reason === "incomplete_lines") {
+            window.alert(String(lastStep?.message || step?.message || "Fill every even-strength slot before simulating."));
+          }
           setActivePanel("events");
           return;
         }
@@ -1855,7 +1869,10 @@ function CalendarScreen(props = {}) {
         const bulkStopped = String(step?.stopped_reason || "").toLowerCase();
 
         if (step?.bulk && bulkCompleted <= 0) {
-          if (bulkStopped === "pending_decisions") {
+          if (bulkStopped === "pending_decisions" || bulkStopped === "incomplete_lines") {
+            if (bulkStopped === "incomplete_lines") {
+              window.alert(String(lastStep?.message || step?.message || "Fill every even-strength slot before simulating."));
+            }
             setActivePanel("events");
           }
           return;
@@ -2218,6 +2235,13 @@ function CalendarScreen(props = {}) {
               </button>
             </div>
           </section>
+
+          {lineupGaps.length ? (
+            <p className="nhlcal-lineup-block" role="alert">
+              Lines are incomplete ({lineupGaps.slice(0, 4).join(", ")}
+              {lineupGaps.length > 4 ? "…" : ""}). Fill every even-strength slot in Edit Lines before advancing.
+            </p>
+          ) : null}
 
           <section className="nhlcal-action-cluster">
             <div className="nhlcal-action-primary">
@@ -6825,6 +6849,8 @@ function CalendarStyles() {
         --green-soft: rgba(82, 223, 148, 0.13);
         --red: #ff606d;
         --red-soft: rgba(255, 96, 109, 0.13);
+        --orange: #ff8a4c;
+        --orange-soft: rgba(255, 138, 76, 0.13);
         --blue: #8ab4ff;
         --blue-soft: rgba(138, 180, 255, 0.13);
         --purple: var(--ops-info, #8ab4ff);
@@ -7181,6 +7207,21 @@ function CalendarStyles() {
         align-items: flex-end;
         gap: 8px;
         min-width: 0;
+      }
+
+      .nhlcal-lineup-block {
+        justify-self: end;
+        max-width: 420px;
+        margin: 0;
+        padding: 8px 12px;
+        border-radius: 8px;
+        border: 1px solid rgba(232, 92, 92, 0.45);
+        background: rgba(70, 16, 20, 0.72);
+        color: #ffd4d4;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.35;
+        text-align: right;
       }
 
       .nhlcal-action-primary,

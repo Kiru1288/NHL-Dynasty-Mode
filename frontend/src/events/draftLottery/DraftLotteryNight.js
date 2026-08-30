@@ -338,10 +338,16 @@ export default function DraftLotteryNight({
           <button
             type="button"
             className="dlot-cta-btn"
-            onClick={onContinue}
-            disabled={stage !== "results"}
+            onClick={() => {
+              if (stage !== "results") {
+                skipToResults();
+                return;
+              }
+              onContinue?.();
+            }}
+            disabled={typeof onContinue !== "function"}
           >
-            {stage === "results" ? "Enter Combine" : "Revealing…"}
+            {stage === "results" ? "Enter Combine" : "Skip to Enter Combine"}
           </button>
         </div>
       </footer>

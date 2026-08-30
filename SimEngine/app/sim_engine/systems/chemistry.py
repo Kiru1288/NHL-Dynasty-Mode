@@ -49,6 +49,122 @@ _DEFAULT_PROFILE = {
     "room_presence": 50,
 }
 
+_ARCHETYPE_PLAYSTYLE_MAP = {
+    "playmaker": "playmaker",
+    "sniper": "sniper",
+    "power_forward": "power_forward",
+    "power": "power_forward",
+    "two_way": "two_way",
+    "two_way_f": "two_way",
+    "two_way_d": "two_way",
+    "grinder": "grinder",
+    "enforcer": "grinder",
+    "puck_mover": "puck_mover",
+    "shutdown": "shutdown",
+    "stay_at_home": "defensive_defenseman",
+    "defensive_d": "defensive_defenseman",
+    "defensive_defenseman": "defensive_defenseman",
+    "offensive_d": "offensive_defenseman",
+    "offensive_defenseman": "offensive_defenseman",
+    "hybrid_g": "hybrid_goalie",
+    "hybrid_goalie": "hybrid_goalie",
+    "butterfly_g": "butterfly_goalie",
+    "butterfly_goalie": "butterfly_goalie",
+}
+
+_PERSONALITY_SYNERGY_POINTS = {
+    ("leader", "young_skilled"): 10,
+    ("leader", "streaky_confidence"): 8,
+    ("glue_guy", "high_ego_star"): 8,
+    ("glue_guy", "intense_competitor"): 7,
+    ("high_ego_star", "glue_guy"): 8,
+    ("high_ego_star", "high_ego_star"): -14,
+    ("high_ego_star", "intense_competitor"): -8,
+    ("mentor", "young_skilled"): 9,
+    ("veteran_stabilizer", "young_skilled"): 8,
+    ("young_skilled", "leader"): 10,
+    ("young_skilled", "mentor"): 9,
+}
+
+_PLAYSTYLE_SYNERGY_POINTS = {
+    ("playmaker", "sniper"): 14,
+    ("sniper", "playmaker"): 14,
+    ("playmaker", "power_forward"): 6,
+    ("power_forward", "playmaker"): 6,
+    ("sniper", "power_forward"): 5,
+    ("power_forward", "sniper"): 5,
+    ("puck_mover", "shutdown"): 12,
+    ("shutdown", "puck_mover"): 12,
+    ("offensive_defenseman", "defensive_defenseman"): 10,
+    ("defensive_defenseman", "offensive_defenseman"): 10,
+    ("two_way", "sniper"): 4,
+    ("two_way", "playmaker"): 4,
+    ("sniper", "sniper"): -3,
+    ("playmaker", "playmaker"): -2,
+    ("offensive_defenseman", "offensive_defenseman"): -4,
+    ("puck_mover", "puck_mover"): -3,
+}
+
+
+def _chemistry_profile_is_materialized(raw: Any) -> bool:
+    return isinstance(raw, dict) and raw.get("_materialized") is True
+
+
+def _chemistry_profile_is_stub(player: Any, raw: Any) -> bool:
+    if not isinstance(raw, dict) or not raw:
+        return True
+    if raw.get("_materialized") is not True:
+        return True
+    current = str(raw.get("playstyle") or "")
+    inferred = _infer_playstyle(player, _player_chemistry_rng(player))
+    distinctive = {
+        "playmaker",
+        "sniper",
+        "power_forward",
+        "grinder",
+        "offensive_defenseman",
+        "defensive_defenseman",
+        "puck_mover",
+        "shutdown",
+        "hybrid_goalie",
+        "butterfly_goalie",
+    }
+    return inferred in distinctive and current in ("two_way", "balanced", "")
+
+
+def _player_chemistry_rng(player: Any) -> random.Random:
+    seed = _canonical_player_id(player) or _player_name(player)
+    return random.Random(seed)
+
+
+def _personality_synergy_points(personality_a: str, personality_b: str) -> float:
+    a = str(personality_a or "balanced")
+    b = str(personality_b or "balanced")
+    return float(
+        _PERSONALITY_SYNERGY_POINTS.get((a, b), 0.0)
+        + _PERSONALITY_SYNERGY_POINTS.get((b, a), 0.0)
+    )
+
+
+def _playstyle_synergy_points(playstyle_a: str, playstyle_b: str) -> float:
+    a = str(playstyle_a or "balanced")
+    b = str(playstyle_b or "balanced")
+    return float(
+        _PLAYSTYLE_SYNERGY_POINTS.get((a, b), 0.0)
+        + _PLAYSTYLE_SYNERGY_POINTS.get((b, a), 0.0)
+    )
+
+
+def materialize_roster_chemistry_profiles(team: Any) -> int:
+    """Ensure every roster player has an inferred, persisted chemistry profile."""
+    count = 0
+    for p in _team_players(team):
+        before = _chemistry_profile_is_stub(p, getattr(p, "chemistry_profile", None))
+        ensure_player_chemistry_profile(p, _player_chemistry_rng(p))
+        if before:
+            count += 1
+    return count
+
 
 def clamp(value: float, low: float, high: float) -> float:
     return low if value < low else high if value > high else float(value)
@@ -64,13 +180,71 @@ def _to_num(v: Any, default: float = 50.0) -> float:
         return default
 
 
-def _player_id(player: Any) -> str:
-    return str(
+def _canonical_player_id(player: Any) -> str:
+    raw = (
         getattr(player, "id", None)
         or getattr(player, "player_id", None)
+        or getattr(player, "_ledger_player_id", None)
+        or getattr(player, "external_player_id", None)
         or getattr(player, "uid", None)
         or ""
     )
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    if s.isdigit():
+        return f"NHL_{s}"
+    return s
+
+
+def _canonical_player_id_from_string(value: Any) -> str:
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    if s.isdigit():
+        return f"NHL_{s}"
+    return s
+
+
+def _player_id(player: Any) -> str:
+    return _canonical_player_id(player)
+
+
+def _pair_index_key(ida: Any, idb: Any) -> str:
+    a = _canonical_player_id_from_string(ida)
+    b = _canonical_player_id_from_string(idb)
+    if not a or not b:
+        return ""
+    left, right = sorted([a, b])
+    return f"{left}|{right}"
+
+
+def build_pair_index(pair_rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for row in pair_rows or []:
+        if not isinstance(row, dict):
+            continue
+        key = _pair_index_key(row.get("player_a_id"), row.get("player_b_id"))
+        if key:
+            out[key] = row
+    return out
+
+
+def _collect_pair_rows_from_report(report: Dict[str, Any]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for unit in list(report.get("lines") or []) + list(report.get("pairs") or []):
+        if not isinstance(unit, dict):
+            continue
+        for row in list(unit.get("pair_links") or []):
+            if isinstance(row, dict):
+                rows.append(row)
+    for row in list(report.get("deployed_pair_links") or []):
+        if isinstance(row, dict):
+            rows.append(row)
+    for row in list(report.get("top_connections") or []):
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
 
 
 def _player_name(player: Any) -> str:
@@ -146,6 +320,8 @@ def _infer_playstyle(player: Any, rng: random.Random) -> str:
         or ""
     ).lower().replace(" ", "_").replace("-", "_")
     pos = _player_position(player)
+    if arch in _ARCHETYPE_PLAYSTYLE_MAP:
+        return _ARCHETYPE_PLAYSTYLE_MAP[arch]
     if pos == "G":
         if "hybrid" in arch:
             return "hybrid_goalie"
@@ -196,16 +372,16 @@ def get_player_chemistry_profile(player: Any) -> Dict[str, Any]:
 def ensure_player_chemistry_profile(player: Any, rng: Optional[random.Random] = None) -> Dict[str, Any]:
     if player is None:
         return dict(_DEFAULT_PROFILE)
-    rng = rng if isinstance(rng, random.Random) else random.Random()
-
-    existing = get_player_chemistry_profile(player)
-    is_existing = isinstance(getattr(player, "chemistry_profile", None), dict)
-    if is_existing and existing.get("personality") in PERSONALITIES:
+    raw_prof = getattr(player, "chemistry_profile", None)
+    if not _chemistry_profile_is_stub(player, raw_prof):
+        existing = get_player_chemistry_profile(player)
         if getattr(player, "chemistry_relationships", None) is None:
             setattr(player, "chemistry_relationships", {})
         if getattr(player, "chemistry_history", None) is None:
             setattr(player, "chemistry_history", [])
         return existing
+
+    rng = rng if isinstance(rng, random.Random) else _player_chemistry_rng(player)
 
     traits = getattr(player, "traits", None)
     psych = safe_get_psych(player)
@@ -239,6 +415,7 @@ def ensure_player_chemistry_profile(player: Any, rng: Optional[random.Random] = 
         "defensive_buy_in": defensive_buy_in,
         "pressure_response": pressure_response,
         "room_presence": room_presence,
+        "_materialized": True,
     }
     setattr(player, "chemistry_profile", prof)
     if getattr(player, "chemistry_relationships", None) is None:
@@ -370,11 +547,14 @@ def calculate_pair_chemistry(player_a: Any, player_b: Any, context: Optional[Dic
     ida = _player_id(player_a)
     idb = _player_id(player_b)
     familiarity = 0.0
+    fam_count = 0
     if idb in rel_a:
         familiarity += _to_num(rel_a.get(idb), 0.0)
+        fam_count += 1
     if ida in rel_b:
         familiarity += _to_num(rel_b.get(ida), 0.0)
-    familiarity = familiarity / 2.0 if familiarity else 50.0
+        fam_count += 1
+    familiarity = familiarity / fam_count if fam_count else 50.0
 
     p_comp = personality_compatibility(player_a, player_b)
     s_comp = playstyle_compatibility(player_a, player_b)
@@ -401,7 +581,15 @@ def calculate_pair_chemistry(player_a: Any, player_b: Any, context: Optional[Dic
         + 0.05 * (role_balance / 100.0)
         - 0.12 * tension_pen
     )
-    score = int(round(clamp(score01, 0.0, 1.0) * 100.0))
+    synergy_bonus = _playstyle_synergy_points(pa.get("playstyle"), pb.get("playstyle"))
+    synergy_bonus += _personality_synergy_points(pa.get("personality"), pb.get("personality"))
+    if _to_num(pa.get("ego"), 50.0) > 72.0 and _to_num(pb.get("ego"), 50.0) > 72.0:
+        synergy_bonus -= 12.0
+    if familiarity >= 80.0:
+        synergy_bonus += min(10.0, (familiarity - 75.0) * 0.45)
+    elif familiarity <= 35.0:
+        synergy_bonus -= min(12.0, (40.0 - familiarity) * 0.5)
+    score = int(round(clamp(score01 * 100.0 + synergy_bonus, 0.0, 100.0)))
     scheme = {
         "position_fit": int(round(pos_fit)),
         "linemate_compatibility": int(round(clamp(0.5 * p_comp + 0.5 * s_comp, 0.0, 1.0) * 100.0)),
@@ -541,6 +729,7 @@ def calculate_forward_line_chemistry(players: List[Any], context: Optional[Dict[
         "risk": risk,
         "trend": int(round(score - 55)),
         "players": [{"id": _player_id(p), "name": _player_name(p), "position": _player_position(p)} for p in line],
+        "pair_links": pairs,
         "factors": factors,
         "concerns": concerns,
         "scheme_fit": scheme,
@@ -594,6 +783,7 @@ def calculate_defense_pair_chemistry(players: List[Any], context: Optional[Dict[
         "risk": "May struggle under forecheck pressure" if score < 60 else "Mostly stable under pressure",
         "trend": int(round(score - 55)),
         "players": [{"id": _player_id(x), "name": _player_name(x), "position": _player_position(x)} for x in pair],
+        "pair_links": [{**p, "chemistry": score}],
         "factors": factors,
         "concerns": concerns,
         "scheme_fit": dict(p.get("scheme_fit") or {}),
@@ -706,7 +896,25 @@ def _session_even_strength_payload(session: Optional[Any]) -> Optional[Dict[str,
 
 
 def _resolve_line_units_from_payload(team: Any, payload: Dict[str, Any]) -> Dict[str, List[List[Any]]]:
-    by_id = {_player_id(p): p for p in _team_players(team) if _player_id(p)}
+    by_id: Dict[str, Any] = {}
+    for p in _team_players(team):
+        cid = _canonical_player_id(p)
+        if not cid:
+            continue
+        by_id[cid] = p
+        bare = cid[4:] if cid.startswith("NHL_") else cid
+        if bare:
+            by_id.setdefault(bare, p)
+
+    def _lookup_player(pid: Any) -> Any:
+        key = str(pid or "").strip()
+        if not key:
+            return None
+        if key in by_id:
+            return by_id[key]
+        canon = _canonical_player_id_from_string(key)
+        return by_id.get(canon)
+
     forward_lines: List[List[Any]] = []
     for line in list(payload.get("forwards") or [])[:4]:
         if not isinstance(line, dict):
@@ -714,7 +922,7 @@ def _resolve_line_units_from_payload(team: Any, payload: Dict[str, Any]) -> Dict
         slots = line.get("slots") or {}
         trio = []
         for slot in ("LW", "C", "RW"):
-            p = by_id.get(str(slots.get(slot) or ""))
+            p = _lookup_player(slots.get(slot))
             if p is not None:
                 trio.append(p)
         if trio:
@@ -726,7 +934,7 @@ def _resolve_line_units_from_payload(team: Any, payload: Dict[str, Any]) -> Dict
         slots = pair.get("slots") or {}
         duo = []
         for slot in ("LD", "RD"):
-            p = by_id.get(str(slots.get(slot) or ""))
+            p = _lookup_player(slots.get(slot))
             if p is not None:
                 duo.append(p)
         if duo:
@@ -737,7 +945,7 @@ def _resolve_line_units_from_payload(team: Any, payload: Dict[str, Any]) -> Dict
             continue
         slots = gline.get("slots") or {}
         for key in ("Starter", "Backup", "Third"):
-            p = by_id.get(str(slots.get(key) or ""))
+            p = _lookup_player(slots.get(key))
             if p is not None and p not in goalies:
                 goalies.append(p)
     if not goalies:
@@ -790,7 +998,34 @@ def calculate_team_chemistry_report(team: Any, session: Optional[Any] = None) ->
         for j in range(i + 1, len(roster)):
             top_connections.append(calculate_pair_chemistry(roster[i], roster[j], context=ctx))
     top_connections.sort(key=lambda x: -int(x.get("chemistry", 0)))
-    top_connections = top_connections[:8]
+    top_connections = top_connections[:24]
+
+    deployed_pair_links: List[Dict[str, Any]] = []
+    fwd_slots = ["LW", "C", "RW"]
+    for group in lines_src["forward_lines"]:
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                deployed_pair_links.append(
+                    calculate_pair_chemistry(
+                        group[i],
+                        group[j],
+                        context={
+                            **ctx,
+                            "slot_a": fwd_slots[i] if i < len(fwd_slots) else "",
+                            "slot_b": fwd_slots[j] if j < len(fwd_slots) else "",
+                        },
+                    )
+                )
+    for group in lines_src["defense_pairs"]:
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                deployed_pair_links.append(
+                    calculate_pair_chemistry(
+                        group[i],
+                        group[j],
+                        context={**ctx, "slot_a": "LD", "slot_b": "RD"},
+                    )
+                )
 
     concerns: List[str] = []
     if room["tension"] >= 56:
@@ -804,15 +1039,18 @@ def calculate_team_chemistry_report(team: Any, session: Optional[Any] = None) ->
     if not _session_even_strength_payload(session):
         concerns.append("No saved even-strength lines — chemistry projected from roster order.")
 
-    return {
+    report = {
         "room": room,
         "lines": f_reports,
         "pairs": d_reports,
         "goalies": goalies,
         "top_connections": top_connections,
+        "deployed_pair_links": deployed_pair_links,
         "concerns": concerns,
         "line_source": "session.lines" if _session_even_strength_payload(session) else "roster_projection",
     }
+    report["pair_index"] = build_pair_index(_collect_pair_rows_from_report(report))
+    return report
 
 
 def apply_daily_chemistry_tick(team: Any, session: Optional[Any] = None, rng: Optional[random.Random] = None) -> Dict[str, Any]:
@@ -959,9 +1197,17 @@ def build_public_chemistry_report(session: Any) -> Dict[str, Any]:
             "pairs": [],
             "goalies": [],
             "top_connections": [],
+            "pair_index": {},
             "concerns": ["Chemistry report unavailable until team roster initializes."],
             "storyline_pressure": [],
         }
+    materialized = materialize_roster_chemistry_profiles(team)
+    if materialized and session is not None:
+        try:
+            session._cached_state_roster_rows = None
+            session._cached_chemistry_report = None
+        except Exception:
+            pass
     rep = calculate_team_chemistry_report(team, session=session)
     storylines = list(getattr(session, "storyline_events", None) or [])[-40:]
     pressure = []
@@ -995,6 +1241,8 @@ def build_public_chemistry_report(session: Any) -> Dict[str, Any]:
         "pairs": rep["pairs"],
         "goalies": rep["goalies"],
         "top_connections": rep["top_connections"],
+        "deployed_pair_links": rep.get("deployed_pair_links") or [],
+        "pair_index": rep.get("pair_index") or {},
         "concerns": rep["concerns"],
         "storyline_pressure": pressure,
         "narrative": narrative,

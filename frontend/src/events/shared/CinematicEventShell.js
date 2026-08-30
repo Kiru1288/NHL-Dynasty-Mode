@@ -157,11 +157,14 @@ export default function CinematicEventShell({
           <button
             type="button"
             className={`${p}-cta-btn`}
-            onClick={onContinue}
-            disabled={!introDone || typeof onContinue !== "function"}
+            onClick={() => {
+              if (!introDone && !skipCeremony) markRevealed();
+              onContinue?.();
+            }}
+            disabled={typeof onContinue !== "function"}
             title={typeof onContinue !== "function" ? "Resolve required decisions to continue" : undefined}
           >
-            {introDone ? ctaLabel : "Revealing…"}
+            {ctaLabel}
           </button>
         </div>
       </footer>

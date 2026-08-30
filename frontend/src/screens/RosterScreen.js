@@ -6238,6 +6238,9 @@ function PlayerCharacterLifePanel({ player, franchiseState, onCallMeeting }) {
   const universe = franchiseState?.narrative_universe || {};
   const meetings = universe?.player_meetings || {};
   const rosterRow = (meetings.roster || []).find((r) => String(r?.player_id || "") === pid) || null;
+  const universePlayer =
+    universe?.players?.find?.((row) => String(row?.player_id || "") === pid) || rosterRow || null;
+  const nicheBadges = Array.isArray(universePlayer?.niche_abilities) ? universePlayer.niche_abilities : [];
   const dossier =
     universe?.human_dossiers?.[pid] ||
     universe?.players?.find?.((row) => String(row?.player_id || "") === pid)?.human_dossier ||
@@ -6280,6 +6283,13 @@ function PlayerCharacterLifePanel({ player, franchiseState, onCallMeeting }) {
           <h3>{charBlock.headline || "—"}</h3>
         </header>
         {charBlock.summary_line ? <p className="nhlrost-muted-text">{charBlock.summary_line}</p> : null}
+        {nicheBadges.length ? (
+          <div className="nhlrost-media-tags">
+            {nicheBadges.map((n) => (
+              <span key={String(n.id || n.label)} className="nhlrost-media-tag">{String(n.label || n.id)}</span>
+            ))}
+          </div>
+        ) : null}
         <div className="nhlrost-character-trait-grid">
           {(charBlock.traits || []).map((trait) => (
             <InfoPair key={trait.label} label={trait.label} value={trait.tier || "—"} />
@@ -6410,7 +6420,12 @@ export function RosterScreen() {
     setScreen,
     refreshFranchise,
     setPendingMeetingPlayerId,
+    hydrateFranchiseNarrative,
   } = gameUI;
+
+  useEffect(() => {
+    hydrateFranchiseNarrative?.();
+  }, [hydrateFranchiseNarrative]);
 
   const rb = franchiseState?.roster_browser || EMPTY_OBJECT;
   const draftBoard = franchiseState?.draft_class_rankings || EMPTY_OBJECT;

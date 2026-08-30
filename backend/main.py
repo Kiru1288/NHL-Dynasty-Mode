@@ -418,6 +418,19 @@ def get_franchise_draft_class_detail(x_franchise_session: Optional[str] = Header
     return franchise_sim.get_cached_draft_class_detail_payload(s, sim)
 
 
+@app.get("/api/franchise/draft-class/prospect/{prospect_id}/profile")
+def get_franchise_draft_prospect_profile(
+    prospect_id: str,
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    s = _session_or_404(x_franchise_session)
+    sim = s.sim
+    profile = franchise_sim.get_draft_prospect_profile_payload(s, sim, prospect_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Prospect not found on the active draft board")
+    return {"prospect_id": str(prospect_id), "profile": profile}
+
+
 @app.get("/api/franchise/state/heavy")
 def get_franchise_state_heavy(
     include_roster_browser: bool = True,
