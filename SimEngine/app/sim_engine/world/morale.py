@@ -72,4 +72,4 @@ def team_avg_morale(team: Any) -> float:
 
 def team_morale_strength_factor(team: Any) -> float:
     avg = team_avg_morale(team)
-    return max(0.985, min(1.015, 1.0 + 0.00025 * (avg - 50.0)))
+    return max(0.955, min(1.045, 1.0 + 0.00090 * (avg - 50.0)))

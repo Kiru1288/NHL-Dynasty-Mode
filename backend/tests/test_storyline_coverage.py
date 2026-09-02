@@ -273,3 +273,73 @@ def test_player_meetings_catalog_and_ovr_explanation():
     ids = {row["id"] for row in avail}
     assert "discuss_ice_time" in ids or "repair_relationship" in ids
     assert "ask_ntc_waiver" not in ids
+
+
+def test_default_traits_get_diversified_and_custom_traits_stay():
+    from app.sim_engine.engine import diversify_player_personality_and_psych, ensure_player_character_initialized
+    from app.sim_engine.entities.player import PersonalityTraits
+    from app.sim_engine.franchise.storyline_engine import _u_personality_tags, _u_tier_label
+
+    class _Flat:
+        id = "flat_a"
+        character = 70
+        traits = PersonalityTraits()
+        psych = None
+
+    rng = __import__("random").Random(1)
+    ensure_player_character_initialized(_Flat, rng)
+    axes = [getattr(_Flat.traits, k) for k in ("loyalty", "ego", "volatility", "ambition", "leadership")]
+    assert max(axes) - min(axes) > 0.12
+    pmap = {
+        "character": 70,
+        "ego": _Flat.traits.ego * 100,
+        "ambition": _Flat.traits.ambition * 100,
+        "volatility": _Flat.traits.volatility * 100,
+        "resilience": 70,
+        "professionalism": 70,
+        "leadership": _Flat.traits.leadership * 100,
+        "media_savvy": 40,
+        "sociability": 50,
+        "coachability": 60,
+        "family_orientation": _Flat.traits.family_priority * 100,
+        "money_focus": _Flat.traits.money_focus * 100,
+        "competitiveness": _Flat.traits.competitiveness * 100,
+        "clutch": 50,
+    }
+    tags = _u_personality_tags({"personality": pmap})
+    assert tags
+    custom = _Player()
+    before = custom.traits.loyalty
+    diversify_player_personality_and_psych(custom, rng)
+    assert custom.traits.loyalty == before
+    assert _u_tier_label(22) == "Very Low"
+    assert _u_tier_label(88) != "Average"
+
+
+def test_stats_ledger_box_moves_morale():
+    from app.sim_engine.franchise.storyline_engine import apply_universe_postgame
+    from app.sim_engine.franchise.storyline_stat_bridge import player_stat_map_from_box
+
+    class _Team:
+        roster = [_Player()]
+
+    session = _Session()
+    session.team_by_id = {"T1": _Team()}
+    session.universe_players["p_test_1"]["state"] = {"morale": 55.0, "confidence": 55.0, "media_stress": 20.0}
+    box = {
+        "home_id": "T1",
+        "away_id": "T2",
+        "home_goals": 4,
+        "away_goals": 1,
+        "home_skaters": [
+            {"player_id": "p_test_1", "g": 2, "a": 1, "sog": 5, "toi_sec": 1100, "pim": 0},
+        ],
+    }
+    stats = player_stat_map_from_box(box)
+    assert stats["p_test_1"]["points"] == 3
+    apply_universe_postgame(session, "T1", {"won": True, "player_stats": stats, "game_id": "g1"})
+    morale = float(session.universe_players["p_test_1"]["state"]["morale"])
+    assert morale > 60
+    assert session.team_by_id["T1"].roster[0].psych.morale > 0.55
+
+

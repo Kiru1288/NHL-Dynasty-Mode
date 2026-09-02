@@ -505,6 +505,7 @@ export function HubScreen() {
       flags: franchiseState?.flags,
       storyline_events: franchiseState?.storyline_events,
       notifications: franchiseState?.notifications,
+      narrative_universe: franchiseState?.narrative_universe,
     }),
     [
       franchiseState?.phase,
@@ -514,6 +515,7 @@ export function HubScreen() {
       franchiseState?.flags,
       franchiseState?.storyline_events,
       franchiseState?.notifications,
+      franchiseState?.narrative_universe,
     ]
   );
 

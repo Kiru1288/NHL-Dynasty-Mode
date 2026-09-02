@@ -18,6 +18,7 @@ import {
   getSocialFeed,
 } from "../services/franchiseService";
 import BurnerPanel from "../components/franchise/social/BurnerPanel";
+import { collectLockerPulse, buildHubStoryTicker, isRoutineLeagueTrade } from "../utils/lockerRoomPulse";
 
 /*
   StorylinesScreen — franchise narrative command center.
@@ -54,6 +55,7 @@ const CATEGORY_META = {
   decision: { glyph: "◈", label: "GM Decision", accent: "#e9a83c" },
   league: { glyph: "◉", label: "League", accent: "#8ab4ff" },
   locker_room: { glyph: "◍", label: "Locker Room", accent: "#7ee0b0" },
+  personal_life: { glyph: "♡", label: "Off ice", accent: "#d4a0c8" },
   business: { glyph: "$", label: "Business", accent: "#52df94" },
   management: { glyph: "▣", label: "Front Office", accent: "#e9a83c" },
   storyline: { glyph: "◉", label: "League", accent: "#8096a8" },
@@ -61,27 +63,40 @@ const CATEGORY_META = {
 
 const FILTERS = [
   { id: "all", label: "All" },
+  { id: "breaking", label: "Breaking" },
   { id: "major", label: "Major" },
-  { id: "rumors", label: "Rumors" },
   { id: "team", label: "Team" },
   { id: "league", label: "League" },
   { id: "player", label: "Player" },
+  { id: "life", label: "Off ice" },
   { id: "media_buzz", label: "Buzz" },
 ];
 
+const TRADE_FILTERS = [
+  { id: "all", label: "All" },
+  { id: "breaking", label: "Breaking" },
+  { id: "major", label: "Major" },
+  { id: "rumors", label: "Rumors" },
+  { id: "team", label: "Your club" },
+  { id: "league", label: "League" },
+];
+
 const FILTER_EMPTY = {
+  breaking: "No breaking beats on file — sim a few days to fill the wire.",
   major: "No major developments on file.",
   rumors: "Trade wire is calm — for now.",
   team: "Nothing filed on your team today.",
   league: "League desk is quiet.",
   player: "No player-specific beats yet.",
+  life: "No off-ice or family beats filed yet.",
   media_buzz: "Media buzz is flat right now.",
 };
 
 const DEPARTMENTS = [
-  { id: "front_page", label: "Newsroom", glyph: "◉" },
+  { id: "front_page", label: "Stories", glyph: "◉" },
+  { id: "trade_desk", label: "Trades", glyph: "⇄" },
   { id: "player_meetings", label: "Meetings", glyph: "◫" },
-  { id: "locker_room", label: "Locker Room", glyph: "◍" },
+  { id: "locker_room", label: "Room & Life", glyph: "◍" },
   { id: "consequences", label: "Fallout", glyph: "⚠" },
   { id: "social", label: "Social", glyph: "◈" },
   { id: "insiders", label: "Insiders", glyph: "◇" },
@@ -147,6 +162,9 @@ function resolveCategoryKey(story) {
   if (/goalie|goaltender/.test(cat)) return "goalie";
   if (/trade|rumor|contract/.test(cat)) return /contract/.test(cat) ? "contract" : "trade";
   if (/locker|belong|role/.test(cat)) return "locker_room";
+  if (cat === "personal_life" || /life/.test(cat) || String(story?.causeType || story?.raw?.cause_type || "").toUpperCase().includes("LIFE")) {
+    return "personal_life";
+  }
   if (/business|agent/.test(cat)) return "business";
   if (/coach|gm|captain|ahl/.test(cat)) return "league";
   if (/crisis|collapse|skid/.test(cat)) return "team_crisis";
@@ -361,11 +379,15 @@ function MeetingOutcomePanel({ outcome, onDismiss }) {
   );
 }
 
-function LockerRoomDashboard({ narrativeUniverse, franchiseState }) {
+function LockerRoomDashboard({ narrativeUniverse, franchiseState, stories = [] }) {
   const hallmark = asObject(narrativeUniverse?.hallmark_panels);
   const culture = asObject(hallmark.room_pulse || narrativeUniverse?.locker_room?.culture);
   const risks = asArray(hallmark.character_risks);
   const leaders = asArray(hallmark.unheralded_leaders);
+  const pulse = collectLockerPulse(franchiseState, { limit: 10 });
+  const lifeStories = pulse.lifeStories.length
+    ? pulse.lifeStories
+    : stories.filter((s) => s.categoryKey === "personal_life").slice(0, 10);
   const hasCultureData = Object.keys(culture).length > 0;
   const pulseParts = [culture.unity, culture.confidence, culture.belonging].filter((v) => v != null && v !== "");
   const pulseScore = pulseParts.length
@@ -373,7 +395,7 @@ function LockerRoomDashboard({ narrativeUniverse, franchiseState }) {
     : null;
   const clubLabel = teamLabel(franchiseState);
 
-  if (!hasCultureData && !risks.length && !leaders.length) {
+  if (!hasCultureData && !risks.length && !leaders.length && !pulse.people.length && !lifeStories.length) {
     return (
       <EmptyPanel
         kicker="Locker room"
@@ -387,7 +409,7 @@ function LockerRoomDashboard({ narrativeUniverse, franchiseState }) {
     <div className="sl-locker-dash">
       <header className="sl-locker-dash__head">
         <p className="sl-room__kicker">Culture · {clubLabel}</p>
-        <h2>Locker room pulse</h2>
+        <h2>Room and life</h2>
       </header>
       <div className="sl-locker-dash__pulse">
         {pulseScore != null ? (
@@ -405,6 +427,32 @@ function LockerRoomDashboard({ narrativeUniverse, franchiseState }) {
           ))}
         </div>
       </div>
+      {pulse.people.length ? (
+        <section className="sl-locker-dash__section">
+          <h3>Who they are</h3>
+          <div className="sl-locker-dash__cards">
+            {pulse.people.slice(0, 12).map((row) => (
+              <article key={row.playerId || row.name} className="sl-locker-card">
+                <strong>{row.name}</strong>
+                <span>{row.line}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {lifeStories.length ? (
+        <section className="sl-locker-dash__section">
+          <h3>Off the ice</h3>
+          <div className="sl-locker-dash__cards">
+            {lifeStories.map((row) => (
+              <article key={row.id} className="sl-locker-card">
+                <strong>{row.playerName || row.headline}</strong>
+                <span>{row.headline}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
       {risks.length ? (
         <section className="sl-locker-dash__section">
           <h3>Character risks</h3>
@@ -684,11 +732,13 @@ function buildChoicesMap(state) {
 
 function matchesFilter(story, filter) {
   if (filter === "all") return true;
-  if (filter === "major") return story.priorityRank >= 3 || story.requiresAction;
+  if (filter === "major") return story.priorityRank >= 3 || story.requiresAction || isBreakingStory(story);
+  if (filter === "breaking") return isBreakingStory(story);
   if (filter === "rumors") return isRumourStory(story);
   if (filter === "team") return story.isUserTeam;
   if (filter === "league") return !story.isUserTeam;
   if (filter === "player") return Boolean(story.playerName);
+  if (filter === "life") return story.categoryKey === "personal_life" || /life/i.test(str(story.category));
   if (filter === "media_buzz") return Number(story.heat) >= 40;
   return true;
 }
@@ -742,7 +792,11 @@ function knowledgeLevelLabel(level) {
 function isBreakingStory(story) {
   const p = String(story?.priority || "").toUpperCase();
   const heat = Number(story?.heat) || 0;
-  return p === "CRITICAL" || heat >= 75 || Boolean(story?.requiresAction);
+  const level = str(story?.breakingLevel).toLowerCase();
+  if (level === "breaking" || level === "league_defining" || level === "developing") return true;
+  if (p === "CRITICAL" || Boolean(story?.requiresAction)) return true;
+  if (story?.categoryKey === "personal_life" && heat >= 28) return true;
+  return heat >= 62;
 }
 
 function storyScore(story) {
@@ -759,7 +813,19 @@ function scoreTone(score) {
 }
 
 function isRumourStory(story) {
-  return /trade|rumor|contract|market/i.test(`${story.type} ${story.category} ${story.headline}`);
+  return isTradeDeskStory(story);
+}
+
+function isTradeDeskStory(story) {
+  if (!story) return false;
+  const key = str(story.categoryKey || story.category || story.type).toLowerCase();
+  if (["personal_life", "locker_room", "injury", "performance"].includes(key)) return false;
+  const cause = str(story.causeType || story.raw?.cause_type).toUpperCase();
+  if (/TRADE_DEMAND|TRADE_REJECTED|TRADE_PROPOSAL|CULPRIT_TRADED|TRADE_ATTEMPTED/.test(cause)) return true;
+  if (key === "trade" || key === "rumor") return true;
+  const hay = `${story.category || ""} ${story.type || ""} ${story.headline || ""}`.toLowerCase();
+  if (/\bacquires\b|\btraded to\b|trade rumour|trade rumor|trade wire/.test(hay)) return true;
+  return /\btrade\b/.test(hay);
 }
 
 function parseIsoDate(iso) {
@@ -1998,6 +2064,10 @@ export default function StorylinesScreen() {
     () => collectStories(franchiseState),
     [franchiseState?.storyline_events, franchiseState?.stats_revision, franchiseState?.narrative_revision]
   );
+  const narrativeStories = useMemo(() => stories.filter((s) => !isTradeDeskStory(s)), [stories]);
+  const tradeStories = useMemo(() => stories.filter((s) => isTradeDeskStory(s)), [stories]);
+  const deskStories = department === "trade_desk" ? tradeStories : narrativeStories;
+  const deskFilters = department === "trade_desk" ? TRADE_FILTERS : FILTERS;
   const choicesMap = useMemo(
     () => buildChoicesMap(franchiseState),
     [franchiseState?.storyline_choices, franchiseState?.pending_decisions]
@@ -2017,24 +2087,24 @@ export default function StorylinesScreen() {
   const closeStory = useCallback(() => setOpenCaseId(null), []);
 
   const filterCounts = useMemo(() => {
-    const counts = { all: stories.length };
-    FILTERS.forEach((f) => {
+    const counts = { all: deskStories.length };
+    deskFilters.forEach((f) => {
       if (f.id === "all") return;
-      counts[f.id] = stories.filter((s) => matchesFilter(s, f.id)).length;
+      counts[f.id] = deskStories.filter((s) => matchesFilter(s, f.id)).length;
     });
     return counts;
-  }, [stories]);
+  }, [deskStories, deskFilters]);
 
   const filtered = useMemo(() => {
-    const base = stories.filter((s) => matchesFilter(s, filter) && matchesSearch(s, search));
+    const base = deskStories.filter((s) => matchesFilter(s, filter) && matchesSearch(s, search));
     return sortStories(base, sortId);
-  }, [stories, filter, search, sortId]);
+  }, [deskStories, filter, search, sortId]);
 
   const pendingDecisions = useMemo(
-    () => stories.filter((s) => s.requiresAction || choicesMap.has(s.storylineId) || choicesMap.has(s.id)),
-    [stories, choicesMap]
+    () => deskStories.filter((s) => s.requiresAction || choicesMap.has(s.storylineId) || choicesMap.has(s.id)),
+    [deskStories, choicesMap]
   );
-  const yourTeamCount = stories.filter((s) => s.isUserTeam).length;
+  const yourTeamCount = deskStories.filter((s) => s.isUserTeam).length;
 
   const orgPressure = asObject(franchiseState?.conduct_org_pressure);
   const userOrg =
@@ -2156,13 +2226,18 @@ export default function StorylinesScreen() {
     return filtered.filter((s) => s.id !== leadStory.id);
   }, [filtered, leadStory]);
 
-  const tickerItems = useMemo(
-    () =>
-      [...stories]
-        .sort((a, b) => Number(b.heat) - Number(a.heat))
-        .slice(0, 12),
-    [stories]
-  );
+  const tickerItems = useMemo(() => {
+    const pool = department === "trade_desk" ? tradeStories : narrativeStories;
+    const fromHub = buildHubStoryTicker(
+      { ...franchiseState, storyline_events: pool.map((s) => s.raw || s) },
+      { limit: 16 }
+    );
+    if (fromHub.length) {
+      const byId = new Map(pool.map((s) => [s.id, s]));
+      return fromHub.map((row) => byId.get(row.id) || { id: row.id, headline: row.headline, categoryKey: "" });
+    }
+    return pool.slice(0, 14);
+  }, [department, narrativeStories, tradeStories, franchiseState]);
 
   const selected = openCase;
   const selectedDossier = playerDossiers.find((d) => str(d.player_id) === str(selected?.playerId)) || null;
@@ -3161,9 +3236,15 @@ export default function StorylinesScreen() {
                     const storyKey = str(activeBreaking.storyline_id || "");
                     if (storyKey) {
                       const match = stories.find((s) => str(s.storylineId) === storyKey || str(s.id) === storyKey);
-                      if (match) openStory(match.id);
+                      if (match) {
+                        setDepartment(isTradeDeskStory(match) ? "trade_desk" : "front_page");
+                        openStory(match.id);
+                      } else {
+                        setDepartment("front_page");
+                      }
+                    } else {
+                      setDepartment("front_page");
                     }
-                    setDepartment("front_page");
                     dismissBreakingAlerts(pendingBreaking);
                   }}
                 >
@@ -3200,8 +3281,12 @@ export default function StorylinesScreen() {
           </div>
           <div className="sl-command__stats">
             <div className="sl-stat">
-              <strong>{stories.length}</strong>
-              <span>Active</span>
+              <strong>{narrativeStories.length}</strong>
+              <span>Stories</span>
+            </div>
+            <div className="sl-stat">
+              <strong>{tradeStories.length}</strong>
+              <span>Trades</span>
             </div>
             <div className="sl-stat sl-stat--ours">
               <strong>{yourTeamCount}</strong>
@@ -3225,7 +3310,7 @@ export default function StorylinesScreen() {
           <div className="sl-ticker" aria-label="League wire">
             <div className="sl-ticker__flag">
               <span className="sl-ticker__dot" aria-hidden />
-              League wire
+              {department === "trade_desk" ? "Trade wire" : "Story wire"}
             </div>
             <div className="sl-ticker__viewport">
               <div className="sl-ticker__track">
@@ -3235,7 +3320,8 @@ export default function StorylinesScreen() {
                     type="button"
                     className="sl-ticker__item"
                     onClick={() => {
-                      setDepartment("front_page");
+                      setDepartment(isTradeDeskStory(s) ? "trade_desk" : "front_page");
+                      setFilter("all");
                       openStory(s.id);
                     }}
                   >
@@ -3253,16 +3339,22 @@ export default function StorylinesScreen() {
         <nav className="sl-depts" aria-label="Media departments">
           {DEPARTMENTS.map((d) => {
             let count = 0;
+            if (d.id === "front_page") count = narrativeStories.length;
+            if (d.id === "trade_desk") count = tradeStories.length;
             if (d.id === "player_meetings") count = meetingAlertCount;
             if (d.id === "consequences") count = asArray(narrativeUniverse?.team_sanctions).filter((s) => s.active !== false).length;
             if (d.id === "press_room") count = pressQueue.length;
-            if (d.id === "front_page") count = pendingDecisions.length;
+            if (d.id === "locker_room") count = collectLockerPulse(franchiseState, { limit: 24 }).people.length;
             return (
               <button
                 key={d.id}
                 type="button"
                 className={department === d.id ? "is-active" : ""}
-                onClick={() => setDepartment(d.id)}
+                onClick={() => {
+                  setDepartment(d.id);
+                  setFilter("all");
+                  setOpenCaseId(null);
+                }}
               >
                 <em aria-hidden>{d.glyph}</em>
                 {d.label}
@@ -3279,7 +3371,7 @@ export default function StorylinesScreen() {
           </div>
         ) : null}
 
-        {userMarket?.label && department === "front_page" ? (
+        {userMarket?.label && department === "trade_desk" ? (
           <p className="sl-market">
             <em>Market</em>
             {userMarket.label} · {userMarket.descriptor || userMarket.tone || "High scrutiny"}
@@ -3306,7 +3398,7 @@ export default function StorylinesScreen() {
             initialPlayerId={pendingMeetingPlayerId}
           />
         ) : department === "locker_room" ? (
-          <LockerRoomDashboard narrativeUniverse={narrativeUniverse} franchiseState={franchiseState} />
+          <LockerRoomDashboard narrativeUniverse={narrativeUniverse} franchiseState={franchiseState} stories={stories} />
         ) : department === "consequences" ? (
           <ConsequencesPanel narrativeUniverse={narrativeUniverse} stories={stories} onOpenStory={openStory} />
         ) : department === "social" ? (
@@ -3340,8 +3432,14 @@ export default function StorylinesScreen() {
                         style={{ animationDelay: `${Math.min(i, 10) * 24}ms` }}
                         onClick={() => {
                           if (post.storyId) {
+                            const match = stories.find((s) => s.id === post.storyId || s.storylineId === post.storyId);
+                            if (match) {
+                              setDepartment(isTradeDeskStory(match) ? "trade_desk" : "front_page");
+                              setFilter("all");
+                            } else {
+                              setDepartment("front_page");
+                            }
                             openStory(post.storyId);
-                            setDepartment("front_page");
                           }
                         }}
                       >
@@ -3476,8 +3574,13 @@ export default function StorylinesScreen() {
                   <h3>Trending now</h3>
                   <div className="sl-effects">
                     {stories
-                      .filter((s) => Number(s.heat) > 0)
-                      .sort((a, b) => Number(b.heat) - Number(a.heat))
+                      .filter((s) => Number(s.heat) > 0 && !isRoutineLeagueTrade(s.raw || s, userTeamId(franchiseState)))
+                      .sort((a, b) => {
+                        const lb = str(b.breakingLevel) ? 1 : 0;
+                        const la = str(a.breakingLevel) ? 1 : 0;
+                        if (lb !== la) return lb - la;
+                        return Number(b.heat) - Number(a.heat);
+                      })
                       .slice(0, 8)
                       .map((s, i) => (
                         <div key={s.id} className="sl-trend">
@@ -3509,8 +3612,9 @@ export default function StorylinesScreen() {
                         className="sl-insider"
                         onClick={() => {
                           if (match) {
+                            setDepartment(isTradeDeskStory(match) ? "trade_desk" : "front_page");
+                            setFilter("all");
                             openStory(match.id);
-                            setDepartment("front_page");
                           }
                         }}
                       >
@@ -3647,8 +3751,9 @@ export default function StorylinesScreen() {
                               (s) => str(s.storylineId) === str(story.storyline_id) || s.headline === story.headline
                             );
                             if (match) {
+                              setDepartment(isTradeDeskStory(match) ? "trade_desk" : "front_page");
+                              setFilter("all");
                               openStory(match.id);
-                              setDepartment("front_page");
                             }
                           }}
                         >
@@ -3681,8 +3786,9 @@ export default function StorylinesScreen() {
                         onClick={() => {
                           const match = stories.find((s) => str(s.storylineId) === str(story.storyline_id));
                           if (match) {
+                            setDepartment(isTradeDeskStory(match) ? "trade_desk" : "front_page");
+                            setFilter("all");
                             openStory(match.id);
-                            setDepartment("front_page");
                           }
                         }}
                       >
@@ -3700,6 +3806,16 @@ export default function StorylinesScreen() {
               />
             )}
           </div>
+        ) : (department === "front_page" || department === "trade_desk") && deskStories.length === 0 && !openCase ? (
+          <EmptyPanel
+            kicker={department === "trade_desk" ? "Trade desk" : "Story desk"}
+            title={department === "trade_desk" ? "No trades on the wire" : "No stories filed yet"}
+            body={
+              department === "trade_desk"
+                ? "Completed deals and trade rumors live here. Narrative beats sit on the Stories desk."
+                : "Locker-room, life, injury, and on-ice beats file here. Deals sit on the Trades desk. Advance a few days to fill this tray."
+            }
+          />
         ) : stories.length === 0 ? (
           <EmptyPanel
             kicker="League wire · idle"
@@ -3718,7 +3834,7 @@ export default function StorylinesScreen() {
                 <div className="sl-case__hero-main">
                   <div className="sl-case__crumbs">
                     <button type="button" className="sl-back" onClick={closeStory}>
-                      ← Newsroom
+                      ← {department === "trade_desk" ? "Trades" : "Stories"}
                     </button>
                     <CategoryTag story={openCase} size="md" />
                     {openCase.requiresAction ? <span className="sl-card__decision">Decision required</span> : null}
@@ -4009,7 +4125,7 @@ export default function StorylinesScreen() {
 
             <div className="sl-toolbar">
               <div className="sl-chips">
-                {FILTERS.map((f) => (
+                {deskFilters.map((f) => (
                   <button
                     key={f.id}
                     type="button"

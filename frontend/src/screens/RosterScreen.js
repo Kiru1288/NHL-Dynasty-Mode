@@ -6,6 +6,7 @@ import { GameFooter } from "../components/game/GameFooter";
 import PlayerHeadshot from "../components/PlayerHeadshot";
 import { formatProspectLeague, formatProspectTeam } from "../events/prospectDevelopment/prospectDevelopmentHelpers";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
+import { lookupHumanDossier, playerRoomLine, playerCharacterChips } from "../utils/lockerRoomPulse";
 import { nationalityCode, ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { nearestFlagApiSize } from "../utils/countryFlags";
 import {
@@ -3062,6 +3063,7 @@ function normalizeLivePlayer(player, franchiseState, index) {
     hand: inferHandedness(source) || "Unknown",
     archetype: normalizeArchetype(source),
     morale: normalizePercentScale(source.morale, 50),
+    humanDossier: lookupHumanDossier(franchiseState, getPlayerId(source, `${index}`)),
     fatigue: normalizePercentScale(source.fatigue, 0),
     growth: inferGrowth(source),
     contract,
@@ -3921,7 +3923,9 @@ function PremiumPlayerRow({ player, selected, onSelect, showTeam = false }) {
               <TradeStabilityConcernBadge player={player} compact />
             ) : null}
           </span>
-          {showTeam && player.teamName && player.teamName !== "—" ? (
+          {playerRoomLine(player.humanDossier) ? (
+            <em className="nhlrost-board-row__life">{playerRoomLine(player.humanDossier)}</em>
+          ) : showTeam && player.teamName && player.teamName !== "—" ? (
             <em className="nhlrost-board-row__team">{player.teamName}</em>
           ) : null}
         </span>
@@ -4168,7 +4172,11 @@ function RosterTable({
                   {player.tradeStabilityConcern ? (
                     <TradeStabilityConcernBadge player={player} compact />
                   ) : null}
-                  <em>{player.teamName}</em>
+                  {playerRoomLine(player.humanDossier) ? (
+                    <em className="nhlrost-row__life">{playerRoomLine(player.humanDossier)}</em>
+                  ) : (
+                    <em>{player.teamName}</em>
+                  )}
                 </span>
               </span>
 
@@ -4184,7 +4192,12 @@ function RosterTable({
 
               <span className="nhlrost-row__age">{player.age}</span>
 
-              <span className="nhlrost-row__role">{player.roleLabel || player.role}</span>
+              <span className="nhlrost-row__role">
+                {player.roleLabel || player.role}
+                {playerCharacterChips(player.humanDossier)[0] ? (
+                  <em className="nhlrost-row__persona">{playerCharacterChips(player.humanDossier)[0]}</em>
+                ) : null}
+              </span>
 
               <span>
                 <em
@@ -10286,6 +10299,30 @@ function RosterScreenStyles() {
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+
+      .nhlrost-row__life,
+      .nhlrost-board-row__life {
+        display: block;
+        max-width: 100%;
+        color: rgba(180, 214, 198, 0.88);
+        font-size: 0.7rem;
+        font-style: normal;
+        font-weight: 650;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .nhlrost-row__persona {
+        display: block;
+        margin-top: 2px;
+        color: rgba(201, 168, 106, 0.92);
+        font-size: 0.66rem;
+        font-style: normal;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
       }
 
       .nhlrost-row__name em,

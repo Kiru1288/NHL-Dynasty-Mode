@@ -355,6 +355,12 @@ def _accumulate_franchise_game_stats(
 
     if len(session.game_results) > 2400:
         session.game_results = session.game_results[-1800:]
+    try:
+        from app.sim_engine.franchise.storyline_stat_bridge import apply_stats_ledger_to_storylines  # noqa: WPS433
+
+        apply_stats_ledger_to_storylines(session, box, rng=rng)
+    except Exception:
+        pass
 def _franchise_enqueue_critical_notice(
     session: FranchiseSession, *, title: str, description: str, source: str
 ) -> None:
@@ -527,10 +533,10 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         hmr = world_morale.team_morale_strength_factor(home)
         amr = world_morale.team_morale_strength_factor(away)
 
-        h_scale = max(0.93, min(1.07, hm * hc * hf * hmr)) * float(sim._roster_injury_depth_penalty(home))
-        a_scale = max(0.93, min(1.07, am * ac * af * amr)) * float(sim._roster_injury_depth_penalty(away))
+        h_scale = max(0.88, min(1.12, hm * hc * hf * hmr)) * float(sim._roster_injury_depth_penalty(home))
+        a_scale = max(0.88, min(1.12, am * ac * af * amr)) * float(sim._roster_injury_depth_penalty(away))
 
-        base_noise = 1.0 + 0.22 * (session.chaos_index - 0.5)
+        base_noise = 1.12 + 0.38 * (session.chaos_index - 0.5)
         nh = world_chemistry.chemistry_chaos_dampen(home, base_noise)
         na = world_chemistry.chemistry_chaos_dampen(away, base_noise)
         _, ih = sim._identity_runner_strength_noise_factors(home)

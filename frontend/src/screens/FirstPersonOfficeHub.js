@@ -33,6 +33,7 @@ import React, {
   import TeamLogoBadge from "../components/ui/TeamLogoBadge";
   import PlayerHeadshot from "../components/PlayerHeadshot";
   import { resolveFranchiseTeamLogo, toLogoUrl } from "../utils/teamLogos";
+  import { collectLockerPulse, buildHubStoryTicker } from "../utils/lockerRoomPulse";
   import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
   import { SCREENS } from "../game/constants";
   import "./FirstPersonOfficeHub.css";
@@ -922,6 +923,29 @@ import React, {
         severity: "low",
         title: `${storyCount} active storyline${storyCount === 1 ? "" : "s"}`,
         detail: "Locker room and league narratives may need management.",
+        target: OFFICE_NAV_TARGETS.STORYLINES,
+      });
+    }
+
+    const pulse = collectLockerPulse(fs, { limit: 3 });
+    pulse.lifeStories.slice(0, 2).forEach((beat, idx) => {
+      push({
+        id: `life-${beat.id || idx}`,
+        type: "news",
+        severity: "medium",
+        title: beat.headline,
+        detail: beat.summary || beat.playerName || "Off-ice development around the roster.",
+        target: OFFICE_NAV_TARGETS.STORYLINES,
+      });
+    });
+    if (!pulse.lifeStories.length && pulse.people.length) {
+      const sample = pulse.people.slice(0, 2).map((p) => p.name).join(", ");
+      push({
+        id: "room-pulse",
+        type: "news",
+        severity: "low",
+        title: "Locker-room lives are in",
+        detail: `${sample} and others now have distinct character and home-life reads.`,
         target: OFFICE_NAV_TARGETS.STORYLINES,
       });
     }
@@ -4151,7 +4175,7 @@ import React, {
     );
   }
 
-  function NewspaperObject({ hovered, activeStorylines }) {
+  function NewspaperObject({ hovered, activeStorylines, lifeHeadline }) {
     return (
       <group rotation={[0, -0.28, 0]}>
         <mesh position={[0, 0.01, 0]} raycast={() => null}>
@@ -4165,16 +4189,17 @@ import React, {
           size={0.038}
           color="#2a241c"
         >
-          DOSSIER
+          {lifeHeadline ? "OFF ICE" : "DOSSIER"}
         </WallText>
   
         <WallText
           position={[0, 0.03, 0.08]}
           rotation={[-Math.PI / 2, 0, 0]}
-          size={0.028}
+          size={0.022}
           color="#4a4034"
+          maxWidth={0.52}
         >
-          {Number(activeStorylines || 0)} storylines
+          {lifeHeadline || `${Number(activeStorylines || 0)} storylines`}
         </WallText>
       </group>
     );
@@ -6627,6 +6652,7 @@ import React, {
     championshipCount = 0,
     capPressure = false,
     officeWeather = null,
+    lifeHeadline = "",
   }) {
     const mood = officeMood || {};
     const [leagueOpsClickToken, setLeagueOpsClickToken] = useState(0);
@@ -6792,6 +6818,7 @@ import React, {
             <NewspaperObject
               hovered={hoveredId === "news"}
               activeStorylines={activeStorylines}
+              lifeHeadline={lifeHeadline}
             />
           </group>
 
@@ -7151,6 +7178,7 @@ import React, {
     nextGame,
     officeMood,
     urgentItems = [],
+    franchiseState = null,
     onUrgentSelect,
     onReset,
     onQuickMenu,
@@ -7158,9 +7186,14 @@ import React, {
     onOpenStation,
     lowPowerMode = false,
     onToggleLowPower,
+    prefersReducedMotion = false,
   }) {
     const mood = officeMood || {};
     const urgent = officeSafeArray(urgentItems);
+    const wireTicker = useMemo(
+      () => buildHubStoryTicker(franchiseState, { limit: 16 }),
+      [franchiseState]
+    );
     const [briefingOpen, setBriefingOpen] = useState(false);
     const [tourOpen, setTourOpen] = useState(() => {
       try {
@@ -7260,6 +7293,33 @@ import React, {
             )
           ) : null}
         </button>
+
+        <div
+          className={`office-wire-ticker${prefersReducedMotion ? " is-static" : ""}`}
+          aria-label="League storyline ticker"
+        >
+          <span className="office-wire-ticker__flag">Wire</span>
+          <div className="office-wire-ticker__viewport">
+            {wireTicker.length ? (
+              <div className="office-wire-ticker__track">
+                {[...wireTicker, ...wireTicker].map((item, i) => (
+                  <button
+                    key={`${item.id}-${i}`}
+                    type="button"
+                    className="office-wire-ticker__item"
+                    onClick={() => onUrgentSelect?.(OFFICE_NAV_TARGETS.STORYLINES, item)}
+                  >
+                    <em>{item.label}</em>
+                    {item.headline}
+                    <span aria-hidden>◆</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <span className="office-wire-ticker__empty">League wire quiet — advance a day to fill the crawl.</span>
+            )}
+          </div>
+        </div>
 
         <div className="office-control-bar">
           <p className="office-control-bar__hint">Drag to look · Esc back · R home · M directory</p>
@@ -7871,6 +7931,10 @@ import React, {
       () => franchiseState?.franchise_pulse || null,
       [franchiseState]
     );
+    const lockerPulse = useMemo(
+      () => collectLockerPulse(franchiseState, { limit: 3 }),
+      [franchiseState]
+    );
 
     const capPressure = useMemo(() => {
       const raw =
@@ -8130,6 +8194,7 @@ import React, {
                   championshipCount={championshipCount}
                   capPressure={capPressure}
                   officeWeather={officeWeather}
+                  lifeHeadline={lockerPulse.lifeStories[0]?.headline || ""}
                 />
   
                 {!effectiveLowPower ? (
@@ -8164,6 +8229,7 @@ import React, {
           nextGame={nextGame}
           standingsRank={standingsRank}
           officeMood={officeMood}
+          franchiseState={franchiseState}
           franchisePulse={franchisePulse}
           urgentItems={urgentItems}
           onUrgentSelect={handleNavigate}

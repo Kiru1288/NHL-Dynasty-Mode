@@ -2750,11 +2750,30 @@ def narrative_director_score(session: Any, sl: Dict[str, Any]) -> int:
         score += 22
     if sl.get("requires_action"):
         score += 18
-    if str(sl.get("team_id") or "") == str(getattr(session, "user_team_id") or ""):
-        score += 10
-    cat = str(sl.get("category") or "").lower()
-    if "trade" in cat or "rumor" in cat:
+    user_team = str(sl.get("team_id") or "") == str(getattr(session, "user_team_id") or "")
+    if user_team:
         score += 14
+    cat = str(sl.get("category") or sl.get("type") or "").lower()
+    cause = str(sl.get("cause_type") or "").upper()
+    headline = str(sl.get("headline") or "")
+    if "trade" in cat or "rumor" in cat:
+        score += 6 if user_team else 2
+    if cat in ("personal_life", "locker_room") or "LIFE" in cause:
+        score += 20 if user_team else 10
+    if cause in (
+        "HAT_TRICK",
+        "SHUTOUT",
+        "TEAMMATE_FIGHT",
+        "WINNING_CONCERN",
+        "PLAYER_ROLE_FRUSTRATION",
+        "LOCKER_ROOM_PULSE",
+        "PLAYER_REPORTER_CONFRONTATION",
+        "CONTRACT_YEAR_HEAT",
+        "TRADE_DEMAND",
+    ):
+        score += 16
+    if re.search(r"\bacquires\b", headline, re.I) and not user_team:
+        score -= 18
     return int(_clamp(score, 5, 100))
 
 
@@ -3038,7 +3057,7 @@ def enrich_storyline_for_narrative_universe(session: Any, event: Dict[str, Any])
     _update_player_narrative_memory(session, sl)
     _archive_storyline_beat(session, sl)
     _maybe_queue_press_conference(session, sl)
-    signal = _breaking_news_signal(sl)
+    signal = _breaking_news_signal(sl, str(getattr(session, "user_team_id") or ""))
     if signal:
         sl["breaking_level"] = signal
     return sl
@@ -3162,10 +3181,7 @@ def build_narrative_universe_payload(session: Any) -> Dict[str, Any]:
     eras = build_narrative_eras(session)
     utid = str(getattr(session, "user_team_id") or "")
     user_market = _market_profile_for_team(session, utid) if utid else MARKET_MEDIA_PROFILES["default"]
-    recent_breaking = [
-        s for s in (getattr(session, "storyline_events", None) or [])[-30:]
-        if isinstance(s, dict) and s.get("breaking_level") in ("breaking", "league_defining")
-    ][-3:]
+    recent_breaking = _collect_breaking_alerts(session)
     return {
         "reporters": list(MEDIA_REPORTERS),
         "agents": list(PLAYER_AGENTS),
@@ -3184,15 +3200,7 @@ def build_narrative_universe_payload(session: Any) -> Dict[str, Any]:
         "user_market_profile": user_market,
         "market_profiles": MARKET_MEDIA_PROFILES,
         "active_arc_count": len(getattr(session, "story_arcs", None) or []),
-        "breaking_alerts": [
-            {
-                "headline": s.get("headline"),
-                "level": s.get("breaking_level"),
-                "storyline_id": s.get("storyline_id") or s.get("id"),
-                "calendar_iso": s.get("calendar_iso"),
-            }
-            for s in recent_breaking
-        ],
+        "breaking_alerts": recent_breaking,
     }
 
 
@@ -3725,16 +3733,122 @@ def _generate_prospect_social_posts_legacy(session: Any, rng: Optional[random.Ra
     return created
 
 
-def _breaking_news_signal(sl: Dict[str, Any]) -> Optional[str]:
+def _is_trade_desk_row(sl: Dict[str, Any]) -> bool:
+    cat = str(sl.get("category") or sl.get("type") or "").lower()
+    cause = str(sl.get("cause_type") or "").upper()
+    headline = str(sl.get("headline") or sl.get("title") or "")
+    if cat in ("personal_life", "locker_room", "injury", "performance"):
+        return False
+    if "TRADE" in cause or cause in ("CULPRIT_TRADED",):
+        return True
+    if cat in ("trade", "rumor") or "trade" in cat or "rumor" in cat:
+        return True
+    if re.search(r"\bacquires\b|\btraded to\b", headline, re.I):
+        return True
+    return False
+
+
+def _trim_storyline_events(rows: List[Dict[str, Any]], limit: int = 420) -> List[Dict[str, Any]]:
+    clean = [s for s in rows if isinstance(s, dict)]
+    if len(clean) <= limit:
+        return clean
+    stories = [s for s in clean if not _is_trade_desk_row(s)]
+    trades = [s for s in clean if _is_trade_desk_row(s)]
+    keep_s = stories[-300:]
+    keep_t = trades[-120:]
+    merged = keep_s + keep_t
+    merged.sort(key=lambda s: str(s.get("calendar_iso") or s.get("date") or s.get("calendar_day") or ""))
+    return merged[-limit:]
+
+
+def _is_routine_wire_trade(sl: Dict[str, Any], user_team_id: str) -> bool:
+    headline = str(sl.get("headline") or "")
+    if not re.search(r"\bacquires\b|\btraded to\b", headline, re.I):
+        return False
+    tid = str(sl.get("team_id") or sl.get("team") or "")
+    related = {str(x) for x in (sl.get("related_teams") or sl.get("related_team_ids") or []) if x}
+    if user_team_id and (tid == user_team_id or user_team_id in related):
+        return False
+    return True
+
+
+def _breaking_news_signal(sl: Dict[str, Any], user_team_id: str = "") -> Optional[str]:
+    utid = str(user_team_id or "")
+    if _is_routine_wire_trade(sl, utid):
+        return None
     priority = str(sl.get("priority") or "").upper()
     heat = int(sl.get("heat") or 0)
-    if priority == "CRITICAL" or heat >= 85:
+    cause = str(sl.get("cause_type") or "").upper()
+    cat = str(sl.get("category") or sl.get("type") or "").lower()
+    if priority == "CRITICAL" or heat >= 85 or cause in ("PLAYER_ARRESTED", "PLAYER_DEATH", "LEAGUE_SUSPENSION", "PLAYER_BANNED"):
         return "league_defining"
-    if priority == "HIGH" or heat >= 72:
+    interesting = cause in (
+        "HAT_TRICK",
+        "SHUTOUT",
+        "TEAMMATE_FIGHT",
+        "WINNING_CONCERN",
+        "PLAYER_ROLE_FRUSTRATION",
+        "LOCKER_ROOM_PULSE",
+        "PLAYER_REPORTER_CONFRONTATION",
+        "CONTRACT_YEAR_HEAT",
+        "TRADE_DEMAND",
+        "POSITIVE_LIFE_EVENT",
+        "MINOR_LIFE_EVENT",
+        "HIGH_CHARACTER_IMPACT",
+        "LOW_CHARACTER_GAME_IMPACT",
+    ) or cat in ("personal_life", "locker_room", "injury", "performance")
+    if priority == "HIGH" or heat >= 62 or (interesting and heat >= 28):
         return "breaking"
-    if heat >= 55:
+    if heat >= 40 or interesting:
         return "developing"
     return None
+
+
+def _collect_breaking_alerts(session: Any) -> List[Dict[str, Any]]:
+    utid = str(getattr(session, "user_team_id") or "")
+    rows: List[Tuple[int, Dict[str, Any]]] = []
+    seen: set = set()
+    for s in list(getattr(session, "storyline_events", None) or [])[-240:]:
+        if not isinstance(s, dict):
+            continue
+        headline = str(s.get("headline") or s.get("title") or "").strip()
+        if not headline:
+            continue
+        if _is_routine_wire_trade(s, utid):
+            continue
+        level = str(s.get("breaking_level") or "") or (
+            _breaking_news_signal(s, utid) or ""
+        )
+        if level not in ("developing", "breaking", "league_defining"):
+            continue
+        key = str(s.get("storyline_id") or s.get("id") or headline)
+        if key in seen:
+            continue
+        seen.add(key)
+        score = int(s.get("heat") or 0)
+        if str(s.get("team_id") or "") == utid:
+            score += 30
+        if level == "league_defining":
+            score += 40
+        elif level == "breaking":
+            score += 20
+        rows.append((score, s, level))
+    rows.sort(key=lambda item: -item[0])
+    alerts = []
+    for score, s, level in rows[:10]:
+        alerts.append(
+            {
+                "headline": s.get("headline") or s.get("title"),
+                "summary": s.get("summary") or s.get("short_summary") or "",
+                "level": level,
+                "storyline_id": s.get("storyline_id") or s.get("id"),
+                "calendar_iso": s.get("calendar_iso") or s.get("date"),
+                "category": s.get("category"),
+                "player_name": s.get("player_name"),
+                "team_id": s.get("team_id"),
+            }
+        )
+    return alerts
 
 
 def narrative_universe_daily_pass(
@@ -3950,6 +4064,27 @@ _UNIVERSE_ATTRIBUTE_ALIASES: Dict[str, Tuple[str, ...]] = {
 def _u_seed(*parts: Any) -> int:
     raw = "|".join(str(p) for p in parts)
     return int(hashlib.sha1(raw.encode("utf-8", "ignore")).hexdigest()[:16], 16)
+
+
+def _u_push_morale_to_player(session: Any, player_id: str, morale_100: float) -> None:
+    """Keep Player.psych.morale in lockstep with the universe 0–100 morale used by storylines."""
+    player = _player_from_roster(session, str(player_id))
+    if player is None:
+        return
+    value = _u_clip(morale_100)
+    try:
+        from app.sim_engine.world import morale as world_morale  # noqa: WPS433
+
+        world_morale.push_to_psych(player, value)
+        return
+    except Exception:
+        pass
+    psych = getattr(player, "psych", None)
+    if psych is not None and hasattr(psych, "morale"):
+        try:
+            psych.morale = max(0.0, min(1.0, value / 100.0))
+        except Exception:
+            return
 
 
 def _u_clip(value: Any, lo: float = 0.0, hi: float = 100.0) -> float:
@@ -4183,19 +4318,25 @@ def _u_create_player_entity(session: Any, team_id: str, player: Any) -> Dict[str
     position = _u_position(player)
     personality = _u_personality(player, player_id)
     rng = random.Random(_u_seed("life", player_id))
-    relationship_status = rng.choices(["single", "partnered", "family_household"], weights=[35, 38, 27])[0]
-    dependents = 0 if relationship_status != "family_household" else rng.choice([1, 1, 2, 2, 3])
+    family_pull = float(personality.get("family_orientation", 50))
+    vol = float(personality.get("volatility", 50))
+    soc = float(personality.get("sociability", 50))
+    rel_weights = [38, 36, 26]
+    rel_weights[0] += max(0, 55 - family_pull) * 0.25
+    rel_weights[2] += max(0, family_pull - 48) * 0.35
+    relationship_status = rng.choices(["single", "partnered", "family_household"], weights=rel_weights)[0]
+    dependents = 0 if relationship_status != "family_household" else rng.choice([1, 1, 2, 2, 3, 4])
     state = {
-        "morale": _u_psych_value(player, ("morale",), 58.0),
-        "confidence": _u_psych_value(player, ("confidence_level", "confidence"), 56.0),
-        "coach_trust": _u_psych_value(player, ("coach_trust",), 60.0),
-        "gm_trust": 65.0,
-        "belonging": 60.0,
-        "energy": 72.0,
-        "focus": 66.0,
-        "media_stress": _u_psych_value(player, ("media_stress",), 28.0),
-        "personal_stress": 28.0 + rng.uniform(-8, 12),
-        "role_satisfaction": 58.0,
+        "morale": _u_psych_value(player, ("morale",), 42.0 + rng.uniform(-10, 22)),
+        "confidence": _u_psych_value(player, ("confidence_level", "confidence"), 40.0 + float(personality.get("competitiveness", 50)) * 0.22 + rng.uniform(-12, 12)),
+        "coach_trust": _u_psych_value(player, ("coach_trust",), 38.0 + float(personality.get("coachability", 50)) * 0.35 + rng.uniform(-10, 10)),
+        "gm_trust": _u_clip(48.0 + rng.uniform(-18, 18)),
+        "belonging": _u_clip(38.0 + soc * 0.28 + rng.uniform(-14, 16)),
+        "energy": _u_clip(58.0 + rng.uniform(-16, 18)),
+        "focus": _u_clip(50.0 + float(personality.get("professionalism", 50)) * 0.18 + rng.uniform(-14, 14)),
+        "media_stress": _u_psych_value(player, ("media_stress",), 12.0 + (100.0 - float(personality.get("media_savvy", 50))) * 0.28 + vol * 0.08),
+        "personal_stress": _u_clip(12.0 + vol * 0.22 + rng.uniform(-8, 18)),
+        "role_satisfaction": _u_clip(42.0 + rng.uniform(-16, 22)),
     }
     return {
         "player_id": player_id,
@@ -4232,12 +4373,13 @@ def _u_create_player_entity(session: Any, team_id: str, player: Any) -> Dict[str
         "life": {
             "relationship_status": relationship_status,
             "dependents": dependents,
-            "home_stability": _u_clip(65 + rng.uniform(-12, 20)),
-            "relocation_strain": _u_clip(rng.uniform(4, 32)),
-            "community_connection": _u_clip(rng.uniform(18, 72)),
-            "financial_stress": _u_clip(rng.uniform(2, 28)),
-            "sleep_quality": _u_clip(rng.uniform(55, 86)),
-            "privacy_preference": rng.choice(["private", "balanced", "public"]),
+            "home_stability": _u_clip(38 + float(personality.get("family_orientation", 50)) * 0.28 + rng.uniform(-22, 24)),
+            "relocation_strain": _u_clip(rng.uniform(2, 28) + vol * 0.18),
+            "community_connection": _u_clip(rng.uniform(8, 86) + (soc - 50) * 0.25),
+            "city_attachment": _u_clip(rng.uniform(12, 78) + float(personality.get("loyalty", 50)) * 0.12),
+            "financial_stress": _u_clip(rng.uniform(1, 42) + float(personality.get("money_focus", 45)) * 0.12),
+            "sleep_quality": _u_clip(rng.uniform(38, 92) - vol * 0.12),
+            "privacy_preference": "private" if soc <= 38 else ("public" if soc >= 68 else rng.choice(["private", "balanced", "public"])),
             "current_note": "Settling into the season.",
         },
         "social": {
@@ -4263,15 +4405,20 @@ def _u_personality_tags(entity: Dict[str, Any]) -> List[str]:
     p = entity.get("personality") or {}
     tags: List[str] = []
     tests = [
-        ("Team-first", p.get("character", 0) >= 72 and p.get("ego", 100) <= 52),
-        ("Demanding", p.get("ambition", 0) >= 72),
-        ("Emotionally volatile", p.get("volatility", 0) >= 72),
-        ("Steady presence", p.get("resilience", 0) >= 72 and p.get("professionalism", 0) >= 68),
-        ("Natural leader", p.get("leadership", 0) >= 72),
-        ("Media savvy", p.get("media_savvy", 0) >= 72),
-        ("Private personality", p.get("sociability", 100) <= 34),
-        ("Highly coachable", p.get("coachability", 0) >= 74),
-        ("Self-interested", p.get("character", 100) <= 42 and p.get("ego", 0) >= 65),
+        ("Team-first", p.get("character", 0) >= 64 and p.get("ego", 100) <= 54),
+        ("Demanding", p.get("ambition", 0) >= 64),
+        ("Emotionally volatile", p.get("volatility", 0) >= 64),
+        ("Steady presence", p.get("resilience", 0) >= 64 and p.get("professionalism", 0) >= 60),
+        ("Natural leader", p.get("leadership", 0) >= 64),
+        ("Media savvy", p.get("media_savvy", 0) >= 64),
+        ("Private personality", p.get("sociability", 100) <= 42),
+        ("Highly coachable", p.get("coachability", 0) >= 66),
+        ("Self-interested", p.get("character", 100) <= 46 and p.get("ego", 0) >= 60),
+        ("Family-oriented", p.get("family_orientation", 0) >= 66),
+        ("Money-driven", p.get("money_focus", 0) >= 66),
+        ("Fierce competitor", p.get("competitiveness", 0) >= 68),
+        ("Clutch", p.get("clutch", 0) >= 68),
+        ("Thin-skinned", p.get("ego", 0) >= 68 and p.get("resilience", 100) <= 48),
     ]
     for label, applies in tests:
         if applies:
@@ -4302,11 +4449,20 @@ def _u_migrate_v2(session: Any) -> None:
 
 def _u_sync_player_entities(session: Any) -> Dict[str, Dict[str, Any]]:
     _u_migrate_v2(session)
+    try:
+        from app.sim_engine.engine import ensure_player_character_initialized
+    except Exception:
+        ensure_player_character_initialized = None  # type: ignore
     entities = dict(getattr(session, "universe_players", None) or {})
     active_ids: List[str] = []
     for team_id, player in _u_all_players(session):
         player_id = str(getattr(player, "id", "") or "")
         active_ids.append(player_id)
+        if ensure_player_character_initialized is not None:
+            try:
+                ensure_player_character_initialized(player, random.Random(_u_seed("char", player_id)))
+            except Exception:
+                pass
         entity = dict(entities.get(player_id) or {})
         if not entity:
             entity = _u_create_player_entity(session, team_id, player)
@@ -4315,7 +4471,19 @@ def _u_sync_player_entities(session: Any) -> Dict[str, Dict[str, Any]]:
         entity["position"] = _u_position(player)
         entity["age"] = _player_age(player)
         entity["overall"] = round(_player_ovr99(player), 1)
-        entity["personality"] = _u_personality(player, player_id)
+        personality = _u_personality(player, player_id)
+        entity["personality"] = personality
+        gen = int(getattr(player, "_story_personality_gen", 0) or 0)
+        if not entity.get("niche_abilities") or int(entity.get("_story_personality_gen", 0) or 0) < gen:
+            entity["niche_abilities"] = _u_pick_niches(player, personality, entity["age"], entity["position"])
+            entity["concerns"] = _u_initial_concerns(player, personality, entity["age"], _u_current_meta(session)[2])
+            entity["_story_personality_gen"] = gen
+            fresh = _u_create_player_entity(session, team_id, player)
+            if not (entity.get("state") or {}) or abs(float((entity.get("state") or {}).get("morale", 58)) - 58.0) < 0.6:
+                entity["state"] = dict(fresh.get("state") or {})
+            life = dict(entity.get("life") or {})
+            if not life or (abs(float(life.get("home_stability") or 65) - 65.0) < 1.5 and "city_attachment" not in life):
+                entity["life"] = dict(fresh.get("life") or {})
         ident = getattr(player, "identity", None)
         entity["identity"] = {
             "name": _u_name(player),
@@ -4739,7 +4907,7 @@ def _u_record_storyline(session: Any, *, event: Dict[str, Any], headline: str, s
         enriched = _UNIVERSE_LEGACY_ENRICH(session, row)
         existing = list(getattr(session, "storyline_events", None) or [])
         existing.append(enriched)
-        session.storyline_events = existing[-300:]
+        session.storyline_events = _trim_storyline_events(existing)
     return row
 
 
@@ -5843,7 +6011,7 @@ def build_universe_matchup_context(session: Any, home_team_id: str, away_team_id
         "away_team_id": str(away_team_id),
         "home": home,
         "away": away,
-        "home_win_probability_delta": round(max(-0.10, min(0.10, net_home_delta)), 4),
+        "home_win_probability_delta": round(max(-0.18, min(0.18, net_home_delta)), 4),
         "explanation": f"The two locker rooms create a net home-team probability adjustment of {net_home_delta * 100:+.1f} percentage points.",
     }
 
@@ -5890,22 +6058,69 @@ def apply_universe_postgame(session: Any, team_id: str, game_result: Dict[str, A
         won = str(game_result.get("result") or "").upper() in ("W", "WIN")
     entities = getattr(session, "universe_players", None) or {}
     room = _u_rebuild_locker_room(session, str(team_id))
+    player_stats = dict(game_result.get("player_stats") or {})
+    if not player_stats:
+        try:
+            from app.sim_engine.franchise.storyline_stat_bridge import player_stat_map_from_box  # noqa: WPS433
+
+            player_stats = player_stat_map_from_box(game_result)
+        except Exception:
+            player_stats = {}
     notable: List[Dict[str, Any]] = []
-    player_stats = game_result.get("player_stats") or {}
     for player in _u_team_players(session, str(team_id)):
         player_id = str(getattr(player, "id", "") or "")
         entity = entities.get(player_id) or {}
         personality = entity.get("personality") or {}
         state = entity.get("state") or {}
         stats = player_stats.get(player_id) or {}
-        morale_delta = 2.2 if won else -2.0
-        confidence_delta = 1.5 if won else -1.2
-        if int(stats.get("points", 0) or 0) > 0 or int(stats.get("goals", 0) or 0) > 0:
-            confidence_delta += 1.6
-        if int(stats.get("penalty_minutes", stats.get("pim", 0)) or 0) >= 4:
+        goals = int(stats.get("goals", stats.get("g", 0)) or 0)
+        assists = int(stats.get("assists", stats.get("a", 0)) or 0)
+        pts = int(stats.get("points", goals + assists) or 0)
+        sog = int(stats.get("sog", stats.get("shots", 0)) or 0)
+        pim = int(stats.get("penalty_minutes", stats.get("pim", 0)) or 0)
+        toi = int(stats.get("toi_sec", 0) or 0)
+        is_goalie = bool(stats.get("is_goalie")) or str(stats.get("position") or "").upper() == "G"
+        morale_delta = 1.5 if won else -1.4
+        confidence_delta = 1.1 if won else -1.0
+        if is_goalie:
+            ga = int(stats.get("ga", stats.get("goals_against", 0)) or 0)
+            saves = int(stats.get("saves", 0) or 0)
+            sa = saves + ga
+            sv = (saves / sa) if sa > 0 else 0.0
+            if bool(stats.get("shutout")) or (ga == 0 and sa >= 18):
+                morale_delta += 5.5
+                confidence_delta += 4.0
+            elif sv >= 0.930 and sa >= 20:
+                morale_delta += 3.2
+                confidence_delta += 2.4
+            elif sv <= 0.860 and sa >= 18:
+                morale_delta -= 4.0
+                confidence_delta -= 3.2
+            elif ga >= 5:
+                morale_delta -= 2.6
+        else:
+            if pts >= 3:
+                morale_delta += 4.8
+                confidence_delta += 3.4
+            elif pts == 2:
+                morale_delta += 2.6
+                confidence_delta += 1.8
+            elif pts == 1:
+                morale_delta += 1.2
+                confidence_delta += 0.8
+            elif toi >= 900 and pts == 0:
+                morale_delta -= 0.9 if won else 1.6
+            if goals >= 2:
+                morale_delta += 1.4
+            if sog >= 6 and pts == 0:
+                morale_delta -= 0.8
+                confidence_delta -= 0.6
+        if pim >= 4:
             state["media_stress"] = _u_clip(float(state.get("media_stress", 25)) + 1.5)
         state["morale"] = _u_clip(float(state.get("morale", 55)) + morale_delta)
         state["confidence"] = _u_clip(float(state.get("confidence", 55)) + confidence_delta)
+        entity["state"] = state
+        _u_push_morale_to_player(session, player_id, float(state["morale"]))
         low_character_risk = max(0.0, 48 - float(personality.get("character", 55))) * 0.006 + max(0.0, 48 - float(state.get("role_satisfaction", 55))) * 0.004 + max(0.0, float((room.get("culture") or {}).get("tension", 35)) - 55) * 0.002
         if not won and local_rng.random() < min(0.28, low_character_risk):
             state["coach_trust"] = _u_clip(float(state.get("coach_trust", 55)) - 4)
@@ -6106,7 +6321,9 @@ def enrich_storyline_for_narrative_universe(session: Any, event: Dict[str, Any])
 def build_narrative_universe_payload(session: Any) -> Dict[str, Any]:
     legacy = _UNIVERSE_LEGACY_PAYLOAD(session)
     expanded = build_narrative_universe_v2_payload(session)
-    return {**dict(legacy or {}), **expanded, "legacy_narrative": legacy}
+    merged = {**dict(legacy or {}), **expanded, "legacy_narrative": legacy}
+    merged["breaking_alerts"] = _collect_breaking_alerts(session)
+    return merged
 
 
 def player_narrative_profile(session: Any, player_id: str) -> Dict[str, Any]:
@@ -7152,7 +7369,7 @@ def _u_notify_user_event(
     day, iso, _ = _u_current_meta(session)
     event_id = str(event.get("id") or f"uve_{uuid.uuid4().hex[:10]}")
     notif_id = f"universe_notif:{event_id}"
-    if not any(str(row.get("id") or "") == notif_id for row in session.notifications):
+    if not any(str((row.get("id") if isinstance(row, dict) else row) or "") == notif_id for row in (session.notifications or [])):
         session.notifications.append(
             {
                 "id": notif_id,
@@ -7244,6 +7461,27 @@ def _u_record_storyline(session: Any, *, event: Dict[str, Any], headline: str, s
     visibility = str(event.get("visibility") or ("public" if public else "team_only"))
     knowledge_type = str(event.get("knowledge_type") or ("fact" if cause_type in _FACT_CAUSE_TYPES else "claim" if cause_type in _CLAIM_CAUSE_TYPES else "report"))
     public_level = str(event.get("public_knowledge_level") or ("confirmed" if visibility == "public" and knowledge_type == "fact" else "widely_reported" if visibility == "public" else "private"))
+    heat_val = int(heat)
+    utid = str(getattr(session, "user_team_id") or "")
+    if team_id and team_id == utid:
+        heat_val += 18
+    if cause_type in (
+        "HAT_TRICK",
+        "SHUTOUT",
+        "TEAMMATE_FIGHT",
+        "WINNING_CONCERN",
+        "PLAYER_ROLE_FRUSTRATION",
+        "LOCKER_ROOM_PULSE",
+        "PLAYER_REPORTER_CONFRONTATION",
+        "CONTRACT_YEAR_HEAT",
+        "POSITIVE_LIFE_EVENT",
+        "MINOR_LIFE_EVENT",
+        "TRADE_DEMAND",
+    ):
+        heat_val += 14
+    if _is_routine_wire_trade({"headline": headline, "team_id": team_id}, utid):
+        heat_val = min(heat_val, 48)
+    heat_val = int(_u_clip(heat_val, 5, 100))
     row = {
         "id": f"story_{uuid.uuid4().hex[:12]}",
         "storyline_id": "",
@@ -7268,7 +7506,7 @@ def _u_record_storyline(session: Any, *, event: Dict[str, Any], headline: str, s
         "event_tier": tier,
         "mechanical_severity": int(event.get("mechanical_severity") or 10),
         "visibility": visibility,
-        "heat": int(_u_clip(heat, 5, 100)),
+        "heat": heat_val,
         "credibility": int(event.get("credibility") or 90),
         "calendar_day": day,
         "calendar_iso": iso,
@@ -7298,6 +7536,9 @@ def _u_record_storyline(session: Any, *, event: Dict[str, Any], headline: str, s
         ),
     }
     row["storyline_id"] = row["id"]
+    brk = _breaking_news_signal(row, utid)
+    if brk:
+        row["breaking_level"] = brk
     try:
         from app.sim_engine.franchise.state import _record_storyline  # noqa: WPS433
         _record_storyline(session, row)
@@ -7305,7 +7546,7 @@ def _u_record_storyline(session: Any, *, event: Dict[str, Any], headline: str, s
         enriched = _UNIVERSE_LEGACY_ENRICH(session, row)
         existing = list(getattr(session, "storyline_events", None) or [])
         existing.append(enriched)
-        session.storyline_events = existing[-300:]
+        session.storyline_events = _trim_storyline_events(existing)
     return row
 
 
@@ -7326,7 +7567,9 @@ def _u_generate_minor_life_events(session: Any, rng: random.Random) -> int:
     entities = getattr(session, "universe_players", None) or {}
     created = 0
     day, iso, _ = _u_current_meta(session)
-    for team_id_raw, team in (getattr(session, "team_by_id", None) or {}).items():
+    teams = list((getattr(session, "team_by_id", None) or {}).items())
+    teams.sort(key=lambda item: 0 if str(item[0]) == user_team_id else 1)
+    for team_id_raw, team in teams:
         team_id = str(team_id_raw)
         for player in list(getattr(team, "roster", None) or []):
             player_id = str(getattr(player, "id", "") or "")
@@ -7335,9 +7578,11 @@ def _u_generate_minor_life_events(session: Any, rng: random.Random) -> int:
                 continue
             life = entity.get("life") or {}
             last = int(life.get("last_minor_event_day", -999) or -999)
-            if day - last < 18:
+            vol = float((entity.get("personality") or {}).get("volatility", 50))
+            cooldown = 3 if vol >= 62 else 5
+            if day - last < cooldown:
                 continue
-            chance = 0.0045 if team_id == user_team_id else 0.00055
+            chance = (0.18 if team_id == user_team_id else 0.04) * (0.75 + vol / 100.0)
             if rng.random() > chance:
                 continue
             positive = rng.random() < 0.52
@@ -7359,19 +7604,20 @@ def _u_generate_minor_life_events(session: Any, rng: random.Random) -> int:
                     reason_public=str(leave_cfg.get("reason_public") or "Unavailable — Personal Leave"),
                     rng=rng,
                 )
+            drama = 2.6
             for field, delta in (spec.get("profile") or {}).items():
-                _u_apply_profile_delta(entity, str(field), float(delta))
+                _u_apply_profile_delta(entity, str(field), float(delta) * drama)
             char_delta = float(spec.get("character", 0) or 0)
             if char_delta:
-                _u_apply_profile_delta(entity, "state.character_modifier", char_delta)
+                _u_apply_profile_delta(entity, "state.character_modifier", char_delta * drama)
             readiness = _u_apply_readiness_modifier(
                 session,
                 player_id,
                 source_id=event_id,
-                ovr_delta=float(spec.get("ovr", 0) or 0),
-                days=int(spec.get("days", 3) or 3),
+                ovr_delta=float(spec.get("ovr", 0) or 0) * drama,
+                days=max(3, int(round(int(spec.get("days", 3) or 3) * 1.35))),
                 reason=str(spec.get("summary") or spec.get("headline") or "Minor life event"),
-                stat_modifiers={str(k): float(v) for k, v in (spec.get("attrs") or {}).items()},
+                stat_modifiers={str(k): float(v) * drama for k, v in (spec.get("attrs") or {}).items()},
             )
             potential_receipt = None
             if positive and int(entity.get("age", 30) or 30) <= 25 and rng.random() < float(spec.get("potential_chance", 0) or 0):
@@ -7389,7 +7635,7 @@ def _u_generate_minor_life_events(session: Any, rng: random.Random) -> int:
             entity["life"] = life
             headline = str(spec["headline"]).format(name=entity.get("player_name") or "Player")
             summary = str(spec["summary"])
-            public = rng.random() < float(spec.get("public_chance", 0.08 if positive else 0.03))
+            public = True
             event = {
                 "id": event_id,
                 "kind": spec["id"],
@@ -7424,7 +7670,7 @@ def _u_generate_minor_life_events(session: Any, rng: random.Random) -> int:
             if team_id == user_team_id:
                 _u_notify_user_event(session, event, presentation_level=1)
             created += 1
-            if created >= 4:
+            if created >= 36:
                 return created
     return created
 
@@ -8513,9 +8759,9 @@ def build_universe_game_context(session: Any, team_id: str, opponent_id: str = "
         character = float(personality.get("character", 55))
         role_satisfaction = float(state.get("role_satisfaction", 55))
         mental = _u_mental_ovr(entity, player)
-        effort = (morale - 50) * 0.012 + (focus - 50) * 0.010 + (energy - 65) * 0.008
-        composure = (confidence - 50) * 0.012 + (float(personality.get("resilience", 50)) - 50) * 0.009 + (mental - 55) * 0.004
-        discipline = (character - 50) * 0.007 - max(0, float(personality.get("volatility", 50)) - 60) * 0.012
+        effort = (morale - 50) * 0.028 + (focus - 50) * 0.024 + (energy - 65) * 0.018
+        composure = (confidence - 50) * 0.028 + (float(personality.get("resilience", 50)) - 50) * 0.022 + (mental - 55) * 0.010
+        discipline = (character - 50) * 0.016 - max(0, float(personality.get("volatility", 50)) - 55) * 0.028
         passing = 0.0
         defensive_effort = 0.0
         penalty_risk = 0.0
@@ -8523,7 +8769,7 @@ def build_universe_game_context(session: Any, team_id: str, opponent_id: str = "
             defensive_effort -= (45 - character) * 0.020 + (46 - role_satisfaction) * 0.014
             passing -= max(0, float(personality.get("ego", 50)) - 60) * 0.014
             penalty_risk += max(0, float(personality.get("volatility", 50)) - 58) * 0.018
-            disruptor_tax += float(entity.get("disruption_risk", 0)) * 0.00012
+            disruptor_tax += float(entity.get("disruption_risk", 0)) * 0.00032
             risks.append({"player_id": player_id, "player_name": entity.get("player_name"), "risk": "Frustration may become selfish decisions", "severity": round(float(entity.get("disruption_risk", 0)), 1)})
         for ability in entity.get("niche_abilities") or []:
             tier_mult = 0.72 + int(ability.get("tier", 1) or 1) * 0.28
@@ -8541,7 +8787,7 @@ def build_universe_game_context(session: Any, team_id: str, opponent_id: str = "
         readiness = _u_active_readiness(session, player_id)
         readiness_ovr = float(readiness.get("ovr_delta", 0) or 0)
         readiness_stats = dict(readiness.get("stat_modifiers") or {})
-        readiness_team_tax += max(0.0, -readiness_ovr) * 0.00018
+        readiness_team_tax += max(0.0, -readiness_ovr) * 0.00045
         overall_equivalent = effort * 0.36 + composure * 0.22 + discipline * 0.14 + passing * 0.14 + defensive_effort * 0.14 + readiness_ovr
         specific = {
             "shooting": readiness_stats.pop("shooting", 0.0),
@@ -8555,10 +8801,10 @@ def build_universe_game_context(session: Any, team_id: str, opponent_id: str = "
             "faceoffs": readiness_stats.pop("faceoffs", 0.0),
             "goalie_positioning": readiness_stats.pop("goalie_positioning", readiness_stats.pop("positioning", 0.0)),
             "rebound_control": readiness_stats.pop("rebound_control", 0.0),
-            "shot_involvement": readiness_stats.pop("shot_involvement", readiness_ovr * 0.006),
-            "assist_involvement": readiness_stats.pop("assist_involvement", readiness_ovr * 0.005),
-            "turnover_risk": readiness_stats.pop("turnover_risk", max(0.0, -readiness_ovr) * 0.004),
-            "toi_readiness": readiness_stats.pop("toi_readiness", readiness_ovr * 0.004),
+            "shot_involvement": readiness_stats.pop("shot_involvement", readiness_ovr * 0.016),
+            "assist_involvement": readiness_stats.pop("assist_involvement", readiness_ovr * 0.014),
+            "turnover_risk": readiness_stats.pop("turnover_risk", max(0.0, -readiness_ovr) * 0.010),
+            "toi_readiness": readiness_stats.pop("toi_readiness", readiness_ovr * 0.010),
         }
         player_modifiers[player_id] = {
             "available": universe_player_is_available(session, player_id),
@@ -8570,7 +8816,7 @@ def build_universe_game_context(session: Any, team_id: str, opponent_id: str = "
             "passing": round(passing, 3),
             "defensive_effort": round(defensive_effort, 3),
             "penalty_risk": round(max(0.0, penalty_risk + max(0.0, -readiness_ovr) * 0.004), 3),
-            "overall_equivalent": round(max(-25.0, min(6.0, overall_equivalent)), 3),
+            "overall_equivalent": round(max(-8.0, min(8.0, overall_equivalent)), 3),
             **specific,
             **readiness_stats,
             **temporary,
@@ -8582,8 +8828,8 @@ def build_universe_game_context(session: Any, team_id: str, opponent_id: str = "
     confidence = float(culture.get("confidence", 50))
     leadership = float(culture.get("leadership", 50))
     accountability = float(culture.get("accountability", 50))
-    win_delta = ((unity - 50) * 0.00042 + (confidence - 50) * 0.00032 + (leadership - 50) * 0.00024 + (accountability - 50) * 0.00018 - max(0, tension - 35) * 0.00045 + min(0.010, glue_count * 0.0012) - disruptor_tax - min(0.035, readiness_team_tax))
-    win_delta = max(-0.10, min(0.085, win_delta))
+    win_delta = ((unity - 50) * 0.00115 + (confidence - 50) * 0.00088 + (leadership - 50) * 0.00062 + (accountability - 50) * 0.00048 - max(0, tension - 35) * 0.00120 + min(0.028, glue_count * 0.0032) - disruptor_tax - min(0.08, readiness_team_tax))
+    win_delta = max(-0.16, min(0.16, win_delta))
     context_id = str((game_meta or {}).get("game_id") or f"gamectx_{team_id}_{_u_current_meta(session)[0]}")
     context = {
         "id": context_id,

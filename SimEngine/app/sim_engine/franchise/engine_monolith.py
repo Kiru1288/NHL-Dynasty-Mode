@@ -2416,6 +2416,12 @@ def _accumulate_franchise_game_stats(
 
     if len(session.game_results) > 2400:
         session.game_results = session.game_results[-1800:]
+    try:
+        from app.sim_engine.franchise.storyline_stat_bridge import apply_stats_ledger_to_storylines  # noqa: WPS433
+
+        apply_stats_ledger_to_storylines(session, box, rng=rng)
+    except Exception:
+        pass
 def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
     """
     StatsCentral payload.
@@ -4086,8 +4092,13 @@ def _record_storyline(session: FranchiseSession, event: Dict[str, Any]) -> None:
     if getattr(session, "storyline_events", None) is None:
         session.storyline_events = []
     session.storyline_events.append(ev)
-    if len(session.storyline_events) > 400:
-        session.storyline_events = session.storyline_events[-400:]
+    try:
+        from app.sim_engine.franchise.storyline_engine import _trim_storyline_events  # noqa: WPS433
+
+        session.storyline_events = _trim_storyline_events(list(session.storyline_events), limit=480)
+    except Exception:
+        if len(session.storyline_events) > 400:
+            session.storyline_events = session.storyline_events[-400:]
 
 
 def _storyline_choices_payload(session: FranchiseSession) -> List[Dict[str, Any]]:
@@ -4321,10 +4332,10 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         hmr = world_morale.team_morale_strength_factor(home)
         amr = world_morale.team_morale_strength_factor(away)
 
-        h_scale = max(0.93, min(1.07, hm * hc * hf * hmr)) * float(sim._roster_injury_depth_penalty(home))
-        a_scale = max(0.93, min(1.07, am * ac * af * amr)) * float(sim._roster_injury_depth_penalty(away))
+        h_scale = max(0.88, min(1.12, hm * hc * hf * hmr)) * float(sim._roster_injury_depth_penalty(home))
+        a_scale = max(0.88, min(1.12, am * ac * af * amr)) * float(sim._roster_injury_depth_penalty(away))
 
-        base_noise = 1.0 + 0.22 * (session.chaos_index - 0.5)
+        base_noise = 1.12 + 0.38 * (session.chaos_index - 0.5)
         nh = world_chemistry.chemistry_chaos_dampen(home, base_noise)
         na = world_chemistry.chemistry_chaos_dampen(away, base_noise)
         _, ih = sim._identity_runner_strength_noise_factors(home)
@@ -6890,7 +6901,13 @@ def build_state_payload(session: FranchiseSession) -> Dict[str, Any]:
 
     notifications_raw = list(session.notifications[-56:])
     notifications_norm = [_normalize_notification_payload(n, i) for i, n in enumerate(notifications_raw)]
-    storylines_norm = [_normalize_storyline_payload(ev if isinstance(ev, dict) else {"headline": str(ev or "")}) for ev in list(getattr(session, "storyline_events", None) or [])[-300:]]
+    try:
+        from app.sim_engine.franchise.storyline_engine import _trim_storyline_events  # noqa: WPS433
+
+        story_src = _trim_storyline_events(list(getattr(session, "storyline_events", None) or []), limit=360)
+    except Exception:
+        story_src = list(getattr(session, "storyline_events", None) or [])[-300:]
+    storylines_norm = [_normalize_storyline_payload(ev if isinstance(ev, dict) else {"headline": str(ev or "")}) for ev in story_src]
     storyline_choices = _storyline_choices_payload(session)
     injuries_payload = _build_injuries_payload(session)
     injury_history_payload = _build_injury_history_payload(session)

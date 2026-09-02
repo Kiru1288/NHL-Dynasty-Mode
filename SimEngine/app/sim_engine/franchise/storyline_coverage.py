@@ -37,6 +37,7 @@ from app.sim_engine.franchise.storyline_engine import (
     apply_universe_matchup_context,
     apply_universe_postgame,
     build_universe_matchup_context,
+    _u_push_morale_to_player,
 )
 
 BEAT_WRITERS: List[Dict[str, Any]] = [
@@ -233,7 +234,7 @@ def emit_concern_threshold_storylines(session: Any, rng: random.Random) -> int:
             satisfaction = float(row.get("satisfaction", 60) or 60)
             pressure = importance * (100.0 - satisfaction) / 100.0
             ambition_boost = float(personality.get("ambition", 50)) >= 68 and key in ("role", "winning")
-            if pressure < (28 if ambition_boost else 34):
+            if pressure < (22 if ambition_boost else 28):
                 continue
             stable = f"concern|{key}|{player_id}|{season}"
             ok, _rep = _can_fire(session, stable, day, "minor")
@@ -264,7 +265,7 @@ def emit_concern_threshold_storylines(session: Any, rng: random.Random) -> int:
             )
             _mark_fired(session, stable, day, "minor", 0)
             emitted += 1
-            if emitted >= 8:
+            if emitted >= 16:
                 return emitted
     return emitted
 
@@ -461,12 +462,6 @@ def ingest_game_box_storylines(session: Any, box: Dict[str, Any]) -> int:
                 emitted += 1
 
     session.player_recent_games = log
-    for tid, won in ((hid, hg > ag), (aid, ag > hg)):
-        if tid:
-            try:
-                apply_universe_postgame(session, tid, {"won": won, "game_id": box.get("game_id"), "player_stats": {}})
-            except Exception:
-                pass
     return emitted
 
 
@@ -513,6 +508,12 @@ def emit_rolling_form_storylines(session: Any) -> int:
                     stable_key=stable,
                 )
                 _mark_fired(session, stable, day, "minor", 0)
+                entity = (getattr(session, "universe_players", None) or {}).get(pid)
+                if isinstance(entity, dict):
+                    state = entity.setdefault("state", {})
+                    state["morale"] = _u_clip(float(state.get("morale", 55)) + 3.5)
+                    state["confidence"] = _u_clip(float(state.get("confidence", 55)) + 2.8)
+                    _u_push_morale_to_player(session, pid, float(state["morale"]))
                 emitted += 1
         elif ppg <= expected * 0.42 and ovr >= 78 and gp >= 6:
             stable = f"formcold|{pid}|{season}|{day // 6}"
@@ -531,6 +532,12 @@ def emit_rolling_form_storylines(session: Any) -> int:
                     stable_key=stable,
                 )
                 _mark_fired(session, stable, day, "minor", 0)
+                entity = (getattr(session, "universe_players", None) or {}).get(pid)
+                if isinstance(entity, dict):
+                    state = entity.setdefault("state", {})
+                    state["morale"] = _u_clip(float(state.get("morale", 55)) - 3.8)
+                    state["confidence"] = _u_clip(float(state.get("confidence", 55)) - 3.0)
+                    _u_push_morale_to_player(session, pid, float(state["morale"]))
                 emitted += 1
         if emitted >= 6:
             break
@@ -557,11 +564,11 @@ def publish_cpu_interaction_rumors(session: Any, rng: random.Random) -> int:
         actor = entities.get(str(row.get("actor_id") or "")) or {}
         headline = str(row.get("title") or "Locker-room chatter")
         _emit_public(
-            session,
-            headline=headline,
-            summary=str(row.get("summary") or "Sources inside the room describe a notable interaction."),
-            cause_type="LOCKER_ROOM_PULSE",
-            category="rumor",
+                    session,
+                    headline=headline,
+                    summary=str(row.get("summary") or "Sources inside the room describe a notable interaction."),
+                    cause_type="LOCKER_ROOM_PULSE",
+                    category="locker_room",
             heat=int(row.get("score") or 40),
             team_id=str(row.get("team_id") or ""),
             player_id=str(row.get("actor_id") or ""),
@@ -573,7 +580,7 @@ def publish_cpu_interaction_rumors(session: Any, rng: random.Random) -> int:
         )
         row["_published_rumor"] = True
         emitted += 1
-        if emitted >= 4:
+        if emitted >= 10:
             break
     return emitted
 

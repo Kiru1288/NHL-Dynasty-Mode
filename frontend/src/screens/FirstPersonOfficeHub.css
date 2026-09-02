@@ -108,6 +108,98 @@
     text-transform: uppercase;
   }
 
+  .office-wire-ticker {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 6;
+    display: flex;
+    align-items: stretch;
+    height: 36px;
+    pointer-events: auto;
+    border-top: 1px solid rgba(201, 168, 106, 0.35);
+    background: rgba(6, 8, 12, 0.88);
+  }
+
+  .office-wire-ticker__flag {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    background: #8b1e28;
+    color: #f4d9c6;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  .office-wire-ticker__viewport {
+    overflow: hidden;
+    flex: 1;
+    display: flex;
+    align-items: center;
+  }
+
+  .office-wire-ticker__track {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    width: max-content;
+    animation: office-wire-scroll 48s linear infinite;
+  }
+
+  .office-wire-ticker:hover .office-wire-ticker__track {
+    animation-play-state: paused;
+  }
+
+  .office-wire-ticker.is-static .office-wire-ticker__track {
+    animation: none;
+    overflow-x: auto;
+  }
+
+  .office-wire-ticker__item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: 0;
+    background: transparent;
+    color: #d7cbb8;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+    padding: 0;
+  }
+
+  .office-wire-ticker__item em {
+    font-style: normal;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #c9a86a;
+  }
+
+  .office-wire-ticker__item span {
+    color: rgba(201, 168, 106, 0.35);
+  }
+
+  .office-wire-ticker__empty {
+    padding: 0 14px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--office-muted);
+  }
+
+  @keyframes office-wire-scroll {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
+  }
+
   .office-reticle {
     position: absolute;
     left: 50%;
@@ -810,7 +902,7 @@
   .office-control-bar {
     position: absolute;
     left: 50%;
-    bottom: 16px;
+    bottom: 44px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1598,7 +1690,7 @@
     }
   
     .office-control-bar {
-      bottom: 16px;
+      bottom: 44px;
       width: calc(100vw - 32px);
       flex-wrap: wrap;
       justify-content: center;

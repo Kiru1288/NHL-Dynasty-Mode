@@ -68,8 +68,13 @@ def _record_storyline(session: FranchiseSession, event: Dict[str, Any]) -> None:
     if getattr(session, "storyline_events", None) is None:
         session.storyline_events = []
     session.storyline_events.append(ev)
-    if len(session.storyline_events) > 400:
-        session.storyline_events = session.storyline_events[-400:]
+    try:
+        from app.sim_engine.franchise.storyline_engine import _trim_storyline_events  # noqa: WPS433
+
+        session.storyline_events = _trim_storyline_events(list(session.storyline_events), limit=480)
+    except Exception:
+        if len(session.storyline_events) > 400:
+            session.storyline_events = session.storyline_events[-400:]
 def _storyline_choices_payload(session: FranchiseSession) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for d in list(getattr(session, "pending_decisions", None) or []):
@@ -366,7 +371,13 @@ def build_state_payload(session: FranchiseSession) -> Dict[str, Any]:
 
     notifications_raw = list(session.notifications[-56:])
     notifications_norm = [_normalize_notification_payload(n, i) for i, n in enumerate(notifications_raw)]
-    storylines_norm = [_normalize_storyline_payload(ev if isinstance(ev, dict) else {"headline": str(ev or "")}) for ev in list(getattr(session, "storyline_events", None) or [])[-300:]]
+    try:
+        from app.sim_engine.franchise.storyline_engine import _trim_storyline_events  # noqa: WPS433
+
+        story_src = _trim_storyline_events(list(getattr(session, "storyline_events", None) or []), limit=360)
+    except Exception:
+        story_src = list(getattr(session, "storyline_events", None) or [])[-300:]
+    storylines_norm = [_normalize_storyline_payload(ev if isinstance(ev, dict) else {"headline": str(ev or "")}) for ev in story_src]
     storyline_choices = _storyline_choices_payload(session)
     injuries_payload = _build_injuries_payload(session)
     injury_history_payload = _build_injury_history_payload(session)

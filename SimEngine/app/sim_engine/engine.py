@@ -25,6 +25,7 @@ it means engine.py got overwritten accidentally. Keep those in run_sim.py ONLY.
 
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Optional, List, Tuple, Callable, Set, Sequence
+import hashlib
 import math
 import os
 import random
@@ -138,6 +139,7 @@ from app.sim_engine.entities.player import (
     SupportLevel,
     PressureLevel,
     DevResources,
+    PersonalityTraits,
     ATTRIBUTE_KEYS,
     OFFENSE_KEYS,
     PASSING_KEYS,
@@ -396,6 +398,150 @@ def assign_player_personality_tag_from_character(player: Any) -> str:
     return tag
 
 
+_TRAIT_AXIS_NAMES = (
+    "loyalty",
+    "ambition",
+    "money_focus",
+    "family_priority",
+    "legacy_drive",
+    "risk_tolerance",
+    "adaptability",
+    "patience",
+    "stability_need",
+    "ego",
+    "confidence",
+    "volatility",
+    "competitiveness",
+    "leadership",
+    "coachability",
+    "media_comfort",
+    "introversion",
+    "work_ethic",
+    "mental_toughness",
+    "clutch_tendency",
+)
+
+
+def _personality_traits_are_generic(traits: Any) -> bool:
+    if traits is None:
+        return True
+    vals: List[float] = []
+    for name in _TRAIT_AXIS_NAMES:
+        raw = getattr(traits, name, None)
+        if raw is None:
+            continue
+        try:
+            vals.append(float(raw))
+        except (TypeError, ValueError):
+            continue
+    if len(vals) < 8:
+        return True
+    spread = max(vals) - min(vals)
+    mean = sum(vals) / len(vals)
+    return spread < 0.12 and abs(mean - 0.5) < 0.06
+
+
+def _archetypes_for_character_tag(tag: str, rng: random.Random) -> List[Any]:
+    pool = {
+        "leader": [PersonalityArchetype.LEADER, PersonalityArchetype.PROFESSIONAL, PersonalityArchetype.COMPETITOR],
+        "professional": [PersonalityArchetype.PROFESSIONAL, PersonalityArchetype.LOYALIST, PersonalityArchetype.STABILITY_SEEKER],
+        "neutral": [PersonalityArchetype.JOURNEYMAN, PersonalityArchetype.FAMILY_FIRST, PersonalityArchetype.INTROVERT, PersonalityArchetype.EXTROVERT],
+        "volatile": [PersonalityArchetype.CHIP_ON_SHOULDER, PersonalityArchetype.RISK_TAKER, PersonalityArchetype.STAR],
+        "toxic": [PersonalityArchetype.CHIP_ON_SHOULDER, PersonalityArchetype.MONEY_HUNGRY, PersonalityArchetype.STAR],
+    }.get(str(tag or "neutral"), [PersonalityArchetype.JOURNEYMAN])
+    extra = [
+        PersonalityArchetype.FAMILY_FIRST,
+        PersonalityArchetype.MONEY_HUNGRY,
+        PersonalityArchetype.COMPETITOR,
+        PersonalityArchetype.INTROVERT,
+        PersonalityArchetype.EXTROVERT,
+        PersonalityArchetype.RISK_TAKER,
+        PersonalityArchetype.STABILITY_SEEKER,
+    ]
+    chosen = list(rng.sample(pool, k=min(2, len(pool))))
+    extra_pick = rng.choice(extra)
+    if extra_pick not in chosen:
+        chosen.append(extra_pick)
+    return chosen
+
+
+def diversify_player_personality_and_psych(player: Any, rng: random.Random) -> None:
+    """Give NHL roster players distinct PersonalityTraits / psych instead of the 0.5 defaults."""
+    from app.sim_engine.ai.personality import clamp01
+
+    traits = getattr(player, "traits", None)
+    if not _personality_traits_are_generic(traits):
+        vol = float(getattr(traits, "volatility", 0.5) or 0.5)
+        setattr(player, "_narrative_performance_variance", max(0.0, min(0.9, (vol - 0.32) * 1.15)))
+        patience = float(getattr(traits, "patience", 0.5) or 0.5)
+        setattr(player, "_narrative_consistency_shift", max(-0.25, min(0.55, patience * 0.45 + (1.0 - vol) * 0.35 - 0.38)))
+        return
+
+    pid = str(getattr(player, "id", "") or "")
+    seed_src = pid or str(getattr(player, "name", "") or "player")
+    seed = int(hashlib.sha256(f"{seed_src}:story_personality_v1".encode("utf-8")).hexdigest()[:16], 16)
+    local = random.Random(seed)
+    tag = str(getattr(player, "personality", "") or "neutral")
+    profile = PersonalityFactory(local).generate(archetypes=_archetypes_for_character_tag(tag, local), seed=local.randint(1, 10**9))
+    new_traits = PersonalityTraits(
+        loyalty=profile.loyalty,
+        ambition=profile.ambition,
+        money_focus=profile.money_focus,
+        family_priority=profile.family_priority,
+        legacy_drive=profile.legacy_drive,
+        risk_tolerance=profile.risk_tolerance,
+        adaptability=profile.adaptability,
+        patience=profile.patience,
+        stability_need=profile.stability_need,
+        ego=profile.ego,
+        confidence=profile.confidence,
+        volatility=profile.volatility,
+        competitiveness=profile.competitiveness,
+        leadership=profile.leadership,
+        coachability=profile.coachability,
+        media_comfort=profile.media_comfort,
+        introversion=profile.introversion,
+        work_ethic=clamp01(0.12 + 0.76 * profile.patience + local.uniform(-0.18, 0.22)),
+        mental_toughness=clamp01(0.10 + 0.55 * (1.0 - profile.volatility) + 0.30 * profile.confidence + local.uniform(-0.12, 0.12)),
+        clutch_tendency=clamp01(0.15 + 0.55 * profile.competitiveness + 0.20 * profile.confidence + local.uniform(-0.18, 0.18)),
+    )
+    ch = float(getattr(player, "character", 50) or 50)
+    # Character score still biases a few public axes so "leader" vs "toxic" is visible.
+    bias = (ch - 50.0) / 80.0
+    new_traits.loyalty = clamp01(new_traits.loyalty + 0.16 * bias)
+    new_traits.leadership = clamp01(new_traits.leadership + 0.18 * bias)
+    new_traits.ego = clamp01(new_traits.ego - 0.12 * bias)
+    new_traits.volatility = clamp01(new_traits.volatility - 0.14 * bias)
+    new_traits.clamp_all()
+    player.traits = new_traits
+
+    psych = getattr(player, "psych", None)
+    if psych is not None:
+        def _wobble(spread: float) -> float:
+            return local.gauss(0.0, spread)
+
+        psych.morale = clamp01(0.38 + 0.28 * new_traits.confidence + _wobble(0.14))
+        psych.morale_sensitivity = clamp01(0.22 + 0.62 * new_traits.volatility + _wobble(0.08))
+        psych.confidence_level = clamp01(new_traits.confidence + _wobble(0.08))
+        psych.confidence_volatility = clamp01(new_traits.volatility + _wobble(0.06))
+        psych.coach_trust = clamp01(0.30 + 0.50 * new_traits.coachability + _wobble(0.12))
+        psych.coach_relationship = clamp01(getattr(psych, "coach_relationship", 0.5) * 0.2 + 0.35 + 0.45 * new_traits.coachability + _wobble(0.10))
+        psych.locker_room_fit = clamp01(0.28 + 0.35 * (1.0 - new_traits.introversion) + 0.22 * new_traits.leadership + _wobble(0.10))
+        psych.trust_in_teammates = clamp01(0.32 + 0.40 * new_traits.loyalty + _wobble(0.12))
+        psych.media_stress = clamp01(0.12 + 0.55 * (1.0 - new_traits.media_comfort) + 0.20 * new_traits.volatility + _wobble(0.08))
+        psych.tilt_susceptibility = clamp01(0.15 + 0.70 * new_traits.volatility + _wobble(0.08))
+        psych.bounce_back_tendency = clamp01(new_traits.mental_toughness + _wobble(0.08))
+        psych.role_satisfaction = clamp01(0.40 + _wobble(0.16))
+        psych.ice_time_satisfaction = clamp01(0.42 + _wobble(0.14))
+        if hasattr(psych, "clamp_all"):
+            psych.clamp_all()
+
+    vol = float(new_traits.volatility)
+    setattr(player, "_narrative_performance_variance", max(0.0, min(0.9, (vol - 0.28) * 1.25)))
+    setattr(player, "_narrative_consistency_shift", max(-0.25, min(0.55, new_traits.patience * 0.45 + (1.0 - vol) * 0.35 - 0.38)))
+    setattr(player, "_story_personality_gen", 1)
+
+
 def ensure_player_character_initialized(player: Any, rng: random.Random) -> int:
     raw = getattr(player, "character", None)
     need = raw is None
@@ -405,6 +551,7 @@ def ensure_player_character_initialized(player: Any, rng: random.Random) -> int:
     if need:
         setattr(player, "character", generate_player_character_score(rng))
     assign_player_personality_tag_from_character(player)
+    diversify_player_personality_and_psych(player, rng)
     return int(getattr(player, "character", 50))
 
 
@@ -10368,8 +10515,20 @@ class SimEngine:
             cs.append(float(getattr(p, "_narrative_consistency_shift", 0.0) or 0.0))
         av = sum(vs) / len(vs)
         ac = sum(cs) / len(cs)
-        mult = 1.0 + 0.48 * av - 0.32 * ac
-        return max(0.82, min(1.30, mult))
+        vol_bonus = 0.0
+        roster_n = 0
+        for p in roster:
+            traits = getattr(p, "traits", None)
+            if traits is None:
+                continue
+            try:
+                vol_bonus += float(getattr(traits, "volatility", 0.5) or 0.5)
+                roster_n += 1
+            except (TypeError, ValueError):
+                continue
+        avg_vol = (vol_bonus / roster_n) if roster_n else 0.5
+        mult = 1.0 + 0.72 * av - 0.28 * ac + 0.38 * (avg_vol - 0.5)
+        return max(0.78, min(1.55, mult))
 
     def _era_combined_gpg_cap(self) -> float:
         """Clamp stacked era + baseline scoring so normal seasons stay franchise-fun, not arcade."""
@@ -14673,8 +14832,8 @@ class SimEngine:
         s_away = max(0.15, min(0.92, float(strength_map.get(aid, 0.5)) * float(away_strength_scale)))
         win_delta = float(getattr(self, "_franchise_home_win_prob_delta", 0) or 0)
         if win_delta:
-            s_home = max(0.15, min(0.92, s_home + win_delta * 0.85))
-            s_away = max(0.15, min(0.92, s_away - win_delta * 0.85))
+            s_home = max(0.12, min(0.94, s_home + win_delta * 1.15))
+            s_away = max(0.12, min(0.94, s_away - win_delta * 1.15))
 
         base = 2.85
         diff = s_home - s_away
@@ -14690,11 +14849,11 @@ class SimEngine:
         home_mu = max(1.2, min(5.0, home_mu))
         away_mu = max(1.0, min(4.8, away_mu))
 
-        sg = max(0.75, min(1.25, float(noise_scale)))
+        sg = max(0.72, min(1.62, float(noise_scale)))
         nh = self._narrative_team_goal_sigma_multiplier(home)
         na = self._narrative_team_goal_sigma_multiplier(away)
-        home_goals = max(0, int(round(rng.gauss(home_mu, 1.28 * sg * nh))))
-        away_goals = max(0, int(round(rng.gauss(away_mu, 1.28 * sg * na))))
+        home_goals = max(0, int(round(rng.gauss(home_mu, 1.48 * sg * nh))))
+        away_goals = max(0, int(round(rng.gauss(away_mu, 1.48 * sg * na))))
 
         overtime = False
         if home_goals == away_goals:
@@ -15123,8 +15282,8 @@ class SimEngine:
 
                     h_scale = hm * hc * hf * hmr
                     a_scale = am * ac * af * amr
-                    h_scale = max(0.93, min(1.07, h_scale))
-                    a_scale = max(0.93, min(1.07, a_scale))
+                    h_scale = max(0.88, min(1.12, h_scale))
+                    a_scale = max(0.88, min(1.12, a_scale))
                     h_scale *= self._roster_injury_depth_penalty(home)
                     a_scale *= self._roster_injury_depth_penalty(away)
 
