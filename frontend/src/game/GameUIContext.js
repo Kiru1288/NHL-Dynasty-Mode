@@ -228,37 +228,27 @@ function playGlobalBreakingSting(level) {
   }
 }
 
-function AdvancingOverlay() {
+const ADVANCE_SAFETY_MS = 12 * 60 * 1000;
+
+function advancingLabelFor({ mode = "day", count = 1 } = {}) {
+  const m = String(mode || "day").toLowerCase();
+  const c = Math.max(1, Number(count) || 1);
+  if (m === "season") return "Simulating regular season…";
+  if (m === "games") return c === 1 ? "Simulating next game…" : `Simulating ${c} games…`;
+  if (m === "days" || (m === "day" && c > 1)) return `Simulating ${c} league days…`;
+  if (m === "next_game") return "Simulating next game…";
+  return "Simulating league day…";
+}
+
+function AdvancingOverlay({ label = "Simulating league day…" }) {
   return (
-    <div
-      className="franchise-advancing-overlay"
-      role="status"
-      aria-live="polite"
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 11500,
-        display: "grid",
-        placeItems: "center",
-        background: "rgba(4, 8, 14, 0.42)",
-        backdropFilter: "blur(2px)",
-        pointerEvents: "none",
-      }}
-    >
-      <div
-        style={{
-          padding: "14px 18px",
-          borderRadius: 8,
-          border: "1px solid rgba(19, 216, 231, 0.35)",
-          background: "rgba(9, 25, 38, 0.96)",
-          color: "#dffcff",
-          fontSize: 12,
-          fontWeight: 800,
-          letterSpacing: "0.12em",
-          textTransform: "uppercase",
-        }}
-      >
-        Simulating league day…
+    <div className="franchise-advancing-overlay" role="status" aria-live="polite" aria-busy="true">
+      <div className="franchise-advancing-card">
+        <div className="franchise-advancing-spinner" aria-hidden />
+        <div className="franchise-advancing-copy">
+          <strong>{label}</strong>
+          <span>League office is processing results</span>
+        </div>
       </div>
     </div>
   );
@@ -381,6 +371,11 @@ function mergeFranchisePayload(prev, incoming) {
       pendingDecisions: incoming.pendingDecisions ?? prior.pendingDecisions,
       pending_ui_popups: incoming.pending_ui_popups ?? prior.pending_ui_popups,
       narrative_summary: incoming.narrative_summary ?? prior.narrative_summary,
+      storyline_events: Array.isArray(incoming.storyline_events)
+        ? incoming.storyline_events
+        : prior.storyline_events,
+      active_storylines: incoming.active_storylines ?? prior.active_storylines,
+      storyline_choices: incoming.storyline_choices ?? prior.storyline_choices,
       flags: incoming.flags ?? prior.flags,
     };
     return applyLeanProgressFields(merged, incoming);
@@ -560,7 +555,66 @@ export function GameUIProvider({ children }) {
     Boolean(getFranchiseSessionId())
   );
   const [advancing, setAdvancing] = useState(false);
+  const [advancingLabel, setAdvancingLabel] = useState("Simulating league day…");
+  const advancingDepthRef = useRef(0);
+  const advancingSafetyTimerRef = useRef(null);
   const [franchiseEventForceOpen, setFranchiseEventForceOpen] = useState(false);
+
+  const beginAdvancing = useCallback((label = "Simulating league day…") => {
+    advancingDepthRef.current += 1;
+    setAdvancingLabel(label);
+    setAdvancing(true);
+    if (advancingSafetyTimerRef.current) {
+      clearTimeout(advancingSafetyTimerRef.current);
+    }
+    advancingSafetyTimerRef.current = setTimeout(() => {
+      if (advancingDepthRef.current > 0) {
+        advancingDepthRef.current = 0;
+        setAdvancing(false);
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("[GameUI] Cleared stuck advance overlay (safety timeout)");
+        }
+      }
+    }, ADVANCE_SAFETY_MS);
+  }, []);
+
+  const endAdvancing = useCallback(() => {
+    advancingDepthRef.current = Math.max(0, advancingDepthRef.current - 1);
+    if (advancingDepthRef.current === 0) {
+      if (advancingSafetyTimerRef.current) {
+        clearTimeout(advancingSafetyTimerRef.current);
+        advancingSafetyTimerRef.current = null;
+      }
+      setAdvancing(false);
+    }
+  }, []);
+
+  const forceEndAdvancing = useCallback(() => {
+    advancingDepthRef.current = 0;
+    if (advancingSafetyTimerRef.current) {
+      clearTimeout(advancingSafetyTimerRef.current);
+      advancingSafetyTimerRef.current = null;
+    }
+    setAdvancing(false);
+  }, []);
+
+  useEffect(() => {
+    const resetIfIdle = () => {
+      if (advancingDepthRef.current === 0) {
+        setAdvancing(false);
+      }
+    };
+    window.addEventListener("focus", resetIfIdle);
+    document.addEventListener("visibilitychange", resetIfIdle);
+    return () => {
+      window.removeEventListener("focus", resetIfIdle);
+      document.removeEventListener("visibilitychange", resetIfIdle);
+      advancingDepthRef.current = 0;
+      if (advancingSafetyTimerRef.current) {
+        clearTimeout(advancingSafetyTimerRef.current);
+      }
+    };
+  }, []);
   const [worldJuniorsOpen, setWorldJuniorsOpen] = useState(false);
   const [wjcEventSnapshot, setWjcEventSnapshot] = useState(null);
   const [pendingDraftProspectId, setPendingDraftProspectId] = useState(null);
@@ -1031,7 +1085,7 @@ export function GameUIProvider({ children }) {
         if (faMode === "week" || faMode === "weeks") days = 7 * faCount;
         else if (faMode === "month" || faMode === "months") days = 30 * faCount;
         else if (faMode === "season") days = 14;
-        setAdvancing(true);
+        beginAdvancing("Advancing free agency market…");
         setError(null);
         try {
           const res = await advanceFreeAgencyDay(days);
@@ -1041,7 +1095,7 @@ export function GameUIProvider({ children }) {
           handleFranchiseApiError(e);
           return null;
         } finally {
-          setAdvancing(false);
+          endAdvancing();
         }
       }
       const m = String(mode || "day").toLowerCase();
@@ -1053,7 +1107,7 @@ export function GameUIProvider({ children }) {
       const seasonBlock = m === "season";
       const bulkSim = multiDayBlock || seasonBlock;
       const effectiveAuto = autoResolve === undefined ? Boolean(bulkSim) : Boolean(autoResolve);
-      setAdvancing(true);
+      beginAdvancing(advancingLabelFor({ mode: m, count: c }));
       setError(null);
       let res = null;
       try {
@@ -1066,21 +1120,21 @@ export function GameUIProvider({ children }) {
             count: targetCount,
             auto_resolve: effectiveAuto,
           });
-          mergeFranchiseState(res.state);
+          mergeFranchiseState(res?.state);
         } else {
           res = await advanceFranchise({ mode: "day", count: 1, auto_resolve: effectiveAuto });
-          mergeFranchiseState(res.state);
+          mergeFranchiseState(res?.state);
         }
       } catch (e) {
         // Never rethrow — Axios Network Error must not open the React crash overlay.
         handleFranchiseApiError(e);
         return null;
       } finally {
-        setAdvancing(false);
+        endAdvancing();
       }
       return res;
     },
-    [franchiseState, handleFranchiseApiError]
+    [franchiseState, handleFranchiseApiError, beginAdvancing, endAdvancing]
   );
 
   const onAdvanceDay = useCallback(async () => {
@@ -1089,7 +1143,7 @@ export function GameUIProvider({ children }) {
 
   const onEnterPlayoffs = useCallback(async () => {
     if (!franchiseState) return null;
-    setAdvancing(true);
+    beginAdvancing("Entering playoffs…");
     setError(null);
     try {
       const res = await enterPlayoffs();
@@ -1102,12 +1156,12 @@ export function GameUIProvider({ children }) {
       handleFranchiseApiError(e);
       return null;
     } finally {
-      setAdvancing(false);
+      endAdvancing();
     }
-  }, [franchiseState, handleFranchiseApiError, setFranchiseEventForceOpen]);
+  }, [franchiseState, handleFranchiseApiError, setFranchiseEventForceOpen, beginAdvancing, endAdvancing]);
 
   const onAdvanceSeasonPhase = useCallback(async (payload = {}) => {
-    setAdvancing(true);
+    beginAdvancing("Advancing season phase…");
     setError(null);
     try {
       const res = await advanceSeasonPhase(payload);
@@ -1117,12 +1171,12 @@ export function GameUIProvider({ children }) {
       handleFranchiseApiError(e);
       return null;
     } finally {
-      setAdvancing(false);
+      endAdvancing();
     }
-  }, [handleFranchiseApiError]);
+  }, [handleFranchiseApiError, beginAdvancing, endAdvancing]);
 
   const onContinueOffseason = useCallback(async () => {
-    setAdvancing(true);
+    beginAdvancing("Continuing offseason…");
     setError(null);
     try {
       const fromStage = String(
@@ -1149,13 +1203,13 @@ export function GameUIProvider({ children }) {
       handleFranchiseApiError(e);
       return null;
     } finally {
-      setAdvancing(false);
+      endAdvancing();
     }
-  }, [franchiseState, handleFranchiseApiError, setFranchiseEventForceOpen]);
+  }, [franchiseState, handleFranchiseApiError, setFranchiseEventForceOpen, beginAdvancing, endAdvancing]);
 
   const onReopenOffseasonStage = useCallback(
     async (stage = "free_agency") => {
-      setAdvancing(true);
+      beginAdvancing("Opening offseason stage…");
       setError(null);
       try {
         const res = await reopenOffseasonStage({ stage });
@@ -1168,10 +1222,10 @@ export function GameUIProvider({ children }) {
         handleFranchiseApiError(e);
         return null;
       } finally {
-        setAdvancing(false);
+        endAdvancing();
       }
     },
-    [handleFranchiseApiError, setFranchiseEventForceOpen]
+    [handleFranchiseApiError, setFranchiseEventForceOpen, beginAdvancing, endAdvancing]
   );
 
   const openFranchiseEvent = useCallback(() => {
@@ -1205,7 +1259,7 @@ export function GameUIProvider({ children }) {
   );
 
   const onGenerateNextSeason = useCallback(async () => {
-    setAdvancing(true);
+    beginAdvancing("Generating next season…");
     setError(null);
     try {
       const res = await generateNextSeason();
@@ -1219,9 +1273,9 @@ export function GameUIProvider({ children }) {
       handleFranchiseApiError(e);
       return null;
     } finally {
-      setAdvancing(false);
+      endAdvancing();
     }
-  }, [handleFranchiseApiError, setFranchiseEventForceOpen]);
+  }, [handleFranchiseApiError, setFranchiseEventForceOpen, beginAdvancing, endAdvancing]);
 
   const onResolveDecision = useCallback(async (decisionId, choiceId) => {
     setError(null);
@@ -1497,7 +1551,7 @@ export function GameUIProvider({ children }) {
     <FranchiseStateContext.Provider value={franchiseState}>
       <GameUIContext.Provider value={value}>
         {children}
-      {advancing ? <AdvancingOverlay /> : null}
+      {advancing ? <AdvancingOverlay label={advancingLabel} /> : null}
       <BreakingNewsLayer franchiseState={franchiseState} screen={screen} setScreen={setScreen} />
       <ShowcasePopupLayer />
       <TradeDemandCrisisOverlay />

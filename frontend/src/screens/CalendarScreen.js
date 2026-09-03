@@ -2,7 +2,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
-import { advanceFranchise } from "../services/franchiseService";
 import { formatFranchiseApiError } from "../services/api";
 import WorldJuniorsEvent from "../events/worldJuniors/WorldJuniorsEvent";
 import { resolveWorldJuniorsPayload } from "../events/worldJuniors/WorldJuniorsMenu";
@@ -1367,14 +1366,13 @@ function CalendarScreen(props = {}) {
   const [hoveredDay, setHoveredDay] = useState(null);
   const [injuryReportOpen, setInjuryReportOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState(null);
-  const [advanceBusy, setAdvanceBusy] = useState(false);
   const [choiceBusyId, setChoiceBusyId] = useState("");
   const [choiceError, setChoiceError] = useState("");
   const [worldJuniorsMenuOpen, setWorldJuniorsMenuOpen] = useState(false);
   const [wjcMenuSnapshot, setWjcMenuSnapshot] = useState(null);
 
   const calendarRootRef = useRef(null);
-  const isAdvancing = advanceBusy || Boolean(gameUI?.advancing);
+  const isAdvancing = Boolean(gameUI?.advancing);
   const lineupGaps = useMemo(() => {
     const flags = rootState?.flags || {};
     const raw = flags.lineup_gaps || flags.lineupGaps || [];
@@ -1830,26 +1828,15 @@ function CalendarScreen(props = {}) {
 
   const handleAdvanceCalendar = useCallback(
     async ({ mode = "day", count = 1 } = {}) => {
-      if (isAdvancing) return;
-
-      setAdvanceBusy(true);
-
-      const payload = {
-        mode,
-        count: Math.max(1, Number(count) || 1),
-        auto_resolve: true,
-      };
+      if (isAdvancing || typeof gameUI?.onAdvanceFranchise !== "function") return;
 
       try {
-        const result = await advanceFranchise(payload);
-
-        if (typeof gameUI?.mergeFranchiseState === "function" && result?.state) {
-          gameUI.mergeFranchiseState(result.state);
-        } else if (typeof gameUI?.setFranchiseState === "function" && result?.state) {
-          gameUI.setFranchiseState((prev) => ({ ...(prev || {}), ...result.state }));
-        } else if (typeof gameUI?.refreshFranchise === "function") {
-          await gameUI.refreshFranchise();
-        }
+        const result = await gameUI.onAdvanceFranchise({
+          mode,
+          count: Math.max(1, Number(count) || 1),
+          auto_resolve: true,
+        });
+        if (!result) return;
 
         const step = result?.step || {};
         const lastStep = step?.bulk ? step.last_step || step : step;
@@ -1925,8 +1912,6 @@ function CalendarScreen(props = {}) {
         if (process.env.NODE_ENV !== "production") {
           console.warn("[CalendarScreen] advance failed:", formatFranchiseApiError(error) || error);
         }
-      } finally {
-        setAdvanceBusy(false);
       }
     },
     [isAdvancing, gameUI, rootState]

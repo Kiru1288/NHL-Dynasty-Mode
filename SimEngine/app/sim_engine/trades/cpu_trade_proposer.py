@@ -23,19 +23,19 @@ from app.sim_engine.economy.team_needs import TeamNeeds
 logger = logging.getLogger(__name__)
 
 CPU_AMBIENT_FAIRNESS_GAP_MAX = 14.0
-CPU_AMBIENT_MIN_INTEREST = 0.48
+CPU_AMBIENT_MIN_INTEREST = 0.40
 CPU_PAIR_COOLDOWN_DAYS = 18
 CPU_REACQUIRE_SOFT_DAYS = 35
 CPU_REVERSE_TRADE_PENALTY = 0.22  # retained as soft demote only; hard ban is season reverse block
 CPU_SEASON_PAIR_SOFT_CAP = 2
-CPU_PEER_ATTEMPT_MODULO = 5  # peer depth swaps slightly less dominant
+CPU_PEER_ATTEMPT_MODULO = 6  # peer depth swaps — ambient volume when futures paths fail
 CPU_ONE_FOR_ONE_OVR_GAP_MAX = 7.0  # allow more talent asymmetry without futures
 CPU_SELLER_CORE_OVR = 86.0
 CPU_YOUNG_CORE_MAX_AGE = 23
 CPU_PROSPECT_MAX_AGE = 22
 CPU_DESPERATION_GAP_MAX = 28.0
-CPU_DESPERATION_CHANCE = 0.18  # controlled unfairness when pressure is high
-CPU_DUMB_GM_CHANCE = 0.09  # occasional overpay / underpay regardless of window
+CPU_DESPERATION_CHANCE = 0.26  # controlled unfairness when pressure is high
+CPU_DUMB_GM_CHANCE = 0.13  # occasional overpay / underpay regardless of window
 CPU_DIVERSITY_TARGETS = {
     "max_pair_repetitions_per_season": 2,
     "min_median_unique_partners_per_trading_team": 3.0,
@@ -235,6 +235,18 @@ def _team_window(team: Any) -> str:
     return "emerging"
 
 
+def _normalize_competitive_window(raw: Any) -> str:
+    """Map profile direction/window tokens onto the four ambient trade windows."""
+    cw = str(raw or "").lower().strip()
+    if cw in ("rebuild", "tank", "declining", "rebuilding", "deep_rebuild", "seller", "cap_correction"):
+        return "rebuild"
+    if cw in ("contender", "all_in_contender", "playoff_buyer", "contender_push"):
+        return "contender"
+    if cw in ("emerging", "competitive_retool", "holding", "balanced", "retool"):
+        return "emerging"
+    return "emerging"
+
+
 def _playoff_odds(team: Any) -> float:
     for key in ("playoff_odds", "playoffOdds", "playoff_probability"):
         v = getattr(team, key, None)
@@ -387,6 +399,8 @@ def _pick_trade_candidates(
                 pass
             elif motive == "desperation" and window in ("rebuild", "declining") and deadline > 0.8 and ovr < 86:
                 pass
+            elif motive == "depth_swap" and ovr < 81:
+                pass
             else:
                 continue
         if ovr >= 90 and motive not in ("star_acquisition", "desperation"):
@@ -495,7 +509,8 @@ def _match_return_player(
             continue
         if _is_reverse_to_prior(p, team_id_of(seller), ctx):
             continue
-        if _needs_fit_score(buyer, p, selling=False) < 0.5 and not _is_rental(seller_asset):
+        fit_min = -1.5 if motive == "depth_swap" else 0.5
+        if _needs_fit_score(buyer, p, selling=False) < fit_min and not _is_rental(seller_asset):
             continue
         # Depth / peer swaps: keep OVR close even before pick compensation.
         if motive == "depth_swap" and abs(_player_ovr(p) - sold_ovr) > CPU_ONE_FOR_ONE_OVR_GAP_MAX + 1.5:
@@ -530,13 +545,18 @@ def _select_tradeable_pick(
     protect_own_first: bool = False,
     prefer_quality: str = "cheapest",
     pair_rng: Any = None,
+    exclude_pick_ids: Optional[set] = None,
 ) -> Optional[Dict[str, Any]]:
     """Pick selection — futures packages prefer mid/high quality, not always cheapest."""
     tid = team_id_of(team)
     picks = get_team_owned_picks(league, tid)
+    excluded = {str(x) for x in (exclude_pick_ids or set()) if x}
     candidates: List[Tuple[float, Dict[str, Any]]] = []
     for row in picks:
         if bool(row.get("resolved")):
+            continue
+        pick_id = str(row.get("pick_id") or "")
+        if pick_id and pick_id in excluded:
             continue
         rnd = _safe_int(row.get("round"), 7)
         if rnd > max_round:
@@ -579,26 +599,45 @@ def _choose_package_motive(
     """Pick a construction motive so ambient is not only closest-TV matching."""
     sw = _team_window(seller)
     bw = _team_window(buyer)
+    rebuild_dirs = frozenset({"SELLER", "REBUILDING", "DEEP_REBUILD", "CAP_CORRECTION"})
+    buyer_dirs = frozenset({"CONTENDER", "PLAYOFF_BUYER", "ALL_IN_CONTENDER"})
     s_desp = _desperation_score(seller, deadline=deadline, direction=direction_seller)
     b_desp = _desperation_score(buyer, deadline=deadline, direction=direction_buyer)
-    if max(s_desp, b_desp) >= 0.62 and pair_rng.random() < CPU_DESPERATION_CHANCE + 0.15 * max(s_desp, b_desp):
+    if max(s_desp, b_desp) >= 0.55 and pair_rng.random() < CPU_DESPERATION_CHANCE + 0.18 * max(s_desp, b_desp):
         return "desperation"
     if peer_path:
         return "depth_swap"
-    if sw in ("rebuild", "declining") and bw in ("contender", "emerging"):
-        if deadline >= 0.35 and pair_rng.random() < 0.55:
+    if direction_seller in rebuild_dirs and direction_buyer in buyer_dirs:
+        if deadline >= 0.20 and pair_rng.random() < 0.62:
             return "rental_sale"
         return "futures_package"
-    if bw == "contender" and deadline >= 0.5 and pair_rng.random() < 0.35:
+    if sw in ("rebuild", "declining") and bw in ("contender", "emerging"):
+        if deadline >= 0.25 and pair_rng.random() < 0.62:
+            return "rental_sale"
+        return "futures_package"
+    if direction_buyer in buyer_dirs and pair_rng.random() < 0.42:
+        return "star_acquisition"
+    if bw == "contender" and deadline >= 0.35 and pair_rng.random() < 0.45:
         return "star_acquisition"
     if sw == bw:
-        return "depth_swap"
+        roll = pair_rng.random()
+        if roll < 0.58:
+            return "depth_swap"
+        if roll < 0.72:
+            return "futures_package"
+        if roll < 0.84:
+            return "rental_sale"
+        return "star_acquisition"
+    if sw == "emerging" and bw == "emerging":
+        return "depth_swap" if pair_rng.random() < 0.72 else "futures_package"
     roll = pair_rng.random()
-    if roll < 0.28:
+    if roll < 0.30:
+        return "depth_swap"
+    if roll < 0.50:
         return "futures_package"
-    if roll < 0.55:
+    if roll < 0.72:
         return "rental_sale"
-    if roll < 0.70:
+    if roll < 0.86:
         return "star_acquisition"
     return "depth_swap"
 
@@ -611,6 +650,7 @@ def _build_package(
     *,
     seller_pick: Optional[Dict[str, Any]] = None,
     buyer_pick: Optional[Dict[str, Any]] = None,
+    buyer_pick_2: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     sid = team_id_of(seller)
     bid = team_id_of(buyer)
@@ -639,6 +679,14 @@ def _build_package(
             {
                 "type": "pick",
                 "id": str(buyer_pick.get("pick_id") or ""),
+                "team": bid,
+            }
+        )
+    if buyer_pick_2:
+        seller_payload.append(
+            {
+                "type": "pick",
+                "id": str(buyer_pick_2.get("pick_id") or ""),
                 "team": bid,
             }
         )
@@ -844,9 +892,19 @@ def propose_and_execute_cpu_trades(
         pass
     ensure_franchise_pick_registry(league, season_calendar_year=int(ctx["season_year"]), years_ahead=4)
     team_by_id = ctx["team_by_id"]
+    profiles = dict(getattr(league, "cpu_franchise_profiles", None) or {})
+    for tm in teams:
+        tid = team_id_of(tm)
+        prof = profiles.get(tid) or {}
+        cw = _normalize_competitive_window(
+            prof.get("competitive_window") or prof.get("team_direction") or getattr(tm, "gm_window", "")
+        )
+        try:
+            setattr(tm, "gm_window", cw)
+        except Exception:
+            pass
     needs_model = TeamNeeds()
     deadline = _safe_float(ctx.get("deadline_phase"), 0.0)
-    profiles = dict(getattr(league, "cpu_franchise_profiles", None) or {})
 
     def _direction_of(tm: Any) -> str:
         tid = team_id_of(tm)
@@ -999,14 +1057,16 @@ def propose_and_execute_cpu_trades(
             if deadline < 0.35 and pair_rng.random() < 0.55:
                 continue
 
+        direction_seller = _direction_of(seller)
+        direction_buyer = _direction_of(buyer)
         motive = _choose_package_motive(
             seller=seller,
             buyer=buyer,
             deadline=deadline,
             peer_path=peer_path,
             pair_rng=pair_rng,
-            direction_seller=_direction_of(seller),
-            direction_buyer=_direction_of(buyer),
+            direction_seller=direction_seller,
+            direction_buyer=direction_buyer,
         )
         attempt_gap_max = fairness_gap_max
         if motive == "desperation":
@@ -1070,9 +1130,15 @@ def propose_and_execute_cpu_trades(
         pick_only = False
         prefer_pick_only = (
             motive in ("futures_package", "rental_sale")
-            and seller_window in ("rebuild", "declining")
-            and buyer_window in ("contender", "emerging")
-            and pair_rng.random() < (0.55 if motive == "futures_package" else 0.35)
+            and (
+                seller_window in ("rebuild", "declining")
+                or direction_seller in ("SELLER", "REBUILDING", "DEEP_REBUILD", "CAP_CORRECTION")
+            )
+            and (
+                buyer_window in ("contender", "emerging")
+                or direction_buyer in ("CONTENDER", "PLAYOFF_BUYER", "ALL_IN_CONTENDER")
+            )
+            and pair_rng.random() < (0.62 if motive == "futures_package" else 0.42)
         )
         b_return = None
         if not prefer_pick_only:
@@ -1093,9 +1159,21 @@ def propose_and_execute_cpu_trades(
                 and seller_window in ("rebuild", "declining")
                 and buyer_window in ("contender", "emerging")
             )
-            if not allow_pick_only:
+            if not allow_pick_only and motive == "depth_swap":
+                b_return = _match_return_player(
+                    seller_asset=s_offer,
+                    seller=seller,
+                    buyer=buyer,
+                    buyer_candidates=b_candidates,
+                    league=league,
+                    ctx=ctx,
+                    used_players=used_players,
+                    value_band=value_band * 1.75,
+                    motive=motive,
+                )
+            if b_return is None and not allow_pick_only:
                 continue
-            pick_only = True
+            pick_only = b_return is None
         elif _is_reverse_to_prior(b_return, sid, ctx):
             telemetry["reverse_blocked"] = int(telemetry.get("reverse_blocked", 0) or 0) + 1
             continue
@@ -1194,6 +1272,26 @@ def propose_and_execute_cpu_trades(
                         prefer_quality="cheapest", pair_rng=pair_rng,
                     )
 
+        buyer_pick_2 = None
+        if buyer_pick is not None and sold_ovr >= 78 and motive in (
+            "futures_package",
+            "rental_sale",
+            "desperation",
+            "star_acquisition",
+        ):
+            mult_chance = 0.58 if motive == "futures_package" else (0.44 if motive == "desperation" else 0.32)
+            if pair_rng.random() < mult_chance:
+                buyer_pick_2 = _select_tradeable_pick(
+                    league,
+                    buyer,
+                    ctx=ctx,
+                    max_round=4 if sold_ovr >= 84 else 3,
+                    protect_own_first=False,
+                    prefer_quality="mid" if sold_ovr >= 82 else "cheapest",
+                    pair_rng=pair_rng,
+                    exclude_pick_ids={str(buyer_pick.get("pick_id") or "")},
+                )
+
         if not _talent_gap_ok(
             s_offer, b_return, buyer_pick=buyer_pick, seller_pick=seller_pick, motive=motive,
         ):
@@ -1215,6 +1313,7 @@ def propose_and_execute_cpu_trades(
             [] if pick_only else [b_return],
             seller_pick=seller_pick,
             buyer_pick=buyer_pick,
+            buyer_pick_2=buyer_pick_2,
         )
         if not package:
             continue
@@ -1330,6 +1429,10 @@ def propose_and_execute_cpu_trades(
             yr = buyer_pick.get("year")
             rnd = buyer_pick.get("round")
             incoming_labels.append(f"{yr} Round {rnd}" if yr and rnd else f"Pick {buyer_pick.get('pick_id') or '?'}")
+        if buyer_pick_2:
+            yr2 = buyer_pick_2.get("year")
+            rnd2 = buyer_pick_2.get("round")
+            incoming_labels.append(f"{yr2} Round {rnd2}" if yr2 and rnd2 else f"Pick {buyer_pick_2.get('pick_id') or '?'}")
         if not incoming_labels:
             incoming_labels = ["draft capital"]
         to_bits = ", ".join(outgoing_labels)

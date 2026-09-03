@@ -2584,6 +2584,11 @@ def franchise_cause_storyline_daily_pass(
     cur = int(calendar_idx)
     _maybe_record_losing_streak_event(session, utid, cur, iso)
     locker_spawned = _process_locker_room_triggers(session, r, cur, iso, utid)
+    light_bulk = bool(getattr(session, "_bulk_calendar_advance", False)) and bool(
+        getattr(session, "_light_game_stat_accumulation", False)
+    )
+    if light_bulk:
+        return {"processed": True, "day": calendar_idx, "locker_room_spawned": locker_spawned, "universe_deferred": True}
     nu = narrative_universe_daily_pass(session, cur, day_meta, r)
     return {"processed": True, "day": calendar_idx, "locker_room_spawned": locker_spawned, **nu}
 
@@ -6936,6 +6941,14 @@ def build_human_dossier_payload(
             life_summary = "Single"
 
     payload: Dict[str, Any] = {
+        "player_id": str(entity.get("player_id") or getattr(player, "id", "") or ""),
+        "player_name": str(entity.get("player_name") or _u_name(player or object()) or "Player"),
+        "identity": {
+            "player_id": str(entity.get("player_id") or getattr(player, "id", "") or ""),
+            "name": str(entity.get("player_name") or _u_name(player or object()) or "Player"),
+            "position": str(entity.get("position") or _u_position(player or object())),
+            "overall": current_ovr,
+        },
         "character": character_block,
         "current_state": {
             "morale_tier": _u_tier_label(float(state.get("morale", 55))),
@@ -7565,10 +7578,15 @@ def _u_generate_minor_life_events(session: Any, rng: random.Random) -> int:
     """Generate diverse small positive/negative off-ice events with subtle real sim effects."""
     user_team_id = str(getattr(session, "user_team_id", "") or "")
     entities = getattr(session, "universe_players", None) or {}
+    bulk_burst = bool(getattr(session, "_bulk_narrative_life_burst", False))
     created = 0
     day, iso, _ = _u_current_meta(session)
-    teams = list((getattr(session, "team_by_id", None) or {}).items())
-    teams.sort(key=lambda item: 0 if str(item[0]) == user_team_id else 1)
+    if bulk_burst and user_team_id:
+        teams = [(user_team_id, (getattr(session, "team_by_id", None) or {}).get(user_team_id))]
+        teams = [t for t in teams if t[1] is not None]
+    else:
+        teams = list((getattr(session, "team_by_id", None) or {}).items())
+        teams.sort(key=lambda item: 0 if str(item[0]) == user_team_id else 1)
     for team_id_raw, team in teams:
         team_id = str(team_id_raw)
         for player in list(getattr(team, "roster", None) or []):
@@ -7579,10 +7597,15 @@ def _u_generate_minor_life_events(session: Any, rng: random.Random) -> int:
             life = entity.get("life") or {}
             last = int(life.get("last_minor_event_day", -999) or -999)
             vol = float((entity.get("personality") or {}).get("volatility", 50))
-            cooldown = 3 if vol >= 62 else 5
+            cooldown = 1 if bulk_burst else (3 if vol >= 62 else 5)
             if day - last < cooldown:
                 continue
-            chance = (0.18 if team_id == user_team_id else 0.04) * (0.75 + vol / 100.0)
+            if bulk_burst and team_id != user_team_id:
+                continue
+            if bulk_burst:
+                chance = 0.42
+            else:
+                chance = (0.22 if team_id == user_team_id else 0.05) * (0.75 + vol / 100.0)
             if rng.random() > chance:
                 continue
             positive = rng.random() < 0.52
@@ -7670,7 +7693,7 @@ def _u_generate_minor_life_events(session: Any, rng: random.Random) -> int:
             if team_id == user_team_id:
                 _u_notify_user_event(session, event, presentation_level=1)
             created += 1
-            if created >= 36:
+            if created >= (72 if bulk_burst else 36):
                 return created
     return created
 
@@ -8985,6 +9008,113 @@ def _gm_broken_promises(session: Any, player_id: str) -> int:
     )
 
 
+def _gm_attention_cleared(entity: Dict[str, Any], day: int) -> bool:
+    return int(entity.get("meeting_attention_cleared_until_day") or 0) > int(day)
+
+
+def _gm_mark_attention_addressed(session: Any, player_id: str, *, days: int = 21) -> None:
+    if not player_id:
+        return
+    entity = _gm_entity(session, player_id)
+    if not entity:
+        return
+    day = _u_current_meta(session)[0]
+    entity["meeting_attention_cleared_until_day"] = int(day) + int(days)
+    entity["last_gm_meeting_resolved_day"] = int(day)
+
+
+def _gm_should_flag_attention(
+    *,
+    requested: bool,
+    cleared: bool,
+    rel: Dict[str, Any],
+    row: Dict[str, Any],
+) -> bool:
+    """Only flag players who truly need a GM conversation — not every low-morale roster member."""
+    if requested:
+        return True
+    if cleared:
+        return False
+    if int(row.get("broken_promise_count") or 0) > 0:
+        return True
+    if row.get("trade_concern"):
+        return True
+    label = str(rel.get("label") or "")
+    if label in ("Strained", "Broken"):
+        return True
+    if row.get("has_active_promise") and label in ("Strained", "Broken", "Neutral"):
+        gm_trust = int(rel.get("gm_trust") or 55)
+        if gm_trust < 48:
+            return True
+    return False
+
+
+def _gm_attention_reasons(
+    requested: bool,
+    rel: Dict[str, Any],
+    row: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    reasons: List[Dict[str, Any]] = []
+    if requested:
+        reasons.append({"code": "requested", "label": "Requested a private meeting"})
+    broken = int(row.get("broken_promise_count") or 0)
+    if broken:
+        reasons.append(
+            {
+                "code": "broken_promise",
+                "label": f"{broken} broken promise{'s' if broken != 1 else ''}",
+            }
+        )
+    if row.get("trade_concern"):
+        reasons.append({"code": "trade_rumor", "label": "Active trade rumor heat"})
+    if row.get("has_active_promise"):
+        reasons.append({"code": "open_promise", "label": "Open management promise"})
+    label = str(rel.get("label") or "")
+    if label in ("Strained", "Broken"):
+        reasons.append({"code": "relationship", "label": f"{label} relationship with management"})
+    morale = int(rel.get("morale") or 55)
+    if morale <= 32:
+        reasons.append({"code": "low_morale", "label": f"Morale critically low ({morale})"})
+    return reasons
+
+
+def _gm_meeting_trigger_reasons(ctx: Dict[str, Any], interaction_type: str) -> List[Dict[str, Any]]:
+    reasons: List[Dict[str, Any]] = []
+    state = dict(ctx.get("state") or {})
+    rel = dict(ctx.get("relationship") or {})
+
+    def add(code: str, label: str, stat: Optional[str] = None, value: Optional[float] = None) -> None:
+        reasons.append(
+            {
+                "code": code,
+                "label": label,
+                "stat": stat,
+                "value": round(float(value)) if value is not None else None,
+            }
+        )
+
+    morale = float(state.get("morale", 55))
+    if morale <= 42:
+        add("low_morale", "Morale has dropped", "morale", morale)
+    role = float(state.get("role_satisfaction", 55))
+    if role <= 48:
+        add("role_unhappy", "Unhappy with current role", "role_satisfaction", role)
+    if ctx.get("struggling"):
+        add("slump", "Recent performance slump")
+    if int(ctx.get("trade_rumor_heat") or 0) >= 10:
+        add("trade_rumors", f"Trade rumor heat ({int(ctx['trade_rumor_heat'])})")
+    if rel.get("label") in ("Strained", "Broken"):
+        add("relationship", f"{rel.get('label')} relationship with management")
+    stress = float(state.get("personal_stress", 30))
+    if stress >= 50:
+        add("personal_stress", "Elevated off-ice stress", "personal_stress", stress)
+    if interaction_type in ("repair_relationship", "personal_wellbeing_check") and not reasons:
+        add("relationship_check", "Relationship needs attention")
+    if not reasons:
+        add("routine", "Routine check-in")
+    return reasons[:5]
+
+
 def _gm_relationship_summary(entity: Dict[str, Any], session: Any, player_id: str) -> Dict[str, Any]:
     state = dict(entity.get("state") or {})
     trusts = dict(entity.get("trusts") or {})
@@ -9023,9 +9153,9 @@ def _gm_relationship_summary(entity: Dict[str, Any], session: Any, player_id: st
         "label": label,
         "tone": tone,
         "detail": detail,
-        "gm_trust": round(gm_trust, 1),
-        "morale": round(morale, 1),
-        "role_satisfaction": round(role_sat, 1),
+        "gm_trust": int(round(gm_trust)),
+        "morale": int(round(morale)),
+        "role_satisfaction": int(round(role_sat)),
         "broken_promises": broken,
         "active_promise_count": len(active_promises),
     }
@@ -9460,6 +9590,7 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
         "choices": tpl["choices"],
         "ovr_explanation": ctx["ovr_trend"] if interaction_type in ("explain_ovr_rising", "explain_ovr_falling") else None,
         "relationship": rel,
+        "trigger_reasons": _gm_meeting_trigger_reasons(ctx, interaction_type),
         "expires_day": ctx["day"] + 5,
     }
 
@@ -9559,6 +9690,7 @@ def resolve_gm_player_meeting(session: Any, meeting_id: str, choice_id: str) -> 
     meeting["status"] = "resolved"
     active.pop(str(meeting_id), None)
     session.gm_active_meetings = active
+    _gm_mark_attention_addressed(session, str(meeting.get("player_id") or ""))
     return result
 
 
@@ -9584,6 +9716,8 @@ def resolve_player_meeting_interaction(session: Any, interaction_id: str, choice
         "receipts": result.get("receipts"),
     })
     session.gm_meeting_history = hist[-GM_MEETING_HISTORY_MAX:]
+    if player_id:
+        _gm_mark_attention_addressed(session, player_id)
     return {"ok": True, **result}
 
 
@@ -9613,12 +9747,15 @@ def build_player_meetings_payload(session: Any) -> Dict[str, Any]:
         except Exception:
             agent = {}
         requested = any(str(r.get("player_id") or r.get("actor_id") or "") == pid for r in pending_player)
+        has_active_promise = any(str(p.get("player_id") or "") == pid for p in active_promises)
+        broken_promise_count = sum(1 for p in broken_promises if str(p.get("player_id") or "") == pid)
+        trade_concern = int(pst.get("trade_rumor_heat") or 0) >= 15
         row = {
             "player_id": pid,
             "player_name": str(entity.get("player_name") or _u_name(player)),
             "position": str(entity.get("position") or _u_position(player)),
             "age": int(entity.get("age") or _player_age(player)),
-            "overall": round(float(entity.get("overall") or _player_ovr99(player)), 1),
+            "overall": int(round(float(entity.get("overall") or _player_ovr99(player)))),
             "ovr_trend": ovr_trend.get("direction"),
             "readiness_delta": ovr_trend.get("readiness_delta"),
             "roster_bucket": bucket,
@@ -9627,13 +9764,15 @@ def build_player_meetings_payload(session: Any) -> Dict[str, Any]:
             "contract": contract,
             "agent": agent,
             "requested_meeting": requested,
-            "has_active_promise": any(str(p.get("player_id") or "") == pid for p in active_promises),
-            "broken_promise_count": sum(1 for p in broken_promises if str(p.get("player_id") or "") == pid),
-            "trade_concern": int(pst.get("trade_rumor_heat") or 0) >= 15,
+            "has_active_promise": has_active_promise,
+            "broken_promise_count": broken_promise_count,
+            "trade_concern": trade_concern,
             "concern_label": rel.get("detail"),
         }
+        row["attention_reasons"] = _gm_attention_reasons(requested, rel, row)
         roster_rows.append(row)
-        if requested or row["has_active_promise"] or row["broken_promise_count"] or row["trade_concern"] or rel.get("label") in ("Strained", "Broken"):
+        cleared = _gm_attention_cleared(entity, day)
+        if _gm_should_flag_attention(requested=requested, cleared=cleared, rel=rel, row=row):
             needs_attention.append(row)
     hist = list(getattr(session, "gm_meeting_history", None) or [])[-40:]
     active_gm = list((getattr(session, "gm_active_meetings", None) or {}).values())

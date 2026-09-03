@@ -340,13 +340,26 @@ function TradeWireBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
   );
 }
 
-function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [] }) {
+function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [], queueCount = 0 }) {
   const theme = resolveAlertTheme(pop);
   const source = pop.source_label || pop.title || "League Update";
   const icon = pop.icon || "◉";
+  const kindLabel = String(pop.kind || pop.type || "alert")
+    .replace(/_/g, " ")
+    .toUpperCase();
 
   return (
-    <div className={`media-alert media-alert--${theme}`}>
+    <div className={`media-alert media-alert--${theme} media-alert--v2`}>
+      <div className="media-alert__topbar">
+        <span className="media-alert__kind-pill">{kindLabel}</span>
+        {queueCount > 1 ? (
+          <span className="media-alert__queue-pill">{queueCount - 1} more queued</span>
+        ) : null}
+        <button type="button" className="media-alert__close" onClick={onDismiss} aria-label="Dismiss alert">
+          ×
+        </button>
+      </div>
+
       <div className="media-alert__source-row">
         <span className="media-alert__icon" aria-hidden>
           {icon}
@@ -360,7 +373,9 @@ function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [] }) {
       <div className="media-alert__hero">
         <div className="media-alert__avatar">{playerInitials(pop.player_name)}</div>
         <div className="media-alert__hero-text">
-          <h3 className="media-alert__headline">{pop.headline || pop.title || "Update"}</h3>
+          <h3 className="media-alert__headline" id="showcase-popup-title">
+            {pop.headline || pop.title || "Update"}
+          </h3>
           <p className="media-alert__player-line">
             <strong>{pop.player_name || "—"}</strong>
             {pop.team_abbrev || pop.team_abbr ? (
@@ -370,7 +385,7 @@ function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [] }) {
         </div>
       </div>
 
-      {children}
+      <div className="media-alert__body-scroll">{children}</div>
 
       {actions.length ? (
         <div className="media-alert__actions">
@@ -388,18 +403,15 @@ function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [] }) {
       ) : null}
 
       <div className="media-alert__foot">
-        <button type="button" className="media-alert__dismiss" onClick={onDismiss}>
-          Dismiss
-        </button>
-        <button type="button" className="media-alert__continue" onClick={onDismiss}>
-          Continue
+        <button type="button" className="media-alert__continue is-primary" onClick={onDismiss}>
+          Continue →
         </button>
       </div>
     </div>
   );
 }
 
-function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTradeCount = 0 }) {
+function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTradeCount = 0, queueCount = 0 }) {
   if (isTradePopup(pop) && !pop.trade_demand) {
     return (
       <TradeWireBody
@@ -491,7 +503,7 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
   }
 
   return (
-    <MediaAlertShell pop={{ ...pop, source_label: sourceLabel, headline: pop.headline || sourceLabel }} onDismiss={onDismiss} onAction={onAction} actions={actions}>
+    <MediaAlertShell pop={{ ...pop, source_label: sourceLabel, headline: pop.headline || sourceLabel }} onDismiss={onDismiss} onAction={onAction} actions={actions} queueCount={queueCount}>
       <div className="media-alert__stat-grid">
         {stats.map((s) => (
           <StatCard key={s.label} label={s.label} value={s.value} sub={s.sub} />
@@ -557,7 +569,7 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
   );
 }
 
-function InjuryBody({ pop, onDismiss, onAction }) {
+function InjuryBody({ pop, onDismiss, onAction, queueCount = 0 }) {
   const tier = String(pop.tier || "").toLowerCase();
   const inj = pop.injury_type ? String(pop.injury_type) : "";
 
@@ -571,6 +583,7 @@ function InjuryBody({ pop, onDismiss, onAction }) {
       }}
       onDismiss={onDismiss}
       onAction={onAction}
+      queueCount={queueCount}
       actions={[
         { id: "roster", label: "View Player", primary: true },
         { id: "storylines", label: "Open Storylines" },
@@ -1113,9 +1126,9 @@ export function ShowcasePopupLayer() {
   return (
     <>
       <ShowcasePopupStyles />
-      <div className="showcase-popup">
+      <div className="showcase-popup showcase-popup--v2">
       <div
-        className="showcase-popup__backdrop"
+        className="showcase-popup__backdrop showcase-popup__backdrop--v2"
         aria-hidden
         onClick={dismiss}
         onKeyDown={(event) => {
@@ -1125,7 +1138,7 @@ export function ShowcasePopupLayer() {
         tabIndex={-1}
       />
       <div
-        className={`showcase-popup__panel ${isMediaAlert ? "showcase-popup__panel--media" : ""} ${isTradeAlert ? "showcase-popup__panel--trade-wire" : ""} showcase-popup__panel--${theme}`}
+        className={`showcase-popup__panel showcase-popup__panel--v2 ${isMediaAlert ? "showcase-popup__panel--media" : ""} ${isTradeAlert ? "showcase-popup__panel--trade-wire" : ""} showcase-popup__panel--${theme}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="showcase-popup-title"
@@ -1143,7 +1156,9 @@ export function ShowcasePopupLayer() {
           {kind === "wjc_tournament" ? <WjcBody pop={first} /> : null}
           {kind === "showcase_game" ? <ShowcaseGameBody pop={first} /> : null}
           {kind === "allstar_game" ? <AllStarBody pop={first} /> : null}
-          {kind === "injury" ? <InjuryBody pop={first} onDismiss={dismiss} onAction={handleAction} /> : null}
+          {kind === "injury" ? (
+            <InjuryBody pop={first} onDismiss={dismiss} onAction={handleAction} queueCount={visiblePopups.length} />
+          ) : null}
           {kind === "storyline" || kind === "legal_trouble" ? (
             <StorylineBody
               pop={first}
@@ -1151,6 +1166,7 @@ export function ShowcasePopupLayer() {
               onDismissAllTrades={dismissAllTrades}
               onAction={handleAction}
               queuedTradeCount={tradeQueueIds.length}
+              queueCount={visiblePopups.length}
             />
           ) : null}
           {!["wjc_tournament", "showcase_game", "allstar_game", "injury", "storyline", "legal_trouble"].includes(

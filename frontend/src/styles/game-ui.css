@@ -5571,4 +5571,195 @@ button.ui-interactive:disabled {
   .game-screen {
     animation: none !important;
   }
+  .franchise-advancing-spinner {
+    animation: none !important;
+  }
+  .showcase-popup__panel--v2 {
+    animation: none !important;
+  }
+}
+
+/* --- Franchise advance overlay --- */
+.franchise-advancing-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 11500;
+  display: grid;
+  place-items: center;
+  background: rgba(4, 8, 14, 0.52);
+  backdrop-filter: blur(4px);
+  pointer-events: all;
+}
+
+.franchise-advancing-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: min(360px, calc(100vw - 32px));
+  padding: 16px 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(19, 216, 231, 0.38);
+  background:
+    radial-gradient(circle at 0% 0%, rgba(19, 216, 231, 0.14), transparent 55%),
+    linear-gradient(165deg, rgba(9, 25, 38, 0.98), rgba(6, 14, 22, 0.99));
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  color: #dffcff;
+}
+
+.franchise-advancing-spinner {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 50%;
+  border: 2px solid rgba(19, 216, 231, 0.22);
+  border-top-color: #13d8e7;
+  animation: franchise-advance-spin 0.85s linear infinite;
+}
+
+.franchise-advancing-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.franchise-advancing-copy strong {
+  font-size: 0.78rem;
+  font-weight: 1000;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.franchise-advancing-copy span {
+  font-size: 0.72rem;
+  color: #9eb4c8;
+  letter-spacing: 0.04em;
+}
+
+@keyframes franchise-advance-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* --- Showcase popup v2 polish --- */
+.showcase-popup--v2 .showcase-popup__backdrop--v2 {
+  background: rgba(2, 6, 12, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.showcase-popup__panel--v2 {
+  animation: showcase-popup-rise 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  box-shadow:
+    0 32px 100px rgba(0, 0, 0, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+@keyframes showcase-popup-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.media-alert--v2 {
+  padding: 0;
+}
+
+.media-alert__topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px 0;
+}
+
+.media-alert__kind-pill {
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(19, 216, 231, 0.28);
+  background: rgba(19, 216, 231, 0.1);
+  font-size: 0.62rem;
+  font-weight: 1000;
+  letter-spacing: 0.14em;
+  color: #13d8e7;
+}
+
+.media-alert--danger .media-alert__kind-pill {
+  border-color: rgba(255, 96, 109, 0.35);
+  background: rgba(255, 96, 109, 0.12);
+  color: #ff808a;
+}
+
+.media-alert__queue-pill {
+  margin-left: auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #b8c9dc;
+}
+
+.media-alert__close {
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(156, 218, 236, 0.18);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  color: #e9f7fb;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.media-alert__topbar:has(.media-alert__queue-pill) .media-alert__close {
+  margin-left: 0;
+}
+
+.media-alert--v2 .media-alert__source-row {
+  padding: 10px 18px 0;
+  margin-bottom: 10px;
+}
+
+.media-alert--v2 .media-alert__hero {
+  margin: 0 18px 12px;
+  padding-bottom: 12px;
+}
+
+.media-alert__body-scroll {
+  max-height: min(42vh, 360px);
+  overflow: auto;
+  padding: 0 18px 8px;
+}
+
+.media-alert--v2 .media-alert__actions {
+  padding: 0 18px 8px;
+}
+
+.media-alert--v2 .media-alert__foot {
+  padding: 12px 18px 16px;
+  border-top: 1px solid rgba(156, 218, 236, 0.1);
+}
+
+.media-alert__continue.is-primary {
+  width: 100%;
+  min-height: 40px;
+  border: 0;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #1de8f5, #13d8e7);
+  color: #04101a;
+  font-size: 0.72rem;
+  font-weight: 1000;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.media-alert__continue.is-primary:hover {
+  filter: brightness(1.05);
 }

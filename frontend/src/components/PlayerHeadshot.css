@@ -45,6 +45,38 @@
     user-select: none;
     z-index: 10;
   }
+
+  .player-headshot.photo-only {
+    filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.42));
+  }
+
+  .player-headshot.photo-only::before,
+  .player-headshot.photo-only::after {
+    display: none;
+  }
+
+  .player-headshot.photo-only .ph-nhl-image--solo {
+    object-fit: cover;
+    object-position: center 12%;
+    border-radius: 12px;
+    background: rgba(8, 18, 28, 0.92);
+  }
+
+  .player-headshot.size-sm.photo-only {
+    --size: 52px;
+  }
+
+  .player-headshot.size-md.photo-only {
+    --size: 72px;
+  }
+
+  .player-headshot.size-lg.photo-only {
+    --size: 96px;
+  }
+
+  .player-headshot.size-xl.photo-only {
+    --size: 128px;
+  }
   
   /* -------------------------------
      Jersey / shoulders

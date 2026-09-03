@@ -253,6 +253,17 @@ function formatEffectLabel(key) {
   return str(key).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function formatMeetingStat(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return String(Math.round(n));
+}
+
+function isPercentStatField(field) {
+  const f = str(field).toLowerCase();
+  return /morale|trust|satisfaction|confidence|belonging|energy|focus|stress|respect|loyalty|communication|honesty|grievance|coach/.test(f);
+}
+
 function formatMeetingReceiptLines(receipts) {
   const raw =
     receipts && typeof receipts === "object" && receipts.receipts && !receipts.profiles
@@ -260,23 +271,31 @@ function formatMeetingReceiptLines(receipts) {
       : receipts;
   if (!raw || typeof raw !== "object") return [];
   const lines = [];
+  const fmtVal = (field, val) => (isPercentStatField(field) ? formatMeetingStat(val) : val);
   asArray(raw.profiles).forEach((r) => {
     const label = formatEffectLabel(r.field || "profile");
     if (r.before != null && r.after != null) {
       const delta = Number(r.delta);
       const sign = Number.isFinite(delta) && delta > 0 ? "+" : "";
-      lines.push(`${label}: ${r.before} → ${r.after}${Number.isFinite(delta) ? ` (${sign}${delta})` : ""}`);
+      const before = fmtVal(r.field, r.before);
+      const after = fmtVal(r.field, r.after);
+      lines.push(
+        `${label}: ${before} → ${after}${Number.isFinite(delta) ? ` (${sign}${isPercentStatField(r.field) ? formatMeetingStat(delta) : delta})` : ""}`
+      );
     } else if (r.delta != null) {
       const delta = Number(r.delta);
-      lines.push(`${label}: ${delta > 0 ? "+" : ""}${delta}`);
+      lines.push(`${label}: ${delta > 0 ? "+" : ""}${isPercentStatField(r.field) ? formatMeetingStat(delta) : delta}`);
     }
   });
   asArray(raw.team).forEach((r) => {
-    lines.push(`Room ${formatEffectLabel(r.field)}: ${r.before} → ${r.after}`);
+    lines.push(
+      `Room ${formatEffectLabel(r.field)}: ${fmtVal(r.field, r.before)} → ${fmtVal(r.field, r.after)}`
+    );
   });
   asArray(raw.relationships).forEach((r) => {
     if (r.summary) lines.push(r.summary);
-    else if (r.field) lines.push(`${formatEffectLabel(r.field)}: ${r.before} → ${r.after}`);
+    else if (r.field)
+      lines.push(`${formatEffectLabel(r.field)}: ${fmtVal(r.field, r.before)} → ${fmtVal(r.field, r.after)}`);
   });
   asArray(raw.attributes).forEach((r) => {
     if (r.field) lines.push(`${formatEffectLabel(r.field)}: ${r.before} → ${r.after}`);
@@ -286,6 +305,170 @@ function formatMeetingReceiptLines(receipts) {
   });
   if (raw.promise_id) lines.push("Promise logged with the player.");
   return lines;
+}
+
+function parseMeetingReceipts(receipts) {
+  const raw =
+    receipts && typeof receipts === "object" && receipts.receipts && !receipts.profiles
+      ? receipts.receipts
+      : receipts;
+  if (!raw || typeof raw !== "object") return [];
+  const cards = [];
+  const push = (group, label, before, after, delta) => {
+    if (before == null && after == null && delta == null) return;
+    const d = Number(delta);
+    const tone = Number.isFinite(d) ? (d > 0 ? "pos" : d < 0 ? "neg" : "neutral") : "neutral";
+    cards.push({
+      group,
+      label,
+      before: before != null ? (isPercentStatField(label) ? formatMeetingStat(before) : before) : null,
+      after: after != null ? (isPercentStatField(label) ? formatMeetingStat(after) : after) : null,
+      delta: Number.isFinite(d)
+        ? `${d > 0 ? "+" : ""}${isPercentStatField(label) ? formatMeetingStat(d) : d}`
+        : null,
+      tone,
+    });
+  };
+  asArray(raw.profiles).forEach((r) =>
+    push("Player", formatEffectLabel(r.field || "profile"), r.before, r.after, r.delta)
+  );
+  asArray(raw.team).forEach((r) =>
+    push("Locker room", formatEffectLabel(r.field || "room"), r.before, r.after, r.delta)
+  );
+  asArray(raw.relationships).forEach((r) => {
+    if (r.summary) cards.push({ group: "Relationship", label: r.summary, tone: "neutral" });
+    else push("Relationship", formatEffectLabel(r.field || "trust"), r.before, r.after, r.delta);
+  });
+  asArray(raw.readiness).forEach((r) => {
+    if (r.ovr_delta)
+      cards.push({
+        group: "Readiness",
+        label: r.reason || "Meeting impact",
+        delta: `${r.ovr_delta > 0 ? "+" : ""}${r.ovr_delta} OVR`,
+        tone: Number(r.ovr_delta) > 0 ? "pos" : "neg",
+      });
+  });
+  if (raw.promise_id) cards.push({ group: "Promise", label: "New promise logged with player", tone: "neutral" });
+  return cards;
+}
+
+function meetingKindLabel(kind) {
+  const key = str(kind).toUpperCase();
+  const map = {
+    PLAYER_MEETING_REQUEST: "Requested a private meeting",
+    REQUEST_MORE_ICE: "Wants more ice time",
+    REQUEST_PP_TIME: "Wants power-play time",
+    REQUEST_STARTING_ROLE: "Wants a defined starting role",
+    CONTRACT_CLARITY_REQUEST: "Needs contract clarity",
+    DEVELOPMENT_MEETING: "Development check-in",
+    WINNING_CONCERN: "Concerned about team direction",
+  };
+  return map[key] || formatEffectLabel(kind || "Player concern");
+}
+
+function MeetingStatBar({ label, value, tone = "neutral" }) {
+  const n = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+  return (
+    <div className={`sl-pm-stat sl-pm-stat--${tone}`}>
+      <div className="sl-pm-stat__head">
+        <span>{label}</span>
+        <strong>{n}</strong>
+      </div>
+      <div className="sl-pm-stat__track">
+        <div className="sl-pm-stat__fill" style={{ width: `${n}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function MeetingRelationshipPanel({ relationship }) {
+  const rel = relationship || {};
+  if (!rel.label && rel.morale == null) return null;
+  const tone =
+    rel.label === "Strong" || rel.label === "Good"
+      ? "good"
+      : rel.label === "Strained" || rel.label === "Broken"
+        ? "hot"
+        : "warm";
+  return (
+    <div className="sl-pm-rel-panel">
+      <div className="sl-pm-rel-panel__head">
+        <span>Relationship snapshot</span>
+        <strong className={`sl-pm-rel is-${relToneClass(rel.tone)}`}>{str(rel.label || "Neutral")}</strong>
+      </div>
+      <div className="sl-pm-rel-panel__grid">
+        <MeetingStatBar label="Morale" value={rel.morale} tone={tone} />
+        <MeetingStatBar label="GM trust" value={rel.gm_trust} tone={tone} />
+        <MeetingStatBar label="Role satisfaction" value={rel.role_satisfaction} tone={tone} />
+      </div>
+      {rel.detail ? <p className="sl-pm-rel-panel__note">{str(rel.detail)}</p> : null}
+    </div>
+  );
+}
+
+function MeetingCausePanel({ reasons = [], title = "Why this meeting" }) {
+  if (!reasons.length) return null;
+  return (
+    <section className="sl-pm-cause">
+      <h4>{title}</h4>
+      <ul>
+        {reasons.map((r, i) => (
+          <li key={`${str(r.code)}-${i}`}>
+            <span>{str(r.label)}</span>
+            {r.value != null ? <em>{formatMeetingStat(r.value)}</em> : null}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function MeetingEffectCards({ receipts }) {
+  const cards = parseMeetingReceipts(receipts);
+  if (!cards.length) return null;
+  return (
+    <section className="sl-pm-effects">
+      <h4>What changed</h4>
+      <div className="sl-pm-effects__grid">
+        {cards.map((card, i) => (
+          <article key={i} className={`sl-pm-effect sl-pm-effect--${card.tone || "neutral"}`}>
+            <span className="sl-pm-effect__group">{str(card.group)}</span>
+            <strong>{str(card.label)}</strong>
+            {card.before != null && card.after != null ? (
+              <p>
+                {card.before} → {card.after}
+                {card.delta ? <em>{card.delta}</em> : null}
+              </p>
+            ) : card.delta ? (
+              <p>
+                <em>{card.delta}</em>
+              </p>
+            ) : null}
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function MeetingOutcomePanel({ outcome, onDismiss }) {
+  if (!outcome) return null;
+  const rel = outcome.relationship || outcome.history?.relationship_snapshot;
+  return (
+    <div className="sl-meeting-outcome sl-meeting-outcome--cinematic">
+      <div className="sl-meeting-outcome__glow" aria-hidden />
+      <p className="sl-meeting-outcome__kicker">Meeting resolved</p>
+      <h4>{str(outcome.message || outcome.choice_label || "Conversation recorded")}</h4>
+      {outcome.summary ? <p className="sl-meeting-outcome__summary">{str(outcome.summary)}</p> : null}
+      <MeetingRelationshipPanel relationship={rel} />
+      <MeetingEffectCards receipts={outcome.receipts} />
+      {onDismiss ? (
+        <button type="button" className="sl-back" onClick={onDismiss}>
+          Continue
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 function deriveDataPassBreakdown(story) {
@@ -347,47 +530,26 @@ function StoryEffectBreakdown({ story, compact = false }) {
   );
 }
 
-function MeetingOutcomePanel({ outcome, onDismiss }) {
-  if (!outcome) return null;
-  const lines = formatMeetingReceiptLines(outcome.receipts);
-  const rel = outcome.relationship || outcome.history?.relationship_snapshot;
-  return (
-    <div className="sl-meeting-outcome">
-      <h4>{str(outcome.message || outcome.choice_label || "Meeting recorded")}</h4>
-      {outcome.summary ? <p className="sl-muted">{str(outcome.summary)}</p> : null}
-      {rel?.label ? (
-        <p className="sl-muted">
-          Relationship: <strong>{rel.label}</strong>
-          {rel.detail ? ` — ${rel.detail}` : ""}
-        </p>
-      ) : null}
-      {lines.length ? (
-        <ul className="sl-meeting-outcome__list">
-          {lines.map((line, i) => (
-            <li key={i}>{line}</li>
-          ))}
-        </ul>
-      ) : (
-        <p className="sl-muted">No measurable stat shifts from this choice.</p>
-      )}
-      {onDismiss ? (
-        <button type="button" className="sl-back" onClick={onDismiss}>
-          Dismiss
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
 function LockerRoomDashboard({ narrativeUniverse, franchiseState, stories = [] }) {
   const hallmark = asObject(narrativeUniverse?.hallmark_panels);
   const culture = asObject(hallmark.room_pulse || narrativeUniverse?.locker_room?.culture);
   const risks = asArray(hallmark.character_risks);
   const leaders = asArray(hallmark.unheralded_leaders);
-  const pulse = collectLockerPulse(franchiseState, { limit: 10 });
+  const pulse = collectLockerPulse(franchiseState, { limit: 12 });
+  const uid = str(franchiseState?.user_team_id);
+  const roomWire = stories.filter(
+    (s) =>
+      s.categoryKey === "personal_life" ||
+      s.categoryKey === "locker_room" ||
+      /locker|life|room/i.test(str(s.category))
+  );
   const lifeStories = pulse.lifeStories.length
     ? pulse.lifeStories
-    : stories.filter((s) => s.categoryKey === "personal_life").slice(0, 10);
+    : roomWire.filter((s) => s.categoryKey === "personal_life").slice(0, 10);
+  const recentUniverse = asArray(narrativeUniverse?.recent_universe_events)
+    .filter((ev) => !uid || str(ev?.team_id) === uid)
+    .slice(-8)
+    .reverse();
   const hasCultureData = Object.keys(culture).length > 0;
   const pulseParts = [culture.unity, culture.confidence, culture.belonging].filter((v) => v != null && v !== "");
   const pulseScore = pulseParts.length
@@ -395,7 +557,7 @@ function LockerRoomDashboard({ narrativeUniverse, franchiseState, stories = [] }
     : null;
   const clubLabel = teamLabel(franchiseState);
 
-  if (!hasCultureData && !risks.length && !leaders.length && !pulse.people.length && !lifeStories.length) {
+  if (!hasCultureData && !risks.length && !leaders.length && !pulse.people.length && !lifeStories.length && !recentUniverse.length) {
     return (
       <EmptyPanel
         kicker="Locker room"
@@ -406,10 +568,11 @@ function LockerRoomDashboard({ narrativeUniverse, franchiseState, stories = [] }
   }
 
   return (
-    <div className="sl-locker-dash">
+    <div className="sl-locker-dash sl-locker-dash--cinematic">
       <header className="sl-locker-dash__head">
         <p className="sl-room__kicker">Culture · {clubLabel}</p>
         <h2>Room and life</h2>
+        <p className="sl-room__sub">Locker-room pulse, character profiles, and off-ice beats tied to your roster.</p>
       </header>
       <div className="sl-locker-dash__pulse">
         {pulseScore != null ? (
@@ -427,27 +590,62 @@ function LockerRoomDashboard({ narrativeUniverse, franchiseState, stories = [] }
           ))}
         </div>
       </div>
-      {pulse.people.length ? (
+
+      {lifeStories.length || roomWire.length ? (
         <section className="sl-locker-dash__section">
-          <h3>Who they are</h3>
-          <div className="sl-locker-dash__cards">
-            {pulse.people.slice(0, 12).map((row) => (
-              <article key={row.playerId || row.name} className="sl-locker-card">
-                <strong>{row.name}</strong>
-                <span>{row.line}</span>
+          <h3>Story beats</h3>
+          <div className="sl-locker-dash__cards sl-locker-dash__cards--wire">
+            {(lifeStories.length ? lifeStories : roomWire.slice(0, 8)).map((row) => (
+              <article key={str(row.id || row.headline)} className="sl-locker-card sl-locker-card--story">
+                <span className="sl-locker-card__tag">Off ice</span>
+                <strong>{str(row.playerName || row.headline)}</strong>
+                <p>{str(row.summary || row.headline)}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section className="sl-locker-dash__section">
+          <h3>Story beats</h3>
+          <p className="sl-muted">No life or locker-room stories on the wire yet. After a 30-day sim, restart the backend and refresh — stories backfill automatically.</p>
+        </section>
+      )}
+
+      {recentUniverse.length ? (
+        <section className="sl-locker-dash__section">
+          <h3>Recent triggers</h3>
+          <div className="sl-locker-dash__cards sl-locker-dash__cards--wire">
+            {recentUniverse.map((ev) => (
+              <article key={str(ev.id || ev.kind)} className="sl-locker-card sl-locker-card--trigger">
+                <span className="sl-locker-card__tag">{formatEffectLabel(ev.kind || ev.type || "event")}</span>
+                <strong>{str(ev.player_name || ev.headline || "Roster event")}</strong>
+                <p>{str(ev.summary || ev.headline || ev.description || "A character or room trigger fired.")}</p>
               </article>
             ))}
           </div>
         </section>
       ) : null}
-      {lifeStories.length ? (
+
+      {pulse.people.length ? (
         <section className="sl-locker-dash__section">
-          <h3>Off the ice</h3>
+          <h3>Who they are</h3>
           <div className="sl-locker-dash__cards">
-            {lifeStories.map((row) => (
-              <article key={row.id} className="sl-locker-card">
-                <strong>{row.playerName || row.headline}</strong>
-                <span>{row.headline}</span>
+            {pulse.people.slice(0, 12).map((row) => (
+              <article key={row.playerId || row.name} className="sl-locker-card sl-locker-card--person">
+                <PlayerHeadshot player={{ id: row.playerId, player_id: row.playerId }} size={48} />
+                <div className="sl-locker-card__body">
+                  <strong>{row.name}</strong>
+                  <span className="sl-locker-card__meta">
+                    {row.position ? `${row.position} · ` : ""}
+                    {row.character || "Profile"}
+                  </span>
+                  <p>{row.line}</p>
+                  <div className="sl-locker-card__chips">
+                    {row.chips.map((chip) => (
+                      <em key={chip} className="sl-niche-badge">{chip}</em>
+                    ))}
+                  </div>
+                </div>
               </article>
             ))}
           </div>
@@ -1523,7 +1721,19 @@ function PlayerMeetingsPanel({
   const [activeMeeting, setActiveMeeting] = useState(null);
   const [notice, setNotice] = useState("");
   const [lastOutcome, setLastOutcome] = useState(null);
+  const [addressedPlayerIds, setAddressedPlayerIds] = useState(() => new Set());
   const [rosterQuery, setRosterQuery] = useState("");
+
+  const markPlayerAddressed = useCallback((playerId) => {
+    const pid = str(playerId);
+    if (!pid) return;
+    setAddressedPlayerIds((prev) => {
+      const next = new Set(prev);
+      next.add(pid);
+      return next;
+    });
+    detailCacheRef.current.delete(pid);
+  }, []);
 
   useEffect(() => {
     if (initialPlayerId) {
@@ -1571,8 +1781,12 @@ function PlayerMeetingsPanel({
   }, [view, selectedPlayerId, loadPlayerDetail]);
 
   const roster = asArray(meetingsPayload?.roster);
-  const needs = asArray(meetingsPayload?.needs_attention);
-  const requests = asArray(meetingsPayload?.player_requests);
+  const needs = asArray(meetingsPayload?.needs_attention).filter(
+    (row) => !addressedPlayerIds.has(str(row.player_id))
+  );
+  const requests = asArray(meetingsPayload?.player_requests).filter(
+    (req) => !addressedPlayerIds.has(str(req.player_id || req.actor_id))
+  );
   const promises = asObject(meetingsPayload?.promises);
   const history = asArray(meetingsPayload?.history);
   const selected = roster.find((r) => str(r.player_id) === str(selectedPlayerId)) || null;
@@ -1612,13 +1826,15 @@ function PlayerMeetingsPanel({
           receipts: res?.receipts,
           relationship: res?.relationship,
         });
+        markPlayerAddressed(res?.interaction?.player_id || res?.interaction?.actor_id);
         setActiveMeeting(null);
+        setView("home");
         onRefresh?.();
       } catch (err) {
         setNotice(err?.message || "Could not resolve meeting.");
       }
     },
-    [onResolvePlayerRequest, onRefresh]
+    [onResolvePlayerRequest, onRefresh, markPlayerAddressed]
   );
 
   const handleAdvance = useCallback(
@@ -1635,6 +1851,7 @@ function PlayerMeetingsPanel({
           relationship: res?.relationship,
           history: res?.history,
         });
+        markPlayerAddressed(activeMeeting?.player_id);
         setActiveMeeting(null);
         setView("player");
         onRefresh?.();
@@ -1642,7 +1859,7 @@ function PlayerMeetingsPanel({
         setNotice(err?.message || "Could not complete meeting.");
       }
     },
-    [onAdvanceMeeting, onRefresh]
+    [onAdvanceMeeting, onRefresh, markPlayerAddressed, activeMeeting?.player_id]
   );
 
   if (!meetingsPayload || !roster.length) {
@@ -1658,31 +1875,43 @@ function PlayerMeetingsPanel({
   if (view === "meeting" && activeMeeting) {
     const dialogue = asArray(activeMeeting.dialogue);
     return (
-      <div className="sl-room">
-        <header className="sl-room__head">
+      <div className="sl-room sl-room--cinematic">
+        <div className="sl-room__vignette" aria-hidden />
+        <header className="sl-room__head sl-room__head--meet">
           <button type="button" className="sl-back" onClick={() => { setActiveMeeting(null); setView("player"); }}>
-            ← Back
+            ← Leave room
           </button>
-          <p className="sl-room__kicker">Private meeting · door closed</p>
-          <h2>{str(activeMeeting.player_name)}</h2>
-          <span className="sl-room__sub">{str(activeMeeting.title)}</span>
+          <div className="sl-pm-hero">
+            <PlayerHeadshot
+              player={{ id: str(activeMeeting.player_id), player_id: str(activeMeeting.player_id) }}
+              size={88}
+            />
+            <div>
+              <p className="sl-room__kicker">Private meeting · door closed</p>
+              <h2>{str(activeMeeting.player_name)}</h2>
+              <span className="sl-room__sub">{str(activeMeeting.title)}</span>
+            </div>
+          </div>
         </header>
 
-        <div className="sl-dialogue">
+        <MeetingCausePanel reasons={asArray(activeMeeting.trigger_reasons)} title="What brought you here" />
+        <MeetingRelationshipPanel relationship={activeMeeting.relationship} />
+
+        <div className="sl-dialogue sl-dialogue--cinematic">
           {dialogue.map((line, i) => (
             <div
               key={i}
               className={`sl-dialogue__line${str(line.speaker) === "GM" ? " is-gm" : " is-player"}`}
-              style={{ animationDelay: `${i * 90}ms` }}
+              style={{ animationDelay: `${i * 120}ms` }}
             >
-              <em>{str(line.speaker)}</em>
+              <em>{str(line.speaker) === "GM" ? "You" : str(line.speaker)}</em>
               <p>{str(line.text)}</p>
             </div>
           ))}
         </div>
 
         {activeMeeting.ovr_explanation?.factors?.length ? (
-          <div className="sl-ovr">
+          <div className="sl-ovr sl-ovr--cinematic">
             <h4>{str(activeMeeting.ovr_explanation.headline)}</h4>
             <ul>
               {activeMeeting.ovr_explanation.factors.map((f, i) => (
@@ -1692,20 +1921,23 @@ function PlayerMeetingsPanel({
           </div>
         ) : null}
 
-        <div className="sl-choices">
-          {asArray(activeMeeting.choices).map((c) => (
-            <button
-              key={str(c.id)}
-              type="button"
-              className="sl-choice"
-              disabled={busy}
-              onClick={() => handleAdvance(str(activeMeeting.id), str(c.id))}
-            >
-              <strong>{str(c.label)}</strong>
-              {c.detail ? <span>{str(c.detail)}</span> : null}
-            </button>
-          ))}
-        </div>
+        <section className="sl-pm-decision">
+          <h4>Your response</h4>
+          <div className="sl-choices sl-choices--cinematic">
+            {asArray(activeMeeting.choices).map((c) => (
+              <button
+                key={str(c.id)}
+                type="button"
+                className="sl-choice sl-choice--cinematic"
+                disabled={busy}
+                onClick={() => handleAdvance(str(activeMeeting.id), str(c.id))}
+              >
+                <strong>{str(c.label)}</strong>
+                {c.detail ? <span>{str(c.detail)}</span> : null}
+              </button>
+            ))}
+          </div>
+        </section>
         <MeetingOutcomePanel outcome={lastOutcome} onDismiss={() => setLastOutcome(null)} />
         {notice ? <p className="sl-notice">{notice}</p> : null}
       </div>
@@ -1716,15 +1948,18 @@ function PlayerMeetingsPanel({
     const avail = asArray(playerDetail?.available_interactions);
     const rel = playerDetail?.relationship || selected.relationship || {};
     const openRequests = requests.filter((r) => str(r.player_id || r.actor_id) === str(selected.player_id));
+    const attentionReasons = asArray(selected.attention_reasons);
     return (
-      <div className="sl-room">
-        <header className="sl-room__head">
+      <div className="sl-room sl-room--cinematic">
+        <div className="sl-room__vignette" aria-hidden />
+        <header className="sl-room__head sl-room__head--meet">
           <button type="button" className="sl-back" onClick={() => { setView("home"); setSelectedPlayerId(null); }}>
             ← Roster
           </button>
-          <div className="sl-pm-identity">
-            <PlayerHeadshot player={{ id: str(selected.player_id), player_id: str(selected.player_id) }} size={72} />
+          <div className="sl-pm-hero">
+            <PlayerHeadshot player={{ id: str(selected.player_id), player_id: str(selected.player_id) }} size={88} />
             <div>
+              <p className="sl-room__kicker">Player file · private office</p>
               <h2>{str(selected.player_name)}</h2>
               <p className="sl-pm-identity__line">
                 {str(selected.position)} · {selected.age} · OVR {selected.overall}
@@ -1732,33 +1967,38 @@ function PlayerMeetingsPanel({
                   ? ` (${selected.readiness_delta > 0 ? "+" : ""}${selected.readiness_delta})`
                   : ""}
               </p>
-              <p className={`sl-pm-rel ${relToneClass(rel.tone)}`}>
-                <em>{str(rel.label)}</em>
-                {rel.detail ? ` — ${str(rel.detail)}` : ""}
-              </p>
             </div>
           </div>
         </header>
 
+        <MeetingRelationshipPanel relationship={rel} />
+        {attentionReasons.length ? (
+          <MeetingCausePanel reasons={attentionReasons} title="Why he needs attention" />
+        ) : null}
+
         {openRequests.map((req) => (
-          <article key={str(req.id)} className="sl-request">
+          <article key={str(req.id)} className="sl-request sl-request--cinematic">
             <span className="sl-request__flag">He asked for this meeting</span>
+            <MeetingCausePanel
+              reasons={[{ code: "kind", label: meetingKindLabel(req.kind) }]}
+              title="Trigger"
+            />
             <h3>{str(req.title || "Player requested a meeting")}</h3>
             <p>{str(req.summary)}</p>
             {asArray(req.dialogue).slice(0, 1).map((d, i) => (
               <blockquote key={i}>{str(d.text)}</blockquote>
             ))}
-            <div className="sl-choices">
+            <div className="sl-choices sl-choices--cinematic">
               {asArray(req.choices).map((c) => (
                 <button
                   key={str(c.id)}
                   type="button"
-                  className="sl-choice"
+                  className="sl-choice sl-choice--cinematic"
                   disabled={busy}
                   onClick={() => handleResolveRequest(str(req.id), str(c.id))}
                 >
                   <strong>{str(c.label)}</strong>
-                  {c.detail ? <span>{str(c.detail)}</span> : null}
+                  {c.detail || c.description ? <span>{str(c.detail || c.description)}</span> : null}
                 </button>
               ))}
             </div>
@@ -1868,14 +2108,16 @@ function PlayerMeetingsPanel({
   }
 
   return (
-    <div className="sl-room">
+    <div className="sl-room sl-room--cinematic">
+      <div className="sl-room__vignette" aria-hidden />
       <header className="sl-room__head">
         <p className="sl-room__kicker">GM office · relationship desk</p>
         <h2>Player meetings</h2>
         <span className="sl-room__sub">
-          Private conversations with your organization. Requests and strained relationships surface first.
+          Private conversations behind closed doors. Resolve requests and strained relationships before they become headlines.
         </span>
       </header>
+      <MeetingOutcomePanel outcome={lastOutcome} onDismiss={() => setLastOutcome(null)} />
       {notice ? <p className="sl-notice">{notice}</p> : null}
 
       {requests.length ? (
@@ -1884,18 +2126,19 @@ function PlayerMeetingsPanel({
             Requests waiting <em>{requests.length}</em>
           </h3>
           {requests.map((req) => (
-            <article key={str(req.id)} className="sl-request">
+            <article key={str(req.id)} className="sl-request sl-request--cinematic">
               <div className="sl-request__head">
                 <strong>{str(req.player_name || "Player")}</strong>
-                <span>{str(req.title)}</span>
+                <span>{meetingKindLabel(req.kind)}</span>
               </div>
+              <h3>{str(req.title)}</h3>
               <p>{str(req.summary)}</p>
-              <div className="sl-choices sl-choices--row">
+              <div className="sl-choices sl-choices--cinematic sl-choices--row">
                 {asArray(req.choices).map((c) => (
                   <button
                     key={str(c.id)}
                     type="button"
-                    className="sl-choice sl-choice--compact"
+                    className="sl-choice sl-choice--cinematic sl-choice--compact"
                     disabled={busy}
                     onClick={() => handleResolveRequest(str(req.id), str(c.id))}
                   >
@@ -1913,25 +2156,29 @@ function PlayerMeetingsPanel({
           <h3 className="sl-block__title">
             Needs attention <em>{needs.length}</em>
           </h3>
-          <div className="sl-roster">
+          <div className="sl-roster sl-roster--attention">
             {needs.map((row) => (
               <button
                 key={str(row.player_id)}
                 type="button"
-                className="sl-rosterrow is-flagged"
+                className="sl-rosterrow is-flagged sl-rosterrow--cinematic"
                 onClick={() => {
                   setSelectedPlayerId(str(row.player_id));
                   setView("player");
                 }}
                 onMouseEnter={() => loadPlayerDetail(str(row.player_id), { background: true })}
               >
-                <PlayerHeadshot player={{ id: str(row.player_id), player_id: str(row.player_id) }} size={44} />
+                <PlayerHeadshot player={{ id: str(row.player_id), player_id: str(row.player_id) }} size={52} />
                 <div className="sl-rosterrow__main">
                   <strong>{str(row.player_name)}</strong>
                   <span>
-                    {str(row.position)} · OVR {row.overall} · {str(row.relationship?.label)}
+                    {str(row.position)} · OVR {row.overall} · Morale {formatMeetingStat(row.relationship?.morale)}
                   </span>
-                  <em>{str(row.concern_label)}</em>
+                  <div className="sl-pm-cause-chips">
+                    {asArray(row.attention_reasons).slice(0, 2).map((reason, i) => (
+                      <em key={i}>{str(reason.label)}</em>
+                    ))}
+                  </div>
                 </div>
                 {row.requested_meeting ? <span className="sl-tagbadge">Requested</span> : null}
               </button>
@@ -2889,6 +3136,16 @@ export default function StorylinesScreen() {
         .sl-choice--lead::before { background: var(--gold); }
         .sl-choice--lead:hover:not(:disabled) { border-color: rgba(233,168,60,.75);
           background: linear-gradient(180deg, rgba(233,168,60,.24), rgba(255,255,255,.04)); }
+        .sl-choice--cinematic {
+          border-color: rgba(201,162,39,.28);
+          background: linear-gradient(180deg, rgba(233,168,60,.08), rgba(255,255,255,.02));
+        }
+        .sl-choice--cinematic::before { background: var(--gold); opacity: .75; }
+        .sl-choice--cinematic:hover:not(:disabled) {
+          border-color: rgba(233,168,60,.55);
+          background: linear-gradient(180deg, rgba(233,168,60,.16), rgba(255,255,255,.04));
+        }
+        .sl-rosterrow--cinematic { min-height: 74px; }
         .sl-choice--compact { padding: 9px 12px; }
         .sl-choice--compact strong { margin-bottom: 0; }
         .sl-choice-empty { font-size: 12px; color: var(--muted); text-align: center; padding: 10px 0; }
@@ -3039,14 +3296,92 @@ export default function StorylinesScreen() {
         .sl-era__stories em { font-style: normal; font-size: 10px; font-weight: 800; color: var(--muted); }
 
         /* ------------- meetings room ------------- */
-        .sl-room { border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px;
+        .sl-room { position: relative; border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px;
           background: linear-gradient(180deg, rgba(10,27,41,.86), rgba(5,14,23,.9)); }
-        .sl-room__head { margin-bottom: 18px; }
+        .sl-room--cinematic {
+          overflow: hidden;
+          border-color: rgba(201,162,39,.28);
+          background:
+            radial-gradient(120% 80% at 50% -10%, rgba(233,168,60,.12), transparent 55%),
+            linear-gradient(180deg, rgba(12,22,34,.96), rgba(4,10,18,.98));
+          box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 18px 48px rgba(0,0,0,.35);
+        }
+        .sl-room__vignette {
+          pointer-events: none; position: absolute; inset: 0; border-radius: inherit;
+          background: radial-gradient(ellipse at center, transparent 35%, rgba(0,0,0,.45) 100%);
+        }
+        .sl-room__head { margin-bottom: 18px; position: relative; z-index: 1; }
+        .sl-room__head--meet { margin-bottom: 22px; }
         .sl-room__head .sl-back { margin-bottom: 12px; }
         .sl-room__kicker { margin: 0 0 4px; font-size: 9.5px; font-weight: 900; letter-spacing: .18em;
           text-transform: uppercase; color: var(--brass); }
         .sl-room__head h2 { margin: 0 0 5px; font-size: 22px; font-weight: 800; letter-spacing: .01em; }
         .sl-room__sub { font-size: 12.5px; color: var(--muted-2); }
+
+        .sl-pm-hero { display: flex; gap: 18px; align-items: center; }
+        .sl-pm-hero h2 { margin: 0 0 4px; font-size: 24px; }
+
+        .sl-pm-rel-panel {
+          position: relative; z-index: 1; margin-bottom: 16px; padding: 14px 16px;
+          border: 1px solid rgba(201,162,39,.22); border-radius: 12px;
+          background: linear-gradient(180deg, rgba(233,168,60,.07), rgba(255,255,255,.02));
+        }
+        .sl-pm-rel-panel__head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+        .sl-pm-rel-panel__head span { font-size: 9.5px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+        .sl-pm-rel-panel__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+        .sl-pm-rel-panel__note { margin: 10px 0 0; font-size: 12px; line-height: 1.5; color: var(--muted-2); }
+
+        .sl-pm-stat__head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+        .sl-pm-stat__head span { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+        .sl-pm-stat__head strong { font-size: 18px; font-weight: 900; font-variant-numeric: tabular-nums; }
+        .sl-pm-stat__track { height: 6px; border-radius: 999px; background: rgba(150,214,235,.1); overflow: hidden; }
+        .sl-pm-stat__fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, #2f9c68, var(--green)); }
+        .sl-pm-stat--hot .sl-pm-stat__fill { background: linear-gradient(90deg, #b03744, var(--red)); }
+        .sl-pm-stat--warm .sl-pm-stat__fill { background: linear-gradient(90deg, #a5731c, var(--gold)); }
+
+        .sl-pm-cause {
+          position: relative; z-index: 1; margin-bottom: 16px; padding: 12px 14px;
+          border: 1px solid rgba(22,220,234,.18); border-radius: 10px; background: rgba(22,220,234,.04);
+        }
+        .sl-pm-cause h4 { margin: 0 0 8px; font-size: 9.5px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: var(--cyan); }
+        .sl-pm-cause ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+        .sl-pm-cause li { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; color: rgba(234,247,252,.9); }
+        .sl-pm-cause li em { font-style: normal; font-weight: 900; color: var(--gold); font-variant-numeric: tabular-nums; }
+        .sl-pm-cause-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+        .sl-pm-cause-chips em { font-style: normal; font-size: 9.5px; font-weight: 800; letter-spacing: .04em;
+          text-transform: uppercase; color: var(--cyan); border: 1px solid rgba(22,220,234,.22); padding: 2px 7px; border-radius: 999px; }
+
+        .sl-pm-effects { position: relative; z-index: 1; margin-top: 14px; }
+        .sl-pm-effects h4 { margin: 0 0 10px; font-size: 9.5px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: var(--cyan); }
+        .sl-pm-effects__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+        .sl-pm-effect {
+          padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+          background: rgba(255,255,255,.02);
+        }
+        .sl-pm-effect__group { display: block; font-size: 9px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+        .sl-pm-effect strong { display: block; font-size: 12.5px; line-height: 1.35; margin-bottom: 4px; }
+        .sl-pm-effect p { margin: 0; font-size: 12px; color: var(--muted-2); }
+        .sl-pm-effect p em { font-style: normal; font-weight: 900; margin-left: 6px; }
+        .sl-pm-effect--pos { border-color: rgba(82,223,148,.28); background: rgba(82,223,148,.05); }
+        .sl-pm-effect--pos p em { color: var(--green); }
+        .sl-pm-effect--neg { border-color: rgba(255,95,109,.28); background: rgba(255,95,109,.05); }
+        .sl-pm-effect--neg p em { color: var(--red); }
+
+        .sl-pm-decision { position: relative; z-index: 1; margin-top: 18px; }
+        .sl-pm-decision h4 { margin: 0 0 10px; font-size: 9.5px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: var(--brass); }
+
+        .sl-meeting-outcome--cinematic {
+          position: relative; z-index: 1; overflow: hidden; margin: 16px 0;
+          padding: 16px 18px; border: 1px solid rgba(82,223,148,.28); border-radius: 12px;
+          background: linear-gradient(180deg, rgba(82,223,148,.08), rgba(5,14,23,.7));
+        }
+        .sl-meeting-outcome__glow {
+          position: absolute; inset: -40% auto auto -20%; width: 220px; height: 220px; border-radius: 50%;
+          background: radial-gradient(circle, rgba(126,224,176,.18), transparent 70%);
+        }
+        .sl-meeting-outcome__kicker { margin: 0 0 6px; font-size: 9.5px; font-weight: 900; letter-spacing: .16em; text-transform: uppercase; color: var(--green); }
+        .sl-meeting-outcome h4 { margin: 0 0 8px; font-size: 18px; line-height: 1.35; font-weight: 800; }
+        .sl-meeting-outcome__summary { margin: 0 0 12px; font-size: 13px; line-height: 1.55; color: var(--muted-2); }
         .sl-block { margin-bottom: 22px; }
         .sl-block__bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
         .sl-block__title { display: flex; align-items: center; gap: 9px; margin: 0 0 10px;
@@ -3080,7 +3415,11 @@ export default function StorylinesScreen() {
         .sl-pm-rel.is-neutral { color: var(--muted-2); }
 
         .sl-request { border: 1px solid rgba(233,168,60,.3); border-left: 3px solid var(--gold); border-radius: 0 10px 10px 0;
-          background: rgba(233,168,60,.05); padding: 14px 16px; margin-bottom: 12px; }
+          background: rgba(233,168,60,.05); padding: 14px 16px; margin-bottom: 12px; position: relative; z-index: 1; }
+        .sl-request--cinematic {
+          background: linear-gradient(135deg, rgba(233,168,60,.08), rgba(5,14,23,.4));
+          box-shadow: 0 10px 28px rgba(0,0,0,.18);
+        }
         .sl-request__flag { display: inline-block; margin-bottom: 8px; font-size: 9px; font-weight: 900;
           letter-spacing: .14em; text-transform: uppercase; color: #2a1f06; background: var(--gold); padding: 3px 8px; border-radius: 4px; }
         .sl-request__head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
@@ -3092,18 +3431,20 @@ export default function StorylinesScreen() {
           font-size: 13.5px; line-height: 1.55; font-style: italic; color: #f3dcae; }
 
         .sl-subtabs.sl-pm { margin: 16px 0 14px; }
-        .sl-dialogue { display: grid; gap: 14px; margin-bottom: 18px; }
+        .sl-dialogue { display: grid; gap: 14px; margin-bottom: 18px; position: relative; z-index: 1; }
+        .sl-dialogue--cinematic { padding: 14px 0 6px; }
         .sl-dialogue__line { padding-left: 14px; border-left: 2px solid var(--line-2);
           animation: slRise .3s cubic-bezier(.2,.7,.3,1) both; }
         .sl-dialogue__line.is-gm { border-left-color: var(--gold); }
         .sl-dialogue__line.is-player { border-left-color: var(--cyan); }
         .sl-dialogue__line em { display: block; font-style: normal; font-size: 9.5px; font-weight: 900;
           letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
-        .sl-dialogue__line p { margin: 0; font-size: 14px; line-height: 1.6; }
-        .sl-dialogue__line.is-player p { color: rgba(234,247,252,.94); }
+        .sl-dialogue__line p { margin: 0; font-size: 15px; line-height: 1.65; }
+        .sl-dialogue__line.is-player p { color: rgba(234,247,252,.94); font-size: 16px; }
 
         .sl-ovr { border: 1px solid rgba(22,220,234,.22); border-radius: 10px; background: rgba(22,220,234,.05);
-          padding: 12px 14px; margin-bottom: 14px; }
+          padding: 12px 14px; margin-bottom: 14px; position: relative; z-index: 1; }
+        .sl-ovr--cinematic { border-color: rgba(22,220,234,.3); background: linear-gradient(180deg, rgba(22,220,234,.08), rgba(255,255,255,.02)); }
         .sl-ovr h4 { margin: 0 0 8px; font-size: 10px; font-weight: 900; letter-spacing: .12em;
           text-transform: uppercase; color: var(--cyan); }
         .sl-ovr ul { margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.55; color: var(--muted-2); }
@@ -3178,6 +3519,19 @@ export default function StorylinesScreen() {
         .sl-locker-dash__gauge { width: 120px; height: 120px; border-radius: 50%; border: 4px solid var(--accent); display: flex; flex-direction: column; align-items: center; justify-content: center; }
         .sl-locker-dash__culture { display: flex; flex-wrap: wrap; gap: 8px; flex: 1; }
         .sl-locker-dash__cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+        .sl-locker-dash--cinematic .sl-locker-dash__head { margin-bottom: 16px; }
+        .sl-locker-dash--cinematic .sl-room__sub { display: block; margin-top: 6px; font-size: 12.5px; color: var(--muted-2); }
+        .sl-locker-card--person { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; }
+        .sl-locker-card__body { flex: 1; min-width: 0; }
+        .sl-locker-card__meta { display: block; font-size: 10.5px; font-weight: 800; color: var(--muted); margin: 2px 0 6px; }
+        .sl-locker-card__body p { margin: 0 0 8px; font-size: 12px; line-height: 1.45; color: rgba(234,247,252,.88); }
+        .sl-locker-card__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+        .sl-locker-card--story, .sl-locker-card--trigger {
+          border-color: rgba(22,220,234,.22); background: linear-gradient(180deg, rgba(22,220,234,.06), rgba(255,255,255,.02));
+        }
+        .sl-locker-card__tag { display: inline-block; margin-bottom: 6px; font-size: 9px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--cyan); }
+        .sl-locker-card--story p, .sl-locker-card--trigger p { margin: 4px 0 0; font-size: 12px; line-height: 1.45; color: var(--muted-2); }
+        .sl-locker-dash__cards--wire { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
         .sl-locker-card { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; gap: 4px; }
         .sl-niche-badge { font-size: 11px; font-style: normal; padding: 2px 8px; border-radius: 999px; background: rgba(126,224,176,0.15); width: fit-content; }
         .sl-consequences { display: grid; gap: 12px; }
@@ -3344,7 +3698,14 @@ export default function StorylinesScreen() {
             if (d.id === "player_meetings") count = meetingAlertCount;
             if (d.id === "consequences") count = asArray(narrativeUniverse?.team_sanctions).filter((s) => s.active !== false).length;
             if (d.id === "press_room") count = pressQueue.length;
-            if (d.id === "locker_room") count = collectLockerPulse(franchiseState, { limit: 24 }).people.length;
+            if (d.id === "locker_room") {
+              const pulse = collectLockerPulse(franchiseState, { limit: 24 });
+              const roomStories = stories.filter(
+                (s) => s.categoryKey === "personal_life" || s.categoryKey === "locker_room"
+              ).length;
+              const triggers = asArray(narrativeUniverse?.recent_universe_events).length;
+              count = pulse.lifeStories.length + roomStories + Math.min(triggers, 8);
+            }
             return (
               <button
                 key={d.id}

@@ -48,34 +48,58 @@ export function playerRoomLine(dossier) {
   if (!dossier) return "";
   const life = str(asObject(dossier.life).summary);
   const morale = str(asObject(dossier.current_state).morale_tier);
-  const mental = str(asObject(dossier.mental_wellbeing).tier);
+  const summary = str(asObject(dossier.character).summary_line);
   const chips = playerCharacterChips(dossier);
   const bits = [];
-  if (chips[0]) bits.push(chips[0]);
-  if (life && life !== "Limited information" && life !== "Single") bits.push(life);
-  else if (life === "Single") bits.push("Single");
-  if (morale && morale !== "Average") bits.push(`Morale ${morale}`);
-  if (mental && mental !== "Average" && mental !== "Above Average") bits.push(`Mental ${mental}`);
-  return bits.join(" · ");
+  if (summary) bits.push(summary);
+  else if (chips[0]) bits.push(chips[0]);
+  if (life && life !== "Limited information") bits.push(life);
+  if (morale && morale !== "Average") bits.push(`Morale: ${morale}`);
+  return bits.slice(0, 3).join(" · ");
+}
+
+function rosterNameById(franchiseState) {
+  const map = new Map();
+  const orgs = asArray(franchiseState?.roster_browser?.organizations);
+  orgs.forEach((org) => {
+    asArray(org?.players).forEach((p) => {
+      const id = str(p?.id || p?.player_id);
+      const name = str(p?.name || p?.player_name);
+      if (id && name) map.set(id, name);
+    });
+  });
+  asArray(franchiseState?.roster).forEach((p) => {
+    const id = str(p?.id || p?.player_id);
+    const name = str(p?.name || p?.player_name);
+    if (id && name) map.set(id, name);
+  });
+  return map;
 }
 
 export function collectLockerPulse(franchiseState, { limit = 8 } = {}) {
   const universe = asObject(franchiseState?.narrative_universe);
   const dossiers = asObject(universe.human_dossiers);
-  const people = Object.values(dossiers)
-    .map((dossier) => {
+  const names = rosterNameById(franchiseState);
+  const people = Object.entries(dossiers)
+    .map(([key, dossier]) => {
       const ident = asObject(dossier?.identity);
+      const playerId = str(dossier?.player_id || ident.player_id || key);
+      const name = str(dossier?.player_name || ident.name || names.get(playerId) || "");
+      if (!name) return null;
       return {
-        playerId: str(dossier?.player_id || ident.player_id),
-        name: str(dossier?.player_name || ident.name || "Player"),
+        playerId,
+        name,
+        position: str(ident.position || dossier?.position),
         line: playerRoomLine(dossier),
         chips: playerCharacterChips(dossier),
         life: str(asObject(dossier?.life).summary),
         morale: str(asObject(dossier?.current_state).morale_tier),
         character: str(asObject(dossier?.character).headline),
+        pressure: str(asObject(dossier?.current_state).pressure_label),
       };
     })
-    .filter((row) => row.line)
+    .filter(Boolean)
+    .filter((row) => row.line || row.chips.length)
     .slice(0, 24);
 
   const lifeStories = asArray(franchiseState?.storyline_events)

@@ -12224,6 +12224,38 @@ class SimEngine:
             p, "toi_readiness", "effort", "stamina"
         )))
 
+    def _gm_estimate_special_teams_toi_splits(
+        self, total_toi: int, p: Any, units: Optional[Dict[str, Any]]
+    ) -> Tuple[int, int, int]:
+        """Estimate EV/PP/PK TOI from line + special-teams deployment."""
+        total = max(0, int(total_toi or 0))
+        if total <= 0:
+            return 0, 0, 0
+        if not isinstance(units, dict):
+            return total, 0, 0
+        pid = _id_str(p, "id")
+        pp_ids = {
+            _id_str(x, "id")
+            for x in list(units.get("pp1") or []) + list(units.get("pp2") or [])
+            if _id_str(x, "id")
+        }
+        pk_ids = {
+            _id_str(x, "id")
+            for x in list(units.get("pk1") or []) + list(units.get("pk2") or [])
+            if _id_str(x, "id")
+        }
+        line_idx = min(3, max(0, int(getattr(p, "_gm_game_line_idx", 2) or 2)))
+        pp_share = 0.18 if pid in pp_ids else (0.11 if line_idx <= 1 else 0.05)
+        pk_share = 0.14 if pid in pk_ids else (0.08 if line_idx <= 1 else 0.04)
+        pp = min(int(round(total * pp_share)), int(total * 0.30))
+        pk = min(int(round(total * pk_share)), int(total * 0.24))
+        if pp + pk > total:
+            scale = float(total) / float(max(1, pp + pk))
+            pp = int(pp * scale)
+            pk = int(pk * scale)
+        ev = max(0, total - pp - pk)
+        return ev, pp, pk
+
     def _gm_team_attempt_environment(
         self,
         rng: random.Random,
@@ -13432,7 +13464,19 @@ class SimEngine:
             pid = _id_str(p, "id")
             tid = hid if p in home_dressed else aid
             toi = int(home_toi.get(pid, 0) if p in home_dressed else away_toi.get(pid, 0))
-            self._gm_ledger_add(ledger, p, tid, gp=1, toi_sec=toi, analytics_gp=1)
+            units = home_units if p in home_dressed else away_units
+            ev_toi, pp_toi, pk_toi = self._gm_estimate_special_teams_toi_splits(toi, p, units)
+            self._gm_ledger_add(
+                ledger,
+                p,
+                tid,
+                gp=1,
+                toi_sec=toi,
+                ev_toi_sec=ev_toi,
+                pp_toi_sec=pp_toi,
+                pk_toi_sec=pk_toi,
+                analytics_gp=1,
+            )
 
         hit_targets_h = int(18 + 8 * (1.0 - self._team_offense_skill(home)))
         hit_targets_a = int(18 + 8 * (1.0 - self._team_offense_skill(away)))
@@ -13665,8 +13709,8 @@ class SimEngine:
         away_dressed, away_gl, _, _ = self._gm_build_dressed_lineup(away, rng)
         # Stamp _gm_game_line_idx before TOI / goal weights — otherwise every
         # skater defaults to line 2 and stars lose usage separation from depth.
-        self._gm_build_game_units(home_dressed, home)
-        self._gm_build_game_units(away_dressed, away)
+        home_units = self._gm_build_game_units(home_dressed, home)
+        away_units = self._gm_build_game_units(away_dressed, away)
         home_sk = [p for p in home_dressed if self._gm_pos_str(p).upper() != "G"]
         away_sk = [p for p in away_dressed if self._gm_pos_str(p).upper() != "G"]
         home_toi = self._gm_allocate_conserved_toi(rng, home_dressed) if home_dressed else {}
@@ -13718,10 +13762,18 @@ class SimEngine:
 
         for p in home_dressed:
             pid = _id_str(p, "id")
-            self._gm_ledger_add(ledger, p, hid, gp=1, toi_sec=int(home_toi.get(pid, 0) or 0))
+            toi = int(home_toi.get(pid, 0) or 0)
+            ev_toi, pp_toi, pk_toi = self._gm_estimate_special_teams_toi_splits(toi, p, home_units)
+            self._gm_ledger_add(
+                ledger, p, hid, gp=1, toi_sec=toi, ev_toi_sec=ev_toi, pp_toi_sec=pp_toi, pk_toi_sec=pk_toi,
+            )
         for p in away_dressed:
             pid = _id_str(p, "id")
-            self._gm_ledger_add(ledger, p, aid, gp=1, toi_sec=int(away_toi.get(pid, 0) or 0))
+            toi = int(away_toi.get(pid, 0) or 0)
+            ev_toi, pp_toi, pk_toi = self._gm_estimate_special_teams_toi_splits(toi, p, away_units)
+            self._gm_ledger_add(
+                ledger, p, aid, gp=1, toi_sec=toi, ev_toi_sec=ev_toi, pp_toi_sec=pp_toi, pk_toi_sec=pk_toi,
+            )
 
         def _credit_team_goals(skaters: List[Any], tid: str, goals: int, team: Any) -> Tuple[Dict[str, float], int]:
             """Allocate G/A; return (offensive SOG weights, PP goals tagged this game)."""
@@ -14807,7 +14859,13 @@ class SimEngine:
             for k, v in row.items():
                 if k in _GM_FLOAT_LEDGER_KEYS:
                     dst[k] = round(float(dst.get(k, 0) or 0) + float(v or 0), 4)
-                elif k in ("gp", "g", "a", "pts", "sog", "pp_sog", "pim", "hit", "blk", "toi_sec", "ppg", "ppa", "shg", "sha", "ga", "w", "l", "otl", "saves", "shots_against", "goalie_shots_against", "goalie_ga", "so", "missed_shots", "blocked_attempts_for", "analytics_gp", "primary_assists", "secondary_assists", "xgf_pct_gp"):
+                elif k in (
+                    "gp", "g", "a", "pts", "sog", "pp_sog", "pim", "hit", "blk", "toi_sec",
+                    "ev_toi_sec", "pp_toi_sec", "pk_toi_sec",
+                    "ppg", "ppa", "shg", "sha", "ga", "w", "l", "otl", "saves", "shots_against",
+                    "goalie_shots_against", "goalie_ga", "so", "missed_shots", "blocked_attempts_for",
+                    "analytics_gp", "primary_assists", "secondary_assists", "xgf_pct_gp",
+                ):
                     dst[k] = int(dst.get(k, 0) or 0) + int(v or 0)
                 elif k not in dst or dst[k] in (None, "", 0, 0.0):
                     dst[k] = v

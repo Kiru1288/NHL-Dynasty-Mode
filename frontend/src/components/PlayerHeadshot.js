@@ -62,12 +62,13 @@ export default function PlayerHeadshot({
   animate = "",
   title,
   style = {},
+  preferPhoto = true,
   ...rest
 }) {
   const portrait = useMemo(() => resolvePlayerHeadshot(player), [player]);
   const resolved = portrait.player;
   const [failedNhlSrc, setFailedNhlSrc] = useState("");
-  const showNhlPhoto = Boolean(portrait.src && failedNhlSrc !== portrait.src);
+  const showNhlPhoto = Boolean(preferPhoto && portrait.src && failedNhlSrc !== portrait.src);
 
   const headshotId = useMemo(
     () => clampHeadshotId(resolved.headshot_id || resolved.face_variant, resolved.avatar_seed),
@@ -122,20 +123,22 @@ export default function PlayerHeadshot({
     draftState ? `draft-${draftState}` : "",
     animate ? `animate-${animate}` : "",
     teamColors ? "team-branded" : "",
-    showNhlPhoto ? "has-nhl-headshot" : "",
+    showNhlPhoto ? "has-nhl-headshot photo-only" : "",
     className,
   ]
     .filter(Boolean)
     .join(" ");
 
-  const mergedStyle = teamColors
-    ? {
-        ...style,
-        "--team-primary": teamColors.primary,
-        "--team-secondary": teamColors.secondary,
-        "--team-accent": teamColors.accent,
-      }
-    : style;
+  const mergedStyle = {
+    ...(teamColors
+      ? {
+          "--team-primary": teamColors.primary,
+          "--team-secondary": teamColors.secondary,
+          "--team-accent": teamColors.accent,
+        }
+      : {}),
+    ...style,
+  };
 
   const badgeClass = badgeVariant ? `ph-badge ${badgeVariant}` : "ph-badge";
 
@@ -149,7 +152,7 @@ export default function PlayerHeadshot({
     >
       {showNhlPhoto ? (
         <img
-          className="ph-nhl-image"
+          className="ph-nhl-image ph-nhl-image--solo"
           src={portrait.src}
           alt=""
           loading="lazy"
@@ -160,12 +163,15 @@ export default function PlayerHeadshot({
             setFailedNhlSrc(portrait.src);
           }}
         />
-      ) : null}
-      <span className="ph-hair" aria-hidden="true" />
-      <span className="ph-face" aria-hidden="true" />
-      <span className="ph-eyes" aria-hidden="true" />
-      <span className="ph-mouth" aria-hidden="true" />
-      <span className="ph-extra" aria-hidden="true" />
+      ) : (
+        <>
+          <span className="ph-hair" aria-hidden="true" />
+          <span className="ph-face" aria-hidden="true" />
+          <span className="ph-eyes" aria-hidden="true" />
+          <span className="ph-mouth" aria-hidden="true" />
+          <span className="ph-extra" aria-hidden="true" />
+        </>
+      )}
       {badge ? <span className={badgeClass}>{badge}</span> : null}
       {resolvedNumber != null && resolvedNumber !== "" ? (
         <span className="ph-number">{resolvedNumber}</span>

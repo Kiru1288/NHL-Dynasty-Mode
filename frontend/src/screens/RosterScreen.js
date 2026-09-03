@@ -4,6 +4,9 @@ import { SCREENS } from "../game/constants";
 import { enrichRosterPlayer } from "../game/rosterColumns";
 import { GameFooter } from "../components/game/GameFooter";
 import PlayerHeadshot from "../components/PlayerHeadshot";
+import ChapterAttributeProfile from "../components/ChapterAttributeProfile";
+import { formatAverageTOI, getAverageTOIMinutes } from "../utils/toiFormat";
+import { chapterAttributeRows } from "../utils/chapterAttributes";
 import { formatProspectLeague, formatProspectTeam } from "../events/prospectDevelopment/prospectDevelopmentHelpers";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { lookupHumanDossier, playerRoomLine, playerCharacterChips } from "../utils/lockerRoomPulse";
@@ -1158,7 +1161,11 @@ function normalizeSeasonStats(player) {
         ? safeNum(plusMinusRaw, 0)
         : Math.round(gfOn - gaOn);
 
-  const toi = safeNum(
+  const toiSec = safeNum(
+    pickFirstDefined(s.toi_sec, s.time_on_ice_sec, s.toi_total_sec, player?.toi_sec, player?.time_on_ice_sec),
+    0
+  );
+  let toi = safeNum(
     pickFirstDefined(
       s.toi,
       s.average_toi,
@@ -1172,6 +1179,11 @@ function normalizeSeasonStats(player) {
     ),
     0
   );
+  if (toiSec > 0 && gp > 0) {
+    toi = toiSec / 60 / gp;
+  } else if (toi > 25 && gp > 1) {
+    toi = toi / gp;
+  }
 
   const wins = safeNum(pickFirstDefined(s.wins, s.w, player?.wins), 0);
   const losses = safeNum(pickFirstDefined(s.losses, s.l, player?.losses), 0);
@@ -3069,6 +3081,7 @@ function normalizeLivePlayer(player, franchiseState, index) {
     contract,
     season_stats: seasonStats,
     rating_groups: ratingGroups,
+    chapter_profile: source.chapter_profile || source.dossier?.chapter_profile || null,
     rating_summary: ratingSummary,
     explicitOverall: overallModel.explicitOverall,
     calculatedOverall: overallModel.calculatedOverall,
@@ -3222,6 +3235,7 @@ function normalizeDraftPlayer(row, index) {
     contract,
     season_stats: seasonStats,
     rating_groups: ratingGroups,
+    chapter_profile: source.chapter_profile || source.dossier?.chapter_profile || null,
     rating_summary: ratingSummary,
     explicitOverall: overallModel.explicitOverall,
     calculatedOverall: overallModel.calculatedOverall,
@@ -3670,9 +3684,9 @@ function EmptyPanel({ title = "NO SIGNAL", body = "Board channel empty — adjus
   );
 }
 
-function PlayerAvatar({ player, size = "md" }) {
+function PlayerAvatar({ player, size = "lg" }) {
   const enriched = ensurePlayerHeadshotFields(player || {});
-  const rosterSize = size === "sm" ? "xs" : size;
+  const rosterSize = size === "sm" ? "sm" : size === "md" ? "md" : "lg";
   const flagCode =
     enriched.nationality_code ||
     nationalityCode(
@@ -3688,6 +3702,7 @@ function PlayerAvatar({ player, size = "md" }) {
       className="nhlrost-headshot"
       number={player?.num}
       flag={flagCode || null}
+      preferPhoto
     />
   );
 }
@@ -4527,10 +4542,11 @@ function PlayerOverviewPanel({ player, franchiseState }) {
   const hasDraftMeta = Boolean(draftYear || draftOverall || draftTeamId || player.drafted);
   const isUndrafted = Boolean(player.undrafted) && !hasDraftMeta;
   const ratingGroups = (player.rating_groups || EMPTY_ARRAY).filter((group) => group?.rows?.length);
+  const chapterRows = chapterAttributeRows(player);
   const { strengths, concerns } = buildStrengthsConcerns(player);
   const tradeConcern = player.tradeStabilityConcern || resolvePlayerTradeStabilityConcern(player, franchiseState);
   const measuredToi = safeNumOrNull(
-    pickFirstDefined(player.explicitMinutes, stats.toi, stats.average_toi, stats.avg_toi)
+    pickFirstDefined(player.explicitMinutes, getAverageTOIMinutes({ ...stats, gp }), stats.toi, stats.average_toi, stats.avg_toi)
   );
 
   return (
@@ -4695,24 +4711,12 @@ function PlayerOverviewPanel({ player, franchiseState }) {
       <article className="nhlrost-profile-zone nhlrost-profile-zone--ratings">
         <header className="nhlrost-profile-zone__head">
           <p>Attribute Profile</p>
-          <h3>{ratingGroups.length ? `${ratingGroups.length} rating group${ratingGroups.length === 1 ? "" : "s"}` : "No ratings loaded"}</h3>
+          <h3>{chapterRows.length ? `${chapterRows.length} core ratings` : "No ratings loaded"}</h3>
         </header>
 
-        {ratingGroups.length ? (
+        {chapterRows.length ? (
           <>
-            <div className="nhlrost-overview-ratings-bars">
-              {ratingGroups.map((group) => {
-                const avg = averageRows(group.rows);
-                return (
-                  <ProgressBar
-                    key={group.key || group.title}
-                    label={group.title}
-                    value={avg}
-                    tone={avg >= 84 ? "good" : avg >= 72 ? "neutral" : "warn"}
-                  />
-                );
-              })}
-            </div>
+            <ChapterAttributeProfile player={player} />
 
             <button
               type="button"
@@ -4720,17 +4724,17 @@ function PlayerOverviewPanel({ player, franchiseState }) {
               onClick={() => setExpandedRatings((value) => !value)}
               aria-expanded={expandedRatings}
             >
-              {expandedRatings ? "Hide full ratings ↑" : "View full ratings ↓"}
+              {expandedRatings ? "Hide granular ratings ↑" : "View granular ratings ↓"}
             </button>
 
-            {expandedRatings ? (
+            {expandedRatings && ratingGroups.length ? (
               <div className="nhlrost-overview-ratings-expanded">
                 <RatingsPanel player={player} />
               </div>
             ) : null}
           </>
         ) : (
-          <p className="nhlrost-muted-text">Backend rating groups are not available for this player.</p>
+          <p className="nhlrost-muted-text">Chapter ratings are not available for this player.</p>
         )}
       </article>
 
@@ -4805,14 +4809,23 @@ function RatingsPanel({ player }) {
     return <EmptyPanel title="No ratings selected" body="Select a player to inspect ratings." />;
   }
 
+  const chapterRows = chapterAttributeRows(player);
   const groups = (player.rating_groups || EMPTY_ARRAY).filter((group) => group?.rows?.length);
 
-  if (!groups.length) {
-    return <EmptyPanel title="No ratings loaded" body="Backend rating groups are not available for this player." />;
+  if (!chapterRows.length && !groups.length) {
+    return <EmptyPanel title="No ratings loaded" body="Chapter ratings are not available for this player." />;
   }
 
   return (
     <section className="nhlrost-ratings-layout">
+      {chapterRows.length ? (
+        <div className="nhlrost-ratings-summary">
+          <ChapterAttributeProfile player={player} />
+        </div>
+      ) : null}
+
+      {groups.length ? (
+        <>
       <div className="nhlrost-ratings-summary">
         {groups.map((group) => {
           const average = averageRows(group.rows);
@@ -4862,6 +4875,8 @@ function RatingsPanel({ player }) {
           );
         })}
       </div>
+        </>
+      ) : null}
     </section>
   );
 }
@@ -6131,11 +6146,12 @@ function PlayerProfileModal({
           <div className="nhlrost-profile-modal__visual">
             <PlayerHeadshot
               player={ensurePlayerHeadshotFields(player)}
-              size="md"
+              size="xl"
               variant="card"
               className="nhlrost-profile-modal__headshot"
               number={jerseyNumber != null ? jerseyNumber : player.num}
               flag={flagCode || null}
+              preferPhoto
             />
           </div>
 
@@ -9218,7 +9234,10 @@ function RosterScreenStyles() {
         flex-shrink: 0;
       }
 
+      .nhlrost-profile-modal__headshot.player-headshot.size-xl,
       .nhlrost-profile-modal__headshot.player-headshot.size-md {
+        --size: 132px;
+      }
         --size: 120px;
       }
 
@@ -10378,19 +10397,75 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-headshot.player-headshot.size-sm {
-        --size: 46px;
+        --size: 56px;
       }
 
       .nhlrost-headshot.player-headshot.size-md {
-        --size: 58px;
+        --size: 68px;
       }
 
       .nhlrost-headshot.player-headshot.size-lg {
-        --size: 72px;
+        --size: 84px;
       }
 
       .nhlrost-headshot.player-headshot.size-xl {
-        --size: 96px;
+        --size: 112px;
+      }
+
+      .chapter-attribute-profile {
+        display: grid;
+        gap: 10px;
+      }
+
+      .chapter-attribute-profile.is-compact {
+        gap: 8px;
+      }
+
+      .chapter-attribute-profile__row {
+        display: grid;
+        gap: 4px;
+      }
+
+      .chapter-attribute-profile__meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 0.78rem;
+      }
+
+      .chapter-attribute-profile__meta strong {
+        font-weight: 900;
+        color: #f4fbff;
+      }
+
+      .chapter-attribute-profile__track {
+        height: 7px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+
+      .chapter-attribute-profile__track i {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+      }
+
+      .chapter-attribute-profile__track i.is-good {
+        background: linear-gradient(90deg, #1fd6a5, #7ef0c8);
+      }
+
+      .chapter-attribute-profile__track i.is-neutral {
+        background: linear-gradient(90deg, #4ea2ff, #8fd0ff);
+      }
+
+      .chapter-attribute-profile__track i.is-warn {
+        background: linear-gradient(90deg, #f0a23a, #ffd27a);
+      }
+
+      .chapter-attribute-profile__empty {
+        color: rgba(255, 255, 255, 0.62);
+        font-size: 0.82rem;
       }
 
       .nhlrost-headshot .ph-flag,
@@ -11996,7 +12071,10 @@ function RosterScreenStyles() {
         border-bottom: 2px solid var(--ops-cyan, #13d8e7);
       }
 
+      .nhlrost-profile-modal__headshot.player-headshot.size-xl,
       .nhlrost-profile-modal__headshot.player-headshot.size-md {
+        --size: 132px;
+      }
         --size: 84px;
       }
 

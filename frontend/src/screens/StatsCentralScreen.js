@@ -17,6 +17,12 @@ import {
   getTeamLogoSrc,
 } from "../utils/teamLogos";
 import PlayerHeadshot from "../components/PlayerHeadshot";
+import {
+  getAverageTOIMinutes as deriveAverageTOIMinutes,
+  formatAverageTOI,
+  formatClockFromMinutes,
+  getTotalTOISeconds,
+} from "../utils/toiFormat";
 
 /*
 ===========================================================
@@ -280,44 +286,14 @@ function fmtScore(game) {
 }
 
 function getTotalTOIMinutes(row) {
-  const toiSec = pickStat(row?.toi_sec, row?.time_on_ice_sec, 0);
+  const toiSec = getTotalTOISeconds(row);
   if (toiSec > 0) return toiSec / 60;
 
   return pickStat(row?.toi, row?.toi_min, row?.time_on_ice, 0);
 }
 
 function getAverageTOIMinutes(row) {
-  const gp = Math.max(1, safeInt(firstPresent(row?.gp, row?.games_played, row?.games), 0));
-  const totalMinutes = getTotalTOIMinutes(row);
-
-  if (totalMinutes <= 0) return 0;
-
-  /*
-    If TOI is obviously season-total TOI, divide by GP.
-    If backend already sends average TOI, keep it.
-    Example:
-    461.2 over 31 GP = 14:53
-    18.4 already looks like ATOI, so keep it.
-  */
-  if (totalMinutes > 35 && gp > 0) {
-    return totalMinutes / gp;
-  }
-
-  return totalMinutes;
-}
-
-function formatClockFromMinutes(minutesValue) {
-  const minutes = safe(minutesValue, 0);
-  if (minutes <= 0) return "—";
-
-  const wholeMinutes = Math.floor(minutes);
-  const seconds = Math.round((minutes - wholeMinutes) * 60);
-
-  if (seconds >= 60) {
-    return `${wholeMinutes + 1}:00`;
-  }
-
-  return `${wholeMinutes}:${String(seconds).padStart(2, "0")}`;
+  return deriveAverageTOIMinutes(row);
 }
 
 function formatTOI(row) {
@@ -325,7 +301,7 @@ function formatTOI(row) {
 }
 
 function formatSmallTOI(row) {
-  return formatClockFromMinutes(getAverageTOIMinutes(row));
+  return formatAverageTOI(row);
 }
 
 function formatTOISplit(secondsValue, gpValue) {
@@ -4618,7 +4594,7 @@ function PlayerAvatar({
   const logoSrc =
     player?.team_logo_src ||
     getPlayerTeamLogoSrc(player, teams, franchiseState || undefined);
-  const portraitSize = large ? "64px" : small ? "38px" : "39px";
+  const portraitSize = large ? "88px" : small ? "48px" : "72px";
 
   return (
     <div
@@ -4627,9 +4603,10 @@ function PlayerAvatar({
     >
       <PlayerHeadshot
         player={{ ...player, position: player?.position || player?.pos || pos }}
-        size={small ? "sm" : large ? "lg" : "md"}
+        size={small ? "sm" : large ? "xl" : "lg"}
         className="sc-avatar-player-headshot"
         style={{ "--size": portraitSize }}
+        preferPhoto
       />
       {logoSrc ? (
         <i className="sc-avatar-team-logo" title={String(player?.team_name || player?.team_id || player?.team || "")}>
@@ -10925,6 +10902,8 @@ function StatsCentralRedesignStyles() {
       .stats-central-screen {
         height: 100vh;
         min-height: 0;
+        width: 100%;
+        max-width: 100vw;
         overflow: hidden;
         background:
           radial-gradient(circle at 15% 0%, rgba(0, 206, 222, 0.08), transparent 28%),
@@ -10934,6 +10913,8 @@ function StatsCentralRedesignStyles() {
       .statscentral-shell {
         height: 100%;
         min-height: 0;
+        width: min(100%, 1920px);
+        margin: 0 auto;
         display: grid;
         grid-template-rows: auto minmax(0, 1fr);
         overflow: hidden;
