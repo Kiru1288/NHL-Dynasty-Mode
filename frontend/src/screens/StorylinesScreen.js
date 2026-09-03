@@ -339,6 +339,19 @@ function parseMeetingReceipts(receipts) {
     if (r.summary) cards.push({ group: "Relationship", label: r.summary, tone: "neutral" });
     else push("Relationship", formatEffectLabel(r.field || "trust"), r.before, r.after, r.delta);
   });
+  asArray(raw.attributes).forEach((r) => {
+    const label = formatEffectLabel(r.attribute || r.field || "attribute");
+    push("Attributes", label, r.before, r.after, r.delta);
+  });
+  asArray(raw.potential).forEach((r) => {
+    push("Potential", r.reason || "Development", r.before, r.after, r.delta);
+  });
+  asArray(raw.reporter).forEach((r) => {
+    push("Media", formatEffectLabel(r.field || "reporter"), r.before, r.after, r.delta);
+  });
+  asArray(raw.media).forEach((r) => {
+    push("Media", formatEffectLabel(r.field || "heat"), r.before, r.after, r.delta);
+  });
   asArray(raw.readiness).forEach((r) => {
     if (r.ovr_delta)
       cards.push({
@@ -451,17 +464,25 @@ function MeetingEffectCards({ receipts }) {
   );
 }
 
-function MeetingOutcomePanel({ outcome, onDismiss }) {
+function MeetingOutcomePanel({ outcome, onDismiss, kicker = "Meeting resolved" }) {
   if (!outcome) return null;
   const rel = outcome.relationship || outcome.history?.relationship_snapshot;
+  const cards = parseMeetingReceipts(outcome.receipts);
+  const hasEffects = cards.length > 0;
+  const negCount = cards.filter((c) => c.tone === "negative").length;
+  const posCount = cards.filter((c) => c.tone === "positive").length;
+  const outcomeTone = negCount > posCount ? "negative" : posCount > 0 ? "positive" : "neutral";
   return (
-    <div className="sl-meeting-outcome sl-meeting-outcome--cinematic">
+    <div className={`sl-meeting-outcome sl-meeting-outcome--cinematic sl-meeting-outcome--${outcomeTone}`}>
       <div className="sl-meeting-outcome__glow" aria-hidden />
-      <p className="sl-meeting-outcome__kicker">Meeting resolved</p>
+      <p className="sl-meeting-outcome__kicker">{kicker}</p>
       <h4>{str(outcome.message || outcome.choice_label || "Conversation recorded")}</h4>
       {outcome.summary ? <p className="sl-meeting-outcome__summary">{str(outcome.summary)}</p> : null}
       <MeetingRelationshipPanel relationship={rel} />
       <MeetingEffectCards receipts={outcome.receipts} />
+      {!hasEffects && !rel?.label && outcome.summary ? (
+        <p className="sl-meeting-outcome__note">Check the front page for follow-up coverage.</p>
+      ) : null}
       {onDismiss ? (
         <button type="button" className="sl-back" onClick={onDismiss}>
           Continue
@@ -848,6 +869,11 @@ function normalizeStory(raw, idx, state) {
     overallBefore: raw?.overall_before,
     overallAfter: raw?.overall_after,
     overallDelta: raw?.overall_delta,
+    severity: str(raw?.severity || "minor"),
+    eventTier: str(raw?.event_tier || "minor"),
+    effectSummary: str(raw?.effect_summary || ""),
+    impactReason: str(raw?.impact_reason || ""),
+    impactLines: asArray(raw?.impact_lines),
     followUp: str(raw?.follow_up || ""),
     arcStatus: str(raw?.arc_status || raw?.status || "active"),
     arcId: str(raw?.arc_id || ""),
@@ -883,6 +909,13 @@ function normalizeStory(raw, idx, state) {
     fromTeamAbbrev: str(raw?.from_team_abbrev || ""),
     toTeamAbbrev: str(raw?.to_team_abbrev || ""),
     relatedTeams: asArray(raw?.related_teams || raw?.teams),
+    tradeTeams: asArray(raw?.teams),
+    tradeValue: asObject(raw?.trade_value),
+    tradeCategory: str(raw?.trade_type_label || raw?.trade_category || ""),
+    tradeReason: str(raw?.reason_text || raw?.story_report || ""),
+    triggerReason: str(raw?.trigger_reason || raw?.trigger_context?.reason_text || ""),
+    triggerReasons: asArray(raw?.trigger_reasons || raw?.trigger_context?.reason_lines),
+    triggerContext: asObject(raw?.trigger_context),
     categoryKey: "",
   };
 }
@@ -1598,6 +1631,210 @@ function relToneClass(tone) {
   return "is-neutral";
 }
 
+function inferChoiceTone(choice = {}) {
+  const explicit = str(choice.tone || choice.valence || "").toLowerCase();
+  if (explicit && explicit !== "neutral") return explicit;
+  const id = str(choice.id || "").toLowerCase();
+  const label = str(choice.label || "").toLowerCase();
+  const hay = `${id} ${label}`;
+  if (/no_comment|deny|firm|hold|cold|challenge|accountability|platoon|deflect|defer|wait|neither/.test(hay)) {
+    return "firm";
+  }
+  if (/support|promise|commit|honest|transparent|welcome|praise|listen|acknowledge|diplomatic|agree/.test(hay)) {
+    return "supportive";
+  }
+  if (/trade|rumor|volatile|changes|overhaul/.test(hay)) return "volatile";
+  if (/conditional|cautious|performance|earn/.test(hay)) return "cautious";
+  if (/deflect|neither_confirm/.test(hay)) return "deflect";
+  return "neutral";
+}
+
+function choiceToneClass(tone) {
+  const t = str(tone).toLowerCase();
+  if (["supportive", "support_player", "diplomatic", "positive", "encouraging"].includes(t)) return "supportive";
+  if (["firm", "cold", "negative", "deny", "deflect", "no_comment"].includes(t)) return "firm";
+  if (["volatile", "risky", "trade", "hostile"].includes(t)) return "volatile";
+  if (["cautious", "conditional", "neutral"].includes(t)) return "cautious";
+  return "neutral";
+}
+
+function DialogueBubble({ line, index = 0, variant = "default" }) {
+  const speaker = str(line?.speaker || "");
+  const isGm = speaker === "GM" || speaker === "You";
+  const isReporter = /reporter|media|press/i.test(speaker);
+  const role = isGm ? "gm" : isReporter ? "reporter" : "player";
+  return (
+    <div
+      className={`sl-bubble sl-bubble--${role} sl-bubble--${variant}`}
+      style={{ animationDelay: `${index * 110}ms` }}
+    >
+      <div className="sl-bubble__tail" aria-hidden />
+      <em className="sl-bubble__speaker">{isGm ? "You" : speaker || "Speaker"}</em>
+      <p>{str(line?.text)}</p>
+    </div>
+  );
+}
+
+function ResponseChoiceButton({
+  choice,
+  response,
+  className = "sl-choice",
+  disabled = false,
+  busy = false,
+  onClick,
+  children,
+}) {
+  const src = choice || response || {};
+  const tone = inferChoiceTone(src);
+  const toneClass = choiceToneClass(tone);
+  return (
+    <button
+      type="button"
+      className={`${className} sl-choice--tone-${toneClass}`}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <span className="sl-choice__tone-bar" aria-hidden />
+      {children || (
+        <>
+          <strong>{str(src.label)}</strong>
+          {src.tone ? <em className={`sl-choice__tone sl-choice__tone--${toneClass}`}>{str(src.tone).replace(/_/g, " ")}</em> : null}
+          {src.detail || src.description ? <span>{str(src.detail || src.description)}</span> : null}
+          {src.effect_preview ? <span className="sl-choice__effects">{src.effect_preview}</span> : null}
+        </>
+      )}
+      {busy ? <em>Working…</em> : null}
+    </button>
+  );
+}
+
+function extractTradeBoard(story) {
+  const raw = story?.raw || story;
+  const teams = asArray(raw?.teams);
+  const tv = asObject(raw?.trade_value);
+  if (teams.length >= 2) {
+    const left = teams[0];
+    const right = teams[1];
+    return {
+      left,
+      right,
+      leftValue: Number(left?.trade_value ?? tv?.left_value ?? 0),
+      rightValue: Number(right?.trade_value ?? tv?.right_value ?? 0),
+      reason: str(raw?.reason_text || story?.effectSummary || raw?.story_report || ""),
+      category: str(raw?.trade_type_label || raw?.trade_category || ""),
+    };
+  }
+  const pair = parseTradeTeams(story);
+  if (pair.length < 2) return null;
+  return {
+    left: { abbreviation: pair[0], display_name: story.fromTeamName || pair[0], acquired_assets: [] },
+    right: { abbreviation: pair[1], display_name: story.toTeamName || pair[1], acquired_assets: [] },
+    leftValue: Number(tv?.left_value || 0),
+    rightValue: Number(tv?.right_value || 0),
+    reason: str(raw?.reason_text || story?.summary || ""),
+    category: str(raw?.trade_type_label || ""),
+  };
+}
+
+function TradeAssetChip({ asset, compact = false }) {
+  const name = str(asset?.display_name || asset?.player_name || asset?.name || "Asset");
+  const ovr = asset?.ovr != null ? Math.round(Number(asset.ovr)) : null;
+  const tv = asset?.trade_value != null ? Number(asset.trade_value) : null;
+  const pos = str(asset?.position || asset?.role_line || "");
+  const isPick = str(asset?.asset_type).toLowerCase().includes("pick");
+  return (
+    <div className={`sl-trade-asset${compact ? " is-compact" : ""}${isPick ? " is-pick" : ""}`}>
+      <div className="sl-trade-asset__head">
+        <strong>{name}</strong>
+        {ovr != null && !isPick ? <span className="sl-trade-asset__ovr">{ovr} OVR</span> : null}
+      </div>
+      <div className="sl-trade-asset__meta">
+        {pos ? <em>{pos}</em> : null}
+        {tv != null ? <span className="sl-trade-asset__tv">TV {tv.toFixed(1)}</span> : null}
+        {asset?.cap_hit_m != null ? <span>${Number(asset.cap_hit_m).toFixed(2)}M</span> : null}
+      </div>
+      {tv != null && !compact ? (
+        <div className="sl-trade-asset__bar" aria-hidden>
+          <span style={{ width: `${Math.min(100, (tv / 85) * 100)}%` }} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TradeValueMeter({ leftValue = 0, rightValue = 0, leftAbbr = "", rightAbbr = "" }) {
+  const lv = Math.max(0, Number(leftValue) || 0);
+  const rv = Math.max(0, Number(rightValue) || 0);
+  const total = Math.max(lv + rv, 1);
+  const leftPct = Math.round((lv / total) * 100);
+  const rightPct = 100 - leftPct;
+  const delta = Math.abs(lv - rv);
+  const fair = delta <= Math.max(4, total * 0.08);
+  return (
+    <div className="sl-trade-meter" aria-label="Trade value comparison">
+      <div className="sl-trade-meter__labels">
+        <span>{leftAbbr || "A"} · {lv ? lv.toFixed(1) : "—"}</span>
+        <em>{fair ? "Balanced deal" : lv > rv ? `${leftAbbr || "Left"} wins value` : `${rightAbbr || "Right"} wins value`}</em>
+        <span>{rightAbbr || "B"} · {rv ? rv.toFixed(1) : "—"}</span>
+      </div>
+      <div className="sl-trade-meter__track">
+        <span className="sl-trade-meter__left" style={{ width: `${leftPct}%` }} />
+        <span className="sl-trade-meter__right" style={{ width: `${rightPct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function TradeSummaryPanel({ story, compact = false }) {
+  const board = extractTradeBoard(story);
+  if (!board) return <TradeSwap story={story} />;
+  const leftAbbr = str(board.left?.abbreviation || board.left?.team_abbrev || "").slice(0, 4).toUpperCase();
+  const rightAbbr = str(board.right?.abbreviation || board.right?.team_abbrev || "").slice(0, 4).toUpperCase();
+  const leftAssets = asArray(board.left?.acquired_assets);
+  const rightAssets = asArray(board.right?.acquired_assets);
+  return (
+    <section className={`sl-trade-board${compact ? " is-compact" : ""}`} aria-label="Trade summary">
+      <div className="sl-trade-board__glow" aria-hidden />
+      {board.category ? <p className="sl-trade-board__kicker">{board.category}</p> : null}
+      <div className="sl-trade-board__teams">
+        <div className="sl-trade-board__side">
+          <TeamMark abbrev={leftAbbr} name={board.left?.display_name} size={compact ? 34 : 46} />
+          <strong>{str(board.left?.display_name || leftAbbr)}</strong>
+          <span>Receives</span>
+          <div className="sl-trade-board__assets">
+            {leftAssets.length ? leftAssets.map((a, i) => <TradeAssetChip key={i} asset={a} compact={compact} />) : (
+              <p className="sl-muted">Assets undisclosed</p>
+            )}
+          </div>
+        </div>
+        <div className="sl-trade-board__mid" aria-hidden>
+          <em>⇄</em>
+          <span>Value check</span>
+        </div>
+        <div className="sl-trade-board__side">
+          <TeamMark abbrev={rightAbbr} name={board.right?.display_name} size={compact ? 34 : 46} />
+          <strong>{str(board.right?.display_name || rightAbbr)}</strong>
+          <span>Receives</span>
+          <div className="sl-trade-board__assets">
+            {rightAssets.length ? rightAssets.map((a, i) => <TradeAssetChip key={i} asset={a} compact={compact} />) : (
+              <p className="sl-muted">Assets undisclosed</p>
+            )}
+          </div>
+        </div>
+      </div>
+      {(board.leftValue > 0 || board.rightValue > 0) ? (
+        <TradeValueMeter
+          leftValue={board.leftValue}
+          rightValue={board.rightValue}
+          leftAbbr={leftAbbr}
+          rightAbbr={rightAbbr}
+        />
+      ) : null}
+      {board.reason && !compact ? <p className="sl-trade-board__reason">{board.reason}</p> : null}
+    </section>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* story card + lead story                                             */
 /* ------------------------------------------------------------------ */
@@ -1624,6 +1861,12 @@ function StoryCard({ story, socialCount, onOpen, index }) {
         <div className="sl-card__text">
           <h3>{story.headline}</h3>
           {story.summary ? <p>{story.summary}</p> : null}
+          {story.triggerReasons?.length ? (
+            <MeetingCausePanel reasons={story.triggerReasons} title="Why this fired" />
+          ) : story.triggerReason ? (
+            <p className="sl-card__trigger">{story.triggerReason}</p>
+          ) : null}
+          {isTradeDeskStory(story) ? <TradeSummaryPanel story={story} compact /> : null}
           <StoryEffectBreakdown story={story} compact />
         </div>
       </div>
@@ -1660,6 +1903,9 @@ function LeadStory({ story, socialCount, onOpen, choiceOptions, onResolve, busyC
         </div>
         <h2 className="sl-lead__headline">{story.headline}</h2>
         {story.summary ? <p className="sl-lead__summary">{story.summary}</p> : null}
+        {story.triggerReasons?.length ? (
+          <MeetingCausePanel reasons={story.triggerReasons} title="Why this story fired" />
+        ) : null}
         <StoryEffectBreakdown story={story} />
         <div className="sl-lead__meta">
           {story.playerName ? <span><em>Subject</em>{story.playerName}</span> : null}
@@ -1819,12 +2065,13 @@ function PlayerMeetingsPanel({
       setLastOutcome(null);
       try {
         const res = await onResolvePlayerRequest(interactionId, choiceId);
-        const gm = res?.state?.last_gm_result || {};
+        const gm = res?.state?.last_gm_result || res?.last_gm_result || {};
         setLastOutcome({
-          message: gm.headline || res?.message || "Meeting resolved.",
-          summary: gm.summary,
+          message: res?.message || gm.headline || "Meeting resolved.",
+          summary: res?.effect_summary || gm.summary,
           receipts: res?.receipts,
           relationship: res?.relationship,
+          choice_label: res?.choice_label,
         });
         markPlayerAddressed(res?.interaction?.player_id || res?.interaction?.actor_id);
         setActiveMeeting(null);
@@ -1843,13 +2090,14 @@ function PlayerMeetingsPanel({
       setLastOutcome(null);
       try {
         const res = await onAdvanceMeeting(meetingId, choiceId);
-        const gm = res?.state?.last_gm_result || {};
+        const gm = res?.state?.last_gm_result || res?.last_gm_result || {};
         setLastOutcome({
-          message: gm.headline || res?.message || res?.history?.choice_label || "Conversation recorded.",
-          summary: gm.summary,
+          message: res?.message || gm.headline || res?.history?.choice_label || "Conversation recorded.",
+          summary: res?.effect_summary || gm.summary,
           receipts: res?.receipts,
           relationship: res?.relationship,
           history: res?.history,
+          choice_label: res?.choice_label || res?.history?.choice_label,
         });
         markPlayerAddressed(activeMeeting?.player_id);
         setActiveMeeting(null);
@@ -1899,14 +2147,7 @@ function PlayerMeetingsPanel({
 
         <div className="sl-dialogue sl-dialogue--cinematic">
           {dialogue.map((line, i) => (
-            <div
-              key={i}
-              className={`sl-dialogue__line${str(line.speaker) === "GM" ? " is-gm" : " is-player"}`}
-              style={{ animationDelay: `${i * 120}ms` }}
-            >
-              <em>{str(line.speaker) === "GM" ? "You" : str(line.speaker)}</em>
-              <p>{str(line.text)}</p>
-            </div>
+            <DialogueBubble key={i} line={line} index={i} variant="meeting" />
           ))}
         </div>
 
@@ -1925,16 +2166,13 @@ function PlayerMeetingsPanel({
           <h4>Your response</h4>
           <div className="sl-choices sl-choices--cinematic">
             {asArray(activeMeeting.choices).map((c) => (
-              <button
+              <ResponseChoiceButton
                 key={str(c.id)}
-                type="button"
+                choice={c}
                 className="sl-choice sl-choice--cinematic"
                 disabled={busy}
                 onClick={() => handleAdvance(str(activeMeeting.id), str(c.id))}
-              >
-                <strong>{str(c.label)}</strong>
-                {c.detail ? <span>{str(c.detail)}</span> : null}
-              </button>
+              />
             ))}
           </div>
         </section>
@@ -1990,16 +2228,13 @@ function PlayerMeetingsPanel({
             ))}
             <div className="sl-choices sl-choices--cinematic">
               {asArray(req.choices).map((c) => (
-                <button
+                <ResponseChoiceButton
                   key={str(c.id)}
-                  type="button"
+                  choice={c}
                   className="sl-choice sl-choice--cinematic"
                   disabled={busy}
                   onClick={() => handleResolveRequest(str(req.id), str(c.id))}
-                >
-                  <strong>{str(c.label)}</strong>
-                  {c.detail || c.description ? <span>{str(c.detail || c.description)}</span> : null}
-                </button>
+                />
               ))}
             </div>
           </article>
@@ -2135,15 +2370,13 @@ function PlayerMeetingsPanel({
               <p>{str(req.summary)}</p>
               <div className="sl-choices sl-choices--cinematic sl-choices--row">
                 {asArray(req.choices).map((c) => (
-                  <button
+                  <ResponseChoiceButton
                     key={str(c.id)}
-                    type="button"
+                    choice={c}
                     className="sl-choice sl-choice--cinematic sl-choice--compact"
                     disabled={busy}
                     onClick={() => handleResolveRequest(str(req.id), str(c.id))}
-                  >
-                    <strong>{str(c.label)}</strong>
-                  </button>
+                  />
                 ))}
               </div>
             </article>
@@ -2244,6 +2477,74 @@ function PlayerMeetingsPanel({
   );
 }
 
+const SEVERITY_LABELS = {
+  crisis: "Crisis",
+  major: "Major",
+  mid: "Notable",
+  minor: "Minor",
+};
+
+function StoryImpactReport({ report }) {
+  const recent = asArray(report?.recent_user_stories);
+  const modifiers = asArray(report?.active_player_modifiers);
+  if (!recent.length && !modifiers.length) return null;
+
+  return (
+    <section className="sl-impact-report">
+      <div className="sl-impact-report__head">
+        <h3>Impact report</h3>
+        <span className="sl-impact-report__sub">Verified rating + room effects from recent beats</span>
+      </div>
+      {modifiers.length ? (
+        <div className="sl-impact-report__mods">
+          <h4>Active OVR modifiers</h4>
+          <div className="sl-impact-report__mod-grid">
+            {modifiers.slice(0, 6).map((row) => {
+              const delta = Number(row.overall_delta) || 0;
+              return (
+                <div key={str(row.player_id)} className={`sl-impact-report__mod ${delta < 0 ? "is-neg" : delta > 0 ? "is-pos" : ""}`}>
+                  <strong>{str(row.player_name)}</strong>
+                  <span>
+                    {row.base_ovr ?? "—"} → {row.effective_ovr ?? "—"}
+                    {delta ? ` (${delta > 0 ? "+" : ""}${delta})` : ""}
+                  </span>
+                  {asArray(row.modifiers).slice(0, 1).map((m, i) => (
+                    <em key={i}>{str(m.reason || m.source || "Storyline")}</em>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+      {recent.length ? (
+        <div className="sl-impact-report__recent">
+          <h4>Recent story impacts</h4>
+          <ul className="sl-impact-report__list">
+            {recent.slice(0, 8).map((row) => {
+              const delta = Number(row.overall_delta);
+              const sev = SEVERITY_LABELS[row.severity] || row.severity || "Story";
+              return (
+                <li key={str(row.storyline_id || row.headline)}>
+                  <div className="sl-impact-report__row-top">
+                    <span className={`sl-impact-report__sev sl-impact-report__sev--${str(row.severity || "minor")}`}>{sev}</span>
+                    <strong>{str(row.headline)}</strong>
+                  </div>
+                  <span className="sl-impact-report__meta">
+                    {str(row.player_name || "Team")} · {prettyDate(row.calendar_iso) || "Recent"}
+                    {Number.isFinite(delta) && delta !== 0 ? ` · OVR ${delta > 0 ? "+" : ""}${delta}` : ""}
+                  </span>
+                  {row.effect_summary ? <em>{str(row.effect_summary)}</em> : null}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* main screen                                                         */
 /* ------------------------------------------------------------------ */
@@ -2263,7 +2564,7 @@ export default function StorylinesScreen() {
   } = useGameUI();
 
   useEffect(() => {
-    hydrateFranchiseNarrative?.();
+    hydrateFranchiseNarrative?.({ force: true });
   }, [franchiseState?.narrative_revision, franchiseState?.session_id, hydrateFranchiseNarrative]);
 
   const [department, setDepartment] = useState(
@@ -2281,6 +2582,7 @@ export default function StorylinesScreen() {
   const [activeTab, setActiveTab] = useState("details");
   const [busyChoice, setBusyChoice] = useState("");
   const [actionNotice, setActionNotice] = useState("");
+  const [pressOutcome, setPressOutcome] = useState(null);
   const caseRef = useRef(null);
 
   const sessionId = str(franchiseState?.session_id || getFranchiseSessionId() || "anon");
@@ -2318,6 +2620,10 @@ export default function StorylinesScreen() {
   const choicesMap = useMemo(
     () => buildChoicesMap(franchiseState),
     [franchiseState?.storyline_choices, franchiseState?.pending_decisions]
+  );
+  const storyImpactReport = useMemo(
+    () => franchiseState?.narrative_summary?.story_impact_report || {},
+    [franchiseState?.narrative_summary?.story_impact_report, franchiseState?.narrative_revision]
   );
 
   const openStory = useCallback((id) => {
@@ -2359,7 +2665,9 @@ export default function StorylinesScreen() {
 
   const narrativeUniverse = asObject(franchiseState?.narrative_universe);
   const playerMeetingsPayload = asObject(narrativeUniverse?.player_meetings);
-  const pressQueue = asArray(narrativeUniverse?.press_conference_queue).filter((p) => str(p?.status) === "pending");
+  const pressQueue = asArray(narrativeUniverse?.press_conference_queue).filter((p) =>
+    ["pending", "in_progress"].includes(str(p?.status))
+  );
   const narrativeEras = asArray(narrativeUniverse?.narrative_eras);
   const narrativeArchive = asArray(narrativeUniverse?.narrative_archive);
   const userMarket = asObject(narrativeUniverse?.user_market_profile);
@@ -2536,10 +2844,17 @@ export default function StorylinesScreen() {
       const choiceId = `${questionId}:${responseId}`;
       const storylineId = str(pressItem.storyline_id || pressItem.id || pressItem.storylineId);
       setBusyChoice(`${storylineId}:${choiceId}`);
+      setPressOutcome(null);
       try {
         const res = await onResolveStorylineChoice(storylineId, choiceId);
         const result = res?.state?.last_gm_result || {};
-        setActionNotice(str(result.headline || result.summary || "Press answer recorded. A follow-up beat is on the wire."));
+        setPressOutcome({
+          message: str(result.headline || "You addressed the media."),
+          summary: str(result.summary || result.effect_summary || ""),
+          receipts: result.receipts,
+          choice_label: result.choice_label || result.response_label,
+        });
+        setActionNotice("");
       } catch (err) {
         setActionNotice(err?.message || "The press room did not take that answer.");
       } finally {
@@ -3148,7 +3463,132 @@ export default function StorylinesScreen() {
         .sl-rosterrow--cinematic { min-height: 74px; }
         .sl-choice--compact { padding: 9px 12px; }
         .sl-choice--compact strong { margin-bottom: 0; }
-        .sl-choice-empty { font-size: 12px; color: var(--muted); text-align: center; padding: 10px 0; }
+        .sl-choice__tone-bar {
+          position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: 10px 0 0 10px;
+          background: var(--cyan); opacity: .85;
+        }
+        .sl-choice--tone-supportive {
+          border-color: rgba(82,223,148,.35);
+          background: linear-gradient(180deg, rgba(82,223,148,.12), rgba(255,255,255,.02));
+        }
+        .sl-choice--tone-supportive .sl-choice__tone-bar { background: var(--green); }
+        .sl-choice--tone-firm {
+          border-color: rgba(255,95,109,.35);
+          background: linear-gradient(180deg, rgba(255,95,109,.1), rgba(255,255,255,.02));
+        }
+        .sl-choice--tone-firm .sl-choice__tone-bar { background: var(--red); }
+        .sl-choice--tone-volatile {
+          border-color: rgba(255,138,76,.4);
+          background: linear-gradient(180deg, rgba(255,138,76,.12), rgba(255,255,255,.02));
+        }
+        .sl-choice--tone-volatile .sl-choice__tone-bar { background: var(--ember); }
+        .sl-choice--tone-cautious {
+          border-color: rgba(233,168,60,.35);
+          background: linear-gradient(180deg, rgba(233,168,60,.1), rgba(255,255,255,.02));
+        }
+        .sl-choice--tone-cautious .sl-choice__tone-bar { background: var(--gold); }
+        .sl-choice--tone-deflect {
+          border-color: rgba(201,146,255,.35);
+          background: linear-gradient(180deg, rgba(201,146,255,.1), rgba(255,255,255,.02));
+        }
+        .sl-choice--tone-deflect .sl-choice__tone-bar { background: var(--purple); }
+        .sl-choice--press { animation: slRise .35s cubic-bezier(.2,.7,.3,1) both; }
+        .sl-choice__effects {
+          display: block; margin-top: 6px; font-size: 10px; font-weight: 800; letter-spacing: .04em;
+          color: var(--cyan); opacity: .9;
+        }
+
+        /* ------------- dialogue bubbles ------------- */
+        .sl-bubble {
+          position: relative; max-width: min(720px, 92%);
+          padding: 12px 14px 12px 16px; border-radius: 14px;
+          border: 1px solid var(--line);
+          background: rgba(255,255,255,.03);
+          animation: slBubbleIn .45s cubic-bezier(.2,.7,.3,1) both;
+        }
+        .sl-bubble__speaker {
+          display: block; font-style: normal; font-size: 9px; font-weight: 900;
+          letter-spacing: .14em; text-transform: uppercase; margin-bottom: 6px; color: var(--muted);
+        }
+        .sl-bubble p { margin: 0; font-size: 15px; line-height: 1.6; }
+        .sl-bubble--gm {
+          margin-left: auto; border-color: rgba(233,168,60,.35);
+          background: linear-gradient(180deg, rgba(233,168,60,.14), rgba(8,18,28,.9));
+          box-shadow: 0 10px 28px rgba(0,0,0,.22);
+        }
+        .sl-bubble--gm .sl-bubble__speaker { color: var(--gold); }
+        .sl-bubble--player {
+          margin-right: auto; border-color: rgba(22,220,234,.28);
+          background: linear-gradient(180deg, rgba(22,220,234,.1), rgba(8,18,28,.88));
+        }
+        .sl-bubble--player .sl-bubble__speaker { color: var(--cyan); }
+        .sl-bubble--reporter {
+          margin-right: auto; border-color: rgba(201,146,255,.28);
+          background: linear-gradient(180deg, rgba(201,146,255,.08), rgba(8,18,28,.88));
+        }
+        .sl-bubble--reporter .sl-bubble__speaker { color: var(--purple); }
+        @keyframes slBubbleIn {
+          from { opacity: 0; transform: translateY(10px) scale(.98); filter: blur(2px); }
+          to { opacity: 1; transform: none; filter: none; }
+        }
+
+        /* ------------- trade board ------------- */
+        .sl-trade-board {
+          position: relative; overflow: hidden; margin: 14px 0; padding: 16px;
+          border: 1px solid rgba(201,146,255,.28); border-radius: 14px;
+          background: linear-gradient(180deg, rgba(201,146,255,.08), rgba(5,14,23,.92));
+        }
+        .sl-trade-board.is-compact { margin: 10px 0 0; padding: 10px 12px; }
+        .sl-trade-board__glow {
+          position: absolute; inset: -30% auto auto 50%; width: 280px; height: 280px; transform: translateX(-50%);
+          background: radial-gradient(circle, rgba(201,146,255,.12), transparent 70%); pointer-events: none;
+        }
+        .sl-trade-board__kicker {
+          margin: 0 0 10px; font-size: 9px; font-weight: 900; letter-spacing: .16em;
+          text-transform: uppercase; color: var(--purple);
+        }
+        .sl-trade-board__teams {
+          display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start;
+        }
+        @media (max-width: 760px) { .sl-trade-board__teams { grid-template-columns: 1fr; } }
+        .sl-trade-board__side { display: grid; gap: 8px; justify-items: center; text-align: center; }
+        .sl-trade-board__side strong { font-size: 13px; }
+        .sl-trade-board__side > span { font-size: 9px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+        .sl-trade-board__mid { display: grid; justify-items: center; gap: 4px; padding-top: 18px; }
+        .sl-trade-board__mid em { font-style: normal; font-size: 22px; color: var(--purple); }
+        .sl-trade-board__mid span { font-size: 9px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+        .sl-trade-board__assets { width: 100%; display: grid; gap: 6px; }
+        .sl-trade-board__reason { margin: 12px 0 0; font-size: 12px; line-height: 1.5; color: var(--muted-2); }
+        .sl-trade-asset {
+          text-align: left; padding: 8px 10px; border-radius: 9px;
+          border: 1px solid rgba(150,214,235,.16); background: rgba(255,255,255,.03);
+        }
+        .sl-trade-asset.is-pick { border-color: rgba(233,168,60,.25); }
+        .sl-trade-asset__head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+        .sl-trade-asset__head strong { font-size: 12px; line-height: 1.3; }
+        .sl-trade-asset__ovr {
+          flex-shrink: 0; font-size: 10px; font-weight: 900; letter-spacing: .06em;
+          color: #041018; background: linear-gradient(180deg, #2ee6f0, #12b9c9); padding: 2px 6px; border-radius: 4px;
+        }
+        .sl-trade-asset__meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 10px; font-weight: 800; color: var(--muted); }
+        .sl-trade-asset__meta em { font-style: normal; text-transform: uppercase; letter-spacing: .06em; }
+        .sl-trade-asset__tv { color: var(--gold); }
+        .sl-trade-asset__bar { height: 4px; border-radius: 999px; background: rgba(150,214,235,.12); margin-top: 6px; overflow: hidden; }
+        .sl-trade-asset__bar span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7b4fd6, var(--purple)); }
+        .sl-trade-meter { margin-top: 12px; }
+        .sl-trade-meter__labels {
+          display: flex; justify-content: space-between; gap: 8px; align-items: center;
+          font-size: 10px; font-weight: 800; color: var(--muted-2); margin-bottom: 6px;
+        }
+        .sl-trade-meter__labels em { font-style: normal; color: var(--gold); letter-spacing: .04em; text-transform: uppercase; font-size: 9px; }
+        .sl-trade-meter__track { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: rgba(150,214,235,.1); }
+        .sl-trade-meter__left { background: linear-gradient(90deg, #2f9c68, var(--green)); }
+        .sl-trade-meter__right { background: linear-gradient(90deg, #7b4fd6, var(--purple)); }
+        .sl-press__question {
+          margin: 0 0 12px; font-size: 14px; line-height: 1.55; font-style: italic;
+          color: rgba(234,247,252,.9); padding: 12px 14px; border-radius: 12px;
+          border: 1px solid rgba(22,220,234,.2); background: rgba(22,220,234,.05);
+        }
 
         /* ------------- decision desk strip ------------- */
         .sl-desk { border: 1px solid rgba(201,162,39,.3); border-radius: 12px; padding: 12px 16px;
@@ -3165,6 +3605,29 @@ export default function StorylinesScreen() {
         .sl-desk__item strong { display: block; font-size: 12.5px; line-height: 1.3; font-weight: 700;
           display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         .sl-desk__item span { display: block; font-size: 10px; font-weight: 800; color: var(--muted); margin-top: 2px; }
+        .sl-impact-report { border: 1px solid rgba(126,224,176,.22); border-radius: 12px; padding: 14px 16px;
+          margin-bottom: 14px; background: linear-gradient(180deg, rgba(18,32,28,.92), rgba(10,16,14,.88)); }
+        .sl-impact-report__head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+        .sl-impact-report__head h3 { margin: 0; font-size: 11px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: #7ee0b0; }
+        .sl-impact-report__sub { font-size: 10px; color: var(--muted); }
+        .sl-impact-report h4 { margin: 0 0 8px; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+        .sl-impact-report__mod-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px,1fr)); gap: 8px; margin-bottom: 12px; }
+        .sl-impact-report__mod { border: 1px solid rgba(255,255,255,.08); border-radius: 8px; padding: 8px 10px; background: rgba(0,0,0,.18); }
+        .sl-impact-report__mod strong { display: block; font-size: 12px; }
+        .sl-impact-report__mod span { display: block; font-size: 11px; color: #d8e8f0; margin-top: 2px; }
+        .sl-impact-report__mod em { display: block; font-size: 10px; color: var(--muted); margin-top: 4px; font-style: normal; }
+        .sl-impact-report__mod.is-neg { border-color: rgba(255,96,109,.35); }
+        .sl-impact-report__mod.is-pos { border-color: rgba(82,223,148,.35); }
+        .sl-impact-report__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+        .sl-impact-report__row-top { display: flex; align-items: center; gap: 8px; }
+        .sl-impact-report__row-top strong { font-size: 12.5px; line-height: 1.3; }
+        .sl-impact-report__sev { font-size: 9px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; }
+        .sl-impact-report__sev--crisis { background: rgba(255,60,80,.2); color: #ff8090; }
+        .sl-impact-report__sev--major { background: rgba(255,138,76,.18); color: #ffb080; }
+        .sl-impact-report__sev--mid { background: rgba(233,168,60,.16); color: #e9c070; }
+        .sl-impact-report__sev--minor { background: rgba(128,150,168,.16); color: #9eb0c0; }
+        .sl-impact-report__meta { display: block; font-size: 10px; color: var(--muted); margin-top: 2px; }
+        .sl-impact-report__list em { display: block; font-size: 10.5px; color: #b8c8d4; margin-top: 3px; font-style: normal; }
 
         /* ------------- dossier ------------- */
         .sl-dossier { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
@@ -3275,8 +3738,6 @@ export default function StorylinesScreen() {
         .sl-press__reporter { display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
           font-size: 10px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; color: var(--cyan); }
         .sl-press__reporter i { font-style: normal; width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); }
-        .sl-press__question { margin: 0 0 12px; font-size: 14px; line-height: 1.55; font-style: italic;
-          color: rgba(234,247,252,.9); padding-left: 14px; border-left: 2px solid rgba(22,220,234,.35); }
 
         /* ------------- archive ------------- */
         .sl-era { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-bottom: 14px;
@@ -3381,7 +3842,18 @@ export default function StorylinesScreen() {
         }
         .sl-meeting-outcome__kicker { margin: 0 0 6px; font-size: 9.5px; font-weight: 900; letter-spacing: .16em; text-transform: uppercase; color: var(--green); }
         .sl-meeting-outcome h4 { margin: 0 0 8px; font-size: 18px; line-height: 1.35; font-weight: 800; }
+        .sl-meeting-outcome--negative {
+          border-color: rgba(255,95,109,.35);
+          background: linear-gradient(180deg, rgba(255,95,109,.1), rgba(5,14,23,.7));
+        }
+        .sl-meeting-outcome--negative .sl-meeting-outcome__kicker { color: var(--red); }
+        .sl-meeting-outcome--positive {
+          border-color: rgba(82,223,148,.28);
+          background: linear-gradient(180deg, rgba(82,223,148,.08), rgba(5,14,23,.7));
+        }
+        .sl-meeting-outcome--positive .sl-meeting-outcome__kicker { color: var(--green); }
         .sl-meeting-outcome__summary { margin: 0 0 12px; font-size: 13px; line-height: 1.55; color: var(--muted-2); }
+        .sl-choice-empty { font-size: 12px; color: var(--muted); text-align: center; padding: 10px 0; }
         .sl-block { margin-bottom: 22px; }
         .sl-block__bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
         .sl-block__title { display: flex; align-items: center; gap: 9px; margin: 0 0 10px;
@@ -4030,6 +4502,13 @@ export default function StorylinesScreen() {
           </div>
         ) : department === "press_room" ? (
           <div>
+            {pressOutcome ? (
+              <MeetingOutcomePanel
+                outcome={pressOutcome}
+                kicker="Press conference"
+                onDismiss={() => setPressOutcome(null)}
+              />
+            ) : null}
             {pressQueue.length ? (
               pressQueue.map((press) => (
                 <article key={str(press.id)} className="sl-press">
@@ -4042,36 +4521,63 @@ export default function StorylinesScreen() {
                   </div>
                   <div className="sl-press__body">
                     {press.summary ? <p className="sl-press__summary">{press.summary}</p> : null}
-                    {asArray(press.questions).map((q) => (
-                      <div key={str(q.id)} className="sl-press__q">
+                    {press.context?.record ? (
+                      <p className="sl-press__record">
+                        Team record: <strong>{str(press.context.record)}</strong>
+                        {press.context.league_rank ? (
+                          <span> · Rank #{Number(press.context.league_rank)}</span>
+                        ) : null}
+                      </p>
+                    ) : null}
+                    {asArray(press.context_triggers).length ? (
+                      <div className="sl-press__context" aria-label="Active story triggers">
+                        {asArray(press.context_triggers).map((t) => (
+                          <span key={str(t.code)} className="sl-press__trigger" title={str(t.label)}>
+                            ✓ {str(t.label)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {asArray(press.questions).map((q) => {
+                      const answeredQuestions = new Set(asArray(press.answered_questions).map((id) => str(id)));
+                      const questionAnswered = answeredQuestions.has(str(q.id));
+                      return (
+                      <div key={str(q.id)} className={`sl-press__q${questionAnswered ? " sl-press__q--done" : ""}`}>
                         <div className="sl-press__reporter">
                           <i aria-hidden />
                           {str(q.reporter_name || "Reporter")}
                           {q.outlet ? ` · ${q.outlet}` : ""}
+                          {questionAnswered ? <em className="sl-press__answered">Answered</em> : null}
                         </div>
+                        {asArray(q.context_tags).length ? (
+                          <div className="sl-press__q-tags">
+                            {asArray(q.context_tags).map((tag) => (
+                              <span key={str(tag)} className="sl-press__q-tag">
+                                ✓ {str(tag).replace(/_/g, " ")}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
                         <p className="sl-press__question">{str(q.question || "")}</p>
-                        <div className="sl-choices">
+                        <div className="sl-choices sl-choices--press">
                           {asArray(q.responses).map((resp) => {
-                            const sid = str(press.storyline_id);
+                            const sid = str(press.storyline_id || press.id);
                             const choiceId = `${str(q.id)}:${str(resp.id)}`;
                             const busy = busyChoice === `${sid}:${choiceId}`;
                             return (
-                              <button
+                              <ResponseChoiceButton
                                 key={resp.id}
-                                type="button"
-                                className="sl-choice"
-                                disabled={Boolean(busyChoice)}
+                                response={resp}
+                                className="sl-choice sl-choice--press"
+                                disabled={Boolean(busyChoice) || questionAnswered}
+                                busy={busy}
                                 onClick={() => handlePressResponse(press, str(q.id), str(resp.id))}
-                              >
-                                <strong>{resp.label}</strong>
-                                {resp.description ? <span>{resp.description}</span> : null}
-                                {busy ? <em>Answering…</em> : null}
-                              </button>
+                              />
                             );
                           })}
                         </div>
                       </div>
-                    ))}
+                    );})}
                   </div>
                 </article>
               ))
@@ -4223,11 +4729,21 @@ export default function StorylinesScreen() {
               </div>
 
               <div className="sl-case__body">
+                {openCase.triggerReasons?.length ? (
+                  <MeetingCausePanel reasons={openCase.triggerReasons} title="Why this story fired" />
+                ) : openCase.triggerReason ? (
+                  <section className="sl-case__section">
+                    <h4>Why this story fired</h4>
+                    <p className="sl-case__prose">{openCase.triggerReason}</p>
+                  </section>
+                ) : null}
                 {openCase.description && openCase.description !== openCase.summary ? (
                   <p className="sl-case__prose">{openCase.description}</p>
                 ) : null}
 
-                {isRumourStory(openCase) ? <TradeSwap story={openCase} /> : null}
+                {isRumourStory(openCase) || isTradeDeskStory(openCase) ? (
+                  <TradeSummaryPanel story={openCase} />
+                ) : null}
                 <ConductChannels story={openCase} />
                 {selectedDossier ? <DossierCard dossier={selectedDossier} /> : null}
 
@@ -4453,6 +4969,7 @@ export default function StorylinesScreen() {
         ) : (
           /* ================= NEWSROOM ================= */
           <>
+            {department === "front_page" ? <StoryImpactReport report={storyImpactReport} /> : null}
             {leadStory ? (
               <LeadStory
                 story={leadStory}

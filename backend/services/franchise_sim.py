@@ -3992,12 +3992,20 @@ def _build_narrative_summary(session: FranchiseSession) -> Dict[str, Any]:
     )
     cached = _peek_cached_narrative_universe_payload(session)
     alerts = list(cached.get("breaking_alerts") or [])[:8]
+    story_impact_report: Dict[str, Any] = {}
+    try:
+        from app.sim_engine.franchise.storyline_engine import build_story_impact_report  # noqa: WPS433
+
+        story_impact_report = build_story_impact_report(session)
+    except Exception:
+        story_impact_report = {}
     return {
         "narrative_revision": _narrative_cache_revision(session),
         "pending_interactions": pending,
         "breaking_alerts": alerts,
         "social_post_count": len(getattr(session, "social_posts", None) or []),
         "reddit_thread_count": len(getattr(session, "reddit_threads", None) or []),
+        "story_impact_report": story_impact_report,
     }
 
 
@@ -8620,6 +8628,9 @@ def _normalize_storyline_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         out["effects"] = dict(raw.get("effects") or {})
     if raw.get("effect_summary") is not None:
         out["effect_summary"] = str(raw.get("effect_summary") or "").strip()
+    impact_lines = raw.get("impact_lines")
+    if isinstance(impact_lines, list):
+        out["impact_lines"] = [str(x) for x in impact_lines if str(x).strip()]
     for key in (
         "storyline_id",
         "stable_key",
@@ -8630,6 +8641,7 @@ def _normalize_storyline_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         "reason_text",
         "execution",
         "severity",
+        "event_tier",
         "short_summary",
         "description",
         "player_id",
@@ -8694,6 +8706,11 @@ def _normalize_storyline_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         "to_team_abbrev",
         "related_teams",
         "teams",
+        "trade_value",
+        "trade_type_label",
+        "importance",
+        "reason_text",
+        "reason_codes",
         # Narrative universe
         "arc_id",
         "beat_id",
@@ -9052,12 +9069,15 @@ def _merge_simengine_league_news_into_storylines(session: FranchiseSession) -> N
 
 def _record_storyline(session: FranchiseSession, event: Dict[str, Any]) -> None:
     raw = event if isinstance(event, dict) else {}
-    try:
-        from app.sim_engine.franchise.storyline_engine import enrich_storyline_for_narrative_universe  # noqa: WPS433
+    light_bulk = bool(getattr(session, "_light_game_stat_accumulation", False))
+    skip_univ = light_bulk and str(raw.get("type") or "").lower() in ("trade", "trade_rumor")
+    if not skip_univ:
+        try:
+            from app.sim_engine.franchise.storyline_engine import enrich_storyline_for_narrative_universe  # noqa: WPS433
 
-        raw = enrich_storyline_for_narrative_universe(session, raw)
-    except Exception:
-        pass
+            raw = enrich_storyline_for_narrative_universe(session, raw)
+        except Exception:
+            pass
     ev = _normalize_storyline_payload(raw)
     if not ev.get("headline"):
         return
@@ -9808,24 +9828,39 @@ def _trade_category_label(category: str) -> str:
     return raw.title()
 
 
-def build_cpu_trade_transaction_event(
+def _trade_event_id(ev: Dict[str, Any], calendar_idx: int) -> str:
+    trade_id = str(ev.get("trade_id") or (ev.get("execution") or {}).get("trade_id") or "")
+    if not trade_id:
+        trade_id = f"cpu_trade:{calendar_idx}:{hashlib.sha1(str(ev.get('headline') or ev).encode('utf-8', 'ignore')).hexdigest()[:10]}"
+    return trade_id
+
+
+def _trade_wire_seen_register(session: FranchiseSession, trade_id: str) -> bool:
+    """Return True when this trade_id is newly registered (first popup/storyline build)."""
+    tid = str(trade_id or "").strip()
+    if not tid:
+        return True
+    seen = getattr(session, "cpu_trade_event_seen_ids", None)
+    if not isinstance(seen, set):
+        seen = set(list(seen or []))
+        session.cpu_trade_event_seen_ids = seen
+    if tid in seen:
+        return False
+    seen.add(tid)
+    return True
+
+
+def _compose_cpu_trade_wire_payload(
     session: FranchiseSession,
     ev: Dict[str, Any],
     *,
     calendar_idx: int,
     iso: str = "",
-) -> Optional[Dict[str, Any]]:
-    """Shared post-commit event builder for regular-season and draft-day CPU trades."""
-    trade_id = str(ev.get("trade_id") or (ev.get("execution") or {}).get("trade_id") or "")
-    if not trade_id:
-        trade_id = f"cpu_trade:{calendar_idx}:{hashlib.sha1(str(ev.get('headline') or ev).encode('utf-8', 'ignore')).hexdigest()[:10]}"
-    seen = getattr(session, "cpu_trade_event_seen_ids", None)
-    if not isinstance(seen, set):
-        seen = set(list(seen or []))
-        session.cpu_trade_event_seen_ids = seen
-    if trade_id in seen:
-        return None
-    seen.add(trade_id)
+    trade_id: Optional[str] = None,
+    resolve_players: bool = True,
+) -> Dict[str, Any]:
+    """Build trade wire payload. Set resolve_players=False during bulk sim for speed."""
+    tid = str(trade_id or _trade_event_id(ev, calendar_idx))
 
     to_team = str(ev.get("team") or ev.get("to_team_id") or "")
     from_team = str(ev.get("from_team_id") or "")
@@ -9833,7 +9868,6 @@ def build_cpu_trade_transaction_event(
     from_tm = _resolve_session_team(session, from_team)
     to_abbr = _franchise_team_abbrev(to_tm) if to_tm is not None else (to_team or "?")
     from_abbr = _franchise_team_abbrev(from_tm) if from_tm is not None else (from_team or "?")
-    # Never leave bare numeric club ids in the wire copy.
     if to_abbr.isdigit() and to_tm is not None:
         to_abbr = _team_abbr(to_tm, to_team) or to_abbr
     if from_abbr.isdigit() and from_tm is not None:
@@ -9841,16 +9875,19 @@ def build_cpu_trade_transaction_event(
     to_name = _display_team(to_tm) if to_tm is not None else to_team
     from_name = _display_team(from_tm) if from_tm is not None else from_team
 
-    to_assets, from_assets = _structured_trade_assets_from_execution(ev, session=session)
     to_lines, from_lines = _cpu_trade_asset_lines(ev, session=session)
-    if not to_lines:
-        to_lines = [str(a.get("display_name") or "") for a in to_assets if a.get("display_name")]
-    if not from_lines:
-        from_lines = [str(a.get("display_name") or "") for a in from_assets if a.get("display_name")]
+    if resolve_players:
+        to_assets, from_assets = _structured_trade_assets_from_execution(ev, session=session)
+        if not to_lines:
+            to_lines = [str(a.get("display_name") or "") for a in to_assets if a.get("display_name")]
+        if not from_lines:
+            from_lines = [str(a.get("display_name") or "") for a in from_assets if a.get("display_name")]
+    else:
+        to_assets = [{"asset_type": "player", "display_name": ln} for ln in to_lines if str(ln).strip()]
+        from_assets = [{"asset_type": "player", "display_name": ln} for ln in from_lines if str(ln).strip()]
 
     reason_codes = [str(c) for c in list(ev.get("reason_codes") or []) if str(c).strip()]
     reason_text = str(ev.get("reason_text") or "").strip() or _reason_text_from_codes(reason_codes)
-    # Expand short single-line reasons with secondary codes when available.
     if reason_codes and len(reason_text.split()) < 12:
         expanded = _reason_text_from_codes(reason_codes, fallback=reason_text)
         if expanded:
@@ -9878,7 +9915,7 @@ def build_cpu_trade_transaction_event(
         f"Context: {reason_text}",
     ]
     return {
-        "id": f"cpu_trade_popup:{trade_id}",
+        "id": f"cpu_trade_popup:{tid}",
         "kind": "storyline",
         "type": "trade",
         "event_type": "CPU_TRADE",
@@ -9901,8 +9938,8 @@ def build_cpu_trade_transaction_event(
         "date": str(iso or calendar_idx),
         "season": season_y,
         "season_label": season_label,
-        "trade_id": trade_id,
-        "transaction_id": trade_id,
+        "trade_id": tid,
+        "transaction_id": tid,
         "trade_category": category,
         "trade_type_label": _trade_category_label(category),
         "importance": importance,
@@ -9940,6 +9977,27 @@ def build_cpu_trade_transaction_event(
         "theme": "info",
         "icon": "⇄",
     }
+
+
+def build_cpu_trade_transaction_event(
+    session: FranchiseSession,
+    ev: Dict[str, Any],
+    *,
+    calendar_idx: int,
+    iso: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Shared post-commit event builder for regular-season and draft-day CPU trades."""
+    trade_id = _trade_event_id(ev, calendar_idx)
+    if not _trade_wire_seen_register(session, trade_id):
+        return None
+    return _compose_cpu_trade_wire_payload(
+        session,
+        ev,
+        calendar_idx=calendar_idx,
+        iso=iso,
+        trade_id=trade_id,
+        resolve_players=True,
+    )
 
 
 def _max_moved_player_trade_value(ev: Dict[str, Any]) -> float:
@@ -9994,24 +10052,220 @@ def _max_moved_player_trade_value(ev: Dict[str, Any]) -> float:
     return best
 
 
+def _merge_trade_storyline_enrichment(
+    session: FranchiseSession,
+    ev: Dict[str, Any],
+    *,
+    calendar_idx: int,
+    iso: str,
+    light_bulk: bool = False,
+) -> Dict[str, Any]:
+    """Attach structured assets + trade value bars to league trade storylines."""
+    if str(ev.get("type") or "").lower() != "trade":
+        return ev
+    if ev.get("teams") and ev.get("trade_value"):
+        return ev
+    cached = ev.get("_wire_payload")
+    if isinstance(cached, dict):
+        enriched = cached
+    else:
+        try:
+            enriched = _compose_cpu_trade_wire_payload(
+                session,
+                ev,
+                calendar_idx=calendar_idx,
+                iso=iso,
+                resolve_players=not light_bulk,
+            )
+        except Exception:
+            return ev
+    if not enriched:
+        return ev
+    out = dict(ev)
+    for key in (
+        "teams",
+        "trade_value",
+        "trade_category",
+        "trade_type_label",
+        "reason_text",
+        "reason_codes",
+        "details",
+        "summary",
+        "story_report",
+        "importance",
+        "team_id",
+        "from_team_id",
+        "team_abbrev",
+        "max_player_trade_value",
+        "trade_id",
+    ):
+        if enriched.get(key) is not None:
+            out[key] = enriched[key]
+    headline = str(out.get("headline") or "").strip()
+    if headline.lower() in ("", "trade completed"):
+        out["headline"] = str(enriched.get("summary") or headline or "Trade completed")
+    out["category"] = "trade"
+    out["type"] = "trade"
+    if enriched.get("effect_summary"):
+        out["effect_summary"] = str(enriched.get("effect_summary") or "")
+    out["_wire_payload"] = enriched
+    return out
+
+
+def _maybe_emit_trade_wire_rumors(
+    session: FranchiseSession,
+    *,
+    calendar_idx: int,
+    iso: str,
+    rng: Any,
+    trades_today: int = 0,
+    light_bulk: bool = False,
+) -> None:
+    """Light trade-rumor beats when the wire is quiet — keeps the Trades desk active."""
+    if trades_today > 0 or light_bulk:
+        return
+    bulk = bool(getattr(session, "_bulk_calendar_advance", False))
+    if bulk:
+        return
+    try:
+        chance = 0.22 if int(calendar_idx) % 7 in (1, 4) else 0.10
+        if float(rng.random()) > chance:
+            return
+    except Exception:
+        return
+    league = getattr(session.sim, "league", None)
+    teams = list(getattr(league, "teams", None) or [])
+    if len(teams) < 4:
+        return
+    profiles = dict(getattr(session, "cpu_franchise_profiles", None) or {})
+    sellers = [
+        t
+        for t in teams
+        if str((profiles.get(str(getattr(t, "team_id", getattr(t, "id", ""))) or {}) or {}).get("team_direction") or "")
+        in ("SELLER", "REBUILDING", "DEEP_REBUILD", "CAP_CORRECTION")
+    ]
+    pool = sellers or teams
+    try:
+        seller = rng.choice(pool)
+        buyer = rng.choice([t for t in teams if t is not seller] or pool)
+    except Exception:
+        return
+    seller_id = str(getattr(seller, "team_id", None) or getattr(seller, "id", "") or "")
+    buyer_id = str(getattr(buyer, "team_id", None) or getattr(buyer, "id", "") or "")
+    if not seller_id or not buyer_id:
+        return
+    roster = list(getattr(seller, "roster", None) or [])
+    if not roster:
+        return
+    try:
+        player = rng.choice(roster)
+    except Exception:
+        return
+    pname = _name_str(player)
+    pid = str(getattr(player, "id", "") or "")
+    ovr = _trade_popup_ovr(player)
+    tv = None
+    if ovr is not None:
+        try:
+            tv = max(8.0, min(85.0, float(ovr) * 0.72))
+        except Exception:
+            tv = None
+    seller_abbr = _franchise_team_abbrev(seller) or seller_id[:3].upper()
+    buyer_abbr = _franchise_team_abbrev(buyer) or buyer_id[:3].upper()
+    templates = [
+        f"League sources: {buyer_abbr} have inquired about {pname} ({seller_abbr}).",
+        f"Trade chatter: {seller_abbr} listening on {pname}; {buyer_abbr} among interested clubs.",
+        f"Insider wire: {pname} drawing pre-deadline attention — {buyer_abbr} kicking tires.",
+        f"Market pulse: {seller_abbr} open to moving {pname}; value expected in {60 if tv and tv > 60 else 45}+ range.",
+    ]
+    try:
+        headline = str(rng.choice(templates))
+    except Exception:
+        headline = templates[0]
+    _record_storyline(
+        session,
+        {
+            "type": "trade",
+            "category": "trade_rumor",
+            "priority": "MEDIUM",
+            "headline": headline,
+            "summary": f"Rumor mill activity around {pname} as teams position ahead of the calendar.",
+            "team_id": seller_id,
+            "from_team_id": seller_id,
+            "to_team_id": buyer_id,
+            "player_id": pid,
+            "player_name": pname,
+            "player_overall": ovr,
+            "from_team_abbrev": seller_abbr,
+            "to_team_abbrev": buyer_abbr,
+            "calendar_iso": iso,
+            "date": int(calendar_idx),
+            "heat": int(28 + (12 if tv and tv >= 70 else 0)),
+            "credibility": 42,
+            "knowledge_type": "rumor",
+            "public_knowledge_level": "rumor",
+            "trade_value": {
+                "left_team_id": buyer_id,
+                "right_team_id": seller_id,
+                "left_value": round(float(tv or 0) * 0.55, 1) if tv else 0,
+                "right_value": round(float(tv or 0), 1) if tv else 0,
+                "label": "Rumor value",
+            },
+            "teams": [
+                {
+                    "team_id": buyer_id,
+                    "abbreviation": buyer_abbr,
+                    "display_name": _display_team(buyer),
+                    "trade_value": round(float(tv or 0) * 0.55, 1) if tv else 0,
+                    "acquired_assets": [
+                        {
+                            "asset_type": "player",
+                            "player_id": pid,
+                            "display_name": pname,
+                            "position": _pos_str(player),
+                            "ovr": ovr,
+                            "trade_value": round(float(tv or 0), 1) if tv else None,
+                        }
+                    ],
+                },
+                {
+                    "team_id": seller_id,
+                    "abbreviation": seller_abbr,
+                    "display_name": _display_team(seller),
+                    "trade_value": round(float(tv or 0), 1) if tv else 0,
+                    "acquired_assets": [],
+                },
+            ],
+            "source_label": "League insider wire",
+            "cause_type": "TRADE_RUMOR",
+        },
+    )
+
+
 def _enqueue_cpu_trade_popup(session: FranchiseSession, ev: Dict[str, Any], *, calendar_idx: int, iso: str) -> None:
     """Queue a trade wire popup only when a moved player's trade value exceeds 70.
 
     Quieter depth / pick-heavy swaps stay in the showcase archive without a modal.
     """
     max_player_value = _max_moved_player_trade_value(ev)
+    cached = ev.get("_wire_payload")
+    popup: Optional[Dict[str, Any]] = None
+    if isinstance(cached, dict):
+        trade_id = str(cached.get("trade_id") or _trade_event_id(ev, calendar_idx))
+        if not _trade_wire_seen_register(session, trade_id):
+            return
+        popup = dict(cached)
+    else:
+        popup = build_cpu_trade_transaction_event(session, ev, calendar_idx=calendar_idx, iso=iso)
+    if not popup:
+        return
     if max_player_value <= 70.0:
         try:
-            popup = build_cpu_trade_transaction_event(session, ev, calendar_idx=calendar_idx, iso=iso)
-            if popup:
-                arch = list(getattr(session, "showcase_archive", None) or [])
-                arch.append(dict(popup))
-                session.showcase_archive = arch[-64:]
+            arch = list(getattr(session, "showcase_archive", None) or [])
+            arch.append(dict(popup))
+            session.showcase_archive = arch[-64:]
         except Exception:
             pass
-        return
-    popup = build_cpu_trade_transaction_event(session, ev, calendar_idx=calendar_idx, iso=iso)
-    if not popup:
         return
     try:
         popup["max_player_trade_value"] = round(float(max_player_value), 1)
@@ -10160,6 +10414,14 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
         ev2.setdefault("priority", "MEDIUM")
         ev2["date"] = int(ev2.get("date") or calendar_idx)
         ev2["calendar_iso"] = iso
+        if str(ev2.get("type")) == "trade":
+            ev2 = _merge_trade_storyline_enrichment(
+                session,
+                ev2,
+                calendar_idx=int(calendar_idx),
+                iso=iso,
+                light_bulk=light_bulk,
+            )
         _record_storyline(session, ev2)
         if str(ev2.get("type")) == "trade":
             _enqueue_cpu_trade_popup(session, ev2, calendar_idx=int(calendar_idx), iso=iso)
@@ -10173,6 +10435,18 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
                     description=str(ev2.get("headline") or "A trade involving your club was processed."),
                     source=f"trade_{calendar_idx}_{ft}_{tt}",
                 )
+    trades_today = sum(1 for ev in news_tmp if str(ev.get("type")) == "trade")
+    try:
+        _maybe_emit_trade_wire_rumors(
+            session,
+            calendar_idx=int(calendar_idx),
+            iso=iso,
+            rng=rng,
+            trades_today=trades_today,
+            light_bulk=light_bulk,
+        )
+    except Exception:
+        pass
     if not socio_ok:
         logger = logging.getLogger(__name__)
         logger.warning("Daily socio-economics tick failed at calendar day %s", int(calendar_idx))
@@ -11383,6 +11657,8 @@ def _bridge_universe_events_to_story_wire(session: FranchiseSession, *, limit: i
 
 def _maybe_backfill_sparse_storylines(session: FranchiseSession) -> None:
     """Backfill storyline_events when bulk/light advance left the newsroom wire nearly empty."""
+    if not bool(getattr(session, "_eligible_sparse_storyline_backfill", False)):
+        return
     phase = str(getattr(session, "phase", "") or "")
     if phase not in ("regular", "preseason", "playoffs"):
         return
@@ -14203,6 +14479,9 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
     if not bool(getattr(session, "_defer_payload_invalidation", False)):
         invalidate_session_payload_caches(session, reason="advance_day")
 
+    if not bool(getattr(session, "_bulk_calendar_advance", False)):
+        session._eligible_sparse_storyline_backfill = False
+
     return {
         "status": "ok",
         "mode": "day",
@@ -14214,6 +14493,50 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
         "games_simulated": int(len(slots)),
         "pending_decisions": _pending_decision_snapshot(session),
     }
+def _days_until_user_game_inclusive(session: FranchiseSession, *, max_lookahead: int = 82) -> int:
+    """Calendar days to advance so the user's next scheduled game is simulated."""
+    cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    uid = str(getattr(session, "user_team_id", "") or "")
+    if not uid:
+        return 1
+    by_day = getattr(session, "by_day", None) or {}
+    cal = getattr(session, "nhl_calendar", None) or []
+    if not cal or cur >= len(cal):
+        return 1
+    phase = str(getattr(session, "phase", "") or "")
+    last = int(getattr(session, "nhl_regular_season_last_index", len(cal) - 1) or 0)
+    end = min(len(cal), cur + max(1, int(max_lookahead)))
+    for idx in range(cur, end):
+        if phase == "regular" and idx > last:
+            break
+        slots = list(by_day.get(idx, []) or [])
+        for sl in slots:
+            hid = _safe_slot_team_id(sl, "home_id")
+            aid = _safe_slot_team_id(sl, "away_id")
+            if uid in (hid, aid):
+                return max(1, idx - cur + 1)
+    return 1
+
+
+def advance_franchise_to_next_user_game(
+    session: FranchiseSession,
+    *,
+    auto_resolve_decisions: bool = False,
+) -> Dict[str, Any]:
+    """Advance through off-days until the user's next game day is simulated."""
+    days = _days_until_user_game_inclusive(session)
+    result = advance_franchise_bulk(
+        session,
+        mode="days",
+        count=int(days),
+        auto_resolve_decisions=bool(auto_resolve_decisions),
+    )
+    if isinstance(result, dict):
+        result["mode"] = "next_game"
+        result["target_days"] = int(days)
+    return result
+
+
 def advance_franchise_one_game(session: FranchiseSession) -> Dict[str, Any]:
     """One real NHL calendar day (same as advance day ΓÇö game-by-game calendar progression removed)."""
     return advance_franchise_day(session)
@@ -14404,6 +14727,7 @@ def advance_franchise_bulk(
                 pass
         if not prior_defer_inv:
             invalidate_session_payload_caches(session, reason="bulk_complete")
+        session._eligible_sparse_storyline_backfill = bool(use_light_bulk and len(steps) > 0)
 
     last = steps[-1] if steps else {
         "status": "blocked" if getattr(session, "pending_decisions", None) else "noop",
@@ -14518,16 +14842,23 @@ def _apply_press_storyline_choice(session: FranchiseSession, storyline_id: str, 
     from app.sim_engine.franchise.storyline_engine import apply_press_conference_response  # noqa: WPS433
 
     result = apply_press_conference_response(session, str(entry.get("id") or ""), qid, rid)
+    response_label = str(result.get("response_label") or "").strip()
     session.last_gm_result = {
         "kind": "press",
         "headline": str(result.get("headline") or "You addressed the media."),
-        "summary": (
-            f"The room heard your answer ({result.get('tone') or 'neutral'}). "
-            "A follow-up beat is now on the storylines wire."
+        "summary": str(
+            result.get("effect_summary")
+            or (
+                f"The room heard your answer ({result.get('tone') or 'neutral'}). "
+                "A follow-up beat is now on the storylines wire."
+            )
         ),
+        "choice_label": response_label,
+        "receipts": dict(result.get("receipts") or {}),
+        "conference_complete": bool(result.get("conference_complete")),
     }
     ev = _find_storyline_event(session, sid) or _find_storyline_event(session, str(entry.get("storyline_id") or ""))
-    if ev:
+    if ev and result.get("conference_complete"):
         ev["requires_action"] = False
         ev["status"] = "resolved"
     try:

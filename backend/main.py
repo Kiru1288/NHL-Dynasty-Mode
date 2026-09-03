@@ -19,6 +19,7 @@ import services.franchise_sim as franchise_sim
 from services.franchise_sim import (
     advance_franchise_bulk,
     advance_franchise_day,
+    advance_franchise_to_next_user_game,
     advance_season_phase,
     apply_decision,
     apply_storyline_choice,
@@ -161,7 +162,7 @@ class FranchiseStartBody(BaseModel):
 class FranchiseAdvanceBody(BaseModel):
     mode: str = Field(
         default="day",
-        description="day | days | game | games | season",
+        description="day | days | game | games | season | next_game",
     )
     count: int = Field(default=1, ge=1, le=320)
     auto_resolve: bool = Field(
@@ -704,7 +705,7 @@ def post_franchise_advance(
     s = _session_or_404(x_franchise_session)
     b = body or FranchiseAdvanceBody()
     mode = (b.mode or "day").strip().lower()
-    allowed = {"day", "days", "game", "games", "season"}
+    allowed = {"day", "days", "game", "games", "season", "next_game"}
     if mode not in allowed:
         raise HTTPException(
             status_code=400,
@@ -714,13 +715,21 @@ def post_franchise_advance(
     simple_one_day = mode == "day" and int(b.count) == 1
 
     try:
-        if simple_one_day:
-            if b.auto_resolve:
-                auto_resolve_franchise_decisions(s)
+        if mode == "next_game":
+            step = advance_franchise_to_next_user_game(
+                s,
+                auto_resolve_decisions=bool(b.auto_resolve),
+            )
+        elif simple_one_day and b.auto_resolve:
+            # Calendar / quick advance: same light bulk path as multi-day sims (~seconds, not minutes).
+            step = advance_franchise_bulk(
+                s,
+                mode="days",
+                count=1,
+                auto_resolve_decisions=True,
+            )
+        elif simple_one_day:
             step = advance_franchise_day(s)
-            # Post-day GM prompts use the same default as bulk sim: first option when auto_resolve is on.
-            if b.auto_resolve:
-                auto_resolve_franchise_decisions(s)
         else:
             step = advance_franchise_bulk(
                 s,

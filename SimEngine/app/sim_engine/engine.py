@@ -15104,9 +15104,9 @@ class SimEngine:
         day_ratio = max(0.0, min(1.0, float(day) / max(1.0, float(max_day))))
         # Quieter league cadence — prior 48–78 season target felt spammy.
         if "seasonal_target" not in market_state:
-            market_state["seasonal_target"] = int(38 + round((rng.random() - 0.5) * 10))
-        seasonal_target = int(market_state.get("seasonal_target", 38) or 38)
-        seasonal_target = max(30, min(48, seasonal_target))
+            market_state["seasonal_target"] = int(44 + round((rng.random() - 0.5) * 12))
+        seasonal_target = int(market_state.get("seasonal_target", 44) or 44)
+        seasonal_target = max(38, min(58, seasonal_target))
         if day_ratio < 0.25:
             expected_curve = 0.14
         elif day_ratio < 0.5:
@@ -15123,7 +15123,7 @@ class SimEngine:
             trade_prob += min(0.10, 0.015 * trade_deficit)
         if deadline_phase > 0.7:
             trade_prob += 0.05
-        trade_prob = max(0.015, min(0.72, trade_prob))
+        trade_prob = max(0.022, min(0.72, trade_prob))
         if getattr(self.league, "transcendent_active", False):
             tank_sellers = sum(1 for tm in teams if int(getattr(tm, "_franchise_tank_pressure", 0) or 0) >= 50)
             if tank_sellers:

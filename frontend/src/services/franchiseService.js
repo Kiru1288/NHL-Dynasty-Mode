@@ -65,6 +65,7 @@ export async function advanceFranchise(opts = {}) {
     m === "season" ||
     m === "days" ||
     m === "games" ||
+    m === "next_game" ||
     (m === "day" && Number(count) > 1) ||
     Number(count) > 1;
   try {

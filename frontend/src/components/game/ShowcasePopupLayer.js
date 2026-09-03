@@ -521,6 +521,25 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
         </section>
       ) : null}
 
+      {Array.isArray(pop.trigger_reasons) && pop.trigger_reasons.length ? (
+        <section className="media-alert__section">
+          <h4 className="media-alert__section-title">Why this story fired</h4>
+          <ul className="media-alert__impact-list">
+            {pop.trigger_reasons.map((row, idx) => (
+              <li key={`${row.code || "trigger"}-${idx}`}>
+                <strong>{String(row.label || row.code || "Signal")}</strong>
+                {row.value != null ? `: ${String(row.value)}` : ""}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : pop.trigger_reason ? (
+        <section className="media-alert__section">
+          <h4 className="media-alert__section-title">Why this story fired</h4>
+          <p className="media-alert__story">{String(pop.trigger_reason)}</p>
+        </section>
+      ) : null}
+
       <section className="media-alert__section">
         <h4 className="media-alert__section-title">{demand ? "Demand" : "Story Report"}</h4>
         <p className="media-alert__story">{storyText}</p>
@@ -556,7 +575,14 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
             }
           />
           {impactText && !pop.overall_delta ? <p className="media-alert__impact-line">{impactText}</p> : null}
-          {!impactText && pop.overall_delta == null ? (
+          {Array.isArray(pop.impact_lines) && pop.impact_lines.length ? (
+            <ul className="media-alert__impact-list">
+              {pop.impact_lines.map((line, idx) => (
+                <li key={idx}>{String(line)}</li>
+              ))}
+            </ul>
+          ) : null}
+          {!impactText && pop.overall_delta == null && !(Array.isArray(pop.impact_lines) && pop.impact_lines.length) ? (
             <p className="media-alert__impact-muted">No direct rating change reported.</p>
           ) : null}
         </section>
@@ -1023,6 +1049,13 @@ function ShowcasePopupStyles() {
         line-height: 1.45;
         color: var(--ops-text, #e9f7fb);
       }
+      .media-alert__impact-list {
+        margin: 8px 0 0;
+        padding-left: 18px;
+        color: var(--ops-text-secondary, #b8c8d4);
+        font-size: 0.82rem;
+        line-height: 1.4;
+      }
       .media-alert__actions {
         display: flex;
         flex-wrap: wrap;
@@ -1120,7 +1153,12 @@ export function ShowcasePopupLayer() {
     else if (act.id === "lines") setScreen?.(SCREENS.EDIT_LINES);
   };
 
-  const isMediaAlert = kind === "storyline" || kind === "legal_trouble" || kind === "injury";
+  const isMediaAlert =
+    kind === "storyline" ||
+    kind === "legal_trouble" ||
+    kind === "injury" ||
+    kind === "player_meeting" ||
+    kind === "breaking_news";
   const isTradeAlert = isMediaAlert && isTradePopup(first);
 
   return (
@@ -1159,7 +1197,7 @@ export function ShowcasePopupLayer() {
           {kind === "injury" ? (
             <InjuryBody pop={first} onDismiss={dismiss} onAction={handleAction} queueCount={visiblePopups.length} />
           ) : null}
-          {kind === "storyline" || kind === "legal_trouble" ? (
+          {kind === "storyline" || kind === "legal_trouble" || kind === "player_meeting" || kind === "breaking_news" ? (
             <StorylineBody
               pop={first}
               onDismiss={dismiss}
@@ -1169,7 +1207,7 @@ export function ShowcasePopupLayer() {
               queueCount={visiblePopups.length}
             />
           ) : null}
-          {!["wjc_tournament", "showcase_game", "allstar_game", "injury", "storyline", "legal_trouble"].includes(
+          {!["wjc_tournament", "showcase_game", "allstar_game", "injury", "storyline", "legal_trouble", "player_meeting", "breaking_news"].includes(
             kind
           ) ? (
             <LeagueNoticeBody pop={first} />

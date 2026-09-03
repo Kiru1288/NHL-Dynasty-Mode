@@ -149,15 +149,9 @@ def _format_line(template: str, ctx: Dict[str, Any]) -> str:
 
 
 def pick_line(rng: random.Random, stype: str, ctx: Dict[str, Any], body: bool = False) -> str:
-    pool: List[str] = list(BODIES.get(str(stype), []) if body else HEADLINES.get(str(stype), []))
-    if not pool:
-        name = str(ctx.get("name") or ctx.get("player_name") or "Player")
-        team = str(ctx.get("team") or ctx.get("team_name") or "Team")
-        if body:
-            return f"{name} storyline developing around {team}."
-        return f"{name} — developing story for {team}"
-    template = rng.choice(pool)
-    return _format_line(template, ctx)
+    from app.sim_engine.franchise.storyline_procedural import compose_data_story_copy  # noqa: WPS433
+
+    return compose_data_story_copy(str(stype), dict(ctx or {}), rng, body=body)
 
 
 def classify_story_lane(

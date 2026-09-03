@@ -1103,7 +1103,7 @@ export function GameUIProvider({ children }) {
       const soloDay = m === "day" && c === 1;
       if (soloDay && !franchiseState?.flags?.can_advance) return null;
       const multiDayBlock =
-        m === "days" || m === "games" || (m === "day" && c > 1);
+        m === "days" || m === "games" || m === "next_game" || (m === "day" && c > 1);
       const seasonBlock = m === "season";
       const bulkSim = multiDayBlock || seasonBlock;
       const effectiveAuto = autoResolve === undefined ? Boolean(bulkSim) : Boolean(autoResolve);
@@ -1113,7 +1113,14 @@ export function GameUIProvider({ children }) {
       try {
         if (bulkSim) {
           if (!effectiveAuto && franchiseState?.flags && !franchiseState.flags.can_advance) return null;
-          const targetMode = seasonBlock ? "season" : m === "games" ? "games" : "days";
+          const targetMode =
+            m === "next_game"
+              ? "next_game"
+              : seasonBlock
+                ? "season"
+                : m === "games"
+                  ? "games"
+                  : "days";
           const targetCount = seasonBlock ? 1 : c;
           res = await advanceFranchise({
             mode: targetMode,
