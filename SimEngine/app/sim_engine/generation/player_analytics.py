@@ -1378,11 +1378,23 @@ def calculate_skater_value_metrics(row: Mapping[str, Any]) -> Dict[str, Any]:
     xa60 = safe_float(first_present(row, ["xa_per_60", "expected_assists_per_60"], 0.0), 0.0)
     xga60 = safe_float(first_present(row, ["xga_per_60"], 0.0), 0.0)
     penalty_diff60 = safe_float(first_present(row, ["penalty_differential_per_60"], 0.0), 0.0)
+    cf_count = safe_float(first_present(row, ["cf", "corsi_for"], 0.0), 0.0)
+    ca = safe_float(first_present(row, ["ca", "corsi_against"], 0.0), 0.0)
+    xgf_count = safe_float(first_present(row, ["xgf", "expected_goals_for", "on_ice_xgf"], 0.0), 0.0)
+    xga = safe_float(first_present(row, ["xga", "expected_goals_against", "on_ice_xga"], 0.0), 0.0)
     cf_raw = first_present(row, ["cf_pct", "corsi_pct"], None)
     xgf_raw = first_present(row, ["xgf_pct"], None)
     gf_raw = first_present(row, ["gf_pct", "goal_share"], None)
-    cf_pct = safe_float(cf_raw, 0.0) if cf_raw is not None else 0.0
-    xgf_pct = safe_float(xgf_raw, 0.0) if xgf_raw is not None else 0.0
+    if cf_count > 0 and ca > 0:
+        cf_pct = cf_count / (cf_count + ca)
+        cf_raw = cf_pct
+    else:
+        cf_pct = safe_float(cf_raw, 0.0) if cf_raw is not None else 0.0
+    if xgf_count > 0 and xga > 0:
+        xgf_pct = xgf_count / (xgf_count + xga)
+        xgf_raw = xgf_pct
+    else:
+        xgf_pct = safe_float(xgf_raw, 0.0) if xgf_raw is not None else 0.0
     # Prefer live on-ice goals when present so stored/stale gf_pct can't disagree
     # with the GF-GA sublabel (e.g. 60.7% over 75-73).
     gf_on_v = safe_float(first_present(row, ["gf_on", "on_ice_gf"], 0.0), 0.0)
@@ -1392,8 +1404,6 @@ def calculate_skater_value_metrics(row: Mapping[str, Any]) -> Dict[str, Any]:
         gf_raw = gf_pct
     else:
         gf_pct = safe_float(gf_raw, 0.0) if gf_raw is not None else 0.0
-    ca = safe_float(first_present(row, ["ca", "corsi_against"], 0.0), 0.0)
-    xga = safe_float(first_present(row, ["xga", "expected_goals_against", "on_ice_xga"], 0.0), 0.0)
     possession_sample_valid = ca > 0 and xga > 0 and cf_raw is not None and xgf_raw is not None
     special_points = safe_float(
         first_present(

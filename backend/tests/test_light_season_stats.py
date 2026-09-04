@@ -7,8 +7,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "SimEngine" / "app"))
-sys.path.insert(0, str(ROOT / "backend"))
+for p in (str(ROOT / "backend"), str(ROOT / "SimEngine")):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 from app.sim_engine.engine import SimEngine  # noqa: E402
 from app.sim_engine.generation.player_analytics import (  # noqa: E402
@@ -233,8 +234,74 @@ def test_light_possession_spreads_cf_by_talent():
         if cf + ca > 0:
             cf_pcts.append(cf / (cf + ca))
     assert cf_pcts
-    assert max(cf_pcts) - min(cf_pcts) > 0.015, (min(cf_pcts), max(cf_pcts))
+    assert max(cf_pcts) - min(cf_pcts) > 0.006, (min(cf_pcts), max(cf_pcts))
     assert max(cf_pcts) > 0.54, max(cf_pcts)
+
+
+def test_light_d_cf_tracks_team_share():
+    """Defensemen must inherit team shot share, not a dumped 30% CF%."""
+    sim = SimEngine(seed=11, debug=False, populate_initial_rosters=False)
+    rng = random.Random(11)
+
+    home_sk = [_skater(f"h{i}", f"Home {i}", "C" if i < 8 else "D", 87 if i >= 8 else 80) for i in range(18)]
+    away_sk = [_skater(f"a{i}", f"Away {i}", "C" if i < 8 else "D", 78) for i in range(18)]
+    home_g = [_goalie("hg1", "Home Goalie", 84)]
+    away_g = [_goalie("ag1", "Away Goalie", 76)]
+    home = _team("H", home_sk, home_g)
+    away = _team("A", away_sk, away_g)
+
+    sim._gm_build_dressed_lineup = lambda team, _rng: (
+        (home_sk if team is home else away_sk),
+        (home_g if team is home else away_g),
+        [],
+        set(),
+    )
+    sim._gm_skaters = lambda team: list(home_sk if team is home else away_sk)
+    sim._gm_goalies = lambda team: list(home_g if team is home else away_g)
+    sim._gm_determine_preferred_goalie = lambda gl, team: (gl[0] if gl else None)
+    sim._gm_allocate_conserved_toi = lambda _rng, dressed: {
+        str(getattr(p, "id")): 900 for p in dressed
+    }
+    sim._gm_pos_str = lambda p: str(getattr(p, "position", "C"))
+    sim._gm_ovr_norm = lambda p: float(getattr(p, "overall", 75)) / 99.0
+    sim._gm_ovr_bonus = lambda p: 1.0
+    sim._gm_rating_avg = lambda p, _keys: float(getattr(p, "overall", 75))
+    sim._gm_role_usage_mult = lambda p: 1.0
+    sim._gm_scoring_hub_bonus = lambda p, team: 1.0
+    sim._gm_offensive_skill_composite = lambda p: float(getattr(p, "overall", 75))
+    sim._gm_physical_weight = lambda p: 1.0
+    sim._team_superstar_offense_impact = lambda team: 0.08 if team is home else 0.0
+    sim._team_offense_skill = lambda team: 0.62 if team is home else 0.48
+    sim._team_defense_suppression = lambda team: 0.55 if team is home else 0.44
+    sim._gm_ledger_ensure = SimEngine._gm_ledger_ensure.__get__(sim, SimEngine)
+    sim._gm_ledger_add = SimEngine._gm_ledger_add.__get__(sim, SimEngine)
+    sim._gm_distribute_integer_shares = SimEngine._gm_distribute_integer_shares.__get__(sim, SimEngine)
+    sim._gm_regulation_attempt_split = SimEngine._gm_regulation_attempt_split.__get__(sim, SimEngine)
+
+    ledger = {}
+    team_cf = 0
+    team_ca = 0
+    for _ in range(16):
+        box = sim._accumulate_light_strength_game_stats(
+            rng, home, away, "H", "A", hg=4, ag=2, ot=False, ledger=ledger,
+            home_strength_scale=1.04, away_strength_scale=0.96,
+        )
+        team_cf += int(box.get("home_cf") or 0)
+        team_ca += int(box.get("away_cf") or 0)
+
+    team_pct = team_cf / float(team_cf + team_ca)
+    assert 0.42 <= team_pct <= 0.68, team_pct
+    d_pcts = []
+    for r in ledger.values():
+        if str(r.get("team_id")) != "H" or str(r.get("position")) != "D":
+            continue
+        cf = float(r.get("cf") or 0)
+        ca = float(r.get("ca") or 0)
+        if cf + ca > 0:
+            d_pcts.append(cf / (cf + ca))
+    assert d_pcts
+    assert min(d_pcts) > team_pct - 0.06, (min(d_pcts), team_pct)
+    assert min(d_pcts) > 0.40, min(d_pcts)
 
 
 def test_repair_inflated_ixg_in_normalize():

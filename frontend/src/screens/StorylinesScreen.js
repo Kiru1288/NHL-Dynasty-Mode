@@ -1024,10 +1024,10 @@ function isBreakingStory(story) {
   const p = String(story?.priority || "").toUpperCase();
   const heat = Number(story?.heat) || 0;
   const level = str(story?.breakingLevel).toLowerCase();
-  if (level === "breaking" || level === "league_defining" || level === "developing") return true;
+  if (level === "breaking" || level === "league_defining") return true;
+  if (level === "developing") return false;
   if (p === "CRITICAL" || Boolean(story?.requiresAction)) return true;
-  if (story?.categoryKey === "personal_life" && heat >= 28) return true;
-  return heat >= 62;
+  return heat >= 78;
 }
 
 function storyScore(story) {

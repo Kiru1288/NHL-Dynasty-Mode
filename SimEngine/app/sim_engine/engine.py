@@ -12334,7 +12334,9 @@ class SimEngine:
 
         home_share = 0.50 + edge * 0.95
         home_share += rng.uniform(-0.045, 0.045)
-        home_share = max(0.30, min(0.70, home_share))
+        # NHL team CF% over a 15-game sample almost never lives at 30/70.
+        # Keep talent edge, but don't invent historically impossible shares.
+        home_share = max(0.40, min(0.60, home_share))
 
         pace = 102.0 + 16.0 * ((home_off + away_off) * 0.5 - 0.5)
         pace += rng.uniform(-9.0, 9.0)
@@ -13726,14 +13728,23 @@ class SimEngine:
                 away_strength_scale=float(away_strength_scale),
             )
         except Exception:
-            home_cf_n = max(40, int(round(rng.gauss(55, 6))))
-            away_cf_n = max(40, int(round(rng.gauss(55, 6))))
-        # Mild finishing tether so blowouts don't look like pure process disasters.
+            # Zero-sum fallback — independent gauss made both clubs "outshoot" the other.
+            total = 110
+            home_cf_n = 55 + int(round(rng.uniform(-6, 6)))
+            away_cf_n = max(40, total - home_cf_n)
+            home_cf_n = max(40, total - away_cf_n)
+        # Possession must track the scoreboard, not float as a second sim.
+        # A 4-2 winner can still lose CF%, but not sit at 30% shot share.
         gd = float(hg - ag)
-        if abs(gd) >= 2.0:
-            nudge = int(round(gd * 1.15))
-            home_cf_n = max(28, min(95, home_cf_n + nudge))
-            away_cf_n = max(28, min(95, away_cf_n - nudge))
+        if gd != 0.0:
+            nudge = int(round(gd * 2.2))
+            home_cf_n += nudge
+            away_cf_n -= nudge
+        total_cf = max(1, int(home_cf_n) + int(away_cf_n))
+        home_share_n = float(home_cf_n) / float(total_cf)
+        home_share_n = max(0.40, min(0.60, home_share_n))
+        home_cf_n = max(36, int(round(total_cf * home_share_n)))
+        away_cf_n = max(36, total_cf - home_cf_n)
 
         # Prime hub multipliers once so goal weight math doesn't re-sort rosters.
         for tm in (home, away):
@@ -14174,16 +14185,12 @@ class SimEngine:
                 pid = _id_str(p, "id")
                 toi = max(1, int(toi_map.get(pid, 0) or 0))
                 ovr_n = max(0.35, self._gm_ovr_norm(p))
-                pos = self._gm_pos_str(p).upper()
-                # Offensive tilt: stars / forwards drive CF; D absorb more CA.
-                off_tilt = (ovr_n - 0.72) * 0.28
-                if pos == "D":
-                    off_tilt -= 0.05
-                elif pos in ("LW", "RW", "C", "F"):
-                    off_tilt += 0.04
-                base = toi * (0.50 + 0.50 * ovr_n)
-                cf_weights.append(max(0.05, base * (1.0 + off_tilt)))
-                ca_weights.append(max(0.05, base * (1.0 - off_tilt * 0.55)))
+                # On-ice Corsi is a 5-man share: CF and CA use the same ice time.
+                # A blanket "D absorb CA" dump invented 30% CF% for 85-OVR pairs.
+                ice = toi * (0.50 + 0.50 * ovr_n)
+                deploy = max(-0.05, min(0.07, (ovr_n - 0.74) * 0.16))
+                cf_weights.append(max(0.05, ice * (1.0 + deploy)))
+                ca_weights.append(max(0.05, ice * (1.0 - deploy * 0.35)))
             cf_total = sum(cf_weights) or 1.0
             ca_total = sum(ca_weights) or 1.0
             for p, cf_w, ca_w in zip(skaters, cf_weights, ca_weights):

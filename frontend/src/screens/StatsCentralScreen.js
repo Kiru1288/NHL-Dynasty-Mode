@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { getStatsCentral } from "../services/franchiseService";
 import { formatFranchiseApiError, isExpiredFranchiseSessionError } from "../services/api";
 import { useGameUI } from "../game/GameUIContext";
@@ -17,6 +24,10 @@ import {
   getTeamLogoSrc,
 } from "../utils/teamLogos";
 import PlayerHeadshot from "../components/PlayerHeadshot";
+import {
+  mergePlayerHeadshotIdentity,
+  pickHeadshotIdentityFields,
+} from "../utils/playerHeadshots";
 import {
   getAverageTOIMinutes as deriveAverageTOIMinutes,
   formatAverageTOI,
@@ -438,6 +449,15 @@ function findTeamRank(teams, targetTeam, key, direction = "desc") {
 
 function deriveTeamAnalyticsFromPlayerLedger(team) {
   const t = team || {};
+  const cf = Number(t.cf ?? t.corsi_for ?? 0);
+  const ca = Number(t.ca ?? t.corsi_against ?? 0);
+  const ff = Number(t.ff ?? t.fenwick_for ?? 0);
+  const fa = Number(t.fa ?? t.fenwick_against ?? 0);
+  const xgf = Number(t.xgf ?? t.expected_goals_for ?? 0);
+  const xga = Number(t.xga ?? t.expected_goals_against ?? 0);
+  const cfFromCounts = cf > 0 && ca > 0 ? cf / (cf + ca) : undefined;
+  const ffFromCounts = ff > 0 && fa > 0 ? ff / (ff + fa) : undefined;
+  const xgfFromCounts = xgf > 0 && xga > 0 ? xgf / (xgf + xga) : undefined;
   return {
     ...t,
     gf: t.gf ?? t.goals_for,
@@ -448,17 +468,17 @@ function deriveTeamAnalyticsFromPlayerLedger(team) {
     shots_for: t.shots_for ?? t.sf,
     sa: t.sa ?? t.shots_against,
     shots_against: t.shots_against ?? t.sa,
-    cf_pct: hasRealPct(t.cf_pct) ? t.cf_pct : undefined,
-    ff_pct: hasRealPct(t.ff_pct) ? t.ff_pct : undefined,
-    xgf_pct: hasRealPct(t.xgf_pct) ? t.xgf_pct : undefined,
+    cf_pct: cfFromCounts ?? (hasRealPct(t.cf_pct) ? t.cf_pct : undefined),
+    ff_pct: ffFromCounts ?? (hasRealPct(t.ff_pct) ? t.ff_pct : undefined),
+    xgf_pct: xgfFromCounts ?? (hasRealPct(t.xgf_pct) ? t.xgf_pct : undefined),
     sh_pct: hasRealPct(t.sh_pct) ? t.sh_pct : undefined,
     sv_pct: hasRealPct(t.sv_pct) ? t.sv_pct : undefined,
     pdo: normalizePdo(t.pdo),
     analytics_missing: {
       pp_pct: !(hasRealPct(t.pp_pct) && t.pp_pct > 0),
       pk_pct: !(hasRealPct(t.pk_pct) && t.pk_pct > 0),
-      cf_pct: !hasRealPct(t.cf_pct),
-      xgf_pct: !hasRealPct(t.xgf_pct),
+      cf_pct: !(cfFromCounts != null || hasRealPct(t.cf_pct)),
+      xgf_pct: !(xgfFromCounts != null || hasRealPct(t.xgf_pct)),
       pdo: !hasRealNumber(normalizePdo(t.pdo)),
     },
   };
@@ -720,31 +740,31 @@ function normalizeSkater(row, index, teamId) {
   const cfSample = cf + ca;
   const cfPctRaw = firstPresent(row?.cf_pct, row?.corsi_pct, row?.corsi_percentage, row?.corsi_for_pct, row?.cf_percentage);
   const cfPct =
-    cf > 0 && ca > 0
-      ? cfPctRaw !== undefined
+    cfSample > 0 && cf > 0 && ca > 0
+      ? pct(cf, cfSample)
+      : cfPctRaw !== undefined
         ? normalizePct(cfPctRaw)
-        : pct(cf, cfSample)
-      : undefined;
+        : undefined;
 
   const ffPct =
     ff > 0 && fa > 0
-      ? firstPresent(row?.ff_pct, row?.fenwick_pct, row?.fenwick_percentage) !== undefined
+      ? pct(ff, ff + fa)
+      : firstPresent(row?.ff_pct, row?.fenwick_pct, row?.fenwick_percentage) !== undefined
         ? normalizePct(firstPresent(row?.ff_pct, row?.fenwick_pct, row?.fenwick_percentage))
-        : pct(ff, ff + fa)
-      : undefined;
+        : undefined;
 
   const xgfPctGp = safeInt(firstPresent(row?.xgf_pct_gp), 0);
   const xgfPctSum = pickStat(row?.xgf_pct_sum, 0);
   const xgfSample = xgf + xga;
   const xgfPctRaw = firstPresent(row?.xgf_pct, row?.expected_goals_pct, row?.expected_goals_for_pct);
   const xgfPct =
-    xgf > 0 && xga > 0
-      ? xgfPctRaw !== undefined
-        ? normalizePct(xgfPctRaw)
-        : pct(xgf, xgfSample)
+    xgfSample > 0 && xgf > 0 && xga > 0
+      ? pct(xgf, xgfSample)
       : xgfPctGp > 0
         ? xgfPctSum / xgfPctGp
-        : undefined;
+        : xgfPctRaw !== undefined
+          ? normalizePct(xgfPctRaw)
+          : undefined;
 
   const gfSample = gfOn + gaOn;
   const gfPct =
@@ -1036,6 +1056,7 @@ function normalizeSkater(row, index, teamId) {
     overall: safeInt(firstPresent(row?.overall, row?.ovr, row?.effective_ovr), 0),
     ovr: safeInt(firstPresent(row?.ovr, row?.overall, row?.effective_ovr), 0),
     potential: pickStat(row?.potential, 0),
+    ...pickHeadshotIdentityFields(row),
   };
 }
 
@@ -1194,6 +1215,7 @@ function normalizeGoalie(row, index, teamId) {
     overall: safeInt(firstPresent(row?.overall, row?.ovr, row?.effective_ovr), 0),
     ovr: safeInt(firstPresent(row?.ovr, row?.overall, row?.effective_ovr), 0),
     potential: pickStat(row?.potential, 0),
+    ...pickHeadshotIdentityFields(row),
   };
 }
 
@@ -1265,31 +1287,31 @@ function normalizeTeam(row, index = 0) {
   // Require both sides — CF-only (light-sim artifact) must not become 100%.
   const cfPctRaw = firstPresent(row?.cf_pct, row?.corsi_pct, row?.corsi_for_pct, row?.cf_percentage);
   const cfPct =
-    cf > 0 && ca > 0
-      ? cfPctRaw !== undefined
+    cfSample > 0 && cf > 0 && ca > 0
+      ? pct(cf, cfSample)
+      : cfPctRaw !== undefined
         ? normalizePct(cfPctRaw)
-        : pct(cf, cfSample)
-      : undefined;
+        : undefined;
 
   const ffPct =
     ff > 0 && fa > 0
-      ? firstPresent(row?.ff_pct, row?.fenwick_pct) !== undefined
+      ? pct(ff, ff + fa)
+      : firstPresent(row?.ff_pct, row?.fenwick_pct) !== undefined
         ? normalizePct(firstPresent(row?.ff_pct, row?.fenwick_pct))
-        : pct(ff, ff + fa)
-      : undefined;
+        : undefined;
 
   const xgfPctGp = safeInt(firstPresent(row?.xgf_pct_gp), 0);
   const xgfPctSum = pickStat(row?.xgf_pct_sum, 0);
   const xgfSample = xgf + xga;
   const xgfPctRaw = firstPresent(row?.xgf_pct, row?.expected_goals_pct, row?.expected_goals_for_pct);
   const xgfPct =
-    xgf > 0 && xga > 0
-      ? xgfPctRaw !== undefined
-        ? normalizePct(xgfPctRaw)
-        : pct(xgf, xgfSample)
+    xgfSample > 0 && xgf > 0 && xga > 0
+      ? pct(xgf, xgfSample)
       : xgfPctGp > 0
         ? xgfPctSum / xgfPctGp
-        : undefined;
+        : xgfPctRaw !== undefined
+          ? normalizePct(xgfPctRaw)
+          : undefined;
 
   // Zero xGF with no against sample is missing data, not a real 0.0 season.
   const xgfDisplay = xgf > 0 ? xgf : undefined;
@@ -1774,9 +1796,31 @@ const LEAGUE_LEADER_VIEWS = [
 ];
 
 const PLAYER_PAGE_SIZE = {
-  team: 18,
-  league: 16,
+  team: 22,
+  league: 26,
 };
+
+function useTablePageSize(scope, density) {
+  const [pageSize, setPageSize] = useState(
+    scope === "league" ? PLAYER_PAGE_SIZE.league : PLAYER_PAGE_SIZE.team
+  );
+
+  useEffect(() => {
+    const compute = () => {
+      const rowHeight = density === "comfortable" ? 48 : 40;
+      const chrome = scope === "league" ? 300 : 260;
+      const rows = Math.floor((window.innerHeight - chrome) / rowHeight);
+      const floor = scope === "league" ? PLAYER_PAGE_SIZE.league : PLAYER_PAGE_SIZE.team;
+      setPageSize(Math.max(floor, Math.min(42, rows)));
+    };
+
+    compute();
+    window.addEventListener("resize", compute);
+    return () => window.removeEventListener("resize", compute);
+  }, [scope, density]);
+
+  return pageSize;
+}
 
 function fmtSavePct(value) {
   if (!hasRealPct(value)) return "—";
@@ -1912,6 +1956,14 @@ function applyPlayerOverallLookup(rows, rosterRowById, franchiseState) {
   const overallCache = new Map();
 
   return rows.map((row, index) => {
+    const id = pickString(
+      row?.player_id,
+      row?.playerId,
+      row?.id,
+      row?.pid,
+      playerId(row, index)
+    );
+    const rosterRow = id ? rosterRowById?.get(id) : null;
     const overall = resolvePlayerDisplayOverall(
       row,
       franchiseState,
@@ -1920,16 +1972,22 @@ function applyPlayerOverallLookup(rows, rosterRowById, franchiseState) {
       index
     );
 
-    if (overall <= 0) return row;
-
     const meta = resolvePlayerOverallMeta(row, rosterRowById, index);
+    const merged = mergePlayerHeadshotIdentity(
+      {
+        ...row,
+        ...meta,
+        ...(overall > 0
+          ? {
+              overall,
+              ovr: overall,
+            }
+          : {}),
+      },
+      rosterRow
+    );
 
-    return {
-      ...row,
-      ...meta,
-      overall,
-      ovr: overall,
-    };
+    return merged;
   });
 }
 
@@ -2185,6 +2243,7 @@ export function StatsCentralScreen() {
     <div className="game-screen stats-central-screen">
       <StatsCentralStyles />
       <StatsCentralRedesignStyles />
+      <StatsCentralStretchStyles />
 
       <main className="statscentral-shell register-ops">
         <header className="sc-terminal-header">
@@ -2283,6 +2342,11 @@ function PlayerStatsPage({
   const [pinnedIds, setPinnedIds] = useState([]);
   const [compareLeftId, setCompareLeftId] = useState("");
   const [compareRightId, setCompareRightId] = useState("");
+  const tablePageSize = useTablePageSize(scope, density);
+
+  useEffect(() => {
+    setPage(1);
+  }, [tablePageSize, submenu]);
 
   const activeSkaters =
     scope === "league"
@@ -2520,7 +2584,14 @@ function PlayerStatsPage({
   ].includes(submenu);
 
   return (
-    <div className="sc-player-workspace">
+    <div
+      className={[
+        "sc-player-workspace",
+        showFilters ? "has-filter-bar" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <PlayerStatsWorkspaceHeader
         submenu={submenu}
         onSubmenuChange={setSubmenu}
@@ -2552,7 +2623,7 @@ function PlayerStatsPage({
         />
       ) : null}
 
-      <div className="sc-player-panel">
+      <div className="sc-player-panel" data-sc-fill-panel>
         {submenu === "overview" ? (
           <PlayerOverviewTab
             data={data}
@@ -2578,6 +2649,7 @@ function PlayerStatsPage({
             changeSort={changeSort}
             density={density}
             page={page}
+            pageSize={tablePageSize}
             onPageChange={setPage}
             selectedPlayerId={selectedPlayerId}
             onSelectPlayer={(player) =>
@@ -2600,6 +2672,7 @@ function PlayerStatsPage({
             changeSort={changeSort}
             density={density}
             page={page}
+            pageSize={tablePageSize}
             onPageChange={setPage}
             selectedPlayerId={selectedPlayerId}
             onSelectPlayer={(player) =>
@@ -2622,6 +2695,7 @@ function PlayerStatsPage({
             changeSort={changeSort}
             density={density}
             page={page}
+            pageSize={tablePageSize}
             onPageChange={setPage}
             selectedPlayerId={selectedPlayerId}
             onSelectPlayer={(player) =>
@@ -3393,6 +3467,59 @@ function buildOverviewTeamMetrics(team = {}, totalTeams = 32) {
   return metrics;
 }
 
+function useOverviewFillLayout(mainGridRef) {
+  const [mainGridHeight, setMainGridHeight] = useState(null);
+
+  useLayoutEffect(() => {
+    const grid = mainGridRef.current;
+    if (!grid) return undefined;
+
+    const measure = () => {
+      const shell = grid.closest(".statscentral-shell");
+      const shellRect = shell?.getBoundingClientRect();
+      const gridTop = grid.getBoundingClientRect().top;
+      const anchorBottom = shellRect?.bottom ?? window.innerHeight;
+      const shellPaddingBottom = shell
+        ? parseFloat(window.getComputedStyle(shell).paddingBottom) || 0
+        : 0;
+      const next = Math.max(
+        320,
+        Math.floor(anchorBottom - gridTop - shellPaddingBottom - 4)
+      );
+
+      setMainGridHeight((current) => (current === next ? current : next));
+    };
+
+    measure();
+    const raf1 = requestAnimationFrame(() => {
+      measure();
+      requestAnimationFrame(measure);
+    });
+
+    const ro =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(grid);
+    const shell = grid.closest(".statscentral-shell");
+    if (shell) ro?.observe(shell);
+    const chrome = grid
+      .closest(".sc-player-overview")
+      ?.querySelector(".sc-player-overview__chrome");
+    if (chrome) ro?.observe(chrome);
+
+    window.addEventListener("resize", measure);
+    window.visualViewport?.addEventListener("resize", measure);
+
+    return () => {
+      cancelAnimationFrame(raf1);
+      ro?.disconnect();
+      window.removeEventListener("resize", measure);
+      window.visualViewport?.removeEventListener("resize", measure);
+    };
+  }, [mainGridRef]);
+
+  return mainGridHeight;
+}
+
 function PlayerOverviewTab({
   data,
   scope,
@@ -3411,6 +3538,9 @@ function PlayerOverviewTab({
   const [sortKey, setSortKey] = useState("pts");
   const [sortDir, setSortDir] = useState("desc");
   const [sortPreset, setSortPreset] = useState("points");
+  const overviewRef = useRef(null);
+  const mainGridRef = useRef(null);
+  const mainGridHeight = useOverviewFillLayout(mainGridRef);
 
   const skaters = useMemo(() => {
     const pool =
@@ -3500,19 +3630,6 @@ function PlayerOverviewTab({
     hasRealNumber(goalie.gsax)
       ? goalie.gsax
       : normalizePct(goalie.sv_pct, 0)
-  );
-
-  const teamMetrics = useMemo(
-    () => buildOverviewTeamMetrics(team, totalTeams),
-    [team, totalTeams]
-  );
-  const contributionMetrics = useMemo(
-    () => buildOverviewRosterContribution(skaters),
-    [skaters]
-  );
-  const frontOfficeReads = useMemo(
-    () => buildOverviewFrontOfficeRead(team, skaters, goaliePool),
-    [team, skaters, goaliePool]
   );
 
   const headerTeam = {
@@ -3632,127 +3749,142 @@ function PlayerOverviewTab({
   ];
 
   return (
-    <div className="sc-player-overview">
-      <OverviewTeamSnapshotHeader
-        team={headerTeam}
-        totalTeams={totalTeams}
-        skaterCount={skaters.length}
-        goalieCount={goaliePool.length}
-        scope={scope}
-      />
-
-      <section className="sc-overview-featured-row">
-        <OverviewFeaturedLeaderCard
-          eyebrow="Featured Offensive Leader"
-          player={topPoints}
-          primaryLabel="PTS"
-          primaryValue={topPoints ? fmtZero(topPoints.pts) : "—"}
-          supporting={[
-            topPoints ? `${fmtZero(topPoints.g)} G` : null,
-            topPoints ? `${fmtZero(topPoints.a)} A` : null,
-            topPoints
-              ? `${fmtMaybeTwo(perGame(topPoints.pts, topPoints.gp))} P/GP`
-              : null,
-          ].filter(Boolean)}
-          teams={teams}
-          franchiseState={franchiseState}
-          onSelectPlayer={onSelectPlayer}
-          featured
+    <div className="sc-player-overview" ref={overviewRef}>
+      <div className="sc-player-overview__chrome">
+        <OverviewTeamSnapshotHeader
+          team={headerTeam}
+          totalTeams={totalTeams}
+          skaterCount={skaters.length}
+          goalieCount={goaliePool.length}
+          scope={scope}
         />
 
-        <OverviewFeaturedLeaderCard
-          eyebrow="Goals"
-          player={topGoals}
-          primaryLabel="G"
-          primaryValue={topGoals ? fmtZero(topGoals.g) : "—"}
-          supporting={[
-            topGoals ? `${fmtZero(topGoals.sog)} SOG` : null,
-            topGoals
-              ? fmtOverviewShPct(
-                  firstPresent(topGoals.shooting_pct, topGoals.sh_pct)
-                )
-              : null,
-          ].filter(Boolean)}
-          teams={teams}
-          franchiseState={franchiseState}
-          onSelectPlayer={onSelectPlayer}
-        />
+        <section className="sc-overview-featured-row">
+          <OverviewFeaturedLeaderCard
+            eyebrow="Featured Offensive Leader"
+            player={topPoints}
+            primaryLabel="PTS"
+            primaryValue={topPoints ? fmtZero(topPoints.pts) : "—"}
+            supporting={[
+              topPoints ? `${fmtZero(topPoints.g)} G` : null,
+              topPoints ? `${fmtZero(topPoints.a)} A` : null,
+              topPoints
+                ? `${fmtMaybeTwo(perGame(topPoints.pts, topPoints.gp))} P/GP`
+                : null,
+            ].filter(Boolean)}
+            teams={teams}
+            franchiseState={franchiseState}
+            onSelectPlayer={onSelectPlayer}
+            featured
+          />
 
-        <OverviewFeaturedLeaderCard
-          eyebrow="Assists"
-          player={topAssists}
-          primaryLabel="A"
-          primaryValue={topAssists ? fmtZero(topAssists.a) : "—"}
-          supporting={[
-            topAssists ? `${fmtZero(topAssists.pts)} PTS` : null,
-          ].filter(Boolean)}
-          teams={teams}
-          franchiseState={franchiseState}
-          onSelectPlayer={onSelectPlayer}
-        />
+          <OverviewFeaturedLeaderCard
+            eyebrow="Goals"
+            player={topGoals}
+            primaryLabel="G"
+            primaryValue={topGoals ? fmtZero(topGoals.g) : "—"}
+            supporting={[
+              topGoals ? `${fmtZero(topGoals.sog)} SOG` : null,
+              topGoals
+                ? fmtOverviewShPct(
+                    firstPresent(topGoals.shooting_pct, topGoals.sh_pct)
+                  )
+                : null,
+            ].filter(Boolean)}
+            teams={teams}
+            franchiseState={franchiseState}
+            onSelectPlayer={onSelectPlayer}
+          />
 
-        <OverviewFeaturedLeaderCard
-          eyebrow="Rate Leader"
-          player={topPpg}
-          primaryLabel="P/GP"
-          primaryValue={
-            topPpg
-              ? fmtMaybeTwo(perGame(topPpg.pts, topPpg.gp))
-              : "—"
-          }
-          supporting={[
-            topPpg ? `${fmtZero(topPpg.pts)} PTS` : null,
-            topPpg ? `${fmtZero(topPpg.gp)} GP` : null,
-          ].filter(Boolean)}
-          teams={teams}
-          franchiseState={franchiseState}
-          onSelectPlayer={onSelectPlayer}
-        />
+          <OverviewFeaturedLeaderCard
+            eyebrow="Assists"
+            player={topAssists}
+            primaryLabel="A"
+            primaryValue={topAssists ? fmtZero(topAssists.a) : "—"}
+            supporting={[
+              topAssists ? `${fmtZero(topAssists.pts)} PTS` : null,
+            ].filter(Boolean)}
+            teams={teams}
+            franchiseState={franchiseState}
+            onSelectPlayer={onSelectPlayer}
+          />
 
-        <OverviewFeaturedLeaderCard
-          eyebrow="Defensive / TOI"
-          player={topToi}
-          primaryLabel="TOI"
-          primaryValue={topToi ? formatSmallTOI(topToi) : "—"}
-          supporting={[
-            topToi
-              ? normalizePosition(
-                  firstPresent(topToi.position, topToi.pos, "D")
-                )
-              : null,
-            topToi ? `${fmtZero(topToi.pts)} PTS` : null,
-          ].filter(Boolean)}
-          teams={teams}
-          franchiseState={franchiseState}
-          onSelectPlayer={onSelectPlayer}
-        />
+          <OverviewFeaturedLeaderCard
+            eyebrow="Rate Leader"
+            player={topPpg}
+            primaryLabel="P/GP"
+            primaryValue={
+              topPpg
+                ? fmtMaybeTwo(perGame(topPpg.pts, topPpg.gp))
+                : "—"
+            }
+            supporting={[
+              topPpg ? `${fmtZero(topPpg.pts)} PTS` : null,
+              topPpg ? `${fmtZero(topPpg.gp)} GP` : null,
+            ].filter(Boolean)}
+            teams={teams}
+            franchiseState={franchiseState}
+            onSelectPlayer={onSelectPlayer}
+          />
 
-        <OverviewFeaturedLeaderCard
-          eyebrow="Goalie Leader"
-          player={topGoalie}
-          primaryLabel={
-            topGoalie && hasRealNumber(topGoalie.gsax) ? "GSAx" : "SV%"
-          }
-          primaryValue={
-            topGoalie
-              ? hasRealNumber(topGoalie.gsax)
-                ? fmtMaybeOne(topGoalie.gsax)
-                : fmtOverviewSavePct(topGoalie.sv_pct) || "—"
-              : "—"
-          }
-          supporting={[
-            topGoalie && hasRealPct(topGoalie.sv_pct)
-              ? fmtOverviewSavePct(topGoalie.sv_pct)
-              : null,
-            topGoalie ? `${fmtZero(topGoalie.gp)} GP` : null,
-          ].filter(Boolean)}
-          teams={teams}
-          franchiseState={franchiseState}
-          onSelectPlayer={onSelectPlayer}
-        />
-      </section>
+          <OverviewFeaturedLeaderCard
+            eyebrow="Defensive / TOI"
+            player={topToi}
+            primaryLabel="TOI"
+            primaryValue={topToi ? formatSmallTOI(topToi) : "—"}
+            supporting={[
+              topToi
+                ? normalizePosition(
+                    firstPresent(topToi.position, topToi.pos, "D")
+                  )
+                : null,
+              topToi ? `${fmtZero(topToi.pts)} PTS` : null,
+            ].filter(Boolean)}
+            teams={teams}
+            franchiseState={franchiseState}
+            onSelectPlayer={onSelectPlayer}
+          />
 
-      <section className="sc-overview-main-grid">
+          <OverviewFeaturedLeaderCard
+            eyebrow="Goalie Leader"
+            player={topGoalie}
+            primaryLabel={
+              topGoalie && hasRealNumber(topGoalie.gsax) ? "GSAx" : "SV%"
+            }
+            primaryValue={
+              topGoalie
+                ? hasRealNumber(topGoalie.gsax)
+                  ? fmtMaybeOne(topGoalie.gsax)
+                  : fmtOverviewSavePct(topGoalie.sv_pct) || "—"
+                : "—"
+            }
+            supporting={[
+              topGoalie && hasRealPct(topGoalie.sv_pct)
+                ? fmtOverviewSavePct(topGoalie.sv_pct)
+                : null,
+              topGoalie ? `${fmtZero(topGoalie.gp)} GP` : null,
+            ].filter(Boolean)}
+            teams={teams}
+            franchiseState={franchiseState}
+            onSelectPlayer={onSelectPlayer}
+          />
+        </section>
+      </div>
+
+      <section
+        ref={mainGridRef}
+        className="sc-overview-board-shell"
+        style={
+          mainGridHeight
+            ? {
+                height: mainGridHeight,
+                minHeight: mainGridHeight,
+                maxHeight: mainGridHeight,
+                flex: "0 0 auto",
+              }
+            : undefined
+        }
+      >
         <OverviewScoringLeadersPanel
           rows={sortedSkaters}
           columns={columns}
@@ -3764,15 +3896,6 @@ function PlayerOverviewTab({
           onSortPreset={applySortPreset}
           onSelectPlayer={onSelectPlayer}
         />
-
-        <div className="sc-overview-side-stack">
-          <OverviewTeamPerformancePanel metrics={teamMetrics} />
-          <OverviewRosterContributionPanel metrics={contributionMetrics} />
-          <OverviewFrontOfficeReadPanel
-            reads={frontOfficeReads}
-            onSelectPlayer={onSelectPlayer}
-          />
-        </div>
       </section>
     </div>
   );
@@ -3872,7 +3995,6 @@ function OverviewFeaturedLeaderCard({
           <PlayerAvatar
             player={player}
             large={featured}
-            small={!featured}
             teams={teams}
             franchiseState={franchiseState}
           />
@@ -3911,7 +4033,6 @@ function OverviewTablePlayerCell({
     <div className="sc-overview-table-player">
       <PlayerAvatar
         player={player}
-        small
         teams={teams}
         franchiseState={franchiseState}
       />
@@ -3980,17 +4101,19 @@ function OverviewScoringLeadersPanel({
         </div>
       </header>
 
-      <DataTable
-        columns={columns}
-        rows={rows}
-        sortKey={sortKey}
-        sortDir={sortDir}
-        density="compact"
-        tableClassName="sc-overview-scoring-table"
-        getRowId={(row) => row.player_id || row.id}
-        onRowClick={onSelectPlayer}
-        empty="No skater scoring rows match the current filters."
-      />
+      <div className="sc-overview-table-fill">
+        <DataTable
+          columns={columns}
+          rows={rows}
+          sortKey={sortKey}
+          sortDir={sortDir}
+          density="compact"
+          tableClassName="sc-overview-scoring-table"
+          getRowId={(row) => row.player_id || row.id}
+          onRowClick={onSelectPlayer}
+          empty="No skater scoring rows match the current filters."
+        />
+      </div>
     </section>
   );
 }
@@ -4594,7 +4717,7 @@ function PlayerAvatar({
   const logoSrc =
     player?.team_logo_src ||
     getPlayerTeamLogoSrc(player, teams, franchiseState || undefined);
-  const portraitSize = large ? "88px" : small ? "48px" : "72px";
+  const portraitSize = large ? "96px" : small ? "52px" : "72px";
 
   return (
     <div
@@ -5769,6 +5892,7 @@ function PlayersTab({
   scope = "team",
   density = "compact",
   page = 1,
+  pageSize = PLAYER_PAGE_SIZE.league,
   onPageChange,
   selectedPlayerId = "",
   onSelectPlayer,
@@ -6532,7 +6656,7 @@ function PlayersTab({
           rows={players}
           page={page}
           onPageChange={onPageChange}
-          pageSize={PLAYER_PAGE_SIZE.league}
+          pageSize={pageSize}
         />
       )}
     </div>
@@ -6550,6 +6674,7 @@ function GoaliesTab({
   changeSort,
   density = "compact",
   page = 1,
+  pageSize = PLAYER_PAGE_SIZE.league,
   onPageChange,
   selectedPlayerId = "",
   onSelectPlayer,
@@ -6842,7 +6967,7 @@ function GoaliesTab({
           rows={qualified}
           page={page}
           onPageChange={onPageChange}
-          pageSize={PLAYER_PAGE_SIZE.league}
+          pageSize={pageSize}
         />
       ) : (
         <DataTable
@@ -6889,6 +7014,7 @@ function AdvancedTab({
   sortDir,
   density = "compact",
   page = 1,
+  pageSize = PLAYER_PAGE_SIZE.league,
   onPageChange,
   selectedPlayerId = "",
   onSelectPlayer,
@@ -7109,7 +7235,7 @@ function AdvancedTab({
           rows={players}
           page={page}
           onPageChange={onPageChange}
-          pageSize={PLAYER_PAGE_SIZE.league}
+          pageSize={pageSize}
         />
       ) : (
         <DataTable
@@ -10900,10 +11026,13 @@ function StatsCentralRedesignStyles() {
   return (
     <style>{`
       .stats-central-screen {
-        height: 100vh;
+        height: 100%;
+        max-height: 100%;
         min-height: 0;
         width: 100%;
-        max-width: 100vw;
+        max-width: none;
+        display: flex;
+        flex-direction: column;
         overflow: hidden;
         background:
           radial-gradient(circle at 15% 0%, rgba(0, 206, 222, 0.08), transparent 28%),
@@ -10911,19 +11040,90 @@ function StatsCentralRedesignStyles() {
       }
 
       .statscentral-shell {
+        flex: 1;
         height: 100%;
+        max-height: 100%;
         min-height: 0;
-        width: min(100%, 1920px);
-        margin: 0 auto;
+        width: 100%;
+        max-width: none;
+        margin: 0;
+        align-self: stretch;
         display: grid;
         grid-template-rows: auto minmax(0, 1fr);
         overflow: hidden;
       }
 
+      .sc-content {
+        width: 100%;
+        max-width: none;
+        min-height: 0;
+      }
+
+      .sc-content.is-player-stats,
+      .sc-content.is-league-leaders,
+      .sc-content.is-team-stats {
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .sc-player-workspace,
+      .sc-league-leaders-workspace {
+        flex: 1;
+        height: 100%;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        overflow: hidden;
+      }
+
+      .sc-league-leaders-workspace {
+        display: flex;
+      }
+
+      .sc-player-workspace > .sc-player-header,
+      .sc-player-workspace > .sc-player-filter-bar,
+      .sc-league-leaders-workspace > header {
+        flex: 0 0 auto;
+      }
+
+      .sc-player-workspace > .sc-player-panel,
+      .sc-league-leaders-workspace > .sc-league-leaders-panel {
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+
+      .sc-player-workspace,
+      .sc-league-leaders-workspace,
+      .sc-player-panel,
+      .sc-league-leaders-panel,
+      .sc-tab-page,
+      .sc-paged-table,
+      .sc-player-overview {
+        width: 100%;
+        max-width: none;
+      }
+
+      .sc-player-panel {
+        height: 100%;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .sc-player-panel > .sc-tab-page,
+      .sc-player-panel > .sc-player-overview {
+        flex: 1;
+        min-height: 0;
+      }
+
       .sc-terminal-header {
         flex: 0 0 auto;
         min-height: 52px;
-        padding: 8px 12px;
+        padding: 8px 10px;
         display: grid;
         grid-template-columns: auto minmax(140px, 200px) minmax(0, 1fr);
         gap: 12px;
@@ -11073,7 +11273,7 @@ function StatsCentralRedesignStyles() {
       .sc-content {
         min-height: 0;
         overflow: hidden;
-        padding: 10px;
+        padding: 8px 10px 10px;
       }
 
       .sc-content.is-player-stats,
@@ -11084,21 +11284,29 @@ function StatsCentralRedesignStyles() {
 
       .sc-player-workspace,
       .sc-league-leaders-workspace {
+        flex: 1;
         height: 100%;
         min-height: 0;
-        display: grid;
-        grid-template-rows: auto auto minmax(0, 1fr);
+        display: flex;
+        flex-direction: column;
         gap: 8px;
+        overflow: hidden;
       }
 
-      .sc-league-leaders-workspace {
-        grid-template-rows: auto minmax(0, 1fr);
+      .sc-player-workspace > .sc-player-header,
+      .sc-player-workspace > .sc-player-filter-bar {
+        flex: 0 0 auto;
+      }
+
+      .sc-player-workspace > .sc-player-panel {
+        flex: 1 1 auto;
+        min-height: 0;
       }
 
       .sc-player-header {
         min-width: 0;
         display: grid;
-        grid-template-columns: minmax(150px, 205px) minmax(0, 1fr) minmax(315px, 405px);
+        grid-template-columns: minmax(140px, 190px) minmax(0, 1fr) minmax(380px, 1.15fr);
         gap: 10px;
         align-items: center;
         padding: 8px 10px;
@@ -11488,21 +11696,22 @@ function StatsCentralRedesignStyles() {
       }
 
       .sc-overview-leader-tile.is-featured .sc-overview-leader-tile-body {
-        grid-template-columns: 78px minmax(0, 1fr);
+        grid-template-columns: 96px minmax(0, 1fr);
       }
 
       .sc-overview-leader-portrait {
         position: relative;
-        width: 52px;
-        height: 52px;
-        flex: 0 0 52px;
+        width: 64px;
+        height: 64px;
+        flex: 0 0 64px;
         z-index: 1;
+        overflow: visible;
       }
 
       .sc-overview-leader-tile.is-featured .sc-overview-leader-portrait {
-        width: 78px;
-        height: 78px;
-        flex-basis: 78px;
+        width: 96px;
+        height: 96px;
+        flex-basis: 96px;
       }
 
       .sc-overview-leader-portrait .sc-avatar {
@@ -11512,8 +11721,8 @@ function StatsCentralRedesignStyles() {
 
       .sc-overview-leader-portrait .sc-avatar.is-large,
       .sc-avatar.is-large {
-        width: 78px;
-        height: 78px;
+        width: 96px;
+        height: 96px;
         border-radius: 10px;
       }
 
@@ -11588,17 +11797,42 @@ function StatsCentralRedesignStyles() {
       .sc-overview-main-grid {
         min-height: 0;
         display: grid;
-        grid-template-columns: minmax(0, 0.68fr) minmax(0, 0.32fr);
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
         gap: 10px;
         overflow: hidden;
       }
 
       .sc-overview-side-stack {
         min-height: 0;
-        display: grid;
-        grid-template-rows: minmax(0, 1.35fr) auto auto;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
         gap: 8px;
         overflow: hidden;
+      }
+
+      .sc-overview-side-stack > .sc-overview-team-performance {
+        flex: 1 1 0;
+        min-height: 0;
+      }
+
+      .sc-overview-side-stack > .sc-overview-roster-contribution,
+      .sc-overview-side-stack > .sc-overview-front-office {
+        flex: 0 0 auto;
+        min-height: 0;
+        max-height: 34%;
+        overflow: hidden;
+      }
+
+      .sc-overview-front-office .sc-overview-read-list {
+        min-height: 0;
+        overflow-y: auto;
+      }
+
+      .sc-overview-module > .sc-table-wrap {
+        min-height: 0;
+        height: 100%;
+        overflow: auto;
       }
 
       .sc-overview-module {
@@ -11666,23 +11900,29 @@ function StatsCentralRedesignStyles() {
       .sc-overview-scoring-leaders .sc-table-wrap {
         min-height: 0;
         height: 100%;
+        width: 100%;
         max-height: none;
-        overflow-x: hidden;
+        overflow-x: auto;
         overflow-y: auto;
         border: 0;
         background: transparent;
       }
 
       .sc-overview-scoring-table {
-        min-width: 0 !important;
+        min-width: 100% !important;
         width: 100%;
+        table-layout: fixed;
+      }
+
+      .sc-overview-scoring-table .is-player-col {
+        width: 30%;
       }
 
       .sc-overview-scoring-table thead th {
         position: static;
-        height: 24px;
-        padding: 0 6px;
-        font-size: 11px;
+        height: 30px;
+        padding: 0 8px;
+        font-size: 12px;
         background: rgba(10, 31, 48, 0.95);
       }
 
@@ -11692,8 +11932,10 @@ function StatsCentralRedesignStyles() {
 
       .sc-overview-scoring-table td {
         height: auto;
-        padding: 3px 6px;
-        font-size: 11px;
+        min-height: 58px;
+        padding: 6px 8px;
+        font-size: 12px;
+        vertical-align: middle;
       }
 
       .sc-overview-scoring-table tbody tr:hover td {
@@ -11703,27 +11945,36 @@ function StatsCentralRedesignStyles() {
       .sc-overview-table-player {
         min-width: 0;
         display: grid;
-        grid-template-columns: 28px minmax(0, 1fr);
-        gap: 8px;
+        grid-template-columns: 72px minmax(0, 1fr);
+        gap: 12px;
         align-items: center;
       }
 
       .sc-overview-table-player .sc-avatar {
-        width: 28px;
-        height: 28px;
+        width: 72px;
+        height: 76px;
+        overflow: visible;
+        border: 0;
+        background: transparent;
         z-index: 1;
+      }
+
+      .sc-overview-table-player .sc-avatar-player-headshot.player-headshot.photo-only .ph-nhl-image--solo {
+        object-fit: cover;
+        object-position: center 10%;
+        border-radius: 10px;
       }
 
       .sc-overview-table-player span {
         min-width: 0;
         display: grid;
-        gap: 1px;
+        gap: 2px;
       }
 
       .sc-overview-table-player strong {
         overflow: hidden;
         color: #f1f8fb;
-        font-size: 11px;
+        font-size: 13px;
         font-weight: 900;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -11732,7 +11983,7 @@ function StatsCentralRedesignStyles() {
       .sc-overview-table-player em {
         overflow: hidden;
         color: #7f9cb0;
-        font-size: 11px;
+        font-size: 12px;
         font-style: normal;
         font-weight: 800;
         text-overflow: ellipsis;
@@ -12048,7 +12299,8 @@ function StatsCentralRedesignStyles() {
 
       .sc-table-wrap {
         min-width: 0;
-        max-width: 100%;
+        max-width: none;
+        width: 100%;
         min-height: 0;
         overflow-x: auto;
         overflow-y: auto;
@@ -12067,10 +12319,30 @@ function StatsCentralRedesignStyles() {
 
       .sc-table {
         width: 100%;
-        min-width: 780px;
+        min-width: 100%;
         border-collapse: separate;
         border-spacing: 0;
         table-layout: fixed;
+      }
+
+      .sc-table .is-rank-col {
+        width: 42px;
+        min-width: 42px;
+      }
+
+      .sc-table .is-player-col {
+        width: 34%;
+        min-width: 220px;
+      }
+
+      .sc-table .is-actions-col {
+        width: 104px;
+        min-width: 104px;
+      }
+
+      .sc-table thead th.is-right:not(.is-player-col):not(.is-actions-col):not(.is-rank-col),
+      .sc-table tbody td.is-right:not(.is-player-col):not(.is-actions-col):not(.is-rank-col) {
+        width: 7.5%;
       }
 
       .sc-table thead th {
@@ -12137,8 +12409,8 @@ function StatsCentralRedesignStyles() {
         position: sticky;
         left: 0;
         z-index: 6;
-        width: 260px;
-        min-width: 260px;
+        width: 34%;
+        min-width: 220px;
         background: #071622;
       }
 
@@ -12156,8 +12428,8 @@ function StatsCentralRedesignStyles() {
       }
 
       .sc-table .is-actions-col {
-        width: 112px;
-        min-width: 112px;
+        width: 104px;
+        min-width: 104px;
       }
 
       .sc-player-row-actions {
@@ -13146,7 +13418,7 @@ function StatsCentralRedesignStyles() {
 
       @media (max-width: 1320px) {
         .sc-player-header {
-          grid-template-columns: 150px minmax(0, 1fr) 310px;
+          grid-template-columns: 140px minmax(0, 1fr) minmax(300px, 1fr);
         }
 
         .sc-player-subnav button {
@@ -13261,6 +13533,253 @@ function StatsCentralRedesignStyles() {
   );
 }
 
+function StatsCentralStretchStyles() {
+  return (
+    <style>{`
+      /* Definitive fill layout — overrides legacy grid rows / 100vh rules */
+      .stats-central-screen {
+        display: flex !important;
+        flex-direction: column !important;
+        height: 100% !important;
+        max-height: 100% !important;
+        min-height: 0 !important;
+        width: 100% !important;
+        max-width: none !important;
+        overflow: hidden !important;
+      }
+
+      .statscentral-shell {
+        flex: 1 1 auto !important;
+        align-self: stretch !important;
+        height: 100% !important;
+        max-height: 100% !important;
+        min-height: 0 !important;
+        width: 100% !important;
+        max-width: none !important;
+        display: grid !important;
+        grid-template-rows: auto minmax(0, 1fr) !important;
+        overflow: hidden !important;
+      }
+
+      .sc-content,
+      .sc-content.is-player-stats,
+      .sc-content.is-league-leaders,
+      .sc-content.is-team-stats {
+        height: 100% !important;
+        min-height: 0 !important;
+        max-height: 100% !important;
+        overflow: hidden !important;
+        display: flex !important;
+        flex-direction: column !important;
+        width: 100% !important;
+        max-width: none !important;
+      }
+
+      .sc-player-workspace,
+      .sc-league-leaders-workspace {
+        flex: 1 1 0 !important;
+        height: 100% !important;
+        min-height: 0 !important;
+        display: flex !important;
+        flex-direction: column !important;
+        overflow: hidden !important;
+        width: 100% !important;
+        max-width: none !important;
+      }
+
+      .sc-player-workspace > .sc-player-header,
+      .sc-player-workspace > .sc-player-filter-bar {
+        flex: 0 0 auto !important;
+      }
+
+      .sc-player-workspace > .sc-player-panel,
+      .sc-league-leaders-workspace > .sc-league-leaders-panel,
+      .sc-player-panel[data-sc-fill-panel] {
+        flex: 1 1 0 !important;
+        min-height: 0 !important;
+        height: auto !important;
+        display: flex !important;
+        flex-direction: column !important;
+        overflow: hidden !important;
+        width: 100% !important;
+      }
+
+      .sc-player-panel > .sc-player-overview,
+      .sc-player-panel > .sc-tab-page {
+        flex: 1 1 0 !important;
+        min-height: 0 !important;
+        height: 100% !important;
+        overflow: hidden !important;
+      }
+
+      .sc-player-overview {
+        display: flex !important;
+        flex-direction: column !important;
+        height: 100% !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+        gap: 10px !important;
+      }
+
+      .sc-player-overview__chrome {
+        flex: 0 0 auto !important;
+        min-height: 0 !important;
+      }
+
+      .sc-overview-board-shell,
+      .sc-overview-main-grid {
+        flex: 1 1 auto !important;
+        min-height: calc(var(--ui-vh, 100vh) - 300px) !important;
+        width: 100% !important;
+        display: flex !important;
+        flex-direction: column !important;
+        overflow: hidden !important;
+      }
+
+      .sc-overview-board-shell > .sc-overview-scoring-leaders,
+      .sc-overview-main-grid > .sc-overview-scoring-leaders {
+        flex: 1 1 0 !important;
+        width: 100% !important;
+        min-height: 0 !important;
+        height: 100% !important;
+      }
+
+      .sc-overview-scoring-leaders {
+        height: 100% !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+        display: flex !important;
+        flex-direction: column !important;
+      }
+
+      .sc-overview-table-fill {
+        flex: 1 1 0 !important;
+        min-height: 0 !important;
+        height: 100% !important;
+        display: flex !important;
+        flex-direction: column !important;
+        overflow: hidden !important;
+      }
+
+      .sc-overview-table-fill > .sc-table-wrap {
+        flex: 1 1 0 !important;
+        min-height: 0 !important;
+        height: 100% !important;
+        max-height: none !important;
+        overflow: auto !important;
+        border: 1px solid rgba(104, 170, 198, 0.14) !important;
+        background: #071622 !important;
+      }
+
+      .sc-overview-leader-portrait .sc-avatar {
+        overflow: visible !important;
+      }
+
+      .sc-overview-leader-portrait .player-headshot.photo-only .ph-nhl-image--solo {
+        object-position: center 8% !important;
+      }
+
+      .sc-overview-side-stack {
+        height: 100% !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+      }
+
+      .sc-overview-module {
+        display: flex !important;
+        flex-direction: column !important;
+        min-height: 0 !important;
+        height: 100% !important;
+        overflow: hidden !important;
+      }
+
+      .sc-overview-module-header {
+        flex: 0 0 auto !important;
+      }
+
+      .sc-overview-module > .sc-table-wrap,
+      .sc-overview-module > .sc-overview-metric-grid,
+      .sc-overview-module > .sc-overview-read-list,
+      .sc-overview-module > .sc-overview-contribution-list,
+      .sc-overview-module > .sc-empty {
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        overflow: auto !important;
+      }
+
+      .sc-overview-side-stack {
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 8px !important;
+      }
+
+      .sc-overview-side-stack > .sc-overview-team-performance {
+        flex: 1 1 0 !important;
+        min-height: 120px !important;
+      }
+
+      .sc-overview-side-stack > .sc-overview-roster-contribution,
+      .sc-overview-side-stack > .sc-overview-front-office {
+        flex: 0 0 auto !important;
+        max-height: none !important;
+      }
+
+      .sc-tab-page,
+      .sc-paged-table,
+      .sc-table-wrap {
+        width: 100% !important;
+        max-width: none !important;
+      }
+
+      .sc-skaters-page-v3,
+      .sc-goalies-page-v2,
+      .sc-analytics-page-v2 {
+        height: 100% !important;
+        min-height: 0 !important;
+        display: grid !important;
+        grid-template-rows: auto minmax(0, 1fr) !important;
+        overflow: hidden !important;
+      }
+
+      .sc-paged-table {
+        min-height: 0 !important;
+        height: 100% !important;
+        display: grid !important;
+        grid-template-rows: minmax(0, 1fr) auto !important;
+        overflow: hidden !important;
+      }
+
+      .sc-paged-table .sc-table-wrap {
+        height: 100% !important;
+        min-height: 0 !important;
+        overflow: auto !important;
+      }
+
+      .sc-table,
+      .sc-overview-scoring-table,
+      .sc-team-stats-table {
+        width: 100% !important;
+        min-width: 100% !important;
+        table-layout: fixed !important;
+      }
+
+      @media (max-width: 1220px) {
+        .statscentral-shell {
+          height: 100% !important;
+          max-height: 100% !important;
+          min-height: 0 !important;
+          overflow: hidden !important;
+        }
+
+        .sc-content {
+          min-height: 0 !important;
+          overflow: hidden !important;
+        }
+      }
+    `}</style>
+  );
+}
+
 function StatsCentralStyles() {
   return (
     <style>{`
@@ -13283,7 +13802,9 @@ function StatsCentralStyles() {
         --orange: #ff9f43;
         --purple: var(--ops-info, #8ab4ff);
 
-        min-height: 100vh;
+        min-height: 0;
+        height: 100%;
+        max-height: 100%;
         width: 100%;
         overflow: hidden;
         color: var(--text);
@@ -13311,12 +13832,16 @@ function StatsCentralStyles() {
       }
 
       .statscentral-shell {
-        height: 100vh;
+        flex: 1;
+        width: 100%;
+        max-width: none;
+        height: 100%;
+        max-height: 100%;
         min-height: 0;
         display: grid;
-        grid-template-rows: auto auto minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
         gap: 12px;
-        padding: 16px 20px 12px;
+        padding: 12px 12px 10px;
         overflow: hidden;
       }
 
@@ -14374,7 +14899,7 @@ function StatsCentralStyles() {
 
       .sc-table {
         width: 100%;
-        min-width: 1060px;
+        min-width: 100%;
         border-collapse: collapse;
       }
 
@@ -16634,7 +17159,8 @@ function StatsCentralStyles() {
 
       @media (max-height: 820px) {
         .statscentral-shell {
-          height: 100vh;
+          height: 100%;
+          max-height: 100%;
           gap: 9px;
           padding: 12px 16px 8px;
         }
@@ -16727,10 +17253,13 @@ function StatsCentralStyles() {
 
       /* UI-only three-menu redesign: CalendarScreen-style shell */
       .statscentral-shell {
-        height: 100vh;
+        height: 100%;
+        max-height: 100%;
+        width: 100%;
+        max-width: none;
         grid-template-rows: auto minmax(0, 1fr);
-        gap: 14px;
-        padding: 18px 22px 14px;
+        gap: 10px;
+        padding: 12px 12px 10px;
         background:
           radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.10), transparent 30%),
           radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.07), transparent 26%),
@@ -16856,10 +17385,15 @@ function StatsCentralStyles() {
       }
 
       .sc-content {
-        overflow: auto;
-        border: 1px solid rgba(156, 218, 236, 0.14);
-        background: rgba(6, 18, 29, 0.68);
-        padding: 12px;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .sc-content.is-player-stats,
+      .sc-content.is-league-leaders,
+      .sc-content.is-team-stats {
+        overflow: hidden;
       }
 
       .sc-menu-stack {
@@ -17111,9 +17645,10 @@ function StatsCentralStyles() {
 
       @media (max-width: 1220px) {
         .statscentral-shell {
-          height: auto;
-          min-height: 100vh;
-          overflow: auto;
+          height: 100%;
+          max-height: 100%;
+          min-height: 0;
+          overflow: hidden;
         }
 
         .sc-topbar {
@@ -17129,8 +17664,8 @@ function StatsCentralStyles() {
         }
 
         .sc-content {
-          min-height: 860px;
-          overflow: visible;
+          min-height: 0;
+          overflow: hidden;
         }
 
         .sc-overview {
@@ -17527,7 +18062,8 @@ function StatsCentralStyles() {
       }
 
       .sc-team-stats-table {
-        min-width: 900px;
+        width: 100%;
+        min-width: 100%;
         table-layout: fixed;
         font-variant-numeric: tabular-nums;
       }

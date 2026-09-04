@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "SimEngine" / "app"))
 sys.path.insert(0, str(ROOT / "backend"))
 
-from services.franchise_sim import _build_team_analytics_rows  # noqa: E402
+from services.franchise_sim import _build_team_analytics_rows, _repair_on_ice_share_to_team_box  # noqa: E402
 
 
 def test_team_diff_uses_standings_gf_ga_fields():
@@ -271,3 +271,63 @@ def test_light_cpu_cpu_boxes_count_toward_team_cf():
     assert int(cpu.get("team_event_games") or 0) >= 70
     assert float(cpu["cf_pct"]) > 0.50, cpu["cf_pct"]
     assert str(cpu.get("team_event_stats_source") or "") == "game_results"
+
+
+def test_repair_clamps_extreme_team_cf_and_reattaches_player_share():
+    """Dumped D CF% and 35% team boxes must snap back to the sim score/share."""
+    session = SimpleNamespace(
+        _on_ice_share_repair_v2=False,
+        _stats_revision=0,
+        game_results=[
+            {
+                "stat_scope": "regular_season",
+                "home_id": "CHI",
+                "away_id": "PHI",
+                "home_cf": 35,
+                "away_cf": 65,
+                "home_shot_attempts": 35,
+                "away_shot_attempts": 65,
+                "home_xgf": 1.4,
+                "away_xgf": 3.6,
+                "home_goals": 4,
+                "away_goals": 1,
+                "light_box": True,
+            }
+        ],
+        player_season_stats={
+            "d1": {
+                "player_id": "d1",
+                "team_id": "CHI",
+                "position": "D",
+                "cf": 40.0,
+                "ca": 120.0,
+                "xgf": 1.0,
+                "xga": 4.0,
+                "stat_scope": "regular_season",
+            },
+            "f1": {
+                "player_id": "f1",
+                "team_id": "CHI",
+                "position": "C",
+                "cf": 90.0,
+                "ca": 50.0,
+                "xgf": 3.0,
+                "xga": 2.0,
+                "stat_scope": "regular_season",
+            },
+        },
+    )
+    assert _repair_on_ice_share_to_team_box(session) is True
+    g = session.game_results[0]
+    share = float(g["home_cf"]) / float(g["home_cf"] + g["away_cf"])
+    assert 0.40 <= share <= 0.60
+    assert share >= 0.45
+    d_share = session.player_season_stats["d1"]["cf"] / (
+        session.player_season_stats["d1"]["cf"] + session.player_season_stats["d1"]["ca"]
+    )
+    f_share = session.player_season_stats["f1"]["cf"] / (
+        session.player_season_stats["f1"]["cf"] + session.player_season_stats["f1"]["ca"]
+    )
+    assert abs(d_share - share) < 0.02
+    assert abs(f_share - share) < 0.02
+    assert _repair_on_ice_share_to_team_box(session) is False

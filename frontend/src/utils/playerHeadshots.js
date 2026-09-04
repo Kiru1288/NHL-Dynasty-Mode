@@ -336,21 +336,56 @@ function safeNhlHeadshotUrl(value) {
   }
 }
 
+export function pickHeadshotIdentityFields(source = {}) {
+  if (!source || typeof source !== "object") return {};
+  const out = {};
+  const assign = (key, value) => {
+    if (value !== undefined && value !== null && value !== "") {
+      out[key] = value;
+    }
+  };
+
+  assign("nhl_player_id", source.nhl_player_id ?? source.nhl_id);
+  assign("nhl_id", source.nhl_id ?? source.nhl_player_id);
+  assign(
+    "nhl_headshot_url",
+    source.nhl_headshot_url ?? source.nhlHeadshotUrl
+  );
+  assign("headshot_url", source.headshot_url ?? source.headshotUrl);
+  assign("headshot", source.headshot);
+  assign("portrait_url", source.portrait_url ?? source.portrait);
+  assign("portrait_source", source.portrait_source);
+  assign("real_nhl_import", source.real_nhl_import);
+  assign("headshot_id", source.headshot_id ?? source.face_variant);
+  assign("face_variant", source.face_variant ?? source.headshot_id);
+  assign("avatar_seed", source.avatar_seed);
+  assign("skin_tone", source.skin_tone);
+  assign("hair_style", source.hair_style);
+  assign("hair_color", source.hair_color);
+  assign("facial_hair", source.facial_hair);
+  assign("expression", source.expression);
+  assign("age_bucket", source.age_bucket);
+  assign("nationality_code", source.nationality_code);
+
+  return out;
+}
+
+export function mergePlayerHeadshotIdentity(row = {}, rosterRow = null) {
+  return ensurePlayerHeadshotFields({
+    ...row,
+    ...pickHeadshotIdentityFields(rosterRow),
+    ...pickHeadshotIdentityFields(row),
+  });
+}
+
 /**
  * Resolve a real NHL photograph without weakening the deterministic portrait
  * fallback. Metadata lookup happens during backend import, never in React.
  */
 export function getNhlHeadshotUrl(player = {}) {
   if (!player || typeof player !== "object") return "";
-  const hasNhlIdentity = Boolean(
-    player.nhl_player_id ||
-      player.nhl_id ||
-      player.real_nhl_import ||
-      player.portrait_source === "nhl"
-  );
-  if (!hasNhlIdentity) return "";
 
-  return safeNhlHeadshotUrl(
+  const direct = safeNhlHeadshotUrl(
     player.nhl_headshot_url ||
       player.nhlHeadshotUrl ||
       player.headshot_url ||
@@ -359,6 +394,17 @@ export function getNhlHeadshotUrl(player = {}) {
       player.portrait_url ||
       player.portrait
   );
+  if (direct) return direct;
+
+  const hasNhlIdentity = Boolean(
+    player.nhl_player_id ||
+      player.nhl_id ||
+      player.real_nhl_import ||
+      player.portrait_source === "nhl"
+  );
+  if (!hasNhlIdentity) return "";
+
+  return "";
 }
 
 export function resolvePlayerHeadshot(player = {}) {

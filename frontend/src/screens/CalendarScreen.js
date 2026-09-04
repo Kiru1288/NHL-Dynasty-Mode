@@ -190,6 +190,20 @@ const EVENT_TYPE_LABELS = {
   four_nations_faceoff: "4 Nations Face-Off",
 };
 
+// ASSUMPTION: "league-wide break" is inferred from calendar_events matching known break-type event keys,
+// not a dedicated backend flag. If the backend later adds an explicit is_league_break field, prefer that instead.
+const LEAGUE_BREAK_EVENT_TYPES = new Set([
+  "roster_freeze",
+  "all_star_weekend",
+  "allstar_game",
+  "thanksgiving_checkpoint",
+]);
+
+function isLeagueWideBreakEvent(event) {
+  const type = normalizeKey(event?.type || event?.event_type || "");
+  return LEAGUE_BREAK_EVENT_TYPES.has(type);
+}
+
 const LOGO_CONTEXT = (() => {
   try {
     return require.context("../logos", false, /\.(png|jpg|jpeg|webp|svg)$/i);
@@ -998,6 +1012,11 @@ function normalizeInjuryRowForUi(inj, idx) {
 
   const duration = inj?.duration || (gamesRemaining > 0 ? `${gamesRemaining} games` : "");
 
+  let severity = inj?.severity || inj?.tier || inj?.injury_type || inj?.injuryType || "—";
+  if (severity === injuryLabel) {
+    severity = "—";
+  }
+
   return {
     id: inj?.id || inj?.injury_id || inj?.injuryId || `inj-fallback-${idx}`,
     player: inj?.player_name || inj?.playerName || inj?.player || inj?.name || "Player",
@@ -1013,7 +1032,7 @@ function normalizeInjuryRowForUi(inj, idx) {
     teamAbbr,
     teamId,
     position: inj?.position || inj?.pos || "—",
-    severity: inj?.severity || inj?.tier || inj?.injury_type || inj?.injuryType || "—",
+    severity,
     duration,
     raw: inj,
   };
@@ -1190,9 +1209,17 @@ function SpecialEventDetailsModal({ event, dateLabel, onClose, onOpenWorldJunior
   );
 }
 function InjuryReportFullModal({ injuries, userTeamId, activeTeam, onClose }) {
-  const leagueCount = injuries.length;
+  const activeInjuries = (injuries || []).filter((row) => {
+    if (row.gamesRemaining > 0) return true;
+    const status = String(row.status || "").trim();
+    if (!status || status === "—") return false;
+    const lower = status.toLowerCase();
+    return lower !== "recovered" && lower !== "cleared";
+  });
 
-  const userCount = injuries.filter((row) => {
+  const leagueCount = activeInjuries.length;
+
+  const userCount = activeInjuries.filter((row) => {
     if (!row.teamId) return false;
     if (activeTeam && isSameTeamIdentifier(row.teamId, activeTeam)) return true;
     return String(row.teamId || "").toLowerCase() === String(userTeamId || "").toLowerCase();
@@ -1222,7 +1249,7 @@ function InjuryReportFullModal({ injuries, userTeamId, activeTeam, onClose }) {
         </header>
 
         <div className="nhlcal-injury-report-body">
-          {injuries.length ? (
+          {activeInjuries.length ? (
             <table className="nhlcal-injury-table">
               <thead>
                 <tr>
@@ -1237,7 +1264,7 @@ function InjuryReportFullModal({ injuries, userTeamId, activeTeam, onClose }) {
                 </tr>
               </thead>
               <tbody>
-                {injuries.map((row) => (
+                {activeInjuries.map((row) => (
                   <tr key={row.id}>
                     <td>{row.playerName}</td>
                     <td>{row.teamAbbr || row.teamId || "—"}</td>
@@ -1290,6 +1317,9 @@ function CalendarScreen(props = {}) {
 
   useEffect(() => {
     if (typeof hydrateFranchiseHeavyState !== "function") return undefined;
+    const leanCalendar = franchiseState?.nhl_calendar_full;
+    const hasLeanCalendarWindow = Array.isArray(leanCalendar) && leanCalendar.length > 0;
+    if (hasLeanCalendarWindow) return undefined;
     let cancelled = false;
     (async () => {
       try {
@@ -1303,7 +1333,7 @@ function CalendarScreen(props = {}) {
     return () => {
       cancelled = true;
     };
-  }, [hydrateFranchiseHeavyState, franchiseState?.session_id]);
+  }, [hydrateFranchiseHeavyState, franchiseState?.session_id, franchiseState?.nhl_calendar_full]);
 
   const rootState = useMemo(() => {
     return franchiseState || state || gameState || data || EMPTY_OBJECT;
@@ -1360,14 +1390,31 @@ function CalendarScreen(props = {}) {
   const [activePanel, setActivePanel] = useState("game_preview");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [denseMode, setDenseMode] = useState(false);
-  const [showOnlyTeamGames, setShowOnlyTeamGames] = useState(true);
+  const [denseMode, setDenseMode] = useState(() => {
+    try {
+      const stored = localStorage.getItem("nhlcal:denseMode");
+      return stored !== null ? stored === "true" : false;
+    } catch {
+      return false;
+    }
+  });
+  const [showOnlyTeamGames, setShowOnlyTeamGames] = useState(() => {
+    try {
+      const stored = localStorage.getItem("nhlcal:showOnlyTeamGames");
+      return stored !== null ? stored === "true" : true;
+    } catch {
+      return true;
+    }
+  });
   const [expandedGameKey, setExpandedGameKey] = useState("");
   const [hoveredDay, setHoveredDay] = useState(null);
   const [injuryReportOpen, setInjuryReportOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [choiceBusyId, setChoiceBusyId] = useState("");
   const [choiceError, setChoiceError] = useState("");
+  const [advanceBlockedMessage, setAdvanceBlockedMessage] = useState("");
+  const [advanceErrorMessage, setAdvanceErrorMessage] = useState("");
+  const [legendFilter, setLegendFilter] = useState(null);
   const [worldJuniorsMenuOpen, setWorldJuniorsMenuOpen] = useState(false);
   const [wjcMenuSnapshot, setWjcMenuSnapshot] = useState(null);
 
@@ -1414,6 +1461,22 @@ function CalendarScreen(props = {}) {
   useEffect(() => {
     setExpandedGameKey("");
   }, [selectedDateISO, denseMode, showOnlyTeamGames]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("nhlcal:denseMode", String(denseMode));
+    } catch {
+      /* localStorage unavailable */
+    }
+  }, [denseMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("nhlcal:showOnlyTeamGames", String(showOnlyTeamGames));
+    } catch {
+      /* localStorage unavailable */
+    }
+  }, [showOnlyTeamGames]);
 
   const selectedDate = useMemo(() => {
     return toDateObject(selectedDateISO) || toDateObject(currentDate) || new Date();
@@ -1790,6 +1853,7 @@ function CalendarScreen(props = {}) {
     return rootState?.storyline_choices || rootState?.storylineChoices || EMPTY_ARRAY;
   }, [rootState?.storyline_choices, rootState?.storylineChoices]);
 
+  // TODO: currently unused after StorylinesReportCard removal
   const recentInjuryRows = useMemo(() => {
     return injuryUiRows
       .filter((row) => row.teamId && isSameTeamIdentifier(row.teamId, activeTeam))
@@ -1830,6 +1894,9 @@ function CalendarScreen(props = {}) {
     async ({ mode = "day", count = 1 } = {}) => {
       if (isAdvancing || typeof gameUI?.onAdvanceFranchise !== "function") return;
 
+      setAdvanceBlockedMessage("");
+      setAdvanceErrorMessage("");
+
       try {
         const result = await gameUI.onAdvanceFranchise({
           mode,
@@ -1846,7 +1913,9 @@ function CalendarScreen(props = {}) {
         if (status === "blocked") {
           const reason = String(lastStep?.reason || step?.reason || "").toLowerCase();
           if (reason === "incomplete_lines") {
-            window.alert(String(lastStep?.message || step?.message || "Fill every even-strength slot before simulating."));
+            setAdvanceBlockedMessage(
+              String(lastStep?.message || step?.message || "Fill every even-strength slot before simulating.")
+            );
           }
           setActivePanel("events");
           return;
@@ -1858,7 +1927,9 @@ function CalendarScreen(props = {}) {
         if (step?.bulk && bulkCompleted <= 0) {
           if (bulkStopped === "pending_decisions" || bulkStopped === "incomplete_lines") {
             if (bulkStopped === "incomplete_lines") {
-              window.alert(String(lastStep?.message || step?.message || "Fill every even-strength slot before simulating."));
+              setAdvanceBlockedMessage(
+                String(lastStep?.message || step?.message || "Fill every even-strength slot before simulating.")
+              );
             }
             setActivePanel("events");
           }
@@ -1912,6 +1983,9 @@ function CalendarScreen(props = {}) {
         if (process.env.NODE_ENV !== "production") {
           console.warn("[CalendarScreen] advance failed:", formatFranchiseApiError(error) || error);
         }
+        setAdvanceErrorMessage(
+          formatFranchiseApiError(error) || error?.message || "Could not advance the calendar."
+        );
       }
     },
     [isAdvancing, gameUI, rootState]
@@ -2085,6 +2159,45 @@ function CalendarScreen(props = {}) {
     setSelectedEvent(null);
   }, []);
 
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+
+      if (worldJuniorsMenuOpen) {
+        closeWorldJuniorsMenu();
+        return;
+      }
+      if (selectedEvent) {
+        closeSpecialEvent();
+        return;
+      }
+      if (injuryReportOpen) {
+        closeInjuryReport();
+        return;
+      }
+      if (settingsOpen) {
+        setSettingsOpen(false);
+        return;
+      }
+      if (drawerOpen) {
+        closeDrawer();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    worldJuniorsMenuOpen,
+    selectedEvent,
+    injuryReportOpen,
+    settingsOpen,
+    drawerOpen,
+    closeWorldJuniorsMenu,
+    closeSpecialEvent,
+    closeInjuryReport,
+    closeDrawer,
+  ]);
+
   const goPreviousMonth = useCallback(() => {
     setViewDate((previous) => new Date(previous.getFullYear(), previous.getMonth() - 1, 1));
   }, []);
@@ -2226,6 +2339,24 @@ function CalendarScreen(props = {}) {
               Lines are incomplete ({lineupGaps.slice(0, 4).join(", ")}
               {lineupGaps.length > 4 ? "…" : ""}). Fill every even-strength slot in Edit Lines before advancing.
             </p>
+          ) : null}
+
+          {advanceBlockedMessage ? (
+            <div className="nhlcal-advance-alert is-blocked" role="alert">
+              <div>
+                <strong>Advance Blocked</strong>
+                <p>{advanceBlockedMessage}</p>
+              </div>
+            </div>
+          ) : null}
+
+          {advanceErrorMessage ? (
+            <div className="nhlcal-advance-alert is-error" role="alert">
+              <div>
+                <strong>Advance Failed</strong>
+                <p>{advanceErrorMessage}</p>
+              </div>
+            </div>
           ) : null}
 
           <section className="nhlcal-action-cluster">
@@ -2401,6 +2532,28 @@ function CalendarScreen(props = {}) {
 
                 const maxEvents = denseMode ? 1 : 2;
                 const maxGames = denseMode ? 2 : hasSpecialEvents ? 1 : 2;
+                const legendDimmed =
+                  legendFilter === "critical"
+                    ? !hasCriticalEvent
+                    : legendFilter === "special"
+                      ? !hasSpecialEvents
+                      : false;
+                const hasLeagueWideBreak = sortedDayEvents.some(isLeagueWideBreakEvent);
+                const isScheduleMissingDay = scheduleDataMissing && !hasRawGames;
+                const showEmptyDayLine =
+                  !visibleGames.length &&
+                  ((showOnlyTeamGames && hasRawGames) ||
+                    isScheduleMissingDay ||
+                    (hasLeagueWideBreak && !hasRawGames) ||
+                    !daySpecialEvents.length);
+                const emptyDayLabel =
+                  showOnlyTeamGames && hasRawGames
+                    ? "League slate"
+                    : isScheduleMissingDay
+                      ? "No data"
+                      : hasLeagueWideBreak && !hasRawGames
+                        ? "League Break"
+                        : "Off day";
 
                 return (
                   <button
@@ -2420,6 +2573,7 @@ function CalendarScreen(props = {}) {
                       hasSpecialEvents ? "has-special-events" : "",
                       hasCriticalEvent ? "has-critical-event" : "",
                       hasHighEvent ? "has-high-event" : "",
+                      legendDimmed ? "is-legend-dimmed" : "",
                     ]
                       .filter(Boolean)
                       .join(" ")}
@@ -2433,14 +2587,14 @@ function CalendarScreen(props = {}) {
                       <span className="nhlcal-day-marker-row">
                       {hasSpecialEvents ? (
                         <span className="nhlcal-event-corner-badge" title={`${daySpecialEvents.length} special event(s)`}>
-                          {daySpecialEvents[0]?.logoSrc || getSpecialEventLogoSrc(daySpecialEvents[0]) ? (
+                          {sortedDayEvents[0]?.logoSrc || getSpecialEventLogoSrc(sortedDayEvents[0]) ? (
                             <img
-                              src={daySpecialEvents[0]?.logoSrc || getSpecialEventLogoSrc(daySpecialEvents[0])}
-                              alt={`${daySpecialEvents[0]?.title || "Special event"} logo`}
+                              src={sortedDayEvents[0]?.logoSrc || getSpecialEventLogoSrc(sortedDayEvents[0])}
+                              alt={`${sortedDayEvents[0]?.title || "Special event"} logo`}
                               loading="lazy"
                             />
                           ) : (
-                            daySpecialEvents[0]?.icon || "◆"
+                            sortedDayEvents[0]?.icon || "◆"
                           )}
                         </span>
                       ) : null}
@@ -2516,16 +2670,16 @@ function CalendarScreen(props = {}) {
                           </div>
                         ) : null}
 
-                        {!visibleGames.length && !daySpecialEvents.length ? (
+                        {showEmptyDayLine ? (
                           <div
-                            className="nhlcal-empty-day-line"
+                            className={`nhlcal-empty-day-line ${isScheduleMissingDay ? "is-muted" : ""}`}
                             title={
                               showOnlyTeamGames && hasRawGames
                                 ? `${dayGamesRaw.length} league game(s) hidden by Team Only filter`
                                 : undefined
                             }
                           >
-                            {showOnlyTeamGames && hasRawGames ? "League slate" : "Off day"}
+                            {emptyDayLabel}
                           </div>
                         ) : null}
                       </div>
@@ -2581,14 +2735,22 @@ function CalendarScreen(props = {}) {
                   <i className="dot otl" />
                   OTL
                 </span>
-                <span>
+                <button
+                  type="button"
+                  className={`nhlcal-legend-filter ${legendFilter === "special" ? "is-active" : ""}`}
+                  onClick={() => setLegendFilter((prev) => (prev === "special" ? null : "special"))}
+                >
                   <i className="dot special" />
                   Special Event
-                </span>
-                <span>
+                </button>
+                <button
+                  type="button"
+                  className={`nhlcal-legend-filter ${legendFilter === "critical" ? "is-active" : ""}`}
+                  onClick={() => setLegendFilter((prev) => (prev === "critical" ? null : "critical"))}
+                >
                   <i className="dot critical" />
                   Critical Date
-                </span>
+                </button>
               </div>
 
               <div className="nhlcal-calendar-actions">
@@ -2616,6 +2778,11 @@ function CalendarScreen(props = {}) {
                 selectedDayTeamGameCount={selectedDayTeamGameCount}
                 todayTeamGame={todayTeamGame}
                 todaySpecialEvents={todaySpecialEvents}
+                storylineRows={recentStorylines}
+                storylineChoices={storylineChoices}
+                choiceError={choiceError}
+                choiceBusyId={choiceBusyId}
+                onStorylineChoice={handleStorylineChoice}
                 onNavigate={handleNavigate}
                 onOpenEvent={openSpecialEvent}
                 onOpenInjuryReport={openInjuryReport}
@@ -2680,10 +2847,6 @@ function CalendarScreen(props = {}) {
       {settingsOpen ? (
         <CalendarSettingsModal
           onClose={() => setSettingsOpen(false)}
-          denseMode={denseMode}
-          setDenseMode={setDenseMode}
-          showOnlyTeamGames={showOnlyTeamGames}
-          setShowOnlyTeamGames={setShowOnlyTeamGames}
           currentDate={currentDate}
           activeTeam={activeTeam}
           games={games}
@@ -2822,6 +2985,7 @@ function CalendarGameTile({ game, activeTeam, allTeams, standings = [], compact,
   );
 
   const hasVisibleScore = awayScore !== null && homeScore !== null;
+  // TBD is expected here when the backend has not yet assigned a broadcast time for this game.
   const detailsTime = normalizeGameTime(game.time || game.start_time || game.startTime);
   const venue = game.venue || game.arena || getArenaName(homeTeam);
   const finalLabel = completed ? "FINAL" : detailsTime;
@@ -2965,6 +3129,11 @@ function GamePreviewCard({
   selectedDayTeamGameCount = 0,
   todayTeamGame,
   todaySpecialEvents,
+  storylineRows = EMPTY_ARRAY,
+  storylineChoices = EMPTY_ARRAY,
+  choiceError = "",
+  choiceBusyId = "",
+  onStorylineChoice,
   onNavigate,
   onOpenEvent,
   onOpenInjuryReport,
@@ -2984,6 +3153,12 @@ function GamePreviewCard({
   const venue = preview?.venue || game?.venue || game?.arena || getArenaName(home);
   const hasAnalysis = Array.isArray(preview?.analysis) && preview.analysis.length > 0;
   const completedPreview = game ? isCompletedGame(game) : false;
+
+  useEffect(() => {
+    if (activePanel === "matchup_analysis" && !hasAnalysis) {
+      setActivePanel("game_preview");
+    }
+  }, [activePanel, hasAnalysis, setActivePanel]);
 
   return (
     <section className="nhlcal-broadcast-strip nhlcal-preview-card nhlcal-scroll-surface">
@@ -3038,15 +3213,26 @@ function GamePreviewCard({
       </div>
 
       {activePanel === "events" ? (
-        <SelectedDayEventsPanel
-          events={selectedDayEvents}
-          injuries={selectedDayInjuryRows}
-          games={selectedDayGamesRaw}
-          activeTeam={activeTeam}
-          allTeams={allTeams}
-          onOpenEvent={onOpenEvent}
-          onOpenInjuryReport={onOpenInjuryReport}
-        />
+        <>
+          {choiceError ? (
+            <div className="nhlcal-advance-error-banner" role="alert">
+              {choiceError}
+            </div>
+          ) : null}
+          <SelectedDayEventsPanel
+            events={selectedDayEvents}
+            injuries={selectedDayInjuryRows}
+            games={selectedDayGamesRaw}
+            activeTeam={activeTeam}
+            allTeams={allTeams}
+            storylineRows={storylineRows}
+            storylineChoices={storylineChoices}
+            choiceBusyId={choiceBusyId}
+            onStorylineChoice={onStorylineChoice}
+            onOpenEvent={onOpenEvent}
+            onOpenInjuryReport={onOpenInjuryReport}
+          />
+        </>
       ) : game ? (
         <>
           {!preview?.isUserTeamGame ? (
@@ -3203,12 +3389,27 @@ function SelectedDayEventsPanel({
   games,
   activeTeam,
   allTeams,
+  storylineRows = EMPTY_ARRAY,
+  storylineChoices = EMPTY_ARRAY,
+  choiceBusyId = "",
+  onStorylineChoice,
   onOpenEvent,
   onOpenInjuryReport,
 }) {
   const visibleEvents = Array.isArray(events) ? events : EMPTY_ARRAY;
   const visibleInjuries = Array.isArray(injuries) ? injuries : EMPTY_ARRAY;
   const visibleGames = Array.isArray(games) ? games : EMPTY_ARRAY;
+  const visibleStorylines = Array.isArray(storylineRows) ? storylineRows : EMPTY_ARRAY;
+
+  const choicesByStoryId = useMemo(() => {
+    const map = new Map();
+
+    (storylineChoices || []).forEach((row) => {
+      map.set(String(row.storyline_id || row.decision_id || row.id || ""), row);
+    });
+
+    return map;
+  }, [storylineChoices]);
 
   return (
     <div className="nhlcal-selected-day-panel">
@@ -3254,6 +3455,51 @@ function SelectedDayEventsPanel({
           </p>
         </section>
       )}
+
+      {visibleStorylines.length ? (
+        <section className="nhlcal-selected-section">
+          <header className="nhlcal-selected-section-head">
+            <span>Storylines</span>
+            <strong>{visibleStorylines.length}</strong>
+          </header>
+
+          <div className="nhlcal-stretch-list nhlcal-storyline-list">
+            {visibleStorylines.map((row, index) => {
+              const choiceRow = choicesByStoryId.get(String(row.id || row.storyline_id || ""));
+
+              return (
+                <div key={row.id || index} className="nhlcal-storyline-row">
+                  <div className="nhlcal-storyline-topline">
+                    <span>{formatMonthDay(row.date) || "Today"}</span>
+                    <strong>{row.headline}</strong>
+                    <em className={String(row.priority || "").toLowerCase()}>{row.priority}</em>
+                  </div>
+
+                  {row.cause ? <div className="nhlcal-subtext">Cause: {row.cause}</div> : null}
+                  {row.effect_summary ? <div className="nhlcal-subtext">Effect: {row.effect_summary}</div> : null}
+
+                  {choiceRow && Array.isArray(choiceRow.action_options) ? (
+                    <div className="nhlcal-storyline-choice-row">
+                      {choiceRow.action_options.map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          className="nhlcal-storyline-choice-button"
+                          disabled={choiceBusyId === `${choiceRow.storyline_id}:${opt.id}`}
+                          onClick={() => onStorylineChoice?.(choiceRow.storyline_id, opt.id)}
+                          title={opt.effect_summary || ""}
+                        >
+                          {choiceBusyId === `${choiceRow.storyline_id}:${opt.id}` ? "Applying..." : opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       {visibleInjuries.length ? (
         <section className="nhlcal-selected-section">
@@ -3420,155 +3666,6 @@ function UpcomingStretchCard({ games, activeTeam, allTeams }) {
 
       <button type="button" className="nhlcal-mini-button">
         View Full Schedule ›
-      </button>
-    </section>
-  );
-}
-
-function LeagueStateCard({ rows }) {
-  return (
-    <section className="nhlcal-card nhlcal-league-card">
-      <header className="nhlcal-mini-header">
-        <h3>League State</h3>
-        <span>Today</span>
-      </header>
-
-      <div className="nhlcal-league-list">
-        {rows.length ? (
-          rows.map((row, index) => (
-            <div
-              key={row.id || `${row.away}-${row.home}-${index}`}
-              className={`nhlcal-league-row ${row.involvesUserTeam ? "is-highlight" : ""}`}
-            >
-              <span>{row.away}</span>
-              <em>@</em>
-              <span>{row.home}</span>
-              <strong>{row.time}</strong>
-            </div>
-          ))
-        ) : (
-          <p className="nhlcal-small-empty">
-            <b>SKD · NO SCORES</b>
-            No league game is loaded for today.
-          </p>
-        )}
-      </div>
-
-      <button type="button" className="nhlcal-mini-button">
-        All Scores
-      </button>
-    </section>
-  );
-}
-
-function StorylinesReportCard({ rows, storylineChoices, onChoose, busyChoiceId = "" }) {
-  const choicesByStoryId = useMemo(() => {
-    const map = new Map();
-
-    (storylineChoices || []).forEach((row) => {
-      map.set(String(row.storyline_id || row.decision_id || row.id || ""), row);
-    });
-
-    return map;
-  }, [storylineChoices]);
-
-  return (
-    <section className="nhlcal-broadcast-strip nhlcal-stretch-card">
-      <header className="nhlcal-mini-header">
-        <h3>Storylines</h3>
-        <span>Latest</span>
-      </header>
-
-      <div className="nhlcal-stretch-list nhlcal-storyline-list">
-        {rows.length ? (
-          rows.map((row, index) => {
-            const choiceRow = choicesByStoryId.get(String(row.id || row.storyline_id || ""));
-
-            return (
-              <div key={row.id || index} className="nhlcal-storyline-row">
-                <div className="nhlcal-storyline-topline">
-                  <span>{formatMonthDay(row.date) || "Today"}</span>
-                  <strong>{row.headline}</strong>
-                  <em className={String(row.priority || "").toLowerCase()}>{row.priority}</em>
-                </div>
-
-                {row.cause ? <div className="nhlcal-subtext">Cause: {row.cause}</div> : null}
-                {row.effect_summary ? <div className="nhlcal-subtext">Effect: {row.effect_summary}</div> : null}
-
-                {Object.keys(row.effects || {}).length ? (
-                  <div className="nhlcal-subtext">
-                    {Object.entries(row.effects)
-                      .map(([k, v]) => `${k.replace(/_/g, " ")} ${Number(v) > 0 ? "+" : ""}${v}`)
-                      .join(" · ")}
-                  </div>
-                ) : null}
-
-                {choiceRow && Array.isArray(choiceRow.action_options) ? (
-                  <div className="nhlcal-storyline-choice-row">
-                    {choiceRow.action_options.map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        className="nhlcal-storyline-choice-button"
-                        disabled={busyChoiceId === `${choiceRow.storyline_id}:${opt.id}`}
-                        onClick={() => onChoose?.(choiceRow.storyline_id, opt.id)}
-                        title={opt.effect_summary || ""}
-                      >
-                        {busyChoiceId === `${choiceRow.storyline_id}:${opt.id}` ? "Applying..." : opt.label}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })
-        ) : (
-          <p className="nhlcal-small-empty">
-            <b>WIRE · QUIET</b>
-            No storyline has been filed for this date.
-          </p>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function InjuryReportCard({ rows, team, onOpenFull }) {
-  return (
-    <section className="nhlcal-card nhlcal-league-card">
-      <header className="nhlcal-mini-header">
-        <h3>Injury Report</h3>
-        <button type="button" onClick={onOpenFull}>
-          {getTeamAbbreviation(team)}
-        </button>
-      </header>
-
-      <div className="nhlcal-league-list nhlcal-injury-mini-list">
-        {rows.length ? (
-          rows.map((row, index) => (
-            <div key={row.id || index} className="nhlcal-injury-mini-row">
-              <span>{row.player}</span>
-              <em>{row.tier}</em>
-              <strong>
-                {row.gamesRemaining > 0
-                  ? `${row.gamesRemaining}g`
-                  : String(row.status || "").toUpperCase().includes("DAY")
-                    ? "DTD"
-                    : row.status || "—"}
-              </strong>
-              <small>{row.returnText || row.date || "active"}</small>
-            </div>
-          ))
-        ) : (
-          <p className="nhlcal-small-empty">
-            <b>MED · CLUB CLEAR</b>
-            No active injury is on file for your club.
-          </p>
-        )}
-      </div>
-
-      <button type="button" className="nhlcal-mini-button" onClick={onOpenFull}>
-        Full Injury Report
       </button>
     </section>
   );
@@ -4236,17 +4333,7 @@ function OfficeMetric({ label, value }) {
   );
 }
 
-function CalendarSettingsModal({
-  onClose,
-  denseMode,
-  setDenseMode,
-  showOnlyTeamGames,
-  setShowOnlyTeamGames,
-  currentDate,
-  activeTeam,
-  games,
-  events,
-}) {
+function CalendarSettingsModal({ onClose, currentDate, activeTeam, games, events }) {
   const totalGames = Array.isArray(games) ? games.length : 0;
   const teamGames = Array.isArray(games) ? games.filter((game) => isTeamGame(game, activeTeam)).length : 0;
   const totalEvents = Array.isArray(events) ? events.length : 0;
@@ -4267,35 +4354,6 @@ function CalendarSettingsModal({
             ×
           </button>
         </header>
-
-        <div className="nhlcal-settings-list">
-          <button
-            type="button"
-            className={denseMode ? "is-active" : ""}
-            onClick={() => setDenseMode((value) => !value)}
-          >
-            <span>Dense Calendar</span>
-            <strong>{denseMode ? "On" : "Off"}</strong>
-          </button>
-
-          <button
-            type="button"
-            className={showOnlyTeamGames ? "is-active" : ""}
-            onClick={() => setShowOnlyTeamGames(true)}
-          >
-            <span>Team Games Only</span>
-            <strong>{showOnlyTeamGames ? "On" : "Off"}</strong>
-          </button>
-
-          <button
-            type="button"
-            className={!showOnlyTeamGames ? "is-active" : ""}
-            onClick={() => setShowOnlyTeamGames(false)}
-          >
-            <span>League Games + Events</span>
-            <strong>{!showOnlyTeamGames ? "On" : "Off"}</strong>
-          </button>
-        </div>
 
         <div className="nhlcal-settings-summary">
           <article>
@@ -4413,19 +4471,7 @@ function resolveStandingsTeamRow(row, allTeams = []) {
     normalizeTeam(
       {
         ...team,
-        abbreviation:
-          canonicalizeTeamAbbr(
-            team.abbreviation ||
-              team.abbr ||
-              row.abbreviation ||
-              row.abbr ||
-              row.abbrev ||
-              row.team_abbrev ||
-              row.team_abbreviation
-          ) ||
-          lookupNhlAbbrFromLabel(team.name || row.name || row.team_name) ||
-          team.abbreviation ||
-          team.abbr,
+        abbreviation: resolveTeamAbbreviation({ ...team, ...row }),
         name: team.name || row.name || row.team_name,
         city: team.city || row.city,
         division: team.division || row.division,
@@ -4721,6 +4767,24 @@ function findActiveTeam(rootState, allTeams, controlledTeamId) {
   return allTeams[0] || normalizeTeam({ abbreviation: "CLB", name: "Club", city: "" }, 0);
 }
 
+/*
+ * GAME TIME DIAGNOSIS (Step 1)
+ * Ingestion path:
+ *   rootState.games / schedule / calendar / nhl_calendar_full (calendarExpanded) / schedule_upcoming (upcomingExpanded)
+ *   → normalizeGames → normalizeGame (time fallback chain) → CalendarGameTile / GamePreviewCard / SelectedDayEventsPanel
+ *   → normalizeGameTime (empty/null/undefined → "TBD")
+ *
+ * Live API trace (GET /api/franchise/state/heavy?include_nhl_calendar_full=true):
+ *   nhl_calendar_full day.games[0] keys: home_id, away_id, home_name, away_name, home_abbr, away_abbr, game_id
+ *   time/start_time/startTime/puck_drop/puckDrop/game_time: all absent on source objects.
+ *
+ * Backend (_nhl_calendar_full_with_slates, _build_schedule_upcoming in franchise_sim.py) serializes matchup
+ * identity only — no broadcast time field is produced for franchise calendar slates.
+ *
+ * Verdict: CASE (a) — backend legitimately has no broadcast time yet; "TBD" is the correct terminal fallback.
+ * NOT (b): no alternate field name exists in the payload for the fallback chain to pick up.
+ * NOT (c): calendarExpanded/upcomingExpanded spread ...g; time is missing from the source object, not dropped by expansion literals.
+ */
 function normalizeGames(rootState, allTeams) {
   const calendarExpanded = [];
   const nhlFull = Array.isArray(rootState.nhl_calendar_full) ? rootState.nhl_calendar_full : EMPTY_ARRAY;
@@ -4918,6 +4982,7 @@ function normalizeGame(game, index, allTeams) {
     ...game,
     id: game.id || game.game_id || game.gameId || `game-${index}`,
     date: game.date || game.game_date || game.gameDate || game.day || game.start_date || game.startDate,
+    // TBD is expected here when the backend has not yet assigned a broadcast time for this game.
     time: game.time || game.start_time || game.startTime || game.puck_drop || game.puckDrop || "",
     homeId: getTeamId(homeTeam),
     awayId: getTeamId(awayTeam),
@@ -4959,12 +5024,7 @@ function normalizeStandings(rootState, allTeams) {
       const otl = firstNumber(row.otl, row.ot, row.overtime_losses, row.record?.otl, team.otl);
       const gp = firstNumber(row.gp, row.games_played, row.gamesPlayed, wins + losses + otl);
       const pts = firstNumber(row.points, row.pts, wins * 2 + otl, team.points);
-      const abbreviation =
-        canonicalizeTeamAbbr(
-          row.abbreviation || row.abbr || row.abbrev || row.team_abbrev || row.team_abbreviation || team.abbreviation || team.abbr
-        ) ||
-        lookupNhlAbbrFromLabel(team.name || row.name || row.team_name || row.team) ||
-        getTeamAbbreviation(team);
+      const abbreviation = resolveTeamAbbreviation({ ...team, ...row });
 
       return {
         ...row,
@@ -4995,10 +5055,7 @@ function normalizeStandings(rootState, allTeams) {
     const otl = firstNumber(team.otl, team.ot);
     const gp = firstNumber(team.gp, wins + losses + otl);
     const pts = firstNumber(team.points, team.pts, wins * 2 + otl);
-    const abbreviation =
-      canonicalizeTeamAbbr(team.abbreviation || team.abbr) ||
-      lookupNhlAbbrFromLabel(team.name || team.team_name || team.full_name) ||
-      getTeamAbbreviation(team);
+    const abbreviation = resolveTeamAbbreviation(team);
 
     return {
       team,
@@ -6061,10 +6118,6 @@ function resolveLeagueRankLabel(activeTeam, metricKey, options = {}) {
   return "";
 }
 
-function rankLabel(activeTeam, standings, key, label = "NHL", lowerIsBetter = false) {
-  return resolveLeagueRankLabel(activeTeam, key, { standings, lowerIsBetter });
-}
-
 function findStandingForTeam(standings, team) {
   if (!team || !standings?.length) return null;
 
@@ -6383,7 +6436,31 @@ function canonicalizeTeamAbbr(raw) {
   return cleaned.length >= 2 && cleaned.length <= 3 ? cleaned : cleaned.slice(0, 3);
 }
 
-function getTeamAbbreviation(team) {
+function sanitizeExplicitTeamAbbr(raw) {
+  const cleaned = String(raw || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  return cleaned || "";
+}
+
+function getExplicitTeamAbbreviation(team) {
+  if (!team || typeof team !== "object") return "";
+
+  const raw =
+    team.abbreviation ||
+    team.abbr ||
+    team.team_abbrev ||
+    team.team_abbreviation ||
+    team.short_name ||
+    team.shortName ||
+    team.code ||
+    "";
+
+  return sanitizeExplicitTeamAbbr(raw);
+}
+
+export function resolveTeamAbbreviation(team) {
   if (!team) return "TBD";
 
   if (typeof team === "string") {
@@ -6393,6 +6470,11 @@ function getTeamAbbreviation(team) {
     if (asAbbr && KNOWN_NHL_ABBRS.has(asAbbr)) return asAbbr;
     return asAbbr || "TBD";
   }
+
+  // ASSUMPTION: explicit backend abbreviation is always trusted over ambiguity heuristics.
+  // If custom-league teams are known to send unreliable abbreviation fields, this needs backend-side validation instead.
+  const explicit = getExplicitTeamAbbreviation(team);
+  if (explicit) return explicit;
 
   const nameBits = [
     team.name,
@@ -6410,28 +6492,15 @@ function getTeamAbbreviation(team) {
     if (hit) return hit;
   }
 
-  const rawExplicit =
-    team.abbreviation ||
-    team.abbr ||
-    team.team_abbrev ||
-    team.team_abbreviation ||
-    team.short_name ||
-    team.shortName ||
-    team.code ||
-    "";
-
-  const explicit = canonicalizeTeamAbbr(rawExplicit);
-  if (explicit && KNOWN_NHL_ABBRS.has(explicit)) return explicit;
-  // Allow non-NHL custom clubs with a clean 2–3 letter code, but never "NEW"/"CAL" truncations.
-  if (explicit && explicit.length >= 2 && explicit.length <= 3 && !["NEW", "CAL", "ST"].includes(explicit)) {
-    return explicit;
-  }
-
   const rawFallback = team.id || team.team_id || "";
   const fromId = canonicalizeTeamAbbr(rawFallback);
   if (fromId && KNOWN_NHL_ABBRS.has(fromId)) return fromId;
 
   return "TBD";
+}
+
+function getTeamAbbreviation(team) {
+  return resolveTeamAbbreviation(team);
 }
 
 function getDivisionName(team) {
@@ -6765,6 +6834,7 @@ function formatMonthYear(value) {
 }
 
 function normalizeGameTime(value) {
+  // Terminal fallback for scheduled games with no broadcast time in backend payload (see GAME TIME DIAGNOSIS above).
   if (!value) return "TBD";
 
   const raw = String(value).trim();
@@ -7908,6 +7978,10 @@ function CalendarStyles() {
         padding-top: 8px;
       }
 
+      .nhlcal-empty-day-line.is-muted {
+        opacity: 0.35;
+      }
+
       .nhlcal-day-cell:nth-child(7n) {
         border-right: 0;
       }
@@ -8623,6 +8697,29 @@ function CalendarStyles() {
         font-weight: 900;
         text-transform: uppercase;
         letter-spacing: 0.08em;
+      }
+
+      .nhlcal-legend-filter {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border: 0;
+        background: transparent;
+        color: rgba(233, 247, 251, 0.74);
+        font-size: 11px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        cursor: pointer;
+        padding: 0;
+      }
+
+      .nhlcal-legend-filter.is-active {
+        color: var(--text);
+      }
+
+      .nhlcal-day-cell.is-legend-dimmed {
+        opacity: 0.35;
       }
 
       .dot {

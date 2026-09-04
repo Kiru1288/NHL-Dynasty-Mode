@@ -9,6 +9,13 @@ from __future__ import annotations
 import random
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from app.sim_engine.franchise.storyline_copy import (
+    format_sv_pct,
+    normalize_save_pct,
+    valid_goalie_heater_sv,
+    valid_goalie_meltdown_sv,
+)
+
 ScoreFn = Callable[[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]], float]
 PredicateFn = Callable[[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]], bool]
 
@@ -156,9 +163,15 @@ def compose_data_story_copy(stype: str, ctx: Dict[str, Any], rng: random.Random,
     cap = float(ctx.get("cap") or 0)
     age = int(ctx.get("age") or 25)
     goals = int(ctx.get("goals") or 0)
-    save_pct = float(ctx.get("save_pct") or 0)
-    exp_sv = float(ctx.get("expected_save_pct") or 0)
+    save_pct = normalize_save_pct(ctx.get("save_pct"), ctx.get("sv"), ctx.get("sv_pct"))
+    exp_sv = normalize_save_pct(ctx.get("expected_save_pct"), ctx.get("exp_sv"))
+    sv_txt = format_sv_pct(save_pct)
+    exp_txt = format_sv_pct(exp_sv)
     streak = int(ctx.get("streak") or 0)
+    gaa = float(ctx.get("gaa") or 0)
+    rank = int(ctx.get("league_rank") or ctx.get("rank") or 0)
+    opponent = str(ctx.get("opponent") or "")
+    contract_year = bool(ctx.get("contract_year"))
 
     if stype == "star_underperforming":
         if body:
@@ -190,15 +203,29 @@ def compose_data_story_copy(stype: str, ctx: Dict[str, Any], rng: random.Random,
         )
 
     if stype == "superstar_carrying":
+        rank_bit = f", {rank}th in the league" if rank else ""
         if body:
-            return f"{name} is driving {team}'s offense with {pts} points in {gp} games while teammates struggle to match pace."
-        return rng.choice(
-            [
-                f"{name} carrying {team}'s attack ({pts} PTS in {gp} GP)",
-                f"Offensive load falling on {name} ({ppg:.2f} P/GP)",
-                f"{team} leaning heavily on {name}'s production",
-            ]
-        )
+            extra = f" on a {record} club{rank_bit}" if record else ""
+            if contract_year:
+                extra += " with a contract year looming"
+            return (
+                f"{name} is driving {team}'s offense with {pts} points in {gp} games"
+                f"{extra}. Teammates have not matched that pace."
+            )
+        options = [
+            f"{name} carrying {team}'s attack ({pts} PTS in {gp} GP)",
+            f"Offensive load falling on {name} ({ppg:.2f} P/GP)",
+            f"{team} leaning heavily on {name}'s production",
+        ]
+        if record:
+            options.append(f"{name} producing through a {record} slog for {team}")
+        if rank >= 20:
+            options.append(f"Award-race case: {name} keeping {team} relevant")
+        if contract_year:
+            options.append(f"Contract-year heater: {name} carrying {team}")
+        if ctx.get("pp_pts"):
+            options.append(f"PP engine: {name} generating {team}'s extra-man offense")
+        return rng.choice(options)
 
     if stype == "contract_pressure":
         if body:
@@ -215,26 +242,37 @@ def compose_data_story_copy(stype: str, ctx: Dict[str, Any], rng: random.Random,
         )
 
     if stype == "goalie_meltdown":
+        if not valid_goalie_meltdown_sv(save_pct):
+            return ""
         if body:
-            return f"{name}'s save percentage ({save_pct:.1f}%) is well below the {exp_sv:.1f}% baseline across {gp} starts."
+            baseline = f" vs a {exp_txt} expected baseline" if exp_txt else ""
+            gaa_bit = f" and {gaa:.2f} GAA" if gaa else ""
+            return f"{name}'s save percentage ({sv_txt}){gaa_bit} is well below profile{baseline} across {gp} starts."
         return rng.choice(
             [
-                f"Goaltending concern: {name} at {save_pct:.1f}% through {gp} GP",
-                f"{name}'s form ({save_pct:.1f}% SV%) lagging expected {exp_sv:.1f}%",
-                f"{team} net unsettled as {name} struggles ({save_pct:.1f}%)",
+                f"Goaltending concern: {name} at {sv_txt} through {gp} GP",
+                f"{name}'s form ({sv_txt} SV%) lagging expected {exp_txt or 'baseline'}",
+                f"{team} net unsettled as {name} struggles ({sv_txt})",
             ]
         )
 
     if stype == "goalie_heater":
+        if not valid_goalie_heater_sv(save_pct):
+            return ""
         if body:
-            return f"{name} is outperforming his profile at {save_pct:.1f}% save rate over {gp} games."
-        return rng.choice(
-            [
-                f"Hot goaltending: {name} at {save_pct:.1f}%",
-                f"{name} stealing games for {team} ({save_pct:.1f}% SV%)",
-                f"Net confidence rising behind {name}",
-            ]
-        )
+            gaa_bit = f" and {gaa:.2f} GAA" if gaa else ""
+            extra = f" against a {exp_txt} expected mark" if exp_txt else ""
+            return f"{name} is outperforming his profile at {sv_txt}{gaa_bit} over {gp} games{extra}."
+        options = [
+            f"Hot goaltending: {name} at {sv_txt}",
+            f"{name} stealing games for {team} ({sv_txt} SV%)",
+            f"Net confidence rising behind {name} ({sv_txt})",
+        ]
+        if gaa:
+            options.append(f"{name} at {sv_txt} / {gaa:.2f} GAA through {gp} starts")
+        if record:
+            options.append(f"{team}'s crease story: {name} {sv_txt} while club sits {record}")
+        return rng.choice(options)
 
     if stype == "backup_taking_net":
         if body:
@@ -299,6 +337,158 @@ def compose_data_story_copy(stype: str, ctx: Dict[str, Any], rng: random.Random,
     return f"{name} — developing story for {team}"
 
 
+_COMMUNITY_HOOKS = (
+    "a hospital visit with the {team} Foundation",
+    "a local rink clinic for kids",
+    "the club's community skate",
+    "a charity food-drive stop downtown",
+    "a veterans' hospital appearance",
+    "an after-school hockey program",
+)
+
+
+def community_event_copy(name: str, team: str, player_id: str = "") -> Tuple[str, str]:
+    seed = abs(hash(str(player_id or name)))
+    hook = _COMMUNITY_HOOKS[seed % len(_COMMUNITY_HOOKS)].format(team=team or "the club")
+    headline = f"{name} spends a day on {hook}"
+    summary = f"{name} spent time on {hook}. Teammates say those days still matter in the room."
+    return headline, summary
+
+
+def compose_shutout_copy(
+    *,
+    goalie_name: str,
+    team: str,
+    opponent: str = "",
+    record: str = "",
+    league_rank: int = 0,
+    prior_shutouts: int = 0,
+    snapped_skid: bool = False,
+) -> Tuple[str, str]:
+    gname = str(goalie_name or "").strip() or "the starter"
+    team_n = str(team or "the club")
+    opp = str(opponent or "the opponent")
+    if prior_shutouts >= 2:
+        headline = f"{gname} posts shutout No. {prior_shutouts + 1} in a week — Vezina buzz for {team_n}"
+        summary = f"Coaches are pointing to {gname} as the reason {team_n} is stacking zeros. {opp} did not solve him."
+        return headline, summary
+    if prior_shutouts >= 1:
+        headline = f"{gname} blanks {opp} again as {team_n} ride the crease"
+        summary = f"Back-to-back shutout form from {gname}. The room is rallying around the starter."
+        return headline, summary
+    if snapped_skid:
+        headline = f"{gname} snaps {team_n}'s skid with a shutout of {opp}"
+        summary = f"{team_n} needed a reset. {gname} provided it with a clean sheet."
+        return headline, summary
+    if 1 <= league_rank <= 3:
+        headline = f"First-place {team_n}: {gname} shuts out {opp}"
+        summary = f"At {record or 'the top of the table'}, {gname} added another shutout to a contender's crease."
+        return headline, summary
+    if 7 <= league_rank <= 16:
+        headline = f"Wildcard-race shutout: {gname} blanks {opp}"
+        summary = f"{team_n} ({record or 'in the mix'}) grabbed a huge point-race result behind {gname}."
+        return headline, summary
+    headline = f"{gname} shuts out {opp}"
+    summary = f"{team_n} blanked {opp} behind {gname}."
+    return headline, summary
+
+
+_REPORTER_FRAMES = (
+    (
+        "coverage",
+        "{actor} confronts {reporter} over a hit piece",
+        "{actor} challenges {reporter} ({outlet}) after a week of critical coverage.",
+        "You're turning every answer into a crisis.",
+    ),
+    (
+        "trade_rumor",
+        "{actor} corners {reporter} about trade chatter",
+        "{actor} is angry {reporter} ({outlet}) put his name in a trade rumor without sourcing the room.",
+        "You don't get to shop me in print.",
+    ),
+    (
+        "coach_criticism",
+        "{actor} pushes back on {reporter}'s coaching take",
+        "{actor} tells {reporter} ({outlet}) to stop using him as a proxy to bury the staff.",
+        "Leave the bench out of it. Talk to me.",
+    ),
+    (
+        "contract",
+        "{actor} clashes with {reporter} over contract noise",
+        "{actor} is tired of {reporter} ({outlet}) framing every shift as leverage for the next deal.",
+        "I'm playing hockey. Stop writing my negotiation.",
+    ),
+    (
+        "leak",
+        "{actor} accuses {reporter} of locker-room leaks",
+        "{actor} believes {reporter} ({outlet}) is printing closed-door details that never should have left the room.",
+        "Someone in here is talking. Don't print it like it's nothing.",
+    ),
+    (
+        "treatment",
+        "{actor} calls out {reporter} for poor media treatment",
+        "{actor} says {reporter} ({outlet}) has been baiting him in scrums and twisting the quotes.",
+        "Ask the question once. Don't ambush me.",
+    ),
+)
+
+
+def reporter_conflict_copy(
+    rng: random.Random,
+    actor_name: str,
+    reporter_name: str,
+    outlet: str,
+    *,
+    physical: bool = False,
+    player_id: str = "",
+) -> Dict[str, str]:
+    if physical:
+        return {
+            "frame": "altercation",
+            "title": f"Media hallway altercation involving {actor_name}",
+            "summary": (
+                f"A heated exchange between {actor_name} and {reporter_name} ({outlet}) "
+                f"turns into a brief shoving incident before security intervenes."
+            ),
+            "player_line": "It had been building. I'm not pretending it hadn't.",
+        }
+    seed = abs(hash(f"{player_id}|{actor_name}|{reporter_name}"))
+    if rng is not None:
+        seed ^= rng.randrange(1, 10_000)
+    idx = seed % len(_REPORTER_FRAMES)
+    _fid, title_t, summary_t, line = _REPORTER_FRAMES[idx]
+    ctx = {"actor": actor_name, "reporter": reporter_name, "outlet": outlet or "media"}
+    return {
+        "frame": _fid,
+        "title": title_t.format(**ctx),
+        "summary": summary_t.format(**ctx),
+        "player_line": line,
+    }
+
+
+def reporter_followup_copy(
+    actor_name: str,
+    reporter_name: str,
+    outlet: str,
+    frame: str = "",
+) -> Tuple[str, str]:
+    outlet_n = outlet or "the outlet"
+    if frame == "trade_rumor":
+        return (
+            f"{reporter_name} answers {actor_name}: the rumor stays in print",
+            f"{reporter_name} ({outlet_n}) declined to walk back the trade chatter. Teammates are telling {actor_name} to let it die.",
+        )
+    if frame == "leak":
+        return (
+            f"Room split after {actor_name}'s leak accusation",
+            f"Veterans privately warned {actor_name} that going after {reporter_name} over a leak makes the dressing room smaller.",
+        )
+    return (
+        f"{reporter_name} responds to {actor_name}'s scrum",
+        f"{reporter_name} ({outlet_n}) said the questions were fair. {actor_name}'s teammates are treating it as a one-day story.",
+    )
+
+
 def build_data_story_trigger_context(
     stype: str,
     ctx: Dict[str, Any],
@@ -325,8 +515,12 @@ def build_data_story_trigger_context(
         scores["overall"] = ovr
         thresholds["production_ppg"] = max(0.55, exp_ppg * 1.45)
     elif stype in ("goalie_meltdown", "goalie_heater"):
-        scores["save_pct"] = float(evidence.get("save_pct") or ctx.get("save_pct") or 0)
-        scores["expected_save_pct"] = float(evidence.get("expected_save_pct") or ctx.get("expected_save_pct") or 0)
+        sv_n = normalize_save_pct(evidence.get("save_pct"), ctx.get("save_pct"), ctx.get("sv"))
+        exp_n = normalize_save_pct(evidence.get("expected_save_pct"), ctx.get("expected_save_pct"), ctx.get("exp_sv"))
+        if sv_n is not None:
+            scores["save_pct"] = sv_n
+        if exp_n is not None:
+            scores["expected_save_pct"] = exp_n
     elif stype in ("losing_skid", "win_streak"):
         scores["streak"] = float(ctx.get("streak") or evidence.get("streak") or 0)
         thresholds["streak"] = 3.0
@@ -393,7 +587,8 @@ def _compose_life_headline(rule_id: str, entity: Dict[str, Any], fields: Dict[st
     if rule_id == "financial_pinch":
         return f"Off-ice expenses are nagging at {name}"
     if rule_id == "community_lift":
-        return f"Community connection is lifting {name}'s mood"
+        headline, _ = community_event_copy(name, str((entity.get("team_name") or entity.get("team") or "the club")), str(entity.get("player_id") or entity.get("id") or ""))
+        return headline
     if rule_id == "family_milestone":
         return f"Positive family news is energizing {name}"
     if rule_id == "belonging_reset":
@@ -421,10 +616,12 @@ def _compose_life_summary(rule_id: str, entity: Dict[str, Any], fields: Dict[str
             f"are amplifying off-ice distraction.{tag_note}"
         )
     if rule_id == "community_lift":
-        return (
-            f"Community connection ({fields.get('community_connection', 0):.0f}) and character "
-            f"({fields.get('character', 0):.0f}) produced a meaningful away-from-rink day.{tag_note}"
+        _, summary = community_event_copy(
+            _name(entity),
+            str((entity.get("team_name") or entity.get("team") or "the club")),
+            str(entity.get("player_id") or entity.get("id") or ""),
         )
+        return summary + tag_note
     if positive:
         return f"Life-state signals aligned for a small positive off-ice moment.{tag_note}"
     return f"Life-state pressure crossed the threshold for a minor negative off-ice event.{tag_note}"
@@ -635,7 +832,7 @@ def _build_life_event_rules() -> List[Dict[str, Any]]:
             heat=22,
             mutation_id="charity_success",
             character=0.5,
-            public_chance=0.75,
+            public_chance=0.28,
         ),
         _life_rule(
             "family_milestone",

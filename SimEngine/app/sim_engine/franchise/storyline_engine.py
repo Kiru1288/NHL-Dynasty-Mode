@@ -19,7 +19,10 @@ from app.sim_engine.franchise.storyline_copy import (
     classify_story_lane,
     lane_flags,
     pick_line,
+    select_daily_data_stories,
     story_ctx,
+    valid_goalie_heater_sv,
+    valid_goalie_meltdown_sv,
 )
 
 _log = logging.getLogger("uvicorn.error")
@@ -872,15 +875,15 @@ def run_data_storyline_pass(
 
     def try_emit(**kwargs: Any) -> None:
         nonlocal skipped_cd, skipped_sample
+        if not str(kwargs.get("headline") or "").strip():
+            return
         stable_key = str(kwargs.pop("stable_key"))
         severity = str(kwargs.get("severity") or "minor")
         ok, rep = _can_fire(session, stable_key, cur_day, severity)
         if not ok:
             skipped_cd += 1
             return
-        esc = ""
         if rep > 0:
-            esc = "Earlier beat on same issue"
             kwargs["repeat_count"] = rep
             kwargs["escalated_from"] = stable_key
         sl = _build_storyline(rng=r, session=session, stable_key=stable_key, cur_day=cur_day, calendar_iso=iso, **kwargs)
@@ -998,6 +1001,20 @@ def run_data_storyline_pass(
         if ovr >= 86 and gp >= SKATER_GP_MAJOR and pts >= 14:
             rank = int(rank_by_team.get(tid, len(rank_by_team) or 16))
             if rank >= 20 and ppg >= 0.85:
+                years_left = 99
+                pl = player_by_id.get(str(pid))
+                if pl is not None:
+                    contract = getattr(pl, "contract", None)
+                    try:
+                        years_left = int(getattr(contract, "years_remaining", None) or getattr(contract, "years", 99) or 99)
+                    except (TypeError, ValueError):
+                        years_left = 99
+                carry_ctx = story_ctx(
+                    **ctx,
+                    league_rank=rank,
+                    contract_year=years_left <= 1,
+                    pp_pts=_stat_int(row, "pp_pts", "pp_points"),
+                )
                 try_emit(
                     stable_key=f"superstar_carry|{pid}|{season}",
                     stype="superstar_carrying",
@@ -1005,9 +1022,9 @@ def run_data_storyline_pass(
                     severity="minor",
                     priority="MEDIUM",
                     tone="mixed",
-                    headline=pick_line(r, "superstar_carrying", ctx),
-                    description=pick_line(r, "superstar_carrying", ctx, body=True),
-                    short_summary=pick_line(r, "superstar_carrying", ctx, body=True),
+                    headline=pick_line(r, "superstar_carrying", carry_ctx),
+                    description=pick_line(r, "superstar_carrying", carry_ctx, body=True),
+                    short_summary=pick_line(r, "superstar_carrying", carry_ctx, body=True),
                     cause="Elite individual scoring on a sub-.500 team.",
                     team_id=tid,
                     team_name=team_name_by_id.get(tid, tid),
@@ -1015,9 +1032,9 @@ def run_data_storyline_pass(
                     player_name=pname,
                     player_position=pos,
                     player_overall=round(ovr, 1),
-                    evidence={"points": pts, "games_played": gp, "team_record": trec, "league_rank": rank},
+                    evidence={"points": pts, "games_played": gp, "team_record": trec, "league_rank": rank, "contract_year": years_left <= 1},
                     effects={"player_morale": -1, "fan_confidence": 2, "media_pressure": 3, "trade_market_heat": 2},
-                    heat=58,
+                    heat=50,
                 )
 
         # Expensive contract pressure
@@ -1074,56 +1091,68 @@ def run_data_storyline_pass(
             ovr=ovr,
             gp=gp,
             sv=sv_pct,
+            save_pct=sv_pct,
             gaa=gaa,
             exp_sv=exp_sv,
+            expected_save_pct=exp_sv,
         )
+        tw, tl, to, trec = _team_record(session, tid)
+        gctx["record"] = trec
 
         if sv_pct < exp_sv - 0.018 and major:
-            try_emit(
-                stable_key=f"goalie_meltdown|{pid}|{season}",
-                stype="goalie_meltdown",
-                category="performance",
-                severity="minor",
-                priority="HIGH" if sv_pct < exp_sv - 0.028 else "MEDIUM",
-                tone="negative",
-                headline=pick_line(r, "goalie_meltdown", gctx),
-                description=pick_line(r, "goalie_meltdown", gctx, body=True),
-                short_summary=pick_line(r, "goalie_meltdown", gctx, body=True),
-                cause=f"Save percentage {sv_pct:.3f} well below {exp_sv:.3f} expected for {round(ovr)} OVR.",
-                team_id=tid,
-                team_name=team_name_by_id.get(tid, tid),
-                player_id=str(pid),
-                player_name=pname,
-                player_position="G",
-                player_overall=round(ovr, 1),
-                evidence={"games_played": gp, "save_pct": round(sv_pct, 3), "gaa": round(gaa, 2), "expected_save_pct": exp_sv},
-                effects={"goalie_confidence": -8 if major else -4, "team_morale": -2, "media_pressure": 3},
-                requires_action=tid == uid,
-                action_options=_goalie_meltdown_actions() if tid == uid else None,
-                heat=72,
-            )
+            if valid_goalie_meltdown_sv(sv_pct):
+                hl = pick_line(r, "goalie_meltdown", gctx)
+                body = pick_line(r, "goalie_meltdown", gctx, body=True)
+                if hl:
+                    try_emit(
+                        stable_key=f"goalie_meltdown|{pid}|{season}",
+                        stype="goalie_meltdown",
+                        category="performance",
+                        severity="minor",
+                        priority="HIGH" if sv_pct < exp_sv - 0.028 else "MEDIUM",
+                        tone="negative",
+                        headline=hl,
+                        description=body,
+                        short_summary=body,
+                        cause=f"Save percentage {sv_pct:.3f} well below {exp_sv:.3f} expected for {round(ovr)} OVR.",
+                        team_id=tid,
+                        team_name=team_name_by_id.get(tid, tid),
+                        player_id=str(pid),
+                        player_name=pname,
+                        player_position="G",
+                        player_overall=round(ovr, 1),
+                        evidence={"games_played": gp, "save_pct": round(sv_pct, 3), "gaa": round(gaa, 2), "expected_save_pct": exp_sv},
+                        effects={"goalie_confidence": -8 if major else -4, "team_morale": -2, "media_pressure": 3},
+                        requires_action=tid == uid,
+                        action_options=_goalie_meltdown_actions() if tid == uid else None,
+                        heat=72,
+                    )
         elif sv_pct >= exp_sv + 0.012 and gp >= GOALIE_GP_MINOR:
-            try_emit(
-                stable_key=f"goalie_heater|{pid}|{season}",
-                stype="goalie_heater",
-                category="performance",
-                severity="minor",
-                priority="MEDIUM",
-                tone="positive",
-                headline=pick_line(r, "goalie_heater", gctx),
-                description=pick_line(r, "goalie_heater", gctx, body=True),
-                short_summary=pick_line(r, "goalie_heater", gctx, body=True),
-                cause="Save percentage materially above expected baseline.",
-                team_id=tid,
-                team_name=team_name_by_id.get(tid, tid),
-                player_id=str(pid),
-                player_name=pname,
-                player_position="G",
-                player_overall=round(ovr, 1),
-                evidence={"save_pct": round(sv_pct, 3), "games_played": gp, "gaa": round(gaa, 2)},
-                effects={"goalie_confidence": 5, "team_morale": 3, "fan_confidence": 4},
-                heat=60,
-            )
+            if valid_goalie_heater_sv(sv_pct):
+                hl = pick_line(r, "goalie_heater", gctx)
+                body = pick_line(r, "goalie_heater", gctx, body=True)
+                if hl:
+                    try_emit(
+                        stable_key=f"goalie_heater|{pid}|{season}",
+                        stype="goalie_heater",
+                        category="performance",
+                        severity="minor",
+                        priority="MEDIUM",
+                        tone="positive",
+                        headline=hl,
+                        description=body,
+                        short_summary=body,
+                        cause="Save percentage materially above expected baseline.",
+                        team_id=tid,
+                        team_name=team_name_by_id.get(tid, tid),
+                        player_id=str(pid),
+                        player_name=pname,
+                        player_position="G",
+                        player_overall=round(ovr, 1),
+                        evidence={"save_pct": round(sv_pct, 3), "games_played": gp, "gaa": round(gaa, 2), "expected_save_pct": exp_sv},
+                        effects={"goalie_confidence": 5, "team_morale": 3, "fan_confidence": 4},
+                        heat=48,
+                    )
 
         goalies_by_team.setdefault(tid, []).append(
             {
@@ -1373,9 +1402,7 @@ def run_data_storyline_pass(
         )
 
     # Cap storylines per day (league desks + rolling form live elsewhere)
-    cap = 16
-    generated.sort(key=lambda s: (-int(s.get("heat") or 0), str(s.get("priority") or "")))
-    trimmed = generated[:cap]
+    trimmed = select_daily_data_stories(generated, uid, league_cap=7)
 
     out = {
         "generated": len(trimmed),
@@ -1446,6 +1473,18 @@ def franchise_record_data_storylines(
             _emit_cause_storyline(session, raw)
         else:
             _record_storyline(session, raw)
+        if tid == utid and str(raw.get("type") or "") == "superstar_carrying":
+            ev = dict(raw.get("evidence") or {})
+            _enqueue_storyline_followup(
+                session,
+                due_day=int(calendar_idx) + 12,
+                kind="carry_followup",
+                team_id=tid,
+                player_id=str(raw.get("player_id") or ""),
+                player_name=str(raw.get("player_name") or ""),
+                team_name=str(raw.get("team_name") or ""),
+                contract_year=bool(ev.get("contract_year")),
+            )
     return result
 
 
@@ -3253,6 +3292,101 @@ def _append_story_arc_beat(session: Any, sl: Dict[str, Any]) -> Dict[str, Any]:
     return sl
 
 
+def _enqueue_storyline_followup(session: Any, *, due_day: int, kind: str, **payload: Any) -> None:
+    q = list(getattr(session, "_storyline_followups", None) or [])
+    key = f"{kind}|{payload.get('player_id') or ''}|{payload.get('reporter_name') or ''}"
+    if any(f"{x.get('kind')}|{x.get('player_id') or ''}|{x.get('reporter_name') or ''}" == key for x in q):
+        return
+    q.append({"due_day": int(due_day), "kind": str(kind), **payload})
+    session._storyline_followups = q[-48:]
+
+
+def _process_storyline_followups(session: Any) -> int:
+    from app.sim_engine.franchise.storyline_procedural import reporter_followup_copy  # noqa: WPS433
+
+    day, iso, _ = _u_current_meta(session)
+    q = list(getattr(session, "_storyline_followups", None) or [])
+    remain: List[Dict[str, Any]] = []
+    emitted = 0
+    for item in q:
+        if int(item.get("due_day") or 0) > day:
+            remain.append(item)
+            continue
+        kind = str(item.get("kind") or "")
+        team_id = str(item.get("team_id") or "")
+        player_id = str(item.get("player_id") or "")
+        player_name = str(item.get("player_name") or "Player")
+        event = {
+            "id": f"fup_{uuid.uuid4().hex[:10]}",
+            "kind": kind,
+            "team_id": team_id,
+            "player_id": player_id,
+            "player_name": player_name,
+            "participants": [pid for pid in (player_id,) if pid],
+            "event_tier": "minor",
+            "tone": "neutral",
+            "stable_key": f"followup|{kind}|{player_id}|{day}",
+        }
+        if kind == "reporter_response":
+            hl, sm = reporter_followup_copy(
+                player_name,
+                str(item.get("reporter_name") or "the reporter"),
+                str(item.get("outlet") or "media"),
+                str(item.get("frame") or ""),
+            )
+            sl = _u_record_storyline(
+                session,
+                event=event,
+                headline=hl,
+                summary=sm,
+                cause_type="STORYLINE_FOLLOWUP",
+                category="media",
+                heat=44,
+                public=True,
+            )
+            if sl:
+                emitted += 1
+        elif kind == "carry_followup":
+            team_name = str(item.get("team_name") or "the club")
+            if item.get("contract_year"):
+                hl = f"Contract-year case: {player_name} still carrying {team_name}"
+                sm = f"{player_name}'s production has not cooled. The next deal is now part of the same conversation."
+            else:
+                hl = f"Award chatter follows {player_name}'s stretch carrying {team_name}"
+                sm = f"{player_name} is still the offense. Hardware talk is no longer a throwaway line."
+            sl = _u_record_storyline(
+                session,
+                event=event,
+                headline=hl,
+                summary=sm,
+                cause_type="STORYLINE_FOLLOWUP",
+                category="team",
+                heat=46,
+                public=True,
+            )
+            if sl:
+                emitted += 1
+        elif kind == "shutout_coach":
+            hl = f"Coach doubles down on {player_name} after stacked shutouts"
+            sm = f"The bench is riding {player_name}. Teammates are talking about a Vezina-pace stretch, not a lucky night."
+            sl = _u_record_storyline(
+                session,
+                event=event,
+                headline=hl,
+                summary=sm,
+                cause_type="STORYLINE_FOLLOWUP",
+                category="goalie",
+                heat=54,
+                public=True,
+            )
+            if sl:
+                emitted += 1
+        else:
+            remain.append(item)
+    session._storyline_followups = remain
+    return emitted
+
+
 def _spawn_social_posts(session: Any, sl: Dict[str, Any]) -> None:
     """Auto social/reddit generation disabled — static templates served via payload."""
     return
@@ -4862,27 +4996,27 @@ def _breaking_news_signal(sl: Dict[str, Any], user_team_id: str = "") -> Optiona
     priority = str(sl.get("priority") or "").upper()
     heat = int(sl.get("heat") or 0)
     cause = str(sl.get("cause_type") or "").upper()
-    cat = str(sl.get("category") or sl.get("type") or "").lower()
-    if priority == "CRITICAL" or heat >= 85 or cause in ("PLAYER_ARRESTED", "PLAYER_DEATH", "LEAGUE_SUSPENSION", "PLAYER_BANNED"):
+    team_id = str(sl.get("team_id") or "")
+    user_club = bool(utid and team_id == utid)
+    crisis = cause in (
+        "PLAYER_ARRESTED",
+        "PLAYER_DEATH",
+        "LEAGUE_SUSPENSION",
+        "PLAYER_BANNED",
+        "MAJOR_PUBLIC_ALTERCATION",
+        "GAMBLING_VIOLATION",
+    )
+    if priority == "CRITICAL" or heat >= 88 or crisis:
         return "league_defining"
-    interesting = cause in (
-        "HAT_TRICK",
-        "SHUTOUT",
-        "TEAMMATE_FIGHT",
-        "WINNING_CONCERN",
-        "PLAYER_ROLE_FRUSTRATION",
-        "LOCKER_ROOM_PULSE",
-        "PLAYER_REPORTER_CONFRONTATION",
-        "CONTRACT_YEAR_HEAT",
-        "TRADE_DEMAND",
-        "POSITIVE_LIFE_EVENT",
-        "MINOR_LIFE_EVENT",
-        "HIGH_CHARACTER_IMPACT",
-        "LOW_CHARACTER_GAME_IMPACT",
-    ) or cat in ("personal_life", "locker_room", "injury", "performance")
-    if priority == "HIGH" or heat >= 62 or (interesting and heat >= 28):
+    if cause in ("TRADE_DEMAND", "TEAMMATE_FIGHT", "PLAYER_REPORTER_ALTERCATION") and (user_club or heat >= 78):
         return "breaking"
-    if heat >= 40 or interesting:
+    if sl.get("requires_action") and user_club:
+        return "breaking"
+    if heat >= 82 and cause in ("HAT_TRICK", "TRADE_DEMAND", "PLAYER_REPORTER_CONFRONTATION"):
+        return "breaking"
+    if user_club and heat >= 76 and priority in ("HIGH", "CRITICAL"):
+        return "breaking"
+    if user_club and heat >= 70:
         return "developing"
     return None
 
@@ -4902,7 +5036,7 @@ def _collect_breaking_alerts(session: Any) -> List[Dict[str, Any]]:
         level = str(s.get("breaking_level") or "") or (
             _breaking_news_signal(s, utid) or ""
         )
-        if level not in ("developing", "breaking", "league_defining"):
+        if level not in ("breaking", "league_defining"):
             continue
         key = str(s.get("storyline_id") or s.get("id") or headline)
         if key in seen:
@@ -6461,6 +6595,8 @@ def _u_make_interaction(session: Any, team_id: str, kind: str, actor_id: str, ta
             }
         )
     elif kind in ("reporter_confrontation", "reporter_altercation"):
+        from app.sim_engine.franchise.storyline_procedural import reporter_conflict_copy  # noqa: WPS433
+
         reporter = _u_pick_reporter_for_player_confrontation(
             session,
             actor_id,
@@ -6470,21 +6606,26 @@ def _u_make_interaction(session: Any, team_id: str, kind: str, actor_id: str, ta
         )
         physical = kind == "reporter_altercation"
         outlet = str(reporter.get("outlet") or "media")
+        copy = reporter_conflict_copy(
+            rng,
+            actor_name,
+            str(reporter["name"]),
+            outlet,
+            physical=physical,
+            player_id=str(actor_id),
+        )
         base.update(
             {
                 "reporter_id": reporter["id"],
                 "reporter_name": reporter["name"],
                 "outlet_name": outlet,
-                "title": f"{actor_name} confronts {reporter['name']}" if not physical else f"Media hallway altercation involving {actor_name}",
-                "summary": (
-                    f"{actor_name} challenges {reporter['name']} ({outlet}) over repeated coverage."
-                    if not physical
-                    else f"A heated exchange between {actor_name} and {reporter['name']} ({outlet}) turns into a brief shoving incident before security intervenes."
-                ),
+                "reporter_frame": copy.get("frame") or "",
+                "title": copy["title"],
+                "summary": copy["summary"],
                 "stakes": "critical" if physical else "high",
                 "dialogue": [
                     {"speaker": reporter["name"], "text": "If the reporting is wrong, tell me exactly what is wrong."},
-                    {"speaker": actor_name, "text": "You know what you're doing. You're turning every answer into a crisis."},
+                    {"speaker": actor_name, "text": copy.get("player_line") or "You know what you're doing."},
                 ],
                 "choices": [
                     _u_choice("back_player_privately", "Back the player privately", "Support him while making public conduct expectations clear.", {"profile_changes": {"actor": {"state.gm_trust": 5, "state.media_stress": -4, "state.coach_trust": -1}}, "reporter_changes": {"friction": 6, "access": -8, "trust": -3}, "public": True, "cause_type": "PLAYER_REPORTER_ALTERCATION" if physical else "PLAYER_REPORTER_CONFRONTATION", "heat": 82 if physical else 62}),
@@ -8359,16 +8500,11 @@ def _u_record_storyline(session: Any, *, event: Dict[str, Any], headline: str, s
         heat_val += 18
     if cause_type in (
         "HAT_TRICK",
-        "SHUTOUT",
         "TEAMMATE_FIGHT",
-        "WINNING_CONCERN",
-        "PLAYER_ROLE_FRUSTRATION",
-        "LOCKER_ROOM_PULSE",
-        "PLAYER_REPORTER_CONFRONTATION",
-        "CONTRACT_YEAR_HEAT",
-        "POSITIVE_LIFE_EVENT",
-        "MINOR_LIFE_EVENT",
+        "PLAYER_REPORTER_ALTERCATION",
         "TRADE_DEMAND",
+        "PLAYER_ARRESTED",
+        "LEAGUE_SUSPENSION",
     ):
         heat_val += 14
     if _is_routine_wire_trade({"headline": headline, "team_id": team_id}, utid):
@@ -8454,14 +8590,21 @@ def _u_record_storyline(session: Any, *, event: Dict[str, Any], headline: str, s
     brk = _breaking_news_signal(row, utid)
     if brk:
         row["breaking_level"] = brk
+    before = len(getattr(session, "storyline_events", None) or [])
     try:
         from app.sim_engine.franchise.state import _record_storyline  # noqa: WPS433
         _record_storyline(session, row)
     except (ImportError, ModuleNotFoundError):
+        from app.sim_engine.franchise.storyline_copy import claim_league_story_slot  # noqa: WPS433
+
+        if public and not claim_league_story_slot(session, row, user_club=bool(utid and team_id == utid)):
+            return None
         enriched = _UNIVERSE_LEGACY_ENRICH(session, row)
         existing = list(getattr(session, "storyline_events", None) or [])
         existing.append(enriched)
         session.storyline_events = _trim_storyline_events(existing)
+    if len(getattr(session, "storyline_events", None) or []) <= before:
+        return None
     return row
 
 
@@ -9006,6 +9149,18 @@ def _u_apply_outcome(session: Any, interaction: Dict[str, Any], choice: Dict[str
         if actor_id and target_id and team_id:
             pair_rel = _u_relationship(session, team_id, actor_id, target_id)
             pair_rel["last_conflict_story_day"] = int(day)
+    if storyline and conflict_kind in ("reporter_confrontation", "reporter_altercation"):
+        _enqueue_storyline_followup(
+            session,
+            due_day=day + 1 + (abs(hash(str(interaction.get("id") or actor_id))) % 3),
+            kind="reporter_response",
+            team_id=team_id,
+            player_id=actor_id,
+            player_name=str(interaction.get("player_name") or (entities.get(actor_id) or {}).get("player_name") or "Player"),
+            reporter_name=str(interaction.get("reporter_name") or ""),
+            outlet=str(interaction.get("outlet_name") or ""),
+            frame=str(interaction.get("reporter_frame") or ""),
+        )
     return {"interaction": interaction, "receipts": receipts, "storyline": storyline}
 
 
@@ -9777,6 +9932,7 @@ def narrative_universe_v2_daily_pass(session: Any, calendar_idx: int, day_meta: 
     for team_id in (getattr(session, "team_by_id", None) or {}).keys():
         _u_rebuild_locker_room(session, str(team_id))
     minor_life = _u_generate_minor_life_events(session, local_rng)
+    followups = _process_storyline_followups(session)
     expired = _u_expire_interactions(session)
     interactions = _u_generate_daily_interactions(session, local_rng)
     trade_demands_created = _u_maybe_create_trade_demand_from_state(session, local_rng)
@@ -9803,6 +9959,7 @@ def narrative_universe_v2_daily_pass(session: Any, calendar_idx: int, day_meta: 
         "locker_rooms": len(getattr(session, "universe_locker_rooms", None) or {}),
         "generated_interactions": interactions,
         "minor_life_events": minor_life,
+        "storyline_followups": followups,
         "major_league_events": major_events,
         "trade_demands_created": trade_demands_created,
         "trade_demands_active": trade_demand_tick["active"],

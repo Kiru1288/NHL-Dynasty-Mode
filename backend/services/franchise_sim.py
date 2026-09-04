@@ -4073,6 +4073,59 @@ def _lean_state_cache_key(session: FranchiseSession) -> str:
     )
 
 
+def _ensure_lean_section_cache(session: FranchiseSession) -> Dict[str, Dict[str, Any]]:
+    cache = getattr(session, "_lean_state_sections", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        session._lean_state_sections = cache
+    return cache
+
+
+def _invalidate_lean_sections(session: FranchiseSession, *names: str) -> None:
+    cache = getattr(session, "_lean_state_sections", None)
+    if not isinstance(cache, dict):
+        return
+    for name in names:
+        cache.pop(name, None)
+
+
+def _lean_section_cache_keys(session: FranchiseSession, *, crisis_tick: bool = False) -> Dict[str, str]:
+    cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
+    prospect_rev = int(getattr(session, "_prospect_revision", 0) or 0)
+    narrative_rev = int(_narrative_cache_revision(session))
+    interaction_rev = int(_interaction_cache_revision(session))
+    phase = str(getattr(session, "phase", "") or "")
+    season_year = int(getattr(session, "season_calendar_year", 0) or 0)
+    pending_n = len(getattr(session, "pending_decisions", None) or [])
+    popup_n = len(getattr(session, "pending_ui_popups", None) or [])
+    storyline_n = len(getattr(session, "storyline_events", None) or [])
+    notification_n = len(getattr(session, "notifications", None) or [])
+    injury_len = len(getattr(session, "injury_log", None) or getattr(session, "injuries", None) or [])
+    game_results_n = len(getattr(session, "game_results", None) or [])
+    return {
+        "core": f"c{cur}|p{phase}|sy{season_year}|pd{pending_n}|pu{popup_n}|ct{int(bool(crisis_tick))}",
+        "stats": f"s{stats_rev}|c{cur}|pr{prospect_rev}|i{injury_len}",
+        "calendar": f"c{cur}|gr{game_results_n}|p{phase}",
+        "narrative": f"n{narrative_rev}|i{interaction_rev}|c{cur}|sn{storyline_n}|nn{notification_n}",
+        "extras": f"s{stats_rev}|p{phase}|sy{season_year}|pr{prospect_rev}",
+    }
+
+
+def _get_lean_section(session: FranchiseSession, name: str, key: str, builder) -> Dict[str, Any]:
+    cache = _ensure_lean_section_cache(session)
+    entry = cache.get(name)
+    if isinstance(entry, dict) and str(entry.get("key") or "") == key:
+        data = entry.get("data")
+        if isinstance(data, dict):
+            return dict(data)
+    data = builder()
+    if not isinstance(data, dict):
+        data = {}
+    cache[name] = {"key": key, "data": dict(data)}
+    return dict(data)
+
+
 def _get_cached_nhl_calendar_full(
     session: FranchiseSession,
     *,
@@ -4543,6 +4596,166 @@ def _backfill_player_analytics_from_game_boxes(session: FranchiseSession) -> boo
     return True
 
 
+def _repair_on_ice_share_to_team_box(session: FranchiseSession) -> bool:
+    """
+    One-shot repair for two light-path bugs:
+    1) Game boxes could land at ~30% CF% for winning clubs (independent / 30-70 clamp).
+    2) Player CF/CA used a D-vs-F dump that invented ~30% CF% for NHL defensemen.
+
+    Rebalance extreme game-box shares into the 40-60 band (score-aware), then
+    re-ratio each skater's existing volume to that club's box share so player
+    CF%/xGF% match the sim, not the dump.
+    """
+    if bool(getattr(session, "_on_ice_share_repair_v2", False)):
+        return False
+
+    def _num(row: Dict[str, Any], *keys: str) -> float:
+        for key in keys:
+            if key in row and row.get(key) is not None:
+                try:
+                    return float(row.get(key) or 0)
+                except (TypeError, ValueError):
+                    continue
+        return 0.0
+
+    def _rebalance_pair(h: float, a: float, gd: float) -> Tuple[float, float]:
+        total = float(h) + float(a)
+        if total <= 0:
+            return h, a
+        share = h / total
+        if 0.40 <= share <= 0.60:
+            return h, a
+        target = 0.50 + max(-0.10, min(0.10, gd * 0.018))
+        blended = 0.50 * max(0.40, min(0.60, share)) + 0.50 * target
+        blended = max(0.40, min(0.60, blended))
+        return round(total * blended, 3), round(total * (1.0 - blended), 3)
+
+    mutated_boxes = 0
+    for g in list(getattr(session, "game_results", None) or []):
+        if not isinstance(g, dict):
+            continue
+        if str(g.get("stat_scope") or "regular_season") != "regular_season":
+            continue
+        h_cf = _num(g, "home_shot_attempts", "home_cf")
+        a_cf = _num(g, "away_shot_attempts", "away_cf")
+        if h_cf + a_cf <= 0:
+            continue
+        gd = (
+            _num(g, "home_goals", "hockey_home_goals", "player_home_goals", "home_score")
+            - _num(g, "away_goals", "hockey_away_goals", "player_away_goals", "away_score")
+        )
+        new_h, new_a = _rebalance_pair(h_cf, a_cf, gd)
+        if abs(new_h - h_cf) > 0.05 or abs(new_a - a_cf) > 0.05:
+            g["home_cf"] = int(round(new_h))
+            g["away_cf"] = int(round(new_a))
+            g["home_shot_attempts"] = int(round(new_h))
+            g["away_shot_attempts"] = int(round(new_a))
+            h_ff = _num(g, "home_ff", "home_fenwick")
+            a_ff = _num(g, "away_ff", "away_fenwick")
+            if h_ff + a_ff > 0:
+                ff_h, ff_a = _rebalance_pair(h_ff, a_ff, gd)
+                g["home_ff"] = int(round(ff_h))
+                g["away_ff"] = int(round(ff_a))
+            h_xgf = _num(g, "home_xgf", "home_xg")
+            a_xgf = _num(g, "away_xgf", "away_xg")
+            if h_xgf + a_xgf > 0:
+                xh, xa = _rebalance_pair(h_xgf, a_xgf, gd)
+                g["home_xgf"] = round(xh, 4)
+                g["away_xgf"] = round(xa, 4)
+                g["home_xg"] = round(xh, 4)
+                g["away_xg"] = round(xa, 4)
+            mutated_boxes += 1
+
+    team_cf: Dict[str, float] = defaultdict(float)
+    team_ca: Dict[str, float] = defaultdict(float)
+    team_xgf: Dict[str, float] = defaultdict(float)
+    team_xga: Dict[str, float] = defaultdict(float)
+    for g in list(getattr(session, "game_results", None) or []):
+        if not isinstance(g, dict):
+            continue
+        if str(g.get("stat_scope") or "regular_season") != "regular_season":
+            continue
+        hid = str(g.get("home_id") or g.get("home_team_id") or "")
+        aid = str(g.get("away_id") or g.get("away_team_id") or "")
+        if not hid or not aid:
+            continue
+        h_cf = _num(g, "home_shot_attempts", "home_cf")
+        a_cf = _num(g, "away_shot_attempts", "away_cf")
+        h_xgf = _num(g, "home_xgf", "home_xg")
+        a_xgf = _num(g, "away_xgf", "away_xg")
+        if h_cf <= 0 and a_cf <= 0 and h_xgf <= 0 and a_xgf <= 0:
+            continue
+        team_cf[hid] += h_cf
+        team_ca[hid] += a_cf
+        team_xgf[hid] += h_xgf
+        team_xga[hid] += a_xgf
+        team_cf[aid] += a_cf
+        team_ca[aid] += h_cf
+        team_xgf[aid] += a_xgf
+        team_xga[aid] += h_xgf
+
+    if not team_cf:
+        try:
+            setattr(session, "_on_ice_share_repair_v2", True)
+        except Exception:
+            pass
+        return False
+
+    repaired = 0
+    stats = getattr(session, "player_season_stats", None) or {}
+    for row in stats.values():
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("stat_scope") or "regular_season") != "regular_season":
+            continue
+        if str(row.get("position") or "").upper() == "G":
+            continue
+        tid = str(row.get("team_id") or "")
+        tcf = float(team_cf.get(tid, 0) or 0)
+        tca = float(team_ca.get(tid, 0) or 0)
+        if tcf + tca <= 0:
+            continue
+        share = tcf / (tcf + tca)
+        cf = float(row.get("cf", 0) or 0)
+        ca = float(row.get("ca", 0) or 0)
+        vol = cf + ca
+        if vol > 0:
+            row["cf"] = round(vol * share, 3)
+            row["ca"] = round(vol * (1.0 - share), 3)
+            repaired += 1
+        ff = float(row.get("ff", 0) or 0)
+        fa = float(row.get("fa", 0) or 0)
+        fvol = ff + fa
+        if fvol > 0:
+            row["ff"] = round(fvol * share, 3)
+            row["fa"] = round(fvol * (1.0 - share), 3)
+        txgf = float(team_xgf.get(tid, 0) or 0)
+        txga = float(team_xga.get(tid, 0) or 0)
+        xshare = txgf / (txgf + txga) if txgf + txga > 0 else share
+        xgf = float(row.get("xgf", 0) or 0)
+        xga = float(row.get("xga", 0) or 0)
+        xvol = xgf + xga
+        if xvol > 0:
+            row["xgf"] = round(xvol * xshare, 4)
+            row["xga"] = round(xvol * (1.0 - xshare), 4)
+        sf = float(row.get("on_ice_shots_for", 0) or 0)
+        sa = float(row.get("on_ice_shots_against", 0) or 0)
+        svol = sf + sa
+        if svol > 0:
+            row["on_ice_shots_for"] = round(svol * share, 3)
+            row["on_ice_shots_against"] = round(svol * (1.0 - share), 3)
+
+    try:
+        setattr(session, "_on_ice_share_repair_v2", True)
+        setattr(session, "_on_ice_share_repair_v1", True)
+    except Exception:
+        pass
+    if repaired or mutated_boxes:
+        _bump_stats_revision(session)
+        return True
+    return False
+
+
 def _build_team_analytics_rows(session: FranchiseSession) -> List[Dict[str, Any]]:
     from app.sim_engine.generation.player_analytics import aggregate_team_from_player_rows, enrich_team_game_result_row
 
@@ -4903,6 +5116,10 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
     """
     stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
     skip_backfill = int(getattr(session, "_stats_backfill_revision", -1) or -1) == stats_rev
+    try:
+        _repair_on_ice_share_to_team_box(session)
+    except Exception:
+        logging.getLogger(__name__).exception("On-ice CF share repair failed")
     if not skip_backfill:
         try:
             _purge_synthetic_universe_artifacts(session)
@@ -5016,6 +5233,38 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
                 r for r in list(enriched.get("goalies") or [])
                 if str(r.get("player_id") or r.get("id") or "") in user_player_ids
             ]
+
+        # enrich_player_row rebuilds rows from scratch and drops NHL headshot fields
+        # that were merged before build_stats_central_player_payload — reattach here.
+        try:
+            from app.sim_engine.generation.player_headshots import merge_headshot_into_row
+
+            def _attach_headshots_to_stat_rows(stat_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                attached: List[Dict[str, Any]] = []
+                for row in stat_rows or []:
+                    if not isinstance(row, dict):
+                        continue
+                    pid = str(row.get("player_id") or row.get("id") or "")
+                    player = player_by_id.get(pid)
+                    try:
+                        attached.append(merge_headshot_into_row(dict(row), player))
+                    except Exception:
+                        attached.append(dict(row))
+                return attached
+
+            for list_key in (
+                "skaters",
+                "goalies",
+                "league_leaders",
+                "league_analytics_leaders",
+                "league_goalies",
+                "user_team_skaters",
+                "user_team_goalies",
+            ):
+                if list_key in enriched:
+                    enriched[list_key] = _attach_headshots_to_stat_rows(enriched.get(list_key) or [])
+        except Exception:
+            logging.getLogger(__name__).exception("Stats Central headshot reattach failed")
 
         team_rows = enrich_team_rows(_build_team_analytics_rows(session))
         all_results = [g for g in list(getattr(session, "game_results", None) or []) if isinstance(g, dict)]
@@ -11144,6 +11393,24 @@ def _purge_retired_from_extra_pools(session: FranchiseSession, player: Any) -> N
 
 PROSPECT_SYNC_THROTTLE_DAYS = 1
 
+# Heavy bulk finalize (narrative catch-up, prospect sync, minors dev) runs incrementally
+# every N simulated days inside the bulk loop so a 15-day advance does not pay one cliff
+# at the end. Season/phase-end still flushes deferred extras once.
+BULK_INCREMENTAL_CATCHUP_EVERY_STEPS = 3
+BULK_INCREMENTAL_FINALIZE_MAX_STEPS = 6  # legacy threshold — retained for season-end flush heuristics
+BULK_FULL_FINALIZE_DEFERRED_DAYS = 7
+_BULK_PHASE_END_STOPS = frozenset(
+    {
+        "regular_complete",
+        "phase",
+        "postseason",
+        "post_cup",
+        "offseason",
+        "playoff_ready",
+        "complete",
+    }
+)
+
 
 def _prospect_sync_should_run(session: FranchiseSession, *, force: bool = False) -> bool:
     """Return True when draft-age prospect stats should advance for this calendar step.
@@ -11251,6 +11518,10 @@ def ensure_prospect_stats_current_for_scouting(session: FranchiseSession) -> Non
     Re-sync when the scouting calendar ISO or franchise calendar cursor moves so
     the draft board does not keep early-season GP after a sim.
     """
+    if bool(getattr(session, "_defer_prospect_sync", False)):
+        return
+    if int(getattr(session, "_bulk_finalize_deferred_days", 0) or 0) > 0:
+        return
     iso = _scouting_calendar_iso(session)
     last_iso = str(getattr(session, "_prospect_stats_synced_iso", "") or "")
     cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
@@ -11532,23 +11803,166 @@ def _franchise_narrative_should_run(
     return False
 
 
-def _franchise_bulk_narrative_catchup(session: FranchiseSession, *, days_advanced: int) -> None:
+def _bulk_finalize_span(session: FranchiseSession) -> int:
+    start_days = int(getattr(session, "_bulk_finalize_start_days", 0) or 0)
+    end_days = int(getattr(session, "calendar_days_finished", 0) or 0)
+    return max(0, end_days - start_days)
+
+
+def _bulk_finalize_should_run_full(
+    session: FranchiseSession,
+    *,
+    steps_n: int,
+    eff_mode: str,
+    stopped: Optional[str],
+) -> bool:
+    """Return True when season/phase-end extras should flush (not per-chunk incremental work)."""
+    if str(eff_mode or "") == "season":
+        return True
+    if str(stopped or "") in _BULK_PHASE_END_STOPS:
+        return True
+    return False
+
+
+def _run_bulk_incremental_catchup(session: FranchiseSession, *, steps_n: int) -> None:
+    """Spread narrative/prospect/dev catch-up across bulk steps (delta per chunk)."""
+    steps_n = max(1, int(steps_n))
+    try:
+        for _ in range(max(1, steps_n // 8)):
+            try:
+                _nhl_in_season_development_tick(session)
+            except Exception:
+                pass
+        for _ in range(max(1, steps_n // 5)):
+            _depth_pool_progression_tick(session)
+    except Exception:
+        pass
+
+    try:
+        _franchise_bulk_narrative_catchup(session, days_advanced=steps_n, incremental=True)
+    except Exception:
+        pass
+
+    try:
+        if steps_n >= BULK_INCREMENTAL_CATCHUP_EVERY_STEPS:
+            _sync_prospect_stats_to_calendar(session, force=False)
+    except Exception:
+        pass
+
+    try:
+        from services.franchise_scouting import apply_passive_scouting_progress
+
+        apply_passive_scouting_progress(session, days=max(1, steps_n))
+    except Exception:
+        pass
+
+
+def _run_bulk_finalize_season_extras(session: FranchiseSession, *, narrative_days: int) -> None:
+    """One-shot extras reserved for season sim / phase transitions."""
+    try:
+        from app.sim_engine.league_hierarchy_bootstrap import tick_extra_league_development
+
+        tick_extra_league_development(session.sim, session.sim.rng)
+    except Exception:
+        pass
+    try:
+        pending_fa = int(getattr(session, "_bulk_fa_days_pending", 0) or 0)
+        if pending_fa > 0 and bool(getattr(session, "free_agency_open", False)):
+            from services.fa_market_engine import tick_free_agency_market
+            from services.franchise_offseason import _open_free_agency
+
+            tick = tick_free_agency_market(session, days=pending_fa)
+            session._last_fa_market_tick = tick
+            _open_free_agency(session, force=False)
+        session._bulk_fa_days_pending = 0
+    except Exception:
+        session._bulk_fa_days_pending = 0
+    try:
+        _sync_prospect_stats_to_calendar(session, force=True)
+    except Exception:
+        pass
+    try:
+        _franchise_bulk_narrative_catchup(session, days_advanced=max(1, int(narrative_days)), incremental=False)
+    except Exception:
+        pass
+    try:
+        from services.franchise_scouting import apply_passive_scouting_progress
+
+        apply_passive_scouting_progress(session, days=max(1, int(narrative_days)))
+    except Exception:
+        pass
+    session._bulk_finalize_deferred_days = 0
+
+
+def _run_bulk_finalize_catchup(
+    session: FranchiseSession,
+    *,
+    steps_n: int,
+    full: bool,
+) -> None:
+    """Flush any remaining incremental catch-up; season/phase-end may add one-shot extras."""
+    remainder = max(0, int(getattr(session, "_bulk_catchup_steps_pending", 0) or 0))
+    if remainder > 0:
+        _run_bulk_incremental_catchup(session, steps_n=remainder)
+        session._bulk_catchup_steps_pending = 0
+
+    if full:
+        span = _bulk_finalize_span(session)
+        narrative_days = max(1, int(getattr(session, "_bulk_finalize_deferred_days", 0) or 0) + int(steps_n))
+        _run_bulk_finalize_season_extras(session, narrative_days=max(narrative_days, span))
+    else:
+        session._bulk_finalize_deferred_days = int(getattr(session, "_bulk_finalize_deferred_days", 0) or 0) + int(
+            steps_n
+        )
+
+    try:
+        stat_scope = _franchise_stat_scope(session, is_playoff=False)
+        for row in (getattr(session, "player_season_stats", None) or {}).values():
+            if isinstance(row, dict):
+                row.setdefault("stat_scope", stat_scope)
+                row["stat_authority"] = "session.player_season_stats"
+    except Exception:
+        pass
+
+    if bool(getattr(session, "_pending_prospect_revision_bump", False)):
+        session._pending_prospect_revision_bump = False
+        _bump_prospect_revision(session)
+
+
+def _franchise_bulk_narrative_catchup(
+    session: FranchiseSession,
+    *,
+    days_advanced: int,
+    incremental: bool = False,
+) -> None:
     """Backfill storylines skipped during light bulk calendar advance."""
     if days_advanced <= 0:
-        days_advanced = max(
-            1,
-            int(getattr(session, "calendar_days_finished", 0) or 0),
-            len(getattr(session, "game_results", None) or []) // 2,
-        )
-    just_idx = max(0, int(session.calendar_cursor) - 1)
-    cal = list(getattr(session, "nhl_calendar", None) or [])
-    day_meta: Dict[str, Any] = {}
-    if 0 <= just_idx < len(cal) and isinstance(cal[just_idx], dict):
-        day_meta = dict(cal[just_idx])
-    if not day_meta.get("iso"):
-        day_meta["iso"] = _calendar_iso_for_day(session, just_idx)
+        days_advanced = 1
     days_advanced = max(1, min(int(days_advanced), 60))
-    _run_franchise_narrative_passes(session, just_idx, day_meta, full=True)
+
+    cal = list(getattr(session, "nhl_calendar", None) or [])
+    start_finished = int(getattr(session, "_bulk_narrative_last_finished_days", 0) or 0)
+    end_finished = int(getattr(session, "calendar_days_finished", 0) or 0)
+    if incremental and end_finished > start_finished:
+        for day_ord in range(start_finished, end_finished):
+            idx = max(0, int(day_ord) - 1)
+            if idx >= len(cal):
+                continue
+            day_meta = dict(cal[idx]) if isinstance(cal[idx], dict) else {}
+            if not day_meta.get("iso"):
+                day_meta["iso"] = _calendar_iso_for_day(session, idx)
+            _run_franchise_narrative_passes(session, idx, day_meta, full=False)
+        session._bulk_narrative_last_finished_days = end_finished
+    elif not incremental:
+        just_idx = max(0, int(session.calendar_cursor) - 1)
+        day_meta: Dict[str, Any] = {}
+        if 0 <= just_idx < len(cal) and isinstance(cal[just_idx], dict):
+            day_meta = dict(cal[just_idx])
+        if not day_meta.get("iso"):
+            day_meta["iso"] = _calendar_iso_for_day(session, just_idx)
+        _run_franchise_narrative_passes(session, just_idx, day_meta, full=True)
+        session._bulk_narrative_last_finished_days = end_finished
+
     try:
         from app.sim_engine.franchise.storyline_engine import (  # noqa: WPS433
             _u_generate_daily_interactions,
@@ -11562,7 +11976,7 @@ def _franchise_bulk_narrative_catchup(session: FranchiseSession, *, days_advance
             _u_sync_player_entities(session, team_id=utid)
             setattr(session, "_bulk_narrative_life_burst", True)
             try:
-                life_target = max(4, min(12, int(days_advanced) // 3))
+                life_target = max(1, min(4, int(days_advanced) // 3) if incremental else max(4, min(12, int(days_advanced) // 3)))
                 created = 0
                 while created < life_target:
                     batch = _u_generate_minor_life_events(session, rng)
@@ -11578,12 +11992,15 @@ def _franchise_bulk_narrative_catchup(session: FranchiseSession, *, days_advance
         from app.sim_engine.franchise.storyline_coverage import ingest_game_box_storylines  # noqa: WPS433
 
         boxes = [box for box in list(getattr(session, "game_results", None) or []) if isinstance(box, dict)]
-        cap = max(4, min(16, int(days_advanced) // 2))
-        if boxes:
-            step = max(1, len(boxes) // cap)
-            sample = boxes[-cap * step :: step][-cap:]
+        box_cursor = int(getattr(session, "_bulk_narrative_box_cursor", 0) or 0)
+        new_boxes = boxes[box_cursor:]
+        cap = max(1, min(6, int(days_advanced))) if incremental else max(4, min(16, int(days_advanced) // 2))
+        if new_boxes:
+            step = max(1, len(new_boxes) // max(1, cap))
+            sample = new_boxes[: cap * step : step][:cap]
             for box in sample:
                 ingest_game_box_storylines(session, box)
+            session._bulk_narrative_box_cursor = box_cursor + len(sample)
     except Exception:
         pass
     try:
@@ -11657,6 +12074,8 @@ def _bridge_universe_events_to_story_wire(session: FranchiseSession, *, limit: i
 
 def _maybe_backfill_sparse_storylines(session: FranchiseSession) -> None:
     """Backfill storyline_events when bulk/light advance left the newsroom wire nearly empty."""
+    if int(getattr(session, "_bulk_finalize_deferred_days", 0) or 0) > 0:
+        return
     if not bool(getattr(session, "_eligible_sparse_storyline_backfill", False)):
         return
     phase = str(getattr(session, "phase", "") or "")
@@ -14583,6 +15002,9 @@ def advance_franchise_bulk(
     session._bulk_auto_resolve_injuries = bool(auto_resolve_decisions)
     session._defer_payload_invalidation = True
     session._bulk_finalize_start_days = int(getattr(session, "calendar_days_finished", 0) or 0)
+    session._bulk_narrative_last_finished_days = int(getattr(session, "calendar_days_finished", 0) or 0)
+    session._bulk_finalize_deferred_days = 0
+    session._bulk_catchup_steps_pending = 0
     try:
         while guard < max_iter:
             guard += 1
@@ -14628,6 +15050,13 @@ def advance_franchise_bulk(
                 stopped = st
                 break
 
+            if use_light_bulk and st == "ok":
+                pending_catchup = int(getattr(session, "_bulk_catchup_steps_pending", 0) or 0) + 1
+                session._bulk_catchup_steps_pending = pending_catchup
+                if pending_catchup >= BULK_INCREMENTAL_CATCHUP_EVERY_STEPS:
+                    _run_bulk_incremental_catchup(session, steps_n=BULK_INCREMENTAL_CATCHUP_EVERY_STEPS)
+                    session._bulk_catchup_steps_pending = 0
+
             if eff_mode == "days":
                 eff_count -= 1
                 if eff_count <= 0:
@@ -14658,76 +15087,26 @@ def advance_franchise_bulk(
         if guard >= max_iter:
             stopped = "guard_limit"
     finally:
+        steps_n = int(len(steps))
+        full_finalize = False
+        if steps and str(steps[-1].get("status") or "") == "ok":
+            full_finalize = _bulk_finalize_should_run_full(
+                session,
+                steps_n=steps_n,
+                eff_mode=eff_mode,
+                stopped=stopped,
+            )
+            _run_bulk_finalize_catchup(session, steps_n=steps_n, full=full_finalize)
         session._defer_prospect_sync = prior_defer
         session._light_game_stat_accumulation = prior_light
         session._bulk_auto_resolve_injuries = prior_bulk_inj
         session._defer_payload_invalidation = prior_defer_inv
         session._bulk_calendar_advance = prior_bulk_cal
-        if steps and str(steps[-1].get("status") or "") == "ok":
-            try:
-                start_days = int(getattr(session, "_bulk_finalize_start_days", 0) or 0)
-                end_days = int(getattr(session, "calendar_days_finished", 0) or 0)
-                span = max(0, end_days - start_days)
-                for _ in range(span // 8):
-                    try:
-                        _nhl_in_season_development_tick(session)
-                    except Exception:
-                        pass
-                for _ in range(span // 5):
-                    _depth_pool_progression_tick(session)
-            except Exception:
-                pass
-            try:
-                # Catch-up minors development once after bulk (deferred daily ticks).
-                from app.sim_engine.league_hierarchy_bootstrap import tick_extra_league_development
-
-                tick_extra_league_development(session.sim, session.sim.rng)
-            except Exception:
-                pass
-            try:
-                pending_fa = int(getattr(session, "_bulk_fa_days_pending", 0) or 0)
-                if pending_fa > 0 and bool(getattr(session, "free_agency_open", False)):
-                    from services.fa_market_engine import tick_free_agency_market
-                    from services.franchise_offseason import _open_free_agency
-
-                    tick = tick_free_agency_market(session, days=pending_fa)
-                    session._last_fa_market_tick = tick
-                    _open_free_agency(session, force=False)
-                session._bulk_fa_days_pending = 0
-            except Exception:
-                session._bulk_fa_days_pending = 0
-            try:
-                _sync_prospect_stats_to_calendar(session, force=True)
-            except Exception:
-                pass
-            try:
-                start_days = int(getattr(session, "_bulk_finalize_start_days", 0) or 0)
-                end_days = int(getattr(session, "calendar_days_finished", 0) or 0)
-                _franchise_bulk_narrative_catchup(session, days_advanced=max(0, end_days - start_days))
-            except Exception:
-                pass
-            try:
-                stat_scope = _franchise_stat_scope(session, is_playoff=False)
-                for row in (getattr(session, "player_season_stats", None) or {}).values():
-                    if isinstance(row, dict):
-                        row.setdefault("stat_scope", stat_scope)
-                        row["stat_authority"] = "session.player_season_stats"
-            except Exception:
-                pass
-            if bool(getattr(session, "_pending_prospect_revision_bump", False)):
-                session._pending_prospect_revision_bump = False
-                _bump_prospect_revision(session)
-            try:
-                from services.franchise_scouting import apply_passive_scouting_progress
-
-                steps_n = int(len(steps))
-                if steps_n > 0:
-                    apply_passive_scouting_progress(session, days=steps_n)
-            except Exception:
-                pass
         if not prior_defer_inv:
             invalidate_session_payload_caches(session, reason="bulk_complete")
-        session._eligible_sparse_storyline_backfill = bool(use_light_bulk and len(steps) > 0)
+        session._eligible_sparse_storyline_backfill = bool(
+            use_light_bulk and steps_n > 0 and (full_finalize or steps_n >= BULK_INCREMENTAL_CATCHUP_EVERY_STEPS)
+        )
 
     last = steps[-1] if steps else {
         "status": "blocked" if getattr(session, "pending_decisions", None) else "noop",
@@ -18648,18 +19027,431 @@ def build_state_payload(session: FranchiseSession, *, include_heavy: bool = Fals
     from services.perf_profiler import span
 
     if not include_heavy and not crisis_tick:
-        key = _lean_state_cache_key(session)
-        cached = getattr(session, "_cached_lean_state_payload", None)
-        if isinstance(cached, dict) and str(cached.get("key") or "") == key:
-            payload = cached.get("payload")
-            if isinstance(payload, dict):
-                return dict(payload)
+        with span("state.build", heavy=False):
+            return _assemble_lean_state_payload(session, crisis_tick=crisis_tick)
 
     with span("state.build", heavy=bool(include_heavy)):
-        payload = _build_state_payload_impl(session, include_heavy=include_heavy, crisis_tick=crisis_tick)
+        return _build_state_payload_impl(session, include_heavy=include_heavy, crisis_tick=crisis_tick)
 
-    if not include_heavy and not crisis_tick:
-        session._cached_lean_state_payload = {"key": _lean_state_cache_key(session), "payload": payload}
+
+def _assemble_lean_state_payload(session: FranchiseSession, *, crisis_tick: bool = False) -> Dict[str, Any]:
+    """Lean advance payload assembled from independently cached sections."""
+    _sync_nhl_calendar_bounds(session)
+    _sync_session_phase_from_calendar(session)
+    ensure_session_nhl_salary_cap(session)
+    sim = session.sim
+    user_team = session.team_by_id.get(str(session.user_team_id))
+    if user_team is None:
+        user_team = session.team_by_id.get(session.user_team_id)
+    uid_s = str(session.user_team_id or "")
+    keys = _lean_section_cache_keys(session, crisis_tick=crisis_tick)
+
+    core = _get_lean_section(
+        session,
+        "core",
+        keys["core"],
+        lambda: _build_lean_core_section(session, user_team=user_team, uid_s=uid_s),
+    )
+    stats = _get_lean_section(
+        session,
+        "stats",
+        keys["stats"],
+        lambda: _build_lean_stats_section(session, user_team=user_team, sim=sim, uid_s=uid_s),
+    )
+    calendar = _get_lean_section(
+        session,
+        "calendar",
+        keys["calendar"],
+        lambda: _build_lean_calendar_section(session),
+    )
+    narrative = _get_lean_section(
+        session,
+        "narrative",
+        keys["narrative"],
+        lambda: _build_lean_narrative_section(session, crisis_tick=crisis_tick),
+    )
+    extras = _get_lean_section(
+        session,
+        "extras",
+        keys["extras"],
+        lambda: _build_lean_extras_section(session, user_team=user_team, sim=sim, stats=stats),
+    )
+
+    team = dict(core.get("team_base") or {})
+    team.update(dict(stats.get("team_stats") or {}))
+    merged_flags = {**(core.get("flags") or {}), **(extras.get("flags") or {})}
+    payload: Dict[str, Any] = {**core, **calendar, **narrative, **stats, **extras, "team": team, "flags": merged_flags}
+    payload.pop("team_base", None)
+    payload.pop("team_stats", None)
+
+    phase_now = str(payload.get("phase") or session.phase or "")
+    if phase_now in ("playoffs", "playoff_ready", "post_cup", "offseason", "preseason"):
+        payload.pop("nhl_calendar_full", None)
+        payload["calendar_events"] = list(payload.get("calendar_events") or [])[-12:]
+        payload["pending_ui_popups"] = list(payload.get("pending_ui_popups") or [])[:64]
+        payload.pop("pendingUiPopups", None)
+        if isinstance(payload.get("awards"), dict):
+            try:
+                from services.franchise_offseason import slim_awards_payload_for_client
+
+                payload["awards"] = slim_awards_payload_for_client(payload.get("awards"))
+            except Exception:
+                pass
+    return payload
+
+
+def _build_lean_core_section(
+    session: FranchiseSession,
+    *,
+    user_team: Any,
+    uid_s: str,
+) -> Dict[str, Any]:
+    day_display = "Off-season"
+    prog = None
+    season_lbl = f"{session.season_calendar_year}–{int(session.season_calendar_year) + 1}"
+    if session.phase in ("regular", "preseason") and session.nhl_calendar:
+        last = int(session.nhl_regular_season_last_index)
+        cur = int(session.calendar_cursor)
+        if cur < len(session.nhl_calendar) and (session.phase == "preseason" or cur <= last):
+            cd = session.nhl_calendar[min(cur, len(session.nhl_calendar) - 1)]
+            wd = str(cd.get("weekday") or "").strip()
+            phase_label = str(cd.get("ui_phase") or ("Training Camp" if session.phase == "preseason" else ""))
+            day_display = (
+                f"{cd.get('iso', '')}"
+                + (f" ({wd})" if wd else "")
+                + (f" — {phase_label}" if phase_label else "")
+            )
+            if session.phase == "regular" and cur <= last:
+                prog = f"{cur + 1} / {last + 1}"
+            elif session.phase == "preseason":
+                prog = f"Camp · day {cur + 1}"
+        elif session.phase == "regular":
+            day_display = "Regular season complete — advance for playoffs"
+            prog = f"{last + 1} / {last + 1}"
+    elif session.phase == "complete":
+        day_display = f"Season complete — Cup: {session.champion_id or '?'}"
+
+    pending_snap = _pending_decision_snapshot(session)
+    fan_profile = _get_team_fan_profile(session, uid_s)
+    return {
+        "session_id": session.session_id,
+        "user_team_id": uid_s,
+        "phase": session.phase,
+        "season_year": session.season_calendar_year,
+        "player_universe": str(getattr(session, "player_universe", None) or "generated"),
+        "games_per_team_schedule": int(getattr(session, "games_per_team_schedule", 82) or 82),
+        "calendar_summary": day_display,
+        "progress": prog,
+        "nhl_season_label": season_lbl,
+        "calendar_cursor": int(getattr(session, "calendar_cursor", 0) or 0),
+        "franchise_today_iso": (
+            _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0))
+            or _scouting_calendar_iso(session)
+        ),
+        "scouting_as_of_iso": _scouting_calendar_iso(session),
+        "season_anchor_events": season_anchor_event_markers(int(session.season_calendar_year)),
+        "pending_decisions": pending_snap,
+        "pendingDecisions": pending_snap,
+        "pending_ui_popups": list(getattr(session, "pending_ui_popups", None) or [])[:64],
+        "timeline": list(session.timeline[-80:]),
+        "calendar_events": list(getattr(session, "calendar_events", []) or [])[-48:],
+        "schedule_diagnostics": getattr(session, "schedule_diagnostics", {}) or {},
+        "cpu_franchise_profiles": dict(getattr(session, "cpu_franchise_profiles", None) or {}),
+        "schedule_upcoming": _build_schedule_upcoming(session, limit=14),
+        "flags": {
+            "playoffs_done": session.playoffs_simulated,
+            "can_advance": (
+                len(session.pending_decisions) == 0
+                and session.phase != "complete"
+                and not _even_strength_lineup_gaps(session)
+            ),
+            "lineup_gaps": _even_strength_lineup_gaps(session),
+        },
+        "last_gm_result": dict(getattr(session, "last_gm_result", None) or {}),
+        "showcase_archive": list(getattr(session, "showcase_archive", None) or [])[-24:],
+        "lines": dict(getattr(session, "lines", None) or {}),
+        "financials_status": str(getattr(session, "financials_status", "") or ""),
+        "wjc_nations": [{"code": c, "label": lab} for c, lab in _wjc_countries_meta()],
+        "team_base": {
+            "id": session.user_team_id,
+            "name": _display_team(user_team) if user_team else session.user_team_id,
+            "coach": session.head_coach_name,
+            "coach_archetype": session.coach_archetype,
+            "cap_pressure": str(getattr(user_team, "cap_pressure", "moderate") if user_team else "?"),
+            "strategy": str(getattr(user_team, "strategy", "balanced") if user_team else "?"),
+            "fan_profile": fan_profile,
+            "fan_morale": fan_profile.get("fan_confidence"),
+            "fan_satisfaction": fan_profile.get("fan_confidence"),
+        },
+    }
+
+
+def _build_lean_stats_section(
+    session: FranchiseSession,
+    *,
+    user_team: Any,
+    sim: Any,
+    uid_s: str,
+) -> Dict[str, Any]:
+    cal_rec = _user_team_record_from_game_results(session)
+    rec = None
+    if session.standings and user_team is not None:
+        tid = str(
+            getattr(user_team, "team_id", None)
+            if getattr(user_team, "team_id", None) is not None
+            else rs._team_id(user_team)
+        )
+        rec = session.standings.records.get(tid) or session.standings.records.get(session.user_team_id)
+
+    roster_rows: List[Dict[str, Any]] = []
+    if user_team is not None:
+        roster_rows = _get_cached_state_roster_rows(session, user_team)
+
+    standings_rows: List[Dict[str, Any]] = []
+    if session.standings:
+        for tid, r in session.standings.records.items():
+            tid_s = str(tid)
+            if uid_s and tid_s == uid_s and int(cal_rec.get("gp") or 0) > 0:
+                standings_rows.append(
+                    {
+                        "team_id": tid_s,
+                        "name": getattr(r, "name", tid),
+                        "gp": int(cal_rec["gp"]),
+                        "w": int(cal_rec["w"]),
+                        "l": int(cal_rec["l"]),
+                        "otl": int(cal_rec["otl"]),
+                        "pts": int(cal_rec["pts"]),
+                    }
+                )
+            else:
+                standings_rows.append(
+                    {
+                        "team_id": tid_s,
+                        "name": getattr(r, "name", tid),
+                        "gp": getattr(r, "gp", 0),
+                        "w": getattr(r, "wins", 0),
+                        "l": getattr(r, "losses", 0),
+                        "otl": getattr(r, "otl", 0),
+                        "pts": getattr(r, "points", 0),
+                    }
+                )
+        standings_rows.sort(key=lambda x: (-x["pts"], -(x["w"] - x["l"])))
+
+    ensure_session_nhl_salary_cap(session)
+    sy_cap = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    cap_snapshot_full, cap_info = _get_cached_user_cap_snapshot(session, user_team, sim, sy_cap)
+    injuries_payload = _get_cached_injuries_payload(session)
+    injury_history_payload = _build_injury_history_payload(session)
+
+    return {
+        "standings": standings_rows[:32],
+        "injuries": injuries_payload,
+        "injury_history": injury_history_payload,
+        "roster": roster_rows[:28],
+        "stats_revision": int(getattr(session, "_stats_revision", 0) or 0),
+        "prospect_revision": int(getattr(session, "_prospect_revision", 0) or 0),
+        "team_stats": {
+            "salary_cap": float(cap_info["salary_cap"]),
+            "cap_hit": float(cap_info["cap_hit"]),
+            "cap_space": float(cap_info["cap_space"]),
+            "cap_limit": float(cap_info["salary_cap"]),
+            "cap_snapshot": cap_snapshot_full,
+            "record": (
+                {
+                    "gp": int(cal_rec["gp"]),
+                    "w": int(cal_rec["w"]),
+                    "l": int(cal_rec["l"]),
+                    "otl": int(cal_rec["otl"]),
+                    "pts": int(cal_rec["pts"]),
+                }
+                if int(cal_rec.get("gp") or 0) > 0
+                else (
+                    {
+                        "gp": getattr(rec, "gp", 0),
+                        "w": getattr(rec, "wins", 0),
+                        "l": getattr(rec, "losses", 0),
+                        "otl": getattr(rec, "otl", 0),
+                        "pts": getattr(rec, "points", 0),
+                    }
+                    if rec
+                    else None
+                )
+            ),
+        },
+    }
+
+
+def _build_lean_calendar_section(session: FranchiseSession) -> Dict[str, Any]:
+    phase_now = str(getattr(session, "phase", "") or "")
+    postseason_lean = phase_now in (
+        "playoffs",
+        "playoff_ready",
+        "post_cup",
+        "offseason",
+        "preseason",
+    )
+    if postseason_lean:
+        nhl_calendar_full: List[Dict[str, Any]] = []
+    else:
+        nhl_calendar_full = _get_cached_nhl_calendar_full(session, cursor_window=(21, 14))
+    return {
+        "nhl_today": _nhl_today_payload(session),
+        "nhl_calendar_strip": _nhl_calendar_strip(session),
+        "nhl_calendar_full": nhl_calendar_full,
+    }
+
+
+def _build_lean_narrative_section(session: FranchiseSession, *, crisis_tick: bool = False) -> Dict[str, Any]:
+    try:
+        _merge_simengine_league_news_into_storylines(session)
+    except Exception:
+        pass
+    try:
+        _maybe_backfill_sparse_storylines(session)
+    except Exception:
+        pass
+
+    notifications_raw = list(session.notifications[-56:])
+    notifications_norm = [_normalize_notification_payload(n, i) for i, n in enumerate(notifications_raw)]
+    storylines_raw = list(getattr(session, "storyline_events", None) or [])
+    cur_idx = int(getattr(session, "calendar_cursor", 0) or 0)
+    try:
+        _prune_expired_storylines(session, cur_idx)
+        storylines_raw = list(getattr(session, "storyline_events", None) or [])
+    except Exception:
+        pass
+    storylines_active = [
+        ev for ev in storylines_raw
+        if isinstance(ev, dict) and not _storyline_is_expired(ev, session, cur_idx)
+    ]
+    storylines_norm = [
+        _normalize_storyline_payload(ev if isinstance(ev, dict) else {"headline": str(ev or "")})
+        for ev in storylines_active[-120:]
+    ]
+    try:
+        from services.trade_demand_engine import (  # noqa: WPS433
+            build_trade_demand_crisis_payload,
+            get_trade_deadline_context,
+        )
+
+        trade_demand_crisis = build_trade_demand_crisis_payload(session, tick_timers=crisis_tick)
+        trade_deadline = get_trade_deadline_context(session)
+    except Exception:
+        trade_demand_crisis = None
+        trade_deadline = {}
+    return {
+        "storyline_choices": _storyline_choices_payload(session),
+        "notifications": notifications_norm,
+        "storyline_events": storylines_norm,
+        "active_storylines": len(storylines_norm),
+        "narrative_summary": _build_narrative_summary(session),
+        "narrative_universe": {},
+        "trade_demand_crisis": trade_demand_crisis,
+        "trade_deadline": trade_deadline,
+        "trade_stability_roster_flags": dict(getattr(session, "trade_stability_roster_flags", None) or {}),
+        "conduct_org_pressure": dict(getattr(session, "_conduct_org_pressure", None) or {}),
+        "narrative_revision": _narrative_cache_revision(session),
+    }
+
+
+def _build_lean_extras_section(
+    session: FranchiseSession,
+    *,
+    user_team: Any,
+    sim: Any,
+    stats: Dict[str, Any],
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"gm_world": _build_gm_world_payload(session)}
+    try:
+        payload["wjc_tournament"] = _build_wjc_client_payload(session)
+    except Exception:
+        payload["wjc_tournament"] = None
+    try:
+        from services.league_operations import (
+            build_franchise_pulse,
+            get_cached_league_operations_payload,
+            slim_league_operations_for_state,
+        )
+
+        league_ops = get_cached_league_operations_payload(session)
+        payload["franchise_pulse"] = build_franchise_pulse(session, league_ops)
+        payload["league_operations"] = slim_league_operations_for_state(league_ops)
+    except Exception:
+        payload["league_operations"] = {}
+        payload["franchise_pulse"] = {}
+    try:
+        from services.franchise_offseason import build_offseason_state_extras
+
+        extras = build_offseason_state_extras(session, lean=True, hydrate_stages=False)
+        extra_flags = dict(extras.pop("flags", {}) or {})
+        payload.update(extras)
+        payload["flags"] = extra_flags
+        payload["phase"] = str(session.phase)
+        payload["season_phase"] = str(getattr(session, "season_phase", session.phase) or session.phase)
+        payload["next_important_event"] = str(getattr(session, "next_important_event", "") or "")
+        payload["playoff_payload"] = dict(getattr(session, "playoff_payload", None) or {})
+        if getattr(session, "playoff_live", None):
+            try:
+                from services.franchise_playoffs import slim_live_for_client
+
+                slim = slim_live_for_client(session.playoff_live)
+            except Exception:
+                slim = dict(session.playoff_live)
+            payload["playoff_live"] = slim
+            payload["playoff_payload"]["live_state"] = slim
+            for key in ("series", "series_list", "first_round", "first_round_matchups", "matchups"):
+                payload["playoff_payload"].pop(key, None)
+    except Exception:
+        try:
+            payload["phase"] = str(session.phase)
+            payload["season_phase"] = str(getattr(session, "season_phase", session.phase) or session.phase)
+            payload["playoff_payload"] = dict(getattr(session, "playoff_payload", None) or {})
+            if getattr(session, "playoff_live", None):
+                try:
+                    from services.franchise_playoffs import slim_live_for_client
+
+                    payload["playoff_live"] = slim_live_for_client(session.playoff_live)
+                except Exception:
+                    payload["playoff_live"] = dict(session.playoff_live)
+        except Exception:
+            pass
+    try:
+        from services.franchise_scouting import _ensure_scouting_state, DEFAULT_SCOUTING_BUDGET
+
+        ss = _ensure_scouting_state(session)
+        payload["scouting_state"] = {
+            "budget": float(ss.get("budget") or DEFAULT_SCOUTING_BUDGET),
+            "used_budget": float(ss.get("used_budget") or 0.0),
+            "watchlist": list(ss.get("watchlist") or []),
+            "active_deployments": list(ss.get("active_deployments") or []),
+            "prospect_count": len(dict(ss.get("prospects") or {})),
+        }
+    except Exception:
+        payload["scouting_state"] = {}
+    try:
+        import os
+        from app.sim_engine.franchise.storyline_engine import build_storyline_debug_payload  # noqa: WPS433
+
+        if os.environ.get("NODE_ENV", "") == "development" or os.environ.get("NHL_FRANCHISE_DEBUG", "0") == "1":
+            payload["storyline_debug"] = build_storyline_debug_payload(session)
+    except Exception:
+        pass
+    try:
+        from services.transcendent_tank_behavior import check_dev_league_generation_version
+
+        league_obj = getattr(sim, "league", None)
+        gen_check = check_dev_league_generation_version(league_obj) if league_obj is not None else {}
+        payload["dev_league_generation"] = gen_check
+        if gen_check.get("needs_rebootstrap"):
+            warn = str(gen_check.get("warning") or "")
+            if warn:
+                payload.setdefault("warnings", [])
+                if warn not in payload["warnings"]:
+                    payload["warnings"].append(warn)
+                _startup_log.warning("DEV_LEAGUE_REBOOTSTRAP_NEEDED: %s", gen_check)
+    except Exception:
+        pass
+    _ = stats  # roster rows available for heavy HUD only
     return payload
 
 
@@ -19222,6 +20014,12 @@ def _today_iso(session: FranchiseSession) -> str:
 
 def invalidate_session_payload_caches(session: FranchiseSession, reason: str = "") -> None:
     """Drop cached read-model payloads after mutating session state."""
+    def _invalidate_lean(*sections: str) -> None:
+        if sections:
+            _invalidate_lean_sections(session, *sections)
+        else:
+            _invalidate_lean_sections(session, "core", "stats", "calendar", "narrative", "extras")
+
     # A single draft selection does NOT change any prospect's consensus ranking or
     # score — it only marks one player drafted, and availability is filtered
     # downstream against drafted_prospect_ids. Rebuilding the entire draft board on
@@ -19241,6 +20039,7 @@ def invalidate_session_payload_caches(session: FranchiseSession, reason: str = "
         session._cached_roster_browser_payload = None
         session._cached_lean_state_payload = None
         session._cached_lean_state_key = None
+        _invalidate_lean("stats", "extras")
         return
 
     if reason != "draft_pick":
@@ -19253,6 +20052,28 @@ def invalidate_session_payload_caches(session: FranchiseSession, reason: str = "
     session._cached_league_operations_key = None
     session._cached_lean_state_payload = None
     session._cached_lean_state_key = None
+    lean_invalidation = {
+        "advance_day": ("core", "stats", "calendar"),
+        "game_stats": ("stats", "calendar"),
+        "player_stats": ("stats",),
+        "season_reset": ("core", "stats", "calendar", "narrative", "extras"),
+        "trade_exec": ("core", "stats", "calendar", "narrative", "extras"),
+        "bulk_complete": ("core", "stats", "calendar", "narrative", "extras"),
+        "prospect_stats": ("stats", "extras"),
+        "wjc_pre": ("extras",),
+        "wjc_post": ("extras",),
+        "scouting_meta": ("extras",),
+        "scouting_action": ("extras",),
+        "draft_combine": ("extras",),
+        "combine_meeting": ("extras",),
+        "player_meeting_resolve": ("core", "narrative"),
+        "player_meeting_start": ("core", "narrative"),
+        "player_meeting_advance": ("core", "narrative"),
+        "storyline_choice": ("core", "narrative"),
+        "burner_post": ("narrative",),
+        "narrative_tick": ("narrative",),
+    }
+    _invalidate_lean(*lean_invalidation.get(reason, ("core", "stats", "calendar", "narrative", "extras")))
     narrative_reasons = {
         "bulk_complete",
         "player_meeting_resolve",
@@ -19318,7 +20139,7 @@ def invalidate_session_payload_caches(session: FranchiseSession, reason: str = "
             _fr_dbg(f"pick registry audit failed while invalidating caches: {exc}")
 
 
-_STATS_CENTRAL_SANITIZER_VERSION = 3  # v3: early-season war_valid (gp>=3, toi>=45)
+_STATS_CENTRAL_SANITIZER_VERSION = 4  # v4: CF%/WAR from sim counts + on-ice share repair
 
 
 def get_cached_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:

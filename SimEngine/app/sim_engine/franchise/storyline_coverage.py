@@ -32,6 +32,7 @@ from app.sim_engine.franchise.storyline_engine import (
     _u_personality,
     _u_position,
     _u_psych_value,
+    _enqueue_storyline_followup,
     _u_record_storyline,
     _u_sync_player_entities,
     apply_universe_matchup_context,
@@ -408,34 +409,68 @@ def ingest_game_box_storylines(session: Any, box: Dict[str, Any]) -> int:
                     emitted += 1
 
     if hg == 0 or ag == 0:
+        from app.sim_engine.franchise.storyline_copy import note_goalie_shutout  # noqa: WPS433
+        from app.sim_engine.franchise.storyline_procedural import compose_shutout_copy  # noqa: WPS433
+
         shut_tid = hid if ag == 0 else aid
         other = aid if shut_tid == hid else hid
         goalie_blob = box.get("home_goalie") if shut_tid == hid else box.get("away_goalie")
         gname = ""
         gid = ""
         if isinstance(goalie_blob, dict):
-            gname = str(goalie_blob.get("name") or "")
+            gname = str(goalie_blob.get("name") or "").strip()
             gid = str(goalie_blob.get("player_id") or goalie_blob.get("id") or "")
-        if not gname:
-            gname = f"{_team_display(session, shut_tid)} netminder"
-        stable = f"shutout|{shut_tid}|{day}"
-        if _can_fire(session, stable, day, "minor")[0]:
-            _emit_public(
-                session,
-                headline=f"{gname} throws a shutout",
-                summary=f"{_team_display(session, shut_tid)} blanked {_team_display(session, other)} {max(hg, ag)}-0.",
-                cause_type="SHUTOUT",
-                category="goalie",
-                heat=72,
-                team_id=shut_tid,
-                player_id=gid,
-                player_name=gname,
-                evidence={"final": f"{hg}-{ag}", "overtime": ot},
-                reporter={"name": "Sam Howe", "outlet": "Crease Report", "specialty": "goalies"},
-                stable_key=stable,
-            )
-            _mark_fired(session, stable, day, "minor", 0)
-            emitted += 1
+        named = bool(gname) and "netminder" not in gname.lower()
+        if not named:
+            gname = ""
+        uid = str(getattr(session, "user_team_id") or "")
+        is_user = str(shut_tid) == uid
+        if not named and not is_user:
+            pass
+        else:
+            display_name = gname or "The starter"
+            prior = max(0, note_goalie_shutout(session, gid or f"team:{shut_tid}", day) - 1)
+            rank = _league_points_rank(session, str(shut_tid))
+            _w, _l, _o, record = _team_record(session, str(shut_tid))
+            notable = prior >= 1 or 1 <= rank <= 3 or 7 <= rank <= 10
+            if is_user or notable:
+                hl, sm = compose_shutout_copy(
+                    goalie_name=display_name,
+                    team=_team_display(session, shut_tid),
+                    opponent=_team_display(session, other),
+                    record=record,
+                    league_rank=rank,
+                    prior_shutouts=prior,
+                    snapped_skid=_l >= 3 and _w <= _l,
+                )
+                heat = 68 if prior >= 1 else (58 if is_user else 46)
+                stable = f"shutout|{shut_tid}|{day}"
+                if _can_fire(session, stable, day, "minor")[0]:
+                    _emit_public(
+                        session,
+                        headline=hl,
+                        summary=sm,
+                        cause_type="SHUTOUT",
+                        category="goalie",
+                        heat=heat,
+                        team_id=shut_tid,
+                        player_id=gid,
+                        player_name=display_name,
+                        evidence={"final": f"{hg}-{ag}", "overtime": ot, "prior_shutouts": prior, "league_rank": rank},
+                        reporter={"name": "Sam Howe", "outlet": "Crease Report", "specialty": "goalies"},
+                        stable_key=stable,
+                    )
+                    _mark_fired(session, stable, day, "minor", 0)
+                    emitted += 1
+                    if is_user and prior >= 1:
+                        _enqueue_storyline_followup(
+                            session,
+                            due_day=day + 2,
+                            kind="shutout_coach",
+                            team_id=str(shut_tid),
+                            player_id=gid,
+                            player_name=display_name,
+                        )
 
     if ot and events:
         last = events[-1]

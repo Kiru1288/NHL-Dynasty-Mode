@@ -19,7 +19,12 @@ def _clone_session(session):
                 delattr(session, attr)
             except Exception:
                 pass
-    return copy.deepcopy(session)
+    cloned = copy.deepcopy(session)
+    cloned._bulk_finalize_deferred_days = 0
+    cloned._bulk_catchup_steps_pending = 0
+    cloned._bulk_narrative_last_finished_days = int(getattr(cloned, "calendar_days_finished", 0) or 0)
+    cloned._bulk_narrative_box_cursor = len(getattr(cloned, "game_results", None) or [])
+    return cloned
 
 
 def _fast_forward_to_regular(session, *, max_days: int = 120):
@@ -77,6 +82,77 @@ def test_quick_single_day_uses_bulk_light_path(regular_session):
     assert int(result.get("steps_completed") or 0) == 1
     assert result.get("status") == "ok"
     assert int(session.calendar_cursor) == start_cursor + 1
+    assert bool(getattr(session, "_eligible_sparse_storyline_backfill", False)) is False
+    assert int(getattr(session, "_bulk_finalize_deferred_days", 0) or 0) == 1
+
+
+def test_bulk_incremental_catchup_runs_in_chunks_not_cliff(regular_session, monkeypatch):
+    from services import franchise_sim as fs
+    from services.franchise_sim import advance_franchise_bulk
+
+    session = _clone_session(regular_session)
+    calls = {"narrative": 0, "prospect": 0, "extra_dev": 0, "incremental": 0}
+
+    def _track_narrative(s, *, days_advanced, incremental=False):
+        calls["narrative"] += 1
+        if incremental:
+            calls["incremental"] += 1
+
+    def _track_prospect(s, *, force=False):
+        calls["prospect"] += 1
+
+    def _track_extra(sim, rng):
+        calls["extra_dev"] += 1
+
+    monkeypatch.setattr(fs, "_franchise_bulk_narrative_catchup", _track_narrative)
+    monkeypatch.setattr(fs, "_sync_prospect_stats_to_calendar", _track_prospect)
+    monkeypatch.setattr(
+        "app.sim_engine.league_hierarchy_bootstrap.tick_extra_league_development",
+        _track_extra,
+    )
+    scouting_calls = {"n": 0}
+
+    def _track_scouting(session, *, days=1):
+        scouting_calls["n"] += 1
+
+    monkeypatch.setattr(
+        "services.franchise_scouting.apply_passive_scouting_progress",
+        _track_scouting,
+    )
+
+    advance_franchise_bulk(session, mode="days", count=1, auto_resolve_decisions=True)
+    assert calls["narrative"] == 1
+    assert calls["incremental"] == 1
+    assert calls["extra_dev"] == 0
+    assert scouting_calls["n"] == 1
+
+    calls = {"narrative": 0, "prospect": 0, "extra_dev": 0, "incremental": 0}
+    scouting_calls["n"] = 0
+    advance_franchise_bulk(session, mode="days", count=9, auto_resolve_decisions=True)
+    assert calls["narrative"] == 3
+    assert calls["incremental"] == 3
+    assert calls["extra_dev"] == 0
+    assert scouting_calls["n"] == 3
+
+
+def test_large_day_batch_spreads_finalize_incrementally(regular_session, monkeypatch):
+    from services import franchise_sim as fs
+    from services.franchise_sim import advance_franchise_bulk
+
+    session = _clone_session(regular_session)
+    calls = {"narrative": 0, "incremental": 0}
+
+    def _track_narrative(s, *, days_advanced, incremental=False):
+        calls["narrative"] += 1
+        if incremental:
+            calls["incremental"] += 1
+
+    monkeypatch.setattr(fs, "_franchise_bulk_narrative_catchup", _track_narrative)
+
+    advance_franchise_bulk(session, mode="days", count=15, auto_resolve_decisions=True)
+    assert calls["narrative"] == 5
+    assert calls["incremental"] == 5
+    assert int(getattr(session, "_bulk_finalize_deferred_days", 0) or 0) == 15
     assert bool(getattr(session, "_eligible_sparse_storyline_backfill", False)) is True
 
 

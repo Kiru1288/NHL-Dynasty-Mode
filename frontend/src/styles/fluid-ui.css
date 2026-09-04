@@ -30,6 +30,8 @@ html.ui-fluid .game-canvas > * {
 }
 
 html.ui-fluid .game-screen,
+html.ui-fluid .stats-central-screen,
+html.ui-fluid .statscentral-shell,
 html.ui-fluid .linebuilder-root,
 html.ui-fluid .nhlcal-root,
 html.ui-fluid .nhlcal-sl-root,

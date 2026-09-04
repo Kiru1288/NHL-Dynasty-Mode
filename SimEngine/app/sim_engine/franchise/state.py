@@ -46,15 +46,25 @@ def _merge_simengine_league_news_into_storylines(session: FranchiseSession) -> N
         _record_storyline(session, raw)
 def _record_storyline(session: FranchiseSession, event: Dict[str, Any]) -> None:
     raw = event if isinstance(event, dict) else {}
+    ev = _normalize_storyline_payload(raw)
+    if not ev.get("headline"):
+        return
+    try:
+        from app.sim_engine.franchise.storyline_copy import claim_league_story_slot  # noqa: WPS433
+
+        utid = str(getattr(session, "user_team_id") or "")
+        tid = str(ev.get("team_id") or "")
+        if not claim_league_story_slot(session, ev, user_club=bool(utid and tid == utid)):
+            return
+    except Exception:
+        pass
     try:
         from app.sim_engine.franchise.storyline_engine import enrich_storyline_for_narrative_universe  # noqa: WPS433
 
         raw = enrich_storyline_for_narrative_universe(session, raw)
+        ev = _normalize_storyline_payload(raw)
     except Exception:
         pass
-    ev = _normalize_storyline_payload(raw)
-    if not ev.get("headline"):
-        return
     dq = getattr(session, "_storyline_dedupe", None)
     if dq is None:
         dq = []
