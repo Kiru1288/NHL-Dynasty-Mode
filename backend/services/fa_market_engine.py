@@ -69,9 +69,9 @@ def _base_patience(ovr: float, age: int) -> float:
     """0–1: higher = waits longer before accepting."""
     tier = _tier_for_ovr(ovr)
     base = {
-        "star": 0.88,
-        "high": 0.72,
-        "mid": 0.52,
+        "star": 0.72,
+        "high": 0.66,
+        "mid": 0.50,
         "depth": 0.32,
         "fringe": 0.18,
     }[tier]
@@ -115,6 +115,9 @@ def _ask_for_player(player: Any, league: Any, *, days_on_market: int = 0, offer_
     # toward the league minimum when nobody is bidding.
     days = max(0, int(days_on_market or 0))
     offers = max(0, int(offer_count or 0))
+    if days >= 5 and ovr >= 88 and offers <= 1:
+        floor = max(LEAGUE_MINIMUM_AAV_M, fair * 0.84)
+        ask = max(floor, ask * (0.988 if offers == 0 else 0.994))
     if days >= 3 and offers == 0:
         if ovr < 70:
             ask = max(LEAGUE_MINIMUM_AAV_M, ask * 0.96)
@@ -151,23 +154,53 @@ def _ask_for_player(player: Any, league: Any, *, days_on_market: int = 0, offer_
     return ask
 
 
-def _iter_fa_market_pool(league: Any) -> List[Any]:
-    """Domestic UFAs + overseas runway — both belong on the Wire year-round."""
+def _iter_domestic_fa_pool(league: Any) -> List[Any]:
     if league is None:
         return []
     out: List[Any] = []
     seen: set = set()
-    for pool_attr in ("free_agents", "overseas_free_agents"):
-        for p in list(_get(league, pool_attr, None) or []):
-            if getattr(p, "retired", False):
-                continue
-            pid = _player_id(p)
-            key = pid or id(p)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(p)
+    for p in list(_get(league, "free_agents", None) or []):
+        if getattr(p, "retired", False):
+            continue
+        pid = _player_id(p)
+        key = pid or id(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
     return out
+
+
+def _iter_overseas_fa_pool(league: Any) -> List[Any]:
+    if league is None:
+        return []
+    out: List[Any] = []
+    seen: set = set()
+    for p in list(_get(league, "overseas_free_agents", None) or []):
+        if getattr(p, "retired", False):
+            continue
+        pid = _player_id(p)
+        key = pid or id(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
+def _iter_fa_market_pool(league: Any, session: Any = None, *, include_overseas: Optional[bool] = None) -> List[Any]:
+    """Domestic UFAs on the wire immediately; overseas imports join after day 10."""
+    domestic = _iter_domestic_fa_pool(league)
+    if include_overseas is None:
+        day = 999
+        if session is not None:
+            day = int(getattr(session, "fa_market_day", 0) or 0)
+            book = getattr(session, "fa_market_book", None) or {}
+            day = max(day, int(book.get("day") or 0))
+        include_overseas = day >= 10
+    if not include_overseas:
+        return domestic
+    return domestic + _iter_overseas_fa_pool(league)
 
 
 def ensure_fa_market_book(session: Any) -> Dict[str, Any]:
@@ -178,7 +211,7 @@ def ensure_fa_market_book(session: Any) -> Dict[str, Any]:
         session.fa_market_book = book
 
     league = getattr(getattr(session, "sim", None), "league", None)
-    fa_pool = _iter_fa_market_pool(league)
+    fa_pool = _iter_fa_market_pool(league, session, include_overseas=True)
     entries: Dict[str, Any] = dict(book.get("entries") or {})
     day = int(book.get("day") or 0)
     season = int(getattr(session, "season_calendar_year", 2025) or 2025)
@@ -236,8 +269,22 @@ def ensure_fa_market_book(session: Any) -> Dict[str, Any]:
     return book
 
 
-def _is_exclusive_home_ufa(player: Any) -> bool:
-    return bool(getattr(player, "ufa_exclusive", False))
+def _is_exclusive_home_ufa(player: Any, session: Any = None) -> bool:
+    if bool(getattr(player, "ufa_exclusive", False)):
+        return True
+    meta = getattr(player, "_franchise_assignment", None) or {}
+    if meta.get("overseas"):
+        return False
+    from_tid = str(
+        getattr(player, "ufa_from_team_id", None)
+        or getattr(player, "previous_nhl_team_id", None)
+        or ""
+    )
+    if not from_tid:
+        return False
+    if session is not None and bool(getattr(session, "free_agency_open", False)):
+        return False
+    return True
 
 
 def _serious_cpu_offer_aav(
@@ -256,7 +303,7 @@ def _serious_cpu_offer_aav(
     days = max(0, int(days_on_market or 0))
     if ovr >= 88:
         # Late market: allow shorter-money serious bids rather than total silence.
-        floor_mult = 0.62 if days >= 18 else (0.68 if days >= 10 else 0.72)
+        floor_mult = 0.58 if days >= 18 else (0.64 if days >= 10 else 0.68)
         floor = max(floor, fair * floor_mult)
     elif ovr >= 82:
         floor_mult = 0.55 if days >= 18 else 0.62
@@ -268,9 +315,10 @@ def _serious_cpu_offer_aav(
         # Can't make a serious bid — sit out rather than post a mirage $1M offer.
         return None
 
-    # Spend up to ~95% of space, but never below the seriousness floor when space allows.
-    offer = min(target, space * 0.95)
-    offer = max(offer, min(floor, space * 0.95))
+    # Spend up to ~98% of space for stars; depth stays near 95%.
+    spend_frac = 0.98 if ovr >= 86 else 0.95
+    offer = min(target, space * spend_frac)
+    offer = max(offer, min(floor, space * spend_frac))
     if offer < floor * 0.98 and ovr >= 80:
         return None
     return round(max(LEAGUE_MINIMUM_AAV_M, offer), 3)
@@ -313,8 +361,8 @@ def _collect_cpu_offers(
     day = int(book.get("day") or 0)
     entries = book["entries"]
     fa_pool = [
-        p for p in _iter_fa_market_pool(league)
-        if not _is_exclusive_home_ufa(p)
+        p for p in _iter_fa_market_pool(league, session)
+        if not _is_exclusive_home_ufa(p, session)
     ]
     if not fa_pool:
         return []
@@ -456,7 +504,10 @@ def _collect_cpu_offers(
                 years = min(years, 2)
 
             fit, _reasons = score_free_agent_fit(team, player, ctx, offer_aav, years, league)
-            if fit < _min_fit_for_ovr(ovr):
+            min_fit = _min_fit_for_ovr(ovr)
+            if ovr >= 86 and day >= 12:
+                min_fit = max(0.08, min_fit - 0.06)
+            if fit < min_fit:
                 continue
 
             team_name = str(_get(team, "name", "") or _get(team, "team_name", "") or tid)
@@ -517,9 +568,12 @@ def _update_player_decision(entry: Dict[str, Any], book: Dict[str, Any], *, day:
 
     # Urgency rises with days without a close offer, and with age
     no_close = best < ask * 0.92
-    urgency = 0.08 + days * (0.055 if tier in ("depth", "fringe") else 0.035)
+    star_tier = tier in ("star", "high")
+    urgency = 0.08 + days * (0.055 if tier in ("depth", "fringe") else (0.048 if star_tier else 0.035))
     if no_close:
         urgency += 0.05 * max(0, days - 2)
+    if star_tier and offer_count == 0 and days >= 8:
+        urgency += 0.08 + min(0.12, (days - 7) * 0.015)
     if age >= 33:
         urgency += 0.10
     if offer_count == 0 and days >= 3:
@@ -648,7 +702,7 @@ def _try_sign_leaning_players(
     book = ensure_fa_market_book(session)
     day = int(book.get("day") or 0)
     entries = book["entries"]
-    fa_pool = _iter_fa_market_pool(league)
+    fa_pool = _iter_fa_market_pool(league, session)
     team_by_id = {
         str(_get(t, "team_id", "") or _get(t, "id", "")): t
         for t in list(_get(league, "teams", None) or [])

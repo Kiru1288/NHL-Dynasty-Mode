@@ -6843,17 +6843,29 @@ def _serialize_player_row(
             row["jersey_number"] = int(jersey) if str(jersey).isdigit() else jersey
     except Exception:
         pass
-    # Potential (0–100 display) from real engine fields — never invent.
+    # Potential (0–100 display) from chapter profile / engine fields — never invent.
     try:
-        ratings = getattr(p, "ratings", None) or {}
-        pot_raw = None
-        if isinstance(ratings, dict):
-            pot_raw = ratings.get("dev_potential")
-        if pot_raw is None:
-            pot_raw = getattr(p, "potential", None)
-        if pot_raw is not None:
-            pot_f = float(pot_raw)
-            pot99 = int(round(pot_f * 99.0)) if pot_f <= 1.5 else int(round(pot_f))
+        pot99 = None
+        try:
+            from app.sim_engine.entities.chapter_attributes import get_player_chapters  # noqa: WPS433
+
+            chapters = get_player_chapters(p)
+            pot_ch = chapters.get("potential")
+            if pot_ch is not None:
+                pot99 = int(round(float(pot_ch)))
+        except Exception:
+            pot99 = None
+        if pot99 is None:
+            ratings = getattr(p, "ratings", None) or {}
+            pot_raw = None
+            if isinstance(ratings, dict):
+                pot_raw = ratings.get("dev_potential")
+            if pot_raw is None:
+                pot_raw = getattr(p, "potential", None)
+            if pot_raw is not None:
+                pot_f = float(pot_raw)
+                pot99 = int(round(pot_f * 99.0)) if pot_f <= 1.5 else int(round(pot_f))
+        if pot99 is not None:
             row["potential"] = pot99
             row["potential_score"] = pot99
             row["dev_potential"] = pot99

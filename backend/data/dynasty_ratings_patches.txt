@@ -1,0 +1,26 @@
+# Last-minute overall patches (Name on one line, old → new on the next).
+# These override the overall in dynasty_ratings.txt only — chapters stay from the main file.
+
+Trevor Moore
+83 → 85
+
+Alex Laferriere
+75 → 81
+
+Boone Jenner
+78 → 81
+
+Quinn Hutson
+78 → 75
+
+Quentin Musty
+79 → 76
+
+Mason West
+76 → 73
+
+Tynan Lawrence
+77 → 74
+
+Yaroslav Askarov
+91 → 88

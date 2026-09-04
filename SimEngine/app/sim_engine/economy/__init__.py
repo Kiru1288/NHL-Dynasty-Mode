@@ -14,7 +14,7 @@ Do not add I/O here; the runner/engine owns logging.
 
 from __future__ import annotations
 
-from app.sim_engine.economy.player_value import PlayerValue, evaluate_player_value
+from app.sim_engine.economy.player_value import PlayerValue, evaluate_player_value, player_economy_ability_01
 from app.sim_engine.economy.team_needs import TeamNeeds, evaluate_team_needs
 from app.sim_engine.economy.roster_manager import RosterManager, manage_roster
 from app.sim_engine.economy.lineup_ai import LineupAI, generate_lineup
@@ -25,6 +25,7 @@ from app.sim_engine.economy.waiver_ai import WaiverAI, process_waivers
 __all__ = [
     "PlayerValue",
     "evaluate_player_value",
+    "player_economy_ability_01",
     "TeamNeeds",
     "evaluate_team_needs",
     "RosterManager",

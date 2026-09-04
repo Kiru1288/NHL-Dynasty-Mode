@@ -1216,6 +1216,9 @@ def build_free_agency_desk(session: FranchiseSession, *, open_market: bool = Fal
     fa_list = annotate_fa_rows_with_decisions(
         session, list(office.get("free_agents") or office.get("freeAgents") or [])
     )
+    overseas_list = annotate_fa_rows_with_decisions(
+        session, list(office.get("overseas_free_agents") or [])
+    )
     session.free_agents_payload = fa_list
     bonus = team_signing_bonus_eligibility(session)
     cap = office.get("cap_snapshot") or {}
@@ -1273,6 +1276,7 @@ def build_free_agency_desk(session: FranchiseSession, *, open_market: bool = Fal
         "available_count": len(fa_list),
         "major_available": top,
         "free_agents": fa_list,
+        "overseas_free_agents": overseas_list,
         "market_news": news[-16:],
         "cap_space_m": float(cap.get("usable_cap_space_m") or cap.get("cap_space_m") or 0),
         "cap_snapshot": cap,
@@ -5425,6 +5429,9 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
     fa_list = annotate_fa_rows_with_decisions(
         session, list(office.get("free_agents") or office.get("freeAgents") or [])
     )
+    overseas_list = annotate_fa_rows_with_decisions(
+        session, list(office.get("overseas_free_agents") or [])
+    )
     session.free_agents_payload = fa_list
     bonus = team_signing_bonus_eligibility(session)
     cap = office.get("cap_snapshot") or {}
@@ -5487,6 +5494,7 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
         "available_count": len(fa_list),
         "major_available": top,
         "free_agents": fa_list,
+        "overseas_free_agents": overseas_list,
         "market_news": news[-16:],
         "cap_space_m": (
             float(cap["usable_cap_space_m"])

@@ -13,6 +13,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from app.sim_engine.economy.team_needs import TeamNeeds, is_player_injured
 from app.sim_engine.economy.cap_engine import player_cap_hit_millions
+from app.sim_engine.economy.player_value import (
+    is_prospect_for_valuation,
+    prospect_valuation_ovr,
+)
 from app.sim_engine.trades.trade_asset import (
     DraftPickTradeAsset,
     PlayerTradeAsset,
@@ -26,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the talent curve / depth-star spread changes so Trade Hub caches rebuild
 # without requiring a new franchise save.
-TRADE_VALUE_FORMULA_VERSION = 6
+TRADE_VALUE_FORMULA_VERSION = 9
 # Soft ceiling used only for UI-relative clamps / legacy helpers — player totals are uncapped.
 TRADE_VALUE_SOFT_CEIL = 220.0
 # Reduced fallback when enrichment fails — never return raw OVR (82 ≈ elite TV).
@@ -268,14 +272,14 @@ def _prospect_upside_score(player: Any, ovr: float, age: int, pot: float) -> flo
     confidence = _scouting_confidence(player)
     base = upside * 0.18
     # Age bump only when there is projection or proven NHL ability.
-    if upside >= 4.0 or ovr >= 74:
+    if upside >= 4.0 or ovr >= 75:
         if age <= 20:
             base += 1.6
         elif age <= 21:
             base += 1.0
         elif age <= 22:
             base += 0.5
-    elif age <= 21 and upside >= 2.0:
+    elif age <= 21 and upside >= 2.5:
         base += 0.6
     if tier >= 0.85:
         base += 4.0
@@ -283,10 +287,15 @@ def _prospect_upside_score(player: Any, ovr: float, age: int, pot: float) -> flo
         base += 2.5
     elif tier >= 0.45:
         base += 1.2
-    if pot >= 88 and ovr < 76:
+    if pot >= 88 and ovr < 74:
         base += 2.5
-    elif pot >= 84 and ovr < 72:
+    elif pot >= 84 and ovr < 70:
         base += 1.5
+    # Established NHL regulars should not get prospect-style upside bags.
+    if ovr >= 78 and upside < 3.0:
+        base *= 0.55
+    elif ovr >= 76 and upside < 2.0:
+        base *= 0.70
     # Low-overall depth prospects stay cheap even when young.
     if ovr < 70:
         base *= 0.55
@@ -422,6 +431,13 @@ def _projected_finish_risk(team: Any, *, team_by_id: Optional[Dict[str, Any]] = 
 
 
 def _player_ovr(player: Any) -> float:
+    """Canonical 0–99 display OVR aligned with roster / FA economy."""
+    try:
+        from app.sim_engine.entities.player import player_current_ovr_01
+
+        return float(player_current_ovr_01(player)) * 99.0
+    except Exception:
+        pass
     fn = getattr(player, "ovr", None)
     if callable(fn):
         try:
@@ -437,6 +453,15 @@ def _player_ovr(player: Any) -> float:
 
 def _player_potential_ovr(player: Any, current_ovr: float) -> float:
     """Development ceiling on the same 0–99 scale as current OVR."""
+    try:
+        from app.sim_engine.entities.chapter_attributes import get_player_chapters
+
+        chapters = get_player_chapters(player)
+        pot = chapters.get("potential")
+        if pot is not None:
+            return max(float(current_ovr), float(pot))
+    except Exception:
+        pass
     ratings = getattr(player, "ratings", None)
     if isinstance(ratings, dict):
         for key in ("dev_potential", "potential", "pot"):
@@ -491,6 +516,28 @@ def _talent_base(ovr: float) -> float:
         # 94+ → 165+ uncapped
         anchor = 160.0 + (o - 93.0) * 12.0
     return max(3.0, float(anchor))
+
+
+def _expected_cap_m(ovr: float) -> float:
+    """Fair-market AAV expectation (millions) for contract surplus/deficit math.
+
+    Piecewise curve recognizes that the dynasty rating pool clusters more talent
+    in the 80–87 band than the legacy stats-derived importer did, while keeping
+    elite expectations steep enough to avoid cheap-deal inflation on stars.
+    """
+    o = float(ovr or 0.0)
+    if o < 72.0:
+        return 0.85
+    if o < 80.0:
+        return 0.75 + (o - 72.0) * 0.18
+    if o < 85.0:
+        return 2.19 + (o - 80.0) * 0.26
+    if o < 90.0:
+        return 3.49 + (o - 85.0) * 0.34
+    if o < 94.0:
+        return 5.19 + (o - 90.0) * 0.52
+    out = 7.27 + (o - 94.0) * 0.65
+    return _clamp(out, 0.85, 14.0)
 
 
 def reduced_trade_value_fallback(player: Any, *, reason: str = "") -> float:
@@ -695,13 +742,17 @@ def _elc_value_mod(
     expiry: str,
     window: str,
     cap_pressure: str,
+    is_prospect_val: bool = False,
 ) -> float:
     if expiry != "ELC" and not _is_elc_contract(player):
         return 0.0
     mod = 0.0
     if window == "rebuild":
         if age <= 22:
-            mod += 2.5 + min(2.5, max(0.0, pot - ovr) * 0.12)
+            if is_prospect_val:
+                mod += 1.25
+            else:
+                mod += 2.5 + min(2.5, max(0.0, pot - ovr) * 0.12)
         elif age <= 24:
             mod += 1.5
     elif window == "contender":
@@ -736,6 +787,8 @@ def _rental_market_mod(
         rental += 0.8
     if window == "contender":
         rental *= 0.85 + 0.95 * max(0.0, deadline_phase)
+        if deadline_phase >= 0.75:
+            rental += 1.25
         if need_mod >= 5.0:
             rental += 2.0
     elif window == "rebuild":
@@ -750,7 +803,7 @@ def _rental_market_mod(
 
 
 def _bad_contract_score(player: Any, ovr: float, cap_hit: float, years: int, age: int) -> float:
-    expected = _clamp(0.75 + max(0.0, ovr - 72.0) * 0.22, 0.85, 14.0)
+    expected = _expected_cap_m(ovr)
     if cap_hit <= expected + 0.75:
         return 0.0
     overpay = cap_hit - expected
@@ -982,30 +1035,37 @@ def _evaluate_player_asset_value_impl(
     years = _contract_years(player)
     expiry = _expiry_status(player)
     pot = _player_potential_ovr(player, ovr)
-    talent_fit = min(1.0, max(0.35, ovr / 82.0))
+    is_prospect_val = is_prospect_for_valuation(player, age=age, ovr_display=ovr)
+    val_ovr = prospect_valuation_ovr(player, ovr_display=ovr, pot_display=pot) if is_prospect_val else ovr
+    contract_ref = val_ovr if is_prospect_val else ovr
+    talent_fit = min(1.0, max(0.35, val_ovr / 84.0))
 
-    base_core = round(_talent_base(ovr), 2)
+    base_core = round(_talent_base(val_ovr), 2)
 
     age_mod = 0.0
     if age <= 22:
-        age_mod = 3.0 if ovr >= 76 else 1.5 if ovr >= 70 else 0.5
+        age_mod = 3.0 if val_ovr >= 76 else 1.5 if val_ovr >= 70 else 0.5
     elif age <= 26:
-        age_mod = 2.0 if ovr >= 74 else 0.5
+        age_mod = 2.0 if val_ovr >= 74 else 0.5
     elif age <= 30:
         age_mod = 1.0
     elif age <= 33:
         # Elite stars still in their window; do not dump them solely for age 31–33.
-        age_mod = -0.5 if ovr >= 88 else (-1.0 if ovr >= 84 else -2.0)
+        age_mod = -0.5 if val_ovr >= 88 else (-1.0 if val_ovr >= 84 else -2.0)
     else:
         age_mod = -5.0 - (age - 33) * 0.8
-        if ovr >= 90:
+        if val_ovr >= 90:
             age_mod = max(age_mod, -3.5)
-        elif ovr >= 86:
+        elif val_ovr >= 86:
             age_mod = max(age_mod, -5.5)
 
     upside = max(0.0, pot - ovr)
     prospect_upside = _prospect_upside_score(player, ovr, age, pot)
-    if age <= 25:
+    if is_prospect_val:
+        # Ceiling is already in base_core — keep only a small scout-tier nudge.
+        prospect_upside *= 0.35
+        potential_mod = _clamp(prospect_upside, 0.0, 4.0) if age <= 25 else 0.0
+    elif age <= 25:
         potential_mod = _clamp(upside * 0.14, 0.0, 5.0) + prospect_upside
         if ovr < 76:
             potential_mod = min(potential_mod, 2.5 + prospect_upside * 0.85)
@@ -1024,15 +1084,25 @@ def _evaluate_player_asset_value_impl(
     elif pos == "G":
         pos_mod = 1.0
 
-    expected_cap = _clamp(0.75 + max(0.0, ovr - 72.0) * 0.22, 0.85, 14.0)
+    expected_cap = _expected_cap_m(contract_ref if is_prospect_val else ovr)
     contract_mod = _clamp((expected_cap - cap_hit) * 1.4, -8.0, 6.0)
+    if is_prospect_val and cap_hit <= 0.05:
+        contract_mod = min(contract_mod, 1.25)
     # Cheap replacement / depth AAV is not franchise surplus — clamp positive
     # surplus for sub-star talent so league-min deals cannot mint premium assets.
-    if ovr < 76 and contract_mod > 0:
-        contract_mod = min(contract_mod, 1.5 if ovr >= 72 else 0.75)
-    elif ovr < 80 and contract_mod > 0:
+    if contract_ref < 76 and contract_mod > 0:
+        contract_mod = min(contract_mod, 1.5 if contract_ref >= 72 else 0.75)
+    elif contract_ref < 80 and contract_mod > 0:
         contract_mod = min(contract_mod, 3.0)
-    if years <= 1 and expiry == "UFA":
+    elif contract_ref < 85 and contract_mod > 0:
+        contract_mod = min(contract_mod, 4.0)
+    elif contract_ref < 88 and contract_mod > 0:
+        contract_mod = min(contract_mod, 4.75)
+    elif contract_ref < 91 and contract_mod > 0:
+        contract_mod = min(contract_mod, 5.5)
+    if contract_mod > 0 and age >= 30:
+        contract_mod *= max(0.45, 1.0 - (age - 29) * 0.08)
+    if years <= 1 and expiry == "UFA" and not is_prospect_val:
         # Elite rentals retain meaningful value; fringe UFAs take the full discount.
         if ovr >= 88:
             contract_mod -= 1.0
@@ -1040,7 +1110,7 @@ def _evaluate_player_asset_value_impl(
             contract_mod -= 2.0
         else:
             contract_mod -= 3.0
-    elif years >= 4 and cap_hit < expected_cap and ovr >= 78:
+    elif years >= 4 and cap_hit < expected_cap and contract_ref >= 78:
         contract_mod += 2.0
     elif years >= 5 and age >= 30 and cap_hit > expected_cap + 1.5:
         contract_mod -= 4.0
@@ -1049,7 +1119,7 @@ def _evaluate_player_asset_value_impl(
 
     needs = _NEEDS_MODEL.evaluate(acquiring_team, context=ctx)
     # Needs can nudge price but must not flatten OVR gaps (roster-spot dumps vs stars).
-    need_scale = 3.2 if ovr >= 84 else 4.2 if ovr >= 78 else 5.0
+    need_scale = 3.2 if val_ovr >= 84 else 4.2 if val_ovr >= 78 else 5.0
     need_mod = 0.0
     if pos in ("C", "W"):
         need_mod = max(needs.get("top_line_forward", 0.0), needs.get("depth_forward", 0.0)) * need_scale * talent_fit
@@ -1058,9 +1128,9 @@ def _evaluate_player_asset_value_impl(
     elif pos == "G":
         need_mod = needs.get("goalie", 0.0) * (need_scale + 0.8) * talent_fit
     # Bound need so positional desperation cannot turn fringe players into stars.
-    if ovr < 76:
+    if val_ovr < 76:
         need_mod = _clamp(need_mod, 0.0, 3.0)
-    elif ovr < 82:
+    elif val_ovr < 82:
         need_mod = _clamp(need_mod, 0.0, 5.0)
     else:
         need_mod = _clamp(need_mod, 0.0, 4.5)
@@ -1079,6 +1149,7 @@ def _evaluate_player_asset_value_impl(
         expiry=expiry,
         window=window,
         cap_pressure=cap_pressure,
+        is_prospect_val=is_prospect_val,
     )
 
     cap_dump_mod = _cap_dump_value_mod(
@@ -1115,7 +1186,7 @@ def _evaluate_player_asset_value_impl(
 
     window_mod = 0.0
     if window == "rebuild":
-        if age <= 23 and ovr >= 74:
+        if age <= 23 and val_ovr >= 74:
             window_mod = 4.0
         elif age <= 23:
             window_mod = 2.0 + prospect_upside * 0.35
@@ -1126,9 +1197,9 @@ def _evaluate_player_asset_value_impl(
         else:
             window_mod = -1.5
     elif window == "contender":
-        if 24 <= age <= 32 and ovr >= 80:
+        if 24 <= age <= 32 and ovr >= 80 and not is_prospect_val:
             window_mod = 3.5
-        elif age <= 22 and ovr < 78:
+        elif age <= 22 and (ovr < 78 or is_prospect_val):
             window_mod = -2.5
         elif age >= 33 and cap_hit > expected_cap:
             window_mod -= 4.0
@@ -1137,8 +1208,10 @@ def _evaluate_player_asset_value_impl(
         contract_mod -= 3.0
 
     market_mod = rental_mod
-    if ovr >= 88:
+    if not is_prospect_val and ovr >= 88:
         market_mod += 2.0
+    if contract_mod >= 4.0 and market_mod > 1.5:
+        market_mod = 1.5 + (market_mod - 1.5) * 0.55
 
     risk_mod = -_clause_penalty(player) * 0.75
     waived, waive_pct = _ntc_waived_for_player(player, ctx)
@@ -1233,6 +1306,8 @@ def _evaluate_player_asset_value_impl(
         "age": round(age_mod, 2),
         "potential": round(potential_mod, 2),
         "prospect_upside": round(prospect_upside, 2),
+        "valued_on": "potential" if is_prospect_val else "overall",
+        "valuation_ovr": round(val_ovr, 1),
         "production": round(production_mod, 2),
         "contract": round(contract_mod, 2),
         "team_need": round(need_mod, 2),
@@ -1249,28 +1324,36 @@ def _evaluate_player_asset_value_impl(
     }
     total = base_core + context_mod
     # Extra star premium / depth tax on top of the uncapped talent curve.
-    # Depth tax was too harsh (sub-73 crushed to near-junk), which made packages
-    # look absurd when a real NHL piece was "balanced" by three worthless names.
-    if ovr >= 92.0:
-        total += 8.0 + (ovr - 92.0) * 3.0
-    elif ovr >= 90.0:
-        total += 6.0 + (ovr - 90.0) * 2.0
-    elif ovr >= 87.0:
-        total += 4.0 + (ovr - 87.0) * 1.5
-    elif ovr >= 84.0:
-        total += 2.5
-    elif ovr < 73.0:
-        total -= (73.0 - ovr) * 1.15
-    elif ovr < 77.0:
-        total -= (77.0 - ovr) * 0.65
-    elif ovr < 80.0:
-        total -= (80.0 - ovr) * 0.30
+    # Pipeline assets skip star-premium — ceiling is already discounted in val_ovr.
+    if not is_prospect_val:
+        if val_ovr >= 92.0:
+            total += 8.0 + (val_ovr - 92.0) * 3.0
+        elif val_ovr >= 90.0:
+            total += 6.0 + (val_ovr - 90.0) * 2.0
+        elif val_ovr >= 87.0:
+            total += 4.0 + (val_ovr - 87.0) * 1.5
+        elif val_ovr >= 84.0:
+            total += 2.5
+        elif val_ovr < 73.0:
+            total -= (73.0 - val_ovr) * 1.15
+        elif val_ovr < 77.0:
+            total -= (77.0 - val_ovr) * 0.65
+        elif val_ovr < 80.0:
+            total -= (80.0 - val_ovr) * 0.30
+    # Pipeline assets stay below lottery picks and proven NHL stars.
+    if is_prospect_val:
+        signed = str(getattr(player, "signed_status", "") or "").lower()
+        unsigned = signed in ("unsigned", "rights", "rights_only", "") and cap_hit <= 0.05
+        prospect_cap = slot_curve_value(1) - (2.0 if unsigned else 0.0)
+        total = min(total, max(prospect_cap, 55.0))
     # Uncapped — only soft-floor junk assets so negative contracts can still dump.
     total = max(-15.0, float(total))
     tier = player_value_tier(total)
 
     explain: List[str] = []
-    if ovr >= 85:
+    if is_prospect_val and val_ovr >= 84:
+        explain.append("Elite prospect ceiling")
+    elif not is_prospect_val and ovr >= 85:
         explain.append("Elite NHL talent")
     if age <= 23 and pot > ovr + 5:
         explain.append("Strong upside relative to current rating")
@@ -1392,18 +1475,18 @@ def evaluate_pick_asset_value(
         if league_rank is not None:
             n_teams = len(team_by_id) if isinstance(team_by_id, dict) and team_by_id else 32
             if league_rank >= max(1, n_teams - 4):
-                lottery_mod += 14.0
+                lottery_mod += 12.0
             elif league_rank >= max(1, n_teams - 10):
-                lottery_mod += 7.0
+                lottery_mod += 6.0
             elif league_rank <= 5:
-                lottery_mod -= 7.0
+                lottery_mod -= 6.0
         if points_pct is not None:
             if points_pct < 0.42:
-                lottery_mod += 10.0
+                lottery_mod += 8.5
             elif points_pct < 0.47:
-                lottery_mod += 6.5
+                lottery_mod += 5.5
             elif points_pct < 0.51:
-                lottery_mod += 3.5
+                lottery_mod += 3.0
             elif points_pct > 0.58:
                 lottery_mod -= 5.5
             elif points_pct > 0.54:

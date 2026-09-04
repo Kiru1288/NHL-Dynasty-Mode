@@ -391,7 +391,12 @@ def _positions_for_block(
     return slots
 
 
-def bootstrap_full_league_hierarchy(league: Any, rng: random.Random, season_year: Optional[int] = None) -> None:
+def bootstrap_full_league_hierarchy(
+    league: Any,
+    rng: random.Random,
+    season_year: Optional[int] = None,
+    dynasty_registry: Optional[Any] = None,
+) -> None:
     """
     Mutates league + NHL Team objects:
       - team.ahl_roster, team.echl_roster
@@ -418,6 +423,14 @@ def bootstrap_full_league_hierarchy(league: Any, rng: random.Random, season_year
         ident = getattr(p, "identity", None)
         if ident and getattr(ident, "name", None):
             used_names.add(str(ident.name))
+
+    if dynasty_registry is None and getattr(league, "real_nhl_import_meta", None):
+        try:
+            from services.dynasty_ratings_parser import load_dynasty_ratings_registry
+
+            dynasty_registry = load_dynasty_ratings_registry()
+        except Exception:
+            dynasty_registry = None
 
     # --- Affiliate rosters per NHL org ---
     AHL_F, AHL_D, AHL_G = 14, 8, 2
@@ -446,11 +459,45 @@ def bootstrap_full_league_hierarchy(league: Any, rng: random.Random, season_year
             team.echl_roster.clear()
 
         tid = str(getattr(team, "team_id", ""))
+        abbr = str(
+            getattr(team, "abbreviation", None) or getattr(team, "abbr", None) or tid
+        ).upper()
+        use_dynasty = bool(dynasty_registry) and bool(getattr(league, "real_nhl_import_meta", None))
 
         ahl_slots = _positions_for_block(rng, forwards=AHL_F, defense=AHL_D, goalies=AHL_G)
         # Leave room for preserved real NHL overflow so affiliates aren't bloated.
         generated_ahl_budget = max(0, len(ahl_slots) - len(preserved_ahl))
+        dynasty_ahl: List[Any] = []
+        if use_dynasty:
+            try:
+                from services.dynasty_ratings_parser import spawn_player_from_dynasty_entry
+
+                for entry in dynasty_registry.entries_for_team(abbr, "ahl"):
+                    nm = str(entry.raw_name)
+                    if nm in used_names:
+                        continue
+                    if len(dynasty_ahl) >= generated_ahl_budget:
+                        break
+                    p = spawn_player_from_dynasty_entry(
+                        entry,
+                        rng=rng,
+                        pool_context="ahl",
+                        used_names=used_names,
+                        league_players=league_players,
+                        as_of_year=year,
+                    )
+                    p.context.current_team_id = f"AHL_{tid}"
+                    _set_assignment(p, org_nhl_team_id=tid, level="ahl", club=_team_label(team))
+                    dynasty_ahl.append(p)
+            except Exception:
+                dynasty_ahl = []
+
+        slot_idx = 0
         for pos in ahl_slots[:generated_ahl_budget]:
+            if slot_idx < len(dynasty_ahl):
+                team.ahl_roster.append(dynasty_ahl[slot_idx])
+                slot_idx += 1
+                continue
             lo, hi = (0.42, 0.62) if pos != Position.G else (0.48, 0.68)
             p = _spawn_player(rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=20, age_hi=28, used_names=used_names, league_players=league_players, pool_context="ahl")
             p.context.current_team_id = f"AHL_{tid}"
@@ -471,6 +518,37 @@ def bootstrap_full_league_hierarchy(league: Any, rng: random.Random, season_year
             _set_assignment(p, org_nhl_team_id=tid, level="ahl", club=_team_label(team))
             if p not in team.ahl_roster:
                 team.ahl_roster.append(p)
+
+        if use_dynasty:
+            try:
+                from services.dynasty_ratings_parser import spawn_player_from_dynasty_entry
+
+                if not hasattr(team, "prospect_pool") or team.prospect_pool is None:
+                    team.prospect_pool = []
+                else:
+                    team.prospect_pool.clear()
+                for entry in dynasty_registry.entries_for_team(abbr, "prospect"):
+                    nm = str(entry.raw_name)
+                    if nm in used_names:
+                        continue
+                    p = spawn_player_from_dynasty_entry(
+                        entry,
+                        rng=rng,
+                        pool_context="prospect",
+                        used_names=used_names,
+                        league_players=league_players,
+                        as_of_year=year,
+                    )
+                    try:
+                        p.nhl_rights_team_id = tid
+                        p.rights_team_id = tid
+                        p.signed = False
+                    except Exception:
+                        pass
+                    _set_assignment(p, org_nhl_team_id=tid, level="prospect", club=_team_label(team))
+                    team.prospect_pool.append(p)
+            except Exception:
+                pass
 
         echl_slots = _positions_for_block(rng, forwards=ECHL_F, defense=ECHL_D, goalies=ECHL_G)
         generated_echl_budget = max(0, len(echl_slots) - len(preserved_echl))
@@ -500,6 +578,18 @@ def bootstrap_full_league_hierarchy(league: Any, rng: random.Random, season_year
         _set_assignment(p, level="ufa", overseas=False)
         league.free_agents.append(p)
 
+    # Sprinkle elite summer UFAs — otherwise stars only appear via contract cycle.
+    for _ in range(12):
+        pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.D, Position.G])
+        lo, hi = (0.78, 0.88) if pos != Position.G else (0.80, 0.90)
+        p = _spawn_player(
+            rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=27, age_hi=34,
+            used_names=used_names, league_players=league_players, pool_context="ufa_elite",
+        )
+        p.context.current_team_id = "UFA"
+        _set_assignment(p, level="ufa", overseas=False)
+        league.free_agents.append(p)
+
     # --- Overseas / KHL-tier style unsigned runway ---
     league.overseas_free_agents = []
     for _ in range(220):
@@ -508,6 +598,20 @@ def bootstrap_full_league_hierarchy(league: Any, rng: random.Random, season_year
         p = _spawn_player(rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=23, age_hi=32, used_names=used_names, league_players=league_players, pool_context="overseas")
         p.context.current_team_id = "OVERSEAS"
         _set_assignment(p, level="ufa", overseas=True, overseas_league=rng.choice(["KHL", "SHL", "Liiga", "NL", "DEL", "Czech Extraliga"]))
+        league.overseas_free_agents.append(p)
+
+    for _ in range(6):
+        pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.G])
+        lo, hi = (0.80, 0.90) if pos != Position.G else (0.82, 0.92)
+        p = _spawn_player(
+            rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=26, age_hi=33,
+            used_names=used_names, league_players=league_players, pool_context="overseas_elite",
+        )
+        p.context.current_team_id = "OVERSEAS"
+        _set_assignment(
+            p, level="ufa", overseas=True,
+            overseas_league=rng.choice(["KHL", "SHL", "Liiga", "NL", "DEL", "Czech Extraliga"]),
+        )
         league.overseas_free_agents.append(p)
 
     # --- Junior / NCAA style development leagues (real club names per league) ---

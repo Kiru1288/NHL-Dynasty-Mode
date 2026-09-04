@@ -1483,6 +1483,13 @@ def calculate_skater_value_metrics(row: Mapping[str, Any]) -> Dict[str, Any]:
 
     injury_penalty = safe_float(first_present(row, ["injury_risk_penalty"], 0.0), 0.0)
 
+    ovr_raw = safe_float(first_present(row, ["overall", "ovr"], 0.0), 0.0)
+    pot_raw = safe_float(first_present(row, ["potential"], 0.0), 0.0)
+    if age <= 22 and pot_raw > ovr_raw + 4.0:
+        ovr_weight, pot_weight = 0.22, 0.28
+    else:
+        ovr_weight, pot_weight = 0.30, 0.20
+
     value_score = clamp(
         production_score * 0.35
         + two_way_score * 0.25
@@ -1494,13 +1501,20 @@ def calculate_skater_value_metrics(row: Mapping[str, Any]) -> Dict[str, Any]:
     )
 
     trade_value = (
-        safe_float(first_present(row, ["overall", "ovr"], 0.0), 0.0) * 0.30
-        + safe_float(first_present(row, ["potential"], 0.0), 0.0) * 0.20
+        safe_float(first_present(row, ["overall", "ovr"], 0.0), 0.0) * ovr_weight
+        + safe_float(first_present(row, ["potential"], 0.0), 0.0) * pot_weight
         + war * 12.0
         + age_value * 0.25
         + contract_value * 0.15
         - injury_penalty
     )
+    try:
+        from services.contract_economy import compute_market_value_from_row
+
+        market_m = float(compute_market_value_from_row(row))
+        trade_value = market_m * 14.0 + war * 8.0 + age_value * 0.20 - injury_penalty * 0.5
+    except Exception:
+        pass
 
     return {
         "offensive_gar": round_to(offensive_gar, 3),

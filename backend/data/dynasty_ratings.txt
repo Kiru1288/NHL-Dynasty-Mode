@@ -1,0 +1,2806 @@
+========================================
+NHL DYNASTY MODE — ATLANTIC DIVISION RATINGS
+2026-27 SEASON
+Format: overall, character, offence, defence, transition, mental, physical, potential
+Goalies: overall, glove, blocker, stick, potential
+========================================
+
+
+=== BOSTON BRUINS ===
+
+-- NHL FORWARDS --
+Pastrnak: 95 ovr, 93 cha, 96 off, 84 def, 91 tra, 90 men, 76 phy, 96 pot
+Peterka: 86 ovr, 77 cha, 90 off, 77 def, 94 tra, 74 men, 70 phy, 89 pot
+Geekie: 86 ovr, 86 cha, 91 off, 78 def, 87 tra, 85 men, 77 phy, 88 pot
+Zacha: 84 ovr, 86 cha, 88 off, 81 def, 82 tra, 82 men, 81 phy, 88 pot
+Elias Lindholm: 86 ovr, 83 cha, 84 off, 85 def, 80 tra, 84 men, 78 phy, 84 pot
+Mittelstadt: 82 ovr, 78 cha, 86 off, 74 def, 82 tra, 78 men, 71 phy, 83 pot
+Hagens: 80 ovr, 76 cha, 87 off, 78 def, 90 tra, 75 men, 71 phy, 93 pot
+Minten: 82 ovr, 88 cha, 79 off, 85 def, 80 tra, 78 men, 77 phy, 87 pot
+Khusnutdinov: 80 ovr, 85 cha, 79 off, 82 def, 84 tra, 80 men, 71 phy, 82 pot
+Jeannot: 78 ovr, 81 cha, 74 off, 80 def, 71 tra, 86 men, 98 phy, 77 pot
+Kastelic: 77 ovr, 84 cha, 73 off, 84 def, 73 tra, 83 men, 94 phy, 80 pot
+Kuraly: 74 ovr, 82 cha, 70 off, 80 def, 74 tra, 80 men, 82 phy, 72 pot
+Steeves: 78 ovr, 85 cha, 84 off, 73 def, 81 tra, 84 men, 72 phy, 81 pot
+
+-- NHL DEFENCE --
+McAvoy: 87 ovr, 84 cha, 79 off, 96 def, 84 tra, 86 men, 96 phy, 90 pot
+Hampus Lindholm: 87 ovr, 87 cha, 80 off, 92 def, 78 tra, 93 men, 94 phy, 84 pot
+Zadorov: 84 ovr, 89 cha, 76 off, 88 def, 74 tra, 89 men, 97 phy, 84 pot
+Lohrei: 84 ovr, 78 cha, 89 off, 71 def, 84 tra, 74 men, 73 phy, 86 pot
+Borgen: 82 ovr, 84 cha, 74 off, 84 def, 71 tra, 82 men, 86 phy, 80 pot
+Jokiharju: 77 ovr, 83 cha, 70 off, 81 def, 73 tra, 85 men, 81 phy, 79 pot
+Aspirot: 80 ovr, 85 cha, 71 off, 89 def, 80 tra, 84 men, 83 phy, 81 pot
+Clifton: 74 ovr, 81 cha, 72 off, 75 def, 78 tra, 83 men, 75 phy, 73 pot
+
+-- NHL GOALIES --
+Swayman: 92 ovr, 94 glove, 91 blocker, 85 stick, 94 pot
+DiPietro: 82 ovr, 86 glove, 82 blocker, 79 stick, 85 pot
+
+-- AHL: PROVIDENCE BRUINS --
+Fraser Minten (C): 79 ovr, 86 cha, 80 off, 86 def, 83 tra, 82 men, 80 phy, 84 pot
+Dans Locmelis (C): 78 ovr, 82 cha, 84 off, 80 def, 82 tra, 82 men, 71 phy, 84 pot
+Ivan Ivan (C): 76 ovr, 84 cha, 76 off, 80 def, 80 tra, 80 men, 74 phy, 78 pot
+Riley Duran (RW): 75 ovr, 84 cha, 74 off, 79 def, 76 tra, 80 men, 84 phy, 76 pot
+Kalle Vaisanen (RW): 73 ovr, 80 cha, 76 off, 74 def, 78 tra, 77 men, 80 phy, 76 pot
+Brian Halonen (RW): 72 ovr, 81 cha, 74 off, 72 def, 73 tra, 79 men, 84 phy, 71 pot
+Brendan Gaunce (C): 72 ovr, 84 cha, 68 off, 80 def, 72 tra, 83 men, 84 phy, 70 pot
+Navrin Mutter (LW): 70 ovr, 80 cha, 64 off, 74 def, 66 tra, 77 men, 92 phy, 69 pot
+Attilio Biasca (C): 71 ovr, 80 cha, 74 off, 74 def, 76 tra, 77 men, 78 phy, 76 pot
+Frederic Brunet (D): 75 ovr, 82 cha, 80 off, 76 def, 82 tra, 78 men, 74 phy, 78 pot
+Maxence Guenette (D): 73 ovr, 82 cha, 72 off, 78 def, 76 tra, 79 men, 78 phy, 75 pot
+Loke Johansson (D): 71 ovr, 80 cha, 66 off, 76 def, 71 tra, 76 men, 88 phy, 78 pot
+Billy Sweezey (D): 71 ovr, 82 cha, 66 off, 79 def, 70 tra, 80 men, 82 phy, 70 pot
+Jordan Harris (D): 76 ovr, 84 cha, 72 off, 80 def, 78 tra, 82 men, 74 phy, 76 pot
+Max Lundgren (G): 72 ovr, 76 glove, 73 blocker, 72 stick, 79 pot
+Simon Zajicek (G): 73 ovr, 78 glove, 74 blocker, 73 stick, 80 pot
+Luke Cavallin (G): 71 ovr, 75 glove, 72 blocker, 74 stick, 76 pot
+Jiri Patera (G): 74 ovr, 79 glove, 76 blocker, 75 stick, 75 pot
+
+-- ECHL: MAINE MARINERS (affiliate depth) --
+Philip Svedeback (G): 70 ovr, 74 glove, 71 blocker, 72 stick, 78 pot
+
+-- PROSPECTS (junior / NCAA / Europe) --
+Dean Letourneau (C/RW): 74 ovr, 82 cha, 80 off, 76 def, 76 tra, 79 men, 88 phy, 88 pot
+Will Zellers (RW/LW): 73 ovr, 78 cha, 86 off, 68 def, 82 tra, 76 men, 68 phy, 86 pot
+Cooper Simpson (LW/RW): 72 ovr, 78 cha, 86 off, 68 def, 82 tra, 75 men, 70 phy, 85 pot
+Will Moore (C/LW): 72 ovr, 82 cha, 74 off, 82 def, 78 tra, 80 men, 76 phy, 85 pot
+Chris Pelosi (C/LW): 72 ovr, 82 cha, 78 off, 78 def, 78 tra, 82 men, 74 phy, 80 pot
+Beckett Hendrickson (LW/C): 71 ovr, 80 cha, 78 off, 74 def, 78 tra, 78 men, 76 phy, 80 pot
+Oskar Jellvik (LW/RW): 72 ovr, 78 cha, 81 off, 72 def, 82 tra, 76 men, 68 phy, 80 pot
+Ryan Walsh (C/RW): 71 ovr, 80 cha, 79 off, 72 def, 79 tra, 77 men, 71 phy, 80 pot
+Elliott Groenewold (D): 72 ovr, 84 cha, 66 off, 82 def, 74 tra, 82 men, 80 phy, 80 pot
+Liam Pettersson (D): 72 ovr, 80 cha, 78 off, 73 def, 80 tra, 77 men, 72 phy, 81 pot
+Jacob Vandeven (D): 70 ovr, 80 cha, 68 off, 78 def, 74 tra, 78 men, 84 phy, 80 pot
+Kirill Yemelyanov (C/LW): 70 ovr, 78 cha, 78 off, 73 def, 80 tra, 76 men, 72 phy, 82 pot
+Cole Chandler (C/LW): 69 ovr, 80 cha, 74 off, 74 def, 77 tra, 78 men, 72 phy, 79 pot
+Matvei Kotkov (RW/LW): 69 ovr, 76 cha, 79 off, 67 def, 79 tra, 73 men, 74 phy, 82 pot
+Roman Bychkov (D): 69 ovr, 78 cha, 70 off, 76 def, 74 tra, 76 men, 78 phy, 80 pot
+Roberto Henriquez (G): 70 ovr, 74 glove, 73 blocker, 73 stick, 82 pot
+Yuri Ivanov (G): 70 ovr, 75 glove, 74 blocker, 73 stick, 83 pot
+
+
+
+=== BUFFALO SABRES ===
+
+-- NHL FORWARDS --
+Tage Thompson: 92 ovr, 84 cha, 97 off, 82 def, 90 tra, 81 men, 79 phy, 94 pot
+Josh Doan: 87 ovr, 90 cha, 88 off, 87 def, 85 tra, 84 men, 90 phy, 92 pot
+Zach Benson: 89 ovr, 93 cha, 91 off, 86 def, 90 tra, 97 men, 91 phy, 94 pot
+Josh Norris: 85 ovr, 86 cha, 90 off, 84 def, 82 tra, 76 men, 83 phy, 87 pot
+Ryan McLeod: 84 ovr, 88 cha, 85 off, 82 def, 84 tra, 83 men, 80 phy, 86 pot
+Jack Quinn: 85 ovr, 78 cha, 90 off, 77 def, 86 tra, 75 men, 74 phy, 88 pot
+Jason Zucker: 82 ovr, 88 cha, 85 off, 78 def, 83 tra, 85 men, 80 phy, 81 pot
+Jiri Kulich: 83 ovr, 80 cha, 89 off, 74 def, 88 tra, 78 men, 72 phy, 87 pot
+Konsta Helenius: 83 ovr, 88 cha, 84 off, 86 def, 84 tra, 88 men, 78 phy, 90 pot
+Noah Ostlund: 80 ovr, 84 cha, 84 off, 80 def, 84 tra, 82 men, 74 phy, 85 pot
+Peyton Krebs: 79 ovr, 85 cha, 79 off, 83 def, 80 tra, 81 men, 90 phy, 81 pot
+Beck Malenstyn: 77 ovr, 85 cha, 74 off, 88 def, 71 tra, 85 men, 92 phy, 77 pot
+
+-- NHL DEFENCE --
+Rasmus Dahlin: 96 ovr, 90 cha, 87 off, 95 def, 90 tra, 90 men, 95 phy, 98 pot
+Owen Power: 85 ovr, 87 cha, 85 off, 83 def, 88 tra, 83 men, 85 phy, 90 pot
+Mattias Samuelsson: 83 ovr, 86 cha, 78 off, 90 def, 77 tra, 78 men, 83 phy, 87 pot
+Bowen Zellweger (Zellweger): 82 ovr, 89 cha, 85 off, 76 def, 90 tra, 85 men, 75 phy, 85 pot
+Conor Timmins: 75 ovr, 80 cha, 74 off, 80 def, 74 tra, 78 men, 82 phy, 77 pot
+Louis Crevier: 76 ovr, 75 cha, 68 off, 82 def, 70 tra, 80 men, 91 phy, 83 pot
+Zach Metsa: 76 ovr, 79 cha, 74 off, 83 def, 76 tra, 78 men, 85 phy, 79 pot
+
+-- NHL GOALIES --
+UPL (Luukkonen): 84 ovr, 88 glove, 81 blocker, 81 stick, 88 pot
+Lyon: 80 ovr, 84 glove, 78 blocker, 74 stick, 82 pot
+Ellis: 78 ovr, 84 glove, 83 blocker, 81 stick, 81 pot
+
+-- AHL: ROCHESTER AMERICANS --
+Jake Richard (RW/LW): 76 ovr, 80 cha, 82 off, 74 def, 76 tra, 80 men, 74 phy, 82 pot
+Riley Fiddler-Schultz (C/LW): 73 ovr, 82 cha, 74 off, 78 def, 76 tra, 80 men, 78 phy, 77 pot
+Carson Meyer (RW/LW): 73 ovr, 80 cha, 76 off, 74 def, 77 tra, 78 men, 79 phy, 74 pot
+Jason Polin (RW/LW): 74 ovr, 81 cha, 78 off, 73 def, 76 tra, 79 men, 80 phy, 74 pot
+Trevor Kuntar (C/LW): 72 ovr, 82 cha, 72 off, 77 def, 73 tra, 79 men, 84 phy, 75 pot
+Aidan McDonough (LW/RW): 74 ovr, 80 cha, 80 off, 71 def, 77 tra, 77 men, 78 phy, 74 pot
+Zac Funk (LW/RW): 72 ovr, 79 cha, 80 off, 69 def, 79 tra, 75 men, 74 phy, 75 pot
+Mason Geertsen (LW/D): 68 ovr, 82 cha, 60 off, 75 def, 65 tra, 78 men, 92 phy, 66 pot
+Maxim Strbak (D): 74 ovr, 84 cha, 70 off, 82 def, 78 tra, 80 men, 84 phy, 81 pot
+Gavin McCarthy (D): 74 ovr, 82 cha, 72 off, 80 def, 78 tra, 82 men, 82 phy, 81 pot
+Vsevolod Komarov (D): 72 ovr, 79 cha, 72 off, 78 def, 76 tra, 76 men, 82 phy, 78 pot
+Ryan Johnson (D): 75 ovr, 82 cha, 74 off, 80 def, 80 tra, 79 men, 76 phy, 76 pot
+Jack Rathbone (D): 76 ovr, 79 cha, 83 off, 71 def, 83 tra, 77 men, 72 phy, 76 pot
+Scott Ratzlaff (G): 73 ovr, 77 glove, 74 blocker, 74 stick, 82 pot
+Topias Leinonen (G): 73 ovr, 78 glove, 76 blocker, 72 stick, 81 pot
+Matt Villalta (G): 74 ovr, 79 glove, 76 blocker, 75 stick, 75 pot
+
+-- PROSPECTS (junior / NCAA / Europe) --
+Daxon Rudolph (D): 74 ovr, 80 cha, 84 off, 72 def, 84 tra, 78 men, 74 phy, 88 pot
+Radim Mrtka (D): 72 ovr, 78 cha, 68 off, 82 def, 76 tra, 76 men, 90 phy, 86 pot
+Konsta Helenius (C) [see NHL]: rated above
+Ilia Morozov (C): 73 ovr, 84 cha, 76 off, 82 def, 80 tra, 80 men, 78 phy, 84 pot
+Brodie Ziemer (RW/LW): 74 ovr, 85 cha, 80 off, 74 def, 79 tra, 80 men, 76 phy, 82 pot
+Ryan Rucinski (C/RW): 71 ovr, 78 cha, 79 off, 71 def, 79 tra, 75 men, 72 phy, 81 pot
+Ashton Schultz (C/RW): 71 ovr, 80 cha, 78 off, 74 def, 79 tra, 78 men, 72 phy, 80 pot
+Prokhor Poltapov (RW/LW): 72 ovr, 80 cha, 79 off, 74 def, 79 tra, 76 men, 82 phy, 81 pot
+Melvin Novotny (LW/RW): 71 ovr, 78 cha, 78 off, 71 def, 79 tra, 74 men, 76 phy, 80 pot
+Luke Osburn (D): 72 ovr, 80 cha, 78 off, 74 def, 80 tra, 77 men, 74 phy, 82 pot
+Adam Kleber (D): 71 ovr, 84 cha, 64 off, 80 def, 72 tra, 80 men, 86 phy, 80 pot
+Norwin Panocha (D): 71 ovr, 80 cha, 72 off, 78 def, 76 tra, 77 men, 80 phy, 81 pot
+Simon-Pier Brunet (D): 70 ovr, 80 cha, 72 off, 76 def, 74 tra, 76 men, 78 phy, 79 pot
+Noah Laberge (D): 70 ovr, 80 cha, 74 off, 74 def, 76 tra, 76 men, 74 phy, 80 pot
+Patrick Geary (D): 70 ovr, 80 cha, 72 off, 76 def, 75 tra, 77 men, 78 phy, 78 pot
+Sean Keohane (D): 70 ovr, 81 cha, 71 off, 76 def, 74 tra, 77 men, 76 phy, 78 pot
+Vasily Zelenov (RW/LW): 70 ovr, 76 cha, 79 off, 68 def, 79 tra, 73 men, 71 phy, 81 pot
+Doman Kristof Szongoth (C): 70 ovr, 80 cha, 76 off, 74 def, 78 tra, 77 men, 76 phy, 81 pot
+Olivers Murnieks (C): 70 ovr, 78 cha, 78 off, 71 def, 79 tra, 75 men, 72 phy, 81 pot
+Matous Jan Kucharcik (C/LW): 69 ovr, 78 cha, 76 off, 71 def, 77 tra, 74 men, 76 phy, 80 pot
+Dylan Dumont (RW): 69 ovr, 78 cha, 78 off, 69 def, 79 tra, 74 men, 72 phy, 80 pot
+Samuel Meloche (G): 71 ovr, 76 glove, 74 blocker, 73 stick, 83 pot
+Yevgeni Prokhorov (G): 70 ovr, 75 glove, 74 blocker, 73 stick, 82 pot
+
+
+
+=== DETROIT RED WINGS ===
+
+-- NHL FORWARDS --
+Dylan Larkin: 88 ovr, 57 cha, 88 off, 82 def, 88 tra, 68 men, 77 phy, 91 pot
+Lucas Raymond: 87 ovr, 79 cha, 90 off, 81 def, 87 tra, 79 men, 81 phy, 91 pot
+Alex DeBrincat: 89 ovr, 61 cha, 94 off, 79 def, 89 tra, 65 men, 70 phy, 90 pot
+Viktor Arvidsson: 83 ovr, 82 cha, 88 off, 79 def, 90 tra, 82 men, 79 phy, 84 pot
+Andrew Copp: 83 ovr, 84 cha, 83 off, 83 def, 78 tra, 84 men, 91 phy, 82 pot
+Marco Kasper: 79 ovr, 83 cha, 80 off, 83 def, 79 tra, 80 men, 88 phy, 87 pot
+J.T. Compher: 84 ovr, 76 cha, 86 off, 83 def, 79 tra, 82 men, 78 phy, 83 pot
+Emmitt Finnie: 81 ovr, 84 cha, 86 off, 77 def, 85 tra, 84 men, 73 phy, 86 pot
+Michael Rasmussen: 79 ovr, 80 cha, 75 off, 80 def, 71 tra, 83 men, 88 phy, 80 pot
+Michael Brandsegg-Nygard (MBN): 74 ovr, 76 cha, 74 off, 79 def, 78 tra, 74 men, 78 phy, 87 pot
+James van Riemsdyk (JVR): 76 ovr, 82 cha, 80 off, 72 def, 71 tra, 80 men, 82 phy, 72 pot
+Mason Appleton: 76 ovr, 79 cha, 72 off, 78 def, 74 tra, 78 men, 78 phy, 74 pot
+
+-- NHL DEFENCE --
+Moritz Seider: 95 ovr, 85 cha, 88 off, 98 def, 87 tra, 90 men, 99 phy, 98 pot
+Simon Edvinsson: 84 ovr, 82 cha, 81 off, 87 def, 83 tra, 81 men, 90 phy, 90 pot
+Justin Faulk: 82 ovr, 78 cha, 83 off, 79 def, 81 tra, 79 men, 79 phy, 80 pot
+Ben Chiarot: 77 ovr, 83 cha, 71 off, 80 def, 71 tra, 84 men, 90 phy, 74 pot
+Albert Johansson: 78 ovr, 84 cha, 75 off, 80 def, 79 tra, 83 men, 77 phy, 80 pot
+Axel Sandin-Pellikka: 79 ovr, 79 cha, 85 off, 74 def, 84 tra, 78 men, 73 phy, 90 pot
+Jacob Bryson: 74 ovr, 80 cha, 72 off, 76 def, 76 tra, 77 men, 74 phy, 74 pot
+
+-- NHL GOALIES --
+Gibson: 86 ovr, 89 glove, 83 blocker, 87 stick, 87 pot
+Tarasov: 78 ovr, 81 glove, 79 blocker, 87 stick, 81 pot
+
+-- AHL: GRAND RAPIDS GRIFFINS --
+Carter Bear (LW/C): 78 ovr, 84 cha, 84 off, 78 def, 82 tra, 82 men, 78 phy, 88 pot
+Nate Danielson (C): 76 ovr, 84 cha, 78 off, 82 def, 80 tra, 82 men, 78 phy, 83 pot
+Eddie Genborg (RW/LW): 74 ovr, 84 cha, 76 off, 78 def, 74 tra, 80 men, 86 phy, 82 pot
+Dylan James (LW): 74 ovr, 80 cha, 80 off, 72 def, 79 tra, 77 men, 76 phy, 80 pot
+Jesse Kiiskinen (RW): 74 ovr, 80 cha, 81 off, 72 def, 80 tra, 77 men, 74 phy, 82 pot
+Ondrej Becher (C/W): 73 ovr, 80 cha, 80 off, 74 def, 80 tra, 77 men, 74 phy, 80 pot
+Amadeus Lombardi (C/LW): 73 ovr, 79 cha, 81 off, 71 def, 82 tra, 76 men, 72 phy, 80 pot
+Noah Dower-Nilsson (C/W): 72 ovr, 80 cha, 79 off, 73 def, 80 tra, 76 men, 72 phy, 80 pot
+Carter Mazur (LW/RW): 74 ovr, 80 cha, 79 off, 73 def, 78 tra, 78 men, 80 phy, 80 pot
+Cameron Butler (RW/LW): 72 ovr, 80 cha, 76 off, 72 def, 76 tra, 76 men, 84 phy, 79 pot
+Theo Rochette (C): 73 ovr, 82 cha, 78 off, 76 def, 78 tra, 79 men, 74 phy, 78 pot
+Chase Stillman (RW/LW): 72 ovr, 82 cha, 74 off, 74 def, 76 tra, 79 men, 82 phy, 76 pot
+John Leonard (LW/RW): 74 ovr, 80 cha, 80 off, 71 def, 78 tra, 77 men, 73 phy, 75 pot
+Sheldon Dries (C/W): 72 ovr, 82 cha, 74 off, 76 def, 76 tra, 80 men, 78 phy, 71 pot
+Sutter Muzzatti (F): 71 ovr, 80 cha, 74 off, 73 def, 76 tra, 77 men, 82 phy, 75 pot
+Dominik Shine (RW/C): 70 ovr, 82 cha, 66 off, 76 def, 71 tra, 79 men, 84 phy, 69 pot
+Shai Buium (D): 74 ovr, 82 cha, 74 off, 79 def, 78 tra, 79 men, 82 phy, 80 pot
+William Wallinder (D): 75 ovr, 80 cha, 78 off, 76 def, 82 tra, 77 men, 82 phy, 80 pot
+Anton Johansson (D): 74 ovr, 82 cha, 76 off, 78 def, 79 tra, 79 men, 76 phy, 82 pot
+Ronnie Attard (D): 72 ovr, 80 cha, 74 off, 76 def, 76 tra, 77 men, 84 phy, 74 pot
+William Lagesson (D): 71 ovr, 81 cha, 66 off, 78 def, 72 tra, 79 men, 82 phy, 70 pot
+Trey Augustine (G): 78 ovr, 84 glove, 80 blocker, 80 stick, 89 pot
+Michal Postava (G): 74 ovr, 79 glove, 77 blocker, 75 stick, 83 pot
+Carter Gylander (G): 72 ovr, 76 glove, 74 blocker, 74 stick, 77 pot
+
+-- PROSPECTS (junior / NCAA / Europe) --
+Max Plante (C/LW): 74 ovr, 80 cha, 82 off, 74 def, 84 tra, 78 men, 68 phy, 84 pot
+Michal Svrcek (LW/RW): 72 ovr, 78 cha, 79 off, 72 def, 81 tra, 75 men, 74 phy, 82 pot
+Eemil Viro (D): 73 ovr, 81 cha, 74 off, 78 def, 78 tra, 78 men, 74 phy, 78 pot
+Brady Cleveland (D): 71 ovr, 82 cha, 68 off, 80 def, 74 tra, 78 men, 86 phy, 80 pot
+Austin Baker (LW): 71 ovr, 77 cha, 80 off, 68 def, 79 tra, 74 men, 74 phy, 82 pot
+Charlie Forslund (LW/RW): 71 ovr, 78 cha, 79 off, 70 def, 79 tra, 75 men, 73 phy, 80 pot
+Kevin Bicker (LW/RW): 71 ovr, 78 cha, 79 off, 70 def, 79 tra, 74 men, 78 phy, 80 pot
+Grayden Robertson-Palmer (C/LW): 70 ovr, 78 cha, 78 off, 71 def, 78 tra, 75 men, 74 phy, 79 pot
+Beckham Edwards (C): 70 ovr, 80 cha, 77 off, 73 def, 79 tra, 77 men, 72 phy, 80 pot
+Brennan Ali (C/LW): 70 ovr, 78 cha, 77 off, 71 def, 78 tra, 74 men, 73 phy, 79 pot
+Victor Plante (LW): 70 ovr, 78 cha, 78 off, 71 def, 78 tra, 75 men, 76 phy, 80 pot
+Brent Solomon (RW): 70 ovr, 77 cha, 78 off, 69 def, 79 tra, 73 men, 72 phy, 79 pot
+J.P. Hurlbert (F): 70 ovr, 78 cha, 77 off, 71 def, 78 tra, 74 men, 74 phy, 80 pot
+Larry Keenan (D): 71 ovr, 80 cha, 74 off, 76 def, 78 tra, 77 men, 76 phy, 80 pot
+John Whipple (D): 70 ovr, 80 cha, 72 off, 76 def, 75 tra, 76 men, 78 phy, 79 pot
+Fisher Scott (D): 69 ovr, 80 cha, 71 off, 75 def, 74 tra, 76 men, 76 phy, 78 pot
+Jack Phelan (D): 69 ovr, 79 cha, 71 off, 74 def, 74 tra, 75 men, 74 phy, 78 pot
+Myles Brosnan (D): 69 ovr, 79 cha, 72 off, 74 def, 76 tra, 74 men, 74 phy, 79 pot
+Nikita Tyurin (D): 69 ovr, 78 cha, 74 off, 74 def, 78 tra, 74 men, 74 phy, 80 pot
+Luka Arkko (LW): 69 ovr, 77 cha, 77 off, 70 def, 78 tra, 73 men, 72 phy, 80 pot
+Rudy Guimond (G): 71 ovr, 76 glove, 74 blocker, 74 stick, 82 pot
+Michal Pradel (G): 70 ovr, 76 glove, 74 blocker, 73 stick, 82 pot
+
+
+=== FLORIDA PANTHERS ===
+
+-- NHL FORWARDS --
+Aleksander Barkov: 94 ovr, 95 cha, 92 off, 95 def, 93 tra, 91 men, 83 phy, 95 pot
+Matthew Tkachuk: 90 ovr, 68 cha, 94 off, 81 def, 89 tra, 61 men, 88 phy, 92 pot
+Sam Reinhart: 91 ovr, 86 cha, 94 off, 94 def, 88 tra, 85 men, 80 phy, 93 pot
+Brad Marchand: 87 ovr, 71 cha, 90 off, 90 def, 82 tra, 83 men, 84 phy, 84 pot
+Sam Bennett: 85 ovr, 82 cha, 87 off, 78 def, 84 tra, 85 men, 94 phy, 86 pot
+Anton Lundell: 85 ovr, 80 cha, 83 off, 89 def, 89 tra, 78 men, 77 phy, 89 pot
+Carter Verhaeghe: 84 ovr, 81 cha, 89 off, 78 def, 85 tra, 86 men, 75 phy, 85 pot
+Eetu Luostarinen: 83 ovr, 83 cha, 84 off, 82 def, 81 tra, 79 men, 77 phy, 85 pot
+Brady Tkachuk: 45 ovr, 0 cha, 94 off, 81 def, 89 tra, 61 men, 92 phy, 92 pot
+Jonah Gadjovich: 74 ovr, 78 cha, 71 off, 76 def, 73 tra, 78 men, 90 phy, 72 pot
+Cole Schwindt: 73 ovr, 80 cha, 74 off, 77 def, 76 tra, 78 men, 79 phy, 76 pot
+John Beecher: 73 ovr, 81 cha, 71 off, 78 def, 77 tra, 78 men, 82 phy, 74 pot
+Lars Eller: 74 ovr, 82 cha, 74 off, 80 def, 74 tra, 82 men, 78 phy, 71 pot
+Garnet Hathaway: 73 ovr, 84 cha, 70 off, 78 def, 71 tra, 80 men, 85 phy, 71 pot
+Cole Reinhardt: 71 ovr, 80 cha, 70 off, 76 def, 73 tra, 77 men, 80 phy, 73 pot
+
+-- NHL DEFENCE --
+Gustav Forsling: 89 ovr, 85 cha, 79 off, 94 def, 83 tra, 84 men, 86 phy, 89 pot
+Aaron Ekblad: 85 ovr, 89 cha, 83 off, 87 def, 81 tra, 81 men, 88 phy, 87 pot
+Seth Jones: 86 ovr, 77 cha, 83 off, 89 def, 79 tra, 88 men, 88 phy, 88 pot
+Niko Mikkola: 84 ovr, 83 cha, 71 off, 88 def, 77 tra, 86 men, 93 phy, 84 pot
+Dmitri Kulikov: 81 ovr, 87 cha, 70 off, 82 def, 71 tra, 85 men, 90 phy, 80 pot
+Radko Gudas: 77 ovr, 77 cha, 68 off, 82 def, 73 tra, 87 men, 94 phy, 75 pot
+Uvis Balinskis: 78 ovr, 80 cha, 77 off, 79 def, 79 tra, 79 men, 78 phy, 81 pot
+Alexander Petrovic: 74 ovr, 80 cha, 68 off, 80 def, 70 tra, 79 men, 90 phy, 72 pot
+
+-- NHL GOALIES --
+Jacob Markstrom: 87 ovr, 88 glove, 86 blocker, 83 stick, 84 pot
+Akira Schmid: 79 ovr, 82 glove, 80 blocker, 78 stick, 84 pot
+
+-- AHL: CHARLOTTE CHECKERS --
+Gracyn Sawchyn (C/RW): 75 ovr, 84 cha, 78 off, 78 def, 80 tra, 80 men, 74 phy, 83 pot
+Sandis Vilmanis (LW/RW): 75 ovr, 80 cha, 80 off, 74 def, 84 tra, 78 men, 74 phy, 82 pot
+Jack Devine (RW/LW): 75 ovr, 80 cha, 82 off, 72 def, 80 tra, 76 men, 70 phy, 80 pot
+Ben Steeves (LW/C): 74 ovr, 80 cha, 81 off, 72 def, 79 tra, 77 men, 74 phy, 78 pot
+Wilmer Skoog (LW/RW): 73 ovr, 80 cha, 80 off, 71 def, 78 tra, 77 men, 74 phy, 75 pot
+Hunter St. Martin (LW/RW): 72 ovr, 80 cha, 76 off, 73 def, 78 tra, 76 men, 78 phy, 80 pot
+Kai Schwindt (LW/RW): 72 ovr, 80 cha, 75 off, 74 def, 76 tra, 77 men, 82 phy, 79 pot
+MacKenzie Entwistle (RW/C): 73 ovr, 82 cha, 74 off, 78 def, 76 tra, 79 men, 82 phy, 74 pot
+Sam Lafferty (C/RW): 74 ovr, 80 cha, 76 off, 78 def, 82 tra, 78 men, 78 phy, 74 pot
+Angus Crookshank (LW/RW): 73 ovr, 82 cha, 78 off, 73 def, 78 tra, 78 men, 76 phy, 76 pot
+Bokondji Imama (LW/RW): 68 ovr, 82 cha, 62 off, 73 def, 66 tra, 78 men, 92 phy, 66 pot
+Matvei Shuravin (D): 74 ovr, 82 cha, 70 off, 82 def, 76 tra, 80 men, 84 phy, 83 pot
+Marek Alscher (D): 73 ovr, 82 cha, 70 off, 80 def, 74 tra, 79 men, 84 phy, 79 pot
+Ludvig Jansson (D): 72 ovr, 80 cha, 74 off, 76 def, 78 tra, 77 men, 74 phy, 79 pot
+Emil Pieniniemi (D): 73 ovr, 80 cha, 76 off, 76 def, 79 tra, 77 men, 76 phy, 81 pot
+Tobias Bjornfot (D): 73 ovr, 81 cha, 72 off, 78 def, 77 tra, 78 men, 78 phy, 75 pot
+Donovan Sebrango (D): 72 ovr, 80 cha, 72 off, 77 def, 77 tra, 77 men, 78 phy, 76 pot
+Casey Fitzgerald (D): 72 ovr, 81 cha, 70 off, 78 def, 74 tra, 79 men, 78 phy, 71 pot
+Mikulas Hovorka (D): 72 ovr, 82 cha, 70 off, 80 def, 78 tra, 79 men, 82 phy, 76 pot
+Cooper Black (G): 73 ovr, 78 glove, 76 blocker, 73 stick, 82 pot
+Tyler Muszelik (G): 73 ovr, 77 glove, 75 blocker, 74 stick, 81 pot
+Kirill Gerasimyuk (G): 72 ovr, 77 glove, 74 blocker, 73 stick, 82 pot
+
+-- PROSPECTS (junior / NCAA / Europe) --
+Linus Eriksson (C): 72 ovr, 82 cha, 76 off, 80 def, 80 tra, 79 men, 74 phy, 82 pot
+Simas Ignatavicius (C/W): 71 ovr, 80 cha, 76 off, 72 def, 76 tra, 76 men, 86 phy, 81 pot
+Ryder Cali (C): 71 ovr, 80 cha, 74 off, 74 def, 75 tra, 76 men, 84 phy, 80 pot
+Vilho Vanhatalo (RW/LW): 71 ovr, 78 cha, 78 off, 71 def, 78 tra, 75 men, 78 phy, 81 pot
+Arvid Drott (RW): 71 ovr, 78 cha, 78 off, 70 def, 82 tra, 74 men, 72 phy, 81 pot
+Shea Busch (LW/RW): 71 ovr, 78 cha, 80 off, 70 def, 78 tra, 75 men, 78 phy, 81 pot
+Stepan Gorbunov (C): 71 ovr, 77 cha, 79 off, 72 def, 80 tra, 74 men, 74 phy, 82 pot
+Mads Kongsbak Klyvo (LW): 71 ovr, 78 cha, 78 off, 71 def, 79 tra, 75 men, 74 phy, 81 pot
+Simon Zether (C/W): 71 ovr, 80 cha, 77 off, 74 def, 78 tra, 77 men, 78 phy, 80 pot
+Stepan Zvyagin (RW/LW): 70 ovr, 77 cha, 78 off, 70 def, 79 tra, 73 men, 73 phy, 81 pot
+Vladislav Lukashevich (D): 71 ovr, 80 cha, 76 off, 76 def, 78 tra, 77 men, 74 phy, 81 pot
+Albert Wikman (D): 71 ovr, 80 cha, 72 off, 77 def, 77 tra, 77 men, 78 phy, 81 pot
+Luke Coughlin (D): 70 ovr, 80 cha, 72 off, 76 def, 76 tra, 76 men, 76 phy, 79 pot
+Jonas Kemps (D): 70 ovr, 80 cha, 70 off, 76 def, 75 tra, 76 men, 82 phy, 80 pot
+Brendan Dunphy (D): 69 ovr, 80 cha, 70 off, 74 def, 74 tra, 76 men, 76 phy, 78 pot
+Olof Glifford (G): 71 ovr, 76 glove, 74 blocker, 73 stick, 82 pot
+Denis Gabdrakhmanov (G): 70 ovr, 75 glove, 74 blocker, 73 stick, 81 pot
+Yegor Midlak (G): 70 ovr, 75 glove, 73 blocker, 73 stick, 82 pot
+
+
+
+=== OTTAWA SENATORS ===
+
+-- NHL FORWARDS --
+Tim Stutzle: 94 ovr, 84 cha, 95 off, 82 def, 94 tra, 82 men, 80 phy, 97 pot
+William Eklund: 87 ovr, 85 cha, 89 off, 81 def, 87 tra, 83 men, 77 phy, 89 pot
+Drake Batherson: 88 ovr, 86 cha, 90 off, 80 def, 86 tra, 83 men, 81 phy, 86 pot
+Shane Pinto: 86 ovr, 85 cha, 84 off, 87 def, 83 tra, 82 men, 85 phy, 86 pot
+Dylan Cozens: 86 ovr, 81 cha, 88 off, 81 def, 86 tra, 79 men, 83 phy, 87 pot
+Claude Giroux: 86 ovr, 89 cha, 88 off, 85 def, 83 tra, 90 men, 77 phy, 82 pot
+Andre Burakovsky: 82 ovr, 79 cha, 86 off, 75 def, 84 tra, 80 men, 80 phy, 81 pot
+Fabian Zetterlund: 83 ovr, 83 cha, 83 off, 78 def, 82 tra, 80 men, 83 phy, 82 pot
+Ridly Greig: 85 ovr, 83 cha, 82 off, 81 def, 83 tra, 81 men, 87 phy, 84 pot
+Michael Amadio: 80 ovr, 83 cha, 78 off, 80 def, 80 tra, 81 men, 79 phy, 76 pot
+Warren Foegele: 80 ovr, 83 cha, 79 off, 79 def, 81 tra, 80 men, 83 phy, 77 pot
+Nick Cousins: 75 ovr, 81 cha, 73 off, 77 def, 75 tra, 80 men, 81 phy, 71 pot
+Stephen Halliday: 81 ovr, 83 cha, 79 off, 75 def, 79 tra, 80 men, 83 phy, 84 pot
+Kurtis MacDermid: 69 ovr, 80 cha, 63 off, 74 def, 65 tra, 76 men, 92 phy, 67 pot
+
+-- NHL DEFENCE --
+Jake Sanderson: 93 ovr, 88 cha, 88 off, 91 def, 90 tra, 86 men, 87 phy, 96 pot
+Thomas Chabot: 88 ovr, 85 cha, 86 off, 84 def, 87 tra, 83 men, 83 phy, 87 pot
+Artyom Zub: 87 ovr, 86 cha, 75 off, 87 def, 78 tra, 85 men, 86 phy, 85 pot
+Jordan Spence: 85 ovr, 83 cha, 83 off, 78 def, 85 tra, 81 men, 73 phy, 87 pot
+Tyler Kleven: 80 ovr, 83 cha, 73 off, 83 def, 77 tra, 81 men, 91 phy, 82 pot
+Nikolas Matinpalo: 76 ovr, 83 cha, 71 off, 81 def, 75 tra, 80 men, 85 phy, 76 pot
+Carter Yakemchuk: 79 ovr, 79 cha, 85 off, 73 def, 81 tra, 77 men, 85 phy, 90 pot
+
+-- NHL GOALIES --
+Linus Ullmark: 90 ovr, 91 glove, 89 blocker, 85 stick, 86 pot
+Samuel Ersson: 84 ovr, 86 glove, 83 blocker, 81 stick, 85 pot
+
+-- AHL: BELLEVILLE SENATORS --
+Ryan Suzuki (C/LW): 78 ovr, 83 cha, 83 off, 75 def, 83 tra, 80 men, 75 phy, 80 pot
+Philip Tomasino (C/W): 79 ovr, 80 cha, 85 off, 74 def, 85 tra, 77 men, 75 phy, 80 pot
+Xavier Bourgault (RW/C): 76 ovr, 85 cha, 81 off, 77 def, 81 tra, 81 men, 73 phy, 79 pot
+Kasper Halttunen (RW/LW): 76 ovr, 79 cha, 85 off, 69 def, 75 tra, 77 men, 87 phy, 83 pot
+Tyler Boucher (RW/LW): 73 ovr, 81 cha, 73 off, 75 def, 75 tra, 78 men, 89 phy, 76 pot
+Philippe Daoust (C/LW): 74 ovr, 83 cha, 78 off, 76 def, 79 tra, 79 men, 77 phy, 78 pot
+Blake Montgomery (LW): 73 ovr, 81 cha, 79 off, 73 def, 79 tra, 77 men, 83 phy, 80 pot
+Oskar Pettersson (RW/LW): 73 ovr, 80 cha, 79 off, 73 def, 80 tra, 76 men, 77 phy, 81 pot
+Lucas Ellinas (C/LW): 73 ovr, 81 cha, 79 off, 74 def, 80 tra, 77 men, 75 phy, 80 pot
+Eskild Bakke Olsen (C): 72 ovr, 81 cha, 77 off, 74 def, 79 tra, 77 men, 75 phy, 80 pot
+Hayden Hodgson (RW/LW): 70 ovr, 82 cha, 68 off, 74 def, 71 tra, 78 men, 88 phy, 70 pot
+Samuel Blais (LW/RW): 74 ovr, 82 cha, 77 off, 76 def, 79 tra, 79 men, 83 phy, 73 pot
+Tomas Hamara (D): 75 ovr, 83 cha, 75 off, 79 def, 81 tra, 80 men, 75 phy, 81 pot
+Hoyt Stanley (D): 74 ovr, 81 cha, 79 off, 75 def, 81 tra, 78 men, 75 phy, 82 pot
+Gabriel Eliasson (D): 73 ovr, 81 cha, 69 off, 81 def, 73 tra, 79 men, 91 phy, 81 pot
+Samuel Bolduc (D): 75 ovr, 82 cha, 73 off, 80 def, 77 tra, 79 men, 85 phy, 77 pot
+Christian Kyrou (D): 74 ovr, 80 cha, 83 off, 72 def, 83 tra, 77 men, 73 phy, 80 pot
+Jorian Donovan (D): 73 ovr, 81 cha, 75 off, 77 def, 79 tra, 78 men, 77 phy, 79 pot
+Matthew Andonovski (D): 72 ovr, 81 cha, 73 off, 78 def, 77 tra, 78 men, 81 phy, 79 pot
+Cameron Crotty (D): 73 ovr, 82 cha, 71 off, 79 def, 75 tra, 79 men, 81 phy, 74 pot
+Djibril Toure (D): 72 ovr, 81 cha, 69 off, 79 def, 75 tra, 77 men, 85 phy, 79 pot
+Leevi Merilainen (G): 80 ovr, 83 glove, 80 blocker, 78 stick, 85 pot
+Jackson Parsons (G): 74 ovr, 79 glove, 76 blocker, 75 stick, 80 pot
+Kevin Reidler (G): 72 ovr, 77 glove, 75 blocker, 74 stick, 79 pot
+
+-- PROSPECTS (junior / NCAA / Europe) --
+Logan Hensler (D): 75 ovr, 83 cha, 75 off, 81 def, 83 tra, 80 men, 79 phy, 85 pot
+Jonas Lagerberg Hoen (RW): 73 ovr, 79 cha, 81 off, 72 def, 81 tra, 76 men, 75 phy, 85 pot
+Jaxon Cover (RW): 72 ovr, 83 cha, 79 off, 77 def, 80 tra, 81 men, 77 phy, 84 pot
+Filip Nordberg (D): 74 ovr, 83 cha, 71 off, 83 def, 77 tra, 79 men, 89 phy, 82 pot
+Eerik Wallenius (D): 73 ovr, 81 cha, 73 off, 79 def, 79 tra, 78 men, 85 phy, 80 pot
+Oscar Holmertz (C): 72 ovr, 81 cha, 79 off, 74 def, 80 tra, 78 men, 75 phy, 81 pot
+Louis-Felix Bourque (C): 72 ovr, 81 cha, 77 off, 75 def, 79 tra, 78 men, 88 phy, 81 pot
+Javon Moore (LW): 72 ovr, 79 cha, 79 off, 72 def, 81 tra, 76 men, 83 phy, 82 pot
+Brandon Svoboda (C/RW): 72 ovr, 83 cha, 75 off, 77 def, 75 tra, 80 men, 87 phy, 80 pot
+Blake Vanek (RW): 70 ovr, 78 cha, 78 off, 70 def, 78 tra, 75 men, 74 phy, 80 pot
+Owen Beckner (C): 70 ovr, 80 cha, 77 off, 73 def, 78 tra, 77 men, 74 phy, 80 pot
+Cameron O'Neill (RW): 70 ovr, 78 cha, 78 off, 71 def, 78 tra, 75 men, 76 phy, 80 pot
+Nicholas Van Tassell (RW): 70 ovr, 79 cha, 76 off, 72 def, 77 tra, 76 men, 76 phy, 79 pot
+Adam Nemec (F): 70 ovr, 78 cha, 77 off, 71 def, 78 tra, 74 men, 78 phy, 80 pot
+Harris Pangretitsch (D): 70 ovr, 80 cha, 74 off, 74 def, 76 tra, 76 men, 76 phy, 80 pot
+Theo Wallberg (D): 70 ovr, 80 cha, 70 off, 78 def, 76 tra, 76 men, 84 phy, 80 pot
+Alexander Grunin (D): 69 ovr, 78 cha, 72 off, 76 def, 75 tra, 75 men, 82 phy, 80 pot
+Bruno Idzan (LW): 69 ovr, 78 cha, 76 off, 71 def, 77 tra, 74 men, 76 phy, 79 pot
+Dmitri Isayev (LW): 69 ovr, 77 cha, 77 off, 70 def, 78 tra, 73 men, 72 phy, 80 pot
+Lucas Beckman (G): 72 ovr, 77 glove, 75 blocker, 74 stick, 82 pot
+Elliot Lennon (G): 70 ovr, 75 glove, 74 blocker, 73 stick, 82 pot
+Andrei Trofimov (G): 70 ovr, 75 glove, 73 blocker, 73 stick, 80 pot
+
+
+=== MONTREAL CANADIENS ===
+
+-- NHL FORWARDS --
+Nick Suzuki: 90 ovr, 90 cha, 90 off, 88 def, 88 tra, 88 men, 78 phy, 90 pot
+Cole Caufield: 89 ovr, 84 cha, 95 off, 74 def, 87 tra, 82 men, 68 phy, 90 pot
+Juraj Slafkovsky: 86 ovr, 82 cha, 87 off, 80 def, 84 tra, 78 men, 90 phy, 92 pot
+Ivan Demidov: 85 ovr, 80 cha, 90 off, 74 def, 90 tra, 78 men, 74 phy, 95 pot
+Kirby Dach: 82 ovr, 80 cha, 84 off, 80 def, 82 tra, 77 men, 88 phy, 87 pot
+Patrik Laine: 82 ovr, 70 cha, 90 off, 70 def, 80 tra, 72 men, 82 phy, 83 pot
+Alex Newhook: 80 ovr, 82 cha, 82 off, 77 def, 85 tra, 78 men, 76 phy, 82 pot
+Josh Anderson: 79 ovr, 82 cha, 76 off, 78 def, 82 tra, 77 men, 94 phy, 78 pot
+Phillip Danault: 84 ovr, 88 cha, 80 off, 90 def, 82 tra, 86 men, 82 phy, 82 pot
+Jake Evans: 78 ovr, 84 cha, 74 off, 82 def, 78 tra, 82 men, 78 phy, 76 pot
+Oliver Kapanen: 77 ovr, 80 cha, 78 off, 78 def, 80 tra, 77 men, 76 phy, 84 pot
+Alexandre Texier: 76 ovr, 80 cha, 77 off, 77 def, 80 tra, 78 men, 78 phy, 76 pot
+
+-- NHL DEFENCE --
+Noah Dobson: 89 ovr, 84 cha, 88 off, 84 def, 89 tra, 82 men, 82 phy, 92 pot
+Lane Hutson: 86 ovr, 82 cha, 94 off, 71 def, 95 tra, 82 men, 68 phy, 95 pot
+Mike Matheson: 83 ovr, 85 cha, 82 off, 83 def, 85 tra, 82 men, 80 phy, 82 pot
+Kaiden Guhle: 84 ovr, 85 cha, 78 off, 87 def, 82 tra, 82 men, 88 phy, 88 pot
+Alexandre Carrier: 80 ovr, 84 cha, 74 off, 84 def, 80 tra, 82 men, 78 phy, 79 pot
+Jayden Struble: 77 ovr, 82 cha, 72 off, 80 def, 78 tra, 78 men, 86 phy, 80 pot
+
+-- NHL GOALIES --
+Samuel Montembeault: 85 ovr, 87 glove, 85 blocker, 82 stick, 84 pot
+Jakub Dobes: 81 ovr, 84 glove, 82 blocker, 79 stick, 86 pot
+Jacob Fowler: 80 ovr, 83 glove, 81 blocker, 79 stick, 90 pot
+
+-- AHL: LAVAL ROCKET --
+David Reinbacher (D): 77 ovr, 82 cha, 74 off, 84 def, 80 tra, 80 men, 82 phy, 87 pot
+Owen Beck (C): 76 ovr, 86 cha, 76 off, 84 def, 80 tra, 82 men, 78 phy, 82 pot
+Adam Engstrom (D): 76 ovr, 82 cha, 82 off, 76 def, 84 tra, 78 men, 76 phy, 82 pot
+Florian Xhekaj (LW/C): 75 ovr, 84 cha, 78 off, 78 def, 72 tra, 79 men, 92 phy, 79 pot
+Sasha Pastujov (RW/LW): 74 ovr, 79 cha, 82 off, 71 def, 80 tra, 76 men, 72 phy, 80 pot
+Samuel Poulin (W/C): 74 ovr, 82 cha, 78 off, 76 def, 78 tra, 79 men, 84 phy, 78 pot
+Brett Berard (LW): 74 ovr, 80 cha, 81 off, 73 def, 82 tra, 77 men, 72 phy, 79 pot
+Jared Davidson (C): 73 ovr, 82 cha, 78 off, 76 def, 79 tra, 78 men, 76 phy, 79 pot
+Filip Mesar (RW): 74 ovr, 80 cha, 80 off, 73 def, 83 tra, 76 men, 72 phy, 80 pot
+Hunter McKown (C/RW): 72 ovr, 80 cha, 77 off, 74 def, 78 tra, 77 men, 76 phy, 78 pot
+Lucas Condotta (C): 71 ovr, 81 cha, 74 off, 76 def, 77 tra, 78 men, 78 phy, 73 pot
+Tyler Thorpe (RW): 72 ovr, 80 cha, 74 off, 73 def, 74 tra, 77 men, 86 phy, 79 pot
+Alex Belzile (RW/C): 72 ovr, 84 cha, 74 off, 76 def, 76 tra, 80 men, 80 phy, 70 pot
+Luke Mittelstadt (D): 73 ovr, 80 cha, 76 off, 76 def, 79 tra, 77 men, 74 phy, 80 pot
+Bryce Pickford (D): 74 ovr, 80 cha, 82 off, 72 def, 80 tra, 76 men, 78 phy, 82 pot
+Owen Protz (D): 72 ovr, 80 cha, 70 off, 78 def, 76 tra, 76 men, 82 phy, 80 pot
+Reilly Walsh (D): 73 ovr, 80 cha, 80 off, 72 def, 80 tra, 77 men, 72 phy, 76 pot
+Ethan Samson (D): 72 ovr, 80 cha, 72 off, 77 def, 77 tra, 77 men, 78 phy, 78 pot
+Maksymilian Szuber (D): 72 ovr, 80 cha, 74 off, 76 def, 78 tra, 76 men, 78 phy, 79 pot
+Kaapo Kahkonen (G): 76 ovr, 80 glove, 78 blocker, 76 stick, 76 pot
+
+-- PROSPECTS (junior / NCAA / Europe) --
+Michael Hage (C): 76 ovr, 84 cha, 84 off, 76 def, 86 tra, 82 men, 74 phy, 88 pot
+Alexander Zharovsky (RW/C): 75 ovr, 78 cha, 88 off, 68 def, 86 tra, 76 men, 72 phy, 88 pot
+Gleb Pugachyov (RW): 73 ovr, 82 cha, 76 off, 76 def, 76 tra, 78 men, 84 phy, 84 pot
+L.J. Mooney (RW/C): 73 ovr, 80 cha, 84 off, 70 def, 86 tra, 76 men, 66 phy, 84 pot
+Aatos Koivu (C/RW): 72 ovr, 82 cha, 78 off, 76 def, 80 tra, 78 men, 74 phy, 84 pot
+Filip Eriksson (C/W): 72 ovr, 80 cha, 79 off, 73 def, 80 tra, 77 men, 74 phy, 82 pot
+Bogdan Konyushkov (D): 73 ovr, 80 cha, 78 off, 76 def, 82 tra, 77 men, 74 phy, 82 pot
+Sam Harris (LW): 71 ovr, 79 cha, 78 off, 72 def, 79 tra, 76 men, 74 phy, 82 pot
+Hayden Paupanekis (C): 71 ovr, 80 cha, 77 off, 74 def, 78 tra, 77 men, 84 phy, 82 pot
+Rasmus Bergqvist (D): 72 ovr, 80 cha, 74 off, 77 def, 78 tra, 77 men, 78 phy, 81 pot
+Daniil Sobolev (D): 71 ovr, 79 cha, 74 off, 76 def, 78 tra, 76 men, 76 phy, 81 pot
+Timofei Runtso (D): 71 ovr, 79 cha, 74 off, 76 def, 77 tra, 76 men, 78 phy, 81 pot
+Dmitri Kostenko (D): 71 ovr, 79 cha, 74 off, 76 def, 78 tra, 76 men, 76 phy, 81 pot
+Logan Sawyer (LW): 70 ovr, 78 cha, 77 off, 71 def, 78 tra, 75 men, 76 phy, 80 pot
+Makar Khanin (RW): 70 ovr, 77 cha, 77 off, 70 def, 79 tra, 74 men, 73 phy, 81 pot
+Alexander Gordin (RW/C): 70 ovr, 77 cha, 77 off, 71 def, 79 tra, 74 men, 74 phy, 81 pot
+Jean-Samuel Daigneault (D): 70 ovr, 79 cha, 73 off, 75 def, 76 tra, 76 men, 78 phy, 80 pot
+Cooper Cleaves (D): 69 ovr, 80 cha, 71 off, 75 def, 74 tra, 76 men, 78 phy, 79 pot
+Maxon Vig (D): 69 ovr, 79 cha, 71 off, 75 def, 75 tra, 75 men, 78 phy, 79 pot
+Parker Trottier (F): 69 ovr, 78 cha, 76 off, 71 def, 78 tra, 74 men, 74 phy, 80 pot
+Ben Merrill (C): 69 ovr, 79 cha, 76 off, 72 def, 77 tra, 75 men, 76 phy, 79 pot
+Emmett Croteau (G): 70 ovr, 75 glove, 74 blocker, 73 stick, 82 pot
+Alexis Cournoyer (G): 70 ovr, 75 glove, 74 blocker, 73 stick, 81 pot
+Arseni Radkov (G): 70 ovr, 76 glove, 74 blocker, 73 stick, 82 pot
+Quentin Miller (G): 70 ovr, 75 glove, 74 blocker, 73 stick, 80 pot
+
+
+
+=== TORONTO MAPLE LEAFS ===
+
+-- NHL FORWARDS --
+Auston Matthews: 95 ovr, 82 cha, 97 off, 86 def, 88 tra, 84 men, 84 phy, 95 pot
+William Nylander: 92 ovr, 80 cha, 96 off, 78 def, 90 tra, 82 men, 80 phy, 92 pot
+Matthew Knies: 87 ovr, 84 cha, 88 off, 78 def, 82 tra, 80 men, 92 phy, 90 pot
+Gavin McKenna: 84 ovr, 80 cha, 90 off, 74 def, 90 tra, 78 men, 70 phy, 97 pot
+John Tavares: 85 ovr, 88 cha, 88 off, 80 def, 78 tra, 87 men, 80 phy, 82 pot
+Max Domi: 80 ovr, 74 cha, 84 off, 72 def, 82 tra, 74 men, 80 phy, 80 pot
+Easton Cowan: 79 ovr, 82 cha, 83 off, 74 def, 84 tra, 78 men, 74 phy, 87 pot
+Dakota Joshua: 78 ovr, 82 cha, 76 off, 78 def, 78 tra, 78 men, 90 phy, 77 pot
+Nick Paul: 80 ovr, 84 cha, 78 off, 82 def, 80 tra, 82 men, 90 phy, 80 pot
+Jack Roslovic: 79 ovr, 78 cha, 82 off, 74 def, 82 tra, 77 men, 76 phy, 79 pot
+Teodors Blugers: 78 ovr, 84 cha, 74 off, 84 def, 80 tra, 82 men, 76 phy, 76 pot
+Colton Sissons: 76 ovr, 82 cha, 74 off, 80 def, 76 tra, 80 men, 80 phy, 74 pot
+Steven Lorentz: 74 ovr, 82 cha, 70 off, 80 def, 74 tra, 80 men, 86 phy, 72 pot
+Brandon Duhaime: 74 ovr, 82 cha, 71 off, 78 def, 74 tra, 79 men, 84 phy, 74 pot
+
+-- NHL DEFENCE --
+Morgan Rielly: 84 ovr, 85 cha, 86 off, 78 def, 85 tra, 82 men, 80 phy, 82 pot
+Jake McCabe: 83 ovr, 85 cha, 74 off, 88 def, 78 tra, 84 men, 88 phy, 82 pot
+Darren Raddysh: 80 ovr, 82 cha, 82 off, 77 def, 82 tra, 80 men, 78 phy, 80 pot
+Chris Tanev: 82 ovr, 88 cha, 70 off, 88 def, 76 tra, 87 men, 86 phy, 80 pot
+Oliver Ekman-Larsson: 81 ovr, 84 cha, 80 off, 80 def, 82 tra, 83 men, 78 phy, 80 pot
+Philippe Myers: 76 ovr, 80 cha, 72 off, 79 def, 74 tra, 78 men, 88 phy, 76 pot
+Troy Stecher: 75 ovr, 82 cha, 71 off, 79 def, 76 tra, 80 men, 76 phy, 74 pot
+Emil Andrae: 76 ovr, 80 cha, 80 off, 74 def, 82 tra, 78 men, 72 phy, 80 pot
+
+-- NHL GOALIES --
+Sergei Bobrovsky: 87 ovr, 89 glove, 87 blocker, 83 stick, 84 pot
+Anthony Stolarz: 84 ovr, 86 glove, 85 blocker, 80 stick, 84 pot
+
+-- AHL: TORONTO MARLIES --
+Jacob Quillan (C/LW): 75 ovr, 82 cha, 78 off, 76 def, 84 tra, 78 men, 78 phy, 79 pot
+Ryan Tverberg (C/RW): 74 ovr, 82 cha, 78 off, 76 def, 82 tra, 78 men, 78 phy, 78 pot
+Luke Haymes (C/LW): 73 ovr, 82 cha, 76 off, 78 def, 79 tra, 79 men, 80 phy, 80 pot
+Miroslav Holinka (C/W): 73 ovr, 80 cha, 78 off, 76 def, 78 tra, 78 men, 78 phy, 81 pot
+Landon Sim (C/RW): 73 ovr, 82 cha, 78 off, 74 def, 80 tra, 78 men, 76 phy, 81 pot
+Borya Valis (RW/C): 72 ovr, 79 cha, 79 off, 71 def, 79 tra, 76 men, 76 phy, 81 pot
+Benoit-Olivier Groulx (C/LW): 73 ovr, 82 cha, 74 off, 78 def, 76 tra, 79 men, 80 phy, 75 pot
+Henrik Rybinski (W/C): 72 ovr, 80 cha, 76 off, 74 def, 78 tra, 77 men, 74 phy, 75 pot
+Zack MacEwen (C/RW): 71 ovr, 82 cha, 68 off, 76 def, 72 tra, 78 men, 90 phy, 71 pot
+Vinni Lettieri (C/RW): 72 ovr, 80 cha, 79 off, 71 def, 79 tra, 77 men, 72 phy, 72 pot
+Michael Pezzetta (LW/C): 70 ovr, 82 cha, 66 off, 76 def, 71 tra, 78 men, 88 phy, 70 pot
+Brandon Buhr (F): 71 ovr, 80 cha, 74 off, 73 def, 76 tra, 76 men, 80 phy, 78 pot
+William Villeneuve (D): 74 ovr, 80 cha, 82 off, 73 def, 82 tra, 77 men, 72 phy, 79 pot
+Noah Chadwick (D): 73 ovr, 80 cha, 80 off, 74 def, 80 tra, 77 men, 80 phy, 81 pot
+Cole McWard (D): 73 ovr, 80 cha, 76 off, 76 def, 79 tra, 77 men, 76 phy, 77 pot
+Marshall Rifai (D): 72 ovr, 81 cha, 70 off, 78 def, 76 tra, 78 men, 80 phy, 73 pot
+Vincent Borgesi (D): 72 ovr, 80 cha, 76 off, 74 def, 78 tra, 77 men, 72 phy, 78 pot
+Cade Webber (D): 71 ovr, 80 cha, 66 off, 80 def, 72 tra, 77 men, 86 phy, 76 pot
+Hayes Hundley (D): 70 ovr, 80 cha, 70 off, 76 def, 74 tra, 77 men, 82 phy, 78 pot
+Blake Smith (D): 71 ovr, 80 cha, 74 off, 74 def, 77 tra, 76 men, 74 phy, 77 pot
+Dakota Mermis (D): 71 ovr, 82 cha, 68 off, 78 def, 74 tra, 79 men, 78 phy, 70 pot
+Artur Akhtyamov (G): 75 ovr, 80 glove, 77 blocker, 76 stick, 84 pot
+Samuel Hlavaj (G): 73 ovr, 78 glove, 76 blocker, 74 stick, 78 pot
+Timofei Obvintsev (G): 72 ovr, 77 glove, 75 blocker, 74 stick, 82 pot
+
+-- PROSPECTS (junior / NCAA / Europe) --
+Ben Danford (D): 74 ovr, 84 cha, 74 off, 80 def, 82 tra, 80 men, 78 phy, 84 pot
+Roni Hirvonen (C/W): 73 ovr, 82 cha, 79 off, 76 def, 82 tra, 78 men, 70 phy, 80 pot
+Topi Niemela (D): 73 ovr, 80 cha, 80 off, 74 def, 82 tra, 78 men, 70 phy, 80 pot
+Nicholas Moldenhauer (C/RW): 72 ovr, 80 cha, 79 off, 73 def, 80 tra, 77 men, 74 phy, 81 pot
+Veeti Miettinen (LW/RW): 72 ovr, 80 cha, 82 off, 70 def, 81 tra, 77 men, 68 phy, 80 pot
+Victor Johansson (D): 72 ovr, 80 cha, 76 off, 76 def, 79 tra, 77 men, 74 phy, 81 pot
+Tinus Luc Koblar (C): 71 ovr, 80 cha, 76 off, 74 def, 78 tra, 77 men, 84 phy, 81 pot
+Sam McCue (LW/RW): 71 ovr, 79 cha, 80 off, 70 def, 78 tra, 76 men, 82 phy, 79 pot
+Hudson Malinoski (C): 71 ovr, 80 cha, 78 off, 73 def, 79 tra, 77 men, 74 phy, 80 pot
+Ethan MacKenzie (D): 71 ovr, 80 cha, 76 off, 75 def, 80 tra, 77 men, 74 phy, 80 pot
+Mans Gudmundsson (D): 71 ovr, 80 cha, 76 off, 75 def, 79 tra, 77 men, 78 phy, 81 pot
+Harry Nansi (RW/C): 70 ovr, 78 cha, 77 off, 71 def, 78 tra, 75 men, 80 phy, 82 pot
+William Belle (RW): 70 ovr, 78 cha, 76 off, 71 def, 77 tra, 75 men, 84 phy, 80 pot
+Alexander Bilecki (D): 70 ovr, 79 cha, 74 off, 74 def, 77 tra, 76 men, 76 phy, 80 pot
+Kirill Slepets (RW/LW): 70 ovr, 77 cha, 80 off, 68 def, 80 tra, 74 men, 70 phy, 78 pot
+Vladimir Bobylyov (W/C): 70 ovr, 78 cha, 76 off, 71 def, 78 tra, 75 men, 74 phy, 78 pot
+Semyon Kizimov (RW): 70 ovr, 77 cha, 78 off, 70 def, 79 tra, 74 men, 74 phy, 79 pot
+Nikolai Chebykin (RW): 70 ovr, 77 cha, 77 off, 71 def, 78 tra, 74 men, 74 phy, 79 pot
+Vladislav Kara (RW): 70 ovr, 78 cha, 77 off, 71 def, 78 tra, 75 men, 76 phy, 77 pot
+Yaroslav Fedoseyev (D): 70 ovr, 78 cha, 74 off, 74 def, 77 tra, 76 men, 76 phy, 80 pot
+Brody Pepoy (F): 69 ovr, 78 cha, 78 off, 70 def, 79 tra, 74 men, 72 phy, 80 pot
+Matthew Lahey (D): 69 ovr, 80 cha, 68 off, 76 def, 74 tra, 76 men, 84 phy, 79 pot
+Zac Olsen (F): 69 ovr, 78 cha, 78 off, 71 def, 78 tra, 74 men, 72 phy, 79 pot
+Juuso Ainasto (G): 70 ovr, 75 glove, 74 blocker, 73 stick, 82 pot
+
+
+=== TAMPA BAY LIGHTNING ===
+
+-- NHL FORWARDS --
+Nikita Kucherov: 95 ovr, 82 cha, 98 off, 78 def, 92 tra, 88 men, 74 phy, 94 pot
+Brayden Point: 92 ovr, 86 cha, 94 off, 84 def, 90 tra, 86 men, 74 phy, 92 pot
+Jake Guentzel: 89 ovr, 84 cha, 92 off, 80 def, 88 tra, 84 men, 74 phy, 89 pot
+Brandon Hagel: 89 ovr, 86 cha, 89 off, 86 def, 90 tra, 84 men, 80 phy, 89 pot
+Anthony Cirelli: 87 ovr, 88 cha, 82 off, 92 def, 84 tra, 85 men, 80 phy, 87 pot
+Conor Geekie: 80 ovr, 82 cha, 82 off, 78 def, 80 tra, 78 men, 88 phy, 88 pot
+Ilya Mikheyev: 80 ovr, 82 cha, 80 off, 80 def, 86 tra, 79 men, 80 phy, 79 pot
+Yanni Gourde: 81 ovr, 86 cha, 80 off, 84 def, 82 tra, 84 men, 76 phy, 79 pot
+Gage Goncalves: 78 ovr, 82 cha, 80 off, 77 def, 82 tra, 78 men, 76 phy, 82 pot
+Pontus Holmberg: 77 ovr, 82 cha, 76 off, 80 def, 79 tra, 80 men, 76 phy, 78 pot
+Zemgus Girgensons: 75 ovr, 84 cha, 72 off, 79 def, 74 tra, 80 men, 84 phy, 73 pot
+Dominic James: 74 ovr, 80 cha, 78 off, 74 def, 82 tra, 76 men, 72 phy, 82 pot
+Jansen Harkins: 74 ovr, 81 cha, 74 off, 78 def, 78 tra, 78 men, 76 phy, 74 pot
+Jeffrey Viel: 71 ovr, 82 cha, 68 off, 74 def, 70 tra, 77 men, 86 phy, 70 pot
+
+-- NHL DEFENCE --
+Victor Hedman: 92 ovr, 90 cha, 87 off, 92 def, 88 tra, 90 men, 90 phy, 92 pot
+John Carlson: 84 ovr, 82 cha, 87 off, 80 def, 82 tra, 84 men, 82 phy, 82 pot
+Ryan McDonagh: 83 ovr, 88 cha, 74 off, 88 def, 80 tra, 87 men, 84 phy, 82 pot
+Erik Cernak: 82 ovr, 84 cha, 70 off, 88 def, 76 tra, 82 men, 92 phy, 82 pot
+Janis Moser: 80 ovr, 82 cha, 80 off, 78 def, 83 tra, 80 men, 76 phy, 82 pot
+Emil Lilleberg: 77 ovr, 82 cha, 70 off, 82 def, 74 tra, 79 men, 88 phy, 79 pot
+Maxwell Crozier: 75 ovr, 80 cha, 74 off, 78 def, 78 tra, 78 men, 80 phy, 78 pot
+Charle-Edouard D'Astous: 74 ovr, 80 cha, 78 off, 73 def, 78 tra, 77 men, 80 phy, 76 pot
+
+-- NHL GOALIES --
+Andrei Vasilevskiy: 93 ovr, 94 glove, 92 blocker, 88 stick, 93 pot
+Jonas Johansson: 79 ovr, 82 glove, 80 blocker, 77 stick, 78 pot
+Dennis Hildeby: 78 ovr, 82 glove, 80 blocker, 76 stick, 84 pot
+
+-- AHL: SYRACUSE CRUNCH --
+Sam O'Reilly (C/RW): 76 ovr, 84 cha, 78 off, 82 def, 80 tra, 82 men, 80 phy, 84 pot
+Ethan Gauthier (RW/LW): 75 ovr, 82 cha, 81 off, 74 def, 80 tra, 78 men, 76 phy, 82 pot
+Dylan Duke (LW/C): 75 ovr, 84 cha, 82 off, 76 def, 78 tra, 80 men, 74 phy, 79 pot
+Jakob Pelletier (LW/C): 75 ovr, 80 cha, 82 off, 74 def, 82 tra, 78 men, 72 phy, 80 pot
+Nick Abruzzese (C/LW): 73 ovr, 80 cha, 80 off, 74 def, 81 tra, 78 men, 70 phy, 78 pot
+Gabriel Szturc (C/LW): 73 ovr, 80 cha, 79 off, 74 def, 80 tra, 77 men, 74 phy, 80 pot
+Connor Kurth (RW/LW): 73 ovr, 80 cha, 79 off, 73 def, 79 tra, 77 men, 76 phy, 79 pot
+Lucas Mercuri (C/RW): 73 ovr, 81 cha, 76 off, 76 def, 78 tra, 78 men, 82 phy, 79 pot
+Noah Steen (LW/RW): 72 ovr, 82 cha, 76 off, 78 def, 79 tra, 79 men, 72 phy, 79 pot
+Tristan Allard (C/LW): 72 ovr, 80 cha, 78 off, 73 def, 79 tra, 77 men, 74 phy, 79 pot
+Milo Roelens (C/LW): 72 ovr, 80 cha, 78 off, 74 def, 80 tra, 77 men, 74 phy, 80 pot
+Cooper Flinton (LW/RW): 71 ovr, 80 cha, 76 off, 73 def, 78 tra, 76 men, 74 phy, 78 pot
+Scott Sabourin (RW/LW): 68 ovr, 82 cha, 62 off, 75 def, 68 tra, 78 men, 90 phy, 67 pot
+Daniil Pylenkov (D): 75 ovr, 82 cha, 80 off, 78 def, 82 tra, 80 men, 78 phy, 80 pot
+Maxim Groshev (D): 73 ovr, 78 cha, 78 off, 74 def, 78 tra, 76 men, 80 phy, 79 pot
+Steven Santini (D): 72 ovr, 82 cha, 68 off, 80 def, 74 tra, 79 men, 82 phy, 72 pot
+Simon Lundmark (D): 73 ovr, 80 cha, 76 off, 76 def, 80 tra, 77 men, 74 phy, 79 pot
+Dyllan Gill (D): 72 ovr, 80 cha, 74 off, 76 def, 78 tra, 76 men, 76 phy, 80 pot
+Michael Callahan (D): 72 ovr, 81 cha, 70 off, 78 def, 76 tra, 78 men, 82 phy, 76 pot
+Tomas Kralovic (D): 72 ovr, 80 cha, 74 off, 76 def, 77 tra, 77 men, 80 phy, 81 pot
+Mads Sogaard (G): 76 ovr, 80 glove, 78 blocker, 76 stick, 80 pot
+Olivier Rodrigue (G): 74 ovr, 78 glove, 76 blocker, 75 stick, 77 pot
+Harrison Meneghin (G): 72 ovr, 77 glove, 75 blocker, 74 stick, 82 pot
+
+-- PROSPECTS (junior / NCAA / Europe) --
+Ethan Czata (C/RW): 72 ovr, 80 cha, 80 off, 74 def, 79 tra, 78 men, 80 phy, 82 pot
+Benjamin Rautiainen (C/LW): 73 ovr, 80 cha, 80 off, 73 def, 81 tra, 77 men, 72 phy, 82 pot
+Jack Pridham (RW): 72 ovr, 80 cha, 79 off, 72 def, 79 tra, 77 men, 76 phy, 81 pot
+Hagen Burrows (C/W): 72 ovr, 80 cha, 80 off, 72 def, 80 tra, 76 men, 74 phy, 81 pot
+Ethan Hay (C): 72 ovr, 80 cha, 79 off, 74 def, 80 tra, 77 men, 74 phy, 81 pot
+Jayson Shaugabay (C): 71 ovr, 80 cha, 80 off, 72 def, 80 tra, 77 men, 70 phy, 80 pot
+Morgan Anderberg (LW/C): 71 ovr, 79 cha, 79 off, 72 def, 79 tra, 76 men, 74 phy, 80 pot
+Joona Saarelainen (C/RW): 71 ovr, 79 cha, 78 off, 72 def, 79 tra, 76 men, 72 phy, 80 pot
+Oleg Kulebyakin (LW/RW): 71 ovr, 78 cha, 80 off, 71 def, 80 tra, 75 men, 72 phy, 82 pot
+Marco Mignosa (RW): 71 ovr, 79 cha, 80 off, 71 def, 80 tra, 76 men, 74 phy, 81 pot
+Everett Baldwin (D): 71 ovr, 80 cha, 74 off, 76 def, 78 tra, 77 men, 74 phy, 81 pot
+Warren Clark (D): 70 ovr, 80 cha, 74 off, 75 def, 77 tra, 76 men, 76 phy, 80 pot
+Jan Golicic (D): 70 ovr, 80 cha, 70 off, 78 def, 75 tra, 76 men, 84 phy, 80 pot
+Klavs Veinbergs (C/LW): 70 ovr, 79 cha, 78 off, 71 def, 78 tra, 75 men, 74 phy, 79 pot
+Joe Connor (C/LW): 70 ovr, 80 cha, 77 off, 73 def, 78 tra, 77 men, 76 phy, 80 pot
+Roman Luttsev (C): 70 ovr, 78 cha, 78 off, 71 def, 79 tra, 75 men, 74 phy, 80 pot
+Mikhail Shalagin (LW): 70 ovr, 78 cha, 79 off, 70 def, 79 tra, 74 men, 76 phy, 79 pot
+Cooper Soller (F): 69 ovr, 78 cha, 77 off, 71 def, 78 tra, 74 men, 72 phy, 80 pot
+Jack Harvey (F): 69 ovr, 79 cha, 77 off, 71 def, 78 tra, 75 men, 74 phy, 79 pot
+Caleb Heil (G): 70 ovr, 75 glove, 74 blocker, 73 stick, 81 pot
+Hugo Alnefelt (G): 72 ovr, 77 glove, 75 blocker, 74 stick, 78 pot
+
+
+
+NHL DYNASTY MODE — METROPOLITAN DIVISION RATINGS
+ 2026-27 SEASON
+ Format: overall, character, offence, defence, transition, mental, physical, potential
+ Goalies: overall, glove, blocker, stick, potential
+
+ 
+
+=== CAROLINA HURRICANES ===
+
+Carolina’s ratings emphasize its defining identity: aggressive forechecking, controlled possession, defensive structure, active defencemen, and strong transitional pressure. The team is generally deeper in two-way and possession players than in pure finishers.
+
+
+
+-- NHL FORWARDS --
+
+Sebastian Aho: 92 ovr, 91 cha, 94 off, 91 def, 94 tra, 90 men, 78 phy, 93 pot
+
+Nikolaj Ehlers: 89 ovr, 83 cha, 92 off, 78 def, 96 tra, 84 men, 72 phy, 89 pot
+
+Andrei Svechnikov: 89 ovr, 82 cha, 93 off, 80 def, 89 tra, 79 men, 93 phy, 91 pot
+
+Seth Jarvis: 90 ovr, 90 cha, 91 off, 89 def, 92 tra, 89 men, 85 phy, 94 pot
+
+Logan Stankoven: 87 ovr, 87 cha, 90 off, 82 def, 91 tra, 87 men, 82 phy, 92 pot
+
+Jackson Blake: 85 ovr, 84 cha, 89 off, 77 def, 91 tra, 82 men, 73 phy, 89 pot
+
+Taylor Hall: 84 ovr, 82 cha, 88 off, 76 def, 88 tra, 81 men, 79 phy, 82 pot
+
+Jordan Staal: 84 ovr, 96 cha, 78 off, 94 def, 76 tra, 95 men, 94 phy, 80 pot
+
+Jesperi Kotkaniemi: 81 ovr, 81 cha, 83 off, 82 def, 80 tra, 78 men, 86 phy, 84 pot
+
+Jordan Martinook: 81 ovr, 92 cha, 78 off, 88 def, 83 tra, 90 men, 88 phy, 79 pot
+
+Mark Jankowski: 79 ovr, 84 cha, 79 off, 84 def, 77 tra, 83 men, 85 phy, 77 pot
+
+William Carrier: 79 ovr, 86 cha, 74 off, 87 def, 80 tra, 85 men, 94 phy, 78 pot
+
+Eric Robinson: 78 ovr, 84 cha, 74 off, 83 def, 85 tra, 82 men, 90 phy, 77 pot
+
+Nicolas Deslauriers: 72 ovr, 84 cha, 65 off, 76 def, 67 tra, 80 men, 98 phy, 68 pot
+
+
+
+-- NHL DEFENCE --
+
+Jaccob Slavin: 94 ovr, 97 cha, 83 off, 99 def, 93 tra, 98 men, 88 phy, 95 pot
+
+K’Andre Miller: 88 ovr, 84 cha, 84 off, 91 def, 91 tra, 83 men, 94 phy, 91 pot
+
+Alexander Nikishin: 87 ovr, 88 cha, 87 off, 89 def, 86 tra, 87 men, 97 phy, 94 pot
+
+Shayne Gostisbehere: 87 ovr, 80 cha, 94 off, 75 def, 88 tra, 81 men, 72 phy, 85 pot
+
+Sean Walker: 82 ovr, 86 cha, 79 off, 86 def, 85 tra, 85 men, 84 phy, 81 pot
+
+Jalen Chatfield: 81 ovr, 87 cha, 74 off, 87 def, 84 tra, 86 men, 88 phy, 82 pot
+
+Joel Nyström: 77 ovr, 81 cha, 79 off, 76 def, 83 tra, 78 men, 74 phy, 84 pot
+
+
+
+-- NHL GOALIES --
+
+Pyotr Kochetkov: 87 ovr, 88 glove, 87 blocker, 90 stick, 91 pot
+
+Brandon Bussi: 81 ovr, 84 glove, 82 blocker, 78 stick, 84 pot
+
+
+
+-- AHL: CHICAGO WOLVES --
+Forwards
+
+Bradly Nadeau (RW/LW): 79 ovr, 82 cha, 89 off, 73 def, 87 tra, 80 men, 73 phy, 90 pot
+
+Felix Unger Sörum (RW/LW): 77 ovr, 83 cha, 84 off, 78 def, 86 tra, 81 men, 71 phy, 86 pot
+
+Justin Robidas (C/RW): 75 ovr, 81 cha, 82 off, 75 def, 84 tra, 79 men, 68 phy, 81 pot
+
+Charlie Cerrato (C/RW): 76 ovr, 86 cha, 83 off, 82 def, 82 tra, 83 men, 79 phy, 85 pot
+
+Gleb Trikozov (LW/RW): 75 ovr, 77 cha, 86 off, 69 def, 84 tra, 75 men, 80 phy, 85 pot
+
+Viktor Neuchev (LW/RW): 75 ovr, 79 cha, 84 off, 72 def, 83 tra, 77 men, 71 phy, 82 pot
+
+Juha Jääskä (LW/C): 75 ovr, 84 cha, 75 off, 82 def, 80 tra, 82 men, 86 phy, 77 pot
+
+Ivan Ryabkin (C): 75 ovr, 80 cha, 86 off, 73 def, 86 tra, 76 men, 78 phy, 89 pot
+
+Defence
+
+Charles-Alexis Legault (D): 73 ovr, 83 cha, 68 off, 81 def, 74 tra, 81 men, 91 phy, 80 pot
+
+Juuso Välimäki (D): 77 ovr, 81 cha, 80 off, 78 def, 83 tra, 79 men, 80 phy, 77 pot
+
+Ronan Seeley (D): 73 ovr, 82 cha, 74 off, 78 def, 80 tra, 79 men, 77 phy, 77 pot
+
+Dominik Badinka (D): 76 ovr, 84 cha, 78 off, 83 def, 83 tra, 82 men, 86 phy, 87 pot
+
+Aleksi Heimosalmi (D): 75 ovr, 81 cha, 80 off, 76 def, 85 tra, 78 men, 72 phy, 82 pot
+
+Noel Fransén (D): 74 ovr, 80 cha, 82 off, 74 def, 83 tra, 77 men, 76 phy, 85 pot
+
+Bryce Montgomery (D): 72 ovr, 82 cha, 67 off, 80 def, 72 tra, 80 men, 93 phy, 78 pot
+
+Goalies
+
+Zach Sawchenko (G): 75 ovr, 79 glove, 76 blocker, 76 stick, 74 pot
+
+Cayden Primeau (G): 78 ovr, 82 glove, 79 blocker, 77 stick, 81 pot
+
+Ruslan Khazheyev (G): 74 ovr, 78 glove, 75 blocker, 76 stick, 84 pot
+
+
+
+-- PROSPECTS: JUNIOR / NCAA / EUROPE --
+Forwards
+
+Nikita Artamonov (RW/LW): 76 ovr, 83 cha, 84 off, 78 def, 86 tra, 81 men, 78 phy, 87 pot
+
+Viggo Björck Sörensson (C/W): 73 ovr, 80 cha, 84 off, 73 def, 84 tra, 78 men, 73 phy, 86 pot
+
+Noah Lansard (F): 70 ovr, 79 cha, 77 off, 72 def, 78 tra, 76 men, 76 phy, 81 pot
+
+Alexander Perevalov (LW): 73 ovr, 78 cha, 84 off, 70 def, 82 tra, 75 men, 77 phy, 82 pot
+
+Stiven Sardarian (RW/LW): 73 ovr, 81 cha, 80 off, 75 def, 81 tra, 79 men, 76 phy, 81 pot
+
+Jayden Perron (RW): 72 ovr, 79 cha, 83 off, 70 def, 85 tra, 77 men, 66 phy, 82 pot
+
+Nikita Rykov (RW/LW): 71 ovr, 79 cha, 80 off, 73 def, 81 tra, 76 men, 76 phy, 81 pot
+
+Rasmus Berchild (C/W): 71 ovr, 80 cha, 80 off, 74 def, 80 tra, 77 men, 76 phy, 82 pot
+
+Vasili Yarovoy (LW/RW): 72 ovr, 79 cha, 81 off, 72 def, 82 tra, 76 men, 72 phy, 81 pot
+
+Oskar Vuollet (C/LW): 72 ovr, 81 cha, 79 off, 77 def, 81 tra, 78 men, 79 phy, 82 pot
+
+Justin Poirier (RW): 73 ovr, 80 cha, 87 off, 68 def, 82 tra, 77 men, 70 phy, 84 pot
+
+Timur Mukhanov (LW/C): 71 ovr, 78 cha, 81 off, 71 def, 83 tra, 75 men, 68 phy, 81 pot
+
+Simon Nordlund (LW): 70 ovr, 79 cha, 77 off, 73 def, 79 tra, 76 men, 77 phy, 80 pot
+
+Ivan Avramov (LW/RW): 70 ovr, 78 cha, 79 off, 70 def, 80 tra, 75 men, 74 phy, 80 pot
+
+Joel Ekberg (LW/RW): 70 ovr, 78 cha, 81 off, 69 def, 80 tra, 74 men, 72 phy, 82 pot
+
+Andrei Krutov (RW/LW): 70 ovr, 77 cha, 80 off, 70 def, 80 tra, 74 men, 74 phy, 80 pot
+
+Defence
+
+William Håkansson (D): 73 ovr, 83 cha, 70 off, 81 def, 76 tra, 80 men, 90 phy, 83 pot
+
+Alexander Limatov (D): 71 ovr, 79 cha, 76 off, 76 def, 79 tra, 77 men, 74 phy, 82 pot
+
+Fyodor Bausov (D): 70 ovr, 80 cha, 69 off, 78 def, 75 tra, 78 men, 84 phy, 80 pot
+
+Nikita Siryatsky (D): 71 ovr, 81 cha, 72 off, 79 def, 77 tra, 78 men, 82 phy, 81 pot
+
+Alexander Grudinin (D): 73 ovr, 80 cha, 82 off, 75 def, 85 tra, 78 men, 70 phy, 84 pot
+
+Mikhail Kol (D): 70 ovr, 79 cha, 74 off, 76 def, 78 tra, 76 men, 78 phy, 80 pot
+
+Roman Shokhrin (D): 70 ovr, 80 cha, 70 off, 78 def, 75 tra, 77 men, 84 phy, 80 pot
+
+Alexander Pelevin (D): 71 ovr, 81 cha, 71 off, 80 def, 76 tra, 79 men, 84 phy, 81 pot
+
+Goalies
+
+Semyon Frolov (G): 73 ovr, 78 glove, 75 blocker, 76 stick, 86 pot
+
+Callum Fetterolf (G): 70 ovr, 75 glove, 74 blocker, 73 stick, 81 pot
+
+Nicholas Jovanovski (G): 70 ovr, 75 glove, 73 blocker, 74 stick, 82 pot
+
+Ruslan Naumov (G): 71 ovr, 76 glove, 74 blocker, 75 stick, 80 pot
+
+Yegor Velmakin (G): 71 ovr, 77 glove, 74 blocker, 74 stick, 81 pot
+
+
+
+========================================
+NHL DYNASTY MODE — METROPOLITAN DIVISION RATINGS
+2026-27 SEASON
+Format: overall, character, offence, defence, transition, mental, physical, potential
+Goalies: overall, glove, blocker, stick, potential
+========================================
+
+
+=== COLUMBUS BLUE JACKETS ===
+
+-- NHL FORWARDS --
+Kirill Marchenko: 88 ovr, 80 cha, 92 off, 78 def, 87 tra, 78 men, 78 phy, 91 pot
+Dmitri Voronkov: 84 ovr, 82 cha, 84 off, 80 def, 78 tra, 80 men, 94 phy, 86 pot
+Sean Monahan: 84 ovr, 84 cha, 86 off, 80 def, 80 tra, 83 men, 79 phy, 82 pot
+Valeri Nichushkin: 86 ovr, 74 cha, 89 off, 79 def, 84 tra, 74 men, 88 phy, 84 pot
+Conor Garland: 84 ovr, 82 cha, 87 off, 78 def, 88 tra, 80 men, 71 phy, 82 pot
+Cole Sillinger: 82 ovr, 82 cha, 83 off, 79 def, 82 tra, 80 men, 82 phy, 87 pot
+Kent Johnson: 82 ovr, 78 cha, 87 off, 74 def, 89 tra, 76 men, 68 phy, 90 pot
+Charlie Coyle: 82 ovr, 87 cha, 78 off, 84 def, 78 tra, 84 men, 84 phy, 76 pot
+Isac Lundeström: 79 ovr, 84 cha, 78 off, 82 def, 80 tra, 82 men, 78 phy, 81 pot
+Miles Wood: 79 ovr, 78 cha, 79 off, 76 def, 87 tra, 74 men, 82 phy, 78 pot
+Danton Heinen: 78 ovr, 83 cha, 78 off, 78 def, 79 tra, 80 men, 74 phy, 76 pot
+Mikael Pyyhtiä: 76 ovr, 80 cha, 78 off, 76 def, 80 tra, 77 men, 74 phy, 82 pot
+Mathieu Olivier: 76 ovr, 84 cha, 68 off, 79 def, 74 tra, 80 men, 92 phy, 74 pot
+Ryan Lomberg: 74 ovr, 86 cha, 66 off, 76 def, 74 tra, 82 men, 88 phy, 71 pot
+
+-- NHL DEFENCE --
+Zach Werenski: 95 ovr, 84 cha, 94 off, 86 def, 88 tra, 84 men, 82 phy, 90 pot
+Ivan Provorov: 85 ovr, 84 cha, 78 off, 88 def, 79 tra, 84 men, 86 phy, 83 pot
+Damon Severson: 82 ovr, 80 cha, 80 off, 80 def, 80 tra, 79 men, 80 phy, 79 pot
+Denton Mateychuk: 82 ovr, 80 cha, 84 off, 76 def, 86 tra, 78 men, 74 phy, 90 pot
+Dante Fabbro: 78 ovr, 82 cha, 74 off, 82 def, 78 tra, 81 men, 80 phy, 78 pot
+Erik Gudbranson: 76 ovr, 88 cha, 60 off, 82 def, 66 tra, 86 men, 92 phy, 68 pot
+Jake Christiansen: 74 ovr, 78 cha, 76 off, 74 def, 78 tra, 76 men, 72 phy, 76 pot
+
+-- NHL GOALIES --
+Elvis Merzlikins: 82 ovr, 84 glove, 82 blocker, 79 stick, 82 pot
+Jet Greaves: 79 ovr, 82 glove, 78 blocker, 77 stick, 85 pot
+
+-- AHL: CLEVELAND MONSTERS --
+Jordan Dumais (RW/LW): 78 ovr, 82 cha, 86 off, 71 def, 82 tra, 79 men, 68 phy, 87 pot
+Luca Del Bel Belluz (C/LW): 77 ovr, 84 cha, 80 off, 78 def, 80 tra, 80 men, 74 phy, 84 pot
+James Malatesta (LW/C): 74 ovr, 80 cha, 78 off, 74 def, 78 tra, 77 men, 78 phy, 79 pot
+Corson Ceulemans (D): 76 ovr, 80 cha, 78 off, 78 def, 80 tra, 78 men, 82 phy, 85 pot
+Luca Pinelli (C/LW): 73 ovr, 80 cha, 76 off, 74 def, 78 tra, 77 men, 72 phy, 80 pot
+Oiva Keskinen (C/LW): 72 ovr, 79 cha, 76 off, 74 def, 79 tra, 76 men, 71 phy, 80 pot
+Josh Eernisse (RW/C): 72 ovr, 78 cha, 77 off, 72 def, 78 tra, 75 men, 74 phy, 78 pot
+Max McCue (C/LW): 71 ovr, 80 cha, 74 off, 74 def, 76 tra, 77 men, 76 phy, 76 pot
+Owen Sillinger (C/LW): 71 ovr, 82 cha, 72 off, 76 def, 76 tra, 79 men, 74 phy, 77 pot
+Riley Bezeau (RW/LW): 70 ovr, 78 cha, 74 off, 72 def, 76 tra, 75 men, 78 phy, 78 pot
+Jack Williams (RW/C): 70 ovr, 79 cha, 74 off, 72 def, 75 tra, 76 men, 76 phy, 75 pot
+Boston Buckberger (D): 72 ovr, 80 cha, 72 off, 78 def, 76 tra, 77 men, 82 phy, 77 pot
+Guillaume Richard (D): 71 ovr, 80 cha, 70 off, 78 def, 74 tra, 77 men, 82 phy, 76 pot
+Luca Marrelli (D): 70 ovr, 79 cha, 68 off, 76 def, 74 tra, 76 men, 80 phy, 78 pot
+Caleb MacDonald (D): 70 ovr, 79 cha, 68 off, 76 def, 73 tra, 76 men, 78 phy, 74 pot
+Charlie Elick (D): 71 ovr, 80 cha, 68 off, 78 def, 74 tra, 78 men, 86 phy, 82 pot
+Colton White (D): 69 ovr, 78 cha, 68 off, 74 def, 73 tra, 75 men, 76 phy, 72 pot
+Nolan Lalonde (G): 72 ovr, 76 glove, 74 blocker, 73 stick, 79 pot
+Evan Gardner (G): 71 ovr, 75 glove, 74 blocker, 73 stick, 80 pot
+Pheonix Copley (G): 70 ovr, 75 glove, 74 blocker, 72 stick, 68 pot
+
+-- PROSPECTS (junior / NCAA / Europe / KHL) --
+Cayden Lindstrom (C/LW): 75 ovr, 80 cha, 80 off, 76 def, 78 tra, 78 men, 88 phy, 89 pot
+Jackson Smith (D): 74 ovr, 81 cha, 80 off, 76 def, 86 tra, 78 men, 76 phy, 90 pot
+Pyotr Andreyanov (G): 73 ovr, 78 glove, 76 blocker, 76 stick, 88 pot
+Malte Vass (D): 71 ovr, 79 cha, 74 off, 76 def, 78 tra, 76 men, 78 phy, 82 pot
+Oscar Hemming (C/RW): 70 ovr, 78 cha, 76 off, 72 def, 76 tra, 75 men, 80 phy, 84 pot
+Tim Berni (D): 71 ovr, 80 cha, 74 off, 78 def, 78 tra, 78 men, 78 phy, 78 pot
+Jonas Woo (D): 69 ovr, 78 cha, 68 off, 76 def, 73 tra, 75 men, 74 phy, 78 pot
+William Whitelaw (C/RW): 70 ovr, 78 cha, 76 off, 71 def, 78 tra, 75 men, 72 phy, 80 pot
+Andrew Strathmann (D): 69 ovr, 79 cha, 68 off, 76 def, 74 tra, 76 men, 78 phy, 77 pot
+Jérémy Loranger (C/RW): 69 ovr, 77 cha, 76 off, 70 def, 77 tra, 74 men, 68 phy, 79 pot
+James Fisher (RW/C): 69 ovr, 77 cha, 75 off, 70 def, 76 tra, 74 men, 74 phy, 78 pot
+Tanner Henricks (D): 69 ovr, 78 cha, 70 off, 74 def, 74 tra, 75 men, 80 phy, 78 pot
+Nikolai Makarov (D): 70 ovr, 78 cha, 70 off, 76 def, 76 tra, 76 men, 80 phy, 79 pot
+Alessandro Di Iorio (C): 69 ovr, 78 cha, 76 off, 70 def, 78 tra, 74 men, 72 phy, 79 pot
+Owen Griffin (C/RW): 69 ovr, 78 cha, 76 off, 70 def, 78 tra, 74 men, 70 phy, 78 pot
+Evan Jardine (F): 68 ovr, 77 cha, 74 off, 69 def, 76 tra, 73 men, 72 phy, 78 pot
+Kirill Dolzhenkov (RW/LW): 69 ovr, 76 cha, 78 off, 68 def, 78 tra, 73 men, 74 phy, 79 pot
+Filip Novák (F): 68 ovr, 77 cha, 74 off, 70 def, 76 tra, 74 men, 74 phy, 78 pot
+Victor Hedin Raftheim (D): 68 ovr, 78 cha, 68 off, 76 def, 74 tra, 75 men, 78 phy, 77 pot
+Melvin Strahl (G): 70 ovr, 74 glove, 73 blocker, 73 stick, 80 pot
+Anttoni Uronen (F): 68 ovr, 76 cha, 74 off, 68 def, 76 tra, 73 men, 72 phy, 77 pot
+Luke Ashton (D): 68 ovr, 77 cha, 62 off, 76 def, 68 tra, 75 men, 84 phy, 76 pot 
+
+
+
+=== NEW YORK RANGERS ===
+
+-- NHL FORWARDS --
+Mika Zibanejad: 87 ovr, 84 cha, 88 off, 82 def, 84 tra, 84 men, 78 phy, 84 pot
+J.T. Miller: 89 ovr, 82 cha, 90 off, 80 def, 84 tra, 79 men, 86 phy, 84 pot
+Pavel Dorofeyev: 88 ovr, 79 cha, 93 off, 74 def, 88 tra, 76 men, 80 phy, 90 pot
+Alexis Lafrenière: 86 ovr, 81 cha, 88 off, 78 def, 87 tra, 79 men, 78 phy, 92 pot
+Will Cuylle: 82 ovr, 83 cha, 82 off, 78 def, 79 tra, 80 men, 88 phy, 85 pot
+Gabe Perreault: 80 ovr, 79 cha, 87 off, 70 def, 85 tra, 76 men, 66 phy, 90 pot
+Taylor Raddysh: 78 ovr, 80 cha, 79 off, 76 def, 78 tra, 78 men, 76 phy, 76 pot
+Oliver Bjorkstrand: 79 ovr, 79 cha, 84 off, 74 def, 82 tra, 78 men, 68 phy, 78 pot
+Tye Kartye: 76 ovr, 82 cha, 74 off, 78 def, 76 tra, 79 men, 84 phy, 79 pot
+Joe Veleno: 75 ovr, 80 cha, 74 off, 76 def, 78 tra, 77 men, 80 phy, 76 pot
+Eeli Tolvanen: 77 ovr, 76 cha, 82 off, 68 def, 80 tra, 74 men, 68 phy, 76 pot
+Jaroslav Chmelař: 74 ovr, 78 cha, 74 off, 74 def, 74 tra, 76 men, 84 phy, 82 pot
+Noah Laba: 73 ovr, 79 cha, 72 off, 76 def, 74 tra, 77 men, 82 phy, 80 pot
+Matt Rempe: 72 ovr, 78 cha, 58 off, 74 def, 62 tra, 76 men, 99 phy, 74 pot
+
+-- NHL DEFENCE --
+Adam Fox: 92 ovr, 87 cha, 92 off, 83 def, 93 tra, 85 men, 68 phy, 91 pot
+Vladislav Gavrikov: 85 ovr, 84 cha, 74 off, 90 def, 76 tra, 84 men, 88 phy, 82 pot
+Sean Durzi: 81 ovr, 80 cha, 84 off, 74 def, 82 tra, 78 men, 74 phy, 82 pot
+Braden Schneider: 80 ovr, 82 cha, 74 off, 84 def, 76 tra, 80 men, 90 phy, 84 pot
+Marcus Pettersson: 79 ovr, 82 cha, 72 off, 84 def, 78 tra, 82 men, 76 phy, 79 pot
+Urho Vaakanainen: 74 ovr, 80 cha, 68 off, 79 def, 74 tra, 79 men, 78 phy, 76 pot
+Vincent Iorio: 73 ovr, 79 cha, 66 off, 78 def, 72 tra, 77 men, 84 phy, 78 pot
+Scott Morrow: 74 ovr, 76 cha, 80 off, 68 def, 82 tra, 74 men, 70 phy, 84 pot
+Matthew Robertson: 73 ovr, 78 cha, 68 off, 78 def, 72 tra, 76 men, 84 phy, 79 pot
+
+-- NHL GOALIES --
+Igor Shesterkin: 96 ovr, 97 glove, 93 blocker, 90 stick, 95 pot
+Joonas Korpisalo: 79 ovr, 81 glove, 79 blocker, 76 stick, 78 pot
+
+-- AHL: HARTFORD WOLF PACK --
+Juuso Pärssinen (C/LW): 76 ovr, 82 cha, 78 off, 79 def, 78 tra, 80 men, 82 phy, 80 pot
+Adam Sýkora (LW/C): 75 ovr, 80 cha, 80 off, 74 def, 82 tra, 77 men, 74 phy, 82 pot
+Liam Greentree (RW): 74 ovr, 80 cha, 82 off, 71 def, 78 tra, 76 men, 76 phy, 84 pot
+Brody Lamb (RW): 73 ovr, 79 cha, 80 off, 70 def, 78 tra, 75 men, 70 phy, 80 pot
+Carey Terrance (C/LW): 73 ovr, 80 cha, 76 off, 76 def, 80 tra, 77 men, 76 phy, 80 pot
+Bryce McConnell-Barker (C/LW): 72 ovr, 80 cha, 76 off, 74 def, 78 tra, 77 men, 74 phy, 79 pot
+Dylan Roobroeck (C/LW): 72 ovr, 79 cha, 76 off, 73 def, 76 tra, 76 men, 80 phy, 79 pot
+Jacob Battaglia (RW/LW): 72 ovr, 79 cha, 76 off, 73 def, 78 tra, 76 men, 78 phy, 78 pot
+Aidan Thompson (C/LW): 71 ovr, 79 cha, 74 off, 74 def, 77 tra, 76 men, 78 phy, 78 pot
+Cole Beaudoin (C): 71 ovr, 80 cha, 72 off, 76 def, 76 tra, 78 men, 80 phy, 79 pot
+Nathan Aspinall (LW/RW): 71 ovr, 78 cha, 74 off, 74 def, 76 tra, 76 men, 82 phy, 76 pot
+Glenn Gawdin (C/RW): 70 ovr, 80 cha, 72 off, 74 def, 76 tra, 78 men, 74 phy, 70 pot
+Justin Dowling (C/W): 70 ovr, 81 cha, 70 off, 76 def, 74 tra, 78 men, 72 phy, 68 pot
+Anton Blidh (LW/RW): 70 ovr, 82 cha, 62 off, 76 def, 68 tra, 79 men, 84 phy, 68 pot
+Drew Fortescue (D): 72 ovr, 80 cha, 68 off, 78 def, 74 tra, 78 men, 84 phy, 78 pot
+Jackson Dorrington (D): 71 ovr, 79 cha, 74 off, 74 def, 78 tra, 76 men, 74 phy, 78 pot
+Marc Del Gaizo (D): 71 ovr, 78 cha, 76 off, 72 def, 80 tra, 76 men, 70 phy, 74 pot
+William Trudeau (D): 71 ovr, 79 cha, 72 off, 76 def, 76 tra, 76 men, 74 phy, 78 pot
+Dennis Cholowski (D): 70 ovr, 77 cha, 74 off, 72 def, 78 tra, 74 men, 70 phy, 72 pot
+Spencer Martin (G): 73 ovr, 76 glove, 76 blocker, 74 stick, 72 pot
+Dylan Garand (G): 73 ovr, 77 glove, 74 blocker, 75 stick, 80 pot
+Callum Tung (G): 70 ovr, 75 glove, 73 blocker, 73 stick, 78 pot
+
+-- PROSPECTS (junior / NCAA / Europe / KHL) --
+Alberts Šmits (D): 74 ovr, 80 cha, 74 off, 79 def, 78 tra, 78 men, 88 phy, 87 pot
+EJ Emery (D): 71 ovr, 81 cha, 62 off, 80 def, 68 tra, 79 men, 86 phy, 82 pot
+Malcolm Spence (LW): 72 ovr, 80 cha, 78 off, 73 def, 78 tra, 77 men, 80 phy, 83 pot
+Karl Henriksson (C): 72 ovr, 79 cha, 78 off, 73 def, 79 tra, 76 men, 68 phy, 80 pot
+Zeb Lindgren (D): 71 ovr, 80 cha, 72 off, 78 def, 76 tra, 77 men, 82 phy, 82 pot
+Ben Macbeath (D): 70 ovr, 79 cha, 68 off, 76 def, 74 tra, 76 men, 82 phy, 79 pot
+Charlie Morrison (D): 70 ovr, 79 cha, 68 off, 76 def, 74 tra, 76 men, 80 phy, 78 pot
+Raoul Boilard (C/LW): 70 ovr, 79 cha, 74 off, 74 def, 76 tra, 76 men, 78 phy, 79 pot
+Rico Gredig (LW/C): 70 ovr, 78 cha, 74 off, 72 def, 78 tra, 75 men, 74 phy, 78 pot
+Sean Barnhill (D): 69 ovr, 78 cha, 66 off, 76 def, 72 tra, 75 men, 84 phy, 79 pot
+Samuel Jung (RW): 69 ovr, 77 cha, 76 off, 68 def, 78 tra, 74 men, 68 phy, 79 pot
+Lauri Pajuniemi (RW): 69 ovr, 77 cha, 76 off, 69 def, 78 tra, 74 men, 70 phy, 78 pot
+Ivan Patrikhayev (D): 68 ovr, 78 cha, 64 off, 76 def, 70 tra, 76 men, 80 phy, 78 pot
+Mikkel Eriksen (C): 68 ovr, 77 cha, 74 off, 68 def, 77 tra, 74 men, 68 phy, 79 pot
+Ty Henricks (LW): 68 ovr, 77 cha, 74 off, 68 def, 76 tra, 73 men, 74 phy, 78 pot
+Felix Färhammar (D): 67 ovr, 78 cha, 64 off, 75 def, 72 tra, 75 men, 76 phy, 78 pot
+Artyom Gonchar (D): 67 ovr, 77 cha, 62 off, 75 def, 70 tra, 74 men, 74 phy, 77 pot
+Rasmus Larsson (D): 67 ovr, 77 cha, 66 off, 74 def, 72 tra, 74 men, 76 phy, 76 pot
+Danai Shaiikov (G): 70 ovr, 75 glove, 73 blocker, 73 stick, 80 pot
+
+
+=== NEW YORK ISLANDERS ===
+
+-- NHL FORWARDS --
+Mathew Barzal: 89 ovr, 78 cha, 92 off, 74 def, 95 tra, 76 men, 70 phy, 89 pot
+Bo Horvat: 84 ovr, 86 cha, 84 off, 82 def, 78 tra, 84 men, 84 phy, 82 pot
+Brayden Schenn: 83 ovr, 82 cha, 84 off, 78 def, 78 tra, 81 men, 86 phy, 80 pot
+Simon Holmström: 79 ovr, 80 cha, 80 off, 76 def, 78 tra, 78 men, 80 phy, 85 pot
+Anthony Duclair: 78 ovr, 76 cha, 84 off, 68 def, 86 tra, 73 men, 74 phy, 78 pot
+Jean-Gabriel Pageau: 80 ovr, 86 cha, 76 off, 84 def, 78 tra, 84 men, 78 phy, 76 pot
+Ondřej Palát: 78 ovr, 82 cha, 78 off, 78 def, 78 tra, 81 men, 74 phy, 74 pot
+Emil Heineman: 76 ovr, 79 cha, 78 off, 74 def, 80 tra, 76 men, 78 phy, 82 pot
+Pierre Engvall: 76 ovr, 79 cha, 76 off, 76 def, 76 tra, 78 men, 86 phy, 74 pot
+Kyle Palmieri: 78 ovr, 80 cha, 82 off, 74 def, 78 tra, 79 men, 74 phy, 74 pot
+Matias Maccelli: 76 ovr, 74 cha, 82 off, 68 def, 80 tra, 73 men, 66 phy, 78 pot
+Calum Ritchie: 76 ovr, 80 cha, 80 off, 74 def, 80 tra, 77 men, 76 phy, 87 pot
+Kyle MacLean: 73 ovr, 80 cha, 70 off, 78 def, 74 tra, 78 men, 82 phy, 76 pot
+Casey Cizikas: 73 ovr, 84 cha, 62 off, 80 def, 72 tra, 83 men, 82 phy, 68 pot
+
+-- NHL DEFENCE --
+Alexander Romanov: 82 ovr, 84 cha, 74 off, 88 def, 78 tra, 82 men, 90 phy, 84 pot
+Ryan Pulock: 82 ovr, 80 cha, 80 off, 82 def, 76 tra, 80 men, 84 phy, 78 pot
+Adam Pelech: 80 ovr, 84 cha, 68 off, 86 def, 72 tra, 84 men, 84 phy, 76 pot
+Matthew Schaefer: 86 ovr, 80 cha, 91 off, 80 def, 88 tra, 76 men, 74 phy, 96 pot
+Scott Mayfield: 77 ovr, 80 cha, 66 off, 82 def, 70 tra, 80 men, 88 phy, 72 pot
+Tony DeAngelo: 78 ovr, 68 cha, 86 off, 66 def, 82 tra, 66 men, 68 phy, 78 pot
+Matt Kessel: 71 ovr, 78 cha, 68 off, 76 def, 74 tra, 76 men, 82 phy, 79 pot
+
+-- NHL GOALIES --
+Ilya Sorokin: 90 ovr, 92 glove, 88 blocker, 84 stick, 89 pot
+Semyon Varlamov: 76 ovr, 79 glove, 76 blocker, 74 stick, 70 pot
+Vítek Vaněček: 75 ovr, 78 glove, 76 blocker, 73 stick, 76 pot
+
+-- AHL: HAMILTON HAMMERS --
+Cole Eiserman (LW): 76 ovr, 78 cha, 86 off, 68 def, 80 tra, 74 men, 76 phy, 88 pot
+Victor Eklund (RW): 75 ovr, 79 cha, 82 off, 71 def, 82 tra, 76 men, 70 phy, 86 pot
+Kashawn Aitcheson (D): 74 ovr, 81 cha, 74 off, 80 def, 76 tra, 79 men, 88 phy, 84 pot
+Isaiah George (D): 73 ovr, 78 cha, 72 off, 78 def, 78 tra, 77 men, 78 phy, 79 pot
+Calle Odelius (D): 73 ovr, 78 cha, 76 off, 74 def, 82 tra, 76 men, 68 phy, 82 pot
+Marshall Warren (D): 72 ovr, 79 cha, 74 off, 76 def, 78 tra, 76 men, 74 phy, 79 pot
+Jesse Pulkkinen (D): 72 ovr, 79 cha, 66 off, 80 def, 70 tra, 78 men, 86 phy, 78 pot
+Daniil Prokhorov (RW): 71 ovr, 77 cha, 76 off, 70 def, 78 tra, 74 men, 82 phy, 81 pot
+Quinn Finley (LW): 71 ovr, 78 cha, 78 off, 69 def, 79 tra, 75 men, 70 phy, 80 pot
+Jesse Nurmi (LW/RW): 71 ovr, 78 cha, 76 off, 71 def, 78 tra, 75 men, 74 phy, 78 pot
+Gleb Veremyev (C/LW): 71 ovr, 78 cha, 76 off, 72 def, 78 tra, 76 men, 74 phy, 78 pot
+Liam Foudy (C/W): 71 ovr, 78 cha, 74 off, 73 def, 82 tra, 75 men, 76 phy, 76 pot
+Daylan Kuefler (LW/RW): 70 ovr, 78 cha, 74 off, 71 def, 76 tra, 75 men, 76 phy, 75 pot
+Ethan Bear (D): 73 ovr, 79 cha, 72 off, 78 def, 76 tra, 78 men, 78 phy, 74 pot
+Matt Luff (RW/LW): 70 ovr, 78 cha, 72 off, 71 def, 74 tra, 75 men, 80 phy, 70 pot
+Mitchell Chaffee (RW): 71 ovr, 78 cha, 76 off, 71 def, 80 tra, 75 men, 74 phy, 74 pot
+Ryan Healey (D): 70 ovr, 78 cha, 68 off, 76 def, 74 tra, 76 men, 78 phy, 76 pot
+Joey Larson (RW/LW): 70 ovr, 79 cha, 72 off, 74 def, 74 tra, 76 men, 78 phy, 72 pot
+Alex Jefferies (RW/LW): 70 ovr, 78 cha, 74 off, 71 def, 76 tra, 75 men, 74 phy, 74 pot
+Joshua Kotai (G): 71 ovr, 76 glove, 74 blocker, 73 stick, 79 pot
+Henrik Tikkanen (G): 72 ovr, 76 glove, 75 blocker, 75 stick, 78 pot
+
+-- PROSPECTS (junior / NCAA / Europe / KHL) --
+Ruslan Iskhakov (C/LW): 74 ovr, 78 cha, 80 off, 71 def, 82 tra, 76 men, 66 phy, 82 pot
+Xavier Veilleux (D): 71 ovr, 79 cha, 70 off, 76 def, 76 tra, 76 men, 78 phy, 79 pot
+Danny Nelson (C/LW): 71 ovr, 80 cha, 74 off, 76 def, 76 tra, 78 men, 78 phy, 80 pot
+Tomas Machu (D): 70 ovr, 78 cha, 70 off, 76 def, 76 tra, 76 men, 78 phy, 78 pot
+Lincoln Kuehne (D): 69 ovr, 78 cha, 68 off, 75 def, 74 tra, 75 men, 78 phy, 79 pot
+Malte Gustafsson (D): 70 ovr, 79 cha, 68 off, 78 def, 74 tra, 77 men, 84 phy, 84 pot
+Luca Romano (C): 69 ovr, 78 cha, 76 off, 70 def, 78 tra, 74 men, 72 phy, 79 pot
+Sam Laurila (D): 69 ovr, 78 cha, 66 off, 76 def, 72 tra, 75 men, 80 phy, 78 pot
+Bobby Cowan (F): 68 ovr, 77 cha, 76 off, 68 def, 78 tra, 73 men, 70 phy, 78 pot
+Kamil Bednarik (C): 69 ovr, 79 cha, 72 off, 74 def, 76 tra, 76 men, 78 phy, 78 pot
+Vladimír Dravecký (D): 68 ovr, 78 cha, 66 off, 75 def, 72 tra, 75 men, 78 phy, 79 pot
+Artyom Matyuk (C): 67 ovr, 76 cha, 74 off, 68 def, 76 tra, 73 men, 68 phy, 78 pot
+Dennis Good Bogg (D): 67 ovr, 77 cha, 66 off, 74 def, 72 tra, 74 men, 78 phy, 77 pot
+Dmitri Gamzin (G): 70 ovr, 75 glove, 73 blocker, 74 stick, 79 pot
+
+
+
+
+=== NEW JERSEY DEVILS ===
+
+-- NHL FORWARDS --
+Jack Hughes: 93 ovr, 84 cha, 96 off, 78 def, 96 tra, 84 men, 68 phy, 95 pot
+Nico Hischier: 89 ovr, 90 cha, 88 off, 88 def, 88 tra, 88 men, 82 phy, 90 pot
+Jesper Bratt: 89 ovr, 86 cha, 91 off, 80 def, 88 tra, 84 men, 72 phy, 88 pot
+Timo Meier: 87 ovr, 78 cha, 90 off, 78 def, 82 tra, 78 men, 88 phy, 87 pot
+Dawson Mercer: 82 ovr, 82 cha, 82 off, 78 def, 82 tra, 79 men, 76 phy, 85 pot
+Anthony Mantha: 81 ovr, 78 cha, 86 off, 74 def, 78 tra, 76 men, 84 phy, 78 pot
+Arseni Gritsyuk: 80 ovr, 80 cha, 82 off, 75 def, 84 tra, 78 men, 74 phy, 86 pot
+Connor Brown: 78 ovr, 84 cha, 74 off, 80 def, 78 tra, 82 men, 78 phy, 74 pot
+Evan Rodrigues: 77 ovr, 80 cha, 78 off, 76 def, 80 tra, 78 men, 74 phy, 76 pot
+Cody Glass: 76 ovr, 78 cha, 78 off, 74 def, 78 tra, 76 men, 74 phy, 79 pot
+Jesper Boqvist: 75 ovr, 78 cha, 76 off, 74 def, 82 tra, 76 men, 72 phy, 78 pot
+Lenni Hämeenaho: 75 ovr, 79 cha, 78 off, 74 def, 78 tra, 77 men, 76 phy, 83 pot
+Stefan Noesen: 76 ovr, 80 cha, 74 off, 78 def, 74 tra, 80 men, 84 phy, 74 pot
+Nick Bjugstad: 74 ovr, 78 cha, 72 off, 76 def, 72 tra, 78 men, 84 phy, 72 pot
+
+-- NHL DEFENCE --
+Dougie Hamilton: 85 ovr, 82 cha, 88 off, 78 def, 84 tra, 80 men, 82 phy, 82 pot
+Luke Hughes: 85 ovr, 80 cha, 88 off, 76 def, 92 tra, 78 men, 74 phy, 92 pot
+Brett Pesce: 82 ovr, 84 cha, 72 off, 87 def, 78 tra, 84 men, 84 phy, 80 pot
+Jonas Siegenthaler: 79 ovr, 84 cha, 62 off, 86 def, 70 tra, 83 men, 88 phy, 77 pot
+Johnathan Kovacevic: 76 ovr, 82 cha, 68 off, 80 def, 74 tra, 80 men, 84 phy, 75 pot
+Brenden Dillon: 76 ovr, 82 cha, 64 off, 82 def, 70 tra, 81 men, 88 phy, 71 pot
+Etienne Morin: 72 ovr, 78 cha, 76 off, 72 def, 80 tra, 75 men, 72 phy, 82 pot
+Declan Chisholm: 72 ovr, 78 cha, 72 off, 74 def, 76 tra, 76 men, 74 phy, 78 pot
+
+-- NHL GOALIES --
+Jake Allen: 80 ovr, 82 glove, 80 blocker, 78 stick, 76 pot
+Nico Daws: 75 ovr, 78 glove, 76 blocker, 74 stick, 80 pot
+David Rittich: 73 ovr, 76 glove, 75 blocker, 73 stick, 70 pot
+
+-- AHL: UTICA COMETS --
+Ben Steeves (LW/C): 74 ovr, 80 cha, 79 off, 73 def, 78 tra, 77 men, 74 phy, 79 pot
+Colin White (C): 73 ovr, 82 cha, 74 off, 78 def, 76 tra, 80 men, 78 phy, 72 pot
+Nathan Légaré (RW): 72 ovr, 78 cha, 74 off, 73 def, 76 tra, 75 men, 78 phy, 74 pot
+Amadeus Lombardi (C/LW): 73 ovr, 79 cha, 81 off, 71 def, 82 tra, 76 men, 72 phy, 80 pot
+Topias Vilén (D): 73 ovr, 79 cha, 72 off, 78 def, 76 tra, 78 men, 78 phy, 79 pot
+Calen Addison (D): 72 ovr, 76 cha, 78 off, 68 def, 80 tra, 73 men, 68 phy, 74 pot
+Kevin Bahl (D): 74 ovr, 82 cha, 66 off, 82 def, 68 tra, 80 men, 92 phy, 76 pot
+Mikhail Yegorov (G): 74 ovr, 78 glove, 76 blocker, 76 stick, 85 pot
+Veeti Louhivaara (G): 71 ovr, 76 glove, 74 blocker, 74 stick, 79 pot
+
+-- PROSPECTS (junior / NCAA / Europe / KHL) --
+Anton Silayev (D): 74 ovr, 80 cha, 72 off, 82 def, 76 tra, 78 men, 90 phy, 88 pot
+Alexander Command (F): 70 ovr, 78 cha, 78 off, 70 def, 78 tra, 74 men, 72 phy, 82 pot
+Matias Vanhanen (F): 69 ovr, 77 cha, 78 off, 68 def, 78 tra, 73 men, 68 phy, 80 pot
+Nikita Shcherbakov (D): 69 ovr, 78 cha, 68 off, 78 def, 72 tra, 76 men, 82 phy, 80 pot
+Lavr Gashilov (F): 68 ovr, 76 cha, 78 off, 67 def, 79 tra, 72 men, 68 phy, 79 pot
+Kasper Pikkarainen (F): 69 ovr, 78 cha, 76 off, 71 def, 78 tra, 75 men, 76 phy, 79 pot
+Herman Träff (F): 68 ovr, 78 cha, 72 off, 72 def, 74 tra, 75 men, 82 phy, 78 pot
+Conrad Fondrk (F): 68 ovr, 77 cha, 76 off, 68 def, 78 tra, 73 men, 72 phy, 78 pot
+Benjamin Kevan (F): 68 ovr, 77 cha, 76 off, 68 def, 78 tra, 73 men, 70 phy, 78 pot
+Mason Moe (F): 68 ovr, 77 cha, 74 off, 70 def, 76 tra, 74 men, 74 phy, 77 pot
+Matyas Melovsky (F): 68 ovr, 78 cha, 74 off, 70 def, 76 tra, 74 men, 76 phy, 76 pot
+David Rozsíval (F): 67 ovr, 77 cha, 74 off, 69 def, 76 tra, 73 men, 74 phy, 77 pot
+Max Graham (F): 67 ovr, 78 cha, 68 off, 74 def, 70 tra, 76 men, 82 phy, 74 pot
+Sigge Holmgren (D): 67 ovr, 78 cha, 68 off, 75 def, 72 tra, 75 men, 80 phy, 78 pot
+Luke Wilfley (F): 66 ovr, 77 cha, 74 off, 68 def, 78 tra, 73 men, 68 phy, 78 pot
+Quinn McKenzie (F): 66 ovr, 77 cha, 74 off, 67 def, 78 tra, 72 men, 66 phy, 77 pot
+Daniil Rusakovich (G): 68 ovr, 74 glove, 72 blocker, 73 stick, 79 pot
+Trenten Bennett (G): 68 ovr, 74 glove, 73 blocker, 72 stick, 78 pot
+
+
+
+=== PHILADELPHIA FLYERS ===
+
+-- NHL FORWARDS --
+Matvei Michkov: 89 ovr, 76 cha, 96 off, 68 def, 90 tra, 74 men, 68 phy, 96 pot
+Travis Konecny: 87 ovr, 82 cha, 88 off, 79 def, 86 tra, 80 men, 80 phy, 86 pot
+Owen Tippett: 85 ovr, 78 cha, 87 off, 74 def, 82 tra, 76 men, 82 phy, 84 pot
+Sean Couturier: 82 ovr, 90 cha, 76 off, 88 def, 76 tra, 88 men, 82 phy, 78 pot
+Trevor Zegras: 86 ovr, 74 cha, 89 off, 75 def, 86 tra, 72 men, 68 phy, 85 pot
+Tyson Foerster: 81 ovr, 80 cha, 84 off, 76 def, 80 tra, 78 men, 78 phy, 87 pot
+Noah Cates: 78 ovr, 84 cha, 74 off, 82 def, 78 tra, 82 men, 78 phy, 80 pot
+Christian Dvorak: 77 ovr, 80 cha, 76 off, 78 def, 76 tra, 79 men, 76 phy, 74 pot
+Nikita Grebyonkin: 76 ovr, 76 cha, 78 off, 72 def, 78 tra, 73 men, 82 phy, 84 pot
+Porter Martone: 76 ovr, 80 cha, 82 off, 74 def, 80 tra, 78 men, 82 phy, 92 pot
+Jett Luchanko: 75 ovr, 79 cha, 74 off, 76 def, 82 tra, 76 men, 74 phy, 85 pot
+Carl Grundström: 74 ovr, 80 cha, 70 off, 78 def, 74 tra, 78 men, 82 phy, 72 pot
+Nolan Foote: 74 ovr, 78 cha, 78 off, 72 def, 76 tra, 76 men, 82 phy, 78 pot
+Denver Barkey: 73 ovr, 78 cha, 80 off, 68 def, 82 tra, 74 men, 62 phy, 80 pot
+Alex Bump: 73 ovr, 77 cha, 78 off, 70 def, 78 tra, 74 men, 72 phy, 79 pot
+Noel Acciari: 74 ovr, 84 cha, 66 off, 80 def, 70 tra, 82 men, 84 phy, 68 pot
+Zach Aston-Reese: 72 ovr, 82 cha, 64 off, 78 def, 70 tra, 80 men, 78 phy, 66 pot
+
+-- NHL DEFENCE --
+Travis Sanheim: 84 ovr, 82 cha, 78 off, 85 def, 82 tra, 82 men, 80 phy, 82 pot
+Cam York: 80 ovr, 78 cha, 82 off, 74 def, 84 tra, 76 men, 68 phy, 84 pot
+David Jiříček: 78 ovr, 78 cha, 74 off, 82 def, 76 tra, 76 men, 88 phy, 88 pot
+Jamie Drysdale: 78 ovr, 78 cha, 80 off, 72 def, 84 tra, 76 men, 66 phy, 84 pot
+Rasmus Ristolainen: 78 ovr, 78 cha, 68 off, 82 def, 72 tra, 78 men, 90 phy, 76 pot
+Nick Seeler: 74 ovr, 82 cha, 60 off, 80 def, 68 tra, 80 men, 88 phy, 70 pot
+Simon Benoît: 73 ovr, 80 cha, 58 off, 80 def, 66 tra, 79 men, 90 phy, 70 pot
+
+-- NHL GOALIES --
+Dan Vladař: 82 ovr, 84 glove, 82 blocker, 78 stick, 82 pot
+Joseph Woll: 81 ovr, 83 glove, 80 blocker, 78 stick, 84 pot
+
+-- AHL: LEHIGH VALLEY PHANTOMS --
+Jack Studnicka (C/RW): 75 ovr, 78 cha, 78 off, 74 def, 78 tra, 76 men, 74 phy, 76 pot
+Danila Klimovich (RW/LW): 74 ovr, 76 cha, 82 off, 68 def, 78 tra, 74 men, 76 phy, 82 pot
+Devin Kaplan (RW/LW): 73 ovr, 80 cha, 76 off, 74 def, 76 tra, 77 men, 82 phy, 82 pot
+Oliver Bonk (D): 73 ovr, 80 cha, 72 off, 78 def, 78 tra, 78 men, 76 phy, 84 pot
+Cole Knuble (C/RW): 72 ovr, 79 cha, 76 off, 72 def, 78 tra, 76 men, 74 phy, 78 pot
+Riley Thompson (C/LW): 71 ovr, 78 cha, 74 off, 72 def, 76 tra, 75 men, 76 phy, 76 pot
+Noah Powell (RW): 71 ovr, 78 cha, 74 off, 71 def, 76 tra, 75 men, 78 phy, 76 pot
+Jacob Gaucher (C/RW): 71 ovr, 79 cha, 70 off, 76 def, 74 tra, 77 men, 82 phy, 74 pot
+Alex Ciernik (LW/RW): 71 ovr, 78 cha, 76 off, 71 def, 78 tra, 75 men, 72 phy, 78 pot
+Helge Grans (D): 72 ovr, 79 cha, 74 off, 76 def, 78 tra, 76 men, 80 phy, 80 pot
+Cam Dineen (D): 71 ovr, 78 cha, 74 off, 74 def, 78 tra, 76 men, 72 phy, 76 pot
+Spencer Gill (D): 71 ovr, 79 cha, 68 off, 78 def, 74 tra, 77 men, 84 phy, 78 pot
+Jackson Edward (D): 70 ovr, 78 cha, 68 off, 76 def, 74 tra, 76 men, 82 phy, 76 pot
+Hunter McDonald (D): 70 ovr, 79 cha, 66 off, 78 def, 72 tra, 77 men, 84 phy, 76 pot
+Ty Murchison (D): 69 ovr, 78 cha, 68 off, 74 def, 74 tra, 75 men, 78 phy, 74 pot
+Carson Bjarnason (G): 74 ovr, 78 glove, 76 blocker, 76 stick, 84 pot
+Aleksei Kolosov (G): 73 ovr, 78 glove, 74 blocker, 76 stick, 80 pot
+
+-- PROSPECTS (junior / NCAA / Europe / KHL) --
+Jack Berglund (C/W): 73 ovr, 79 cha, 78 off, 74 def, 80 tra, 76 men, 80 phy, 84 pot
+Max Westergård (LW/RW): 71 ovr, 78 cha, 78 off, 71 def, 80 tra, 75 men, 70 phy, 82 pot
+Jack Nesbitt (C): 71 ovr, 79 cha, 76 off, 76 def, 76 tra, 77 men, 82 phy, 83 pot
+Shane Vansaghi (RW): 70 ovr, 78 cha, 76 off, 71 def, 76 tra, 75 men, 84 phy, 80 pot
+Matthew Gard (C): 69 ovr, 78 cha, 72 off, 74 def, 74 tra, 76 men, 84 phy, 78 pot
+Nathan Quinn (C): 69 ovr, 77 cha, 78 off, 68 def, 80 tra, 74 men, 66 phy, 80 pot
+Heikki Ruohonen (C): 69 ovr, 79 cha, 74 off, 74 def, 76 tra, 76 men, 76 phy, 78 pot
+KJ Sauer (F): 68 ovr, 78 cha, 70 off, 74 def, 72 tra, 76 men, 84 phy, 78 pot
+Austin Moline (D): 68 ovr, 78 cha, 64 off, 76 def, 70 tra, 76 men, 84 phy, 76 pot
+Ryan MacPherson (C): 68 ovr, 77 cha, 74 off, 70 def, 76 tra, 74 men, 70 phy, 77 pot
+Max Laatikainen (D): 66 ovr, 77 cha, 68 off, 74 def, 74 tra, 74 men, 74 phy, 78 pot
+Yegor Zavragin (G): 71 ovr, 76 glove, 75 blocker, 74 stick, 80 pot
+Martin Psohlavec (G): 68 ovr, 74 glove, 73 blocker, 74 stick, 79 pot
+
+
+=== PITTSBURGH PENGUINS ===
+
+-- NHL FORWARDS --
+Sidney Crosby: 93 ovr, 96 cha, 92 off, 86 def, 88 tra, 96 men, 76 phy, 88 pot
+Yevgeni Malkin: 86 ovr, 78 cha, 90 off, 74 def, 80 tra, 78 men, 82 phy, 78 pot
+Bryan Rust: 83 ovr, 82 cha, 84 off, 78 def, 84 tra, 80 men, 76 phy, 78 pot
+Rickard Rakell: 83 ovr, 80 cha, 86 off, 76 def, 80 tra, 78 men, 78 phy, 80 pot
+Egor Chinakhov: 82 ovr, 76 cha, 87 off, 72 def, 84 tra, 74 men, 78 phy, 87 pot
+Andrey Kuzmenko: 81 ovr, 76 cha, 87 off, 68 def, 80 tra, 73 men, 68 phy, 80 pot
+Nick Robertson: 79 ovr, 76 cha, 86 off, 68 def, 84 tra, 73 men, 66 phy, 84 pot
+Ville Koivunen: 78 ovr, 78 cha, 82 off, 72 def, 82 tra, 76 men, 66 phy, 86 pot
+Tommy Novak: 78 ovr, 80 cha, 80 off, 74 def, 80 tra, 78 men, 68 phy, 78 pot
+Benjamin Kindel: 76 ovr, 79 cha, 82 off, 70 def, 82 tra, 76 men, 68 phy, 90 pot
+Justin Brazeau: 76 ovr, 80 cha, 76 off, 76 def, 74 tra, 78 men, 90 phy, 78 pot
+Hendrix Lapierre: 74 ovr, 78 cha, 76 off, 72 def, 80 tra, 75 men, 68 phy, 82 pot
+Connor Dewar: 74 ovr, 82 cha, 68 off, 78 def, 76 tra, 80 men, 82 phy, 74 pot
+Elmer Söderblom: 73 ovr, 78 cha, 68 off, 76 def, 68 tra, 76 men, 96 phy, 78 pot
+Blake Lizotte: 73 ovr, 82 cha, 66 off, 78 def, 76 tra, 80 men, 76 phy, 70 pot
+
+-- NHL DEFENCE --
+Erik Karlsson: 87 ovr, 80 cha, 90 off, 74 def, 90 tra, 78 men, 68 phy, 84 pot
+Kris Letang: 84 ovr, 84 cha, 82 off, 80 def, 84 tra, 82 men, 74 phy, 78 pot
+Samuel Girard: 78 ovr, 78 cha, 78 off, 74 def, 84 tra, 76 men, 62 phy, 78 pot
+Ryan Graves: 76 ovr, 80 cha, 62 off, 82 def, 68 tra, 79 men, 90 phy, 74 pot
+Trevor van Riemsdyk: 75 ovr, 80 cha, 66 off, 80 def, 72 tra, 79 men, 80 phy, 70 pot
+Kaedan Korczak: 74 ovr, 78 cha, 70 off, 78 def, 74 tra, 76 men, 82 phy, 78 pot
+Ilya Solovyov: 72 ovr, 78 cha, 66 off, 76 def, 72 tra, 75 men, 82 phy, 76 pot
+Declan Carlile: 71 ovr, 78 cha, 66 off, 76 def, 72 tra, 75 men, 80 phy, 76 pot
+Caleb Jones: 71 ovr, 77 cha, 66 off, 76 def, 72 tra, 75 men, 78 phy, 72 pot
+
+-- NHL GOALIES --
+Artūrs Šilovs: 78 ovr, 80 glove, 78 blocker, 76 stick, 82 pot
+Sergei Murashov: 76 ovr, 78 glove, 76 blocker, 76 stick, 88 pot
+
+-- AHL: WILKES-BARRE/SCRANTON PENGUINS --
+Rutger McGroarty (C/W): 76 ovr, 80 cha, 80 off, 74 def, 80 tra, 78 men, 78 phy, 87 pot
+Bill Zonnon (C): 74 ovr, 80 cha, 76 off, 76 def, 78 tra, 78 men, 82 phy, 84 pot
+Tristan Broz (C/LW): 73 ovr, 78 cha, 78 off, 72 def, 78 tra, 76 men, 74 phy, 79 pot
+Melvin Fernström (RW): 72 ovr, 78 cha, 78 off, 70 def, 78 tra, 75 men, 72 phy, 80 pot
+Filip Hållander (C/LW): 72 ovr, 79 cha, 74 off, 74 def, 78 tra, 76 men, 74 phy, 78 pot
+Mikhail Ilyin (LW/RW): 71 ovr, 76 cha, 78 off, 69 def, 78 tra, 73 men, 74 phy, 80 pot
+Tanner Howe (LW/C): 71 ovr, 78 cha, 76 off, 71 def, 78 tra, 75 men, 74 phy, 80 pot
+Avery Hayes (C/RW): 71 ovr, 79 cha, 72 off, 74 def, 76 tra, 76 men, 78 phy, 76 pot
+David Gustafsson (C): 71 ovr, 79 cha, 72 off, 76 def, 74 tra, 77 men, 78 phy, 74 pot
+Atley Calvert (C/RW): 70 ovr, 78 cha, 72 off, 72 def, 76 tra, 75 men, 74 phy, 74 pot
+Oliver Okuliar (LW/RW): 69 ovr, 77 cha, 72 off, 70 def, 76 tra, 74 men, 72 phy, 72 pot
+Owen Pickering (D): 73 ovr, 79 cha, 72 off, 78 def, 78 tra, 77 men, 82 phy, 84 pot
+Harrison Brunicke (D): 72 ovr, 80 cha, 74 off, 76 def, 78 tra, 78 men, 78 phy, 82 pot
+Jake Livanavage (D): 72 ovr, 79 cha, 70 off, 76 def, 76 tra, 77 men, 78 phy, 80 pot
+Chase Pietila (D): 71 ovr, 78 cha, 68 off, 76 def, 74 tra, 76 men, 80 phy, 78 pot
+Phil Kemp (D): 70 ovr, 78 cha, 66 off, 76 def, 72 tra, 76 men, 80 phy, 74 pot
+Daniel Laatsch (D): 70 ovr, 79 cha, 64 off, 78 def, 70 tra, 77 men, 84 phy, 71 pot
+Finn Harding (D): 69 ovr, 78 cha, 64 off, 75 def, 70 tra, 75 men, 78 phy, 76 pot
+Gabriel D'Aigle (G): 72 ovr, 76 glove, 75 blocker, 74 stick, 81 pot
+Taylor Gauthier (G): 71 ovr, 76 glove, 74 blocker, 73 stick, 76 pot
+Joel Blomqvist (G): 74 ovr, 78 glove, 76 blocker, 76 stick, 82 pot
+
+-- PROSPECTS (junior / NCAA / Europe / KHL) --
+William Horcoff (C): 74 ovr, 80 cha, 78 off, 76 def, 78 tra, 78 men, 84 phy, 87 pot
+Vasili Ponomaryov (C): 73 ovr, 78 cha, 78 off, 74 def, 80 tra, 76 men, 78 phy, 82 pot
+Tomas Galvas (D): 72 ovr, 79 cha, 76 off, 74 def, 82 tra, 77 men, 68 phy, 82 pot
+Liam Ruck (F): 71 ovr, 78 cha, 82 off, 68 def, 82 tra, 74 men, 66 phy, 85 pot
+Markus Ruck (C): 70 ovr, 78 cha, 80 off, 68 def, 82 tra, 74 men, 64 phy, 83 pot
+Alexander Alexeyev (D): 70 ovr, 78 cha, 68 off, 76 def, 74 tra, 75 men, 80 phy, 78 pot
+Kirill Tankov (C/RW): 70 ovr, 77 cha, 78 off, 68 def, 80 tra, 74 men, 68 phy, 80 pot
+Joona Väisänen (D): 69 ovr, 78 cha, 68 off, 76 def, 74 tra, 76 men, 78 phy, 78 pot
+Mac Swanson (LW/C): 69 ovr, 77 cha, 78 off, 66 def, 82 tra, 73 men, 62 phy, 80 pot
+Zam Plante (C): 68 ovr, 78 cha, 74 off, 70 def, 78 tra, 74 men, 70 phy, 78 pot
+Quinn Beauchesne (D): 68 ovr, 78 cha, 66 off, 76 def, 72 tra, 75 men, 78 phy, 77 pot
+Brady Peddle (D): 68 ovr, 78 cha, 66 off, 76 def, 72 tra, 75 men, 80 phy, 76 pot
+Charlie Trethewey (D): 68 ovr, 78 cha, 66 off, 75 def, 72 tra, 75 men, 78 phy, 77 pot
+Ryan Miller (C): 68 ovr, 77 cha, 76 off, 68 def, 78 tra, 73 men, 66 phy, 78 pot
+Kale Dach (F): 67 ovr, 77 cha, 74 off, 68 def, 78 tra, 73 men, 64 phy, 77 pot
+Peyton Kettles (D): 68 ovr, 78 cha, 68 off, 76 def, 74 tra, 76 men, 80 phy, 78 pot
+Carter Sanderson (C/LW): 67 ovr, 77 cha, 74 off, 69 def, 76 tra, 74 men, 74 phy, 77 pot
+Pierce Mbuyi (LW): 67 ovr, 76 cha, 76 off, 66 def, 78 tra, 72 men, 66 phy, 78 pot
+Luke Devlin (C): 67 ovr, 77 cha, 72 off, 70 def, 76 tra, 74 men, 70 phy, 76 pot
+Kalle Kangas (D): 66 ovr, 77 cha, 64 off, 74 def, 70 tra, 74 men, 74 phy, 76 pot
+Emil Järventie (LW): 67 ovr, 76 cha, 78 off, 66 def, 80 tra, 72 men, 62 phy, 78 pot
+Parker Von Richter (D): 66 ovr, 77 cha, 64 off, 74 def, 70 tra, 74 men, 78 phy, 75 pot
+
+
+=== WASHINGTON CAPITALS ===
+
+-- NHL FORWARDS --
+Alexander Ovechkin: 87 ovr, 82 cha, 94 off, 66 def, 74 tra, 84 men, 82 phy, 72 pot
+Alex Tuch: 87 ovr, 82 cha, 89 off, 78 def, 84 tra, 80 men, 84 phy, 86 pot
+Jordan Kyrou: 86 ovr, 76 cha, 91 off, 70 def, 90 tra, 74 men, 68 phy, 87 pot
+Dylan Strome: 84 ovr, 80 cha, 87 off, 74 def, 80 tra, 78 men, 74 phy, 82 pot
+Pierre-Luc Dubois: 82 ovr, 78 cha, 82 off, 78 def, 78 tra, 76 men, 88 phy, 80 pot
+Tom Wilson: 81 ovr, 82 cha, 76 off, 78 def, 74 tra, 80 men, 96 phy, 76 pot
+Alexei Protas: 82 ovr, 82 cha, 82 off, 78 def, 82 tra, 79 men, 88 phy, 88 pot
+Ryan Leonard: 80 ovr, 80 cha, 85 off, 74 def, 82 tra, 77 men, 82 phy, 90 pot
+Anthony Beauvillier: 76 ovr, 76 cha, 79 off, 70 def, 80 tra, 73 men, 68 phy, 74 pot
+Ethen Frank: 74 ovr, 78 cha, 76 off, 71 def, 78 tra, 75 men, 74 phy, 76 pot
+Boone Jenner: 78 ovr, 84 cha, 76 off, 80 def, 74 tra, 82 men, 88 phy, 74 pot
+Ilya Protas: 74 ovr, 78 cha, 78 off, 74 def, 76 tra, 76 men, 84 phy, 85 pot
+Justin Sourdif: 73 ovr, 79 cha, 72 off, 74 def, 76 tra, 76 men, 78 phy, 78 pot
+Jonny Brodzinski: 72 ovr, 78 cha, 74 off, 70 def, 72 tra, 75 men, 76 phy, 68 pot
+
+-- NHL DEFENCE --
+Jakob Chychrun: 84 ovr, 80 cha, 84 off, 78 def, 82 tra, 78 men, 82 phy, 84 pot
+Martin Fehérváry: 80 ovr, 82 cha, 68 off, 86 def, 74 tra, 82 men, 86 phy, 82 pot
+Matt Roy: 79 ovr, 82 cha, 68 off, 84 def, 74 tra, 82 men, 82 phy, 78 pot
+Rasmus Sandin: 78 ovr, 78 cha, 78 off, 74 def, 82 tra, 76 men, 68 phy, 80 pot
+Vincent Desharnais: 74 ovr, 80 cha, 58 off, 82 def, 66 tra, 79 men, 92 phy, 72 pot
+Timothy Liljegren: 75 ovr, 78 cha, 74 off, 76 def, 78 tra, 76 men, 72 phy, 78 pot
+Cole Hutson: 78 ovr, 76 cha, 84 off, 62 def, 88 tra, 72 men, 60 phy, 90 pot
+Justin Holl: 72 ovr, 79 cha, 62 off, 78 def, 68 tra, 77 men, 80 phy, 68 pot
+
+-- NHL GOALIES --
+Logan Thompson: 87 ovr, 89 glove, 85 blocker, 82 stick, 87 pot
+Charlie Lindgren: 78 ovr, 80 glove, 78 blocker, 76 stick, 76 pot
+
+-- AHL: HERSHEY BEARS --
+Andrew Cristall (LW): 76 ovr, 78 cha, 86 off, 68 def, 84 tra, 75 men, 62 phy, 87 pot
+Terik Parascak (RW): 75 ovr, 79 cha, 84 off, 70 def, 78 tra, 76 men, 72 phy, 86 pot
+Ivan Miroshnichenko (LW): 75 ovr, 78 cha, 82 off, 70 def, 80 tra, 75 men, 76 phy, 85 pot
+Lynden Lakovic (LW/RW): 74 ovr, 78 cha, 80 off, 71 def, 78 tra, 75 men, 78 phy, 84 pot
+Alexander Suzdalev (LW/RW): 73 ovr, 78 cha, 78 off, 71 def, 78 tra, 75 men, 76 phy, 81 pot
+Theodor Niederbach (C): 73 ovr, 79 cha, 78 off, 73 def, 80 tra, 77 men, 68 phy, 79 pot
+Petr Sikora (C): 72 ovr, 78 cha, 78 off, 71 def, 78 tra, 75 men, 70 phy, 80 pot
+Ludwig Persson (LW/C): 72 ovr, 78 cha, 76 off, 72 def, 78 tra, 76 men, 72 phy, 78 pot
+Patrick Thomas (C): 71 ovr, 78 cha, 74 off, 72 def, 76 tra, 75 men, 74 phy, 74 pot
+Bogdan Trineyev (LW): 71 ovr, 77 cha, 76 off, 69 def, 78 tra, 74 men, 74 phy, 77 pot
+Tyler Kopff (C/LW): 70 ovr, 78 cha, 72 off, 71 def, 76 tra, 75 men, 76 phy, 74 pot
+Josh Dunne (C/LW): 71 ovr, 78 cha, 74 off, 72 def, 74 tra, 76 men, 84 phy, 74 pot
+Spencer Smallman (RW/C): 70 ovr, 79 cha, 70 off, 74 def, 74 tra, 76 men, 78 phy, 68 pot
+Ryan Chesley (D): 73 ovr, 79 cha, 72 off, 78 def, 78 tra, 77 men, 80 phy, 80 pot
+Leon Muggli (D): 72 ovr, 79 cha, 68 off, 78 def, 76 tra, 77 men, 78 phy, 79 pot
+David Gucciardi (D): 71 ovr, 78 cha, 66 off, 77 def, 74 tra, 76 men, 82 phy, 76 pot
+Cam Allen (D): 71 ovr, 78 cha, 68 off, 76 def, 74 tra, 76 men, 78 phy, 77 pot
+Dylan McIlrath (D): 70 ovr, 80 cha, 56 off, 78 def, 62 tra, 78 men, 92 phy, 66 pot
+Louie Belpedio (D): 71 ovr, 79 cha, 68 off, 76 def, 76 tra, 77 men, 74 phy, 70 pot
+Jacob MacDonald (D): 70 ovr, 78 cha, 68 off, 74 def, 74 tra, 76 men, 74 phy, 68 pot
+Clay Stevenson (G): 72 ovr, 76 glove, 74 blocker, 75 stick, 78 pot
+Mitch Gibson (G): 71 ovr, 75 glove, 74 blocker, 73 stick, 76 pot
+
+-- PROSPECTS (junior / NCAA / Europe) --
+Oliver Suvanto (C): 72 ovr, 79 cha, 78 off, 75 def, 80 tra, 77 men, 76 phy, 85 pot
+Maxim Schäfer (LW): 71 ovr, 78 cha, 78 off, 71 def, 80 tra, 75 men, 74 phy, 82 pot
+Brett Hyland (LW/C): 71 ovr, 78 cha, 78 off, 71 def, 78 tra, 75 men, 70 phy, 80 pot
+Jackson Crowder (C): 69 ovr, 78 cha, 74 off, 72 def, 76 tra, 75 men, 78 phy, 79 pot
+Logan Stuart (F): 69 ovr, 78 cha, 74 off, 71 def, 76 tra, 74 men, 78 phy, 78 pot
+Joaquim Lemay (D): 68 ovr, 78 cha, 66 off, 76 def, 74 tra, 75 men, 76 phy, 77 pot
+Aron Dahlqvist (D): 68 ovr, 78 cha, 66 off, 76 def, 74 tra, 75 men, 80 phy, 78 pot
+Brian McFadden (D): 67 ovr, 78 cha, 64 off, 76 def, 70 tra, 75 men, 82 phy, 78 pot
+Miroslav Satan (C/LW): 66 ovr, 77 cha, 74 off, 68 def, 76 tra, 73 men, 72 phy, 76 pot
+Antoine Keller (G): 69 ovr, 74 glove, 73 blocker, 73 stick, 78 pot
+Nicholas Kempf (G): 68 ovr, 74 glove, 72 blocker, 73 stick, 77 pot
+
+
+=== COLORADO AVALANCHE ===
+
+-- NHL FORWARDS --
+Nathan MacKinnon: 97 ovr, 88 cha, 98 off, 84 def, 96 tra, 90 men, 82 phy, 96 pot
+Martin Nečas: 88 ovr, 80 cha, 91 off, 76 def, 90 tra, 78 men, 74 phy, 89 pot
+Gabriel Landeskog: 86 ovr, 92 cha, 84 off, 84 def, 80 tra, 90 men, 88 phy, 78 pot
+Artturi Lehkonen: 84 ovr, 86 cha, 82 off, 84 def, 82 tra, 85 men, 78 phy, 80 pot
+Brock Nelson: 83 ovr, 82 cha, 84 off, 78 def, 78 tra, 80 men, 84 phy, 78 pot
+Nazem Kadri: 83 ovr, 76 cha, 86 off, 76 def, 82 tra, 76 men, 78 phy, 78 pot
+Nicolas Roy: 79 ovr, 82 cha, 76 off, 80 def, 78 tra, 80 men, 86 phy, 76 pot
+Jaden Schwartz: 78 ovr, 82 cha, 79 off, 76 def, 78 tra, 80 men, 74 phy, 72 pot
+Logan O'Connor: 78 ovr, 84 cha, 74 off, 80 def, 78 tra, 82 men, 82 phy, 74 pot
+Fyodor Svechkov: 75 ovr, 82 cha, 72 off, 80 def, 76 tra, 80 men, 78 phy, 82 pot
+Parker Kelly: 74 ovr, 82 cha, 68 off, 78 def, 74 tra, 80 men, 80 phy, 72 pot
+Zachary L'Heureux: 73 ovr, 78 cha, 74 off, 72 def, 76 tra, 74 men, 84 phy, 78 pot
+T.J. Hughes: 72 ovr, 78 cha, 76 off, 70 def, 80 tra, 74 men, 68 phy, 78 pot
+Gavin Brindley: 72 ovr, 78 cha, 78 off, 68 def, 84 tra, 74 men, 62 phy, 82 pot
+Vinnie Hinostroza: 71 ovr, 78 cha, 74 off, 68 def, 80 tra, 73 men, 66 phy, 68 pot
+
+-- NHL DEFENCE --
+Cale Makar: 98 ovr, 86 cha, 97 off, 88 def, 98 tra, 88 men, 76 phy, 98 pot
+Devon Toews: 87 ovr, 86 cha, 82 off, 88 def, 84 tra, 86 men, 78 phy, 84 pot
+Sam Malinski: 78 ovr, 78 cha, 78 off, 76 def, 80 tra, 77 men, 78 phy, 80 pot
+Josh Manson: 79 ovr, 84 cha, 66 off, 86 def, 72 tra, 84 men, 90 phy, 74 pot
+Brett Kulak: 76 ovr, 80 cha, 70 off, 78 def, 76 tra, 78 men, 78 phy, 74 pot
+Brent Burns: 78 ovr, 82 cha, 82 off, 74 def, 78 tra, 80 men, 86 phy, 68 pot
+Noah Juulsen: 72 ovr, 79 cha, 62 off, 78 def, 70 tra, 76 men, 80 phy, 72 pot
+
+-- NHL GOALIES --
+Mackenzie Blackwood: 84 ovr, 86 glove, 82 blocker, 79 stick, 84 pot
+Scott Wedgewood: 78 ovr, 80 glove, 78 blocker, 76 stick, 74 pot
+
+-- AHL: COLORADO EAGLES --
+Fabian Lysell (RW/LW): 76 ovr, 78 cha, 82 off, 70 def, 84 tra, 75 men, 68 phy, 85 pot
+Adam Beckman (LW/RW): 74 ovr, 78 cha, 82 off, 68 def, 80 tra, 74 men, 70 phy, 79 pot
+Georgi Merkulov (LW/C): 73 ovr, 78 cha, 80 off, 70 def, 80 tra, 74 men, 68 phy, 79 pot
+Matthew DiMarsico (F): 72 ovr, 78 cha, 78 off, 70 def, 78 tra, 74 men, 74 phy, 78 pot
+Cooper Gay (RW/LW): 71 ovr, 78 cha, 76 off, 70 def, 78 tra, 74 men, 74 phy, 77 pot
+Tristen Nielsen (W/C): 71 ovr, 79 cha, 74 off, 72 def, 78 tra, 76 men, 76 phy, 74 pot
+Nikita Prishchepov (C/LW): 70 ovr, 77 cha, 74 off, 70 def, 78 tra, 73 men, 72 phy, 76 pot
+Taylor Makar (LW/C): 70 ovr, 78 cha, 74 off, 70 def, 78 tra, 74 men, 74 phy, 74 pot
+Sean Behrens (D): 73 ovr, 79 cha, 76 off, 76 def, 80 tra, 77 men, 68 phy, 80 pot
+Domenick Fensore (D): 72 ovr, 78 cha, 78 off, 70 def, 84 tra, 75 men, 60 phy, 78 pot
+Gustav Stjernberg (D): 72 ovr, 79 cha, 70 off, 78 def, 76 tra, 77 men, 78 phy, 78 pot
+Christian Wolanin (D): 72 ovr, 78 cha, 76 off, 72 def, 78 tra, 76 men, 72 phy, 74 pot
+Alex Gagne (D): 71 ovr, 78 cha, 68 off, 76 def, 74 tra, 76 men, 82 phy, 75 pot
+Wyatt Aamodt (D): 70 ovr, 78 cha, 66 off, 76 def, 72 tra, 76 men, 80 phy, 73 pot
+Keaton Middleton (D): 70 ovr, 79 cha, 60 off, 78 def, 66 tra, 78 men, 90 phy, 68 pot
+Saige Weinstein (D): 69 ovr, 78 cha, 66 off, 75 def, 74 tra, 75 men, 78 phy, 76 pot
+Nikita Novosyolov (G): 72 ovr, 76 glove, 75 blocker, 74 stick, 80 pot
+Ilya Nabokov (G): 73 ovr, 77 glove, 75 blocker, 75 stick, 81 pot
+Trent Miner (G): 71 ovr, 76 glove, 74 blocker, 73 stick, 76 pot
+
+-- PROSPECTS (junior / NCAA / Europe / KHL) --
+Mikhail Gulyayev (D): 76 ovr, 80 cha, 80 off, 75 def, 88 tra, 78 men, 66 phy, 88 pot
+Zakhar Bardakov (C/LW): 72 ovr, 78 cha, 78 off, 71 def, 80 tra, 75 men, 72 phy, 81 pot
+Cole Tuminaro (D): 70 ovr, 78 cha, 68 off, 76 def, 74 tra, 76 men, 82 phy, 78 pot
+Christian Humphreys (RW/C): 72 ovr, 79 cha, 80 off, 72 def, 78 tra, 77 men, 70 phy, 84 pot
+Sampo Ranta (LW/RW): 71 ovr, 78 cha, 78 off, 70 def, 78 tra, 75 men, 76 phy, 78 pot
+Egor Shilov (C): 70 ovr, 77 cha, 78 off, 69 def, 80 tra, 74 men, 68 phy, 82 pot
+Jake Fisher (C/LW): 69 ovr, 78 cha, 74 off, 70 def, 76 tra, 74 men, 74 phy, 78 pot
+Nikita Ishimnikov (D): 68 ovr, 78 cha, 66 off, 76 def, 74 tra, 75 men, 78 phy, 78 pot
+Axel Elofsson (D): 67 ovr, 78 cha, 68 off, 75 def, 76 tra, 75 men, 72 phy, 79 pot
+Chris Romaine (D): 68 ovr, 78 cha, 64 off, 76 def, 72 tra, 75 men, 80 phy, 76 pot
+Tory Pitner (D): 68 ovr, 78 cha, 66 off, 76 def, 72 tra, 75 men, 78 phy, 77 pot
+Teddy Lechner (D): 67 ovr, 78 cha, 64 off, 76 def, 72 tra, 74 men, 76 phy, 78 pot
+Nolan Roed (C/LW): 68 ovr, 78 cha, 74 off, 70 def, 78 tra, 74 men, 74 phy, 78 pot
+Francesco Dell'Elce (D): 67 ovr, 77 cha, 66 off, 75 def, 74 tra, 75 men, 78 phy, 77 pot
+Linus Funck (D): 67 ovr, 78 cha, 64 off, 76 def, 72 tra, 75 men, 76 phy, 78 pot
+Andrei Buyalsky (C): 66 ovr, 76 cha, 74 off, 68 def, 76 tra, 72 men, 68 phy, 74 pot
+Ivan Yunin (G): 68 ovr, 74 glove, 72 blocker, 73 stick, 78 pot
+
+=== DALLAS STARS ===
+
+-- NHL FORWARDS --
+Mikko Rantanen: 93 ovr, 82 cha, 95 off, 78 def, 84 tra, 82 men, 88 phy, 91 pot
+Roope Hintz: 90 ovr, 84 cha, 90 off, 82 def, 86 tra, 84 men, 82 phy, 88 pot
+Jason Robertson: 94 ovr, 80 cha, 96 off, 80 def, 84 tra, 78 men, 76 phy, 95 pot
+Wyatt Johnston: 87 ovr, 84 cha, 88 off, 80 def, 84 tra, 82 men, 78 phy, 91 pot
+Tyler Seguin: 84 ovr, 76 cha, 87 off, 74 def, 82 tra, 74 men, 74 phy, 78 pot
+Matt Duchene: 83 ovr, 80 cha, 85 off, 74 def, 84 tra, 78 men, 68 phy, 76 pot
+Jamie Benn: 82 ovr, 88 cha, 78 off, 80 def, 74 tra, 86 men, 88 phy, 74 pot
+Radek Faksa: 80 ovr, 86 cha, 68 off, 84 def, 74 tra, 84 men, 88 phy, 74 pot
+Joel Kiviranta: 78 ovr, 82 cha, 74 off, 78 def, 76 tra, 80 men, 82 phy, 74 pot
+Oskar Bäck: 76 ovr, 80 cha, 72 off, 78 def, 74 tra, 78 men, 84 phy, 78 pot
+Justin Hryckowian: 75 ovr, 78 cha, 76 off, 74 def, 78 tra, 76 men, 76 phy, 79 pot
+Arttu Hyry: 74 ovr, 78 cha, 74 off, 74 def, 76 tra, 76 men, 78 phy, 78 pot
+Sam Steel: 76 ovr, 78 cha, 78 off, 74 def, 80 tra, 76 men, 68 phy, 76 pot
+Colin Blackwell: 73 ovr, 80 cha, 68 off, 76 def, 76 tra, 78 men, 76 phy, 68 pot
+
+-- NHL DEFENCE --
+Miro Heiskanen: 92 ovr, 86 cha, 86 off, 92 def, 90 tra, 86 men, 78 phy, 92 pot
+Thomas Harley: 87 ovr, 80 cha, 88 off, 80 def, 88 tra, 78 men, 76 phy, 91 pot
+Esa Lindell: 84 ovr, 88 cha, 68 off, 90 def, 76 tra, 86 men, 88 phy, 80 pot
+Lian Bichsel: 78 ovr, 80 cha, 66 off, 82 def, 72 tra, 78 men, 94 phy, 86 pot
+Nils Lundkvist: 77 ovr, 78 cha, 80 off, 72 def, 82 tra, 76 men, 68 phy, 79 pot
+Tyler Myers: 76 ovr, 80 cha, 68 off, 78 def, 72 tra, 78 men, 90 phy, 70 pot
+Kyle Capobianco: 73 ovr, 77 cha, 76 off, 70 def, 80 tra, 74 men, 66 phy, 75 pot
+
+-- NHL GOALIES --
+Jake Oettinger: 91 ovr, 91 glove, 88 blocker, 84 stick, 91 pot
+Casey DeSmith: 76 ovr, 78 glove, 76 blocker, 74 stick, 72 pot
+
+-- AHL: TEXAS STARS --
+Emil Hemming (RW/LW): 75 ovr, 79 cha, 80 off, 73 def, 80 tra, 77 men, 78 phy, 85 pot
+Ayrton Martino (LW/RW): 74 ovr, 78 cha, 80 off, 70 def, 82 tra, 75 men, 68 phy, 80 pot
+Dylan Hryckowian (RW): 73 ovr, 78 cha, 78 off, 71 def, 78 tra, 75 men, 74 phy, 78 pot
+Justin Ertel (LW/RW): 72 ovr, 78 cha, 76 off, 71 def, 78 tra, 75 men, 76 phy, 76 pot
+Christian Fitzgerald (C/LW): 72 ovr, 79 cha, 74 off, 74 def, 78 tra, 76 men, 76 phy, 76 pot
+Angus MacDonell (C/LW): 71 ovr, 78 cha, 74 off, 72 def, 78 tra, 75 men, 72 phy, 77 pot
+Jaxon Fuder (LW/C): 71 ovr, 78 cha, 74 off, 72 def, 78 tra, 75 men, 74 phy, 76 pot
+Charlie Paquette (RW/C): 71 ovr, 78 cha, 74 off, 72 def, 76 tra, 75 men, 78 phy, 75 pot
+Harrison Scott (C/LW): 70 ovr, 78 cha, 70 off, 74 def, 74 tra, 76 men, 76 phy, 71 pot
+Artem Shlaine (C/LW): 70 ovr, 77 cha, 74 off, 71 def, 78 tra, 74 men, 70 phy, 73 pot
+Cameron Hughes (C/LW): 71 ovr, 79 cha, 72 off, 75 def, 76 tra, 77 men, 74 phy, 68 pot
+Jack Anderson (D): 72 ovr, 78 cha, 70 off, 76 def, 76 tra, 76 men, 78 phy, 78 pot
+Niilopekka Muhonen (D): 71 ovr, 78 cha, 68 off, 76 def, 74 tra, 76 men, 82 phy, 79 pot
+Trey Taylor (D): 71 ovr, 79 cha, 70 off, 76 def, 76 tra, 77 men, 78 phy, 76 pot
+Aram Minnetian (D): 70 ovr, 78 cha, 68 off, 75 def, 74 tra, 76 men, 76 phy, 74 pot
+Tristan Bertucci (D): 70 ovr, 78 cha, 68 off, 75 def, 74 tra, 76 men, 78 phy, 75 pot
+Connor Punnett (D): 69 ovr, 78 cha, 64 off, 76 def, 70 tra, 76 men, 80 phy, 73 pot
+Luke Krys (D): 69 ovr, 78 cha, 64 off, 75 def, 70 tra, 76 men, 78 phy, 72 pot
+Kyle Burroughs (D): 72 ovr, 80 cha, 62 off, 78 def, 68 tra, 78 men, 82 phy, 70 pot
+Arno Tiefensee (G): 72 ovr, 76 glove, 75 blocker, 74 stick, 78 pot
+Rémi Poirier (G): 71 ovr, 75 glove, 74 blocker, 74 stick, 78 pot
+Brandon Halverson (G): 71 ovr, 76 glove, 74 blocker, 73 stick, 74 pot
+
+-- PROSPECTS (junior / NCAA / Europe) --
+Cameron Schmidt (RW): 74 ovr, 78 cha, 84 off, 68 def, 86 tra, 74 men, 62 phy, 85 pot
+Atte Joki (C): 72 ovr, 79 cha, 76 off, 74 def, 78 tra, 76 men, 74 phy, 80 pot
+Jasper Kuhta (F): 70 ovr, 78 cha, 76 off, 70 def, 78 tra, 74 men, 72 phy, 78 pot
+William Samuelsson (C): 70 ovr, 78 cha, 74 off, 71 def, 76 tra, 75 men, 74 phy, 78 pot
+Dawson Sharkey (RW): 69 ovr, 77 cha, 76 off, 68 def, 78 tra, 73 men, 70 phy, 78 pot
+Sebastian Bradshaw (LW): 66 ovr, 76 cha, 72 off, 66 def, 76 tra, 71 men, 68 phy, 74 pot
+George Fegaras (D): 68 ovr, 78 cha, 66 off, 76 def, 74 tra, 75 men, 76 phy, 76 pot
+Anton Emil Wilde Larsen (G): 68 ovr, 74 glove, 73 blocker, 73 stick, 79 pot
+Måns Goos (G): 68 ovr, 74 glove, 72 blocker, 73 stick, 78 pot
+Maxim Mayorov (G): 67 ovr, 73 glove, 72 blocker, 72 stick, 76 pot
+
+
+=== MINNESOTA WILD ===
+
+-- NHL FORWARDS --
+Kirill Kaprizov: 96 ovr, 84 cha, 97 off, 78 def, 92 tra, 86 men, 78 phy, 95 pot
+Matt Boldy: 87 ovr, 82 cha, 89 off, 78 def, 84 tra, 80 men, 78 phy, 89 pot
+Joel Eriksson Ek: 85 ovr, 88 cha, 80 off, 88 def, 80 tra, 86 men, 88 phy, 84 pot
+Danila Yurov: 80 ovr, 78 cha, 84 off, 74 def, 84 tra, 76 men, 74 phy, 90 pot
+Ryan Hartman: 80 ovr, 80 cha, 78 off, 78 def, 78 tra, 78 men, 84 phy, 76 pot
+Blake Coleman: 80 ovr, 84 cha, 76 off, 82 def, 78 tra, 82 men, 86 phy, 76 pot
+Bobby Brink: 77 ovr, 78 cha, 82 off, 70 def, 82 tra, 75 men, 62 phy, 82 pot
+Marcus Foligno: 78 ovr, 88 cha, 68 off, 82 def, 72 tra, 86 men, 92 phy, 74 pot
+Yakov Trenin: 77 ovr, 82 cha, 68 off, 80 def, 74 tra, 80 men, 88 phy, 74 pot
+Maxim Shabanov: 74 ovr, 76 cha, 80 off, 68 def, 80 tra, 74 men, 66 phy, 80 pot
+Nico Sturm: 75 ovr, 84 cha, 66 off, 80 def, 74 tra, 82 men, 82 phy, 72 pot
+Michael McCarron: 73 ovr, 79 cha, 66 off, 78 def, 68 tra, 78 men, 92 phy, 68 pot
+Nick Foligno: 73 ovr, 86 cha, 66 off, 76 def, 70 tra, 84 men, 82 phy, 66 pot
+
+-- NHL DEFENCE --
+Quinn Hughes: 96 ovr, 84 cha, 94 off, 82 def, 97 tra, 86 men, 68 phy, 94 pot
+Brock Faber: 88 ovr, 86 cha, 80 off, 90 def, 84 tra, 84 men, 82 phy, 92 pot
+Jonas Brodin: 85 ovr, 86 cha, 70 off, 90 def, 78 tra, 86 men, 84 phy, 82 pot
+Jared Spurgeon: 82 ovr, 86 cha, 78 off, 82 def, 80 tra, 84 men, 74 phy, 76 pot
+Olli Määttä: 76 ovr, 82 cha, 68 off, 80 def, 74 tra, 80 men, 78 phy, 72 pot
+Zach Bogosian: 74 ovr, 82 cha, 60 off, 80 def, 66 tra, 80 men, 86 phy, 68 pot
+Daemon Hunt: 73 ovr, 78 cha, 72 off, 74 def, 78 tra, 76 men, 74 phy, 78 pot
+
+-- NHL GOALIES --
+Filip Gustavsson: 86 ovr, 88 glove, 84 blocker, 80 stick, 86 pot
+Jesper Wallstedt: 79 ovr, 82 glove, 78 blocker, 76 stick, 88 pot
+Calvin Pickard: 73 ovr, 76 glove, 75 blocker, 73 stick, 68 pot
+
+-- AHL: IOWA WILD --
+Charlie Stramel (C/RW): 74 ovr, 79 cha, 74 off, 76 def, 76 tra, 77 men, 84 phy, 82 pot
+Riley Heidt (C/LW): 74 ovr, 78 cha, 80 off, 70 def, 82 tra, 75 men, 66 phy, 82 pot
+Hunter Haight (C/RW): 73 ovr, 79 cha, 78 off, 72 def, 78 tra, 77 men, 72 phy, 79 pot
+Rieger Lorenz (LW/C): 72 ovr, 78 cha, 76 off, 71 def, 78 tra, 76 men, 76 phy, 78 pot
+Rasmus Kumpulainen (C/LW): 71 ovr, 78 cha, 74 off, 72 def, 78 tra, 75 men, 74 phy, 78 pot
+Jagger Joshua (LW/RW): 70 ovr, 79 cha, 68 off, 76 def, 74 tra, 76 men, 84 phy, 74 pot
+Mason Shaw (C/LW): 70 ovr, 80 cha, 66 off, 76 def, 74 tra, 78 men, 78 phy, 68 pot
+Justin Kirkland (C/W): 69 ovr, 78 cha, 70 off, 72 def, 76 tra, 75 men, 74 phy, 68 pot
+Dylan Gambrell (C): 70 ovr, 79 cha, 68 off, 74 def, 76 tra, 76 men, 74 phy, 68 pot
+Tyler Pitlick (C/RW): 69 ovr, 78 cha, 68 off, 74 def, 74 tra, 76 men, 76 phy, 66 pot
+Caedan Bankier (C/LW): 69 ovr, 78 cha, 68 off, 74 def, 74 tra, 76 men, 74 phy, 75 pot
+Jack Peart (D): 72 ovr, 78 cha, 72 off, 76 def, 78 tra, 76 men, 76 phy, 79 pot
+Carson Lambos (D): 72 ovr, 79 cha, 72 off, 76 def, 78 tra, 77 men, 78 phy, 80 pot
+David Spacek (D): 71 ovr, 78 cha, 70 off, 76 def, 76 tra, 76 men, 74 phy, 78 pot
+Roman Schmidt (D): 71 ovr, 78 cha, 66 off, 78 def, 72 tra, 77 men, 82 phy, 78 pot
+Ben Dexheimer (D): 70 ovr, 78 cha, 68 off, 76 def, 74 tra, 75 men, 76 phy, 74 pot
+Matt Kiersted (D): 70 ovr, 78 cha, 68 off, 76 def, 76 tra, 76 men, 74 phy, 72 pot
+Viking Gustafsson Nyberg (D): 69 ovr, 78 cha, 66 off, 76 def, 74 tra, 75 men, 76 phy, 76 pot
+Stevie Leskovar (D): 69 ovr, 78 cha, 62 off, 76 def, 70 tra, 76 men, 82 phy, 74 pot
+Chase Wutzke (G): 70 ovr, 74 glove, 73 blocker, 73 stick, 76 pot
+Riley Mercer (G): 69 ovr, 74 glove, 72 blocker, 72 stick, 75 pot
+
+-- PROSPECTS (junior / NCAA / Europe) --
+
+Aron Kiviharju (D): 74 ovr, 78 cha, 78 off, 72 def, 84 tra, 76 men, 62 phy, 84 pot
+Adam Benák (C): 71 ovr, 78 cha, 82 off, 66 def, 82 tra, 74 men, 58 phy, 84 pot
+Jimmy Clark (LW/C): 70 ovr, 78 cha, 76 off, 70 def, 78 tra, 75 men, 72 phy, 79 pot
+Ryder Ritchie (RW): 70 ovr, 78 cha, 78 off, 69 def, 80 tra, 75 men, 70 phy, 80 pot
+Carter Klippenstein (C): 69 ovr, 78 cha, 74 off, 71 def, 76 tra, 75 men, 76 phy, 78 pot
+Lirim Amidovski (RW): 68 ovr, 77 cha, 76 off, 68 def, 78 tra, 73 men, 72 phy, 78 pot
+Sebastian Soini (D): 68 ovr, 78 cha, 66 off, 75 def, 74 tra, 75 men, 78 phy, 78 pot
+Theodor Hallquisth (D): 67 ovr, 78 cha, 66 off, 76 def, 74 tra, 75 men, 78 phy, 78 pot
+Justin Kipkie (D): 68 ovr, 78 cha, 64 off, 76 def, 70 tra, 75 men, 82 phy, 76 pot
+Adam Andersson (C): 67 ovr, 77 cha, 72 off, 68 def, 76 tra, 73 men, 76 phy, 77 pot
+Aaron Pionk (D): 67 ovr, 78 cha, 64 off, 75 def, 72 tra, 75 men, 78 phy, 76 pot
+Nate Benoit (D): 66 ovr, 77 cha, 66 off, 74 def, 74 tra, 74 men, 74 phy, 76 pot
+Filip Ruzicka (G): 68 ovr, 74 glove, 74 blocker, 73 stick, 78 pot 
+
+
+=== WINNIPEG JETS ===
+
+-- NHL FORWARDS --
+Kyle Connor: 93 ovr, 82 cha, 96 off, 76 def, 88 tra, 80 men, 74 phy, 92 pot
+Mark Scheifele: 89 ovr, 84 cha, 92 off, 78 def, 84 tra, 82 men, 76 phy, 86 pot
+Gabriel Vilardi: 86 ovr, 82 cha, 88 off, 78 def, 82 tra, 80 men, 84 phy, 88 pot
+Cole Perfetti: 84 ovr, 80 cha, 88 off, 72 def, 86 tra, 78 men, 68 phy, 88 pot
+Adam Lowry: 80 ovr, 90 cha, 68 off, 86 def, 74 tra, 88 men, 90 phy, 76 pot
+Nino Niederreiter: 79 ovr, 80 cha, 78 off, 78 def, 76 tra, 79 men, 84 phy, 74 pot
+Alex Iafallo: 77 ovr, 82 cha, 74 off, 78 def, 78 tra, 80 men, 74 phy, 74 pot
+Isak Rosén: 76 ovr, 78 cha, 80 off, 71 def, 82 tra, 76 men, 68 phy, 84 pot
+Vladislav Namestnikov: 76 ovr, 80 cha, 76 off, 76 def, 78 tra, 78 men, 70 phy, 72 pot
+Brad Lambert: 75 ovr, 76 cha, 80 off, 68 def, 88 tra, 73 men, 68 phy, 86 pot
+Morgan Barron: 74 ovr, 82 cha, 70 off, 78 def, 74 tra, 79 men, 86 phy, 76 pot
+Cole Koepke: 73 ovr, 80 cha, 68 off, 76 def, 74 tra, 78 men, 82 phy, 74 pot
+Noah Gregor: 72 ovr, 79 cha, 68 off, 74 def, 78 tra, 76 men, 78 phy, 72 pot
+Viggo Björck: 74 ovr, 78 cha, 82 off, 68 def, 84 tra, 75 men, 62 phy, 90 pot
+
+-- NHL DEFENCE --
+Josh Morrissey: 91 ovr, 86 cha, 88 off, 86 def, 90 tra, 84 men, 78 phy, 90 pot
+Neal Pionk: 82 ovr, 78 cha, 86 off, 75 def, 82 tra, 76 men, 68 phy, 78 pot
+Dylan Samberg: 84 ovr, 82 cha, 78 off, 86 def, 72 tra, 82 men, 90 phy, 80 pot
+Dylan DeMelo: 77 ovr, 82 cha, 66 off, 82 def, 74 tra, 82 men, 76 phy, 72 pot
+Mario Ferraro: 76 ovr, 80 cha, 70 off, 80 def, 76 tra, 79 men, 82 phy, 78 pot
+Haydn Fleury: 71 ovr, 79 cha, 60 off, 78 def, 68 tra, 77 men, 82 phy, 68 pot
+Jack St. Ivany: 70 ovr, 78 cha, 62 off, 76 def, 70 tra, 76 men, 80 phy, 74 pot
+
+-- NHL GOALIES --
+Connor Hellebuyck: 95 ovr, 96 glove, 92 blocker, 88 stick, 92 pot
+Stuart Skinner: 78 ovr, 80 glove, 78 blocker, 76 stick, 78 pot
+
+-- AHL: MANITOBA MOOSE --
+Brayden Yager (C/RW): 76 ovr, 80 cha, 80 off, 74 def, 80 tra, 77 men, 74 phy, 86 pot
+Nikita Chibrikov (LW/RW): 74 ovr, 78 cha, 80 off, 70 def, 82 tra, 75 men, 68 phy, 82 pot
+Colby Barlow (LW): 74 ovr, 78 cha, 82 off, 68 def, 78 tra, 75 men, 76 phy, 83 pot
+Danny Zhilkin (C): 73 ovr, 79 cha, 76 off, 74 def, 78 tra, 77 men, 76 phy, 79 pot
+Henry Thrun (D): 74 ovr, 80 cha, 68 off, 80 def, 74 tra, 78 men, 82 phy, 80 pot
+Isaak Phillips (D): 72 ovr, 79 cha, 68 off, 78 def, 74 tra, 77 men, 80 phy, 78 pot
+Elias Salomonsson (D): 72 ovr, 78 cha, 72 off, 76 def, 78 tra, 76 men, 76 phy, 80 pot
+Kevin He (LW): 71 ovr, 78 cha, 76 off, 68 def, 80 tra, 75 men, 68 phy, 78 pot
+Parker Ford (C/RW): 71 ovr, 78 cha, 76 off, 70 def, 78 tra, 75 men, 72 phy, 76 pot
+Lucas Wahlin (RW/LW): 70 ovr, 78 cha, 74 off, 70 def, 78 tra, 74 men, 70 phy, 76 pot
+Fabian Wagner (C/RW): 70 ovr, 78 cha, 72 off, 71 def, 76 tra, 75 men, 74 phy, 74 pot
+Jacob Julien (C): 70 ovr, 78 cha, 72 off, 71 def, 76 tra, 75 men, 72 phy, 74 pot
+Kieron Walton (C/LW): 69 ovr, 77 cha, 72 off, 68 def, 78 tra, 73 men, 76 phy, 76 pot
+Walker Duehr (RW): 69 ovr, 79 cha, 66 off, 74 def, 72 tra, 76 men, 82 phy, 68 pot
+Garrett Brown (D): 70 ovr, 78 cha, 66 off, 76 def, 74 tra, 76 men, 78 phy, 74 pot
+Alfons Freij (D): 70 ovr, 78 cha, 68 off, 76 def, 76 tra, 76 men, 74 phy, 78 pot
+Tyrel Bauer (D): 69 ovr, 79 cha, 60 off, 76 def, 68 tra, 77 men, 82 phy, 70 pot
+Thomas Milic (G): 73 ovr, 77 glove, 75 blocker, 75 stick, 80 pot
+Domenic DiVincentiis (G): 71 ovr, 76 glove, 74 blocker, 74 stick, 78 pot
+Isaac Poulter (G): 70 ovr, 75 glove, 74 blocker, 73 stick, 76 pot
+
+-- PROSPECTS (junior / NCAA / Europe / KHL) --
+Rasmus Kupari (C/RW): 73 ovr, 78 cha, 74 off, 74 def, 78 tra, 76 men, 76 phy, 78 pot
+Sascha Boumedienne (D): 71 ovr, 79 cha, 70 off, 76 def, 78 tra, 77 men, 82 phy, 82 pot
+Dmitri Rashevsky (RW): 71 ovr, 77 cha, 78 off, 68 def, 80 tra, 74 men, 70 phy, 78 pot
+Edison Engle (D): 68 ovr, 78 cha, 64 off, 76 def, 74 tra, 75 men, 76 phy, 78 pot
+Zach Wooten (C): 68 ovr, 77 cha, 74 off, 68 def, 76 tra, 74 men, 74 phy, 78 pot
+Markus Loponen (C): 68 ovr, 77 cha, 72 off, 70 def, 76 tra, 74 men, 72 phy, 77 pot
+Landon Hafele (F): 67 ovr, 77 cha, 74 off, 68 def, 76 tra, 73 men, 70 phy, 77 pot
+Viktor Klingsell (LW): 67 ovr, 76 cha, 76 off, 66 def, 78 tra, 73 men, 66 phy, 78 pot
+Alexandre Taillefer (D): 66 ovr, 78 cha, 62 off, 74 def, 72 tra, 75 men, 68 phy, 76 pot
+John Parsons (G): 68 ovr, 74 glove, 72 blocker, 73 stick, 77 pot
+Samuel Hrenak (G): 67 ovr, 73 glove, 72 blocker, 72 stick, 78 pot
+
+
+=== UTAH MAMMOTH ===
+
+-- NHL FORWARDS --
+Clayton Keller: 91 ovr, 84 cha, 93 off, 74 def, 90 tra, 82 men, 66 phy, 90 pot
+Dylan Guenther: 87 ovr, 80 cha, 90 off, 74 def, 84 tra, 78 men, 74 phy, 91 pot
+Nick Schmaltz: 86 ovr, 82 cha, 88 off, 76 def, 86 tra, 80 men, 68 phy, 84 pot
+Logan Cooley: 85 ovr, 82 cha, 88 off, 76 def, 88 tra, 79 men, 70 phy, 93 pot
+Lawson Crouse: 79 ovr, 80 cha, 76 off, 78 def, 74 tra, 78 men, 88 phy, 78 pot
+Anders Lee: 78 ovr, 84 cha, 78 off, 78 def, 70 tra, 82 men, 88 phy, 72 pot
+Vincent Trocheck: 82 ovr, 84 cha, 82 off, 80 def, 82 tra, 84 men, 78 phy, 78 pot
+Barrett Hayton: 76 ovr, 80 cha, 76 off, 76 def, 78 tra, 78 men, 78 phy, 82 pot
+Jack McBain: 78 ovr, 82 cha, 76 off, 80 def, 78 tra, 80 men, 88 phy, 82 pot
+Daniil But: 77 ovr, 76 cha, 80 off, 70 def, 78 tra, 74 men, 84 phy, 88 pot
+Michael Carcone: 74 ovr, 78 cha, 76 off, 70 def, 80 tra, 75 men, 66 phy, 74 pot
+Kevin Stenlund: 74 ovr, 80 cha, 72 off, 76 def, 74 tra, 78 men, 86 phy, 74 pot
+Brandon Tanev: 74 ovr, 84 cha, 62 off, 78 def, 82 tra, 80 men, 84 phy, 68 pot
+Liam O'Brien: 71 ovr, 80 cha, 58 off, 76 def, 68 tra, 78 men, 88 phy, 66 pot
+Kailer Yamamoto: 73 ovr, 76 cha, 78 off, 68 def, 80 tra, 73 men, 62 phy, 74 pot
+Caleb Desnoyers: 74 ovr, 80 cha, 78 off, 74 def, 80 tra, 77 men, 76 phy, 92 pot
+
+-- NHL DEFENCE --
+MacKenzie Weegar: 87 ovr, 84 cha, 78 off, 88 def, 82 tra, 84 men, 88 phy, 84 pot
+Mikhail Sergachyov: 85 ovr, 80 cha, 82 off, 82 def, 80 tra, 78 men, 84 phy, 82 pot
+Dmitri Simashev: 76 ovr, 80 cha, 68 off, 82 def, 74 tra, 78 men, 84 phy, 90 pot
+John Marino: 78 ovr, 82 cha, 68 off, 82 def, 76 tra, 82 men, 78 phy, 76 pot
+Nate Schmidt: 76 ovr, 80 cha, 74 off, 76 def, 80 tra, 78 men, 68 phy, 72 pot
+Andrew Peeke: 74 ovr, 80 cha, 62 off, 80 def, 70 tra, 78 men, 82 phy, 74 pot
+Nick DeSimone: 71 ovr, 79 cha, 62 off, 78 def, 70 tra, 76 men, 76 phy, 68 pot
+
+-- NHL GOALIES --
+Karel Vejmelka: 80 ovr, 82 glove, 80 blocker, 76 stick, 78 pot
+Sebastian Cossa: 79 ovr, 82 glove, 79 blocker, 76 stick, 90 pot
+
+-- AHL: TUCSON ROADRUNNERS --
+Tij Iginla (LW): 76 ovr, 80 cha, 82 off, 70 def, 80 tra, 76 men, 76 phy, 89 pot
+Joshua Roy (W/C): 75 ovr, 78 cha, 82 off, 70 def, 82 tra, 75 men, 68 phy, 83 pot
+Sam Lipkin (C/LW): 73 ovr, 78 cha, 80 off, 70 def, 80 tra, 75 men, 68 phy, 80 pot
+Noel Nordh (LW/RW): 72 ovr, 78 cha, 78 off, 70 def, 78 tra, 75 men, 74 phy, 79 pot
+Miko Matikka (RW/LW): 71 ovr, 78 cha, 76 off, 70 def, 78 tra, 74 men, 72 phy, 78 pot
+Ben McCartney (LW/RW): 71 ovr, 78 cha, 74 off, 71 def, 76 tra, 75 men, 76 phy, 76 pot
+Owen Allard (C/LW): 71 ovr, 79 cha, 72 off, 74 def, 76 tra, 76 men, 76 phy, 74 pot
+Gabe Smith (C): 70 ovr, 78 cha, 70 off, 74 def, 74 tra, 75 men, 82 phy, 74 pot
+Julian Lutz (W/C): 70 ovr, 77 cha, 74 off, 70 def, 78 tra, 74 men, 72 phy, 76 pot
+Cameron Hebig (C/W): 69 ovr, 78 cha, 70 off, 72 def, 74 tra, 75 men, 74 phy, 70 pot
+Yegor Borikov (RW/LW): 70 ovr, 77 cha, 74 off, 69 def, 78 tra, 74 men, 74 phy, 78 pot
+Vadim Moroz (LW/RW): 69 ovr, 77 cha, 74 off, 68 def, 78 tra, 73 men, 70 phy, 76 pot
+Tomas Lavoie (D): 72 ovr, 79 cha, 68 off, 78 def, 74 tra, 77 men, 84 phy, 82 pot
+Zac Jones (D): 73 ovr, 78 cha, 76 off, 72 def, 82 tra, 76 men, 66 phy, 78 pot
+Gregor Biber (D): 71 ovr, 78 cha, 64 off, 78 def, 72 tra, 76 men, 82 phy, 79 pot
+Terrell Goldsmith (D): 70 ovr, 78 cha, 66 off, 76 def, 74 tra, 76 men, 78 phy, 76 pot
+Artyom Duda (D): 69 ovr, 78 cha, 64 off, 76 def, 72 tra, 75 men, 78 phy, 75 pot
+Montana Onyebuchi (D): 68 ovr, 78 cha, 58 off, 76 def, 66 tra, 76 men, 88 phy, 68 pot
+Michael Hrabal (G): 76 ovr, 80 glove, 78 blocker, 78 stick, 88 pot
+Jaxson Stauber (G): 71 ovr, 76 glove, 74 blocker, 74 stick, 76 pot
+
+-- PROSPECTS (junior / NCAA / Europe / KHL) --
+Ethan Belchetz (LW): 71 ovr, 78 cha, 74 off, 71 def, 76 tra, 75 men, 84 phy, 84 pot
+Veeti Väisänen (D): 71 ovr, 79 cha, 66 off, 78 def, 74 tra, 77 men, 78 phy, 80 pot
+Vojtěch Hradec (C): 70 ovr, 78 cha, 74 off, 72 def, 76 tra, 75 men, 80 phy, 80 pot
+Stepan Hoch (LW): 69 ovr, 77 cha, 74 off, 69 def, 76 tra, 73 men, 78 phy, 79 pot
+Reko Alanko (D): 68 ovr, 78 cha, 62 off, 76 def, 70 tra, 75 men, 82 phy, 79 pot
+Will Skahan (D): 68 ovr, 78 cha, 60 off, 78 def, 68 tra, 76 men, 88 phy, 78 pot
+Ludvig Johnson (D): 68 ovr, 78 cha, 66 off, 76 def, 74 tra, 75 men, 74 phy, 77 pot
+Ludvig Lafton (D): 67 ovr, 78 cha, 62 off, 76 def, 70 tra, 75 men, 78 phy, 78 pot
+Theodor Knights (D): 67 ovr, 78 cha, 64 off, 76 def, 72 tra, 75 men, 80 phy, 79 pot
+Samu Bau (C): 68 ovr, 78 cha, 72 off, 70 def, 76 tra, 74 men, 74 phy, 78 pot
+Adam Valentini (F): 67 ovr, 77 cha, 74 off, 67 def, 78 tra, 72 men, 66 phy, 78 pot
+Tanner Ludtke (C): 68 ovr, 78 cha, 72 off, 70 def, 76 tra, 74 men, 76 phy, 77 pot
+Matthew Morden (D): 66 ovr, 77 cha, 62 off, 75 def, 72 tra, 74 men, 76 phy, 76 pot
+Alexander Daryin (LW): 67 ovr, 76 cha, 76 off, 66 def, 78 tra, 72 men, 68 phy, 78 pot
+Ilya Fedotov (LW): 67 ovr, 76 cha, 76 off, 66 def, 78 tra, 72 men, 70 phy, 78 pot
+Danil Savunov (RW/C): 66 ovr, 76 cha, 72 off, 66 def, 76 tra, 72 men, 68 phy, 76 pot
+Artyom Prima (RW/LW): 66 ovr, 76 cha, 74 off, 65 def, 78 tra, 71 men, 66 phy, 78 pot
+Melker Thelin (G): 68 ovr, 74 glove, 72 blocker, 73 stick, 78 pot
+Ivan Tkach-Tkachenko (G): 68 ovr, 74 glove, 73 blocker, 72 stick, 79 pot
+Carl Axelsson (G): 67 ovr, 73 glove, 72 blocker, 72 stick, 77 pot
+Carsen Musser (G): 67 ovr, 73 glove, 72 blocker, 72 stick, 76 pot
+
+
+=== VEGAS GOLDEN KNIGHTS ===
+
+-- NHL FORWARDS --
+Jack Eichel: 95 ovr, 86 cha, 96 off, 80 def, 88 tra, 86 men, 78 phy, 92 pot
+Mitch Marner: 92 ovr, 82 cha, 93 off, 78 def, 92 tra, 80 men, 66 phy, 90 pot
+Mark Stone: 89 ovr, 92 cha, 84 off, 90 def, 80 tra, 90 men, 78 phy, 82 pot
+Tomas Hertl: 85 ovr, 82 cha, 84 off, 80 def, 78 tra, 82 men, 84 phy, 78 pot
+William Karlsson: 82 ovr, 82 cha, 80 off, 82 def, 82 tra, 80 men, 74 phy, 76 pot
+Ivan Barbashev: 81 ovr, 80 cha, 82 off, 76 def, 78 tra, 78 men, 82 phy, 76 pot
+Brett Howden: 78 ovr, 82 cha, 74 off, 80 def, 76 tra, 80 men, 82 phy, 76 pot
+Victor Olofsson: 76 ovr, 76 cha, 84 off, 66 def, 78 tra, 74 men, 62 phy, 76 pot
+Alexander Holtz: 76 ovr, 76 cha, 82 off, 68 def, 82 tra, 74 men, 68 phy, 84 pot
+Marc Gatcomb: 71 ovr, 78 cha, 62 off, 76 def, 72 tra, 76 men, 86 phy, 70 pot
+Nic Dowd: 72 ovr, 82 cha, 60 off, 80 def, 68 tra, 82 men, 78 phy, 66 pot
+Brandon Saad: 73 ovr, 82 cha, 68 off, 76 def, 76 tra, 80 men, 78 phy, 66 pot
+
+-- NHL DEFENCE --
+Noah Hanifin: 86 ovr, 82 cha, 78 off, 86 def, 82 tra, 82 men, 78 phy, 84 pot
+Shea Theodore: 85 ovr, 80 cha, 86 off, 76 def, 86 tra, 78 men, 66 phy, 82 pot
+Rasmus Andersson: 82 ovr, 82 cha, 74 off, 84 def, 78 tra, 80 men, 82 phy, 80 pot
+Brayden McNabb: 76 ovr, 84 cha, 56 off, 84 def, 66 tra, 82 men, 88 phy, 68 pot
+Ben Hutton: 73 ovr, 78 cha, 66 off, 76 def, 74 tra, 76 men, 76 phy, 68 pot
+Jeremy Lauzon: 74 ovr, 80 cha, 58 off, 80 def, 68 tra, 79 men, 88 phy, 70 pot
+Parker Wotherspoon: 74 ovr, 78 cha, 72 off, 74 def, 78 tra, 76 men, 78 phy, 76 pot
+Dylan Coghlan: 73 ovr, 76 cha, 74 off, 70 def, 78 tra, 74 men, 70 phy, 74 pot
+
+-- NHL GOALIES --
+Adin Hill: 84 ovr, 86 glove, 82 blocker, 78 stick, 82 pot
+Carter Hart: 78 ovr, 80 glove, 78 blocker, 76 stick, 80 pot
+
+-- AHL: HENDERSON SILVER KNIGHTS --
+Matyas Sapovaliv (C/LW): 74 ovr, 78 cha, 78 off, 72 def, 78 tra, 76 men, 76 phy, 82 pot
+Trevor Connelly (LW): 74 ovr, 76 cha, 82 off, 68 def, 82 tra, 74 men, 66 phy, 84 pot
+Raphaël Lavoie (C/RW): 74 ovr, 78 cha, 80 off, 70 def, 76 tra, 76 men, 82 phy, 80 pot
+Jonas Røndbjerg (RW/LW): 73 ovr, 78 cha, 78 off, 70 def, 80 tra, 75 men, 68 phy, 78 pot
+Kai Uchacz (C/RW): 72 ovr, 78 cha, 76 off, 71 def, 76 tra, 75 men, 78 phy, 78 pot
+Jordan Gustafson (C/LW): 71 ovr, 78 cha, 74 off, 71 def, 78 tra, 75 men, 74 phy, 78 pot
+Mathieu Cataford (C/RW): 70 ovr, 78 cha, 72 off, 72 def, 76 tra, 75 men, 76 phy, 74 pot
+Ben Hemmerling (RW/C): 71 ovr, 78 cha, 74 off, 71 def, 78 tra, 75 men, 74 phy, 78 pot
+Tuomas Uronen (W/C): 70 ovr, 77 cha, 74 off, 70 def, 76 tra, 74 men, 72 phy, 76 pot
+Trent Swick (LW/RW): 70 ovr, 78 cha, 72 off, 71 def, 74 tra, 75 men, 80 phy, 74 pot
+Jackson Hallum (LW/RW): 69 ovr, 77 cha, 72 off, 69 def, 76 tra, 74 men, 74 phy, 74 pot
+Tanner Laczynski (C/RW): 70 ovr, 78 cha, 72 off, 72 def, 76 tra, 76 men, 76 phy, 74 pot
+Jakub Demek (C/W): 69 ovr, 77 cha, 72 off, 69 def, 76 tra, 73 men, 72 phy, 74 pot
+Alex Weiermair (C/RW): 69 ovr, 77 cha, 70 off, 71 def, 74 tra, 74 men, 76 phy, 74 pot
+Jérémy Davies (D): 72 ovr, 78 cha, 72 off, 74 def, 78 tra, 76 men, 72 phy, 76 pot
+Bronson Ride (D): 71 ovr, 78 cha, 66 off, 78 def, 72 tra, 76 men, 82 phy, 78 pot
+Viliam Kmec (D): 71 ovr, 78 cha, 68 off, 76 def, 74 tra, 76 men, 78 phy, 78 pot
+Jaycob Megna (D): 70 ovr, 79 cha, 58 off, 78 def, 66 tra, 78 men, 84 phy, 66 pot
+Adam Ginning (D): 71 ovr, 79 cha, 62 off, 78 def, 70 tra, 78 men, 82 phy, 76 pot
+Ville Heinola (D): 74 ovr, 78 cha, 78 off, 74 def, 84 tra, 76 men, 66 phy, 82 pot
+Antti Tuomisto (D): 71 ovr, 78 cha, 66 off, 76 def, 74 tra, 76 men, 78 phy, 78 pot
+Lukas Cormier (D): 71 ovr, 78 cha, 72 off, 74 def, 78 tra, 75 men, 68 phy, 78 pot
+Joe Fleming (W/D): 68 ovr, 77 cha, 62 off, 74 def, 70 tra, 74 men, 76 phy, 72 pot
+Pavel Moysevich (G): 73 ovr, 78 glove, 76 blocker, 76 stick, 84 pot
+Cameron Whitehead (G): 71 ovr, 76 glove, 74 blocker, 74 stick, 78 pot
+Carl Lindbom (G): 70 ovr, 75 glove, 73 blocker, 73 stick, 76 pot
+
+-- PROSPECTS (junior / NCAA / Europe) --
+Juho Piiparinen (D): 70 ovr, 78 cha, 70 off, 76 def, 76 tra, 76 men, 76 phy, 82 pot
+Arttu Kärki (D): 68 ovr, 78 cha, 66 off, 76 def, 74 tra, 75 men, 76 phy, 78 pot
+Ben Wilmott (C/LW): 68 ovr, 77 cha, 74 off, 68 def, 76 tra, 73 men, 70 phy, 78 pot
+Jakob Ihs-Wozniak (RW/C): 69 ovr, 78 cha, 78 off, 68 def, 78 tra, 74 men, 70 phy, 80 pot
+Gustav Sjöqvist (D): 67 ovr, 78 cha, 62 off, 76 def, 72 tra, 74 men, 78 phy, 78 pot
+Jakub Brabenec (C/LW): 68 ovr, 78 cha, 76 off, 68 def, 78 tra, 74 men, 68 phy, 78 pot
+Martins Dzierkals (LW/RW): 68 ovr, 77 cha, 74 off, 68 def, 76 tra, 73 men, 70 phy, 74 pot
+Sean Burick (D): 68 ovr, 78 cha, 62 off, 76 def, 70 tra, 75 men, 82 phy, 79 pot
+Noel Pakarinen (LW): 66 ovr, 76 cha, 72 off, 66 def, 76 tra, 72 men, 68 phy, 77 pot
+Mateo Nobert (C): 67 ovr, 77 cha, 74 off, 68 def, 78 tra, 73 men, 66 phy, 77 pot
+Lucas Van Vliet (RW): 66 ovr, 76 cha, 70 off, 68 def, 74 tra, 72 men, 70 phy, 74 pot
+Noah Ellis (D): 65 ovr, 76 cha, 60 off, 74 def, 70 tra, 73 men, 76 phy, 70 pot
+
+
+=== LOS ANGELES KINGS ===
+
+-- NHL FORWARDS --
+Adrian Kempe: 90 ovr, 82 cha, 92 off, 78 def, 86 tra, 80 men, 78 phy, 88 pot
+Artemi Panarin: 89 ovr, 78 cha, 93 off, 70 def, 92 tra, 76 men, 60 phy, 84 pot
+Kevin Fiala: 87 ovr, 78 cha, 87 off, 72 def, 84 tra, 76 men, 66 phy, 82 pot
+Quinton Byfield: 85 ovr, 80 cha, 84 off, 76 def, 82 tra, 78 men, 82 phy, 90 pot
+Alex Laferriere: 75 ovr, 80 cha, 80 off, 74 def, 78 tra, 78 men, 76 phy, 84 pot
+Trevor Moore: 83 ovr, 82 cha, 78 off, 85 def, 82 tra, 80 men, 74 phy, 76 pot
+Scott Laughton: 76 ovr, 82 cha, 72 off, 78 def, 76 tra, 80 men, 82 phy, 74 pot
+Joel Armia: 75 ovr, 80 cha, 74 off, 76 def, 74 tra, 78 men, 82 phy, 72 pot
+Erik Haula: 74 ovr, 80 cha, 72 off, 76 def, 78 tra, 78 men, 74 phy, 68 pot
+Corey Perry: 76 ovr, 78 cha, 78 off, 70 def, 68 tra, 76 men, 80 phy, 64 pot
+Mats Zuccarello: 76 ovr, 82 cha, 78 off, 70 def, 84 tra, 78 men, 60 phy, 66 pot
+Alex Turcotte: 73 ovr, 78 cha, 74 off, 72 def, 78 tra, 75 men, 72 phy, 80 pot
+Taylor Ward: 71 ovr, 78 cha, 70 off, 72 def, 76 tra, 75 men, 72 phy, 76 pot
+Jared Wright: 70 ovr, 78 cha, 68 off, 72 def, 74 tra, 75 men, 74 phy, 76 pot
+Samuel Helenius: 70 ovr, 78 cha, 62 off, 74 def, 68 tra, 76 men, 86 phy, 74 pot
+
+-- NHL DEFENCE --
+Drew Doughty: 84 ovr, 88 cha, 76 off, 84 def, 78 tra, 86 men, 78 phy, 76 pot
+Brandt Clarke: 85 ovr, 78 cha, 82 off, 72 def, 84 tra, 76 men, 68 phy, 89 pot
+Mikey Anderson: 83 ovr, 82 cha, 66 off, 84 def, 74 tra, 82 men, 82 phy, 78 pot
+Joel Edmundson: 76 ovr, 82 cha, 58 off, 82 def, 68 tra, 80 men, 88 phy, 72 pot
+Cody Ceci: 75 ovr, 78 cha, 68 off, 78 def, 74 tra, 78 men, 80 phy, 72 pot
+Brian Dumoulin: 74 ovr, 80 cha, 60 off, 80 def, 70 tra, 80 men, 82 phy, 70 pot
+Erik Gustafsson: 73 ovr, 76 cha, 78 off, 66 def, 82 tra, 73 men, 62 phy, 72 pot
+
+-- NHL GOALIES --
+Darcy Kuemper: 82 ovr, 84 glove, 80 blocker, 78 stick, 78 pot
+Anton Forsberg: 76 ovr, 78 glove, 76 blocker, 74 stick, 72 pot
+
+-- AHL: ONTARIO REIGN --
+Koehn Ziemmer (RW/C): 73 ovr, 78 cha, 78 off, 71 def, 78 tra, 75 men, 74 phy, 82 pot
+Francesco Pinelli (C/LW): 73 ovr, 79 cha, 76 off, 73 def, 78 tra, 76 men, 76 phy, 82 pot
+Martin Chromiak (RW/LW): 72 ovr, 78 cha, 78 off, 70 def, 78 tra, 75 men, 72 phy, 80 pot
+Jan Jeník (W/C): 72 ovr, 78 cha, 76 off, 71 def, 80 tra, 75 men, 70 phy, 80 pot
+Aatu Jämsen (RW/LW): 71 ovr, 78 cha, 74 off, 71 def, 78 tra, 75 men, 70 phy, 78 pot
+Cole Guttman (C/RW): 70 ovr, 78 cha, 72 off, 71 def, 76 tra, 75 men, 72 phy, 76 pot
+Grant Slukynsky (C): 69 ovr, 77 cha, 72 off, 70 def, 76 tra, 74 men, 74 phy, 76 pot
+Kenny Connors (C/LW): 69 ovr, 78 cha, 70 off, 71 def, 76 tra, 75 men, 74 phy, 74 pot
+Andre Lee (LW/C): 68 ovr, 77 cha, 70 off, 69 def, 76 tra, 73 men, 72 phy, 74 pot
+Kaleb Lawrence (C/W): 68 ovr, 77 cha, 70 off, 70 def, 76 tra, 74 men, 72 phy, 74 pot
+Lane Pederson (C/RW): 70 ovr, 78 cha, 72 off, 72 def, 76 tra, 76 men, 76 phy, 72 pot
+Jared Woolley (D): 70 ovr, 78 cha, 62 off, 76 def, 70 tra, 76 men, 82 phy, 76 pot
+Otto Salin (D): 70 ovr, 78 cha, 70 off, 74 def, 78 tra, 76 men, 72 phy, 76 pot
+Kirill Kirsanov (D): 69 ovr, 78 cha, 66 off, 76 def, 74 tra, 75 men, 76 phy, 76 pot
+Jakub Dvořák (D): 70 ovr, 78 cha, 66 off, 76 def, 72 tra, 76 men, 80 phy, 76 pot
+Angus Booth (D): 68 ovr, 77 cha, 64 off, 75 def, 72 tra, 74 men, 76 phy, 74 pot
+Joe Hicketts (D): 70 ovr, 79 cha, 66 off, 76 def, 74 tra, 77 men, 76 phy, 70 pot
+Scott Perunovich (D): 72 ovr, 78 cha, 78 off, 70 def, 84 tra, 76 men, 60 phy, 76 pot
+Erik Portillo (G): 72 ovr, 76 glove, 75 blocker, 74 stick, 80 pot
+Carter George (G): 71 ovr, 76 glove, 74 blocker, 74 stick, 82 pot
+Hampton Slukynsky (G): 69 ovr, 74 glove, 72 blocker, 72 stick, 74 pot
+
+-- PROSPECTS (junior / NCAA / Europe / KHL) --
+Elton Hermansson (RW/LW): 71 ovr, 78 cha, 76 off, 70 def, 78 tra, 75 men, 70 phy, 82 pot
+Vojtech Cihar (LW): 69 ovr, 77 cha, 76 off, 68 def, 78 tra, 73 men, 70 phy, 79 pot
+Jimmy Lombardi (C/LW): 68 ovr, 77 cha, 74 off, 68 def, 76 tra, 73 men, 72 phy, 78 pot
+Blake Zielinski (F): 68 ovr, 77 cha, 74 off, 68 def, 76 tra, 73 men, 74 phy, 78 pot
+Thomas Vandenberg (C): 67 ovr, 77 cha, 72 off, 68 def, 76 tra, 73 men, 70 phy, 77 pot
+Caeden Herrington (D): 68 ovr, 78 cha, 64 off, 76 def, 72 tra, 75 men, 78 phy, 77 pot
+Kristian Epperson (LW): 68 ovr, 77 cha, 74 off, 67 def, 76 tra, 73 men, 70 phy, 77 pot
+Bulat Shafigullin (RW/LW): 68 ovr, 76 cha, 78 off, 66 def, 78 tra, 72 men, 66 phy, 78 pot
+Alexander Dergachyov (C): 67 ovr, 76 cha, 74 off, 67 def, 76 tra, 72 men, 68 phy, 76 pot
+Brendan McMorrow (LW): 66 ovr, 76 cha, 70 off, 68 def, 74 tra, 72 men, 72 phy, 76 pot
+James Reeder (RW): 65 ovr, 75 cha, 70 off, 66 def, 76 tra, 71 men, 66 phy, 75 pot
+Alex Kostov (RW): 66 ovr, 76 cha, 70 off, 68 def, 74 tra, 72 men, 78 phy, 74 pot
+Giorgos Pantelas (D): 66 ovr, 77 cha, 62 off, 75 def, 70 tra, 74 men, 78 phy, 76 pot
+Will Sharpe (D): 66 ovr, 77 cha, 62 off, 75 def, 70 tra, 74 men, 76 phy, 76 pot
+Tobias Krestan (F): 65 ovr, 76 cha, 70 off, 66 def, 74 tra, 71 men, 76 phy, 74 pot
+Liam Lefebvre (C): 65 ovr, 76 cha, 72 off, 66 def, 76 tra, 71 men, 68 phy, 76 pot
+Jan Chovan (C/RW): 65 ovr, 76 cha, 70 off, 66 def, 74 tra, 71 men, 70 phy, 75 pot
+Adam Goljer (D): 64 ovr, 76 cha, 60 off, 74 def, 68 tra, 73 men, 76 phy, 76 pot
+Petteri Rimpinen (G): 68 ovr, 74 glove, 73 blocker, 73 stick, 77 pot
+Yegor Rybkin (G): 65 ovr, 71 glove, 70 blocker, 70 stick, 76 pot
+
+
+========================================
+NHL DYNASTY MODE — PACIFIC DIVISION RATINGS
+2026-27 SEASON
+Format: overall, character, offence, defence, transition, mental, physical, potential
+Goalies: overall, glove, blocker, stick, potential
+========================================
+
+=== EDMONTON OILERS ===
+
+-- NHL FORWARDS --
+Connor McDavid: 99 ovr, 94 cha, 99 off, 88 def, 99 tra, 96 men, 82 phy, 99 pot
+Leon Draisaitl: 97 ovr, 90 cha, 99 off, 86 def, 92 tra, 94 men, 90 phy, 97 pot
+Zach Hyman: 88 ovr, 91 cha, 91 off, 84 def, 86 tra, 90 men, 91 phy, 87 pot
+Ryan Nugent-Hopkins: 87 ovr, 90 cha, 89 off, 88 def, 87 tra, 89 men, 74 phy, 86 pot
+Matthew Savoie: 84 ovr, 83 cha, 89 off, 77 def, 91 tra, 81 men, 70 phy, 92 pot
+Vasili Podkolzin: 82 ovr, 84 cha, 83 off, 81 def, 82 tra, 82 men, 89 phy, 86 pot
+Isaac Howard: 81 ovr, 81 cha, 89 off, 73 def, 88 tra, 79 men, 70 phy, 91 pot
+Jason Dickinson: 80 ovr, 87 cha, 76 off, 87 def, 79 tra, 85 men, 84 phy, 79 pot
+Kasperi Kapanen: 79 ovr, 81 cha, 80 off, 78 def, 88 tra, 79 men, 75 phy, 78 pot
+Trent Frederic: 79 ovr, 83 cha, 77 off, 80 def, 77 tra, 81 men, 92 phy, 80 pot
+Colton Dach: 78 ovr, 82 cha, 79 off, 77 def, 78 tra, 79 men, 91 phy, 84 pot
+Josh Samanski: 77 ovr, 84 cha, 77 off, 81 def, 79 tra, 81 men, 82 phy, 82 pot
+Mathieu Joseph: 77 ovr, 82 cha, 75 off, 80 def, 87 tra, 80 men, 78 phy, 77 pot
+Mattias Janmark: 75 ovr, 85 cha, 71 off, 82 def, 79 tra, 82 men, 76 phy, 72 pot
+Max Jones: 73 ovr, 81 cha, 70 off, 76 def, 74 tra, 78 men, 90 phy, 72 pot
+
+-- NHL DEFENCE --
+Evan Bouchard: 94 ovr, 84 cha, 97 off, 83 def, 93 tra, 86 men, 84 phy, 95 pot
+Mattias Ekholm: 88 ovr, 93 cha, 80 off, 94 def, 82 tra, 92 men, 94 phy, 85 pot
+Jake Walman: 84 ovr, 83 cha, 85 off, 82 def, 87 tra, 81 men, 83 phy, 84 pot
+Connor Murphy: 82 ovr, 87 cha, 72 off, 89 def, 76 tra, 86 men, 91 phy, 80 pot
+Ryan Shea: 80 ovr, 82 cha, 80 off, 81 def, 83 tra, 80 men, 78 phy, 82 pot
+Ty Emberson: 79 ovr, 84 cha, 70 off, 85 def, 78 tra, 82 men, 84 phy, 82 pot
+Shakir Mukhamadullin: 78 ovr, 82 cha, 76 off, 82 def, 81 tra, 79 men, 88 phy, 88 pot
+Spencer Stastney: 77 ovr, 82 cha, 74 off, 81 def, 83 tra, 80 men, 78 phy, 81 pot
+
+-- NHL GOALIES --
+Tristan Jarry: 83 ovr, 85 glove, 82 blocker, 80 stick, 82 pot
+Frederik Andersen: 82 ovr, 85 glove, 83 blocker, 79 stick, 78 pot
+Devon Levi: 81 ovr, 85 glove, 82 blocker, 81 stick, 88 pot
+
+-- AHL: BAKERSFIELD CONDORS --
+Forwards
+Quinn Hutson (RW/LW): 78 ovr, 82 cha, 86 off, 74 def, 84 tra, 81 men, 73 phy, 79 pot
+Viljami Marjala (LW/C): 76 ovr, 83 cha, 82 off, 78 def, 83 tra, 80 men, 72 phy, 83 pot
+William Nicholl (C/LW): 75 ovr, 85 cha, 77 off, 82 def, 79 tra, 82 men, 82 phy, 84 pot
+Connor Clattenburg (C/LW): 74 ovr, 82 cha, 74 off, 78 def, 76 tra, 79 men, 91 phy, 79 pot
+Aku Räty (RW): 74 ovr, 82 cha, 79 off, 76 def, 81 tra, 79 men, 74 phy, 79 pot
+Maxim Beryozkin (RW/LW): 75 ovr, 80 cha, 83 off, 74 def, 80 tra, 78 men, 87 phy, 83 pot
+James Stefan (RW/LW): 73 ovr, 80 cha, 80 off, 72 def, 79 tra, 77 men, 74 phy, 79 pot
+Brady Stonehouse (RW/LW): 72 ovr, 84 cha, 74 off, 76 def, 76 tra, 80 men, 88 phy, 78 pot
+Eduards Tralmaks (W/C): 74 ovr, 83 cha, 79 off, 77 def, 78 tra, 80 men, 89 phy, 77 pot
+Owen Michaels (F): 72 ovr, 80 cha, 77 off, 73 def, 78 tra, 77 men, 76 phy, 78 pot
+
+Defence
+Beau Akey (D): 76 ovr, 82 cha, 82 off, 77 def, 86 tra, 80 men, 75 phy, 86 pot
+Atro Leppänen (D): 76 ovr, 81 cha, 84 off, 76 def, 84 tra, 79 men, 77 phy, 81 pot
+Alec Regula (D): 75 ovr, 82 cha, 72 off, 82 def, 75 tra, 80 men, 90 phy, 79 pot
+Riley Stillman (D): 74 ovr, 84 cha, 66 off, 82 def, 72 tra, 81 men, 91 phy, 75 pot
+Josh Brown (D): 73 ovr, 83 cha, 61 off, 81 def, 68 tra, 80 men, 95 phy, 70 pot
+Damien Carfagna (D): 73 ovr, 81 cha, 77 off, 76 def, 81 tra, 78 men, 73 phy, 81 pot
+Tomas Cibulka (D): 72 ovr, 80 cha, 76 off, 75 def, 80 tra, 77 men, 72 phy, 80 pot
+
+Goalies
+Samuel Jonsson (G): 75 ovr, 80 glove, 77 blocker, 76 stick, 85 pot
+Connor Ungar (G): 74 ovr, 79 glove, 76 blocker, 75 stick, 82 pot
+
+-- PROSPECTS (ALL JUNIOR / NCAA / EUROPE / KHL / UNSIGNED RIGHTS) --
+Forwards
+Tommy Lafrenière (C): 76 ovr, 87 cha, 79 off, 83 def, 82 tra, 84 men, 84 phy, 85 pot
+David Lewandowski (LW/RW): 74 ovr, 80 cha, 84 off, 72 def, 83 tra, 78 men, 76 phy, 86 pot
+Malcom Gästrin (C): 73 ovr, 84 cha, 77 off, 81 def, 79 tra, 81 men, 80 phy, 84 pot
+Rūdolfs Bērzkalns (C): 72 ovr, 86 cha, 74 off, 82 def, 77 tra, 82 men, 83 phy, 82 pot
+Aidan Park (C/W): 72 ovr, 81 cha, 79 off, 75 def, 82 tra, 79 men, 74 phy, 83 pot
+Maxim Denezhkin (C): 72 ovr, 82 cha, 79 off, 77 def, 80 tra, 79 men, 76 phy, 79 pot
+Roby Järventie (LW/RW): 73 ovr, 79 cha, 82 off, 72 def, 81 tra, 77 men, 82 phy, 82 pot
+Caden Harvey (C): 69 ovr, 80 cha, 75 off, 73 def, 77 tra, 76 men, 79 phy, 80 pot
+Dalyn Wakely (C): 70 ovr, 82 cha, 74 off, 77 def, 77 tra, 79 men, 78 phy, 78 pot
+Matt Copponi (C): 70 ovr, 80 cha, 76 off, 72 def, 80 tra, 76 men, 70 phy, 78 pot
+Joel Määttä (C): 69 ovr, 82 cha, 70 off, 78 def, 75 tra, 78 men, 82 phy, 75 pot
+Petr Hauser (RW): 69 ovr, 78 cha, 77 off, 70 def, 76 tra, 75 men, 82 phy, 77 pot
+Tomas Mazura (C): 68 ovr, 79 cha, 73 off, 72 def, 76 tra, 75 men, 74 phy, 74 pot
+
+Defence
+Nikita Yevseyev (D): 74 ovr, 83 cha, 70 off, 84 def, 76 tra, 81 men, 88 phy, 84 pot
+Asher Barnett (D): 72 ovr, 84 cha, 68 off, 82 def, 76 tra, 81 men, 89 phy, 83 pot
+Paul Fischer (D): 72 ovr, 82 cha, 72 off, 80 def, 79 tra, 80 men, 82 phy, 82 pot
+Bauer Berry (D): 70 ovr, 83 cha, 66 off, 79 def, 73 tra, 79 men, 89 phy, 80 pot
+Andrew Robinson (D): 69 ovr, 81 cha, 72 off, 76 def, 77 tra, 77 men, 78 phy, 80 pot
+Zachary Sharp (D): 69 ovr, 82 cha, 68 off, 78 def, 75 tra, 78 men, 82 phy, 80 pot
+
+Goalies
+Eemil Vinni (G): 72 ovr, 77 glove, 74 blocker, 75 stick, 84 pot
+Nathaniel Day (G): 71 ovr, 76 glove, 74 blocker, 73 stick, 82 pot
+Daniel Salonen (G): 69 ovr, 74 glove, 72 blocker, 72 stick, 80 pot
+Ryan Cameron (G): 68 ovr, 73 glove, 71 blocker, 72 stick, 79 pot
+Ty Taylor (G): 68 ovr, 73 glove, 72 blocker, 71 stick, 72 pot
+
+
+========================================
+NHL DYNASTY MODE — PACIFIC DIVISION RATINGS
+2026-27 SEASON
+Format: overall, character, offence, defence, transition, mental, physical, potential
+Goalies: overall, glove, blocker, stick, potential
+========================================
+
+=== CALGARY FLAMES ===
+
+-- NHL FORWARDS --
+Matt Coronato: 87 ovr, 84 cha, 91 off, 79 def, 87 tra, 83 men, 76 phy, 90 pot
+Jonathan Huberdeau: 84 ovr, 82 cha, 88 off, 76 def, 85 tra, 80 men, 74 phy, 82 pot
+Connor Zary: 84 ovr, 84 cha, 86 off, 80 def, 86 tra, 82 men, 78 phy, 89 pot
+Morgan Frost: 83 ovr, 81 cha, 86 off, 77 def, 86 tra, 80 men, 74 phy, 86 pot
+Joel Farabee: 82 ovr, 83 cha, 84 off, 79 def, 84 tra, 81 men, 77 phy, 84 pot
+Ryan Strome: 82 ovr, 82 cha, 85 off, 77 def, 80 tra, 81 men, 80 phy, 80 pot
+Yegor Sharangovich: 81 ovr, 80 cha, 85 off, 77 def, 83 tra, 79 men, 78 phy, 82 pot
+Mikael Backlund: 81 ovr, 94 cha, 76 off, 91 def, 79 tra, 91 men, 82 phy, 77 pot
+Matvei Gridin: 80 ovr, 79 cha, 87 off, 72 def, 86 tra, 77 men, 75 phy, 91 pot
+Samuel Honzek: 79 ovr, 84 cha, 81 off, 80 def, 80 tra, 81 men, 90 phy, 87 pot
+Martin Pospisil: 78 ovr, 81 cha, 76 off, 79 def, 78 tra, 78 men, 95 phy, 80 pot
+Maxim Tsyplakov: 78 ovr, 79 cha, 81 off, 76 def, 80 tra, 78 men, 86 phy, 80 pot
+Adam Klapka: 76 ovr, 82 cha, 74 off, 79 def, 73 tra, 80 men, 97 phy, 79 pot
+
+-- NHL DEFENCE --
+Simon Nemec: 88 ovr, 84 cha, 89 off, 84 def, 91 tra, 82 men, 80 phy, 94 pot
+Zayne Parekh: 86 ovr, 81 cha, 94 off, 75 def, 93 tra, 79 men, 72 phy, 96 pot
+Kevin Bahl: 83 ovr, 86 cha, 68 off, 91 def, 74 tra, 85 men, 96 phy, 85 pot
+Jacob Middleton: 82 ovr, 88 cha, 70 off, 88 def, 76 tra, 85 men, 92 phy, 81 pot
+Zach Whitecloud: 81 ovr, 86 cha, 72 off, 86 def, 78 tra, 83 men, 88 phy, 81 pot
+Brayden Pachal: 78 ovr, 84 cha, 68 off, 83 def, 74 tra, 81 men, 91 phy, 78 pot
+Yan Kuznetsov: 77 ovr, 82 cha, 70 off, 82 def, 75 tra, 80 men, 91 phy, 82 pot
+Joel Hanley: 75 ovr, 84 cha, 66 off, 80 def, 73 tra, 81 men, 82 phy, 73 pot
+
+-- NHL GOALIES --
+Dustin Wolf: 92 ovr, 94 glove, 91 blocker, 87 stick, 95 pot
+Devin Cooley: 79 ovr, 82 glove, 79 blocker, 76 stick, 80 pot
+
+-- AHL: CALGARY WRANGLERS --
+Forwards
+Andrew Basha (LW/RW): 77 ovr, 83 cha, 83 off, 76 def, 84 tra, 80 men, 78 phy, 86 pot
+Aydar Suniev (LW/RW): 77 ovr, 81 cha, 85 off, 73 def, 82 tra, 79 men, 84 phy, 86 pot
+Rory Kerins (C/LW): 77 ovr, 84 cha, 82 off, 79 def, 82 tra, 81 men, 75 phy, 83 pot
+William Strömgren (LW/RW): 76 ovr, 82 cha, 81 off, 77 def, 84 tra, 80 men, 77 phy, 82 pot
+Sam Morton (C/LW): 75 ovr, 84 cha, 79 off, 80 def, 80 tra, 81 men, 82 phy, 80 pot
+Jonathan Castagna (C/LW): 74 ovr, 83 cha, 77 off, 79 def, 79 tra, 80 men, 81 phy, 81 pot
+Tyson Gross (C): 74 ovr, 81 cha, 80 off, 75 def, 81 tra, 78 men, 75 phy, 81 pot
+Dryden Hunt (LW/RW): 74 ovr, 84 cha, 77 off, 76 def, 77 tra, 81 men, 87 phy, 73 pot
+Ben Jones (C/LW): 74 ovr, 84 cha, 76 off, 80 def, 78 tra, 81 men, 82 phy, 75 pot
+Luke Philp (C/RW): 73 ovr, 84 cha, 78 off, 77 def, 78 tra, 81 men, 76 phy, 73 pot
+Ryan Hofer (C/W): 73 ovr, 82 cha, 75 off, 78 def, 78 tra, 79 men, 85 phy, 78 pot
+Marko Sikic (RW/C): 72 ovr, 81 cha, 76 off, 75 def, 78 tra, 78 men, 78 phy, 78 pot
+Carter Wilkie (RW/C): 72 ovr, 82 cha, 76 off, 76 def, 78 tra, 79 men, 78 phy, 76 pot
+Braden Birnie (LW/RW): 72 ovr, 80 cha, 77 off, 73 def, 79 tra, 77 men, 76 phy, 77 pot
+Alexander Campbell (LW/C): 72 ovr, 80 cha, 78 off, 72 def, 79 tra, 77 men, 74 phy, 77 pot
+Quinn Olson (C): 71 ovr, 82 cha, 72 off, 77 def, 77 tra, 79 men, 79 phy, 75 pot
+Will Dineen (LW/RW): 71 ovr, 81 cha, 73 off, 76 def, 77 tra, 78 men, 80 phy, 74 pot
+Ryder Boulton (LW/RW): 70 ovr, 79 cha, 72 off, 73 def, 74 tra, 76 men, 89 phy, 77 pot
+Alex Gallant (W/C): 68 ovr, 84 cha, 60 off, 74 def, 66 tra, 80 men, 96 phy, 65 pot
+
+Defence
+Hunter Brzustewicz (D): 78 ovr, 82 cha, 85 off, 77 def, 87 tra, 80 men, 76 phy, 87 pot
+Mike Benning (D): 76 ovr, 80 cha, 83 off, 74 def, 84 tra, 78 men, 72 phy, 79 pot
+Jake Livingstone (D): 75 ovr, 83 cha, 72 off, 82 def, 76 tra, 80 men, 90 phy, 78 pot
+Andreas Englund (D): 75 ovr, 85 cha, 65 off, 83 def, 72 tra, 82 men, 92 phy, 74 pot
+Abram Wiebe (D): 74 ovr, 82 cha, 76 off, 79 def, 80 tra, 79 men, 82 phy, 82 pot
+Axel Hurtig (D): 73 ovr, 84 cha, 67 off, 81 def, 73 tra, 80 men, 94 phy, 81 pot
+Kent Anderson (D): 73 ovr, 81 cha, 75 off, 78 def, 79 tra, 78 men, 80 phy, 79 pot
+Kyle Walker (D): 72 ovr, 82 cha, 70 off, 79 def, 75 tra, 79 men, 84 phy, 75 pot
+Tyson Feist (D): 72 ovr, 81 cha, 69 off, 78 def, 75 tra, 78 men, 82 phy, 75 pot
+Tyler Inamoto (D): 71 ovr, 82 cha, 66 off, 79 def, 72 tra, 79 men, 86 phy, 73 pot
+
+Goalies
+Arsenii Sergeev (G): 77 ovr, 82 glove, 79 blocker, 77 stick, 86 pot
+Kirill Zarubin (G): 75 ovr, 80 glove, 77 blocker, 76 stick, 85 pot
+Semyon Konopsky (G): 72 ovr, 77 glove, 74 blocker, 74 stick, 80 pot
+Owen Say (G): 71 ovr, 76 glove, 74 blocker, 73 stick, 77 pot
+
+-- ECHL: RAPID CITY RUSH (AFFILIATE DEPTH) --
+
+-- PROSPECTS (ALL JUNIOR / NCAA / EUROPE / RUSSIA / UNSIGNED RIGHTS) --
+Forwards
+Cole Reschny (C/LW): 77 ovr, 86 cha, 84 off, 82 def, 84 tra, 83 men, 78 phy, 89 pot
+Cullen Potter (C/LW): 76 ovr, 82 cha, 86 off, 74 def, 89 tra, 80 men, 67 phy, 88 pot
+Ethan Wyttenbach (LW/RW): 76 ovr, 82 cha, 85 off, 75 def, 85 tra, 80 men, 74 phy, 87 pot
+Jack Hextall (C): 75 ovr, 84 cha, 82 off, 79 def, 82 tra, 81 men, 82 phy, 87 pot
+Max Curran (C/LW/RW): 74 ovr, 83 cha, 81 off, 77 def, 82 tra, 80 men, 78 phy, 84 pot
+Trevor Hoskin (RW/C): 74 ovr, 82 cha, 83 off, 74 def, 83 tra, 79 men, 77 phy, 84 pot
+Theo Stockselius (C/LW): 74 ovr, 85 cha, 78 off, 82 def, 79 tra, 82 men, 86 phy, 84 pot
+Egor Barabanov (F): 73 ovr, 80 cha, 82 off, 73 def, 82 tra, 78 men, 77 phy, 83 pot
+Alan Shaikhlislamov (RW/LW): 73 ovr, 79 cha, 83 off, 71 def, 84 tra, 77 men, 72 phy, 84 pot
+Cade Littler (C/RW): 72 ovr, 84 cha, 75 off, 80 def, 77 tra, 80 men, 91 phy, 81 pot
+Simon Katolicky (LW/RW): 71 ovr, 80 cha, 77 off, 73 def, 79 tra, 77 men, 76 phy, 81 pot
+Jaden Lipinski (C/RW): 71 ovr, 83 cha, 74 off, 79 def, 76 tra, 79 men, 88 phy, 80 pot
+Aidan Lane (RW/LW): 71 ovr, 80 cha, 78 off, 72 def, 79 tra, 77 men, 78 phy, 80 pot
+Yan Matveiko (C): 70 ovr, 81 cha, 75 off, 76 def, 78 tra, 78 men, 81 phy, 80 pot
+Joe Iginla (F): 70 ovr, 82 cha, 77 off, 74 def, 78 tra, 79 men, 82 phy, 82 pot
+Luke Misa (C): 70 ovr, 79 cha, 78 off, 71 def, 82 tra, 76 men, 70 phy, 80 pot
+
+Defence
+Carson Carels (D): 78 ovr, 85 cha, 85 off, 81 def, 89 tra, 83 men, 87 phy, 94 pot
+Henry Mews (D): 75 ovr, 82 cha, 85 off, 75 def, 86 tra, 80 men, 76 phy, 87 pot
+Mace'o Phillips (D): 74 ovr, 84 cha, 68 off, 84 def, 74 tra, 82 men, 97 phy, 85 pot
+Eric Jamieson (D): 74 ovr, 83 cha, 76 off, 81 def, 80 tra, 81 men, 85 phy, 83 pot
+Nikita Okhotyuk (D): 74 ovr, 82 cha, 68 off, 82 def, 74 tra, 80 men, 91 phy, 78 pot
+Bode Laylin (D): 72 ovr, 81 cha, 73 off, 78 def, 78 tra, 78 men, 82 phy, 81 pot
+Jakob Leander (D): 71 ovr, 82 cha, 68 off, 80 def, 74 tra, 79 men, 90 phy, 80 pot
+
+Goalies
+Tobias Trejbal (G): 74 ovr, 79 glove, 76 blocker, 76 stick, 87 pot
+Yegor Yegorov (G): 73 ovr, 78 glove, 75 blocker, 75 stick, 84 pot
+Daniil Chechelev (G): 72 ovr, 77 glove, 74 blocker, 74 stick, 78 pot
+
+
+========================================
+NHL DYNASTY MODE — PACIFIC DIVISION RATINGS
+2026-27 SEASON
+Format: overall, character, offence, defence, transition, mental, physical, potential
+Goalies: overall, glove, blocker, stick, potential
+========================================
+
+=== ANAHEIM DUCKS ===
+
+-- NHL FORWARDS --
+Leo Carlsson: 91 ovr, 88 cha, 93 off, 86 def, 91 tra, 87 men, 86 phy, 96 pot
+Troy Terry: 88 ovr, 84 cha, 91 off, 79 def, 89 tra, 83 men, 73 phy, 89 pot
+Beckett Sennecke: 86 ovr, 82 cha, 91 off, 77 def, 89 tra, 80 men, 82 phy, 94 pot
+Chris Kreider: 85 ovr, 87 cha, 88 off, 80 def, 86 tra, 86 men, 90 phy, 82 pot
+Frank Vatrano: 84 ovr, 81 cha, 89 off, 76 def, 84 tra, 80 men, 81 phy, 83 pot
+Mikael Granlund: 84 ovr, 87 cha, 87 off, 81 def, 85 tra, 86 men, 73 phy, 81 pot
+Nikita Klepov: 82 ovr, 80 cha, 89 off, 73 def, 88 tra, 78 men, 70 phy, 93 pot
+Sam Colangelo: 81 ovr, 83 cha, 84 off, 77 def, 81 tra, 80 men, 86 phy, 85 pot
+Alex Killorn: 81 ovr, 89 cha, 82 off, 80 def, 77 tra, 87 men, 86 phy, 77 pot
+Ryan Poehling: 79 ovr, 85 cha, 76 off, 84 def, 82 tra, 82 men, 82 phy, 80 pot
+Nikita Nesterenko: 78 ovr, 81 cha, 81 off, 76 def, 81 tra, 79 men, 78 phy, 82 pot
+A.J. Greer: 77 ovr, 84 cha, 74 off, 79 def, 76 tra, 81 men, 91 phy, 76 pot
+Tim Washe: 76 ovr, 85 cha, 73 off, 82 def, 76 tra, 81 men, 89 phy, 79 pot
+Jeff Malott: 74 ovr, 82 cha, 74 off, 76 def, 73 tra, 79 men, 90 phy, 73 pot
+
+-- NHL DEFENCE --
+Jackson LaCombe: 87 ovr, 88 cha, 87 off, 86 def, 90 tra, 86 men, 79 phy, 91 pot
+Pavel Mintyukov: 85 ovr, 81 cha, 90 off, 78 def, 91 tra, 80 men, 77 phy, 92 pot
+Tristan Luneau: 82 ovr, 82 cha, 86 off, 77 def, 87 tra, 80 men, 78 phy, 89 pot
+Nick Jensen: 82 ovr, 87 cha, 74 off, 88 def, 80 tra, 85 men, 82 phy, 79 pot
+Drew Helleson: 80 ovr, 84 cha, 73 off, 85 def, 78 tra, 82 men, 84 phy, 83 pot
+Tyson Hinds: 79 ovr, 83 cha, 71 off, 84 def, 79 tra, 81 men, 83 phy, 84 pot
+Ian Moore: 78 ovr, 84 cha, 72 off, 83 def, 80 tra, 82 men, 87 phy, 84 pot
+
+-- NHL GOALIES --
+Lukas Dostal: 89 ovr, 92 glove, 88 blocker, 84 stick, 92 pot
+Ville Husso: 79 ovr, 82 glove, 79 blocker, 76 stick, 78 pot
+
+-- AHL: SAN DIEGO GULLS --
+Forwards
+Roger McQueen (C/RW): 79 ovr, 83 cha, 85 off, 78 def, 82 tra, 80 men, 94 phy, 91 pot
+Anton Wahlberg (C/LW): 78 ovr, 85 cha, 80 off, 83 def, 82 tra, 82 men, 88 phy, 86 pot
+Nathan Gaucher (C/RW): 77 ovr, 87 cha, 76 off, 85 def, 78 tra, 83 men, 92 phy, 83 pot
+Lucas Pettersson (C/LW): 77 ovr, 83 cha, 83 off, 78 def, 84 tra, 80 men, 73 phy, 86 pot
+Yegor Sidorov (RW/LW): 76 ovr, 80 cha, 85 off, 72 def, 81 tra, 78 men, 78 phy, 84 pot
+Herman Träff (RW/LW): 76 ovr, 84 cha, 79 off, 81 def, 80 tra, 81 men, 88 phy, 84 pot
+Coulson Pitre (RW/C): 75 ovr, 84 cha, 78 off, 80 def, 79 tra, 80 men, 86 phy, 82 pot
+Ethan Procyszyn (C/RW): 75 ovr, 85 cha, 78 off, 81 def, 78 tra, 81 men, 89 phy, 83 pot
+Nico Myatovic (LW/C): 74 ovr, 84 cha, 76 off, 79 def, 79 tra, 80 men, 87 phy, 81 pot
+Marcus Nordmark (LW/RW): 74 ovr, 78 cha, 85 off, 69 def, 85 tra, 75 men, 75 phy, 88 pot
+Sean Farrell (C/LW): 74 ovr, 80 cha, 82 off, 73 def, 84 tra, 77 men, 66 phy, 80 pot
+Matthew Phillips (RW/C): 74 ovr, 80 cha, 82 off, 70 def, 84 tra, 77 men, 61 phy, 75 pot
+Judd Caulfield (RW/LW): 73 ovr, 84 cha, 75 off, 79 def, 76 tra, 80 men, 88 phy, 76 pot
+James Hamblin (C/LW): 73 ovr, 84 cha, 74 off, 80 def, 78 tra, 81 men, 78 phy, 75 pot
+Kyle Kukkonen (C/RW): 72 ovr, 80 cha, 79 off, 73 def, 81 tra, 77 men, 72 phy, 80 pot
+Ryan Carpenter (C/RW): 72 ovr, 88 cha, 68 off, 82 def, 73 tra, 85 men, 82 phy, 69 pot
+Sasha Mutala (RW/LW): 71 ovr, 80 cha, 74 off, 74 def, 76 tra, 77 men, 81 phy, 74 pot
+Drew Elliott (LW/RW): 70 ovr, 79 cha, 73 off, 72 def, 77 tra, 75 men, 80 phy, 74 pot
+Travis Howe (RW/LW): 68 ovr, 81 cha, 58 off, 73 def, 64 tra, 77 men, 96 phy, 66 pot
+
+Defence
+Stian Solberg (D): 78 ovr, 87 cha, 70 off, 87 def, 77 tra, 83 men, 96 phy, 88 pot
+Noah Warren (D): 76 ovr, 84 cha, 68 off, 84 def, 74 tra, 81 men, 95 phy, 84 pot
+Konnor Smith (D): 75 ovr, 83 cha, 66 off, 83 def, 73 tra, 80 men, 96 phy, 82 pot
+Jett Woo (D): 74 ovr, 84 cha, 67 off, 82 def, 73 tra, 81 men, 91 phy, 77 pot
+Corey Schueneman (D): 74 ovr, 81 cha, 79 off, 74 def, 81 tra, 79 men, 72 phy, 74 pot
+Matt Basgall (D): 73 ovr, 81 cha, 76 off, 77 def, 80 tra, 78 men, 76 phy, 79 pot
+Travis Mitchell (D): 72 ovr, 82 cha, 68 off, 79 def, 74 tra, 79 men, 84 phy, 75 pot
+Jake Lee (D): 71 ovr, 81 cha, 68 off, 78 def, 74 tra, 78 men, 86 phy, 75 pot
+Jackson Niedermayer (D): 71 ovr, 82 cha, 70 off, 77 def, 76 tra, 79 men, 80 phy, 74 pot
+Roman Kinal (D): 70 ovr, 80 cha, 66 off, 77 def, 72 tra, 77 men, 82 phy, 71 pot
+
+Goalies
+Damian Clara (G): 77 ovr, 81 glove, 78 blocker, 78 stick, 88 pot
+Tomas Suchanek (G): 76 ovr, 81 glove, 77 blocker, 75 stick, 83 pot
+Laurent Brossoit (G): 78 ovr, 82 glove, 79 blocker, 76 stick, 76 pot
+
+-- PROSPECTS (ALL JUNIOR / NCAA / EUROPE / KHL / UNSIGNED RIGHTS) --
+Forwards
+Maxim Massé (RW/LW): 77 ovr, 83 cha, 87 off, 74 def, 82 tra, 80 men, 82 phy, 87 pot
+Eric Nilson (C/RW): 76 ovr, 86 cha, 80 off, 84 def, 81 tra, 83 men, 79 phy, 86 pot
+Mathis Preston (RW/LW): 75 ovr, 79 cha, 86 off, 71 def, 88 tra, 77 men, 70 phy, 87 pot
+Émile Guité (LW/RW): 74 ovr, 82 cha, 82 off, 75 def, 81 tra, 79 men, 84 phy, 84 pot
+Austin Burnevik (RW/LW): 74 ovr, 82 cha, 84 off, 72 def, 80 tra, 78 men, 88 phy, 83 pot
+Rian Chudzinski (RW/LW): 72 ovr, 80 cha, 79 off, 72 def, 79 tra, 77 men, 81 phy, 81 pot
+Alexandre Blais (LW/C): 72 ovr, 82 cha, 77 off, 77 def, 79 tra, 79 men, 78 phy, 80 pot
+Michael Callow (RW/LW): 71 ovr, 81 cha, 78 off, 72 def, 77 tra, 77 men, 88 phy, 79 pot
+Noah Read (C/LW): 71 ovr, 81 cha, 78 off, 74 def, 79 tra, 78 men, 76 phy, 81 pot
+Brady Turko (RW/LW): 70 ovr, 80 cha, 77 off, 72 def, 78 tra, 76 men, 78 phy, 80 pot
+Artyom Galimov (W/C): 72 ovr, 82 cha, 78 off, 78 def, 79 tra, 79 men, 80 phy, 78 pot
+
+Defence
+Lasse Boelius (D): 75 ovr, 83 cha, 80 off, 80 def, 83 tra, 81 men, 78 phy, 86 pot
+Tarin Smith (D): 74 ovr, 85 cha, 76 off, 82 def, 80 tra, 82 men, 84 phy, 84 pot
+Darels Uljanskis (D): 73 ovr, 82 cha, 74 off, 80 def, 79 tra, 79 men, 84 phy, 83 pot
+Anthony Allain-Samaké (D): 72 ovr, 83 cha, 69 off, 81 def, 75 tra, 80 men, 87 phy, 81 pot
+Jimmy Rieber (D): 71 ovr, 81 cha, 72 off, 78 def, 77 tra, 78 men, 80 phy, 81 pot
+Eric Frossard (D): 70 ovr, 80 cha, 69 off, 77 def, 75 tra, 77 men, 82 phy, 80 pot
+Alexis Mathieu (D): 70 ovr, 80 cha, 72 off, 76 def, 77 tra, 77 men, 78 phy, 80 pot
+Drew Schock (D): 70 ovr, 82 cha, 68 off, 79 def, 74 tra, 79 men, 84 phy, 80 pot
+Jayden Kurtz (D): 69 ovr, 80 cha, 68 off, 77 def, 74 tra, 77 men, 82 phy, 79 pot
+
+Goalies
+Gleb Peshkov (G): 71 ovr, 76 glove, 74 blocker, 74 stick, 83 pot
+Calle Clang (G): 74 ovr, 79 glove, 76 blocker, 75 stick, 80 pot
+
+
+========================================
+NHL DYNASTY MODE — PACIFIC DIVISION RATINGS
+2026-27 SEASON
+Format: overall, character, offence, defence, transition, mental, physical, potential
+Goalies: overall, glove, blocker, stick, potential
+========================================
+
+=== SAN JOSE SHARKS ===
+
+-- NHL FORWARDS --
+Macklin Celebrini: 95 ovr, 92 cha, 96 off, 87 def, 96 tra, 92 men, 83 phy, 99 pot
+Will Smith: 89 ovr, 84 cha, 93 off, 78 def, 92 tra, 83 men, 72 phy, 95 pot
+Michael Misa: 87 ovr, 86 cha, 92 off, 80 def, 91 tra, 84 men, 78 phy, 97 pot
+Ivar Stenberg: 84 ovr, 84 cha, 91 off, 77 def, 90 tra, 82 men, 74 phy, 96 pot
+Tyler Toffoli: 85 ovr, 86 cha, 90 off, 80 def, 82 tra, 85 men, 78 phy, 82 pot
+Mason Marchment: 84 ovr, 81 cha, 86 off, 79 def, 81 tra, 80 men, 92 phy, 83 pot
+Igor Chernyshov: 82 ovr, 82 cha, 87 off, 76 def, 84 tra, 80 men, 87 phy, 90 pot
+Collin Graf: 82 ovr, 84 cha, 84 off, 80 def, 84 tra, 82 men, 77 phy, 87 pot
+Kiefer Sherwood: 81 ovr, 86 cha, 78 off, 84 def, 82 tra, 84 men, 95 phy, 80 pot
+Alexander Wennberg: 80 ovr, 85 cha, 78 off, 84 def, 82 tra, 83 men, 75 phy, 78 pot
+Zack Ostapchuk: 79 ovr, 85 cha, 76 off, 83 def, 78 tra, 81 men, 91 phy, 83 pot
+Adam Gaudette: 78 ovr, 79 cha, 83 off, 73 def, 79 tra, 77 men, 76 phy, 78 pot
+Ty Dellandrea: 77 ovr, 84 cha, 74 off, 81 def, 79 tra, 81 men, 84 phy, 78 pot
+Barclay Goodrow: 75 ovr, 88 cha, 69 off, 82 def, 73 tra, 84 men, 89 phy, 71 pot
+
+-- NHL DEFENCE --
+Sam Dickinson: 86 ovr, 87 cha, 87 off, 86 def, 88 tra, 84 men, 88 phy, 94 pot
+Michael Kesselring: 84 ovr, 84 cha, 78 off, 88 def, 82 tra, 83 men, 93 phy, 86 pot
+Darnell Nurse: 83 ovr, 83 cha, 78 off, 85 def, 80 tra, 82 men, 95 phy, 82 pot
+Dmitri Orlov: 82 ovr, 85 cha, 82 off, 82 def, 82 tra, 84 men, 87 phy, 79 pot
+Jacob Trouba: 80 ovr, 83 cha, 72 off, 84 def, 74 tra, 81 men, 97 phy, 76 pot
+Libor Hájek: 76 ovr, 82 cha, 68 off, 81 def, 74 tra, 79 men, 88 phy, 76 pot
+
+-- NHL GOALIES --
+Yaroslav Askarov: 91 ovr, 94 glove, 90 blocker, 88 stick, 95 pot
+Alex Nedeljkovic: 80 ovr, 83 glove, 80 blocker, 78 stick, 79 pot
+Eric Comrie: 78 ovr, 81 glove, 78 blocker, 76 stick, 77 pot
+
+-- AHL: SAN JOSE BARRACUDA --
+Forwards
+Quentin Musty (LW): 79 ovr, 80 cha, 88 off, 73 def, 84 tra, 78 men, 87 phy, 89 pot
+Cameron Lund (C/W): 78 ovr, 84 cha, 83 off, 80 def, 84 tra, 82 men, 82 phy, 86 pot
+Filip Bystedt (C/LW): 78 ovr, 85 cha, 81 off, 83 def, 82 tra, 82 men, 88 phy, 86 pot
+Carson Wetsch (RW): 76 ovr, 85 cha, 78 off, 80 def, 78 tra, 81 men, 91 phy, 83 pot
+Ethan Cardwell (RW/C): 76 ovr, 83 cha, 81 off, 78 def, 82 tra, 80 men, 81 phy, 81 pot
+Jimmy Huntington (C/LW): 75 ovr, 84 cha, 76 off, 80 def, 79 tra, 81 men, 82 phy, 76 pot
+Patrick Giles (C/RW): 74 ovr, 84 cha, 73 off, 80 def, 76 tra, 80 men, 90 phy, 76 pot
+Tye Felhaber (LW/C): 73 ovr, 81 cha, 79 off, 72 def, 80 tra, 78 men, 75 phy, 74 pot
+Anthony Vincent (RW/C): 72 ovr, 81 cha, 76 off, 75 def, 78 tra, 78 men, 77 phy, 76 pot
+Donavan Houle (C/RW): 72 ovr, 82 cha, 74 off, 77 def, 76 tra, 79 men, 84 phy, 76 pot
+Brendan Hoffmann (C/RW): 71 ovr, 80 cha, 75 off, 74 def, 77 tra, 77 men, 79 phy, 75 pot
+Samuel Huo (C): 71 ovr, 80 cha, 77 off, 72 def, 79 tra, 76 men, 74 phy, 77 pot
+Jordan Bax (C/RW): 70 ovr, 81 cha, 72 off, 76 def, 75 tra, 78 men, 83 phy, 74 pot
+Connor Lockhart (C): 70 ovr, 79 cha, 76 off, 72 def, 79 tra, 76 men, 72 phy, 76 pot
+Ryley Appelt (LW): 69 ovr, 80 cha, 70 off, 74 def, 73 tra, 76 men, 86 phy, 71 pot
+
+Defence
+Luca Cagnoni (D): 79 ovr, 82 cha, 88 off, 74 def, 90 tra, 80 men, 65 phy, 86 pot
+Mattias Hävelid (D): 77 ovr, 82 cha, 82 off, 77 def, 84 tra, 80 men, 74 phy, 84 pot
+Nolan Allan (D): 76 ovr, 85 cha, 70 off, 85 def, 76 tra, 82 men, 88 phy, 83 pot
+Phillip Sinn (D): 74 ovr, 83 cha, 69 off, 82 def, 74 tra, 80 men, 89 phy, 80 pot
+Roland McKeown (D): 74 ovr, 83 cha, 72 off, 81 def, 76 tra, 80 men, 82 phy, 74 pot
+Tristan Sarsland (D): 72 ovr, 81 cha, 70 off, 79 def, 75 tra, 78 men, 84 phy, 77 pot
+Thomas Messineo (D): 71 ovr, 81 cha, 68 off, 79 def, 74 tra, 78 men, 83 phy, 75 pot
+Mack Oliphant (D): 71 ovr, 80 cha, 70 off, 77 def, 76 tra, 77 men, 79 phy, 76 pot
+Jake Boltmann (D): 71 ovr, 82 cha, 67 off, 80 def, 73 tra, 79 men, 86 phy, 75 pot
+
+Goalies
+Kyle Keyser (G): 74 ovr, 78 glove, 76 blocker, 75 stick, 76 pot
+Matt Davis (G): 73 ovr, 78 glove, 75 blocker, 74 stick, 79 pot
+
+-- ECHL: WICHITA THUNDER (AFFILIATE DEPTH) --
+
+-- PROSPECTS (ALL JUNIOR / NCAA / EUROPE / KHL / UNSIGNED RIGHTS) --
+Forwards
+Teddy Mutryn (C): 76 ovr, 86 cha, 82 off, 81 def, 81 tra, 83 men, 88 phy, 87 pot
+Yegor Rimashevsky (RW/LW): 75 ovr, 81 cha, 84 off, 74 def, 83 tra, 79 men, 83 phy, 85 pot
+Joey Muldowney (RW): 74 ovr, 81 cha, 85 off, 71 def, 85 tra, 78 men, 70 phy, 84 pot
+David Klee (F): 73 ovr, 84 cha, 77 off, 80 def, 79 tra, 81 men, 89 phy, 82 pot
+Max Heise (C/W): 73 ovr, 83 cha, 80 off, 77 def, 82 tra, 80 men, 78 phy, 83 pot
+Cole McKinney (C): 73 ovr, 85 cha, 78 off, 81 def, 80 tra, 81 men, 81 phy, 84 pot
+Richard Gallant (LW): 72 ovr, 85 cha, 73 off, 80 def, 76 tra, 80 men, 90 phy, 81 pot
+Martin Kaut (RW): 72 ovr, 80 cha, 79 off, 73 def, 78 tra, 77 men, 82 phy, 75 pot
+Yegor Spiridonov (C): 71 ovr, 83 cha, 74 off, 79 def, 76 tra, 79 men, 85 phy, 78 pot
+
+Defence
+Ryan Lin (D): 78 ovr, 83 cha, 89 off, 76 def, 92 tra, 81 men, 69 phy, 91 pot
+Haoxi Wang (D): 76 ovr, 84 cha, 74 off, 84 def, 79 tra, 81 men, 94 phy, 88 pot
+Alexander Karmanov (D): 74 ovr, 85 cha, 68 off, 84 def, 74 tra, 81 men, 98 phy, 84 pot
+Axel Landén (D): 74 ovr, 85 cha, 69 off, 84 def, 75 tra, 82 men, 91 phy, 83 pot
+Colton Roberts (D): 73 ovr, 83 cha, 74 off, 80 def, 79 tra, 80 men, 86 phy, 83 pot
+Michael Fisher (D): 72 ovr, 84 cha, 67 off, 81 def, 72 tra, 80 men, 92 phy, 80 pot
+Ilyas Magomedsultanov (D): 71 ovr, 81 cha, 72 off, 78 def, 77 tra, 78 men, 82 phy, 81 pot
+
+Goalies
+Joshua Ravensbergen (G): 77 ovr, 82 glove, 79 blocker, 78 stick, 90 pot
+Christian Kirsch (G): 73 ovr, 78 glove, 75 blocker, 75 stick, 84 pot
+Brady Knowling (G): 71 ovr, 76 glove, 74 blocker, 74 stick, 82 pot
+
+
+========================================
+NHL DYNASTY MODE — PACIFIC DIVISION RATINGS
+2026-27 SEASON
+REVISED VANCOUVER CALIBRATION
+Format: overall, character, offence, defence, transition, mental, physical, potential
+Goalies: overall, glove, blocker, stick, potential
+========================================
+
+=== VANCOUVER CANUCKS ===
+
+-- NHL FORWARDS --
+Elias Pettersson: 87 ovr, 84 cha, 90 off, 81 def, 89 tra, 82 men, 73 phy, 89 pot
+Marco Rossi: 84 ovr, 86 cha, 86 off, 81 def, 86 tra, 82 men, 72 phy, 88 pot
+Brock Boeser: 84 ovr, 85 cha, 89 off, 77 def, 80 tra, 83 men, 78 phy, 84 pot
+Jake DeBrusk: 82 ovr, 84 cha, 83 off, 79 def, 82 tra, 81 men, 84 phy, 82 pot
+Filip Chytil: 81 ovr, 82 cha, 83 off, 76 def, 85 tra, 79 men, 76 phy, 83 pot
+Liam Öhgren: 79 ovr, 84 cha, 81 off, 78 def, 82 tra, 79 men, 84 phy, 86 pot
+Jonathan Lekkerimäki: 78 ovr, 80 cha, 85 off, 71 def, 84 tra, 76 men, 72 phy, 87 pot
+Aatu Räty: 77 ovr, 85 cha, 77 off, 81 def, 78 tra, 80 men, 86 phy, 82 pot
+Drew O'Connor: 77 ovr, 84 cha, 74 off, 80 def, 82 tra, 80 men, 85 phy, 77 pot
+Paul Cotter: 76 ovr, 83 cha, 73 off, 77 def, 78 tra, 78 men, 91 phy, 77 pot
+Linus Karlsson: 75 ovr, 84 cha, 77 off, 77 def, 76 tra, 79 men, 86 phy, 78 pot
+Max Sasson: 75 ovr, 84 cha, 74 off, 79 def, 80 tra, 79 men, 78 phy, 79 pot
+Brendan Gallagher: 74 ovr, 88 cha, 72 off, 76 def, 73 tra, 82 men, 88 phy, 70 pot
+Ilya Safonov: 73 ovr, 82 cha, 71 off, 76 def, 72 tra, 77 men, 93 phy, 77 pot
+
+-- NHL DEFENCE --
+Filip Hronek: 85 ovr, 84 cha, 85 off, 82 def, 85 tra, 81 men, 83 phy, 86 pot
+Zeev Buium: 82 ovr, 86 cha, 86 off, 78 def, 88 tra, 81 men, 76 phy, 92 pot
+Tom Willander: 80 ovr, 86 cha, 76 off, 84 def, 83 tra, 81 men, 83 phy, 89 pot
+Elias Pettersson (D): 78 ovr, 87 cha, 69 off, 84 def, 76 tra, 81 men, 91 phy, 84 pot
+Jamie Oleksiak: 79 ovr, 86 cha, 65 off, 84 def, 70 tra, 82 men, 98 phy, 76 pot
+Victor Mancini: 77 ovr, 83 cha, 70 off, 81 def, 75 tra, 79 men, 92 phy, 81 pot
+Luke Schenn: 73 ovr, 90 cha, 59 off, 79 def, 65 tra, 83 men, 97 phy, 68 pot
+
+-- NHL GOALIES --
+Thatcher Demko: 85 ovr, 88 glove, 84 blocker, 81 stick, 85 pot
+Kevin Lankinen: 81 ovr, 84 glove, 80 blocker, 77 stick, 80 pot
+Chris Driedger: 75 ovr, 78 glove, 75 blocker, 73 stick, 73 pot
+
+-- AHL: ABBOTSFORD CANUCKS / FORWARDS --
+Riley Patterson (C/RW): 74 ovr, 84 cha, 79 off, 76 def, 79 tra, 78 men, 79 phy, 83 pot
+Ty Mueller (C/LW): 74 ovr, 86 cha, 75 off, 81 def, 79 tra, 80 men, 79 phy, 80 pot
+Gabriel Chiarot (RW/LW): 73 ovr, 82 cha, 80 off, 72 def, 79 tra, 76 men, 80 phy, 82 pot
+Vilmer Alriksson (LW/C): 73 ovr, 84 cha, 74 off, 77 def, 74 tra, 78 men, 96 phy, 81 pot
+Arshdeep Bains (LW/RW): 73 ovr, 85 cha, 76 off, 76 def, 79 tra, 79 men, 74 phy, 76 pot
+Trey Fix-Wolansky (RW/LW): 73 ovr, 80 cha, 81 off, 70 def, 79 tra, 76 men, 70 phy, 74 pot
+Akil Thomas (C/W): 73 ovr, 83 cha, 77 off, 75 def, 78 tra, 78 men, 77 phy, 76 pot
+Chase Wouters (C/RW): 72 ovr, 88 cha, 71 off, 79 def, 74 tra, 81 men, 83 phy, 74 pot
+Matt Stienburg (C/RW): 71 ovr, 84 cha, 71 off, 75 def, 73 tra, 78 men, 87 phy, 74 pot
+Mackenzie MacEachern (LW/RW): 70 ovr, 83 cha, 69 off, 74 def, 72 tra, 77 men, 84 phy, 69 pot
+Ben Berard (LW/RW): 70 ovr, 80 cha, 75 off, 69 def, 76 tra, 74 men, 74 phy, 74 pot
+Ryan St. Louis (LW): 70 ovr, 82 cha, 74 off, 71 def, 76 tra, 76 men, 76 phy, 76 pot
+Bennett Schimek (F): 70 ovr, 84 cha, 73 off, 73 def, 75 tra, 78 men, 80 phy, 74 pot
+Cooper Walker (C/RW): 69 ovr, 82 cha, 70 off, 74 def, 73 tra, 76 men, 80 phy, 73 pot
+Quinn Emerson (RW/C): 69 ovr, 80 cha, 73 off, 70 def, 75 tra, 75 men, 75 phy, 74 pot
+Austin Brimmer (RW): 68 ovr, 80 cha, 72 off, 69 def, 74 tra, 74 men, 74 phy, 72 pot
+
+-- AHL DEFENCE --
+Jack Thompson (D): 74 ovr, 82 cha, 81 off, 73 def, 82 tra, 77 men, 75 phy, 80 pot
+Sawyer Mynio (D): 73 ovr, 86 cha, 70 off, 81 def, 76 tra, 79 men, 86 phy, 82 pot
+Kirill Kudryavtsev (D): 73 ovr, 83 cha, 77 off, 76 def, 80 tra, 77 men, 78 phy, 81 pot
+Jimmy Schuldt (D): 72 ovr, 84 cha, 75 off, 75 def, 77 tra, 79 men, 78 phy, 71 pot
+Guillaume Brisebois (D): 71 ovr, 84 cha, 66 off, 79 def, 72 tra, 79 men, 82 phy, 72 pot
+Cole Clayton (D): 71 ovr, 82 cha, 67 off, 77 def, 72 tra, 77 men, 86 phy, 73 pot
+Isaac Belliveau (D): 70 ovr, 81 cha, 74 off, 73 def, 78 tra, 76 men, 76 phy, 76 pot
+Gavin White (D): 70 ovr, 82 cha, 69 off, 75 def, 74 tra, 77 men, 81 phy, 75 pot
+Joe Arntsen (D): 69 ovr, 83 cha, 64 off, 77 def, 70 tra, 77 men, 88 phy, 75 pot
+Tim Rego (D): 69 ovr, 81 cha, 67 off, 75 def, 73 tra, 76 men, 80 phy, 73 pot
+
+-- AHL GOALIES --
+Nikita Tolopilo (G): 74 ovr, 79 glove, 75 blocker, 73 stick, 80 pot
+Ty Young (G): 72 ovr, 77 glove, 74 blocker, 73 stick, 81 pot
+Aku Koskenvuo (G): 71 ovr, 76 glove, 73 blocker, 72 stick, 80 pot
+Mitchell Weeks (G): 70 ovr, 75 glove, 72 blocker, 72 stick, 74 pot
+
+-- PROSPECTS: FORWARDS --
+Caleb Malhotra (C): 74 ovr, 88 cha, 80 off, 83 def, 81 tra, 83 men, 80 phy, 89 pot
+Braeden Cootes (C): 74 ovr, 89 cha, 77 off, 82 def, 79 tra, 83 men, 80 phy, 86 pot
+Adam Novotny (LW): 72 ovr, 83 cha, 80 off, 74 def, 79 tra, 77 men, 87 phy, 84 pot
+Yaroslav Bryzgalov (C/LW): 71 ovr, 83 cha, 77 off, 75 def, 78 tra, 77 men, 82 phy, 81 pot
+Kieren Dervin (C/LW): 71 ovr, 85 cha, 75 off, 78 def, 77 tra, 79 men, 81 phy, 81 pot
+Anthony Romani (RW/C): 71 ovr, 81 cha, 81 off, 70 def, 79 tra, 75 men, 74 phy, 80 pot
+Niklas Aaram-Olsen (RW/LW): 70 ovr, 82 cha, 78 off, 72 def, 79 tra, 76 men, 76 phy, 80 pot
+Daimon Gardner (C): 69 ovr, 84 cha, 72 off, 77 def, 74 tra, 77 men, 92 phy, 78 pot
+Matthew Lansing (C): 69 ovr, 84 cha, 73 off, 77 def, 75 tra, 78 men, 82 phy, 78 pot
+Brooks Rogowski (C): 69 ovr, 83 cha, 71 off, 76 def, 71 tra, 77 men, 98 phy, 79 pot
+Connor Davis (RW): 68 ovr, 80 cha, 74 off, 70 def, 75 tra, 74 men, 78 phy, 77 pot
+Lucian Bernat (W): 68 ovr, 80 cha, 75 off, 69 def, 76 tra, 74 men, 76 phy, 77 pot
+Wilson Björck (LW/C): 68 ovr, 82 cha, 73 off, 73 def, 75 tra, 76 men, 80 phy, 77 pot
+Matthew Perkins (C): 67 ovr, 82 cha, 71 off, 74 def, 74 tra, 75 men, 78 phy, 76 pot
+
+-- PROSPECTS: DEFENCE --
+Basile Sansonnens (D): 72 ovr, 86 cha, 67 off, 82 def, 73 tra, 80 men, 96 phy, 83 pot
+Parker Alcos (D): 70 ovr, 84 cha, 65 off, 79 def, 72 tra, 78 men, 91 phy, 79 pot
+Samuel Eriksson (D): 69 ovr, 82 cha, 75 off, 74 def, 78 tra, 76 men, 79 phy, 79 pot
+
+-- PROSPECTS: GOALIES --
+Alexei Medvedev (G): 72 ovr, 77 glove, 74 blocker, 73 stick, 83 pot
+Dmitri Ivchenko (G): 70 ovr, 75 glove, 72 blocker, 72 stick, 80 pot
+
+
+========================================
+NHL DYNASTY MODE — PACIFIC DIVISION RATINGS
+2026-27 SEASON
+Format: overall, character, offence, defence, transition, mental, physical, potential
+Goalies: overall, glove, blocker, stick, potential
+========================================
+
+=== SEATTLE KRAKEN ===
+
+-- NHL FORWARDS --
+Jared McCann: 86 ovr, 85 cha, 89 off, 82 def, 85 tra, 84 men, 80 phy, 85 pot
+Matty Beniers: 85 ovr, 89 cha, 84 off, 89 def, 86 tra, 86 men, 82 phy, 90 pot
+Shane Wright: 84 ovr, 86 cha, 87 off, 82 def, 84 tra, 83 men, 83 phy, 90 pot
+Berkly Catton: 82 ovr, 83 cha, 88 off, 76 def, 90 tra, 80 men, 72 phy, 93 pot
+Kaapo Kakko: 81 ovr, 84 cha, 82 off, 80 def, 82 tra, 81 men, 85 phy, 85 pot
+Chandler Stephenson: 81 ovr, 84 cha, 82 off, 80 def, 87 tra, 82 men, 76 phy, 79 pot
+Bobby McMann: 80 ovr, 84 cha, 82 off, 78 def, 80 tra, 81 men, 91 phy, 80 pot
+Mackie Samoskevich: 79 ovr, 80 cha, 84 off, 74 def, 85 tra, 78 men, 72 phy, 84 pot
+Jani Nyman: 78 ovr, 82 cha, 83 off, 76 def, 80 tra, 79 men, 89 phy, 85 pot
+Jordan Eberle: 78 ovr, 89 cha, 81 off, 76 def, 77 tra, 87 men, 74 phy, 73 pot
+Ryan Winterton: 77 ovr, 84 cha, 78 off, 80 def, 79 tra, 81 men, 84 phy, 82 pot
+Frédérick Gaudreau: 76 ovr, 86 cha, 72 off, 83 def, 77 tra, 83 men, 78 phy, 73 pot
+Ben Meyers: 74 ovr, 82 cha, 72 off, 79 def, 77 tra, 79 men, 78 phy, 75 pot
+Curtis Douglas: 72 ovr, 82 cha, 66 off, 78 def, 68 tra, 78 men, 98 phy, 71 pot
+
+-- NHL DEFENCE --
+Brandon Montour: 86 ovr, 83 cha, 89 off, 81 def, 88 tra, 82 men, 84 phy, 85 pot
+Vince Dunn: 85 ovr, 83 cha, 88 off, 80 def, 87 tra, 81 men, 81 phy, 85 pot
+Adam Larsson: 83 ovr, 90 cha, 70 off, 90 def, 76 tra, 87 men, 94 phy, 80 pot
+Ryker Evans: 81 ovr, 83 cha, 83 off, 78 def, 85 tra, 80 men, 77 phy, 85 pot
+Ryan Lindgren: 80 ovr, 88 cha, 66 off, 87 def, 73 tra, 85 men, 93 phy, 78 pot
+Josh Mahura: 76 ovr, 82 cha, 72 off, 80 def, 77 tra, 80 men, 79 phy, 76 pot
+Ville Ottavainen: 75 ovr, 83 cha, 68 off, 81 def, 74 tra, 80 men, 91 phy, 80 pot
+Cale Fleury: 74 ovr, 81 cha, 70 off, 78 def, 76 tra, 78 men, 82 phy, 75 pot
+
+-- NHL GOALIES --
+Joey Daccord: 86 ovr, 89 glove, 85 blocker, 82 stick, 86 pot
+Philipp Grubauer: 76 ovr, 79 glove, 76 blocker, 74 stick, 72 pot
+
+-- AHL: COACHELLA VALLEY FIREBIRDS --
+Forwards
+Jake O'Brien (C): 78 ovr, 86 cha, 85 off, 79 def, 84 tra, 82 men, 76 phy, 89 pot
+Oscar Fisker Mølgaard (C/LW): 77 ovr, 88 cha, 78 off, 86 def, 82 tra, 84 men, 77 phy, 85 pot
+Carson Rehkopf (C/LW): 76 ovr, 81 cha, 84 off, 73 def, 81 tra, 78 men, 87 phy, 85 pot
+Julius Miettinen (C/W): 76 ovr, 85 cha, 79 off, 82 def, 78 tra, 81 men, 91 phy, 85 pot
+Eduard Šalé (RW/LW): 75 ovr, 79 cha, 83 off, 72 def, 83 tra, 77 men, 73 phy, 83 pot
+Nathan Villeneuve (C/LW): 75 ovr, 82 cha, 79 off, 77 def, 79 tra, 79 men, 87 phy, 82 pot
+Jagger Firkus (RW/LW): 74 ovr, 80 cha, 84 off, 70 def, 85 tra, 76 men, 65 phy, 82 pot
+David Goyette (C/LW): 74 ovr, 81 cha, 81 off, 74 def, 83 tra, 78 men, 69 phy, 81 pot
+Andrei Loshko (RW/LW): 73 ovr, 82 cha, 78 off, 76 def, 79 tra, 79 men, 80 phy, 80 pot
+Ryden Evers (C): 73 ovr, 82 cha, 76 off, 77 def, 78 tra, 79 men, 88 phy, 80 pot
+Logan Morrison (C/RW): 73 ovr, 82 cha, 79 off, 75 def, 79 tra, 79 men, 77 phy, 79 pot
+Lleyton Roed (LW/C): 72 ovr, 81 cha, 77 off, 74 def, 81 tra, 77 men, 75 phy, 77 pot
+Jon-Randall Avon (C/LW): 71 ovr, 81 cha, 73 off, 77 def, 77 tra, 78 men, 76 phy, 76 pot
+John Hayden (C/RW): 71 ovr, 86 cha, 66 off, 79 def, 70 tra, 81 men, 94 phy, 68 pot
+Mitchell Stephens (C): 72 ovr, 83 cha, 75 off, 77 def, 78 tra, 79 men, 76 phy, 72 pot
+Jakov Novak (LW/C): 70 ovr, 80 cha, 75 off, 72 def, 77 tra, 76 men, 84 phy, 73 pot
+Ian McKinnon (LW/C): 68 ovr, 81 cha, 60 off, 74 def, 66 tra, 77 men, 95 phy, 66 pot
+
+Defence
+Tyson Jugnauth (D): 76 ovr, 82 cha, 84 off, 76 def, 86 tra, 79 men, 72 phy, 84 pot
+Caden Price (D): 75 ovr, 84 cha, 80 off, 80 def, 83 tra, 81 men, 80 phy, 84 pot
+Ty Nelson (D): 75 ovr, 82 cha, 83 off, 75 def, 84 tra, 79 men, 76 phy, 83 pot
+Lukas Dragicevic (D): 74 ovr, 80 cha, 82 off, 73 def, 83 tra, 77 men, 79 phy, 82 pot
+Alexis Bernier (D): 74 ovr, 83 cha, 75 off, 81 def, 79 tra, 80 men, 84 phy, 82 pot
+Kaden Hammell (D): 73 ovr, 84 cha, 70 off, 82 def, 76 tra, 80 men, 87 phy, 81 pot
+Gustav Olofsson (D): 72 ovr, 84 cha, 67 off, 79 def, 73 tra, 80 men, 83 phy, 70 pot
+Charlie Wright (D): 71 ovr, 82 cha, 69 off, 78 def, 75 tra, 78 men, 80 phy, 76 pot
+
+Goalies
+Niklas Kokko (G): 75 ovr, 80 glove, 77 blocker, 76 stick, 85 pot
+Victor Östman (G): 73 ovr, 78 glove, 75 blocker, 74 stick, 79 pot
+Logan Terness (G): 71 ovr, 76 glove, 73 blocker, 73 stick, 76 pot
+
+-- ECHL: KANSAS CITY MAVERICKS (AFFILIATE DEPTH) --
+
+-- PROSPECTS (ALL JUNIOR / NCAA / EUROPE / KHL / UNSIGNED RIGHTS) --
+Forwards
+Casey Mutryn (RW): 75 ovr, 84 cha, 80 off, 76 def, 79 tra, 81 men, 91 phy, 86 pot
+Clarke Caswell (LW): 73 ovr, 82 cha, 82 off, 73 def, 82 tra, 78 men, 72 phy, 83 pot
+Zeb Forsfjäll (C): 73 ovr, 88 cha, 75 off, 84 def, 79 tra, 83 men, 76 phy, 82 pot
+Loke Krantz (RW): 72 ovr, 81 cha, 81 off, 73 def, 80 tra, 78 men, 82 phy, 83 pot
+William Tomko (F): 72 ovr, 83 cha, 77 off, 78 def, 79 tra, 80 men, 82 phy, 82 pot
+Viktor Fyodorov (C): 71 ovr, 82 cha, 77 off, 75 def, 80 tra, 78 men, 73 phy, 82 pot
+Barrett Hall (C): 71 ovr, 84 cha, 75 off, 79 def, 78 tra, 80 men, 78 phy, 80 pot
+Ollie Josephson (C): 71 ovr, 87 cha, 72 off, 83 def, 76 tra, 82 men, 82 phy, 81 pot
+Ben MacDonald (C): 70 ovr, 81 cha, 78 off, 71 def, 80 tra, 76 men, 71 phy, 80 pot
+Justin Janicke (LW): 70 ovr, 83 cha, 74 off, 77 def, 78 tra, 79 men, 79 phy, 78 pot
+Jacob Melanson (RW): 70 ovr, 82 cha, 72 off, 76 def, 75 tra, 78 men, 89 phy, 77 pot
+Zaccharya Wisdom (RW): 69 ovr, 81 cha, 74 off, 73 def, 76 tra, 77 men, 79 phy, 77 pot
+
+Defence
+Chase Reid (D): 78 ovr, 84 cha, 88 off, 79 def, 88 tra, 81 men, 84 phy, 93 pot
+Blake Fiddler (D): 74 ovr, 86 cha, 71 off, 84 def, 77 tra, 82 men, 94 phy, 86 pot
+Jakub Fibigr (D): 73 ovr, 82 cha, 79 off, 77 def, 82 tra, 79 men, 78 phy, 84 pot
+Karl Annborn (D): 72 ovr, 85 cha, 69 off, 82 def, 75 tra, 81 men, 87 phy, 83 pot
+Peetro Seppälä (D): 72 ovr, 83 cha, 72 off, 80 def, 77 tra, 80 men, 84 phy, 81 pot
+Luken Huff (D): 71 ovr, 82 cha, 70 off, 78 def, 77 tra, 79 men, 86 phy, 81 pot
+Ola Palme (D): 70 ovr, 82 cha, 72 off, 77 def, 76 tra, 78 men, 82 phy, 80 pot
+Maxim Agafonov (D): 70 ovr, 81 cha, 74 off, 76 def, 78 tra, 77 men, 80 phy, 81 pot
+Finn Kearns (D): 69 ovr, 81 cha, 68 off, 77 def, 74 tra, 77 men, 84 phy, 79 pot
+Hawke Huff (D): 69 ovr, 82 cha, 67 off, 78 def, 73 tra, 78 men, 88 phy, 79 pot
+
+Goalies
+Semyon Vyazovoi (G): 74 ovr, 79 glove, 76 blocker, 76 stick, 83 pot
+Visa Vedenpää (G): 71 ovr, 76 glove, 74 blocker, 73 stick, 82 pot
+Kim Saarinen (G): 71 ovr, 76 glove, 74 blocker, 74 stick, 83 pot
+
+
+========================================
+NHL DYNASTY MODE — CENTRAL DIVISION RATINGS
+2026-27 SEASON
+Format: overall, character, offence, defence, transition, mental, physical, potential
+Goalies: overall, glove, blocker, stick, potential
+========================================
+
+=== CHICAGO BLACKHAWKS ===
+
+-- NHL FORWARDS --
+Connor Bedard: 94 ovr, 87 cha, 98 off, 78 def, 94 tra, 88 men, 76 phy, 98 pot
+Frank Nazar: 85 ovr, 86 cha, 87 off, 82 def, 89 tra, 84 men, 77 phy, 91 pot
+Anton Frondell: 83 ovr, 85 cha, 88 off, 79 def, 84 tra, 82 men, 88 phy, 94 pot
+Patrick Kane: 83 ovr, 88 cha, 90 off, 72 def, 84 tra, 89 men, 68 phy, 78 pot
+Teuvo Teravainen: 82 ovr, 88 cha, 84 off, 81 def, 84 tra, 86 men, 72 phy, 79 pot
+Roman Kantserov: 81 ovr, 81 cha, 87 off, 74 def, 86 tra, 79 men, 76 phy, 89 pot
+Nick Lardis: 80 ovr, 81 cha, 88 off, 72 def, 85 tra, 78 men, 72 phy, 87 pot
+Tyler Bertuzzi: 80 ovr, 82 cha, 82 off, 77 def, 77 tra, 80 men, 88 phy, 78 pot
+Oliver Moore: 79 ovr, 86 cha, 80 off, 80 def, 90 tra, 82 men, 73 phy, 88 pot
+Ryan Donato: 79 ovr, 84 cha, 83 off, 77 def, 80 tra, 82 men, 78 phy, 78 pot
+Ryan Greene: 77 ovr, 87 cha, 76 off, 83 def, 80 tra, 82 men, 82 phy, 83 pot
+Andrew Mangiapane: 77 ovr, 83 cha, 79 off, 77 def, 82 tra, 80 men, 78 phy, 76 pot
+Landon Slaggert: 76 ovr, 86 cha, 74 off, 82 def, 79 tra, 81 men, 85 phy, 80 pot
+Jordan Greenway: 75 ovr, 84 cha, 72 off, 80 def, 73 tra, 80 men, 94 phy, 74 pot
+Cole Smith: 73 ovr, 84 cha, 68 off, 79 def, 73 tra, 80 men, 88 phy, 71 pot
+
+-- NHL DEFENCE --
+Alex Vlasic: 86 ovr, 90 cha, 75 off, 93 def, 82 tra, 88 men, 92 phy, 89 pot
+Bowen Byram: 85 ovr, 82 cha, 87 off, 80 def, 88 tra, 81 men, 84 phy, 88 pot
+Artyom Levshunov: 83 ovr, 84 cha, 85 off, 82 def, 86 tra, 82 men, 91 phy, 93 pot
+Sam Rinzel: 81 ovr, 83 cha, 84 off, 79 def, 86 tra, 81 men, 86 phy, 90 pot
+Kevin Korchinski: 80 ovr, 81 cha, 85 off, 75 def, 88 tra, 79 men, 74 phy, 88 pot
+Wyatt Kaiser: 78 ovr, 85 cha, 72 off, 84 def, 80 tra, 82 men, 82 phy, 83 pot
+Ian Cole: 76 ovr, 89 cha, 64 off, 83 def, 71 tra, 85 men, 90 phy, 72 pot
+Ryan Ellis: 70 ovr, 86 cha, 72 off, 70 def, 70 tra, 82 men, 66 phy, 68 pot
+
+-- NHL GOALIES --
+Spencer Knight: 86 ovr, 89 glove, 85 blocker, 82 stick, 89 pot
+Arvid Soderblom: 79 ovr, 82 glove, 79 blocker, 76 stick, 80 pot
+
+-- AHL: ROCKFORD ICEHOGS --
+Forwards
+Marek Vanacker (LW/RW): 75 ovr, 84 cha, 81 off, 77 def, 80 tra, 80 men, 84 phy, 84 pot
+A.J. Spellacy (RW/C): 75 ovr, 87 cha, 76 off, 82 def, 82 tra, 83 men, 91 phy, 83 pot
+Jiri Felcman (C): 74 ovr, 86 cha, 76 off, 82 def, 78 tra, 81 men, 88 phy, 82 pot
+Paul Ludwinski (C/LW): 74 ovr, 86 cha, 77 off, 82 def, 83 tra, 82 men, 78 phy, 81 pot
+Gavin Hayes (LW/RW): 74 ovr, 81 cha, 82 off, 73 def, 79 tra, 77 men, 85 phy, 81 pot
+Samuel Savoie (LW/C): 73 ovr, 86 cha, 74 off, 80 def, 77 tra, 81 men, 87 phy, 79 pot
+Martin Misiak (RW/LW): 73 ovr, 82 cha, 78 off, 75 def, 79 tra, 78 men, 84 phy, 80 pot
+Dominic Toninato (C/W): 73 ovr, 86 cha, 70 off, 82 def, 75 tra, 82 men, 82 phy, 71 pot
+Brett Seney (LW/C): 72 ovr, 82 cha, 78 off, 72 def, 80 tra, 78 men, 69 phy, 71 pot
+Jamie Engelbert (C/LW): 72 ovr, 84 cha, 75 off, 77 def, 77 tra, 79 men, 83 phy, 76 pot
+Connor Mylymok (RW/LW): 71 ovr, 82 cha, 68 off, 77 def, 73 tra, 78 men, 94 phy, 73 pot
+Kevin Lombardi (RW/LW): 71 ovr, 81 cha, 77 off, 72 def, 79 tra, 76 men, 72 phy, 75 pot
+Harrison Israels (C/LW): 70 ovr, 82 cha, 72 off, 76 def, 76 tra, 78 men, 79 phy, 73 pot
+Marcus Joughin (C/LW): 70 ovr, 80 cha, 73 off, 74 def, 77 tra, 76 men, 80 phy, 74 pot
+Kyler Kupka (LW/RW): 70 ovr, 81 cha, 74 off, 73 def, 77 tra, 77 men, 78 phy, 73 pot
+Chase Dafoe (C/LW): 69 ovr, 80 cha, 71 off, 74 def, 75 tra, 76 men, 78 phy, 72 pot
+Dillon Boucher (LW/RW): 68 ovr, 82 cha, 62 off, 74 def, 67 tra, 77 men, 95 phy, 66 pot
+
+Defence
+Dylan Anhorn (D): 74 ovr, 84 cha, 79 off, 78 def, 82 tra, 80 men, 75 phy, 79 pot
+Jake Furlong (D): 73 ovr, 85 cha, 70 off, 82 def, 76 tra, 81 men, 84 phy, 80 pot
+Taige Harding (D): 73 ovr, 84 cha, 68 off, 82 def, 74 tra, 80 men, 95 phy, 78 pot
+Ashton Cumby (D): 72 ovr, 83 cha, 68 off, 80 def, 74 tra, 79 men, 90 phy, 80 pot
+Connor Mackey (D): 72 ovr, 82 cha, 72 off, 79 def, 76 tra, 79 men, 85 phy, 72 pot
+Derrick Pouliot (D): 72 ovr, 82 cha, 79 off, 73 def, 80 tra, 79 men, 72 phy, 71 pot
+Cavan Fitzgerald (D): 71 ovr, 83 cha, 70 off, 78 def, 75 tra, 78 men, 83 phy, 71 pot
+Tommy Budnick (D): 70 ovr, 83 cha, 67 off, 79 def, 73 tra, 78 men, 87 phy, 76 pot
+Lachlan Getz (D): 70 ovr, 82 cha, 70 off, 77 def, 75 tra, 77 men, 82 phy, 74 pot
+Brayden Hislop (D): 69 ovr, 82 cha, 66 off, 78 def, 72 tra, 78 men, 88 phy, 73 pot
+
+Goalies
+Drew Commesso (G): 76 ovr, 81 glove, 77 blocker, 75 stick, 84 pot
+Adam Gajan (G): 75 ovr, 80 glove, 77 blocker, 76 stick, 85 pot
+Stanislav Berezhnoy (G): 73 ovr, 78 glove, 75 blocker, 74 stick, 81 pot
+Thomas Gale (G): 70 ovr, 75 glove, 72 blocker, 72 stick, 74 pot
+
+-- ECHL: INDY FUEL (AFFILIATE DEPTH) --
+
+-- PROSPECTS (ALL JUNIOR / NCAA / EUROPE / KHL / UNSIGNED RIGHTS) --
+Forwards
+Mason West (C/W): 76 ovr, 88 cha, 80 off, 81 def, 79 tra, 84 men, 94 phy, 89 pot
+Ryan Roobroeck (C): 74 ovr, 84 cha, 82 off, 77 def, 78 tra, 80 men, 96 phy, 86 pot
+Vaclav Nestrasil (RW): 74 ovr, 82 cha, 82 off, 74 def, 80 tra, 78 men, 91 phy, 85 pot
+Nathan Behm (LW/RW): 73 ovr, 82 cha, 83 off, 73 def, 80 tra, 78 men, 85 phy, 84 pot
+Joel Svensson (LW/C): 73 ovr, 84 cha, 79 off, 79 def, 80 tra, 80 men, 80 phy, 83 pot
+John Mustard (LW): 72 ovr, 85 cha, 75 off, 80 def, 80 tra, 81 men, 89 phy, 82 pot
+Julius Sumpf (C): 72 ovr, 84 cha, 78 off, 78 def, 79 tra, 80 men, 87 phy, 82 pot
+William Sorbrand (C/W): 71 ovr, 84 cha, 76 off, 79 def, 78 tra, 79 men, 84 phy, 81 pot
+Parker Holmes (LW): 70 ovr, 81 cha, 76 off, 72 def, 77 tra, 76 men, 82 phy, 79 pot
+Artur Kayumov (LW/RW): 72 ovr, 82 cha, 80 off, 76 def, 80 tra, 80 men, 78 phy, 77 pot
+
+Defence
+Xavier Villeneuve (D): 75 ovr, 83 cha, 85 off, 75 def, 87 tra, 80 men, 71 phy, 87 pot
+Samu Alalauri (D): 73 ovr, 84 cha, 70 off, 82 def, 77 tra, 81 men, 89 phy, 83 pot
+Alexander Ivanov (D): 72 ovr, 83 cha, 72 off, 80 def, 78 tra, 79 men, 84 phy, 82 pot
+Ty Henry (D): 70 ovr, 83 cha, 67 off, 79 def, 73 tra, 78 men, 90 phy, 79 pot
+Janne Peltonen (D): 70 ovr, 82 cha, 72 off, 77 def, 76 tra, 78 men, 82 phy, 79 pot
+
+Goalies
+Ilya Kanarsky (G): 71 ovr, 76 glove, 74 blocker, 73 stick, 82 pot
+
+
+========================================
+NHL DYNASTY MODE — CENTRAL DIVISION RATINGS
+2026-27 SEASON
+Format: overall, character, offence, defence, transition, mental, physical, potential
+Goalies: overall, glove, blocker, stick, potential
+========================================
+
+=== NASHVILLE PREDATORS ===
+
+-- NHL FORWARDS --
+Filip Forsberg: 90 ovr, 87 cha, 94 off, 80 def, 87 tra, 86 men, 86 phy, 90 pot
+Steven Stamkos: 86 ovr, 89 cha, 92 off, 76 def, 81 tra, 89 men, 78 phy, 82 pot
+Ryan O'Reilly: 85 ovr, 94 cha, 84 off, 91 def, 80 tra, 92 men, 84 phy, 82 pot
+Jonathan Marchessault: 84 ovr, 85 cha, 89 off, 76 def, 84 tra, 85 men, 72 phy, 81 pot
+Luke Evangelista: 83 ovr, 84 cha, 86 off, 78 def, 85 tra, 82 men, 73 phy, 87 pot
+Mavrik Bourque: 82 ovr, 84 cha, 84 off, 80 def, 85 tra, 82 men, 74 phy, 87 pot
+Matthew Wood: 81 ovr, 82 cha, 86 off, 76 def, 81 tra, 79 men, 90 phy, 89 pot
+Brady Martin: 80 ovr, 89 cha, 80 off, 84 def, 80 tra, 85 men, 92 phy, 91 pot
+Ross Colton: 80 ovr, 84 cha, 79 off, 82 def, 80 tra, 82 men, 89 phy, 79 pot
+Jack Drury: 79 ovr, 87 cha, 76 off, 85 def, 80 tra, 83 men, 80 phy, 81 pot
+Nils Hoglander: 78 ovr, 81 cha, 82 off, 74 def, 84 tra, 79 men, 81 phy, 81 pot
+Alexander Kerfoot: 78 ovr, 86 cha, 75 off, 84 def, 82 tra, 84 men, 75 phy, 76 pot
+Ozzy Wiesblatt: 76 ovr, 84 cha, 76 off, 79 def, 80 tra, 80 men, 87 phy, 81 pot
+Vitali Pinchuk: 75 ovr, 83 cha, 76 off, 79 def, 77 tra, 80 men, 86 phy, 80 pot
+Adam Edstrom: 74 ovr, 83 cha, 70 off, 80 def, 73 tra, 79 men, 95 phy, 77 pot
+
+-- NHL DEFENCE --
+Roman Josi: 91 ovr, 94 cha, 92 off, 86 def, 91 tra, 93 men, 84 phy, 89 pot
+Brady Skjei: 84 ovr, 86 cha, 84 off, 83 def, 85 tra, 84 men, 83 phy, 83 pot
+Nicolas Hague: 82 ovr, 85 cha, 73 off, 88 def, 77 tra, 83 men, 96 phy, 83 pot
+Nick Perbix: 79 ovr, 84 cha, 73 off, 84 def, 78 tra, 82 men, 82 phy, 80 pot
+Justin Barron: 78 ovr, 81 cha, 81 off, 76 def, 83 tra, 79 men, 81 phy, 82 pot
+Adam Wilsby: 77 ovr, 83 cha, 74 off, 82 def, 79 tra, 81 men, 82 phy, 81 pot
+Ryan Ufko: 77 ovr, 82 cha, 82 off, 76 def, 84 tra, 79 men, 72 phy, 83 pot
+Ilya Lyubushkin: 75 ovr, 84 cha, 62 off, 82 def, 70 tra, 81 men, 93 phy, 72 pot
+
+-- NHL GOALIES --
+Juuse Saros: 91 ovr, 94 glove, 90 blocker, 86 stick, 91 pot
+Justus Annunen: 81 ovr, 84 glove, 81 blocker, 79 stick, 84 pot
+
+-- AHL: MILWAUKEE ADMIRALS --
+Forwards
+Aiden Fink (RW): 77 ovr, 83 cha, 85 off, 74 def, 84 tra, 80 men, 72 phy, 85 pot
+Joakim Kemell (RW): 76 ovr, 80 cha, 86 off, 70 def, 82 tra, 77 men, 78 phy, 83 pot
+David Edstrom (C): 76 ovr, 87 cha, 77 off, 84 def, 79 tra, 83 men, 90 phy, 84 pot
+Reid Schaefer (LW): 75 ovr, 86 cha, 78 off, 80 def, 77 tra, 82 men, 92 phy, 82 pot
+Joey Willis (C/LW): 74 ovr, 85 cha, 78 off, 79 def, 79 tra, 81 men, 81 phy, 81 pot
+Hiroki Gojsic (RW): 74 ovr, 81 cha, 81 off, 73 def, 80 tra, 78 men, 87 phy, 82 pot
+Cole O'Hara (RW): 74 ovr, 82 cha, 82 off, 73 def, 80 tra, 79 men, 75 phy, 79 pot
+Ben Strinden (RW/C): 73 ovr, 85 cha, 75 off, 80 def, 77 tra, 80 men, 86 phy, 79 pot
+Kalan Lind (LW): 73 ovr, 83 cha, 75 off, 78 def, 76 tra, 79 men, 90 phy, 80 pot
+Austin Roest (RW/C): 72 ovr, 82 cha, 76 off, 75 def, 79 tra, 78 men, 76 phy, 78 pot
+Oasiz Wiesblatt (C/LW): 72 ovr, 82 cha, 75 off, 77 def, 77 tra, 78 men, 88 phy, 77 pot
+Jake Lucchini (C/LW): 72 ovr, 82 cha, 78 off, 74 def, 78 tra, 79 men, 74 phy, 71 pot
+Chase Bradley (LW/C): 71 ovr, 83 cha, 71 off, 78 def, 75 tra, 79 men, 87 phy, 75 pot
+John Farinacci (C/RW): 71 ovr, 82 cha, 74 off, 76 def, 77 tra, 78 men, 78 phy, 75 pot
+Kyle Marino (W/C/D): 68 ovr, 84 cha, 60 off, 75 def, 66 tra, 79 men, 95 phy, 65 pot
+
+Defence
+Tanner Molendyk (D): 77 ovr, 85 cha, 80 off, 82 def, 87 tra, 82 men, 78 phy, 86 pot
+Andrew Gibson (D): 75 ovr, 84 cha, 73 off, 82 def, 76 tra, 81 men, 91 phy, 83 pot
+Viggo Gustafsson (D): 74 ovr, 85 cha, 70 off, 82 def, 76 tra, 81 men, 88 phy, 83 pot
+Jack Ahcan (D): 74 ovr, 82 cha, 81 off, 74 def, 83 tra, 79 men, 68 phy, 75 pot
+Hunter Skinner (D): 73 ovr, 82 cha, 70 off, 80 def, 75 tra, 79 men, 88 phy, 76 pot
+Kevin Gravel (D): 72 ovr, 86 cha, 64 off, 80 def, 71 tra, 81 men, 86 phy, 70 pot
+John Prokop (D): 71 ovr, 82 cha, 72 off, 78 def, 77 tra, 78 men, 82 phy, 77 pot
+Will Gilson (D): 70 ovr, 81 cha, 69 off, 77 def, 75 tra, 77 men, 80 phy, 75 pot
+
+Goalies
+Matt Murray (G): 75 ovr, 80 glove, 76 blocker, 75 stick, 77 pot
+Isak Posch (G): 74 ovr, 79 glove, 76 blocker, 75 stick, 82 pot
+Ethan Haider (G): 73 ovr, 78 glove, 75 blocker, 74 stick, 80 pot
+T.J. Semptimphelter (G): 72 ovr, 77 glove, 74 blocker, 74 stick, 79 pot
+
+-- ECHL: ATLANTA GLADIATORS (AFFILIATE DEPTH) --
+
+-- PROSPECTS (ALL JUNIOR / NCAA / EUROPE / KHL / UNSIGNED RIGHTS) --
+Forwards
+Wyatt Cullen (LW): 76 ovr, 84 cha, 84 off, 76 def, 86 tra, 81 men, 79 phy, 89 pot
+Yegor Surin (C/LW): 75 ovr, 86 cha, 81 off, 81 def, 80 tra, 82 men, 91 phy, 87 pot
+Ryker Lee (RW): 74 ovr, 82 cha, 84 off, 73 def, 83 tra, 79 men, 74 phy, 85 pot
+Felix Nilsson (C/W): 74 ovr, 86 cha, 78 off, 83 def, 80 tra, 82 men, 80 phy, 84 pot
+Teddy Stiga (C/LW): 73 ovr, 88 cha, 76 off, 83 def, 80 tra, 83 men, 78 phy, 83 pot
+Miguel Marques (RW): 72 ovr, 82 cha, 80 off, 74 def, 81 tra, 78 men, 74 phy, 82 pot
+Erik Pahlsson (C/W): 72 ovr, 85 cha, 75 off, 81 def, 78 tra, 80 men, 84 phy, 81 pot
+Viktor Norringer (RW): 71 ovr, 81 cha, 79 off, 72 def, 79 tra, 77 men, 76 phy, 81 pot
+Philip Hemmyr (C/W): 70 ovr, 83 cha, 75 off, 78 def, 77 tra, 79 men, 80 phy, 80 pot
+Charlie Puglisi (F): 70 ovr, 82 cha, 74 off, 77 def, 76 tra, 78 men, 82 phy, 79 pot
+Justin Graf (C): 69 ovr, 82 cha, 74 off, 76 def, 77 tra, 78 men, 76 phy, 78 pot
+
+Defence
+Cameron Reid (D): 75 ovr, 84 cha, 84 off, 78 def, 86 tra, 81 men, 75 phy, 87 pot
+Tommy Bleyl (D): 74 ovr, 83 cha, 81 off, 78 def, 86 tra, 80 men, 74 phy, 86 pot
+Alex Huang (D): 73 ovr, 82 cha, 82 off, 75 def, 84 tra, 79 men, 72 phy, 84 pot
+Jacob Rombach (D): 72 ovr, 85 cha, 67 off, 82 def, 73 tra, 80 men, 94 phy, 82 pot
+Semyon Chistyakov (D): 72 ovr, 83 cha, 70 off, 80 def, 76 tra, 79 men, 86 phy, 81 pot
+Daniel Nieminen (D): 71 ovr, 82 cha, 72 off, 78 def, 77 tra, 78 men, 80 phy, 80 pot
+Jakub Floris (D): 70 ovr, 82 cha, 70 off, 77 def, 76 tra, 78 men, 82 phy, 80 pot
+
+Goalies
+Jack Ivankovic (G): 74 ovr, 80 glove, 76 blocker, 76 stick, 86 pot
+Jakub Milota (G): 72 ovr, 77 glove, 75 blocker, 74 stick, 82 pot
+Dmitri Borichev (G): 71 ovr, 76 glove, 74 blocker, 74 stick, 83 pot
+
+
+========================================
+NHL DYNASTY MODE — CENTRAL DIVISION RATINGS
+2026-27 SEASON
+Format: overall, character, offence, defence, transition, mental, physical, potential
+Goalies: overall, glove, blocker, stick, potential
+========================================
+
+=== ST. LOUIS BLUES ===
+
+-- NHL FORWARDS --
+Robert Thomas: 90 ovr, 92 cha, 92 off, 87 def, 90 tra, 90 men, 78 phy, 91 pot
+Pavel Buchnevich: 87 ovr, 86 cha, 90 off, 83 def, 87 tra, 85 men, 82 phy, 87 pot
+Mason McTavish: 86 ovr, 88 cha, 87 off, 85 def, 84 tra, 86 men, 92 phy, 91 pot
+Dylan Holloway: 85 ovr, 89 cha, 84 off, 86 def, 88 tra, 86 men, 91 phy, 88 pot
+Jimmy Snuggerud: 84 ovr, 84 cha, 89 off, 77 def, 85 tra, 82 men, 80 phy, 90 pot
+Connor McMichael: 83 ovr, 85 cha, 85 off, 81 def, 85 tra, 83 men, 77 phy, 87 pot
+Dalibor Dvorsky: 82 ovr, 86 cha, 85 off, 82 def, 82 tra, 83 men, 85 phy, 89 pot
+Jake Neighbours: 82 ovr, 88 cha, 83 off, 82 def, 80 tra, 84 men, 91 phy, 84 pot
+Pius Suter: 79 ovr, 87 cha, 76 off, 86 def, 81 tra, 84 men, 75 phy, 78 pot
+Jonatan Berggren: 78 ovr, 80 cha, 83 off, 74 def, 83 tra, 78 men, 70 phy, 81 pot
+Oskar Sundqvist: 77 ovr, 88 cha, 72 off, 84 def, 74 tra, 84 men, 90 phy, 74 pot
+Alexei Toropchenko: 76 ovr, 84 cha, 72 off, 81 def, 79 tra, 80 men, 94 phy, 77 pot
+Nathan Walker: 75 ovr, 88 cha, 70 off, 81 def, 76 tra, 83 men, 87 phy, 72 pot
+Jack Finley: 74 ovr, 84 cha, 72 off, 80 def, 73 tra, 80 men, 96 phy, 79 pot
+Ross Johnston: 68 ovr, 82 cha, 57 off, 73 def, 63 tra, 77 men, 98 phy, 65 pot
+
+-- NHL DEFENCE --
+Philip Broberg: 87 ovr, 88 cha, 85 off, 88 def, 90 tra, 86 men, 87 phy, 91 pot
+Colton Parayko: 86 ovr, 92 cha, 76 off, 93 def, 80 tra, 89 men, 96 phy, 84 pot
+Brandon Carlo: 83 ovr, 90 cha, 64 off, 91 def, 74 tra, 87 men, 94 phy, 81 pot
+Cam Fowler: 81 ovr, 87 cha, 82 off, 80 def, 84 tra, 86 men, 76 phy, 77 pot
+Logan Mailloux: 80 ovr, 81 cha, 85 off, 76 def, 83 tra, 79 men, 87 phy, 86 pot
+Torey Krug: 77 ovr, 84 cha, 83 off, 72 def, 80 tra, 82 men, 74 phy, 72 pot
+Tyler Tucker: 75 ovr, 85 cha, 66 off, 82 def, 72 tra, 81 men, 93 phy, 76 pot
+
+-- NHL GOALIES --
+Jordan Binnington: 86 ovr, 89 glove, 85 blocker, 82 stick, 84 pot
+Joel Hofer: 84 ovr, 87 glove, 83 blocker, 81 stick, 87 pot
+
+-- AHL: SPRINGFIELD THUNDERBIRDS --
+Forwards
+Justin Carbonneau (RW): 77 ovr, 81 cha, 87 off, 72 def, 83 tra, 78 men, 86 phy, 87 pot
+Otto Stenberg (C/LW): 77 ovr, 85 cha, 82 off, 81 def, 84 tra, 82 men, 78 phy, 86 pot
+Adam Jecho (C/RW): 76 ovr, 85 cha, 78 off, 81 def, 76 tra, 81 men, 97 phy, 84 pot
+Jakub Stancl (LW): 75 ovr, 84 cha, 80 off, 78 def, 78 tra, 80 men, 94 phy, 83 pot
+Juraj Pekarcik (W/C): 75 ovr, 84 cha, 79 off, 79 def, 81 tra, 80 men, 87 phy, 83 pot
+Nikita Susuyev (LW/RW): 74 ovr, 82 cha, 81 off, 74 def, 82 tra, 78 men, 77 phy, 82 pot
+Aleksanteri Kaskimaki (C): 74 ovr, 84 cha, 78 off, 80 def, 81 tra, 80 men, 78 phy, 81 pot
+Simon Robertsson (RW): 74 ovr, 82 cha, 81 off, 75 def, 80 tra, 78 men, 84 phy, 81 pot
+Dylan Peterson (C/RW): 73 ovr, 85 cha, 72 off, 81 def, 74 tra, 80 men, 95 phy, 78 pot
+Zach Dean (C): 73 ovr, 82 cha, 76 off, 77 def, 79 tra, 78 men, 82 phy, 77 pot
+Felix Trudeau (LW): 72 ovr, 81 cha, 77 off, 74 def, 78 tra, 77 men, 84 phy, 77 pot
+Dillon Dube (LW/C): 72 ovr, 80 cha, 76 off, 74 def, 79 tra, 77 men, 77 phy, 72 pot
+T.J. Tynan (C/RW): 72 ovr, 84 cha, 82 off, 70 def, 80 tra, 82 men, 61 phy, 70 pot
+Chris Wagner (RW/C): 71 ovr, 88 cha, 66 off, 80 def, 72 tra, 83 men, 87 phy, 68 pot
+Kale Kessy (LW/RW): 67 ovr, 83 cha, 57 off, 73 def, 62 tra, 77 men, 98 phy, 64 pot
+
+Defence
+Adam Jiricek (D): 77 ovr, 84 cha, 78 off, 83 def, 81 tra, 81 men, 87 phy, 86 pot
+Theo Lindstein (D): 76 ovr, 87 cha, 77 off, 83 def, 82 tra, 82 men, 82 phy, 85 pot
+Colin Ralph (D): 75 ovr, 86 cha, 68 off, 84 def, 74 tra, 82 men, 96 phy, 84 pot
+Lukas Fischer (D): 74 ovr, 84 cha, 72 off, 82 def, 76 tra, 81 men, 91 phy, 83 pot
+Michael Buchinger (D): 74 ovr, 81 cha, 81 off, 76 def, 83 tra, 79 men, 75 phy, 82 pot
+Quinton Burns (D): 73 ovr, 85 cha, 69 off, 82 def, 74 tra, 81 men, 91 phy, 81 pot
+Marc-Andre Gaudet (D): 72 ovr, 83 cha, 70 off, 80 def, 75 tra, 79 men, 88 phy, 78 pot
+Arseni Koromyslov (D): 72 ovr, 84 cha, 68 off, 81 def, 73 tra, 80 men, 92 phy, 80 pot
+Calle Rosen (D): 72 ovr, 83 cha, 76 off, 76 def, 79 tra, 80 men, 76 phy, 71 pot
+Ryan Wheeler (D): 70 ovr, 81 cha, 68 off, 77 def, 74 tra, 77 men, 82 phy, 72 pot
+
+Goalies
+Georgi Romanov (G): 74 ovr, 79 glove, 76 blocker, 75 stick, 80 pot
+Will Cranley (G): 72 ovr, 77 glove, 74 blocker, 73 stick, 79 pot
+
+-- ECHL: FLORIDA EVERBLADES (AFFILIATE DEPTH) --
+
+-- PROSPECTS (ALL JUNIOR / NCAA / EUROPE / KHL / UNSIGNED RIGHTS) --
+Forwards
+Tynan Lawrence (C): 77 ovr, 88 cha, 84 off, 85 def, 85 tra, 85 men, 81 phy, 91 pot
+Maddox Dagenais (C): 76 ovr, 84 cha, 83 off, 78 def, 79 tra, 81 men, 96 phy, 88 pot
+Dmitri Buchelnikov (LW): 75 ovr, 81 cha, 86 off, 72 def, 84 tra, 78 men, 68 phy, 85 pot
+Matvei Korotky (C): 74 ovr, 86 cha, 79 off, 82 def, 79 tra, 82 men, 86 phy, 84 pot
+Mikhail Fyodorov (RW/LW): 73 ovr, 80 cha, 83 off, 71 def, 82 tra, 77 men, 70 phy, 83 pot
+Milton Gastrin (C): 73 ovr, 85 cha, 77 off, 81 def, 78 tra, 81 men, 83 phy, 83 pot
+Ondrej Kos (LW): 72 ovr, 84 cha, 76 off, 79 def, 78 tra, 80 men, 87 phy, 81 pot
+Tomas Mrsic (C): 72 ovr, 82 cha, 80 off, 74 def, 81 tra, 79 men, 72 phy, 81 pot
+Lars Steiner (RW): 71 ovr, 80 cha, 80 off, 72 def, 80 tra, 77 men, 70 phy, 81 pot
+Carter Stevens (RW): 71 ovr, 82 cha, 76 off, 76 def, 77 tra, 79 men, 84 phy, 80 pot
+Ivan Vorobyov (LW/RW): 70 ovr, 79 cha, 78 off, 71 def, 78 tra, 75 men, 68 phy, 78 pot
+Antoine Dorion (RW): 69 ovr, 81 cha, 74 off, 76 def, 76 tra, 78 men, 80 phy, 77 pot
+Mikhail Abramov (C): 71 ovr, 81 cha, 77 off, 76 def, 79 tra, 78 men, 74 phy, 76 pot
+
+Defence
+Landon Nycz (D): 75 ovr, 85 cha, 80 off, 81 def, 84 tra, 82 men, 84 phy, 86 pot
+Nicholas Bogas (D): 73 ovr, 84 cha, 70 off, 82 def, 76 tra, 80 men, 88 phy, 83 pot
+William McIsaac (D): 72 ovr, 84 cha, 68 off, 82 def, 74 tra, 80 men, 92 phy, 81 pot
+Matthew Mayich (D): 71 ovr, 83 cha, 70 off, 79 def, 75 tra, 79 men, 86 phy, 80 pot
+Leo Loof (D): 72 ovr, 84 cha, 68 off, 81 def, 74 tra, 80 men, 89 phy, 78 pot
+
+Goalies
+Vadim Zherenko (G): 73 ovr, 78 glove, 75 blocker, 74 stick, 79 pot
+

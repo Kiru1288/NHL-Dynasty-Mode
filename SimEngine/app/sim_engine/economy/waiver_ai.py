@@ -123,7 +123,12 @@ def _upgrade_score(team: TeamDict, player: PlayerDict) -> float:
     - otherwise we treat player overall_projection as-is
     """
     pos = _player_pos(player)
-    p_ovr = _safe_float(player.get("overall_projection"), 0.0)
+    p_ovr_raw = _safe_float(player.get("overall_projection"), 0.0)
+    if p_ovr_raw <= 0.0:
+        p_ovr_raw = _safe_float(player.get("overall"), 0.0)
+    if p_ovr_raw <= 0.0:
+        p_ovr_raw = _safe_float(player.get("ovr"), 0.0)
+    p_ovr = p_ovr_raw / 99.0 if p_ovr_raw > 1.5 else _clamp(p_ovr_raw, 0.0, 1.0)
 
     # Supported optional structures
     rep = team.get("replacement_level", {}) or {}
@@ -542,7 +547,10 @@ class WaiverAI:
 
     @staticmethod
     def _player_dict(player: Any) -> PlayerDict:
+        from app.sim_engine.economy.player_value import player_economy_ability_01
+
         cap_hit = getattr(player, "cap_hit_m", getattr(player, "cap_hit", getattr(player, "contract_aav_m", 0.0)))
+        ability_proj = player_economy_ability_01(player) * 99.0
         return {
             "player_id": getattr(player, "id", getattr(player, "name", "player")),
             "name": getattr(player, "name", "Player"),
@@ -550,7 +558,7 @@ class WaiverAI:
             "age": getattr(player, "age", 25),
             "cap_hit": cap_hit if cap_hit is not None else 0.0,
             "contract_years_left": getattr(getattr(player, "contract", None), "years_left", 0),
-            "overall_projection": (player.ovr() if callable(getattr(player, "ovr", None)) else getattr(player, "ovr", 0.0)),
+            "overall_projection": ability_proj,
         }
 
     def process_waivers(self, league: Any, *, season_day: int = 1) -> List[str]:

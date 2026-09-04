@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
-from app.sim_engine.economy.player_value import PlayerValue
+from app.sim_engine.economy.player_value import PlayerValue, player_economy_ability_01, estimate_fa_market_aav_m
 from app.sim_engine.economy.team_needs import TeamNeeds
 
 
@@ -34,13 +34,24 @@ def _safe_int(x: Any, default: int = 0) -> int:
 
 
 def _player_ovr(player: Any) -> float:
+    """Canonical 0–1 ability for signing heuristics."""
+    try:
+        from app.sim_engine.entities.player import player_current_ovr_01
+
+        return float(player_current_ovr_01(player))
+    except Exception:
+        pass
     fn = getattr(player, "ovr", None)
     if callable(fn):
         try:
-            return float(fn())
+            v = float(fn())
         except Exception:
             return 0.0
-    return _safe_float(getattr(player, "ovr", None), 0.0)
+    else:
+        v = _safe_float(getattr(player, "ovr", None), 0.0)
+    if v > 1.5:
+        return max(0.0, min(1.0, v / 99.0))
+    return max(0.0, min(1.0, v))
 
 
 def _player_pos(player: Any) -> str:
@@ -64,7 +75,9 @@ class SigningAI:
         self.value_model = PlayerValue()
         self.needs_model = TeamNeeds()
 
-    def evaluate_free_agents(self, team: Any, free_agent_pool: List[Any]) -> List[Any]:
+    def evaluate_free_agents(
+        self, team: Any, free_agent_pool: List[Any], league: Any = None,
+    ) -> List[Any]:
         needs = getattr(team, "needs", None) or self.needs_model.evaluate(team)
         roster = list(getattr(team, "roster", None) or [])
 
@@ -90,19 +103,19 @@ class SigningAI:
 
         def preference(p: Any) -> Tuple[float, float, float]:
             val = self.value_model.evaluate(p, team=team)
-            ovr = _player_ovr(p)
+            ability = player_economy_ability_01(p)
             age = _safe_int(getattr(p, "age", 25), 25)
             n = need_score(p)
             youth = 1.0 if age <= 23 else 0.0
             prime = 1.0 if 24 <= age <= 30 else 0.0
-            # contender wants high OVR; rebuild / draft_focus wants youth/value
+            # contender wants proven ability; rebuild / draft_focus wants youth/value
             if contender:
-                style = ovr * 0.35 + prime * 0.08
+                style = ability * 0.35 + prime * 0.08
             elif rebuild or draft_focus:
                 style = val * 0.28 + youth * 0.14 + (0.06 if age <= 26 else 0.0)
             else:
-                style = val * 0.22 + ovr * 0.12 + (0.04 if age <= 28 else 0.0)
-            return (n + val + style, ovr, -age if rebuild else age)
+                style = val * 0.22 + ability * 0.12 + (0.04 if age <= 28 else 0.0)
+            return (n + val + style, ability, -age if rebuild else age)
 
         # shortlist sorted by desirability
         pool_sorted = sorted(list(free_agent_pool), key=preference, reverse=True)
@@ -113,7 +126,7 @@ class SigningAI:
             # affordability: if player has an attached cap_hit_m/aav_m, respect it; otherwise estimate by ovr
             cap_hit_m = _safe_float(getattr(p, "cap_hit_m", None), _safe_float(getattr(p, "contract_aav_m", None), 0.0))
             if cap_hit_m <= 0.0:
-                cap_hit_m = 1.0 + 9.0 * max(0.0, _player_ovr(p) - 0.50)
+                cap_hit_m = estimate_fa_market_aav_m(p, league)
             if cap_space_m - cap_hit_m < self.cap_buffer_m:
                 continue
             chosen.append(p)
@@ -131,7 +144,7 @@ class SigningAI:
             roster = list(getattr(team, "roster", None) or [])
             if len(roster) >= 23:
                 continue
-            picks = self.evaluate_free_agents(team, free_agents)
+            picks = self.evaluate_free_agents(team, free_agents, league)
             for p in picks:
                 if p not in free_agents:
                     continue
@@ -140,7 +153,7 @@ class SigningAI:
                 # attach a rough AAV for logging/cap
                 aav = _safe_float(getattr(p, "cap_hit_m", None), 0.0)
                 if aav <= 0.0:
-                    aav = 1.0 + 9.0 * max(0.0, _player_ovr(p) - 0.50)
+                    aav = estimate_fa_market_aav_m(p, league)
                     try:
                         p.cap_hit_m = aav
                     except Exception:

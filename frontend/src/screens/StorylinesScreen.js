@@ -19,6 +19,7 @@ import {
 } from "../services/franchiseService";
 import BurnerPanel from "../components/franchise/social/BurnerPanel";
 import { collectLockerPulse, buildHubStoryTicker, isRoutineLeagueTrade } from "../utils/lockerRoomPulse";
+import { resolveChapterMap, chapterNumericValue } from "../utils/chapterAttributes";
 
 /*
   StorylinesScreen — franchise narrative command center.
@@ -99,6 +100,7 @@ const DEPARTMENTS = [
   { id: "locker_room", label: "Room & Life", glyph: "◍" },
   { id: "consequences", label: "Fallout", glyph: "⚠" },
   { id: "social", label: "Social", glyph: "◈" },
+  { id: "prospect_pools", label: "Prospect Pools", glyph: "▲" },
   { id: "insiders", label: "Insiders", glyph: "◇" },
   { id: "press_room", label: "Press Room", glyph: "▤" },
   { id: "archive", label: "Archive", glyph: "▥" },
@@ -130,6 +132,149 @@ function str(v, fallback = "") {
 function userTeamId(state) {
   return str(state?.user_team_id || state?.userTeamId || state?.team_id || "");
 }
+
+const PROSPECT_POOL_TOP_N = 5;
+
+function prospectPotentialScore(player) {
+  if (!player) return 0;
+  const chapters = resolveChapterMap(player);
+  const pot = chapterNumericValue(chapters.potential);
+  if (pot != null && pot > 0) return pot;
+  const raw = player.potential ?? player.potential_score ?? player.dev_potential;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n > 0) return Math.round(n);
+  const ovr = Number(
+    player.overall ?? player.effective_ovr ?? player.ovr ?? player.base_ovr ?? chapters.overall
+  );
+  if (Number.isFinite(ovr) && ovr > 0) return Math.round(ovr * 0.92);
+  return 0;
+}
+
+function rightsHolderTeamId(player) {
+  return str(
+    player?.nhl_rights_team_id ||
+      player?.rights_team_id ||
+      player?.draft_team_id ||
+      player?.drafted_by_team_id ||
+      ""
+  ).toUpperCase();
+}
+
+function collectProspectsForOrg(org) {
+  const tid = str(org.team_id || org.id).toUpperCase();
+  const name = str(org.name || tid);
+  return asArray(org.prospects).map((p) => ({
+    player_id: str(p.player_id || p.id),
+    name: str(p.name || "Prospect"),
+    team_id: tid,
+    team_name: name,
+    potential: prospectPotentialScore(p),
+    age: Number(p.age) || null,
+  }));
+}
+
+function collectDevelopmentLeagueProspects(developmentLeagues, orgIndex) {
+  const out = [];
+  for (const block of asArray(developmentLeagues)) {
+    for (const tm of asArray(block?.teams)) {
+      for (const p of asArray(tm?.players)) {
+        const rights = rightsHolderTeamId(p);
+        if (!rights || !orgIndex.has(rights)) continue;
+        const org = orgIndex.get(rights);
+        out.push({
+          player_id: str(p.player_id || p.id),
+          name: str(p.name || "Prospect"),
+          team_id: rights,
+          team_name: str(org?.name || rights),
+          potential: prospectPotentialScore(p),
+          age: Number(p.age) || null,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function buildProspectPoolRankings(organizations, developmentLeagues) {
+  const orgs = asArray(organizations);
+  const orgIndex = new Map(
+    orgs.map((org) => [str(org.team_id || org.id).toUpperCase(), org])
+  );
+
+  const leagueProspects = [];
+  orgs.forEach((org) => {
+    leagueProspects.push(...collectProspectsForOrg(org));
+  });
+  leagueProspects.push(...collectDevelopmentLeagueProspects(developmentLeagues, orgIndex));
+
+  const deduped = [];
+  const seen = new Set();
+  leagueProspects.forEach((p) => {
+    const key = p.player_id || `${p.team_id}:${p.name}`;
+    if (!p.potential || p.potential <= 0 || seen.has(key)) return;
+    seen.add(key);
+    deduped.push(p);
+  });
+
+  deduped.sort(
+    (a, b) => b.potential - a.potential || str(a.name).localeCompare(str(b.name))
+  );
+
+  const rankByPlayerId = new Map();
+  deduped.forEach((p, idx) => {
+    if (p.player_id) rankByPlayerId.set(p.player_id, idx + 1);
+  });
+
+  const byTeam = new Map();
+  deduped.forEach((p) => {
+    if (!byTeam.has(p.team_id)) byTeam.set(p.team_id, []);
+    byTeam.get(p.team_id).push({
+      player_id: p.player_id,
+      name: p.name,
+      potential: p.potential,
+      potentialRank: rankByPlayerId.get(p.player_id) || null,
+      age: p.age,
+    });
+  });
+
+  const rows = orgs.map((org) => {
+    const tid = str(org.team_id || org.id).toUpperCase();
+    const name = str(org.name || tid);
+    const prospects = (byTeam.get(tid) || [])
+      .filter((p) => p.potentialRank)
+      .sort((a, b) => a.potentialRank - b.potentialRank);
+
+    const count = prospects.length;
+    const topSlice = prospects.slice(0, PROSPECT_POOL_TOP_N);
+    const avgRank = topSlice.length
+      ? topSlice.reduce((sum, p) => sum + p.potentialRank, 0) / topSlice.length
+      : null;
+    const avgPotential = count
+      ? prospects.reduce((sum, p) => sum + p.potential, 0) / count
+      : 0;
+
+    return {
+      team_id: tid,
+      name,
+      count,
+      avgRank,
+      avgPotential,
+      topProspect: prospects[0] || null,
+      prospects,
+    };
+  });
+
+  rows.sort((a, b) => {
+    if (a.avgRank == null && b.avgRank == null) return str(a.name).localeCompare(str(b.name));
+    if (a.avgRank == null) return 1;
+    if (b.avgRank == null) return -1;
+    if (a.avgRank !== b.avgRank) return a.avgRank - b.avgRank;
+    return str(a.name).localeCompare(str(b.name));
+  });
+
+  return rows.map((row, idx) => ({ ...row, poolRank: idx + 1 }));
+}
+
 function teamLabel(state) {
   return str(
     state?.user_team_name || state?.team_name || state?.franchise_team_name || "Your Team"
@@ -2733,6 +2878,23 @@ export default function StorylinesScreen() {
     return buildRedditThreads(source, redditSubFilter, opts);
   }, [liveSocialFeed, narrativeUniverse, redditSubFilter, currentCalendarIso]);
 
+  const prospectPoolRankings = useMemo(
+    () =>
+      buildProspectPoolRankings(
+        franchiseState?.roster_browser?.organizations,
+        franchiseState?.roster_browser?.development_leagues
+      ),
+    [
+      franchiseState?.roster_browser?.organizations,
+      franchiseState?.roster_browser?.development_leagues,
+      franchiseState?.stats_revision,
+    ]
+  );
+  const userProspectPoolRow = useMemo(() => {
+    const uid = userTeamId(franchiseState).toUpperCase();
+    return prospectPoolRankings.find((row) => row.team_id === uid) || null;
+  }, [prospectPoolRankings, franchiseState?.user_team_id, franchiseState?.userTeamId, franchiseState?.team_id]);
+
   const redditPulse = useMemo(
     () => fanPulseTrend(narrativeUniverse?.reddit_engagement_pulse),
     [narrativeUniverse]
@@ -4425,6 +4587,101 @@ export default function StorylinesScreen() {
                   </div>
                 </div>
               )}
+            </aside>
+          </div>
+        ) : department === "prospect_pools" ? (
+          <div className="sl-two">
+            <div className="sl-feed">
+              {prospectPoolRankings.some((row) => row.count > 0) ? (
+                prospectPoolRankings.map((row, idx) => {
+                  const isUser = row.team_id === userTeamId(franchiseState).toUpperCase();
+                  const logo =
+                    resolveFranchiseTeamLogo(
+                      { team_abbrev: row.team_id, abbrev: row.team_id, team_name: row.name },
+                      row.name || row.team_id
+                    ) || "";
+                  return (
+                    <article
+                      key={row.team_id}
+                      className="sl-insider"
+                      style={{ animationDelay: `${Math.min(idx, 10) * 24}ms` }}
+                    >
+                      <div className="sl-insider__head">
+                        <strong>
+                          #{row.poolRank} · {row.name}
+                        </strong>
+                        <em>{row.count} in pool</em>
+                      </div>
+                      <p>
+                        Average top-{PROSPECT_POOL_TOP_N} potential rank{" "}
+                        <strong>{row.avgRank != null ? row.avgRank.toFixed(1) : "—"}</strong>
+                        {row.topProspect ? (
+                          <>
+                            {" "}
+                            · Headliner {row.topProspect.name} (#{row.topProspect.potentialRank} ·{" "}
+                            {row.topProspect.potential} POT)
+                          </>
+                        ) : null}
+                      </p>
+                      <div className="sl-insider__meta">
+                        {logo ? (
+                          <span>
+                            <img src={logo} alt="" width={16} height={16} style={{ verticalAlign: "middle" }} />{" "}
+                            {row.team_id}
+                          </span>
+                        ) : (
+                          <span>{row.team_id}</span>
+                        )}
+                        <span>Avg ceiling {row.avgPotential ? row.avgPotential.toFixed(1) : "—"}</span>
+                        {isUser ? <span>Your org</span> : null}
+                      </div>
+                    </article>
+                  );
+                })
+              ) : (
+                <EmptyPanel
+                  kicker="Prospect Pools · quiet"
+                  title="No ranked pools yet"
+                  body="Rights-held prospects need potential data from your roster browser. Start or advance a Real NHL franchise to populate the pipeline."
+                />
+              )}
+            </div>
+            <aside className="sl-rail">
+              <div className="sl-panel">
+                <div className="sl-pulse">
+                  <span>Your pool rank</span>
+                  <strong>{userProspectPoolRow ? `#${userProspectPoolRow.poolRank}` : "—"}</strong>
+                  <p>
+                    {userProspectPoolRow?.avgRank != null
+                      ? `Avg top-${PROSPECT_POOL_TOP_N} potential rank ${userProspectPoolRow.avgRank.toFixed(1)} across ${userProspectPoolRow.count} prospects`
+                      : "Pipeline not ranked yet"}
+                  </p>
+                </div>
+                <h3>League snapshot</h3>
+                <div className="sl-effects">
+                  {prospectPoolRankings.slice(0, 10).map((row) => (
+                    <div key={row.team_id} className="sl-trend">
+                      <b>{row.poolRank}</b>
+                      <span>{row.name}</span>
+                      <em>{row.avgRank != null ? row.avgRank.toFixed(1) : "—"}</em>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {userProspectPoolRow?.prospects?.length ? (
+                <div className="sl-panel">
+                  <h3>Your pipeline</h3>
+                  <div className="sl-effects">
+                    {userProspectPoolRow.prospects.slice(0, 8).map((p) => (
+                      <div key={p.player_id || p.name} className="sl-trend">
+                        <b>{p.potentialRank}</b>
+                        <span>{p.name}</span>
+                        <em>{p.potential} POT</em>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </aside>
           </div>
         ) : department === "insiders" ? (

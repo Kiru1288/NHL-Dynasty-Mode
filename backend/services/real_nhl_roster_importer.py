@@ -1178,6 +1178,7 @@ def _build_player_from_roster_row(
     all_teams: Optional[List[Any]] = None,
     analytics_by_id: Optional[Dict[int, Dict[str, Any]]] = None,
     goalie_analytics_by_id: Optional[Dict[int, Dict[str, Any]]] = None,
+    dynasty_registry: Optional[Any] = None,
 ) -> Any:
     from app.sim_engine.engine import (
         build_role_shaped_ratings,
@@ -1218,43 +1219,61 @@ def _build_player_from_roster_row(
     except Exception:
         pass
 
-    if is_goalie:
-        stats = pick_stats_row(
-            nhl_id, is_goalie=True, primary=goalie_stats_a, secondary=goalie_stats_b
-        )
-        g_anal = (goalie_analytics_by_id or {}).get(nhl_id)
-        stats = _merge_analytics_into_stats(stats, g_anal)
-        target_ovr, rating_note = target_ovr_from_goalie_stats(
-            stats, age=age, analytics=g_anal
-        )
-        forced_profile = "balanced_g"
-        if stats:
-            gs = float(stats.get("gamesStarted") or 0)
-            sa_pg = float(stats.get("shotsAgainst") or 0) / max(float(stats.get("gamesPlayed") or 1), 1.0)
-            if sa_pg >= 32:
-                forced_profile = "hybrid_g"
-            elif float(stats.get("savePct") or 0) >= 0.915 and gs >= 30:
-                forced_profile = "butterfly_g"
-    else:
-        stats = pick_stats_row(
-            nhl_id, is_goalie=False, primary=skater_stats_a, secondary=skater_stats_b
-        )
-        anal = (analytics_by_id or {}).get(nhl_id)
-        stats = _merge_analytics_into_stats(stats, anal)
-        target_ovr, rating_note = target_ovr_from_skater_stats(
-            stats, position_code=pos_code, age=age, analytics=anal
-        )
-        forced_profile = infer_skater_profile(stats, position_code=pos_code)
-
+    dynasty_entry = None
     r4 = None
-    target_ovr, forced_profile, r4 = apply_r4_target(
-        nhl_id=nhl_id,
-        target_ovr=target_ovr,
-        profile=forced_profile,
-        overrides=r4_overrides or {},
-    )
-    if r4:
-        rating_note = f"r4|{rating_note}"
+    team_abbr = str(
+        getattr(team, "abbreviation", None) or getattr(team, "abbr", None) or ""
+    ).upper()
+    if dynasty_registry is not None:
+        try:
+            dynasty_entry = dynasty_registry.match_player(
+                team_abbr, "nhl", full_name, last_name=last
+            )
+        except Exception:
+            dynasty_entry = None
+
+    if dynasty_entry is None:
+        if is_goalie:
+            stats = pick_stats_row(
+                nhl_id, is_goalie=True, primary=goalie_stats_a, secondary=goalie_stats_b
+            )
+            g_anal = (goalie_analytics_by_id or {}).get(nhl_id)
+            stats = _merge_analytics_into_stats(stats, g_anal)
+            target_ovr, rating_note = target_ovr_from_goalie_stats(
+                stats, age=age, analytics=g_anal
+            )
+            forced_profile = "balanced_g"
+            if stats:
+                gs = float(stats.get("gamesStarted") or 0)
+                sa_pg = float(stats.get("shotsAgainst") or 0) / max(float(stats.get("gamesPlayed") or 1), 1.0)
+                if sa_pg >= 32:
+                    forced_profile = "hybrid_g"
+                elif float(stats.get("savePct") or 0) >= 0.915 and gs >= 30:
+                    forced_profile = "butterfly_g"
+        else:
+            stats = pick_stats_row(
+                nhl_id, is_goalie=False, primary=skater_stats_a, secondary=skater_stats_b
+            )
+            anal = (analytics_by_id or {}).get(nhl_id)
+            stats = _merge_analytics_into_stats(stats, anal)
+            target_ovr, rating_note = target_ovr_from_skater_stats(
+                stats, position_code=pos_code, age=age, analytics=anal
+            )
+            forced_profile = infer_skater_profile(stats, position_code=pos_code)
+
+        r4 = None
+        target_ovr, forced_profile, r4 = apply_r4_target(
+            nhl_id=nhl_id,
+            target_ovr=target_ovr,
+            profile=forced_profile,
+            overrides=r4_overrides or {},
+        )
+        if r4:
+            rating_note = f"r4|{rating_note}"
+    else:
+        target_ovr = float(dynasty_entry.chapters.get("overall", 75)) / 99.0
+        rating_note = "dynasty_txt"
+        forced_profile = "balanced_g" if is_goalie else "two_way"
 
     ratings = build_role_shaped_ratings(
         position=pos,
@@ -1335,14 +1354,26 @@ def _build_player_from_roster_row(
         persist_recomputed_ovr(player)
     except Exception:
         pass
-    # OVR must be the weighted attribute card (skating/shot/defense/…), not a stamped float.
-    try:
-        align_attribute_ovr_to_target(player, float(target_ovr), rounds=40)
-    except Exception:
+    if dynasty_entry is not None:
         try:
-            persist_recomputed_ovr(player)
+            from services.dynasty_ratings_parser import apply_dynasty_entry_to_player
+
+            apply_dynasty_entry_to_player(player, dynasty_entry, seed=nhl_id)
+            target_ovr = float(player.ovr()) if callable(getattr(player, "ovr", None)) else target_ovr
+            rating_note = str(getattr(player, "real_nhl_rating_note", rating_note) or rating_note)
         except Exception:
-            pass
+            try:
+                align_attribute_ovr_to_target(player, float(target_ovr), rounds=40)
+            except Exception:
+                pass
+    else:
+        try:
+            align_attribute_ovr_to_target(player, float(target_ovr), rounds=40)
+        except Exception:
+            try:
+                persist_recomputed_ovr(player)
+            except Exception:
+                pass
 
     setattr(player, "nhl_player_id", nhl_id)
     setattr(player, "external_player_id", str(nhl_id))
@@ -1358,7 +1389,7 @@ def _build_player_from_roster_row(
                 setattr(identity, "birth_day", parts[2])
         except Exception:
             pass
-    if r4:
+    if dynasty_entry is None and r4:
         setattr(player, "real_nhl_r4", True)
     from app.sim_engine.generation.player_headshots import valid_nhl_headshot_url
 
@@ -1879,6 +1910,15 @@ def build_real_nhl_league_players(
     stats_secondary_id = roster_season
     as_of = date(sy, 9, 15)
     r4_overrides = load_r4_overrides()
+    dynasty_registry = None
+    dynasty_meta: Dict[str, Any] = {}
+    try:
+        from services.dynasty_ratings_parser import load_dynasty_ratings_registry
+
+        dynasty_registry = load_dynasty_ratings_registry()
+        dynasty_meta = dict(getattr(dynasty_registry, "parse_stats", {}) or {})
+    except Exception as e:
+        dynasty_meta = {"load_error": str(e)}
 
     try:
         from services.real_nhl_analytics import (
@@ -1968,6 +2008,8 @@ def build_real_nhl_league_players(
     per_team: Dict[str, int] = {}
     failures: List[str] = list(roster_failures) + list(contract_failures)
     r4_applied = 0
+    dynasty_applied = 0
+    dynasty_missing = 0
     contracts_applied = 0
     drafts_applied = 0
     sent_to_ahl = 0
@@ -2028,10 +2070,15 @@ def build_real_nhl_league_players(
                     all_teams=teams,
                     analytics_by_id=analytics_by_id,
                     goalie_analytics_by_id=goalie_analytics_by_id,
+                    dynasty_registry=dynasty_registry,
                 )
             except Exception as e:
                 failures.append(f"{abbr} player build failed: {e}")
                 continue
+            if getattr(player, "dynasty_ratings_import", False):
+                dynasty_applied += 1
+            elif dynasty_registry is not None:
+                dynasty_missing += 1
             if getattr(player, "real_nhl_r4", False):
                 r4_applied += 1
             if getattr(player, "real_nhl_contract", False):
@@ -2106,7 +2153,12 @@ def build_real_nhl_league_players(
             "imported_players": imported,
             "per_team": per_team,
             "failures": failures[:20],
-            "rating_model": "R2_R3_R4",
+            "rating_model": "dynasty_txt" if dynasty_registry else "R2_R3_R4",
+            "dynasty_ratings": {
+                **dynasty_meta,
+                "nhl_applied": dynasty_applied,
+                "nhl_missing": dynasty_missing,
+            },
             "r4_applied": r4_applied,
             "contracts_applied": contracts_applied,
             "drafts_applied": drafts_applied,
@@ -2125,7 +2177,12 @@ def build_real_nhl_league_players(
         "imported": imported,
         "per_team": per_team,
         "failures": failures,
-        "rating_model": "R2_R3_R4",
+        "rating_model": "dynasty_txt" if dynasty_registry else "R2_R3_R4",
+        "dynasty_ratings": {
+            **dynasty_meta,
+            "nhl_applied": dynasty_applied,
+            "nhl_missing": dynasty_missing,
+        },
         "r4_applied": r4_applied,
         "contracts_applied": contracts_applied,
         "drafts_applied": drafts_applied,

@@ -1077,6 +1077,43 @@ def compute_market_value(player: Any, league: Any = None) -> float:
     return round(max(LEAGUE_MINIMUM_AAV_M, base), 3)
 
 
+def compute_market_value_from_row(row: Any, league: Any = None) -> float:
+    """Analytics-row bridge into the franchise contract market curve."""
+    if not isinstance(row, dict):
+        return LEAGUE_MINIMUM_AAV_M
+    from types import SimpleNamespace
+
+    ovr_raw = float(row.get("overall") or row.get("ovr") or 0)
+    ovr_01 = ovr_raw / 99.0 if ovr_raw > 1.5 else ovr_raw
+    pot = float(row.get("potential") or row.get("dev_potential") or 0)
+    adapter = SimpleNamespace(
+        ovr=ovr_01,
+        overall=ovr_raw,
+        age=int(row.get("age") or 27),
+        position=str(row.get("position") or row.get("pos") or "C"),
+        potential=pot,
+        ratings={"dev_potential": pot} if pot else {},
+        season_stats=row.get("season_stats") if isinstance(row.get("season_stats"), dict) else {},
+        pro_seasons=row.get("pro_seasons") or row.get("nhl_seasons"),
+        nhl_seasons=row.get("nhl_seasons"),
+    )
+    return compute_market_value(adapter, league)
+
+
+def locker_room_fa_penalty(player: Any) -> Tuple[float, bool, List[str]]:
+    """Interest penalty, CPU hard-block, and risk tags for locker-room problems."""
+    cancer = bool(
+        getattr(player, "locker_room_cancer", False)
+        or getattr(player, "brady_tkachuk_chaos", False)
+    )
+    disruptor = bool(getattr(player, "locker_room_disruptor", False))
+    if cancer:
+        return 42.0, True, ["Locker-room cancer"]
+    if disruptor:
+        return 16.0, False, ["Locker-room disruptor"]
+    return 0.0, False, []
+
+
 def compute_fair_aav(player: Any, team: Optional[Any] = None, league: Any = None) -> float:
     """Fair value is league-wide and independent of the negotiating team
     (items 2 & 3). Team-specific leverage now lives in compute_player_demand and
@@ -3208,6 +3245,7 @@ def evaluate_contract_offer(
     gamble = float(prof["gamble_pref"])
     loyalty = float(prof["loyalty"])
     importance = float(demand.get("importance") or 0.5)
+    offer_count = int(demand.get("offer_count") or 0)
 
     try:
         morale = float(getattr(player, "morale", None) or getattr(player, "happiness", 70) or 70)
@@ -3349,6 +3387,18 @@ def evaluate_contract_offer(
     elif gamble >= 0.6 and want_aav >= 4.0:
         bonus_component -= 3.5 * gamble
 
+    meta = getattr(player, "_franchise_assignment", None) or {}
+    overseas_import = bool(meta.get("overseas")) or str(context or "").lower() == "overseas"
+    import_component = 0.0
+    if overseas_import:
+        import_component -= 7.0
+        if r >= 1.08:
+            import_component += 5.0
+        elif r >= 1.02:
+            import_component += 2.5
+
+    lr_penalty, _lr_block, lr_tags = locker_room_fa_penalty(player)
+
     interest = (
         48.0
         + salary_component
@@ -3358,6 +3408,8 @@ def evaluate_contract_offer(
         + clause_component
         + bonus_component
         + variance_component
+        + import_component
+        - lr_penalty
     )
     interest = max(0.0, min(100.0, interest))
 
@@ -3389,6 +3441,12 @@ def evaluate_contract_offer(
         accept_cut = 57.0
     else:
         accept_cut = 60.0
+    # Late-market stars soften threshold so cap-strapped summers still move.
+    if ovr >= 87 and days_unsigned >= 10:
+        accept_cut -= min(10.0, 2.0 + (days_unsigned - 9) * 0.45)
+    if ovr >= 88 and days_unsigned >= 22 and offer_count <= 2:
+        accept_cut -= 3.0
+    accept_cut = max(48.0, accept_cut)
     accepted = interest >= accept_cut and meets_floor
     instant_accept = accepted and interest >= (80.0 if ovr < 84 else 88.0)
 
@@ -3441,7 +3499,7 @@ def evaluate_contract_offer(
     else:
         agent_mood = "Agent confidence unknown."
 
-    risk_tags: List[str] = []
+    risk_tags: List[str] = list(lr_tags)
     if compute_bad_contract_score(player, team) >= 0.3:
         risk_tags.append("Overpay risk")
     if years >= 5 and age >= 30:
@@ -3752,6 +3810,10 @@ def cpu_signing_blocked(
     need = float(ctx["need_score"].get(pos, 0))
     spendable = float(ctx.get("spendable_cap_space_m", ctx.get("cap_space_m", 0)) or 0)
 
+    _lr_penalty, lr_block, _lr_tags = locker_room_fa_penalty(player)
+    if lr_block:
+        return "locker_room_cancer"
+
     if ctx["overload"].get(pos) and ovr < best + 3.0 and ovr < 88:
         return "position_overload"
     if pos == "G" and counts.get("G", 0) >= 2 and ovr < 82:
@@ -3801,7 +3863,15 @@ def score_free_agent_fit(
     best = ctx["best_ovr"].get(pos, 0.0)
     reasons: List[str] = []
 
+    lr_penalty, lr_block, lr_tags = locker_room_fa_penalty(player)
+    if lr_block:
+        return 0.0, lr_tags + ["locker_room_veto"]
+    if lr_penalty > 0:
+        reasons.extend(lr_tags)
+
     score = 0.12 + (ovr / 99.0) * 0.28 + need * 0.42
+    if lr_penalty > 0:
+        score -= min(0.35, lr_penalty / 100.0)
 
     if ovr >= best + 5:
         score += 0.14
@@ -7819,6 +7889,7 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
 
     # Free-agent pool — available for in-season signing (not gated by the offseason stage).
     free_agents: List[Dict[str, Any]] = []
+    overseas_free_agents: List[Dict[str, Any]] = []
     slot_info: Dict[str, Any] = {}
     stage = str(getattr(session, "offseason_stage", "") or "")
     awaiting_july1 = (
@@ -7836,6 +7907,8 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
         except Exception:
             pass
         seen_fa: set = set()
+        fa_market_day = int(getattr(session, "fa_market_day", 0) or 0)
+        overseas_wire_open = fa_open or fa_market_day >= 10
         for pool_attr in ("free_agents", "overseas_free_agents"):
             for p in _get(league, pool_attr, None) or []:
                 if _get(p, "retired", False):
@@ -7843,19 +7916,43 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
                 pid = _player_id(p)
                 if pid in seen_fa:
                     continue
-                # Exclusive home-team UFAs stay off the open board until FA opens.
-                # Overseas + leftover summer UFAs always remain visible.
                 is_overseas = pool_attr == "overseas_free_agents" or bool(
                     (getattr(p, "_franchise_assignment", None) or {}).get("overseas")
                 )
-                if awaiting_july1 and (not is_overseas) and bool(getattr(p, "ufa_exclusive", False)):
+                if is_overseas and not overseas_wire_open:
+                    continue
+                # Exclusive home-team UFAs stay off the open board until FA opens.
+                if (not is_overseas) and bool(getattr(p, "ufa_exclusive", False)):
+                    if awaiting_july1 or not fa_open:
+                        continue
+                from_tid = str(
+                    getattr(p, "ufa_from_team_id", None)
+                    or getattr(p, "previous_nhl_team_id", None)
+                    or ""
+                )
+                if (
+                    (not is_overseas)
+                    and from_tid
+                    and (awaiting_july1 or not fa_open)
+                    and not bool(getattr(p, "ufa_exclusive", False))
+                ):
+                    try:
+                        setattr(p, "ufa_exclusive", True)
+                    except Exception:
+                        pass
                     continue
                 seen_fa.add(pid)
                 try:
-                    free_agents.append(_build_free_agent_row(p, season_year, session))
+                    row = _build_free_agent_row(p, season_year, session)
+                    row["fa_pool"] = "overseas" if is_overseas else "domestic"
+                    if is_overseas:
+                        overseas_free_agents.append(row)
+                    else:
+                        free_agents.append(row)
                 except Exception:
                     continue
         free_agents.sort(key=lambda r: -float(r.get("ovr") or 0))
+        overseas_free_agents.sort(key=lambda r: -float(r.get("ovr") or 0))
         # Full open market — every unsigned FA, not a high-OVR sample.
         slot_check = validate_contract_slots(user_team, league, additional=0)
         used_slots = int(slot_check.get("contract_slots_used") or 0)
@@ -7939,6 +8036,7 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
         "nextYearProjection": projection,
         "contracts": contracts,
         "free_agents": free_agents,
+        "overseas_free_agents": overseas_free_agents,
         "contract_slots": slot_info,
         "expiring": expiring,
         "own_expired_ufas": own_expired_ufas,
