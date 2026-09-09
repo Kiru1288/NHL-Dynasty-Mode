@@ -496,6 +496,11 @@ export function HubScreen() {
     [franchiseState?.roster, franchiseState?.roster_browser, franchiseState?.stats_revision]
   );
 
+  const hubWarnings = useMemo(
+    () => (Array.isArray(franchiseState?.hub_warnings) ? franchiseState.hub_warnings : []),
+    [franchiseState?.hub_warnings]
+  );
+
   const hubOfficeSnapshot = useMemo(
     () => ({
       phase: franchiseState?.phase,
@@ -505,6 +510,7 @@ export function HubScreen() {
       flags: franchiseState?.flags,
       storyline_events: franchiseState?.storyline_events,
       notifications: franchiseState?.notifications,
+      hub_warnings: hubWarnings,
       narrative_universe: franchiseState?.narrative_universe,
     }),
     [
@@ -515,6 +521,7 @@ export function HubScreen() {
       franchiseState?.flags,
       franchiseState?.storyline_events,
       franchiseState?.notifications,
+      hubWarnings,
       franchiseState?.narrative_universe,
     ]
   );
@@ -624,6 +631,47 @@ export function HubScreen() {
 
   return (
     <div className="game-screen hub-screen">
+      {hubWarnings.length ? (
+        <div
+          role="status"
+          style={{
+            position: "absolute",
+            top: 12,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 30,
+            width: "min(920px, calc(100vw - 32px))",
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            pointerEvents: "none",
+          }}
+        >
+          {hubWarnings.map((warning) => (
+            <div
+              key={warning.id || warning.message}
+              style={{
+                pointerEvents: "auto",
+                padding: "10px 14px",
+                borderRadius: 12,
+                border: "1px solid rgba(251, 191, 36, 0.45)",
+                background: "rgba(120, 53, 15, 0.88)",
+                color: "#fff7ed",
+                fontWeight: 700,
+                fontSize: 13,
+                boxShadow: "0 12px 32px rgba(0,0,0,0.28)",
+              }}
+            >
+              {warning.message}
+              {Array.isArray(warning.issues) && warning.issues.length > 1 ? (
+                <div style={{ marginTop: 4, fontSize: 12, fontWeight: 600, opacity: 0.9 }}>
+                  {warning.issues.slice(1, 3).join(" · ")}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
       <FirstPersonOfficeHub
         teamName={teamName}
         teamLogo={teamLogo}

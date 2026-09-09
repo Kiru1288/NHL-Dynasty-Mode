@@ -112,6 +112,7 @@ class FranchiseSession:
 
     pending_decisions: List[Dict[str, Any]] = field(default_factory=list)
     notifications: List[Any] = field(default_factory=list)
+    hub_warnings: List[Dict[str, Any]] = field(default_factory=list)
     timeline: List[str] = field(default_factory=list)
     # Structured narrative + sim hooks (trades, injuries, arcs); API feeds Calendar "Storylines" tab.
     storyline_events: List[Dict[str, Any]] = field(default_factory=list)

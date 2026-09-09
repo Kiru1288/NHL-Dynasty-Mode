@@ -19,18 +19,7 @@ export default function FranchiseEventOverlay({
   const handleContinueFlow = useCallback(async () => {
     const key = current?.key;
     try {
-      if (key === "roster_cleanup") {
-        if (!franchiseState?.flags?.can_generate_next_season) {
-          const route =
-            franchiseState?.roster_cleanup?.blocking?.[0]?.route ||
-            franchiseState?.roster_cleanup?.blocking_reasons?.[0]?.route ||
-            "free_agency";
-          const stage = String(route).includes("cap") ? "free_agency" : String(route || "free_agency");
-          if (typeof onReopenOffseasonStage === "function") {
-            await onReopenOffseasonStage(stage === "re_sign" ? "re_sign" : "free_agency");
-          }
-          return;
-        }
+      if (key === "free_agency" && franchiseState?.flags?.can_generate_next_season) {
         if (typeof onGenerateNextSeason === "function") await onGenerateNextSeason();
         return;
       }

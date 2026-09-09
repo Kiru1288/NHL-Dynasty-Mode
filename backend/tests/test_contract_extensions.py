@@ -88,13 +88,34 @@ class TestQoAndOfferSheet(unittest.TestCase):
         self.assertAlmostEqual(qualifying_offer_aav(2.0), 2.0)
 
     def test_offer_sheet_grid(self):
-        from services.contract_economy import offer_sheet_compensation_tier
+        from types import SimpleNamespace
 
-        self.assertEqual(offer_sheet_compensation_tier(1.0)["tier"], "none")
-        self.assertEqual(offer_sheet_compensation_tier(1.5)["rounds"], [2])
-        self.assertEqual(offer_sheet_compensation_tier(2.5)["rounds"], [2, 3])
-        self.assertIn(1, offer_sheet_compensation_tier(5.0)["rounds"])
-        self.assertEqual(len(offer_sheet_compensation_tier(9.0)["rounds"]), 4)
+        from services.contract_economy import (
+            offer_sheet_compensation_tier,
+            refresh_offer_sheet_compensation_tiers,
+            resolve_offer_sheet_tiers,
+        )
+
+        tiers_104 = resolve_offer_sheet_tiers(104.0)
+        self.assertAlmostEqual(tiers_104[1]["aav_floor_m"], 1.576, places=2)
+        self.assertAlmostEqual(tiers_104[2]["aav_floor_m"], 2.388, places=2)
+        self.assertAlmostEqual(tiers_104[3]["aav_floor_m"], 4.776, places=2)
+
+        league_104 = SimpleNamespace(salary_cap_m=104.0)
+        refresh_offer_sheet_compensation_tiers(league_104)
+
+        self.assertEqual(offer_sheet_compensation_tier(1.0, league_104)["tier"], "none")
+        self.assertEqual(offer_sheet_compensation_tier(1.6, league_104)["rounds"], [3])
+        self.assertEqual(offer_sheet_compensation_tier(2.4, league_104)["rounds"], [2])
+        self.assertIn(1, offer_sheet_compensation_tier(5.0, league_104)["rounds"])
+        self.assertEqual(offer_sheet_compensation_tier(8.0, league_104)["rounds"], [1, 2, 3])
+
+        league_150 = SimpleNamespace(salary_cap_m=150.0)
+        refresh_offer_sheet_compensation_tiers(league_150)
+        scaled_floor = resolve_offer_sheet_tiers(150.0)[1]["aav_floor_m"]
+        self.assertAlmostEqual(scaled_floor, 2.272, places=2)
+        self.assertEqual(offer_sheet_compensation_tier(2.0, league_150)["tier"], "none")
+        self.assertEqual(offer_sheet_compensation_tier(2.3, league_150)["rounds"], [3])
 
 
 class TestMinorContracts(unittest.TestCase):

@@ -64,9 +64,19 @@ export function formatMovement(movement) {
 
 export function revealPaceMs(pickNumber) {
   const n = Number(pickNumber) || 1;
-  if (n <= 3) return 3200;
-  if (n <= 8) return 2600;
-  return 2000;
+  if (n <= 3) return 1800;
+  if (n <= 8) return 1500;
+  return 1200;
+}
+
+export function formatPickOwnershipLabel(pick) {
+  const team = pick.team_name || "Team";
+  const pickNum = pick.pick;
+  if (pick.is_traded && (pick.via_team_name || pick.via_abbr || pick.original_owner_team_name)) {
+    const via = pick.via_team_name || pick.original_owner_team_name || pick.via_abbr;
+    return `${team} — Pick #${pickNum} (via ${via})`;
+  }
+  return `${team} — Pick #${pickNum}`;
 }
 
 export function pickOrdinal(n) {

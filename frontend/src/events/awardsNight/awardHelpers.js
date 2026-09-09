@@ -959,6 +959,9 @@ export const CEREMONY_RAIL_GROUPS = [
   { id: "championship", label: "Championship", awardKeys: ["stanley"] },
 ];
 
+/** Computed hardware surfaced on the rail but outside the live reveal script. */
+export const CEREMONY_OFF_RAIL_AWARDS = ["lady_byng", "ted_lindsay", "all_star_1", "all_star_2"];
+
 export const SEASON_MILESTONES = [
   { id: "regular", label: "Regular Season" },
   { id: "playoffs", label: "Playoffs" },
@@ -1022,13 +1025,57 @@ export function getCeremonyGroupId(awardKey) {
   return group?.id || "player";
 }
 
-export function buildCeremonyRailGroups(slides) {
-  return CEREMONY_RAIL_GROUPS.map((group) => ({
+export function buildOffRailCeremonySlide(award) {
+  const key = award?.awardKey || resolveAwardKey(award?.award_id || award?.name);
+  const meta = getAwardCatalogEntry(key);
+  const rationale = String(award?.rationale || award?.public_rationale || meta.stageLine || "").trim();
+  return {
+    id: `off-rail-${key}`,
+    awardKey: key,
+    title: award?.ceremonyTitle || meta.ceremonyTitle || meta.label,
+    awardLabel: award?.awardLabel || meta.label,
+    awardShort: award?.awardShort || meta.short,
+    winnerLabel: award?.winnerLabel || getAwardWinnerLabel(award),
+    winnerTeamName: award?.winnerTeamName || "",
+    accent: award?.awardAccent || meta.accent,
+    glow: award?.awardGlow || meta.glow,
+    trophyTone: award?.trophyTone || meta.trophyTone,
+    stageLine: award?.stageLine || meta.stageLine,
+    rationale,
+    awardKind: award?.awardKind || meta.kind,
+    offRail: true,
+  };
+}
+
+export function buildCeremonyRailGroups(slides, allAwards = []) {
+  const groups = CEREMONY_RAIL_GROUPS.map((group) => ({
     ...group,
     items: safeArray(slides)
-      .map((slide, index) => ({ slide, index }))
+      .map((slide, index) => ({ slide, index, offRail: false }))
       .filter(({ slide }) => group.awardKeys.includes(slide.awardKey)),
   })).filter((group) => group.items.length);
+
+  const offRailAwards = safeArray(allAwards).filter(
+    (award) =>
+      CEREMONY_OFF_RAIL_AWARDS.includes(award.awardKey) &&
+      award.status !== "unavailable" &&
+      award.status !== "pending" &&
+      !award.unavailable
+  );
+  if (offRailAwards.length) {
+    groups.push({
+      id: "off_rail",
+      label: "Additional Honors",
+      offRail: true,
+      awardKeys: CEREMONY_OFF_RAIL_AWARDS,
+      items: offRailAwards.map((award) => ({
+        slide: buildOffRailCeremonySlide(award),
+        index: null,
+        offRail: true,
+      })),
+    });
+  }
+  return groups;
 }
 
 function buildHeroBadges(award, entity, franchiseState) {

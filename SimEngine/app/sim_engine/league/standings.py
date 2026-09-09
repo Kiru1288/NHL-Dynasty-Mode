@@ -579,9 +579,35 @@ class StandingsTable:
         tbl = self.league_table()
         return list(reversed(tbl))[: max(0, n)]
 
+    def _presidents_tiebreak_key(self, rec: TeamStandingRecord, peers: Sequence[TeamStandingRecord]) -> Tuple:
+        """Points tiebreak: wins, ROW, head-to-head points (if present), fewest GA."""
+        h2h_pts = 0
+        h2h_blob = getattr(rec, "head_to_head", None) or getattr(rec, "head_to_head_points", None)
+        if isinstance(h2h_blob, Mapping):
+            peer_ids = {str(p.team_id) for p in peers if str(p.team_id) != str(rec.team_id)}
+            for opp_id, val in h2h_blob.items():
+                if str(opp_id) in peer_ids:
+                    if isinstance(val, Mapping):
+                        h2h_pts += _safe_int(val.get("points"), _safe_int(val.get("pts"), 0))
+                    else:
+                        h2h_pts += _safe_int(val, 0)
+        return (
+            int(rec.wins),
+            int(rec.row),
+            int(h2h_pts),
+            -int(rec.ga),
+            str(rec.team_id),
+        )
+
     def presidents_trophy_winner(self) -> Optional[TeamStandingRecord]:
         tbl = self.league_table()
-        return tbl[0] if tbl else None
+        if not tbl:
+            return None
+        top_pts = int(tbl[0].points)
+        tied = [rec for rec in tbl if int(rec.points) == top_pts]
+        if len(tied) <= 1:
+            return tied[0]
+        return sorted(tied, key=lambda rec: self._presidents_tiebreak_key(rec, tied), reverse=True)[0]
 
     def find_record(self, team_id: str) -> Optional[TeamStandingRecord]:
         return self.records.get(str(team_id))

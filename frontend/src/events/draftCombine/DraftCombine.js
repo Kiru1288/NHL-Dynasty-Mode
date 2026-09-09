@@ -498,6 +498,7 @@ export default function DraftCombine({ franchiseState = {}, eventData = {}, onCo
   const [selectedProspectId, setSelectedProspectId] = useState("");
   const [filter, setFilter] = useState("all");
   const [meetingReveal, setMeetingReveal] = useState(null);
+  const [movementRevealCount, setMovementRevealCount] = useState(0);
 
   useEffect(() => {
     if (initial?.completed) return;
@@ -639,6 +640,20 @@ export default function DraftCombine({ franchiseState = {}, eventData = {}, onCo
       (a, b) => Math.abs(getStockDelta(b)) - Math.abs(getStockDelta(a))
     );
   }, [risers, fallers, allKnownProspects]);
+
+  useEffect(() => {
+    setMovementRevealCount(0);
+  }, [movementList]);
+
+  useEffect(() => {
+    if (activeTab !== "board" || !movementList.length) return undefined;
+    if (movementRevealCount >= movementList.length) return undefined;
+    const pace = 1200 + Math.min(600, movementRevealCount * 40);
+    const timer = window.setTimeout(() => {
+      setMovementRevealCount((count) => Math.min(count + 1, movementList.length));
+    }, pace);
+    return () => window.clearTimeout(timer);
+  }, [activeTab, movementList, movementRevealCount]);
 
   const filteredProspects = useMemo(() => {
     const source = prospects.length ? prospects : allKnownProspects;
@@ -903,7 +918,7 @@ export default function DraftCombine({ franchiseState = {}, eventData = {}, onCo
     <div className="dcb-scroll" style={{ display: "grid", gap: 12 }}>
       <Panel title="Stock Movement" empty={!movementList.length ? "—" : null}>
         <div style={{ maxHeight: 320, overflowY: "auto", paddingRight: 4 }}>
-          {movementList.map((p) => (
+          {movementList.slice(0, movementRevealCount || 0).map((p) => (
             <SmallResultRow key={getId(p)} p={p} type="movement" />
           ))}
         </div>

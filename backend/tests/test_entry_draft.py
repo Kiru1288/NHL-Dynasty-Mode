@@ -246,5 +246,27 @@ class EntryDraftTests(unittest.TestCase):
             _prepare_draft_payload(session)
 
 
+class DraftLotteryTests(unittest.TestCase):
+    def test_nhl_lottery_odds_table(self):
+        from app.sim_engine.draft.draft_lottery import COMBINATIONS, ODDS_PCT
+
+        expected = [
+            18.5, 13.5, 11.5, 9.5, 8.5, 7.5, 6.5, 6.0,
+            5.0, 3.5, 3.0, 2.5, 2.0, 1.5, 0.5, 0.5,
+        ]
+        self.assertEqual(ODDS_PCT, expected)
+        self.assertEqual(COMBINATIONS, [int(round(p * 10)) for p in expected])
+
+    def test_lottery_respects_max_jump(self):
+        from app.sim_engine.draft.draft_lottery import LotteryTeam, run_draft_lottery
+
+        teams = [LotteryTeam(team_id=f"T{i}", points=82 - i) for i in range(1, 17)]
+        for seed in range(40):
+            result = run_draft_lottery(teams=teams, seed=seed)
+            orig_rank = {f"T{i}": i for i in range(1, 17)}
+            for pick_num, tid in enumerate(result.pick_order, start=1):
+                self.assertGreaterEqual(pick_num, orig_rank[tid] - 10)
+
+
 if __name__ == "__main__":
     unittest.main()

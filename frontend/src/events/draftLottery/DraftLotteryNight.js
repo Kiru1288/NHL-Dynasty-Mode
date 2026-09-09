@@ -3,6 +3,7 @@ import { pickFranchiseData } from "../shared/eventHelpers";
 import {
   buildRevealSequence,
   formatMovement,
+  formatPickOwnershipLabel,
   normalizeLotteryPicks,
   pickOrdinal,
   revealPaceMs,
@@ -52,7 +53,7 @@ function PickCard({ pick, active, pending, isUser }) {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <TeamLogo src={pick.logoSrc} label={pick.team_name} size="md" />
           <div>
-            <strong>{pick.team_name}</strong>
+            <strong>{formatPickOwnershipLabel(pick)}</strong>
             {pick.is_traded && pick.via_abbr ? (
               <div className="dlot-via">
                 {pick.viaLogoSrc ? <TeamLogo src={pick.viaLogoSrc} label={pick.via_abbr} size="xs" /> : null}
@@ -80,7 +81,7 @@ function RevealOverlay({ pick, revealIndex, revealTotal, onSkip, isUser }) {
         <div className="dlot-lower-third__panel">
           <div className="dlot-lower-third__pick">#{pick.pick}</div>
           <div className="dlot-lower-third__body">
-            <strong>{pick.team_name}</strong>
+            <strong>{formatPickOwnershipLabel(pick)}</strong>
             <span>
               {isUser ? "Your franchise · " : ""}
               {pickOrdinal(pick.pick).toUpperCase()} overall
@@ -94,7 +95,7 @@ function RevealOverlay({ pick, revealIndex, revealTotal, onSkip, isUser }) {
       </p>
       <p className="dlot-reveal-pick">#{pick.pick}</p>
       <TeamLogo src={pick.logoSrc} label={pick.team_name} size="xl" />
-      <h2 className="dlot-reveal-team">{pick.team_name}</h2>
+      <h2 className="dlot-reveal-team">{formatPickOwnershipLabel(pick)}</h2>
       {pick.is_traded && (pick.via_team_name || pick.via_abbr) ? (
         <p className="dlot-reveal-via">
           {pick.viaLogoSrc ? <TeamLogo src={pick.viaLogoSrc} label={pick.via_abbr} size="sm" /> : null}
@@ -124,7 +125,7 @@ function ResultsBoard({ picks, userTeamId }) {
         <h2>Draft Order Set</h2>
         <p>Final lottery results — picks 1 through {picks.length || 16}</p>
       </div>
-      <div className="dlot-board">
+      <div className="dlot-board dlot-board-scroll">
         {picks.map((pick) => {
           const isUser =
             userTeamId &&
@@ -146,15 +147,8 @@ function ResultsBoard({ picks, userTeamId }) {
               <TeamLogo src={pick.logoSrc} label={pick.team_name} size="md" />
               <div className="dlot-board-team">
                 <div>
-                  <strong>{pick.team_name}</strong>
-                  {pick.is_traded && pick.via_abbr ? (
-                    <span className="dlot-via-inline">
-                      {pick.viaLogoSrc ? <TeamLogo src={pick.viaLogoSrc} label={pick.via_abbr} size="xs" /> : null}
-                      via {pick.via_abbr}
-                    </span>
-                  ) : isUser ? (
-                    <span>Your team</span>
-                  ) : null}
+                  <strong>{formatPickOwnershipLabel(pick)}</strong>
+                  {isUser ? <span>Your team</span> : null}
                 </div>
               </div>
               <div className="dlot-board-col">Was #{pick.original_rank}</div>

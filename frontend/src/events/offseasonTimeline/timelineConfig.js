@@ -15,7 +15,6 @@ export const FRANCHISE_LIFECYCLE = [
   { id: "prospect_rights", label: "Prospect Rights", folder: "prospectDevelopment", backendStage: "prospect_rights", status: "active" },
   { id: "re_sign", label: "Re-Sign", folder: "reSign", backendStage: "re_sign", status: "active" },
   { id: "free_agency", label: "Free Agency", folder: "freeAgency", backendStage: "free_agency", status: "active" },
-  { id: "roster_cleanup", label: "Roster Check", folder: "rosterCleanup", backendStage: "roster_cleanup", status: "active" },
   { id: "next_season", label: "New Season", folder: "nextSeasonReveal", backendStage: "next_season_reveal", status: "active" },
   { id: "training_camp", label: "Training Camp", folder: "trainingCamp", backendStage: null, status: "planned" },
   { id: "preseason", label: "Preseason", folder: "preseason", backendStage: "preseason", status: "active" },

@@ -29,7 +29,6 @@ OFFSEASON_STAGES: Tuple[str, ...] = (
     "prospect_rights",
     "re_sign",
     "free_agency",
-    "roster_cleanup",
     "next_season_reveal",
 )
 
@@ -44,8 +43,7 @@ STAGE_NEXT_EVENT: Dict[str, str] = {
     "draft_review": "prospect_rights",
     "prospect_rights": "re_sign",
     "re_sign": "free_agency",
-    "free_agency": "roster_cleanup",
-    "roster_cleanup": "generate_next_season",
+    "free_agency": "generate_next_season",
     "next_season_reveal": "preseason_start",
 }
 
@@ -58,7 +56,6 @@ STAGE_PAYLOAD_VERSION: Dict[str, int] = {
     "prospect_rights": 5,
     "re_sign": 6,
     "free_agency": 4,
-    "roster_cleanup": 4,
 }
 
 # Post-draft slice used by Hub timeline / resume labels (keeps pre-draft stages intact).
@@ -68,7 +65,6 @@ POST_DRAFT_STAGES: Tuple[str, ...] = (
     "prospect_rights",
     "re_sign",
     "free_agency",
-    "roster_cleanup",
     "next_season_reveal",
 )
 
@@ -137,6 +133,78 @@ def _mark_stage_completed(session: FranchiseSession, stage: str) -> None:
         completed = session.offseason_stage_completed_at
     if stage:
         completed[stage] = _now_iso()
+
+
+def _evaluate_user_team_compliance(session: FranchiseSession) -> Dict[str, Any]:
+    """Live roster + cap compliance for the user's NHL club."""
+    from services.contract_economy import get_team_cap_snapshot_full
+    from services.roster_compliance import evaluate_roster_compliance
+
+    user_team = session.team_by_id.get(session.user_team_id)
+    league = getattr(session.sim, "league", None)
+    season_year = int(session.season_calendar_year)
+    cap_snap: Dict[str, Any] = {}
+    cap_error: Optional[str] = None
+    if user_team is not None:
+        try:
+            cap_snap = get_team_cap_snapshot_full(user_team, league, session.sim, season_year=season_year) or {}
+        except Exception as exc:
+            cap_error = str(exc) or "unknown error"
+    return evaluate_roster_compliance(
+        user_team,
+        league=league,
+        sim=session.sim,
+        season_year=season_year,
+        cap_snap=cap_snap,
+        cap_error=cap_error,
+    )
+
+
+def push_hub_warning(
+    session: FranchiseSession,
+    *,
+    team_id: str,
+    warning_type: str,
+    severity: str,
+    message: str,
+    issues: Optional[List[Any]] = None,
+    routes: Optional[List[str]] = None,
+) -> None:
+    """Append or refresh a persistent Hub warning (never blocks season progression)."""
+    if not hasattr(session, "hub_warnings") or session.hub_warnings is None:
+        session.hub_warnings = []
+    wid = f"{warning_type}:{team_id}"
+    row = {
+        "id": wid,
+        "type": str(warning_type),
+        "severity": str(severity),
+        "team_id": str(team_id),
+        "message": str(message),
+        "issues": list(issues or []),
+        "routes": list(routes or ["cap_ledger", "roster"]),
+        "persistent": True,
+    }
+    existing = list(getattr(session, "hub_warnings", None) or [])
+    session.hub_warnings = [w for w in existing if str(w.get("id")) != wid] + [row]
+
+
+def sync_hub_compliance_warnings(session: FranchiseSession) -> None:
+    """Refresh compliance warnings from live roster/cap state."""
+    evaluation = _evaluate_user_team_compliance(session)
+    existing = [w for w in list(getattr(session, "hub_warnings", None) or []) if w.get("type") != "compliance"]
+    session.hub_warnings = existing
+    if not bool(evaluation.get("valid")):
+        reasons = list(evaluation.get("blocking_reasons") or evaluation.get("issues") or [])
+        message = reasons[0] if reasons else "Roster or salary-cap compliance issue"
+        push_hub_warning(
+            session,
+            team_id=str(session.user_team_id),
+            warning_type="compliance",
+            severity="persistent",
+            message=str(message),
+            issues=reasons,
+            routes=["cap_ledger", "roster"],
+        )
 
 
 def invalidate_offseason_decision_payloads(session: FranchiseSession, *, reason: str = "") -> None:
@@ -965,8 +1033,6 @@ def _offseason_stage_ready(session: FranchiseSession, stage: str) -> bool:
         if count <= 0 and not (isinstance(fa_rows, list) and len(fa_rows) > 0):
             return False
         return True
-    if stage == "roster_cleanup":
-        return _versioned(session.roster_cleanup_payload, "roster_cleanup")
     if stage == "next_season_reveal":
         return bool(session.next_season_payload)
     return False
@@ -1003,7 +1069,6 @@ def _stage_handler(session: FranchiseSession, stage: str) -> Dict[str, Any]:
         "prospect_rights": _run_prospect_rights_stage,
         "re_sign": _prepare_resign_payload,
         "free_agency": _open_free_agency,
-        "roster_cleanup": _run_roster_cleanup,
         "next_season_reveal": _finalize_next_season_reveal,
     }
     fn = handlers.get(stage)
@@ -1097,16 +1162,16 @@ def continue_offseason(
     idx = OFFSEASON_STAGES.index(current)
     result: Dict[str, Any] = {}
 
-    if current == "roster_cleanup" and not session.next_season_generated:
+    if current == "free_agency" and not session.next_season_generated:
         _ensure_offseason_stage_hydrated(session)
-        session.offseason_stage = "roster_cleanup"
+        session.offseason_stage = "free_agency"
         session.next_important_event = "generate_next_season"
-        invalidate_session_payload_caches(session, "roster_cleanup")
+        invalidate_session_payload_caches(session, "free_agency_generate")
         return {
             **result,
             "status": "offseason",
             "season_phase": "offseason",
-            "offseason_stage": "roster_cleanup",
+            "offseason_stage": "free_agency",
             "next_important_event": "generate_next_season",
             "needs_generate_next_season": True,
         }
@@ -1304,11 +1369,7 @@ def build_free_agency_desk(session: FranchiseSession, *, open_market: bool = Fal
 
 
 def reopen_offseason_stage(session: FranchiseSession, stage: str) -> Dict[str, Any]:
-    """Step back to an earlier offseason desk (Roster Check → Free Agency).
-
-    Used when Roster Check is blocked and the GM needs to sign free agents
-    without leaving the offseason timeline.
-    """
+    """Step back to an earlier offseason desk (e.g. return to Free Agency)."""
     from services.franchise_sim import invalidate_session_payload_caches
 
     _sync_phase_fields(session)
@@ -1321,10 +1382,8 @@ def reopen_offseason_stage(session: FranchiseSession, stage: str) -> Dict[str, A
         raise ValueError(f"Unknown offseason stage {target!r}")
 
     allowed = {
-        ("roster_cleanup", "free_agency"),
-        ("roster_cleanup", "re_sign"),
-        ("next_season_reveal", "roster_cleanup"),
         ("next_season_reveal", "free_agency"),
+        ("next_season_reveal", "re_sign"),
     }
     # Also allow reopening free_agency while already there (idempotent refresh).
     if (current, target) not in allowed and not (current == target == "free_agency"):
@@ -1375,15 +1434,13 @@ def reopen_offseason_stage(session: FranchiseSession, stage: str) -> Dict[str, A
             "reopened_from": current,
         }
 
-    result = _run_roster_cleanup(session, force=False)
-    invalidate_session_payload_caches(session, "offseason_reopen_roster_cleanup")
+    invalidate_session_payload_caches(session, f"offseason_reopen_{target}")
     return {
         "ok": True,
         "status": "offseason",
         "season_phase": "offseason",
         "offseason_stage": target,
         "next_important_event": session.next_important_event,
-        **result,
         "reopened_from": current,
     }
 
@@ -1585,6 +1642,12 @@ def _advance_salary_cap(session: FranchiseSession) -> Dict[str, Any]:
     cap_row: Dict[str, Any] = {}
     try:
         cap_row = advance_league_salary_cap(league, sim.rng, season_year=sy + 1)
+        try:
+            from services.contract_economy import refresh_offer_sheet_compensation_tiers
+
+            refresh_offer_sheet_compensation_tiers(league)
+        except Exception:
+            pass
     except Exception:
         fallback_cap = float(getattr(league, "salary_cap_m", 88.0) or 88.0)
         cap_row = {
@@ -3133,6 +3196,13 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
         winners = list(getattr(result, "lottery_winners", None) or [])
         for i, tid in enumerate(winners[:2], start=1):
             draw_results.append({"draw": i, "team_id": str(tid), "won_pick": i})
+        try:
+            from app.sim_engine.draft.draft_lottery import ODDS_PCT
+        except Exception:
+            ODDS_PCT = [
+                18.5, 13.5, 11.5, 9.5, 8.5, 7.5, 6.5, 6.0,
+                5.0, 3.5, 3.0, 2.5, 2.0, 1.5, 0.5, 0.5,
+            ]
         for pick_num, tid in enumerate(order[:16], start=1):
             orig_rank = next((i + 1 for i, r in enumerate(ordered) if str(r.get("team_id")) == str(tid)), pick_num)
             tm = session.team_by_id.get(str(tid))
@@ -3140,8 +3210,11 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
                 "pick": pick_num,
                 "team_id": str(tid),
                 "team_name": _display_team(tm) if tm else str(tid),
+                "lottery_team_id": str(tid),
+                "lottery_team_name": _display_team(tm) if tm else str(tid),
                 "original_rank": orig_rank,
                 "movement": orig_rank - pick_num,
+                "odds": ODDS_PCT[orig_rank - 1] if 1 <= orig_rank <= len(ODDS_PCT) else None,
                 "won_pick": pick_num if pick_num <= 2 and str(tid) in {str(w) for w in winners[:2]} else None,
             })
     except Exception:
@@ -5979,7 +6052,7 @@ def _run_roster_cleanup(session: FranchiseSession, *, force: bool = False) -> Di
     if (
         not force
         and isinstance(existing, dict)
-        and existing.get("version") == STAGE_PAYLOAD_VERSION["roster_cleanup"]
+        and existing.get("version") == 4
         and existing.get("valid") is not None
     ):
         # Re-validate against live rosters so Cap Ledger fixes unlock Generate, but
@@ -6019,7 +6092,7 @@ def _run_roster_cleanup(session: FranchiseSession, *, force: bool = False) -> Di
     valid = bool(evaluation.get("valid"))
 
     payload = {
-        "version": STAGE_PAYLOAD_VERSION["roster_cleanup"],
+        "version": 4,
         "nhl_roster_count": evaluation.get("nhl_roster_count"),
         "nhl_roster_max": ACTIVE_ROSTER_MAX,
         "nhl_roster_min": ACTIVE_ROSTER_MIN,
@@ -6482,12 +6555,8 @@ def _retune_inflated_underage_prospects(session: FranchiseSession) -> Dict[str, 
 def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     """Build new schedule/calendar — only increments year when data exists."""
     from services.contract_economy import run_cap_compliance_before_season
-    # Re-validate roster before generation; never generate with blocking issues.
-    cleanup = _run_roster_cleanup(session, force=True)
-    payload = (cleanup or {}).get("roster_cleanup") or session.roster_cleanup_payload or {}
-    if not payload.get("valid", False):
-        reasons = payload.get("blocking_reasons") or payload.get("issues") or ["Roster not compliant"]
-        raise ValueError("Cannot generate next season: " + "; ".join(str(r) for r in reasons[:4]))
+
+    sync_hub_compliance_warnings(session)
     run_cap_compliance_before_season(session)
     from app.sim_engine.league import generate_regular_season_schedule
     from app.sim_engine.league.schedule_generator import _safe_team_id
@@ -6514,7 +6583,7 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
             "source_season_year": source_sy,
             "source_calendar_year": source_sy,
             "event": "season_year_increment",
-            "destination_phase": "offseason_roster_cleanup",
+            "destination_phase": "offseason_generate_next_season",
             "destination_season_year": next_sy,
             "destination_calendar_year": next_sy,
         }
@@ -6747,7 +6816,7 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     }
     session.next_season_payload = payload
     session.next_season_generated = True
-    _mark_stage_completed(session, "roster_cleanup")
+    _mark_stage_completed(session, "free_agency")
     # Seamless handoff: skip the reveal cinematic and park the club in September camp.
     # Hub world opens with the new calendar; players are already aged from year-end.
     session.offseason_stage = "next_season_reveal"
@@ -6773,7 +6842,6 @@ def _scrub_lifecycle_popups_for_new_season(session: FranchiseSession) -> None:
         "prospect_rights",
         "re_sign",
         "free_agency",
-        "roster_cleanup",
         "next_season_reveal",
         "stanley_cup",
         "playoffs",
@@ -7032,9 +7100,8 @@ def build_offseason_state_extras(session: FranchiseSession, *, lean: bool = Fals
     roster_payload = session.roster_cleanup_payload or {}
     can_generate = (
         phase == "offseason"
-        and stage == "roster_cleanup"
+        and stage == "free_agency"
         and not session.next_season_generated
-        and bool(roster_payload.get("valid", True))
     )
     is_terminal = False
 
@@ -7061,8 +7128,6 @@ def build_offseason_state_extras(session: FranchiseSession, *, lean: bool = Fals
         stage_blob = getattr(session, "resign_payload", None)
     elif stage == "free_agency":
         stage_blob = getattr(session, "free_agency_market_payload", None)
-    elif stage == "roster_cleanup":
-        stage_blob = roster_payload
     elif stage == "next_season_reveal":
         stage_blob = session.next_season_payload
     stage_blob = stage_blob if isinstance(stage_blob, dict) else {}
@@ -7070,8 +7135,7 @@ def build_offseason_state_extras(session: FranchiseSession, *, lean: bool = Fals
     blocking = list(stage_blob.get("blocking_reasons") or [])
     warnings = list(stage_blob.get("warning_reasons") or [])
     can_continue_stage = bool(stage_blob.get("can_continue", True)) if stage_blob else True
-    if stage == "roster_cleanup":
-        can_continue_stage = bool(roster_payload.get("valid", False))
+    sync_hub_compliance_warnings(session)
 
     timeline = {
         "season": int(getattr(session, "season_calendar_year", 0) or 0),
@@ -7091,7 +7155,7 @@ def build_offseason_state_extras(session: FranchiseSession, *, lean: bool = Fals
         "warning_reasons": warnings,
         "resume_available": can_continue_offseason and bool(stage or phase == "post_cup"),
         "primary_action": (
-            "generate_next_season" if stage == "roster_cleanup"
+            "generate_next_season" if stage == "free_agency"
             else "enter_preseason" if stage == "next_season_reveal"
             else "continue_offseason" if can_continue_offseason else "advance_day"
         ),
@@ -7119,7 +7183,7 @@ def build_offseason_state_extras(session: FranchiseSession, *, lean: bool = Fals
         "contracts": session.resign_payload,
         "salary_cap": session.salary_cap_payload,
         "development_report": session.development_report_payload,
-        "roster_cleanup": session.roster_cleanup_payload,
+        "hub_warnings": list(getattr(session, "hub_warnings", None) or []),
         "next_season": session.next_season_payload,
         "season_history": list(getattr(session, "season_history", None) or []),
         "flags": {

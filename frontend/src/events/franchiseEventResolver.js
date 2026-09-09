@@ -103,7 +103,7 @@ const EVENT_MAP = {
     key: "free_agency",
     title: "Market Opens",
     component: wrapMenu(FreeAgencyEventMenu),
-    ctaLabel: "Roster Cleanup",
+    ctaLabel: "Generate Next Season",
     getEventData: (fs) => ({
       free_agents: fs?.free_agents,
       free_agency_market: fs?.free_agency_market,
@@ -209,7 +209,7 @@ export function getFranchisePhaseCta(franchiseState) {
     if (stage === "prospect_rights") return "Resume Offseason Timeline";
     if (stage === "re_sign") return "Resume Offseason Timeline";
     if (stage === "free_agency") return "Resume Offseason Timeline";
-    if (stage === "roster_cleanup" || next === "generate_next_season") return "Generate Next Season";
+    if (stage === "free_agency" || next === "generate_next_season") return "Generate Next Season";
     if (stage === "next_season_reveal" || next === "preseason_start") return "Enter Preseason";
     return "Resume Offseason Timeline";
   }

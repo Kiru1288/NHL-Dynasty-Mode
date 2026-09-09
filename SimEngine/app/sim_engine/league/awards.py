@@ -8,10 +8,13 @@ deterministic ballot simulation, and payload assembly all live here.
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import random
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+
+logger = logging.getLogger(__name__)
 
 from .playoffs import PlayoffResult
 from .standings import StandingsTable, TeamStandingRecord
@@ -581,13 +584,23 @@ def calder_eligibility(
 
     if prior_gp is None and prior_seasons is None and flagged_rookie is None:
         confidence = "fallback"
-        # Conservative: only treat very young first-year profiles as rookies.
+        seasons_in_league = None
+        for key in ("seasons_in_league", "nhl_seasons", "league_seasons_played", "seasons_played"):
+            if row.get(key) is not None or hist.get(key) is not None:
+                seasons_in_league = _safe_int(row.get(key, hist.get(key)), 0)
+                break
         if age is None:
             eligible = False
-            reasons.append("Missing rookied history and age; conservative deny.")
-        elif age <= 22 and gp >= min_gp:
-            eligible = True
-            reasons.append("Fallback: age<=22 with meaningful GP and no prior history fields.")
+            reasons.append("Missing rookie history and age; conservative deny.")
+        elif age <= 23 and gp >= min_gp:
+            if seasons_in_league is not None and seasons_in_league > 1:
+                eligible = False
+                reasons.append("Fallback: already more than one league season.")
+            else:
+                if seasons_in_league is None:
+                    log_fallback_degradation("calder", ["seasons_in_league"])
+                eligible = True
+                reasons.append("Fallback: age<=23 with meaningful GP and no prior history fields.")
         else:
             eligible = False
             reasons.append("Fallback: insufficient evidence of first NHL season.")
@@ -601,6 +614,7 @@ def calder_eligibility(
                 "age": age,
                 "prior_nhl_gp": prior_gp,
                 "prior_nhl_seasons": prior_seasons,
+                "seasons_in_league": seasons_in_league,
                 "is_rookie_flag": flagged_rookie,
                 "reasons": reasons,
             },
@@ -713,7 +727,8 @@ def snapshot_row(row: Mapping[str, Any], *, teams: Optional[Sequence[Any]] = Non
     snap["position"] = _pos(row)
     snap["age"] = _player_age(row, teams)
     snap["gp"] = _gp(row)
-    snap["is_rookie"] = bool(row.get("is_rookie", row.get("rookie", False)))
+    if "is_rookie" in row or "rookie" in row:
+        snap["is_rookie"] = bool(row.get("is_rookie", row.get("rookie")))
     snap["previous_nhl_gp"] = row.get("previous_nhl_gp", row.get("prior_nhl_gp"))
     snap["is_captain"] = bool(row.get("is_captain", row.get("captain", False)))
     return snap
@@ -761,6 +776,229 @@ def goalie_workload_ok(row: Mapping[str, Any], *, season_length: int = 82) -> Tu
         "min_gs": min_gs,
         "eligible": ok,
     }
+
+
+def log_fallback_degradation(award_id: str, missing_fields: Sequence[str]) -> None:
+    fields = [str(f) for f in missing_fields if f]
+    if not fields:
+        return
+    logger.info(
+        "Award %s fallback degraded; missing fields: %s",
+        str(award_id),
+        ", ".join(fields),
+    )
+
+
+def _optional_stat_per_gp(row: Mapping[str, Any], keys: Sequence[str]) -> Optional[float]:
+    gp = max(1, _gp(row))
+    for key in keys:
+        if key in row and row.get(key) is not None:
+            return float(_safe_float(row.get(key))) / float(gp)
+    return None
+
+
+def _toi_per_gp_normalized(row: Mapping[str, Any]) -> float:
+    gp = max(1, _gp(row))
+    toi_pg = None
+    for key in ("toi_per_game", "toi_per_gp", "avg_toi"):
+        if row.get(key) is not None:
+            toi_pg = _safe_float(row.get(key))
+            break
+    if toi_pg is None:
+        total_toi = _safe_float(row.get("toi"), _safe_float(row.get("toi_minutes"), 0.0))
+        if total_toi > 0:
+            toi_pg = total_toi / float(gp)
+    if toi_pg is None or toi_pg <= 0:
+        return 0.0
+    return min(1.5, toi_pg / 22.0)
+
+
+def hart_fallback_formula(row: Mapping[str, Any]) -> float:
+    ppg = float(_pts(row)) / max(1, _gp(row))
+    avail = min(1.0, float(_gp(row)) / 70.0)
+    offense = ppg * 40.0
+    availability = avail * 10.0
+    row["_fallback_terms"] = {
+        "production_component": offense,
+        "availability_component": availability,
+        "team_context_component": 0.0,
+        "two_way_component": 0.0,
+        "individual_value_component": offense * 0.25,
+    }
+    return offense + availability
+
+
+def norris_fallback_formula(row: Mapping[str, Any], *, award_id: str = "norris") -> float:
+    ppg = float(_pts(row)) / max(1, _gp(row))
+    offense_term = ppg * 12.0
+    toi_norm = _toi_per_gp_normalized(row)
+    toi_term = toi_norm * 8.0
+    blocked_pg = _optional_stat_per_gp(row, ("blocked_shots", "blk", "blocks"))
+    giveaways_pg = _optional_stat_per_gp(row, ("giveaways", "giv", "gv"))
+    missing: List[str] = []
+    defense_term = 0.0
+    if blocked_pg is not None:
+        defense_term += blocked_pg * 3.0
+    else:
+        missing.append("blocked_shots")
+    if giveaways_pg is not None:
+        defense_term -= giveaways_pg * 2.0
+    else:
+        missing.append("giveaways")
+    if blocked_pg is None and giveaways_pg is None:
+        log_fallback_degradation(award_id, missing)
+    elif missing:
+        log_fallback_degradation(award_id, missing)
+    row["_fallback_terms"] = {
+        "production_component": offense_term,
+        "two_way_component": defense_term + toi_term,
+        "availability_component": toi_term,
+        "individual_value_component": offense_term * 0.35,
+        "team_context_component": toi_norm * 4.0,
+    }
+    return offense_term + defense_term + toi_term
+
+
+def selke_fallback_formula(row: Mapping[str, Any], *, award_id: str = "selke") -> float:
+    toi_norm = _toi_per_gp_normalized(row)
+    toi_term = toi_norm * 10.0
+    fo_taken = _safe_int(row.get("fo_taken"), _safe_int(row.get("faceoffs_taken"), 0))
+    fo_pct = normalize_percentage(row.get("faceoff_pct")) if fo_taken > 0 else 0.5
+    fo_term = fo_pct * 0.15
+    pk_toi_pg = _optional_stat_per_gp(row, ("pk_toi", "sh_toi", "pk_toi_per_game"))
+    if pk_toi_pg is None:
+        pk_share = _safe_float(row.get("pk_toi_share"), 0.0)
+        if pk_share > 0:
+            pk_toi_pg = pk_share
+        else:
+            log_fallback_degradation(award_id, ["pk_toi"])
+            pk_toi_pg = 0.0
+    pk_term = pk_toi_pg * 6.0
+    pts_penalty = float(_pts(row)) * 0.05
+    row["_fallback_terms"] = {
+        "production_component": fo_term,
+        "two_way_component": toi_term + pk_term - pts_penalty,
+        "availability_component": toi_term,
+        "individual_value_component": -pts_penalty,
+        "team_context_component": pk_term,
+    }
+    return toi_term + fo_term + pk_term - pts_penalty
+
+
+def vezina_fallback_formula(row: Mapping[str, Any]) -> float:
+    sv = goalie_sv_pct(row) * 50.0
+    workload = float(_gp(row))
+    row["_fallback_terms"] = {
+        "production_component": sv,
+        "goals_saved_above_expected": sv * 0.4,
+        "workload": workload,
+        "availability_component": workload,
+        "individual_value_component": sv * 0.55,
+    }
+    return sv + workload
+
+
+def calder_fallback_formula(
+    row: Mapping[str, Any],
+    team_context_by_tid: Optional[Mapping[str, Mapping[str, Any]]] = None,
+) -> float:
+    if _is_goalie(row):
+        return vezina_fallback_formula(row)
+    if _is_defense(row):
+        return norris_fallback_formula(row, award_id="calder")
+    hart = hart_fallback_formula(row)
+    hart_terms = dict(row.get("_fallback_terms") or {})
+    selke = selke_fallback_formula(row, award_id="calder")
+    selke_terms = dict(row.get("_fallback_terms") or {})
+    row["_fallback_terms"] = {
+        "production_component": hart_terms.get("production_component", hart * 0.6) * 0.6
+        + selke_terms.get("production_component", selke * 0.1) * 0.4,
+        "two_way_component": hart_terms.get("two_way_component", 0.0) * 0.6
+        + selke_terms.get("two_way_component", selke * 0.7) * 0.4,
+        "individual_value_component": hart * 0.55 + selke * 0.25,
+        "availability_component": hart_terms.get("availability_component", 0.0) * 0.6
+        + selke_terms.get("availability_component", 0.0) * 0.4,
+        "team_context_component": selke_terms.get("team_context_component", 0.0) * 0.4,
+    }
+    return 0.6 * hart + 0.4 * selke
+
+
+def derive_pseudo_components(row: Mapping[str, Any], award_id: str, canonical_score: float) -> Dict[str, float]:
+    terms = dict(row.get("_fallback_terms") or {})
+    if terms:
+        return terms
+    aid = str(award_id or "").lower()
+    if aid == "norris":
+        norris_fallback_formula(row, award_id=aid)
+        return dict(row.get("_fallback_terms") or {})
+    if aid == "selke":
+        selke_fallback_formula(row, award_id=aid)
+        return dict(row.get("_fallback_terms") or {})
+    if aid == "hart":
+        hart_fallback_formula(row)
+        return dict(row.get("_fallback_terms") or {})
+    if aid == "vezina":
+        vezina_fallback_formula(row)
+        return dict(row.get("_fallback_terms") or {})
+    if aid == "calder":
+        calder_fallback_formula(row)
+        return dict(row.get("_fallback_terms") or {})
+    if aid == "lady_byng":
+        score = lady_byng_score(row)
+        return {
+            "production_component": float(_pts(row)) / max(1, _gp(row)) * 40.0,
+            "two_way_component": _safe_float(row.get("discipline_score"), 50.0) * 0.4,
+            "individual_value_component": score * 0.5,
+        }
+    if aid == "ted_lindsay":
+        ppg = float(_pts(row)) / max(1, _gp(row))
+        return {
+            "production_component": ppg * 38.0,
+            "individual_value_component": _safe_float(row.get("impact_score"), float(_pts(row)) * 0.4) * 0.35,
+            "two_way_component": normalize_percentage(row.get("xgf_pct")) * 10.0,
+        }
+    return {
+        "production_component": float(canonical_score) * 0.55,
+        "two_way_component": float(canonical_score) * 0.25,
+        "individual_value_component": float(canonical_score) * 0.20,
+    }
+
+
+def _merge_history_from_rosters(
+    teams: Optional[Sequence[Any]],
+    history_by_player: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    merged: Dict[str, Any] = dict(history_by_player or {})
+    for team in teams or []:
+        for player in getattr(team, "roster", None) or []:
+            pid = str(getattr(player, "id", "") or "")
+            if not pid:
+                continue
+            blob = getattr(player, "player_award_history", None)
+            if isinstance(blob, dict):
+                base = dict(merged.get(pid) or {})
+                base.update(blob)
+                merged[pid] = base
+    return merged
+
+
+# BLOCKED: no injury ledger accessible from awards.py scope — Masterton cannot populate until
+# upstream ledger exposed. Searched FranchiseSession.injury_log_all / injury_log_major in
+# backend/services/franchise_sim.py; compute_awards() receives player_season_stats only.
+def populate_masterton_inputs(player_id: str, season: Any, injury_ledger: Optional[Sequence[Mapping[str, Any]]] = None) -> Optional[Dict[str, Any]]:
+    if not injury_ledger:
+        return None
+    missed = 0
+    returned = False
+    for inj in injury_ledger:
+        if str(inj.get("player_id") or "") != str(player_id):
+            continue
+        missed += _safe_int(inj.get("games"), _safe_int(inj.get("games_initial"), 0))
+        if str(inj.get("status") or "").upper() in {"ACTIVE", "RETURNED", "CLEARED"}:
+            returned = True
+    if missed <= 0 and not returned:
+        return None
+    return {"injury_games_missed": missed, "games_returned": returned}
 
 
 # ---------------------------------------------------------------------------
@@ -976,12 +1214,15 @@ def simulate_award_ballots(
     tallies: Dict[str, Dict[str, Any]] = {}
     for score, row in ordered:
         pid = _pid(row)
+        comps = dict(row.get("_components") or row.get("component_scores") or {})
+        if not comps or comps == {"canonical": float(score)}:
+            comps = derive_pseudo_components(row, award_id, float(score))
         tallies[pid] = {
             "row": row,
             "canonical_score": float(score),
             "ballot_points": 0.0,
             "first_place_votes": 0,
-            "component_scores": dict(row.get("_components") or row.get("component_scores") or {}),
+            "component_scores": comps,
         }
 
     archetype_bias = {
@@ -1000,7 +1241,7 @@ def simulate_award_ballots(
             pid = _pid(row)
             noise = rng.uniform(-0.045, 0.045)
             pref = 0.0
-            comps = tallies[pid]["component_scores"]
+            comps = tallies[pid]["component_scores"] or derive_pseudo_components(row, award_id, float(score))
             if arch == "production":
                 pref = _safe_float(comps.get("production_component"), float(score))
             elif arch == "two_way":
@@ -1303,8 +1544,11 @@ def _run_ballot_award(
         return _unavailable_award(defn, reason=reason or "Unavailable", season=season)
     # Attach components for rationale/voters when present
     for score, row in scored:
-        row.setdefault("_components", row.get("component_scores") or {"canonical": score})
-        row["component_scores"] = row["_components"]
+        comps = dict(row.get("_components") or row.get("component_scores") or {})
+        if not comps or comps == {"canonical": float(score)}:
+            comps = derive_pseudo_components(row, str(defn.get("award_id") or ""), float(score))
+        row["_components"] = comps
+        row["component_scores"] = comps
     ballot = simulate_award_ballots(scored, award_id=str(defn["award_id"]), season_seed=season_seed)
     full: List[Dict[str, Any]] = []
     for tally in ballot["candidates"]:
@@ -1568,8 +1812,10 @@ def compute_jennings(
                     "votes": team_ga,
                 }
             )
+    award_status = "complete"
     if not recipients:
-        # Team award with no qualifying goalie still records team winner.
+        # Explicit fallback: team credited with fewest GA; no individual goalie share.
+        award_status = "team_only"
         recipients = [
             {
                 "entity_id": tid,
@@ -1583,6 +1829,7 @@ def compute_jennings(
                 "display_metric": "Team GA",
                 "is_winner": True,
                 "votes": team_ga,
+                "award_status": "team_only",
             }
         ]
     award = _finalize_player_award(
@@ -1608,6 +1855,7 @@ def compute_jennings(
         award.result["recipients"] = recipients
         award.result["team_goals_against"] = team_ga
         award.result["qualification_details"] = {"min_apps": min_apps}
+        award.result["award_status"] = award_status
     return award
 
 
@@ -1637,6 +1885,7 @@ def compute_awards(
             team_map[str(tid)] = t
 
     season = season_year
+    history_by_player = _merge_history_from_rosters(teams, history_by_player)
     team_ctx = build_team_context(standings)
     tbl = list(standings.league_table() or [])
 
@@ -1809,7 +2058,7 @@ def compute_awards(
         season=season,
         eligibility_summary=f"Meaningful skater participation (>= {_season_games_threshold(season_length, 0.45, 30)} GP).",
         required_fields=["gp"],
-        fallback_fn=lambda r: float(_pts(r)) / max(1, _gp(r)) * 40.0 + min(1.0, _gp(r) / 70.0) * 10.0,
+        fallback_fn=hart_fallback_formula,
     )
 
     # Norris
@@ -1822,7 +2071,7 @@ def compute_awards(
         season=season,
         eligibility_summary="Defencemen with meaningful GP/TOI.",
         required_fields=["gp"],
-        fallback_fn=lambda r: float(_pts(r)) / max(1, _gp(r)) * 25.0,
+        fallback_fn=norris_fallback_formula,
     )
 
     # Selke
@@ -1835,7 +2084,7 @@ def compute_awards(
         season=season,
         eligibility_summary="Forwards with meaningful GP and even-strength usage.",
         required_fields=["gp"],
-        fallback_fn=lambda r: _safe_float(r.get("defense_score"), float(_pts(r)) * 0.2),
+        fallback_fn=selke_fallback_formula,
     )
 
     # Calder
@@ -1854,7 +2103,7 @@ def compute_awards(
         season=season,
         eligibility_summary="Canonical first-year NHL eligibility (not age-only).",
         required_fields=["gp"],
-        fallback_fn=lambda r: float(_pts(r)) / max(1, _gp(r)) * 30.0,
+        fallback_fn=lambda r: calder_fallback_formula(r, team_ctx),
     )
 
     # Vezina
@@ -1867,7 +2116,7 @@ def compute_awards(
         season=season,
         eligibility_summary="Starter-level goalie workload (starts/minutes/shots).",
         required_fields=["gp"],
-        fallback_fn=lambda r: goalie_sv_pct(r) * 50.0 + float(_gp(r)),
+        fallback_fn=vezina_fallback_formula,
     )
 
     # Lady Byng
@@ -1972,6 +2221,9 @@ def compute_awards(
 
 
 def _try_masterton(rows, team_map, season, season_seed) -> Award:
+    # BLOCKED: no injury ledger accessible from awards.py scope — Masterton cannot populate until
+    # upstream ledger exposed (FranchiseSession.injury_log_all exists in franchise_sim.py but is
+    # not passed into compute_awards). populate_masterton_inputs() is ready when ledger is wired.
     defn = AWARD_REGISTRY["masterton"]
     pool = []
     for r in rows:
@@ -2000,6 +2252,8 @@ def _try_masterton(rows, team_map, season, season_seed) -> Award:
 
 
 def _try_messier(rows, team_map, season, season_seed) -> Award:
+    # BLOCKED: leadership_score is not populated on award stat rows. Character traits (leadership)
+    # exist on player generation objects but are not exposed on player_season_stats at award time.
     defn = AWARD_REGISTRY["messier"]
     pool = [r for r in rows if not validate_required_award_fields(r, defn["required_fields"])]
     if not pool:
@@ -2024,6 +2278,8 @@ def _try_messier(rows, team_map, season, season_seed) -> Award:
 
 
 def _try_jack_adams(teams, team_ctx, team_map, season, season_seed) -> Award:
+    # BLOCKED: team.expected_points is never set on team objects at award-compute time. Storyline
+    # engine computes per-player expected_points in evidence only; no preseason team projection field.
     defn = AWARD_REGISTRY["jack_adams"]
     coach_rows = []
     for t in teams or []:
@@ -2234,6 +2490,7 @@ def apply_career_award_history(
     season: Any,
     *,
     result_id: str,
+    history_by_player: Optional[MutableMapping[str, Any]] = None,
 ) -> int:
     """Idempotently append award history onto player objects. Returns writes count."""
     writes = 0
@@ -2292,6 +2549,22 @@ def apply_career_award_history(
                 player.career_awards = history
             except Exception:
                 pass
+            hist_blob = dict(getattr(player, "player_award_history", None) or {})
+            if history_by_player is not None:
+                hist_blob = {**dict(history_by_player.get(pid) or {}), **hist_blob}
+            awards_hist = list(hist_blob.get("awards") or [])
+            if not any(
+                isinstance(h, dict) and h.get("award_result_id") == entry["award_result_id"] for h in awards_hist
+            ):
+                awards_hist.append(entry)
+            hist_blob["awards"] = awards_hist
+            hist_blob["last_award_season"] = season
+            try:
+                player.player_award_history = hist_blob
+            except Exception:
+                pass
+            if history_by_player is not None:
+                history_by_player[pid] = hist_blob
             writes += 1
     return writes
 

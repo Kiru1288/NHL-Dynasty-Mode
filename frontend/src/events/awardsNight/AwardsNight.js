@@ -262,7 +262,23 @@ function AwardsRail({ groups, activeIndex, totalSlides, phase, revealedIds, onSe
         {groups.map((group) => (
           <div key={group.id} className="an-awards-rail__group">
             <h3>{group.label}</h3>
-            {group.items.map(({ slide, index }) => {
+            {group.items.map(({ slide, index, offRail }) => {
+              if (offRail) {
+                return (
+                  <div
+                    key={slide.id}
+                    className="an-awards-rail__item is-revealed is-off-rail"
+                    style={{ "--award-accent": slide.accent }}
+                  >
+                    <span className="an-awards-rail__badge">{slide.awardShort || "—"}</span>
+                    <span className="an-awards-rail__copy">
+                      <strong>{slide.awardLabel}</strong>
+                      <em>{slide.winnerLabel}</em>
+                      {slide.rationale ? <small>{slide.rationale}</small> : null}
+                    </span>
+                  </div>
+                );
+              }
               const status = getCeremonyRevealStatus(index, activeIndex, totalSlides);
               return (
                 <button
@@ -393,7 +409,7 @@ export default function AwardsNight({
 
   const slides = useMemo(() => buildAwardsCeremonySlides(awards), [awards]);
   const summary = useMemo(() => buildAwardsNightSummary(awards), [awards]);
-  const railGroups = useMemo(() => buildCeremonyRailGroups(slides), [slides]);
+  const railGroups = useMemo(() => buildCeremonyRailGroups(slides, awards), [slides, awards]);
   const ticker = useMemo(() => buildAwardTickerItems(awards), [awards]);
   const fanPool = useMemo(() => buildFallbackAwardFans(24, "awards-night-live"), []);
   const preShowTweets = useMemo(

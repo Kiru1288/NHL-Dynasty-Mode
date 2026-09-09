@@ -320,3 +320,258 @@ def test_repair_inflated_ixg_in_normalize():
     assert float(fixed["ixg"]) < 100
     assert float(fixed["xa"]) < 120
     assert abs(float(fixed["ixg"]) - round(float(fixed["ixg"]))) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Awards fallback correctness (fixture season_seed=424242)
+# ---------------------------------------------------------------------------
+
+AWARDS_FIXTURE_SEED = 424242
+
+
+def _fixture_defense_pool():
+    rows = []
+    for i in range(20):
+        gp = 78 + (i % 5)
+        pts = 28 + (i * 3) % 55
+        toi_pg = 18.0 + (i % 7) * 1.4
+        blk = 40 + (i * 11) % 120
+        giv = 20 + (i * 5) % 60
+        rows.append(
+            {
+                "player_id": f"d{i}",
+                "name": f"D{i}",
+                "position": "D",
+                "team_id": f"T{i % 8}",
+                "age": 21,
+                "gp": gp,
+                "g": pts // 3,
+                "a": pts - (pts // 3),
+                "pts": pts,
+                "toi_per_game": toi_pg,
+                "blocked_shots": blk,
+                "giveaways": giv,
+            }
+        )
+    return rows
+
+
+def _fixture_forward_pool():
+    rows = []
+    for i in range(24):
+        gp = 70 + (i % 10)
+        pts = 18 + (i * 4) % 48
+        rows.append(
+            {
+                "player_id": f"f{i}",
+                "name": f"F{i}",
+                "position": "C" if i % 3 == 0 else "LW",
+                "team_id": f"T{i % 8}",
+                "age": 22,
+                "gp": gp,
+                "g": pts // 2,
+                "a": pts - (pts // 2),
+                "pts": pts,
+                "toi_per_game": 14.0 + (i % 6) * 1.1,
+                "faceoff_pct": 45.0 + (i * 3) % 20,
+                "fo_taken": 250 + i * 10,
+                "pk_toi": 20 + (i * 7) % 80,
+            }
+        )
+    return rows
+
+
+def _pearson(xs, ys):
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    den_x = sum((x - mx) ** 2 for x in xs) ** 0.5
+    den_y = sum((y - my) ** 2 for y in ys) ** 0.5
+    if den_x <= 0 or den_y <= 0:
+        return 0.0
+    return num / (den_x * den_y)
+
+
+def test_awards_p0_norris_fallback_not_pure_ppg():
+    from app.sim_engine.league.awards import norris_fallback_formula
+
+    pool = _fixture_defense_pool()
+    old_rank = sorted(pool, key=lambda r: float(r["pts"]) / r["gp"] * 25.0, reverse=True)[:5]
+    new_rank = sorted(pool, key=norris_fallback_formula, reverse=True)[:5]
+    assert [r["player_id"] for r in old_rank] != [r["player_id"] for r in new_rank]
+
+
+def test_awards_p0_selke_fallback_low_points_correlation():
+    from app.sim_engine.league.awards import selke_fallback_formula
+
+    pool = _fixture_forward_pool()
+    scores = [selke_fallback_formula(dict(r)) for r in pool]
+    points = [float(r["pts"]) for r in pool]
+    r = _pearson(scores, points)
+    assert r < 0.85
+
+
+def test_awards_p0_calder_fallback_position_blend():
+    from app.sim_engine.league.awards import calder_fallback_formula, vezina_fallback_formula
+
+    rookie_g = {
+        "player_id": "rg",
+        "position": "G",
+        "gp": 60,
+        "sv_pct": 0.922,
+        "shots_against": 1800,
+        "ga": 140,
+        "saves": 1660,
+    }
+    rookie_d = {
+        "player_id": "rd",
+        "position": "D",
+        "gp": 75,
+        "pts": 42,
+        "g": 10,
+        "a": 32,
+        "toi_per_game": 23.5,
+        "blocked_shots": 140,
+        "giveaways": 35,
+    }
+    rookie_f = {
+        "player_id": "rf",
+        "position": "C",
+        "gp": 78,
+        "pts": 55,
+        "g": 22,
+        "a": 33,
+        "toi_per_game": 17.0,
+        "faceoff_pct": 54.0,
+        "fo_taken": 900,
+        "pk_toi": 55,
+    }
+    ppg_only = sorted(
+        [rookie_g, rookie_d, rookie_f],
+        key=lambda r: float(r.get("pts", 0)) / max(1, int(r.get("gp", 1))),
+        reverse=True,
+    )[0]["player_id"]
+    blended = sorted(
+        [rookie_g, rookie_d, rookie_f],
+        key=lambda r: calder_fallback_formula(dict(r)),
+        reverse=True,
+    )[0]["player_id"]
+    assert blended != ppg_only or vezina_fallback_formula(rookie_g) > calder_fallback_formula(rookie_f)
+
+
+def test_awards_p2_archetype_pref_spread_increases_with_pseudo_components():
+    from app.sim_engine.league.awards import (
+        VOTER_ARCHETYPES,
+        derive_pseudo_components,
+        norris_fallback_formula,
+    )
+
+    row = dict(_fixture_defense_pool()[0])
+    score = norris_fallback_formula(row)
+
+    def pref_stddev(use_pseudo: bool) -> float:
+        comps = derive_pseudo_components(row, "norris", score) if use_pseudo else {}
+        prefs = []
+        for arch in VOTER_ARCHETYPES:
+            if arch == "production":
+                pref = float(comps.get("production_component") or score)
+            elif arch == "two_way":
+                pref = float(comps.get("two_way_component", comps.get("defensive_value")) or score)
+            elif arch == "team_success":
+                pref = float(comps.get("team_context_component") or score)
+            elif arch == "analytics":
+                pref = float(comps.get("individual_value_component") or score)
+            elif arch == "workload":
+                pref = float(comps.get("availability_component", comps.get("workload")) or score)
+            else:
+                pref = float(score)
+            prefs.append(pref)
+        mean = sum(prefs) / len(prefs)
+        var = sum((p - mean) ** 2 for p in prefs) / len(prefs)
+        return var ** 0.5
+
+    old_std = pref_stddev(False)
+    new_std = pref_stddev(True)
+    assert new_std > old_std
+
+
+def test_awards_p0_fixture_winner_diff_table(capsys):
+    """Emit before/after winner table for fixture season (console harness)."""
+    from app.sim_engine.league.awards import (
+        _run_ballot_award,
+        AWARD_REGISTRY,
+        calder_fallback_formula,
+        eligible_calder,
+        eligible_norris,
+        eligible_selke,
+        hart_fallback_formula,
+        norris_ballot_score,
+        norris_fallback_formula,
+        selke_ballot_score,
+        selke_fallback_formula,
+        snapshot_row,
+    )
+
+    skaters = [snapshot_row(r) for r in _fixture_defense_pool() + _fixture_forward_pool()]
+    team_map = {f"T{i}": SimpleNamespace(team_id=f"T{i}", name=f"Team {i}") for i in range(8)}
+
+    def winner_id(defn_key, pool, score_fn, fallback_fn):
+        award = _run_ballot_award(
+            AWARD_REGISTRY[defn_key],
+            pool,
+            score_fn,
+            team_map=team_map,
+            season_seed=AWARDS_FIXTURE_SEED,
+            season=2025,
+            eligibility_summary="fixture",
+            required_fields=["gp"],
+            fallback_fn=fallback_fn,
+        )
+        return str(award.winner_player_id or "")
+
+    norris_pool = eligible_norris([r for r in skaters if r["position"] == "D"], 82)
+    selke_pool = eligible_selke([r for r in skaters if r["position"] != "D"], 82)
+    calder_pool = eligible_calder(skaters, teams=[], history_by_player={}, season_length=82)
+
+    rows = []
+    old_norris = winner_id(
+        "norris",
+        norris_pool,
+        lambda r: norris_ballot_score(r, {}),
+        lambda r: float(r.get("pts", 0)) / max(1, int(r.get("gp", 1))) * 25.0,
+    )
+    new_norris = winner_id("norris", norris_pool, lambda r: norris_ballot_score(r, {}), norris_fallback_formula)
+    rows.append(("norris", old_norris, new_norris, old_norris != new_norris))
+
+    old_selke = winner_id(
+        "selke",
+        selke_pool,
+        selke_ballot_score,
+        lambda r: float(r.get("pts", 0)) * 0.2,
+    )
+    new_selke = winner_id("selke", selke_pool, selke_ballot_score, selke_fallback_formula)
+    rows.append(("selke", old_selke, new_selke, old_selke != new_selke))
+
+    old_calder = winner_id(
+        "calder",
+        calder_pool,
+        lambda r: hart_fallback_formula(r),
+        lambda r: float(r.get("pts", 0)) / max(1, int(r.get("gp", 1))) * 30.0,
+    )
+    new_calder = winner_id(
+        "calder",
+        calder_pool,
+        lambda r: hart_fallback_formula(r),
+        lambda r: calder_fallback_formula(r, {}),
+    )
+    rows.append(("calder", old_calder, new_calder, old_calder != new_calder))
+
+    print("\n# P0 fixture-season before/after winner table (seed=%s)" % AWARDS_FIXTURE_SEED)
+    print("award_id | old_winner | new_winner | changed")
+    for award_id, old_w, new_w, changed in rows:
+        print(f"{award_id} | {old_w} | {new_w} | {changed}")
+    captured = capsys.readouterr()
+    assert "norris" in captured.out

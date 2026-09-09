@@ -537,6 +537,14 @@
   position: relative;
   z-index: 10;
   padding: 0 1.5rem 7rem;
+  max-height: calc(100dvh - 140px);
+  overflow-y: auto;
+}
+
+.dlot-board-scroll {
+  max-height: min(68vh, 720px);
+  overflow-y: auto;
+  padding-right: 0.35rem;
 }
 
 .dlot-results-head {

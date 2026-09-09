@@ -1985,91 +1985,113 @@ def qualifying_offer_aav(previous_aav_m: float) -> float:
     return round(max(LEAGUE_MINIMUM_AAV_M, qo), 3)
 
 
-# Literal NHL offer-sheet compensation grid (AAV thresholds in millions).
-# Source: CBA Article 10 / offer-sheet compensation schedule (original picks).
-OFFER_SHEET_COMPENSATION_GRID: List[Dict[str, Any]] = [
-    {
-        "aav_floor_m": 14.051,
-        "tier": "1st_1st_1st_1st_1st",
-        "rounds": [1, 1, 1, 1, 1],
-        "label": "Five 1st-round picks",
-    },
-    {
-        "aav_floor_m": 10.628,
-        "tier": "1st_1st_1st_1st",
-        "rounds": [1, 1, 1, 1],
-        "label": "Four 1st-round picks",
-    },
-    {
-        "aav_floor_m": 8.503,
-        "tier": "1st_1st_1st_2nd",
-        "rounds": [1, 1, 1, 2],
-        "label": "Three 1sts + 2nd",
-    },
-    {
-        "aav_floor_m": 6.378,
-        "tier": "1st_1st_1st_3rd",
-        "rounds": [1, 1, 1, 3],
-        "label": "Three 1sts + 3rd",
-    },
-    {
-        "aav_floor_m": 4.784,
+# NHL offer-sheet compensation tiers as % of upper limit (single source of truth).
+OFFER_SHEET_TIERS_PCT_OF_CAP: List[Tuple[float, float, str]] = [
+    (0.0000, 0.01515, "none"),
+    (0.01515, 0.02296, "3rd"),
+    (0.02296, 0.04592, "2nd"),
+    (0.04592, 0.06888, "1st+3rd"),
+    (0.06888, 0.09184, "1st+2nd+3rd"),
+    (0.09184, 0.11480, "2x1st(next3drafts)+2nd+3rd"),
+    (0.11480, float("inf"), "4x1st(next5drafts)"),
+]
+
+_OFFER_SHEET_COMP_DEFS: Dict[str, Dict[str, Any]] = {
+    "none": {"tier": "none", "rounds": [], "label": "No compensation"},
+    "3rd": {"tier": "3rd", "rounds": [3], "label": "3rd-round pick"},
+    "2nd": {"tier": "2nd", "rounds": [2], "label": "2nd-round pick"},
+    "1st+3rd": {"tier": "1st_3rd", "rounds": [1, 3], "label": "1st + 3rd"},
+    "1st+2nd+3rd": {"tier": "1st_2nd_3rd", "rounds": [1, 2, 3], "label": "1st + 2nd + 3rd"},
+    "2x1st(next3drafts)+2nd+3rd": {
         "tier": "1st_1st_2nd_3rd",
         "rounds": [1, 1, 2, 3],
         "label": "Two 1sts + 2nd + 3rd",
     },
-    {
-        "aav_floor_m": 3.613,
-        "tier": "1st_2nd_3rd",
-        "rounds": [1, 2, 3],
-        "label": "1st + 2nd + 3rd",
+    "4x1st(next5drafts)": {
+        "tier": "1st_1st_1st_1st",
+        "rounds": [1, 1, 1, 1],
+        "label": "Four 1st-round picks",
     },
-    {
-        "aav_floor_m": 2.761,
-        "tier": "1st_3rd",
-        "rounds": [1, 3],
-        "label": "1st + 3rd",
-    },
-    {
-        "aav_floor_m": 2.082,
-        "tier": "2nd_3rd",
-        "rounds": [2, 3],
-        "label": "2nd + 3rd",
-    },
-    {
-        "aav_floor_m": 1.488,
-        "tier": "2nd",
-        "rounds": [2],
-        "label": "2nd-round pick",
-    },
-    {
-        "aav_floor_m": 1.190,
-        "tier": "3rd",
-        "rounds": [3],
-        "label": "3rd-round pick",
-    },
-]
+}
 
 
-def offer_sheet_compensation_tier(aav_m: float) -> Dict[str, Any]:
+def resolve_offer_sheet_tiers(current_cap_upper_limit: float) -> List[Dict[str, Any]]:
+    """Resolve CBA offer-sheet thresholds from the current upper limit (millions)."""
+    cap = float(current_cap_upper_limit or 0.0)
+    if cap <= 0:
+        cap = 88.0
+    rows: List[Dict[str, Any]] = []
+    for low_pct, high_pct, comp_key in OFFER_SHEET_TIERS_PCT_OF_CAP:
+        meta = dict(_OFFER_SHEET_COMP_DEFS.get(comp_key) or _OFFER_SHEET_COMP_DEFS["none"])
+        rows.append(
+            {
+                "aav_floor_m": round(low_pct * cap, 3),
+                "aav_ceiling_m": None if high_pct == float("inf") else round(high_pct * cap, 3),
+                "comp_key": comp_key,
+                **meta,
+            }
+        )
+    return rows
+
+
+def _league_salary_cap_upper_limit(league: Any) -> float:
+    try:
+        from app.sim_engine.economy.cap_engine import normalize_money_to_millions
+
+        cap = normalize_money_to_millions(
+            _get(league, "salary_cap_m", _get(league, "salary_cap", _get(_get(league, "economics", None), "salary_cap", 88.0)))
+        )
+        return float(cap) if cap > 0 else 88.0
+    except Exception:
+        return 88.0
+
+
+def refresh_offer_sheet_compensation_tiers(league: Any) -> List[Dict[str, Any]]:
+    """Recompute offer-sheet dollar thresholds whenever the league cap moves."""
+    cap = _league_salary_cap_upper_limit(league)
+    tiers = resolve_offer_sheet_tiers(cap)
+    try:
+        league.offer_sheet_compensation_tiers = tiers
+        league.offer_sheet_compensation_cap_m = cap
+    except Exception:
+        pass
+    return tiers
+
+
+def _active_offer_sheet_tiers(league: Any = None) -> List[Dict[str, Any]]:
+    if league is not None:
+        cached = _get(league, "offer_sheet_compensation_tiers", None)
+        if isinstance(cached, list) and cached:
+            return list(cached)
+        cap = _league_salary_cap_upper_limit(league)
+        return refresh_offer_sheet_compensation_tiers(league)
+    return resolve_offer_sheet_tiers(88.0)
+
+
+def offer_sheet_compensation_tier(aav_m: float, league: Any = None) -> Dict[str, Any]:
     """
     NHL offer-sheet compensation grid by AAV (millions).
-    Returns tier id + required draft-pick rounds (original picks).
+    Thresholds scale with the league salary-cap upper limit.
     """
     aav = float(aav_m or 0.0)
-    for row in OFFER_SHEET_COMPENSATION_GRID:
-        if aav >= float(row["aav_floor_m"]):
+    tiers = _active_offer_sheet_tiers(league)
+    # Highest compensation band first (descending floor).
+    for row in sorted(tiers, key=lambda r: float(r.get("aav_floor_m") or 0.0), reverse=True):
+        floor_m = float(row.get("aav_floor_m") or 0.0)
+        if aav >= floor_m and row.get("tier") != "none":
             return {
-                "tier": row["tier"],
-                "rounds": list(row["rounds"]),
-                "label": row["label"],
-                "aav_floor_m": float(row["aav_floor_m"]),
+                "tier": row.get("tier"),
+                "rounds": list(row.get("rounds") or []),
+                "label": row.get("label"),
+                "aav_floor_m": floor_m,
+                "comp_key": row.get("comp_key"),
             }
     return {
         "tier": "none",
         "rounds": [],
         "label": "No compensation",
         "aav_floor_m": 0.0,
+        "comp_key": "none",
     }
 
 
@@ -4890,7 +4912,7 @@ def execute_offer_sheet(
     if not check.get("ok"):
         return {"ok": False, "reason": check.get("reason")}
 
-    tier_info = offer_sheet_compensation_tier(aav_m)
+    tier_info = offer_sheet_compensation_tier(aav_m, league)
     filed_day = int(
         offer.get("filed_day")
         or getattr(session, "fa_market_day", None)
@@ -7996,7 +8018,7 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
                 qo = float(entry.get("qualifying_offer_aav_m") or LEAGUE_MINIMUM_AAV_M)
                 # Default sheet preview at ~120% of QO for compensation peek
                 preview_aav = round(max(qo * 1.2, qo + 0.25), 3)
-                tier = offer_sheet_compensation_tier(preview_aav)
+                tier = offer_sheet_compensation_tier(preview_aav, league)
                 offer_sheet_targets.append({
                     "player_id": entry.get("player_id"),
                     "name": entry.get("name"),
@@ -8046,7 +8068,7 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
         "pending_offer_sheets": pending_sheets,
         "offer_sheet_targets": offer_sheet_targets,
         "offer_sheet_compensation_grid": [
-            {k: v for k, v in row.items()} for row in OFFER_SHEET_COMPENSATION_GRID
+            {k: v for k, v in row.items()} for row in _active_offer_sheet_tiers(league)
         ],
         "warnings": cap_snapshot.get("warnings", []),
         "summary": {
