@@ -7096,6 +7096,15 @@ def _serialize_player_row(
                     row["drafted_by_team_name"] = _display_team(tm)
         except Exception:
             pass
+    if session is not None:
+        wjc_map = getattr(session, "wjc_prospect_tournament_results", None) or {}
+        wjc_res = wjc_map.get(pid)
+        if not isinstance(wjc_res, dict):
+            raw_id = str(getattr(p, "id", "") or "")
+            wjc_res = wjc_map.get(raw_id)
+        if isinstance(wjc_res, dict) and int(wjc_res.get("wjc_gp") or 0) > 0:
+            row["wjc_tournament"] = dict(wjc_res)
+            row["wjcStats"] = dict(wjc_res.get("wjc_stats") or wjc_res)
     return row
 
 
@@ -7595,6 +7604,12 @@ def _draft_stock_reason(row: Dict[str, Any], signed_delta: int, *, goalie_penali
     ):
         return weekly[:72]
     if mode == "rank_change":
+        wjc_gp = int(row.get("wjc_gp") or row.get("wjc_games") or 0)
+        wjc_pts = int(row.get("wjc_points") or 0)
+        if wjc_gp > 0 and signed_delta >= 1:
+            return f"World Juniors — {wjc_pts} pts in {wjc_gp} GP, up {signed_delta} spots"
+        if wjc_gp > 0 and signed_delta <= -1:
+            return f"World Juniors — {wjc_pts} pts in {wjc_gp} GP, down {abs(signed_delta)} spots"
         if signed_delta >= 5:
             return f"Board jump +{signed_delta} spots"
         if signed_delta >= 1:
@@ -8263,13 +8278,18 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
 
     # --- Draft score: ability + market consensus + production + size translation ---
     wjc_boosts = getattr(session, "wjc_draft_score_boosts", None) or {}
+    wjc_results = getattr(session, "wjc_prospect_tournament_results", None) or {}
     for row in prospects:
+        wjc_row = wjc_results.get(str(row.get("key") or ""))
+        if isinstance(wjc_row, dict):
+            row.update(wjc_row)
         row["true_potential_score"] = float(row.get("true_potential_score") or row.get("potential_score") or 0)
         row["consensus_potential_score"] = compute_consensus_potential_evaluation(row)
         row["_score"] = compute_enhanced_draft_score(row)
         wjc_key = str(row.get("key") or "")
         if wjc_key and wjc_key in wjc_boosts:
-            row["_score"] = float(row["_score"]) + float(wjc_boosts[wjc_key])
+            row["wjc_draft_boost"] = float(wjc_boosts[wjc_key])
+            row["_score"] = float(row["_score"]) + float(row["wjc_draft_boost"])
         row.update(compute_prospect_outcome_band(row))
         row["draft_rank_reason_codes"] = build_draft_rank_reason_codes(row)
 
@@ -12420,7 +12440,73 @@ def _wjc_day_index_for_iso(iso: str, season_y: int) -> Optional[int]:
     return None
 
 
+def _wjc_countries_meta() -> List[Tuple[str, str]]:
+    """IIHF World Juniors field — national U20 programs only."""
+    from services.player_bio_parser import WJC_COUNTRY_META
+
+    return list(WJC_COUNTRY_META)
+
+
+def _wjc_eligibility_cutoff(season_sy: int) -> date:
+    from services.player_bio_parser import wjc_eligibility_cutoff
+
+    return wjc_eligibility_cutoff(season_sy)
+
+
+def _wjc_age_eligible(source: Any, season_sy: int) -> bool:
+    from services.player_bio_parser import wjc_age_eligible
+
+    return wjc_age_eligible(source, season_sy)
+
+
+def _wjc_player_age_on(source: Any, as_of: date) -> int:
+    from services.player_bio_parser import player_age_on
+
+    return player_age_on(source, as_of)
+
+
+def _wjc_resolve_country(player: Any, rng: random.Random) -> str:
+    from services.player_bio_parser import resolve_wjc_country_for_player
+
+    return resolve_wjc_country_for_player(player, rng=rng)
+
+
+def _wjc_resolve_country_from_row(row: Dict[str, Any], rng: random.Random) -> str:
+    preset = str(row.get("wjc_country") or "")
+    if preset and _country_in_wjc_pool(preset):
+        return preset
+    nat = str(row.get("nationality") or row.get("birth_country") or row.get("country") or "")
+    dual = row.get("dual_nationality")
+    junior_league = str(
+        row.get("junior_league")
+        or row.get("league")
+        or row.get("league_name")
+        or row.get("team_league")
+        or ""
+    )
+    try:
+        from services.player_bio_parser import resolve_wjc_country_code
+
+        if isinstance(dual, list) and dual:
+            code = resolve_wjc_country_code(
+                nat, nationalities=dual, rng=rng, junior_league=junior_league
+            )
+            if code:
+                return code
+        return resolve_wjc_country_code(nat, rng=rng, junior_league=junior_league)
+    except Exception:
+        return _wjc_country_for_birth(rng, nat)
+
+
 def _wjc_country_for_birth(rng: random.Random, birth_country: str) -> str:
+    try:
+        from services.player_bio_parser import resolve_wjc_country_code
+
+        code = resolve_wjc_country_code(birth_country, rng=rng)
+        if code:
+            return code
+    except Exception:
+        pass
     bc = str(birth_country or "").strip().lower()
     pairs = [
         (("canada", "can"), "CAN"),
@@ -12433,27 +12519,12 @@ def _wjc_country_for_birth(rng: random.Random, birth_country: str) -> str:
         (("switzerland", "swiss"), "SUI"),
         (("denmark", "danish"), "DEN"),
         (("latvia", "latv"), "LAT"),
+        (("russia", "rus"), "RUS"),
     ]
     for hints, code in pairs:
         if any(h in bc for h in hints):
             return code
     return ""
-
-
-def _wjc_countries_meta() -> List[Tuple[str, str]]:
-    """IIHF World Juniors field — national U20 programs only."""
-    return [
-        ("CAN", "Canada"),
-        ("CZE", "Czechia"),
-        ("DEN", "Denmark"),
-        ("FIN", "Finland"),
-        ("GER", "Germany"),
-        ("LAT", "Latvia"),
-        ("SVK", "Slovakia"),
-        ("SWE", "Sweden"),
-        ("SUI", "Switzerland"),
-        ("USA", "United States"),
-    ]
 
 
 def _wjc_country_label(code: str) -> str:
@@ -12596,14 +12667,103 @@ def _wjc_hud_event_extras(session: FranchiseSession, now_iso: str, season_year: 
     }
 
 
+def _wjc_compute_performance_impact(
+    row: Dict[str, Any],
+    st: Dict[str, Any],
+    *,
+    medal_tier: str = "",
+) -> Dict[str, Any]:
+    """Score WJC run and derive skill / potential adjustment magnitudes."""
+    gp = int(row.get("tournament_gp") or st.get("gp") or 0)
+    if gp <= 0:
+        return {
+            "performance_score": 0.0,
+            "performance_grade": "none",
+            "skill_bump": 0.0,
+            "potential_bump": 0.0,
+            "summary": "",
+        }
+
+    pos = str(st.get("position") or row.get("position") or "F").upper()
+    is_goalie = pos == "G"
+    stock_delta = int(row.get("stock_delta") or 0)
+    score = float(stock_delta) * 0.35
+
+    if is_goalie:
+        gw = int(st.get("w") or row.get("tournament_w") or 0)
+        gl = int(st.get("l") or row.get("tournament_l") or 0)
+        shutouts = int(st.get("shutouts") or row.get("tournament_shutouts") or 0)
+        try:
+            sv_pct = float(st.get("sv_pct") or row.get("tournament_sv_pct") or 0.0)
+        except (TypeError, ValueError):
+            sv_pct = 0.0
+        score += gw * 2.5 - gl * 1.5 + shutouts * 3.0
+        if sv_pct >= 0.930:
+            score += 4.0
+        elif sv_pct >= 0.910:
+            score += 2.0
+        elif sv_pct > 0.0 and sv_pct < 0.880:
+            score -= 2.5
+    else:
+        goals = int(st.get("g") or row.get("tournament_g") or 0)
+        pts = int(st.get("pts") or row.get("tournament_pts") or 0)
+        plus = int(st.get("plus_minus") or row.get("tournament_plus_minus") or 0)
+        score += goals * 1.8 + max(0, pts - goals) * 1.2 + plus * 0.4
+
+    tier = str(medal_tier or "").lower()
+    if tier == "gold":
+        score += 6.0
+    elif tier == "silver":
+        score += 3.0
+    elif tier == "bronze":
+        score += 1.5
+
+    if score >= 8.0:
+        grade = "breakout"
+        skill_bump = min(3.0, 0.14 * score)
+        pot_bump = min(2.5, 0.08 * score)
+        summary = "Breakout international tournament — tools and projection upgraded."
+    elif score >= 3.0:
+        grade = "positive"
+        skill_bump = min(1.8, 0.11 * score)
+        pot_bump = min(1.2, 0.05 * score)
+        summary = "Strong WJC showing — modest development bump."
+    elif score <= -3.0:
+        grade = "setback"
+        skill_bump = max(-1.5, 0.08 * score)
+        pot_bump = max(-1.8, 0.06 * score)
+        summary = "Disappointing WJC run — projection trimmed."
+    elif score < 0.0:
+        grade = "quiet"
+        skill_bump = max(-0.8, 0.06 * score)
+        pot_bump = max(-1.0, 0.04 * score)
+        summary = "Quiet WJC tournament — slight skepticism on ceiling."
+    else:
+        grade = "neutral"
+        skill_bump = 0.12 if gp >= 4 else 0.0
+        pot_bump = 0.0
+        summary = "Neutral WJC sample — no major projection shift."
+
+    return {
+        "performance_score": round(score, 2),
+        "performance_grade": grade,
+        "skill_bump": round(skill_bump, 2),
+        "potential_bump": round(pot_bump, 2),
+        "summary": summary,
+    }
+
+
 def _apply_wjc_development_to_prospects(
     session: FranchiseSession,
     prospects_stocked: List[Dict[str, Any]],
-) -> None:
-    """Apply a small post-tournament attribute bump to live dev-league draft prospects."""
+    *,
+    medals: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Apply post-WJC attribute, OVR, and potential adjustments to dev-league prospects."""
     league = getattr(getattr(session, "sim", None), "league", None)
+    impacts: Dict[str, Dict[str, Any]] = {}
     if league is None:
-        return
+        return impacts
 
     by_id: Dict[str, Any] = {}
     for block in getattr(league, "development_leagues", None) or []:
@@ -12614,10 +12774,16 @@ def _apply_wjc_development_to_prospects(
                     by_id[pid] = p
 
     try:
-        from app.sim_engine.entities.player import persist_recomputed_ovr
+        from app.sim_engine.entities.player import (
+            display_rating,
+            normalize_rating,
+            persist_recomputed_ovr,
+            player_current_ovr_01,
+        )
     except Exception:
-        return
+        return impacts
 
+    medal_by_code = {str(v or "").upper(): str(k or "").lower() for k, v in (medals or {}).items()}
     skill_keys = (
         "skating", "shooting", "passing", "defense", "physical", "hockey_iq",
         "handling", "wrist_shot", "slap_shot", "deking", "faceoffs",
@@ -12628,29 +12794,59 @@ def _apply_wjc_development_to_prospects(
             continue
         if bool(row.get("is_npc")):
             continue
-        try:
-            stock_delta = int(row.get("stock_delta") or 0)
-        except (TypeError, ValueError):
-            stock_delta = 0
         gp = int(row.get("tournament_gp") or 0)
-        if stock_delta == 0 and gp <= 0:
+        if gp <= 0:
             continue
         pid = str(row.get("player_id") or row.get("draft_prospect_id") or "")
         player = by_id.get(pid)
         if player is None:
             continue
+
+        code = str(row.get("wjc_country") or "").upper()
+        medal_tier = medal_by_code.get(code, "")
+        st = {
+            "gp": gp,
+            "g": int(row.get("tournament_g") or 0),
+            "pts": int(row.get("tournament_pts") or 0),
+            "plus_minus": int(row.get("tournament_plus_minus") or 0),
+            "position": str(row.get("position") or "F"),
+            "w": int(row.get("tournament_w") or 0),
+            "l": int(row.get("tournament_l") or 0),
+            "shutouts": int(row.get("tournament_shutouts") or 0),
+            "sv_pct": row.get("tournament_sv_pct"),
+        }
+        impact = _wjc_compute_performance_impact(row, st, medal_tier=medal_tier)
+        skill_bump = float(impact.get("skill_bump") or 0.0)
+        pot_bump = float(impact.get("potential_bump") or 0.0)
+        if abs(skill_bump) < 0.05 and abs(pot_bump) < 0.05:
+            continue
+
         ratings = getattr(player, "ratings", None)
         if not isinstance(ratings, dict) or not ratings:
             continue
-        goals = int(row.get("tournament_g") or 0)
-        if stock_delta > 0:
-            bump = min(2.5, 0.12 * stock_delta + 0.08 * goals)
-        elif stock_delta < 0:
-            bump = max(-1.2, 0.06 * stock_delta)
-        else:
-            bump = 0.15 if goals >= 2 else 0.0
-        if abs(bump) < 0.05:
-            continue
+
+        try:
+            ovr_before = float(display_rating(player_current_ovr_01(player)))
+        except Exception:
+            ovr_before = float(row.get("ovr") or 0.0) * 99.0 if float(row.get("ovr") or 0) <= 1.5 else float(row.get("ovr") or 0.0)
+
+        pot_before = None
+        for pk in ("dev_potential", "potential", "dev_ceiling"):
+            try:
+                pv = float(ratings.get(pk, 0) or 0)
+            except (TypeError, ValueError):
+                pv = 0.0
+            if pv > 0:
+                pot_before = float(display_rating(normalize_rating(pv))) if pv <= 1.5 else pv
+                break
+        if pot_before is None:
+            try:
+                raw_pot = getattr(player, "potential", None)
+                if raw_pot is not None:
+                    pot_before = float(display_rating(normalize_rating(raw_pot)))
+            except Exception:
+                pot_before = ovr_before + 8.0
+
         touched = False
         for k in skill_keys:
             if k not in ratings:
@@ -12659,13 +12855,140 @@ def _apply_wjc_development_to_prospects(
                 cur = float(ratings[k])
             except (TypeError, ValueError):
                 continue
-            ratings[k] = round(max(35.0, min(99.0, cur + bump)), 1)
+            ratings[k] = round(max(35.0, min(99.0, cur + skill_bump)), 1)
             touched = True
-        if touched:
+
+        pot_after = float(pot_before or ovr_before)
+        if abs(pot_bump) >= 0.05:
+            pot_after = round(max(40.0, min(99.0, pot_after + pot_bump)), 1)
+            for pk in ("dev_potential", "dev_ceiling"):
+                if pk in ratings:
+                    ratings[pk] = pot_after
             try:
-                persist_recomputed_ovr(player)
+                pot01 = normalize_rating(pot_after)
+                setattr(player, "potential", pot01)
             except Exception:
                 pass
+
+        if not touched and abs(pot_bump) < 0.05:
+            continue
+
+        try:
+            persist_recomputed_ovr(player)
+            ovr_after = float(display_rating(player_current_ovr_01(player)))
+        except Exception:
+            ovr_after = ovr_before
+
+        hist = list(getattr(player, "development_history", None) or [])
+        hist.append(
+            {
+                "season": int(getattr(session, "season_calendar_year", 0) or 0),
+                "source_path": "world_juniors",
+                "ovr_before": round(ovr_before, 1),
+                "ovr_after": round(ovr_after, 1),
+                "potential_before": round(float(pot_before or pot_after), 1),
+                "potential_after": round(pot_after, 1),
+                "development_applied": True,
+                "note": str(impact.get("summary") or "WJC tournament impact"),
+            }
+        )
+        player.development_history = hist[-24:]
+
+        impacts[pid] = {
+            **impact,
+            "ovr_before": round(ovr_before, 1),
+            "ovr_after": round(ovr_after, 1),
+            "ovr_delta": round(ovr_after - ovr_before, 1),
+            "potential_before": round(float(pot_before or pot_after), 1),
+            "potential_after": round(pot_after, 1),
+            "potential_delta": round(pot_after - float(pot_before or pot_after), 1),
+        }
+
+    return impacts
+
+
+def _store_wjc_tournament_results_on_session(
+    session: FranchiseSession,
+    prospects_stocked: List[Dict[str, Any]],
+    *,
+    season_sy: int,
+    medals: Dict[str, Any],
+    impacts: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> None:
+    """Persist WJC box-score lines onto the session for draft board / scouting UI."""
+    medal_by_code = {str(v or "").upper(): str(k or "").lower() for k, v in (medals or {}).items()}
+    stored = dict(getattr(session, "wjc_prospect_tournament_results", None) or {})
+    impact_map = dict(impacts or {})
+    for p in prospects_stocked:
+        if str(p.get("prospect_classification") or "") != "draft_eligible":
+            continue
+        if bool(p.get("is_npc")):
+            continue
+        key = str(p.get("draft_prospect_id") or p.get("player_id") or "")
+        if not key:
+            continue
+        gp = int(p.get("tournament_gp") or 0)
+        if gp <= 0:
+            continue
+        goals = int(p.get("tournament_g") or 0)
+        pts = int(p.get("tournament_pts") or 0)
+        assists = max(0, pts - goals)
+        code = str(p.get("wjc_country") or "").upper()
+        medal_tier = medal_by_code.get(code, "")
+        pos = str(p.get("position") or "F").upper()
+        impact = impact_map.get(key) or {}
+        wjc_stats = {
+            "gp": gp,
+            "goals": goals,
+            "assists": assists,
+            "points": pts,
+            "plus_minus": int(p.get("tournament_plus_minus") or 0),
+            "team": str(p.get("wjc_country_label") or ""),
+            "year": int(season_sy),
+            "result": medal_tier.replace("_", " ").title() if medal_tier else "",
+            "position": pos,
+            "stock_delta": int(p.get("stock_delta") or 0),
+            "w": int(p.get("tournament_w") or 0),
+            "l": int(p.get("tournament_l") or 0),
+            "shutouts": int(p.get("tournament_shutouts") or 0),
+            "sv_pct": p.get("tournament_sv_pct"),
+            "performance_grade": impact.get("performance_grade"),
+            "performance_score": impact.get("performance_score"),
+            "summary": impact.get("summary"),
+            "ovr_delta": impact.get("ovr_delta"),
+            "potential_delta": impact.get("potential_delta"),
+            "ovr_before": impact.get("ovr_before"),
+            "ovr_after": impact.get("ovr_after"),
+            "potential_before": impact.get("potential_before"),
+            "potential_after": impact.get("potential_after"),
+        }
+        if gp and pts is not None:
+            wjc_stats["ppg"] = round(float(pts) / float(max(1, gp)), 2)
+        stored[key] = {
+            "wjc_gp": gp,
+            "wjc_goals": goals,
+            "wjc_assists": assists,
+            "wjc_points": pts,
+            "wjc_plus_minus": int(p.get("tournament_plus_minus") or 0),
+            "wjc_w": int(p.get("tournament_w") or 0),
+            "wjc_l": int(p.get("tournament_l") or 0),
+            "wjc_shutouts": int(p.get("tournament_shutouts") or 0),
+            "wjc_sv_pct": p.get("tournament_sv_pct"),
+            "wjc_team": str(p.get("wjc_country_label") or ""),
+            "wjc_result": wjc_stats["result"],
+            "wjc_year": int(season_sy),
+            "wjc_stock_delta": int(p.get("stock_delta") or 0),
+            "wjc_performance_grade": impact.get("performance_grade"),
+            "wjc_summary": impact.get("summary"),
+            "wjc_ovr_delta": impact.get("ovr_delta"),
+            "wjc_potential_delta": impact.get("potential_delta"),
+            "wjc_ovr_before": impact.get("ovr_before"),
+            "wjc_ovr_after": impact.get("ovr_after"),
+            "wjc_potential_before": impact.get("potential_before"),
+            "wjc_potential_after": impact.get("potential_after"),
+            "wjc_stats": wjc_stats,
+        }
+    session.wjc_prospect_tournament_results = stored
 
 
 def _persist_wjc_stock_to_draft_class(
@@ -12688,6 +13011,8 @@ def _persist_wjc_stock_to_draft_class(
     if bool(bundle.get("stock_evaluated")):
         evaluated.add(int(season_sy))
         return {}
+
+    medals = dict(bundle.get("medals") or {})
 
     invalidate_session_payload_caches(session, reason="wjc_pre")
     board_before = build_draft_class_rankings(session, sim)
@@ -12718,18 +13043,24 @@ def _persist_wjc_stock_to_draft_class(
         boosts[key] = float(boosts.get(key, 0.0)) + float(stock_delta) * 1.0
         rank_changes[key] = {"before": rank_before, "stock_delta": stock_delta}
 
-    if not rank_changes:
-        evaluated.add(int(season_sy))
-        bundle["stock_evaluated"] = True
-        session.wjc_tournament_bundle = bundle
-        return {}
+    impacts = _apply_wjc_development_to_prospects(session, prospects_stocked, medals=medals)
+    _store_wjc_tournament_results_on_session(
+        session,
+        prospects_stocked,
+        season_sy=season_sy,
+        medals=medals,
+        impacts=impacts,
+    )
 
-    session.wjc_draft_score_boosts = boosts
-    _apply_wjc_development_to_prospects(session, prospects_stocked)
     evaluated.add(int(season_sy))
     session.wjc_stock_evaluated_seasons = evaluated
     bundle["stock_evaluated"] = True
     session.wjc_tournament_bundle = bundle
+
+    if not rank_changes:
+        return {}
+
+    session.wjc_draft_score_boosts = boosts
 
     invalidate_session_payload_caches(session, reason="wjc_post")
     board_after = build_draft_class_rankings(session, sim)
@@ -12818,27 +13149,26 @@ def _collect_user_wjc_prospects(session: FranchiseSession, rng: random.Random) -
     if ut is None:
         return out
     loans = getattr(session, "wjc_nhl_u20_loan", None) or {}
+    sy = int(session.season_calendar_year)
+    cutoff = _wjc_eligibility_cutoff(sy)
 
-    def _row(p: Any, *, roster: str) -> None:
+    def _row(p: Any, *, roster: str, depth_rank: int) -> None:
         if getattr(p, "retired", False):
             return
         ident = getattr(p, "identity", None)
         if ident is None:
             return
-        age = int(getattr(ident, "age", 99) or 99)
-        if age > 20:
+        if not _wjc_age_eligible(p, sy):
             return
         pid = str(getattr(p, "id", "") or "")
         nm = str(getattr(ident, "name", None) or "?")
         bc = str(getattr(ident, "birth_country", "") or "")
-        code = _wjc_country_for_birth(rng, bc)
+        code = _wjc_resolve_country(p, rng)
         if not _country_in_wjc_pool(code):
-            # If the country is not in this year's tournament field, player does not participate.
             return
         lab = _wjc_country_label(code)
-        ov = _player_ovr01(p)
-        cut = 0.62 + 0.08 * rng.random()
-        made = bool(ov >= cut or rng.random() < 0.28)
+        age = _wjc_player_age_on(p, cutoff)
+        made = _wjc_camp_make_team(player=p, row=None, rng=rng, depth_rank=depth_rank)
         note = (
             f"Named to {lab} U20 national roster."
             if made
@@ -12858,13 +13188,19 @@ def _collect_user_wjc_prospects(session: FranchiseSession, rng: random.Random) -
             }
         )
 
-    for p in getattr(ut, "ahl_roster", None) or []:
-        _row(p, roster="AHL")
+    ahl = list(getattr(ut, "ahl_roster", None) or [])
+    for idx, p in enumerate(sorted(ahl, key=lambda x: -_player_ovr01(x))):
+        _row(p, roster="AHL", depth_rank=idx)
 
-    for p in getattr(ut, "roster", None) or []:
-        if not loans.get(str(getattr(p, "id", "") or ""), False):
-            continue
-        _row(p, roster="NHL (loaned)")
+    nhl_loaned = [
+        p
+        for p in getattr(ut, "roster", None) or []
+        if _wjc_loan_mode_active(loans, str(getattr(p, "id", "") or ""))
+    ]
+    for idx, p in enumerate(sorted(nhl_loaned, key=lambda x: -_player_ovr01(x))):
+        mode = loans.get(str(getattr(p, "id", "") or ""))
+        roster_label = "NHL (loaned)" if mode in (True, "full", "loan") else "NHL (RR only)"
+        _row(p, roster=roster_label, depth_rank=idx)
 
     out.sort(key=lambda x: (-int(x.get("made_wjc_team") or 0), str(x.get("roster") or ""), str(x.get("name") or "")))
     return out
@@ -12919,6 +13255,229 @@ def _rr_standings_from_slice(codes: List[str], label_by: Dict[str, str], rr_slic
     return rows
 
 
+def _wjc_is_real_prospect(row: Dict[str, Any]) -> bool:
+    pid = str(row.get("player_id") or "")
+    if pid.startswith("wjc_npc_"):
+        return False
+    return not bool(row.get("is_npc")) and str(row.get("prospect_classification") or "") != "tournament_npc"
+
+
+def _wjc_client_visible_prospects(rows: Any) -> List[Dict[str, Any]]:
+    """Strip filler NPCs from payloads sent to the WJC UI."""
+    return [dict(r) for r in (rows or []) if isinstance(r, dict) and _wjc_is_real_prospect(r)]
+
+
+def _wjc_client_visible_player_stats(
+    stats: Any,
+    prospects: Any,
+) -> List[Dict[str, Any]]:
+    visible_ids = {str(r.get("player_id") or "") for r in _wjc_client_visible_prospects(prospects)}
+    out: List[Dict[str, Any]] = []
+    for row in stats or []:
+        if not isinstance(row, dict):
+            continue
+        pid = str(row.get("player_id") or "")
+        if not pid or pid.startswith("wjc_npc_"):
+            continue
+        if visible_ids and pid not in visible_ids:
+            continue
+        out.append(dict(row))
+    return out
+
+
+def _wjc_real_count(rows: List[Dict[str, Any]]) -> int:
+    return sum(1 for r in rows if _wjc_is_real_prospect(r))
+
+
+def _wjc_goalie_count(rows: List[Dict[str, Any]]) -> int:
+    return sum(1 for r in rows if str(r.get("position") or "F").upper() == "G")
+
+
+def _wjc_country_depth_ovr_base(real_count: int) -> float:
+    if real_count >= 20:
+        return 0.74
+    if real_count >= 12:
+        return 0.66
+    if real_count >= 8:
+        return 0.58
+    if real_count >= 4:
+        return 0.52
+    return 0.47
+
+
+def _wjc_npc_name(rng: random.Random, code: str) -> str:
+    try:
+        from services.player_bio_parser import WJC_CODE_TO_NAME_NAT
+        from app.sim_engine.generation.name_generator import NAME_POOLS
+
+        nat = WJC_CODE_TO_NAME_NAT.get(str(code or "").upper(), "Canada")
+        pool = NAME_POOLS.get(nat) or NAME_POOLS.get("Canada") or {}
+        first = rng.choice(pool.get("first") or ["Alex"])
+        last = rng.choice(pool.get("last") or ["Smith"])
+        return f"{first} {last}"
+    except Exception:
+        return f"{rng.choice(['Alex', 'Erik', 'Janis', 'Mika'])} {rng.choice(['Smith', 'Berzins', 'Karlsson'])}"
+
+
+def _wjc_build_board_row(
+    entry: Dict[str, Any],
+    *,
+    code: str,
+    label_by: Dict[str, str],
+    nat: str,
+    cutoff: date,
+    rank: int,
+) -> Dict[str, Any]:
+    return {
+        "player_id": str(entry.get("key") or entry.get("player_id") or entry.get("id") or ""),
+        "draft_prospect_id": str(entry.get("key") or entry.get("player_id") or entry.get("id") or ""),
+        "prospect_classification": "draft_eligible",
+        "name": str(entry.get("name") or "?"),
+        "wjc_country": code,
+        "wjc_country_label": label_by.get(code, code),
+        "position": str(entry.get("position") or "F")[:3].upper(),
+        "age": _wjc_player_age_on(entry, cutoff),
+        "nationality": nat,
+        "is_user_prospect": False,
+        "stock_rank_before": rank,
+        "stock_rank_after": rank,
+        "stock_delta": 0,
+        "ovr": max(0.45, min(0.95, 1.0 - (rank / 250.0))),
+        "junior_league": str(entry.get("league") or entry.get("league_name") or ""),
+        "junior_team": str(entry.get("team") or entry.get("team_name") or ""),
+        "junior_gp": int(entry.get("gp") or entry.get("games_played") or 0),
+        "junior_g": int(entry.get("goals") or entry.get("g") or 0),
+        "junior_a": int(entry.get("assists") or entry.get("a") or 0),
+        "junior_pts": int(entry.get("points") or entry.get("pts") or 0),
+        "scouting_confidence": entry.get("scouting_confidence"),
+        "camp_score": 0.0,
+    }
+
+
+def _wjc_stamp_camp_scores(rows: List[Dict[str, Any]]) -> None:
+    for row in rows:
+        row["camp_score"] = round(_wjc_camp_score(row=row), 4)
+
+
+def _wjc_add_npc_prospect(
+    *,
+    rng: random.Random,
+    code: str,
+    label_by: Dict[str, str],
+    idx: int,
+    position: str,
+    ovr_base: float,
+    seen_ids: set,
+) -> Optional[Dict[str, Any]]:
+    pid = f"wjc_npc_{code}_{idx}"
+    if pid in seen_ids:
+        return None
+    seen_ids.add(pid)
+    rank = max(30, min(190, int((1.0 - ovr_base) * 250) + rng.randint(-15, 15)))
+    ovr = max(0.42, min(0.88, ovr_base + rng.uniform(-0.06, 0.06)))
+    row = {
+        "player_id": pid,
+        "draft_prospect_id": None,
+        "prospect_classification": "tournament_npc",
+        "name": _wjc_npc_name(rng, code),
+        "wjc_country": code,
+        "wjc_country_label": label_by.get(code, code),
+        "position": str(position or "F")[:3].upper(),
+        "age": rng.randint(18, 20),
+        "nationality": label_by.get(code, code),
+        "is_user_prospect": False,
+        "stock_rank_before": rank,
+        "stock_rank_after": rank,
+        "stock_delta": 0,
+        "ovr": ovr,
+        "is_npc": True,
+        "camp_score": round(ovr * 0.52, 4),
+    }
+    return row
+
+
+def _wjc_finalize_country_rosters(
+    by_code: Dict[str, List[Dict[str, Any]]],
+    all_rows: List[Dict[str, Any]],
+    codes: List[str],
+    label_by: Dict[str, str],
+    rng: random.Random,
+    seen_ids: set,
+) -> None:
+    from services.player_bio_parser import WJC_REAL_MIN_BEFORE_FILLER, WJC_ROSTER_MAX, WJC_ROSTER_MIN
+
+    for c in codes:
+        roster = by_code[c]
+        real_count = _wjc_real_count(roster)
+        ovr_base = _wjc_country_depth_ovr_base(real_count)
+
+        while _wjc_goalie_count(roster) < 2 and len(roster) < WJC_ROSTER_MAX:
+            idx = len(roster)
+            row = _wjc_add_npc_prospect(
+                rng=rng,
+                code=c,
+                label_by=label_by,
+                idx=idx,
+                position="G",
+                ovr_base=max(0.44, ovr_base - 0.04),
+                seen_ids=seen_ids,
+            )
+            if row is None:
+                break
+            roster.append(row)
+            all_rows.append(row)
+
+        if real_count >= WJC_REAL_MIN_BEFORE_FILLER:
+            while len(roster) < WJC_ROSTER_MIN and len(roster) < WJC_ROSTER_MAX:
+                idx = len(roster)
+                pos = rng.choice(["F", "F", "F", "D", "D"])
+                row = _wjc_add_npc_prospect(
+                    rng=rng,
+                    code=c,
+                    label_by=label_by,
+                    idx=idx,
+                    position=pos,
+                    ovr_base=ovr_base,
+                    seen_ids=seen_ids,
+                )
+                if row is None:
+                    break
+                roster.append(row)
+                all_rows.append(row)
+
+        if len(roster) < WJC_ROSTER_MIN:
+            while len(roster) < WJC_ROSTER_MIN and len(roster) < WJC_ROSTER_MAX:
+                idx = len(roster)
+                pos = "G" if _wjc_goalie_count(roster) < 2 else rng.choice(["F", "F", "D"])
+                row = _wjc_add_npc_prospect(
+                    rng=rng,
+                    code=c,
+                    label_by=label_by,
+                    idx=idx,
+                    position=pos,
+                    ovr_base=ovr_base - 0.03,
+                    seen_ids=seen_ids,
+                )
+                if row is None:
+                    break
+                roster.append(row)
+                all_rows.append(row)
+
+        _wjc_stamp_camp_scores(roster)
+        if len(roster) <= WJC_ROSTER_MAX:
+            by_code[c] = roster
+            continue
+
+        goalies = [r for r in roster if str(r.get("position") or "F").upper() == "G"]
+        skaters = [r for r in roster if str(r.get("position") or "F").upper() != "G"]
+        goalies.sort(key=lambda x: -float(x.get("camp_score") or x.get("ovr") or 0))
+        skaters.sort(key=lambda x: -float(x.get("camp_score") or x.get("ovr") or 0))
+        keep_goalies = goalies[:2]
+        keep_skaters = skaters[: max(0, WJC_ROSTER_MAX - len(keep_goalies))]
+        by_code[c] = keep_goalies + keep_skaters
+        by_code[c].sort(key=lambda x: -float(x.get("camp_score") or x.get("ovr") or 0))
+
+
 def _collect_wjc_tournament_prospects(
     session: FranchiseSession,
     rng: random.Random,
@@ -12968,16 +13527,19 @@ def _collect_wjc_tournament_prospects(
             "nationality": str(p.get("nationality") or ""),
             "is_user_prospect": True,
             "roster": str(p.get("roster") or ""),
+            "wjc_loan_mode": (getattr(session, "wjc_nhl_u20_loan", None) or {}).get(pid) or "",
         }
         row = _wjc_enrich_prospect_row(session, row, by_key, rank_by_key, ut_abbr)
         by_code[c].append(row)
         all_rows.append(row)
 
+    sy = int(session.season_calendar_year)
+    cutoff = _wjc_eligibility_cutoff(sy)
+
     for entry in board_entries:
         if not isinstance(entry, dict):
             continue
-        age = int(entry.get("age") or 99)
-        if age > 20:
+        if not _wjc_age_eligible(entry, sy):
             continue
         nat = str(
             entry.get("nationality")
@@ -12985,13 +13547,12 @@ def _collect_wjc_tournament_prospects(
             or entry.get("birth_country")
             or ""
         )
-        code = _wjc_country_for_birth(rng, nat)
+        code = _wjc_resolve_country_from_row(entry, rng)
         if not code or code not in by_code:
             continue
         pid = str(entry.get("key") or entry.get("player_id") or entry.get("id") or "")
         if not pid or pid in seen_ids:
             continue
-        seen_ids.add(pid)
         stock = entry.get("draft_stock") if isinstance(entry.get("draft_stock"), dict) else {}
         rank = int(entry.get("rank") or stock.get("current_rank") or 999)
         row = {
@@ -13002,7 +13563,7 @@ def _collect_wjc_tournament_prospects(
             "wjc_country": code,
             "wjc_country_label": label_by.get(code, code),
             "position": str(entry.get("position") or "F")[:3].upper(),
-            "age": age,
+            "age": _wjc_player_age_on(entry, cutoff),
             "nationality": nat,
             "is_user_prospect": False,
             "stock_rank_before": rank,
@@ -13017,42 +13578,63 @@ def _collect_wjc_tournament_prospects(
             "junior_pts": int(entry.get("points") or entry.get("pts") or 0),
             "scouting_confidence": entry.get("scouting_confidence"),
         }
+        if not _wjc_camp_make_team(player=None, row=row, rng=rng, depth_rank=len(by_code[code])):
+            continue
+        seen_ids.add(pid)
+        row["camp_score"] = round(_wjc_camp_score(row=row), 4)
         by_code[code].append(row)
         all_rows.append(row)
 
-    first_names = ["Alex", "Marcus", "Erik", "Liam", "Noah", "Owen", "Kai", "Mika", "Joonas", "Ivan"]
-    last_names = ["Smith", "Johnson", "Karlsson", "Mueller", "Novak", "Silva", "Berg", "Petrov", "Lee", "Costa"]
-    for c in codes:
-        while len(by_code[c]) < 14:
-            idx = len(by_code[c])
-            pid = f"wjc_npc_{c}_{idx}"
-            if pid in seen_ids:
+    pending_board: List[Tuple[str, Dict[str, Any], str, int]] = []
+    for entry in board_entries:
+        if not isinstance(entry, dict):
+            continue
+        if not _wjc_age_eligible(entry, sy):
+            continue
+        pid = str(entry.get("key") or entry.get("player_id") or entry.get("id") or "")
+        if not pid or pid in seen_ids:
+            continue
+        nat = str(
+            entry.get("nationality")
+            or entry.get("country")
+            or entry.get("birth_country")
+            or ""
+        )
+        code = _wjc_resolve_country_from_row(entry, rng)
+        if not code or code not in by_code:
+            continue
+        stock = entry.get("draft_stock") if isinstance(entry.get("draft_stock"), dict) else {}
+        rank = int(entry.get("rank") or stock.get("current_rank") or 999)
+        pending_board.append((code, entry, nat, rank))
+
+    for code in codes:
+        if _wjc_real_count(by_code[code]) >= 8:
+            continue
+        for c_code, entry, nat, rank in pending_board:
+            if c_code != code:
+                continue
+            pid = str(entry.get("key") or entry.get("player_id") or entry.get("id") or "")
+            if not pid or pid in seen_ids:
+                continue
+            row = _wjc_build_board_row(
+                entry, code=code, label_by=label_by, nat=nat, cutoff=cutoff, rank=rank
+            )
+            if not _wjc_camp_make_team(
+                player=None, row=row, rng=rng, depth_rank=len(by_code[code]), relaxed=True
+            ):
                 continue
             seen_ids.add(pid)
-            nm = f"{rng.choice(first_names)} {rng.choice(last_names)}"
-            rank = 40 + rng.randint(0, 160)
-            row = {
-                "player_id": pid,
-                "draft_prospect_id": None,
-                "prospect_classification": "tournament_npc",
-                "name": nm,
-                "wjc_country": c,
-                "wjc_country_label": label_by.get(c, c),
-                "position": rng.choice(["F", "F", "F", "D", "D", "G"]),
-                "age": rng.randint(18, 20),
-                "nationality": label_by.get(c, c),
-                "is_user_prospect": False,
-                "stock_rank_before": rank,
-                "stock_rank_after": rank,
-                "stock_delta": 0,
-                "ovr": max(0.45, min(0.9, 1.0 - (rank / 250.0))),
-                "is_npc": True,
-            }
-            by_code[c].append(row)
+            row["camp_score"] = round(_wjc_camp_score(row=row), 4)
+            by_code[code].append(row)
             all_rows.append(row)
+            if _wjc_real_count(by_code[code]) >= 8:
+                break
+
+    _wjc_finalize_country_rosters(by_code, all_rows, codes, label_by, rng, seen_ids)
 
     for c in codes:
-        by_code[c].sort(key=lambda x: -float(x.get("ovr") or 0))
+        by_code[c].sort(key=lambda x: -float(x.get("camp_score") or x.get("ovr") or 0))
+    all_rows = [row for c in codes for row in by_code[c]]
     return all_rows, by_code
 
 
@@ -13064,18 +13646,127 @@ def _wjc_skater_pool(prospects_by_code: Dict[str, List[Dict[str, Any]]], team_co
     ]
 
 
+def _wjc_goalie_pool(prospects_by_code: Dict[str, List[Dict[str, Any]]], team_code: str) -> List[Dict[str, Any]]:
+    return [
+        p
+        for p in prospects_by_code.get(team_code, [])
+        if str(p.get("position") or "F").upper() == "G"
+    ]
+
+
+def _wjc_team_strength(prospects_by_code: Dict[str, List[Dict[str, Any]]], team_code: str) -> float:
+    skaters = sorted(
+        _wjc_skater_pool(prospects_by_code, team_code),
+        key=lambda p: -float(p.get("ovr") or 0.5),
+    )[:12]
+    goalies = sorted(
+        _wjc_goalie_pool(prospects_by_code, team_code),
+        key=lambda p: -float(p.get("ovr") or 0.5),
+    )[:2]
+    sk_avg = sum(float(p.get("ovr") or 0.5) for p in skaters) / max(1, len(skaters))
+    g_avg = max((float(g.get("ovr") or 0.5) for g in goalies), default=0.52)
+    return sk_avg * 0.84 + g_avg * 0.16
+
+
+def _wjc_simulate_game_goals(
+    rng: random.Random,
+    home: str,
+    away: str,
+    prospects_by_code: Dict[str, List[Dict[str, Any]]],
+    *,
+    is_playoff: bool = False,
+) -> Tuple[int, int]:
+    hr = _wjc_team_strength(prospects_by_code, home)
+    ar = _wjc_team_strength(prospects_by_code, away)
+    diff = hr - ar
+    base = 2.6 if is_playoff else 2.4
+    hg_f = base + diff * 3.8 + rng.gauss(0, 0.85)
+    ag_f = base - diff * 3.8 + rng.gauss(0, 0.85)
+    if is_playoff:
+        hg_f += 0.25
+        ag_f += 0.15
+    hg = max(0, int(round(hg_f)))
+    ag = max(0, int(round(ag_f)))
+    if is_playoff:
+        if hg == ag:
+            if diff >= 0:
+                hg += 1
+            else:
+                ag += 1
+        hg = max(1, min(8, hg))
+        ag = max(0, min(7, ag))
+    else:
+        if hg == ag:
+            if rng.random() < 0.5:
+                hg += 1
+            else:
+                ag += 1
+        hg = max(1, min(7, hg))
+        ag = max(0, min(6, ag))
+    return hg, ag
+
+
+def _wjc_camp_score(
+    *,
+    player: Any = None,
+    row: Optional[Dict[str, Any]] = None,
+) -> float:
+    ov = _player_ovr01(player) if player is not None else float((row or {}).get("ovr") or 0.5)
+    r = row or {}
+    gp = int(r.get("junior_gp") or r.get("gp") or r.get("games_played") or 0)
+    pts = int(r.get("junior_pts") or r.get("points") or r.get("pts") or 0)
+    ppg = float(pts) / float(max(1, gp)) if gp else float(r.get("ppg") or 0)
+    rank = int(r.get("stock_rank_before") or r.get("rank") or 120)
+    return ov * 0.52 + min(1.15, ppg * 0.38) + max(0.0, (85 - rank) / 220.0)
+
+
+def _wjc_camp_make_team(
+    *,
+    player: Any,
+    row: Optional[Dict[str, Any]],
+    rng: random.Random,
+    depth_rank: int,
+    relaxed: bool = False,
+) -> bool:
+    score = _wjc_camp_score(player=player, row=row)
+    cutoff = 0.56 + min(0.12, depth_rank * 0.008)
+    if relaxed:
+        cutoff -= 0.10
+    jitter = rng.uniform(0.0, 0.05 if not relaxed else 0.02)
+    return score >= cutoff + jitter
+
+
+def _wjc_loan_mode_active(loans: Dict[str, Any], player_id: str) -> bool:
+    mode = loans.get(str(player_id or ""))
+    return mode in (True, "full", "partial", "loan", "loan_partial")
+
+
+def _wjc_nhl_roster_strength_by_code(session: FranchiseSession, code: str) -> float:
+    total = 0.0
+    for tm in (session.team_by_id or {}).values():
+        for p in getattr(tm, "roster", None) or []:
+            if getattr(p, "retired", False):
+                continue
+            nat_code = _wjc_resolve_country(p, session.sim.rng if getattr(session, "sim", None) else random.Random(1))
+            if nat_code != code:
+                continue
+            total += _player_ovr01(p)
+    return total
+
+
 def _wjc_distribute_team_scoring(
     rng: random.Random,
     skaters: List[Dict[str, Any]],
     goals: int,
     *,
     team_won: bool,
+    team_goals_against: int = 0,
 ) -> List[Dict[str, Any]]:
-    pool = skaters[:10] if skaters else []
+    pool = sorted(skaters, key=lambda s: -float(s.get("ovr") or 0.5))[:12] if skaters else []
     if not pool or goals <= 0:
         return []
 
-    weights = [max(0.12, float(s.get("ovr") or 0.5)) for s in pool]
+    weights = [max(0.08, float(s.get("ovr") or 0.5) ** 1.35) for s in pool]
     tallies: Dict[str, Dict[str, int]] = {
         str(s["player_id"]): {"g": 0, "a": 0, "sog": 0, "plus_minus": 0} for s in pool
     }
@@ -13084,14 +13775,22 @@ def _wjc_distribute_team_scoring(
         scorer = rng.choices(pool, weights=weights, k=1)[0]
         sid = str(scorer["player_id"])
         tallies[sid]["g"] += 1
-        if rng.random() < 0.82:
-            assister = rng.choices(pool, weights=weights, k=1)[0]
-            tallies[str(assister["player_id"])]["a"] += 1
+        if rng.random() < 0.84:
+            assist_pool = [s for s in pool if str(s["player_id"]) != sid]
+            if assist_pool:
+                aw = [max(0.08, float(s.get("ovr") or 0.5) ** 1.2) for s in assist_pool]
+                assister = rng.choices(assist_pool, weights=aw, k=1)[0]
+                tallies[str(assister["player_id"])]["a"] += 1
 
+    ga_factor = max(0, int(team_goals_against))
     for s in pool:
         sid = str(s["player_id"])
-        tallies[sid]["sog"] = rng.randint(0, 5) + tallies[sid]["g"] * 2
-        tallies[sid]["plus_minus"] = rng.randint(0, 2) if team_won else -rng.randint(0, 2)
+        ovr = float(s.get("ovr") or 0.5)
+        tallies[sid]["sog"] = int(rng.randint(0, 3) + tallies[sid]["g"] * 2 + ovr * 4)
+        if team_won:
+            tallies[sid]["plus_minus"] = rng.randint(0, 2) + (1 if tallies[sid]["g"] else 0)
+        else:
+            tallies[sid]["plus_minus"] = -rng.randint(0, 1 + min(2, ga_factor // 2))
 
     lines: List[Dict[str, Any]] = []
     for s in pool:
@@ -13118,6 +13817,38 @@ def _wjc_distribute_team_scoring(
     return lines
 
 
+def _wjc_distribute_goalie_line(
+    rng: random.Random,
+    goalies: List[Dict[str, Any]],
+    *,
+    team_won: bool,
+    goals_against: int,
+    shots_against: int,
+) -> Optional[Dict[str, Any]]:
+    if not goalies:
+        return None
+    starter = sorted(goalies, key=lambda g: -float(g.get("ovr") or 0.5))[0]
+    sv_pct_base = 0.86 + (float(starter.get("ovr") or 0.5) - 0.5) * 0.18
+    if team_won:
+        sv_pct_base += 0.04
+    sv_pct = max(0.78, min(0.96, sv_pct_base + rng.uniform(-0.04, 0.04)))
+    saves = max(0, int(round(shots_against * sv_pct)))
+    return {
+        "player_id": str(starter.get("player_id") or ""),
+        "name": str(starter.get("name") or "?"),
+        "wjc_country": str(starter.get("wjc_country") or ""),
+        "position": "G",
+        "w": 1 if team_won else 0,
+        "l": 0 if team_won else 1,
+        "ga": int(goals_against),
+        "sa": int(shots_against),
+        "sv": int(saves),
+        "sv_pct": round(sv_pct, 3),
+        "shutout": bool(team_won and goals_against == 0),
+        "is_user_prospect": bool(starter.get("is_user_prospect")),
+    }
+
+
 def _build_wjc_game_box_score(
     rng: random.Random,
     game: Dict[str, Any],
@@ -13128,17 +13859,42 @@ def _build_wjc_game_box_score(
     hg = int(game.get("home_goals") or 0)
     ag = int(game.get("away_goals") or 0)
     home_won = hg > ag
+    home_skaters = _wjc_skater_pool(prospects_by_code, home)
+    away_skaters = _wjc_skater_pool(prospects_by_code, away)
+    if bool(game.get("is_playoff")):
+        home_skaters = [s for s in home_skaters if str(s.get("wjc_loan_mode") or "") != "partial"]
+        away_skaters = [s for s in away_skaters if str(s.get("wjc_loan_mode") or "") != "partial"]
     home_lines = _wjc_distribute_team_scoring(
-        rng, _wjc_skater_pool(prospects_by_code, home), hg, team_won=home_won
+        rng, home_skaters, hg, team_won=home_won, team_goals_against=ag
     )
     away_lines = _wjc_distribute_team_scoring(
-        rng, _wjc_skater_pool(prospects_by_code, away), ag, team_won=not home_won
+        rng, away_skaters, ag, team_won=not home_won, team_goals_against=hg
+    )
+    home_shots = sum(int(r.get("sog") or 0) for r in home_lines) + hg * 3 + rng.randint(8, 16)
+    away_shots = sum(int(r.get("sog") or 0) for r in away_lines) + ag * 3 + rng.randint(8, 16)
+    home_goalie = _wjc_distribute_goalie_line(
+        rng,
+        _wjc_goalie_pool(prospects_by_code, home),
+        team_won=home_won,
+        goals_against=ag,
+        shots_against=away_shots,
+    )
+    away_goalie = _wjc_distribute_goalie_line(
+        rng,
+        _wjc_goalie_pool(prospects_by_code, away),
+        team_won=not home_won,
+        goals_against=hg,
+        shots_against=home_shots,
     )
     return {
         **game,
+        "home_shots": home_shots,
+        "away_shots": away_shots,
         "box_score": {
             "home": home_lines,
             "away": away_lines,
+            "home_goalie": home_goalie,
+            "away_goalie": away_goalie,
         },
     }
 
@@ -13167,6 +13923,12 @@ def _aggregate_wjc_player_stats(games: List[Dict[str, Any]]) -> List[Dict[str, A
                         "pts": 0,
                         "sog": 0,
                         "plus_minus": 0,
+                        "w": 0,
+                        "l": 0,
+                        "ga": 0,
+                        "sa": 0,
+                        "sv": 0,
+                        "shutouts": 0,
                         "is_user_prospect": bool(row.get("is_user_prospect")),
                     }
                     agg[pid] = cur
@@ -13176,29 +13938,92 @@ def _aggregate_wjc_player_stats(games: List[Dict[str, Any]]) -> List[Dict[str, A
                 cur["pts"] += int(row.get("pts") or 0)
                 cur["sog"] += int(row.get("sog") or 0)
                 cur["plus_minus"] += int(row.get("plus_minus") or 0)
+        for gside in ("home_goalie", "away_goalie"):
+            grow = box.get(gside)
+            if not isinstance(grow, dict) or not grow.get("player_id"):
+                continue
+            pid = str(grow.get("player_id") or "")
+            cur = agg.get(pid)
+            if cur is None:
+                cur = {
+                    "player_id": pid,
+                    "name": str(grow.get("name") or "?"),
+                    "wjc_country": str(grow.get("wjc_country") or ""),
+                    "position": "G",
+                    "gp": 0,
+                    "g": 0,
+                    "a": 0,
+                    "pts": 0,
+                    "sog": 0,
+                    "plus_minus": 0,
+                    "w": 0,
+                    "l": 0,
+                    "ga": 0,
+                    "sa": 0,
+                    "sv": 0,
+                    "shutouts": 0,
+                    "is_user_prospect": bool(grow.get("is_user_prospect")),
+                }
+                agg[pid] = cur
+            cur["gp"] += 1
+            cur["w"] += int(grow.get("w") or 0)
+            cur["l"] += int(grow.get("l") or 0)
+            cur["ga"] += int(grow.get("ga") or 0)
+            cur["sa"] += int(grow.get("sa") or 0)
+            cur["sv"] += int(grow.get("sv") or 0)
+            if bool(grow.get("shutout")):
+                cur["shutouts"] += 1
+            if cur["sa"] > 0:
+                cur["sv_pct"] = round(float(cur["sv"]) / float(cur["sa"]), 3)
     rows = list(agg.values())
     rows.sort(
         key=lambda r: (
+            0 if str(r.get("position") or "").upper() == "G" else -1,
             -int(r.get("pts", 0) or 0),
+            -int(r.get("sv", 0) or 0),
             -int(r.get("g", 0) or 0),
-            -int(r.get("a", 0) or 0),
             str(r.get("name") or ""),
         )
     )
     return rows
 
 
+def _wjc_medal_tier_for_country(
+    code: str,
+    nat_label: str,
+    medals: Dict[str, Any],
+    medal_labels: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Resolve gold/silver/bronze for a WJC nation (prefer country codes)."""
+    c = str(code or "").upper()
+    if c and medals:
+        for tier, val in medals.items():
+            if str(val or "").upper() == c:
+                return str(tier or "").lower()
+    label = str(nat_label or "").lower()
+    if label and medal_labels:
+        by_label = {str(v or "").lower(): str(k or "").lower() for k, v in medal_labels.items()}
+        tier = by_label.get(label)
+        if tier:
+            return tier
+        # Legacy bundles sometimes stored federation codes in medal_labels values.
+        for tier, val in medal_labels.items():
+            if str(val or "").upper() == c:
+                return str(tier or "").lower()
+    return ""
+
+
 def _apply_wjc_stock_after(
     prospects: List[Dict[str, Any]],
     player_stats: List[Dict[str, Any]],
     standings: List[Dict[str, Any]],
-    medal_labels: Dict[str, Any],
+    medals: Dict[str, Any],
     *,
     day_multiplier: float = 1.0,
+    medal_labels: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     stats_by_id = {str(r.get("player_id") or ""): r for r in player_stats}
     standing_by_code = {str(r.get("code") or ""): r for r in standings}
-    medal_map = {str(v or "").lower(): k for k, v in (medal_labels or {}).items()}
 
     out: List[Dict[str, Any]] = []
     for p in prospects:
@@ -13225,24 +14050,59 @@ def _apply_wjc_stock_after(
         goals = int(st.get("g") or 0)
         plus = int(st.get("plus_minus") or 0)
         code = str(row.get("wjc_country") or "")
-        nat_label = str(row.get("wjc_country_label") or "").lower()
+        nat_label = str(row.get("wjc_country_label") or "")
+        pos = str(st.get("position") or row.get("position") or "F").upper()
+        is_goalie = pos == "G"
         team_row = standing_by_code.get(code) or {}
         team_wins = int(team_row.get("w") or 0)
         team_losses = int(team_row.get("l") or 0)
 
         delta = 0
+        reason_bits: List[str] = []
         if gp > 0:
-            delta -= goals * 3
-            delta -= max(0, pts - goals) * 2
-            delta -= plus * 1
+            if is_goalie:
+                gw = int(st.get("w") or 0)
+                gl = int(st.get("l") or 0)
+                shutouts = int(st.get("shutouts") or 0)
+                try:
+                    sv_pct = float(st.get("sv_pct") or 0.0)
+                except (TypeError, ValueError):
+                    sv_pct = 0.0
+                delta -= gw * 4
+                delta += gl * 2
+                delta -= shutouts * 6
+                if sv_pct >= 0.930:
+                    delta -= 8
+                elif sv_pct >= 0.910:
+                    delta -= 4
+                elif sv_pct > 0.0 and sv_pct < 0.880:
+                    delta += 4
+                if gw or gl:
+                    reason_bits.append(f"{gw}-{gl} W-L")
+                if shutouts:
+                    reason_bits.append(f"{shutouts} SO")
+                if sv_pct > 0:
+                    reason_bits.append(f"{sv_pct:.3f} SV%")
+            else:
+                delta -= goals * 3
+                delta -= max(0, pts - goals) * 2
+                delta -= plus * 1
+                if pts:
+                    reason_bits.append(f"{pts}P")
+                if goals:
+                    reason_bits.append(f"{goals}G")
             delta -= team_wins * 2
             delta += team_losses * 2
-            if nat_label and medal_map.get(nat_label) == "gold":
+            medal_tier = _wjc_medal_tier_for_country(code, nat_label, medals, medal_labels)
+            if medal_tier == "gold":
                 delta -= 18
-            elif nat_label and medal_map.get(nat_label) == "silver":
+                reason_bits.append("Gold medal")
+            elif medal_tier == "silver":
                 delta -= 12
-            elif nat_label and medal_map.get(nat_label) == "bronze":
+                reason_bits.append("Silver medal")
+            elif medal_tier == "bronze":
                 delta -= 8
+                reason_bits.append("Bronze medal")
 
         delta = int(round(delta * max(1.0, float(day_multiplier))))
         after = max(1, base_rank + delta)
@@ -13251,8 +14111,17 @@ def _apply_wjc_stock_after(
         row["tournament_pts"] = pts
         row["tournament_g"] = goals
         row["tournament_gp"] = gp
+        row["tournament_a"] = max(0, pts - goals)
+        row["tournament_plus_minus"] = plus
+        if is_goalie:
+            row["tournament_w"] = int(st.get("w") or 0)
+            row["tournament_l"] = int(st.get("l") or 0)
+            row["tournament_shutouts"] = int(st.get("shutouts") or 0)
+            row["tournament_sv_pct"] = st.get("sv_pct")
         row["team_wins"] = team_wins
         row["team_losses"] = team_losses
+        if reason_bits:
+            row["stock_reason"] = "World Juniors — " + ", ".join(reason_bits)
         out.append(row)
     out.sort(key=lambda x: (-int(x.get("stock_delta") or 0), str(x.get("name") or "")))
     return out
@@ -13306,17 +14175,14 @@ def _simulate_wjc_national_bundle(session: FranchiseSession, rng: random.Random)
     codes = [c for c, _ in countries]
     label_by = {c: lab for c, lab in countries}
 
+    all_prospects, prospects_by_code = _collect_wjc_tournament_prospects(session, rng, codes, label_by)
+
     rr_games: List[Dict[str, Any]] = []
     rr_days = _wjc_build_rr_schedule(codes, rng)
     for day_idx, day_pairings in enumerate(rr_days, start=1):
         for hi, aj in day_pairings:
             home, away = (hi, aj) if rng.random() < 0.5 else (aj, hi)
-            hg = rng.randint(1, 5)
-            ga = rng.randint(1, 5)
-            if hg == ga:
-                ga = min(6, ga + 1)
-                if hg == ga:
-                    hg = max(1, hg - 1)
+            hg, ga = _wjc_simulate_game_goals(rng, home, away, prospects_by_code, is_playoff=False)
             rr_games.append(
                 {
                     "home": home,
@@ -13337,10 +14203,7 @@ def _simulate_wjc_national_bundle(session: FranchiseSession, rng: random.Random)
 
     def _play_pair(a: str, b: str, label: str, lb: Dict[str, str], *, game_day: int) -> Dict[str, Any]:
         home, away = (a, b) if rng.random() < 0.5 else (b, a)
-        hg = rng.randint(2, 5)
-        ga = rng.randint(1, 4)
-        if hg == ga:
-            hg = min(6, hg + 1)
+        hg, ga = _wjc_simulate_game_goals(rng, home, away, prospects_by_code, is_playoff=True)
         w = home if hg > ga else away
         l = away if hg > ga else home
         return {
@@ -13396,7 +14259,6 @@ def _simulate_wjc_national_bundle(session: FranchiseSession, rng: random.Random)
     }
     medal_labels = {k: label_by.get(v, v) for k, v in medals.items()}
 
-    all_prospects, prospects_by_code = _collect_wjc_tournament_prospects(session, rng, codes, label_by)
     game_rng = random.Random(rng.randint(0, 2**31 - 1))
     rr_games = [_build_wjc_game_box_score(game_rng, g, prospects_by_code) for g in rr_games]
     qf = [_build_wjc_game_box_score(game_rng, g, prospects_by_code) for g in qf]
@@ -13413,7 +14275,7 @@ def _simulate_wjc_national_bundle(session: FranchiseSession, rng: random.Random)
         "tournament_prospects": all_prospects,
         "prospects_by_country": prospects_by_code,
         "rr_days_total": rr_days_total,
-        "wjc_format_version": 2,
+        "wjc_format_version": 4,
     }
 
 
@@ -13475,7 +14337,8 @@ def _wjc_live_tournament_payload(session: FranchiseSession, iso: str, d_idx: int
         po_out["gold"] = po_all.get("gold")
 
     complete = bool(current_day > rr_days_total + 2 and po_all.get("gold"))
-    medals = bundle.get("medal_labels") if complete else {}
+    medals = bundle.get("medals") if complete else {}
+    medal_labels = bundle.get("medal_labels") if complete else {}
     user_prospects = _collect_user_wjc_prospects(session, rng)
 
     all_games = _all_wjc_games_from_bundle(bundle)
@@ -13495,6 +14358,7 @@ def _wjc_live_tournament_payload(session: FranchiseSession, iso: str, d_idx: int
                 standings,
                 medals if complete else {},
                 day_multiplier=1.35,
+                medal_labels=medal_labels if complete else {},
             )
     else:
         prospects_stocked = _apply_wjc_stock_after(
@@ -13503,6 +14367,7 @@ def _wjc_live_tournament_payload(session: FranchiseSession, iso: str, d_idx: int
             standings,
             medals if complete else {},
             day_multiplier=1.35,
+            medal_labels=medal_labels if complete else {},
         )
         if complete:
             sim = getattr(session, "sim", None)
@@ -13538,8 +14403,8 @@ def _wjc_live_tournament_payload(session: FranchiseSession, iso: str, d_idx: int
         "medal_labels": medals if complete else {},
         "medals_final": complete,
         "user_prospects": user_prospects,
-        "tournament_prospects": prospects_stocked,
-        "player_stats": player_stats,
+        "tournament_prospects": _wjc_client_visible_prospects(prospects_stocked),
+        "player_stats": _wjc_client_visible_player_stats(player_stats, prospects_stocked),
         "all_games": visible_games,
         "games_today": games_today,
         "all_games_total": len(all_games),
@@ -13612,7 +14477,9 @@ def _build_wjc_client_payload(session: FranchiseSession) -> Optional[Dict[str, A
                 "medal_labels": {},
                 "medals_final": False,
                 "user_prospects": _collect_user_wjc_prospects(session, rng),
-                "tournament_prospects": list(bundle.get("tournament_prospects") or []),
+                "tournament_prospects": _wjc_client_visible_prospects(
+                    list(bundle.get("tournament_prospects") or [])
+                ),
                 "player_stats": [],
                 "all_games": [],
                 "games_today": [],
@@ -13659,22 +14526,24 @@ def _maybe_enqueue_wjc_loan_decisions(session: FranchiseSession, day_meta: Dict[
         session.wjc_loan_prompts_enqueued = True
         return
     offered = False
+    sy = int(session.season_calendar_year)
     for p in getattr(ut, "roster", None) or []:
         if getattr(p, "retired", False):
             continue
         ident = getattr(p, "identity", None)
         if ident is None:
             continue
-        age = int(getattr(ident, "age", 99) or 99)
-        if age > 20:
+        if not _wjc_age_eligible(p, sy):
             continue
         pid = str(getattr(p, "id", "") or "")
         nm = str(getattr(ident, "name", None) or "?")
         bc = str(getattr(ident, "birth_country", "") or "")
-        nat = _wjc_country_for_birth(session.sim.rng, bc)
+        nat = _wjc_resolve_country(p, session.sim.rng)
         if not _country_in_wjc_pool(nat):
             continue
         nat_lab = _wjc_country_label(nat)
+        age = _wjc_player_age_on(p, _wjc_eligibility_cutoff(sy))
+        cap_hit = _player_cap_hit_millions(p)
         storyline_id = f"story_wjc_loan_{pid}"
         dec_id = f"dec_{uuid.uuid4().hex[:12]}"
         session.pending_decisions.append(
@@ -13682,24 +14551,34 @@ def _maybe_enqueue_wjc_loan_decisions(session: FranchiseSession, day_meta: Dict[
                 "id": dec_id,
                 "storyline_id": storyline_id,
                 "kind": "wjc_u20_loan",
-                "title": f"World Juniors ΓÇö {nm}",
+                "title": f"World Juniors — {nm}",
                 "description": (
-                    f"{nm} ({age}) is U20-eligible for {nat_lab}. "
-                    "Loan him to the national junior tournament roster (WJC recap only ΓÇö no NHL club in the IIHF bracket), "
-                    "or keep him with your NHL club."
+                    f"{nm} ({age}) is U20-eligible for {nat_lab} through Jan 4. "
+                    "Release him for the full tournament, a round-robin-only loan, or keep him on your NHL roster."
                 ),
                 "options": [
                     {
                         "id": "keep",
                         "label": "Keep on NHL roster",
                         "effects": {"chemistry_delta": 0, "prospect_exposure_delta": -1},
-                        "effect_summary": "Retains NHL depth, limits international development reps.",
+                        "effect_summary": "Retains NHL depth; no international reps.",
+                    },
+                    {
+                        "id": "loan_partial",
+                        "label": f"Partial release — {nat_lab} RR only",
+                        "effects": {"chemistry_delta": 0, "prospect_exposure_delta": 1},
+                        "effect_summary": (
+                            "Round-robin only. Keeps your 23-man spot; lower injury risk than a full release."
+                        ),
                     },
                     {
                         "id": "loan",
-                        "label": f"Loan to {nat_lab} U20",
+                        "label": f"Full loan to {nat_lab} U20",
                         "effects": {"chemistry_delta": 1, "prospect_exposure_delta": 2},
-                        "effect_summary": "Improves tournament exposure and confidence, temporarily reduces NHL depth.",
+                        "effect_summary": (
+                            f"Frees an NHL roster spot (~${cap_hit:.2f}M cap relief) through the tournament; "
+                            "small injury risk while overseas."
+                        ),
                     },
                 ],
                 "meta": {
@@ -13709,6 +14588,7 @@ def _maybe_enqueue_wjc_loan_decisions(session: FranchiseSession, day_meta: Dict[
                     "wjc_country": nat,
                     "wjc_country_label": nat_lab,
                     "team_id": str(session.user_team_id),
+                    "cap_hit_m": round(float(cap_hit), 3),
                     "cause": "National team requested U20 availability during World Juniors.",
                 },
             }
@@ -13853,22 +14733,38 @@ def _maybe_enqueue_showcase_popups(session: FranchiseSession, day_meta: Dict[str
         if rk not in session.shown_event_keys:
             rng = _rng_for_event(session, rk)
             teams = ["CAN", "USA", "SWE", "FIN"]
-            rng.shuffle(teams)
-            a, b = teams[0], teams[1]
-            hg, ag, ot = _simulate_showcase_score(rng)
+            strengths = {code: _wjc_nhl_roster_strength_by_code(session, code) for code in teams}
+            ordered = sorted(teams, key=lambda c: -float(strengths.get(c) or 0.0))
+            a, b = ordered[0], ordered[1]
+            c_strength = float(strengths.get(a) or 1.0)
+            d_strength = float(strengths.get(b) or 1.0)
+            diff = (c_strength - d_strength) / max(1.0, c_strength + d_strength)
+            base = 3.2
+            hg_f = base + diff * 2.5 + rng.gauss(0, 0.7)
+            ag_f = base - diff * 2.5 + rng.gauss(0, 0.7)
+            hg = max(1, int(round(hg_f)))
+            ag = max(0, int(round(ag_f)))
+            ot = False
+            if hg == ag:
+                ot = True
+                hg += 1 if diff >= 0 else -1
+                if hg == ag:
+                    hg += 1
             _append_showcase_popup(
                 session,
                 rk,
                 {
                     "kind": "showcase_game",
                     "subkind": "four_nations",
-                    "title": "4 Nations Face-Off ΓÇö Final",
+                    "title": "4 Nations Face-Off — Final",
                     "iso": iso,
-                    "home": {"abbr": a, "name": a, "id": ""},
-                    "away": {"abbr": b, "name": b, "id": ""},
+                    "home": {"abbr": a, "name": _wjc_country_label(a), "id": ""},
+                    "away": {"abbr": b, "name": _wjc_country_label(b), "id": ""},
                     "home_goals": hg,
                     "away_goals": ag,
                     "overtime": ot,
+                    "home_strength": round(c_strength, 1),
+                    "away_strength": round(d_strength, 1),
                 },
             )
 
@@ -15471,8 +16367,59 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
                 if not hasattr(session, "wjc_nhl_u20_loan") or session.wjc_nhl_u20_loan is None:
                     session.wjc_nhl_u20_loan = {}
 
-                session.wjc_nhl_u20_loan[pid] = bool(cid == "loan")
-                effects["wjc_loan"] = 1 if cid == "loan" else 0
+                if cid == "loan":
+                    mode = "full"
+                elif cid == "loan_partial":
+                    mode = "partial"
+                else:
+                    mode = False
+                session.wjc_nhl_u20_loan[pid] = mode
+                effects["wjc_loan"] = 1 if mode else 0
+                effects["wjc_loan_mode"] = mode or "none"
+
+                player = _wjc_find_roster_player(session, pid)
+                if player is not None:
+                    if mode == "full":
+                        setattr(player, "wjc_tournament_loan", True)
+                        setattr(player, "wjc_loan_mode", "full")
+                        setattr(player, "_wjc_cap_exempt", True)
+                    elif mode == "partial":
+                        setattr(player, "wjc_tournament_loan", True)
+                        setattr(player, "wjc_loan_mode", "partial")
+                        setattr(player, "_wjc_cap_exempt", False)
+                    else:
+                        setattr(player, "wjc_tournament_loan", False)
+                        setattr(player, "wjc_loan_mode", "")
+                        setattr(player, "_wjc_cap_exempt", False)
+
+                    if mode == "full":
+                        effects["cap_relief_m"] = round(
+                            float((meta or {}).get("cap_hit_m") or _player_cap_hit_millions(player)), 3
+                        )
+
+                    inj_roll = session.sim.rng.random()
+                    inj_threshold = 0.07 if mode == "full" else (0.03 if mode == "partial" else 0.0)
+                    if mode and inj_roll < inj_threshold:
+                        ident = getattr(player, "identity", None)
+                        pname = str(getattr(ident, "name", None) or meta.get("player_name") or "Player")
+                        ut = session.team_by_id.get(str(session.user_team_id))
+                        abbr = _franchise_team_abbrev(ut) if ut else "?"
+                        day_idx = int(getattr(session, "calendar_cursor", 0) or 0)
+                        iso = _calendar_iso_for_day(session, day_idx) or ""
+                        games_out = 2 if mode == "full" else 1
+                        _franchise_log_injury_and_ui(
+                            session,
+                            player_id=pid,
+                            player_name=pname,
+                            team_id=str(session.user_team_id),
+                            team_abbrev=abbr,
+                            tier="moderate" if mode == "full" else "minor",
+                            games=games_out,
+                            injury_type="WJC tournament",
+                            calendar_day=day_idx,
+                            calendar_iso=iso,
+                        )
+                        effects["wjc_injury"] = games_out
 
         elif kind == "legal_storyline_decision":
             effects.update(_apply_legal_conduct_decision_effect(session, d, chosen))

@@ -4,6 +4,62 @@ function asArray(v) {
   return Array.isArray(v) ? v : [];
 }
 
+function int(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function isWjcNpc(row) {
+  if (!row || typeof row !== "object") return false;
+  if (row.is_npc === true) return true;
+  if (String(row.prospect_classification || "") === "tournament_npc") return true;
+  const pid = String(row.player_id || row.draft_prospect_id || "");
+  return pid.startsWith("wjc_npc_");
+}
+
+function isRealWjcProspect(row) {
+  if (!row || typeof row !== "object") return false;
+  if (isWjcNpc(row)) return false;
+  const cls = String(row.prospect_classification || "");
+  if (cls === "draft_eligible" || cls === "drafted_user") return true;
+  if (row.is_user_prospect) return true;
+  if (row.draft_prospect_id) return true;
+  return false;
+}
+
+function npcIdsFromProspects(prospects) {
+  const ids = new Set();
+  asArray(prospects).forEach((p) => {
+    if (isWjcNpc(p)) ids.add(String(p.player_id || ""));
+  });
+  return ids;
+}
+
+function filterRealPlayerStats(stats, prospects) {
+  const npcIds = npcIdsFromProspects(prospects);
+  return asArray(stats).filter((row) => {
+    const pid = String(row.player_id || "");
+    if (!pid || npcIds.has(pid) || pid.startsWith("wjc_npc_")) return false;
+    return true;
+  });
+}
+
+function tournamentHasStarted(payload) {
+  if (!payload) return false;
+  if (payload.medals_final) return true;
+  if (int(payload.wjc_day) > 0) return true;
+  if (asArray(payload.player_stats).length > 0) return true;
+  if (asArray(payload.all_games).some((g) => g?.home_goals != null)) return true;
+  return false;
+}
+
+function countryLabelFor(code, payload) {
+  const match = asArray(payload?.countries).find(
+    (c) => String(c.code) === String(code)
+  );
+  return match?.label || code || "—";
+}
+
 function pick(arr, fallback = null) {
   const list = asArray(arr).filter(Boolean);
   if (!list.length) return fallback;
@@ -60,14 +116,14 @@ function buildTemplateVars(payload) {
   const games = asArray(payload?.all_games).length
     ? asArray(payload?.all_games)
     : asArray(payload?.round_robin_games);
-  const playerStats = asArray(payload?.player_stats);
   const prospects = asArray(payload?.tournament_prospects);
+  const playerStats = filterRealPlayerStats(payload?.player_stats, prospects);
   const countries = asArray(payload?.countries);
   const stMap = standingByCode(standings);
   const leader = standings[0] || {};
   const featuredGame = pick(games);
   const standout = pick(playerStats.filter((p) => int(p.pts) > 0)) || playerStats[0] || {};
-  const ptsLeader = playerStats[0] || {};
+  const ptsLeader = [...playerStats].sort((a, b) => int(b.pts) - int(a.pts))[0] || {};
   const goalLeader =
     [...playerStats].sort((a, b) => int(b.g) - int(a.g))[0] || ptsLeader;
   const userProspect =
@@ -83,8 +139,12 @@ function buildTemplateVars(payload) {
     loserCode = hg > ag ? gameCode(featuredGame, "away") : gameCode(featuredGame, "home");
   }
 
-  const risers = [...prospects].sort((a, b) => int(b.stock_delta) - int(a.stock_delta));
-  const fallers = [...prospects].sort((a, b) => int(a.stock_delta) - int(b.stock_delta));
+  const risers = [...prospects]
+    .filter((p) => isRealWjcProspect(p) && int(p.stock_delta) > 0)
+    .sort((a, b) => int(b.stock_delta) - int(a.stock_delta));
+  const fallers = [...prospects]
+    .filter((p) => isRealWjcProspect(p) && int(p.stock_delta) < 0)
+    .sort((a, b) => int(a.stock_delta) - int(b.stock_delta));
   const riser = risers[0] || {};
   const faller = fallers[0] || {};
 
@@ -210,11 +270,6 @@ function buildTemplateVars(payload) {
   };
 }
 
-function int(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
 function findProspectStock(prospects, player, which) {
   const pid = String(player?.player_id || "");
   const row = prospects.find((p) => String(p.player_id) === pid);
@@ -285,78 +340,94 @@ export function buildWjcBroadcastLines(payload) {
 }
 
 export function buildWjcShowcaseCards(payload) {
-  const playerStats = asArray(payload?.player_stats);
   const prospects = asArray(payload?.tournament_prospects);
-  const standings = asArray(payload?.standings);
-  const games = asArray(payload?.all_games).length
-    ? asArray(payload?.all_games)
-    : asArray(payload?.round_robin_games);
+  const playerStats = filterRealPlayerStats(payload?.player_stats, prospects);
+  const prospectById = {};
+  prospects.forEach((p) => {
+    if (p?.player_id) prospectById[String(p.player_id)] = p;
+  });
 
   const cards = [];
 
-  playerStats.slice(0, 12).forEach((p) => {
-    const pr = prospects.find((x) => String(x.player_id) === String(p.player_id));
-    cards.push({
-      type: "player",
-      player_id: p.player_id,
-      name: p.name,
-      wjc_country: p.wjc_country,
-      g: p.g,
-      a: p.a,
-      pts: p.pts,
-      gp: p.gp,
-      plus_minus: p.plus_minus,
-      sog: p.sog,
-      stock_before: pr?.stock_rank_before,
-      stock_after: pr?.stock_rank_after,
-      stock_delta: pr?.stock_delta,
-      is_user_prospect: p.is_user_prospect || pr?.is_user_prospect,
+  playerStats
+    .filter((p) => int(p.gp) > 0 && (int(p.pts) > 0 || int(p.g) > 0 || int(p.sv) > 0))
+    .slice(0, 16)
+    .forEach((p) => {
+      const pr = prospectById[String(p.player_id)] || {};
+      if (isWjcNpc(pr) || isWjcNpc(p)) return;
+      const stockDelta = pr.stock_delta;
+      const natLabel = pr.wjc_country_label || countryLabelFor(p.wjc_country, payload);
+      let tag = "TOURNAMENT WATCH";
+      let summary = `${int(p.g)}G-${int(p.a)}A in ${int(p.gp)} GP for ${natLabel}.`;
+      if (int(p.pts) >= 7) {
+        tag = "TOP PRODUCER";
+        summary = `${p.name} has ${int(p.pts)} points through ${int(p.gp)} games — a draft-class statement.`;
+      } else if (int(stockDelta) > 0) {
+        tag = "DRAFT RISER";
+        summary = `Up ${int(stockDelta)} spots on the board after a ${int(p.pts)}-point tournament.`;
+      } else if (String(p.position || "").toUpperCase() === "G" && int(p.sv) > 0) {
+        tag = "GOALIE SPOTLIGHT";
+        summary = `${int(p.w)}-${int(p.l)} · ${int(p.sv)} saves (${((int(p.sv_pct) || 0) * 100).toFixed(1)}% SV).`;
+      }
+
+      cards.push({
+        type: "player",
+        player_id: p.player_id,
+        name: p.name,
+        wjc_country: p.wjc_country,
+        wjc_country_label: natLabel,
+        position: p.position || pr.position,
+        g: p.g,
+        a: p.a,
+        pts: p.pts,
+        gp: p.gp,
+        plus_minus: p.plus_minus,
+        sog: p.sog,
+        w: p.w,
+        l: p.l,
+        sv: p.sv,
+        sv_pct: p.sv_pct,
+        stock_before: pr.stock_rank_before,
+        stock_after: pr.stock_rank_after,
+        stock_delta: stockDelta,
+        is_user_prospect: p.is_user_prospect || pr.is_user_prospect,
+        tag,
+        summary,
+        category: tag,
+      });
     });
+
+  cards.sort((a, b) => {
+    const aScore = int(a.pts) * 10 + int(a.stock_delta) * 3 + int(a.sv) * 0.1;
+    const bScore = int(b.pts) * 10 + int(b.stock_delta) * 3 + int(b.sv) * 0.1;
+    return bScore - aScore;
   });
 
-  standings.slice(0, 9).forEach((row) => {
-    cards.push({
-      type: "nation",
-      code: row.code,
-      label: row.label,
-      w: row.w,
-      l: row.l,
-      pts: row.pts,
-      gf: row.gf,
-      ga: row.ga,
-    });
-  });
-
-  games.slice(-6).forEach((g, i) => {
-    cards.push({
-      type: "game",
-      id: `game-${i}`,
-      home: g.home,
-      away: g.away,
-      home_goals: g.home_goals,
-      away_goals: g.away_goals,
-      round: g.round || "Final",
-    });
-  });
-
-  return cards;
+  return cards.slice(0, 6);
 }
 
 export function buildWjcDraftStockRows(payload, franchiseState) {
-  const backend = asArray(payload?.tournament_prospects);
-  if (backend.length) {
+  const backend = asArray(payload?.tournament_prospects).filter(
+    (p) => isRealWjcProspect(p) && !isWjcNpc(p)
+  );
+  const started = tournamentHasStarted(payload);
+
+  if (backend.length && (started || payload?.wjc_phase === "complete")) {
     const rows = backend.map((p) => ({
       player_id: p.player_id,
       draft_prospect_id: p.draft_prospect_id || p.player_id,
-      prospect_classification: p.prospect_classification || (p.is_user_prospect ? "drafted_user" : "draft_eligible"),
+      prospect_classification:
+        p.prospect_classification ||
+        (p.is_user_prospect ? "drafted_user" : "draft_eligible"),
       name: p.name,
       wjc_country: p.wjc_country,
-      wjc_country_label: p.wjc_country_label || p.wjc_country,
+      wjc_country_label: p.wjc_country_label || countryLabelFor(p.wjc_country, payload),
       age: p.age,
       position: p.position,
       stock_before: p.stock_rank_before,
       stock_after: p.stock_rank_after,
-      stock_delta: p.stock_delta ?? int(p.stock_rank_before) - int(p.stock_rank_after),
+      stock_delta:
+        p.stock_delta ?? int(p.stock_rank_before) - int(p.stock_rank_after),
       tournament_pts: p.tournament_pts ?? 0,
       tournament_g: p.tournament_g ?? 0,
       tournament_gp: p.tournament_gp ?? 0,
@@ -369,80 +440,69 @@ export function buildWjcDraftStockRows(payload, franchiseState) {
       scouting_confidence: p.scouting_confidence,
       owner_team_abbr: p.owner_team_abbr,
       is_user_prospect: p.is_user_prospect,
-      is_npc: p.is_npc,
+      is_npc: false,
     }));
 
-    const draftEligible = rows.filter((r) => r.prospect_classification === "draft_eligible");
-    draftEligible.sort((a, b) => Math.abs(int(b.stock_delta)) - Math.abs(int(a.stock_delta)));
-    const notable = draftEligible.filter((r) => int(r.stock_before) <= 40);
-    const merged = [...draftEligible.slice(0, 16)];
-    notable.forEach((r) => {
+    const draftEligible = rows.filter(
+      (r) => r.prospect_classification === "draft_eligible"
+    );
+    draftEligible.sort(
+      (a, b) => Math.abs(int(b.stock_delta)) - Math.abs(int(a.stock_delta))
+    );
+    const movers = draftEligible.filter(
+      (r) => int(r.stock_delta) !== 0 || int(r.tournament_pts) >= 2
+    );
+    const merged = [...movers.slice(0, 20)];
+    draftEligible.slice(0, 12).forEach((r) => {
       if (!merged.some((m) => m.player_id === r.player_id)) merged.push(r);
+    });
+    const userRows = rows.filter((r) => r.prospect_classification === "drafted_user");
+    userRows.forEach((r) => {
+      if (!merged.some((m) => m.player_id === r.player_id)) merged.unshift(r);
     });
     return merged.slice(0, 24);
   }
 
-  const userRows = asArray(payload?.user_prospects).map((p) => ({
-    player_id: p.player_id,
-    prospect_classification: "drafted_user",
-    name: p.name,
-    wjc_country: p.wjc_country,
-    wjc_country_label: p.wjc_country_label,
-    age: p.age,
-    stock_before: null,
-    stock_after: null,
-    stock_delta: null,
-    owner_team_abbr: franchiseState?.team?.abbreviation || franchiseState?.team?.abbr || "YOU",
-    is_user_prospect: true,
-  }));
-  if (userRows.length) return userRows;
-
-  // Pre-tournament: persistent board from draft class rankings (backend entries only).
-  const board = asArray(franchiseState?.draft_class_rankings?.entries);
-  if (!board.length) return [];
-
-  return board
-    .filter((e) => e && (e.name || e.player_name))
-    .slice(0, 24)
-    .map((e) => {
-      const rank = int(e.rank || e.board_rank || 0) || null;
-      const country =
-        e.wjc_country ||
-        e.country_code ||
-        e.nationality ||
-        e.country ||
-        "";
-      return {
-        player_id: e.key || e.player_id || e.id,
-        draft_prospect_id: e.key || e.player_id || e.id,
-        prospect_classification: "draft_eligible",
-        name: e.name || e.player_name,
-        wjc_country: country,
-        wjc_country_label: e.wjc_country_label || e.nationality || country,
-        age: e.age,
-        position: e.position || e.pos,
-        stock_before: rank,
-        stock_after: rank,
-        stock_delta: 0,
-        tournament_pts: 0,
-        tournament_g: 0,
-        tournament_gp: 0,
-        junior_league: e.league || e.junior_league || "",
-        junior_team: e.team || e.junior_team || "",
-        is_user_prospect: false,
-        is_npc: false,
-      };
-    });
+  const userRows = asArray(payload?.user_prospects)
+    .filter((p) => p?.made_wjc_team !== false)
+    .map((p) => ({
+      player_id: p.player_id,
+      prospect_classification: "drafted_user",
+      name: p.name,
+      wjc_country: p.wjc_country,
+      wjc_country_label: p.wjc_country_label || countryLabelFor(p.wjc_country, payload),
+      age: p.age,
+      position: p.position || "F",
+      stock_before: null,
+      stock_after: null,
+      stock_delta: null,
+      tournament_pts: 0,
+      tournament_g: 0,
+      tournament_gp: 0,
+      owner_team_abbr:
+        franchiseState?.team?.abbreviation ||
+        franchiseState?.team?.abbr ||
+        "YOU",
+      is_user_prospect: true,
+      is_npc: false,
+      note: p.note || "",
+    }));
+  return userRows;
 }
 
 export function buildWjcStatLeaders(payload) {
-  const stats = asArray(payload?.player_stats);
+  const prospects = asArray(payload?.tournament_prospects);
+  const stats = filterRealPlayerStats(payload?.player_stats, prospects);
   const standings = asArray(payload?.standings);
 
   const skaters = stats.filter((p) => String(p.position || "F").toUpperCase() !== "G");
-  const byPts = [...skaters].sort((a, b) => int(b.pts) - int(a.pts)).slice(0, 10);
-  const byGoals = [...skaters].sort((a, b) => int(b.g) - int(a.g)).slice(0, 8);
+  const goalies = stats.filter((p) => String(p.position || "F").toUpperCase() === "G" && int(p.gp) > 0);
+  const byPts = [...skaters].sort((a, b) => int(b.pts) - int(a.pts) || int(b.g) - int(a.g)).slice(0, 10);
+  const byGoals = [...skaters].sort((a, b) => int(b.g) - int(a.g) || int(b.pts) - int(a.pts)).slice(0, 8);
   const byPm = [...skaters].sort((a, b) => int(b.plus_minus) - int(a.plus_minus)).slice(0, 8);
+  const byGoalies = [...goalies]
+    .sort((a, b) => Number(b.sv_pct || 0) - Number(a.sv_pct || 0) || int(b.sv) - int(a.sv))
+    .slice(0, 6);
 
   const teamLeaders = [...standings]
     .sort((a, b) => int(b.pts) - int(a.pts))
@@ -458,7 +518,7 @@ export function buildWjcStatLeaders(payload) {
       pts: row.pts,
     }));
 
-  return { byPts, byGoals, byPm, teamLeaders };
+  return { byPts, byGoals, byPm, byGoalies, teamLeaders };
 }
 
-export { formatScoreLine, gameCode, getTodayGames };
+export { formatScoreLine, gameCode, getTodayGames, isWjcNpc, isRealWjcProspect, filterRealPlayerStats, tournamentHasStarted };

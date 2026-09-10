@@ -4796,6 +4796,14 @@ def _wjc_day_index_for_iso(iso: str, season_y: int) -> Optional[int]:
 
 
 def _wjc_country_for_birth(rng: random.Random, birth_country: str) -> str:
+    try:
+        from services.player_bio_parser import resolve_wjc_country_code
+
+        code = resolve_wjc_country_code(birth_country, rng=rng)
+        if code:
+            return code
+    except Exception:
+        pass
     bc = str(birth_country or "").strip().lower()
     pairs = [
         (("canada", "can"), "CAN"),
@@ -4805,10 +4813,10 @@ def _wjc_country_for_birth(rng: random.Random, birth_country: str) -> str:
         (("czech", "czechia"), "CZE"),
         (("slovak", "slovakia"), "SVK"),
         (("germany", "deutsch"), "GER"),
+        (("switzerland", "swiss"), "SUI"),
+        (("denmark", "danish"), "DEN"),
         (("latvia", "latv"), "LAT"),
-        (("russia", "╤Ç╨╛╤ü╤ü", "rossiya"), "RUS"),
-        (("kazakh", "╥¢╨░╨╖╨░"), "KAZ"),
-        (("denmark", "norway", "austria", "switzerland"), "GER"),
+        (("russia", "rus"), "RUS"),
     ]
     for hints, code in pairs:
         if any(h in bc for h in hints):
@@ -4817,18 +4825,24 @@ def _wjc_country_for_birth(rng: random.Random, birth_country: str) -> str:
 
 
 def _wjc_countries_meta() -> List[Tuple[str, str]]:
-    """National programs only (no NHL clubs)."""
-    return [
-        ("CAN", "Canada"),
-        ("USA", "United States"),
-        ("RUS", "Russia"),
-        ("FIN", "Finland"),
-        ("SWE", "Sweden"),
-        ("GER", "Germany"),
-        ("CZE", "Czechia"),
-        ("LAT", "Latvia"),
-        ("KAZ", "Kazakhstan"),
-    ]
+    try:
+        from services.player_bio_parser import WJC_COUNTRY_META
+
+        return list(WJC_COUNTRY_META)
+    except Exception:
+        return [
+            ("CAN", "Canada"),
+            ("USA", "United States"),
+            ("RUS", "Russia"),
+            ("SWE", "Sweden"),
+            ("FIN", "Finland"),
+            ("CZE", "Czechia"),
+            ("SVK", "Slovakia"),
+            ("GER", "Germany"),
+            ("SUI", "Switzerland"),
+            ("DEN", "Denmark"),
+            ("LAT", "Latvia"),
+        ]
 
 
 def _wjc_country_label(code: str) -> str:
@@ -4857,6 +4871,70 @@ def _player_ovr01(p: Any) -> float:
     return float(ov)
 
 
+def _wjc_eligibility_cutoff(season_sy: int) -> date:
+    try:
+        from services.player_bio_parser import wjc_eligibility_cutoff
+
+        return wjc_eligibility_cutoff(season_sy)
+    except Exception:
+        return date(int(season_sy) + 1, 1, 4)
+
+
+def _wjc_age_eligible(source: Any, season_sy: int) -> bool:
+    try:
+        from services.player_bio_parser import wjc_age_eligible
+
+        return wjc_age_eligible(source, season_sy)
+    except Exception:
+        ident = getattr(source, "identity", None)
+        age = int(getattr(ident, "age", 99) or 99) if ident else 99
+        return age < 20
+
+
+def _wjc_player_age_on(source: Any, as_of: date) -> int:
+    try:
+        from services.player_bio_parser import player_age_on
+
+        return player_age_on(source, as_of)
+    except Exception:
+        ident = getattr(source, "identity", None)
+        return int(getattr(ident, "age", 99) or 99) if ident else 99
+
+
+def _wjc_resolve_country(player: Any, rng: random.Random) -> str:
+    try:
+        from services.player_bio_parser import resolve_wjc_country_for_player
+
+        return resolve_wjc_country_for_player(player, rng=rng)
+    except Exception:
+        ident = getattr(player, "identity", None)
+        bc = str(getattr(ident, "birth_country", "") or "") if ident else ""
+        return _wjc_country_for_birth(rng, bc)
+
+
+def _wjc_camp_make_team(
+    *,
+    player: Any,
+    row: Optional[Dict[str, Any]],
+    rng: random.Random,
+    depth_rank: int,
+) -> bool:
+    ov = _player_ovr01(player) if player is not None else float((row or {}).get("ovr") or 0.5)
+    r = row or {}
+    gp = int(r.get("junior_gp") or r.get("gp") or r.get("games_played") or 0)
+    pts = int(r.get("junior_pts") or r.get("points") or r.get("pts") or 0)
+    ppg = float(pts) / float(max(1, gp)) if gp else float(r.get("ppg") or 0)
+    rank = int(r.get("stock_rank_before") or r.get("rank") or 120)
+    score = ov * 0.52 + min(1.15, ppg * 0.38) + max(0.0, (85 - rank) / 220.0)
+    cutoff = 0.56 + min(0.12, depth_rank * 0.008)
+    return score >= cutoff + rng.uniform(0.0, 0.05)
+
+
+def _wjc_loan_mode_active(loans: Dict[str, Any], player_id: str) -> bool:
+    mode = loans.get(str(player_id or ""))
+    return mode in (True, "full", "partial", "loan", "loan_partial")
+
+
 def _collect_user_wjc_prospects(session: FranchiseSession, rng: random.Random) -> List[Dict[str, Any]]:
     """U20 on your AHL affiliate, plus NHL U20 only if the user loaned them to their WJC country."""
     out: List[Dict[str, Any]] = []
@@ -4864,27 +4942,26 @@ def _collect_user_wjc_prospects(session: FranchiseSession, rng: random.Random) -
     if ut is None:
         return out
     loans = getattr(session, "wjc_nhl_u20_loan", None) or {}
+    sy = int(session.season_calendar_year)
+    cutoff = _wjc_eligibility_cutoff(sy)
 
-    def _row(p: Any, *, roster: str) -> None:
+    def _row(p: Any, *, roster: str, depth_rank: int) -> None:
         if getattr(p, "retired", False):
             return
         ident = getattr(p, "identity", None)
         if ident is None:
             return
-        age = int(getattr(ident, "age", 99) or 99)
-        if age > 20:
+        if not _wjc_age_eligible(p, sy):
             return
         pid = str(getattr(p, "id", "") or "")
         nm = str(getattr(ident, "name", None) or "?")
         bc = str(getattr(ident, "birth_country", "") or "")
-        code = _wjc_country_for_birth(rng, bc)
+        code = _wjc_resolve_country(p, rng)
         if not _country_in_wjc_pool(code):
-            # If the country is not in this year's tournament field, player does not participate.
             return
         lab = _wjc_country_label(code)
-        ov = _player_ovr01(p)
-        cut = 0.62 + 0.08 * rng.random()
-        made = bool(ov >= cut or rng.random() < 0.28)
+        age = _wjc_player_age_on(p, cutoff)
+        made = _wjc_camp_make_team(player=p, row=None, rng=rng, depth_rank=depth_rank)
         note = (
             f"Named to {lab} U20 national roster."
             if made
@@ -4904,13 +4981,19 @@ def _collect_user_wjc_prospects(session: FranchiseSession, rng: random.Random) -
             }
         )
 
-    for p in getattr(ut, "ahl_roster", None) or []:
-        _row(p, roster="AHL")
+    ahl = list(getattr(ut, "ahl_roster", None) or [])
+    for idx, p in enumerate(sorted(ahl, key=lambda x: -_player_ovr01(x))):
+        _row(p, roster="AHL", depth_rank=idx)
 
-    for p in getattr(ut, "roster", None) or []:
-        if not loans.get(str(getattr(p, "id", "") or ""), False):
-            continue
-        _row(p, roster="NHL (loaned)")
+    nhl_loaned = [
+        p
+        for p in getattr(ut, "roster", None) or []
+        if _wjc_loan_mode_active(loans, str(getattr(p, "id", "") or ""))
+    ]
+    for idx, p in enumerate(sorted(nhl_loaned, key=lambda x: -_player_ovr01(x))):
+        mode = loans.get(str(getattr(p, "id", "") or ""))
+        roster_label = "NHL (loaned)" if mode in (True, "full", "loan") else "NHL (RR only)"
+        _row(p, roster=roster_label, depth_rank=idx)
 
     out.sort(key=lambda x: (-int(x.get("made_wjc_team") or 0), str(x.get("roster") or ""), str(x.get("name") or "")))
     return out
@@ -5146,22 +5229,23 @@ def _maybe_enqueue_wjc_loan_decisions(session: FranchiseSession, day_meta: Dict[
         session.wjc_loan_prompts_enqueued = True
         return
     offered = False
+    cutoff = _wjc_eligibility_cutoff(sy)
     for p in getattr(ut, "roster", None) or []:
         if getattr(p, "retired", False):
             continue
         ident = getattr(p, "identity", None)
         if ident is None:
             continue
-        age = int(getattr(ident, "age", 99) or 99)
-        if age > 20:
+        if not _wjc_age_eligible(p, sy):
             continue
         pid = str(getattr(p, "id", "") or "")
         nm = str(getattr(ident, "name", None) or "?")
-        bc = str(getattr(ident, "birth_country", "") or "")
-        nat = _wjc_country_for_birth(session.sim.rng, bc)
+        nat = _wjc_resolve_country(p, session.sim.rng)
         if not _country_in_wjc_pool(nat):
             continue
         nat_lab = _wjc_country_label(nat)
+        age = _wjc_player_age_on(p, cutoff)
+        cap_hit = _player_cap_hit_millions(p)
         storyline_id = f"story_wjc_loan_{pid}"
         dec_id = f"dec_{uuid.uuid4().hex[:12]}"
         session.pending_decisions.append(
@@ -5169,24 +5253,34 @@ def _maybe_enqueue_wjc_loan_decisions(session: FranchiseSession, day_meta: Dict[
                 "id": dec_id,
                 "storyline_id": storyline_id,
                 "kind": "wjc_u20_loan",
-                "title": f"World Juniors ΓÇö {nm}",
+                "title": f"World Juniors — {nm}",
                 "description": (
-                    f"{nm} ({age}) is U20-eligible for {nat_lab}. "
-                    "Loan him to the national junior tournament roster (WJC recap only ΓÇö no NHL club in the IIHF bracket), "
-                    "or keep him with your NHL club."
+                    f"{nm} ({age}) is U20-eligible for {nat_lab} through Jan 4. "
+                    "Release him for the full tournament, a round-robin-only loan, or keep him on your NHL roster."
                 ),
                 "options": [
                     {
                         "id": "keep",
                         "label": "Keep on NHL roster",
                         "effects": {"chemistry_delta": 0, "prospect_exposure_delta": -1},
-                        "effect_summary": "Retains NHL depth, limits international development reps.",
+                        "effect_summary": "Retains NHL depth; no international reps.",
+                    },
+                    {
+                        "id": "loan_partial",
+                        "label": f"Partial release — {nat_lab} RR only",
+                        "effects": {"chemistry_delta": 0, "prospect_exposure_delta": 1},
+                        "effect_summary": (
+                            "Round-robin only. Keeps your 23-man spot; lower injury risk than a full release."
+                        ),
                     },
                     {
                         "id": "loan",
-                        "label": f"Loan to {nat_lab} U20",
+                        "label": f"Full loan to {nat_lab} U20",
                         "effects": {"chemistry_delta": 1, "prospect_exposure_delta": 2},
-                        "effect_summary": "Improves tournament exposure and confidence, temporarily reduces NHL depth.",
+                        "effect_summary": (
+                            f"Frees an NHL roster spot (~${cap_hit:.2f}M cap relief) through the tournament; "
+                            "small injury risk while overseas."
+                        ),
                     },
                 ],
                 "meta": {
@@ -5196,6 +5290,7 @@ def _maybe_enqueue_wjc_loan_decisions(session: FranchiseSession, day_meta: Dict[
                     "wjc_country": nat,
                     "wjc_country_label": nat_lab,
                     "team_id": str(session.user_team_id),
+                    "cap_hit_m": round(float(cap_hit), 3),
                     "cause": "National team requested U20 availability during World Juniors.",
                 },
             }
@@ -6293,8 +6388,62 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
                 if not hasattr(session, "wjc_nhl_u20_loan") or session.wjc_nhl_u20_loan is None:
                     session.wjc_nhl_u20_loan = {}
 
-                session.wjc_nhl_u20_loan[pid] = bool(cid == "loan")
-                effects["wjc_loan"] = 1 if cid == "loan" else 0
+                if cid == "loan":
+                    mode = "full"
+                elif cid == "loan_partial":
+                    mode = "partial"
+                else:
+                    mode = False
+                session.wjc_nhl_u20_loan[pid] = mode
+                effects["wjc_loan"] = 1 if mode else 0
+                effects["wjc_loan_mode"] = mode or "none"
+
+                player = None
+                ut = session.team_by_id.get(str(session.user_team_id))
+                if ut is not None:
+                    for rp in getattr(ut, "roster", None) or []:
+                        if str(getattr(rp, "id", "") or "") == pid:
+                            player = rp
+                            break
+                if player is not None:
+                    if mode == "full":
+                        setattr(player, "wjc_tournament_loan", True)
+                        setattr(player, "wjc_loan_mode", "full")
+                        setattr(player, "_wjc_cap_exempt", True)
+                        effects["cap_relief_m"] = round(
+                            float(meta.get("cap_hit_m") or _player_cap_hit_millions(player)), 3
+                        )
+                    elif mode == "partial":
+                        setattr(player, "wjc_tournament_loan", True)
+                        setattr(player, "wjc_loan_mode", "partial")
+                        setattr(player, "_wjc_cap_exempt", False)
+                    else:
+                        setattr(player, "wjc_tournament_loan", False)
+                        setattr(player, "wjc_loan_mode", "")
+                        setattr(player, "_wjc_cap_exempt", False)
+
+                    inj_roll = session.sim.rng.random()
+                    inj_threshold = 0.07 if mode == "full" else (0.03 if mode == "partial" else 0.0)
+                    if mode and inj_roll < inj_threshold:
+                        ident = getattr(player, "identity", None)
+                        pname = str(getattr(ident, "name", None) or meta.get("player_name") or "Player")
+                        abbr = _franchise_team_abbrev(ut) if ut else "?"
+                        day_idx = int(getattr(session, "calendar_cursor", 0) or 0)
+                        iso = _calendar_iso_for_day(session, day_idx) or ""
+                        games_out = 2 if mode == "full" else 1
+                        _franchise_log_injury_and_ui(
+                            session,
+                            player_id=pid,
+                            player_name=pname,
+                            team_id=str(session.user_team_id),
+                            team_abbrev=abbr,
+                            tier="moderate" if mode == "full" else "minor",
+                            games=games_out,
+                            injury_type="WJC tournament",
+                            calendar_day=day_idx,
+                            calendar_iso=iso,
+                        )
+                        effects["wjc_injury"] = games_out
 
         elif kind == "legal_storyline_decision":
             from app.sim_engine.franchise.decisions import (  # noqa: WPS433

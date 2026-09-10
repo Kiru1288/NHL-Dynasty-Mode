@@ -1184,6 +1184,15 @@ def build_draft_rank_reason_codes(row: Dict[str, Any]) -> List[str]:
     if role in ("defensive_defenseman", "shutdown_center", "grinder") and ppg < 0.55:
         codes.append("defensive_role_context")
 
+    wjc_gp = int(row.get("wjc_gp") or row.get("wjc_games") or 0)
+    wjc_pts = int(row.get("wjc_points") or 0)
+    if wjc_gp >= 3 and wjc_pts >= 4:
+        codes.insert(0, "wjc_standout")
+    elif wjc_gp > 0 and wjc_pts >= 2:
+        codes.insert(0, "wjc_positive")
+    if float(row.get("wjc_draft_boost") or 0) >= 3:
+        codes.insert(0, "wjc_stock_riser")
+
     return codes[:6]
 
 

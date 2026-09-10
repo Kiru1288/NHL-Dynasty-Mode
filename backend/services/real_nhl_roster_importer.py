@@ -1417,6 +1417,13 @@ def _build_player_from_roster_row(
         landing=landing,
         teams=all_teams or [],
     )
+    try:
+        from services.player_bio_parser import apply_player_bio_by_name, load_player_bio_registry
+
+        bio_registry = load_player_bio_registry(as_of=date(int(season_year), 9, 15))
+        apply_player_bio_by_name(player, bio_registry, as_of_year=season_year)
+    except Exception:
+        pass
     _attach_career_stats(player, landing=landing, is_goalie=is_goalie)
 
     if contract or (r4 and isinstance(r4.get("contract"), dict)):

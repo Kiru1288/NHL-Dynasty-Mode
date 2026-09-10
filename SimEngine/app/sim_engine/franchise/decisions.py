@@ -575,8 +575,60 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
                 if not hasattr(session, "wjc_nhl_u20_loan") or session.wjc_nhl_u20_loan is None:
                     session.wjc_nhl_u20_loan = {}
 
-                session.wjc_nhl_u20_loan[pid] = bool(cid == "loan")
-                effects["wjc_loan"] = 1 if cid == "loan" else 0
+                if cid == "loan":
+                    mode = "full"
+                elif cid == "loan_partial":
+                    mode = "partial"
+                else:
+                    mode = False
+                session.wjc_nhl_u20_loan[pid] = mode
+                effects["wjc_loan"] = 1 if mode else 0
+                effects["wjc_loan_mode"] = mode or "none"
+
+                player = None
+                ut = session.team_by_id.get(str(session.user_team_id))
+                if ut is not None:
+                    for rp in getattr(ut, "roster", None) or []:
+                        if str(getattr(rp, "id", "") or "") == pid:
+                            player = rp
+                            break
+                if player is not None:
+                    if mode == "full":
+                        setattr(player, "wjc_tournament_loan", True)
+                        setattr(player, "wjc_loan_mode", "full")
+                        setattr(player, "_wjc_cap_exempt", True)
+                        effects["cap_relief_m"] = round(float(meta.get("cap_hit_m") or 0), 3)
+                    elif mode == "partial":
+                        setattr(player, "wjc_tournament_loan", True)
+                        setattr(player, "wjc_loan_mode", "partial")
+                        setattr(player, "_wjc_cap_exempt", False)
+                    else:
+                        setattr(player, "wjc_tournament_loan", False)
+                        setattr(player, "wjc_loan_mode", "")
+                        setattr(player, "_wjc_cap_exempt", False)
+
+                    inj_roll = session.sim.rng.random()
+                    inj_threshold = 0.07 if mode == "full" else (0.03 if mode == "partial" else 0.0)
+                    if mode and inj_roll < inj_threshold:
+                        ident = getattr(player, "identity", None)
+                        pname = str(getattr(ident, "name", None) or meta.get("player_name") or "Player")
+                        abbr = _franchise_team_abbrev(ut) if ut else "?"
+                        day_idx = int(getattr(session, "calendar_cursor", 0) or 0)
+                        iso = _calendar_iso_for_day(session, day_idx) or ""
+                        games_out = 2 if mode == "full" else 1
+                        _franchise_log_injury_and_ui(
+                            session,
+                            player_id=pid,
+                            player_name=pname,
+                            team_id=str(session.user_team_id),
+                            team_abbrev=abbr,
+                            tier="moderate" if mode == "full" else "minor",
+                            games=games_out,
+                            injury_type="WJC tournament",
+                            calendar_day=day_idx,
+                            calendar_iso=iso,
+                        )
+                        effects["wjc_injury"] = games_out
 
         elif kind == "retirement_decision":
             from app.sim_engine.franchise.retirement import apply_retirement_decision

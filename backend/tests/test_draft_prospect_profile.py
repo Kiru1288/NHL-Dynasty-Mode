@@ -100,3 +100,32 @@ def test_character_concerns_force_sub_fifty_score_and_disastrous_read():
     assert char_score is not None
     assert float(char_score) < 50
     assert any(t.get("tier") == "Disastrous" for t in profile["character_read"]["traits"])
+
+
+def test_wjc_stats_block_on_profile():
+    profile = build_prospect_profile(_fixture_row(
+        wjc_gp=6,
+        wjc_goals=4,
+        wjc_assists=5,
+        wjc_points=9,
+        wjc_team="Canada",
+        wjc_year=2025,
+        wjc_result="Gold",
+        wjc_stock_delta=7,
+        wjc_performance_grade="breakout",
+        wjc_summary="Breakout international tournament — tools and projection upgraded.",
+        wjc_ovr_delta=1.2,
+        wjc_potential_delta=0.8,
+        wjc_ovr_before=72.0,
+        wjc_ovr_after=73.2,
+        wjc_potential_before=86.0,
+        wjc_potential_after=86.8,
+    ))
+    wjc = profile.get("wjcStats") or {}
+    assert wjc.get("played") is True
+    assert wjc.get("games") == 6
+    assert wjc.get("points") == 9
+    assert wjc.get("team") == "Canada"
+    assert wjc.get("ovrDelta") == 1.2
+    assert wjc.get("potentialDelta") == 0.8
+    assert profile.get("wjcPerformance") == wjc

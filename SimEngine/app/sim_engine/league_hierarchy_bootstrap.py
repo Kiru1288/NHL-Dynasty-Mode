@@ -744,6 +744,13 @@ def bootstrap_full_league_hierarchy(
 
     _init_chars(league, rng, all_new)
 
+    try:
+        from services.player_bio_parser import apply_player_bios_to_league
+
+        apply_player_bios_to_league(league, as_of_year=year)
+    except Exception:
+        pass
+
 
 # Star-power tiers: (label, weight, franchise/elite/top slot counts, top target ovr)
 # Current ability is NHL-scale. Top picks should look like near-NHL talents a GM

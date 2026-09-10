@@ -5,7 +5,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest import mock
 
-from services.franchise_sim import _build_wjc_client_payload
+from services.franchise_sim import (
+    _apply_wjc_stock_after,
+    _build_wjc_client_payload,
+    _wjc_medal_tier_for_country,
+)
 
 
 def _session(*, sy: int, iso: str, bundle: dict | None):
@@ -71,3 +75,76 @@ def test_same_year_completed_wjc_before_window_is_wiped():
     assert payload.get("wjc_phase") == "upcoming"
     assert session.wjc_tournament_bundle is None
     assert 2025 not in (session.wjc_stock_evaluated_seasons or set())
+
+
+def test_wjc_medal_tier_prefers_country_codes():
+    assert _wjc_medal_tier_for_country("CAN", "Canada", {"gold": "CAN"}) == "gold"
+    assert _wjc_medal_tier_for_country("CAN", "Canada", {}, {"gold": "CAN"}) == "gold"
+
+
+def test_wjc_stock_applies_gold_medal_bonus():
+    prospects = [
+        {
+            "player_id": "p1",
+            "prospect_classification": "draft_eligible",
+            "stock_rank_before": 30,
+            "wjc_country": "CAN",
+            "wjc_country_label": "Canada",
+            "position": "F",
+        }
+    ]
+    stats = [
+        {
+            "player_id": "p1",
+            "gp": 5,
+            "g": 3,
+            "a": 2,
+            "pts": 5,
+            "plus_minus": 4,
+            "position": "F",
+        }
+    ]
+    standings = [{"code": "CAN", "w": 4, "l": 1}]
+    without = _apply_wjc_stock_after(prospects, stats, standings, {}, day_multiplier=1.0)[0]
+    with_gold = _apply_wjc_stock_after(
+        prospects,
+        stats,
+        standings,
+        {"gold": "CAN", "silver": "USA", "bronze": "SWE"},
+        day_multiplier=1.0,
+    )[0]
+    assert with_gold["stock_delta"] > without["stock_delta"]
+    assert "Gold medal" in str(with_gold.get("stock_reason") or "")
+
+
+def test_wjc_stock_rewards_goalie_performance():
+    prospects = [
+        {
+            "player_id": "g1",
+            "prospect_classification": "draft_eligible",
+            "stock_rank_before": 45,
+            "wjc_country": "SWE",
+            "wjc_country_label": "Sweden",
+            "position": "G",
+        }
+    ]
+    stats = [
+        {
+            "player_id": "g1",
+            "gp": 5,
+            "g": 0,
+            "a": 0,
+            "pts": 0,
+            "position": "G",
+            "w": 4,
+            "l": 1,
+            "shutouts": 1,
+            "sv_pct": 0.925,
+            "sa": 120,
+            "sv": 111,
+        }
+    ]
+    standings = [{"code": "SWE", "w": 3, "l": 2}]
+    row = _apply_wjc_stock_after(prospects, stats, standings, {}, day_multiplier=1.0)[0]
+    assert int(row.get("stock_delta") or 0) >= 20
+    assert "SO" in str(row.get("stock_reason") or "")

@@ -660,5 +660,68 @@ export function buildStubProspectProfile(player) {
     rank: player.rank,
     intel_label: player.intelLabel,
     risk: player.riskLabel,
+    wjcStats: player.wjcStats || player.wjc_tournament?.wjc_stats || null,
+  };
+}
+
+function formatWjcSavePct(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  if (n > 1) return `.${String(Math.round(n)).padStart(3, "0")}`;
+  return `.${String(Math.round(n * 1000)).padStart(3, "0")}`;
+}
+
+/** Build dossier-facing WJC tournament block from backend profile payload. */
+export function resolveWjcDossierBlock(profile, isGoalie = false) {
+  const w = profile?.wjcStats || profile?.wjcPerformance;
+  if (!w || (!w.played && !Number(w.games))) return null;
+
+  const gp = Number(w.games || 0);
+  const team = w.team || "—";
+  const year = w.year ? `U20 ${w.year}` : "U20";
+  const result = w.result ? String(w.result) : null;
+  const headline = [year, team, result].filter(Boolean).join(" · ");
+  const summary = w.summary || null;
+  const grade = w.performanceGrade ? String(w.performanceGrade).replace(/_/g, " ") : null;
+
+  const tiles = isGoalie || w.isGoalie
+    ? [
+        { label: "GP", value: gp > 0 ? String(gp) : "—" },
+        { label: "W-L", value: gp > 0 ? `${Number(w.wins || 0)}-${Number(w.losses || 0)}` : "—" },
+        { label: "SV%", value: formatWjcSavePct(w.savePct) },
+        { label: "SO", value: Number(w.shutouts || 0) > 0 ? String(w.shutouts) : "—" },
+      ]
+    : [
+        { label: "GP", value: gp > 0 ? String(gp) : "—" },
+        { label: "G-A-P", value: gp > 0 ? `${Number(w.goals || 0)}-${Number(w.assists || 0)}-${Number(w.points || 0)}` : "—" },
+        { label: "P/GP", value: w.ppg != null ? Number(w.ppg).toFixed(2) : "—" },
+        { label: "+/-", value: w.plusMinus != null ? String(w.plusMinus) : "—" },
+      ];
+
+  const impactLines = [];
+  if (Number.isFinite(Number(w.stockDelta)) && Number(w.stockDelta) !== 0) {
+    const d = Number(w.stockDelta);
+    impactLines.push(`Draft stock ${d > 0 ? "↑" : "↓"} ${Math.abs(d)} spots`);
+  }
+  if (Number.isFinite(Number(w.ovrDelta)) && Number(w.ovrDelta) !== 0) {
+    impactLines.push(`OVR ${Number(w.ovrDelta) > 0 ? "+" : ""}${Number(w.ovrDelta).toFixed(1)}`);
+  }
+  if (Number.isFinite(Number(w.potentialDelta)) && Number(w.potentialDelta) !== 0) {
+    impactLines.push(`Ceiling ${Number(w.potentialDelta) > 0 ? "+" : ""}${Number(w.potentialDelta).toFixed(1)}`);
+  }
+  if (w.ovrBefore != null && w.ovrAfter != null) {
+    impactLines.push(`OVR ${w.ovrBefore} → ${w.ovrAfter}`);
+  }
+  if (w.potentialBefore != null && w.potentialAfter != null) {
+    impactLines.push(`Potential ${w.potentialBefore} → ${w.potentialAfter}`);
+  }
+
+  return {
+    headline,
+    summary,
+    grade,
+    tiles,
+    impactLines,
+    played: gp > 0,
   };
 }

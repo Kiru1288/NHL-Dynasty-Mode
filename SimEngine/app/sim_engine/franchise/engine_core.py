@@ -250,27 +250,26 @@ def _collect_user_wjc_prospects(session: FranchiseSession, rng: random.Random) -
     if ut is None:
         return out
     loans = getattr(session, "wjc_nhl_u20_loan", None) or {}
+    sy = int(session.season_calendar_year)
+    cutoff = _wjc_eligibility_cutoff(sy)
 
-    def _row(p: Any, *, roster: str) -> None:
+    def _row(p: Any, *, roster: str, depth_rank: int) -> None:
         if getattr(p, "retired", False):
             return
         ident = getattr(p, "identity", None)
         if ident is None:
             return
-        age = int(getattr(ident, "age", 99) or 99)
-        if age > 20:
+        if not _wjc_age_eligible(p, sy):
             return
         pid = str(getattr(p, "id", "") or "")
         nm = str(getattr(ident, "name", None) or "?")
         bc = str(getattr(ident, "birth_country", "") or "")
-        code = _wjc_country_for_birth(rng, bc)
+        code = _wjc_resolve_country(p, rng)
         if not _country_in_wjc_pool(code):
-            # If the country is not in this year's tournament field, player does not participate.
             return
         lab = _wjc_country_label(code)
-        ov = _player_ovr01(p)
-        cut = 0.62 + 0.08 * rng.random()
-        made = bool(ov >= cut or rng.random() < 0.28)
+        age = _wjc_player_age_on(p, cutoff)
+        made = _wjc_camp_make_team(player=p, row=None, rng=rng, depth_rank=depth_rank)
         note = (
             f"Named to {lab} U20 national roster."
             if made
@@ -290,13 +289,19 @@ def _collect_user_wjc_prospects(session: FranchiseSession, rng: random.Random) -
             }
         )
 
-    for p in getattr(ut, "ahl_roster", None) or []:
-        _row(p, roster="AHL")
+    ahl = list(getattr(ut, "ahl_roster", None) or [])
+    for idx, p in enumerate(sorted(ahl, key=lambda x: -_player_ovr01(x))):
+        _row(p, roster="AHL", depth_rank=idx)
 
-    for p in getattr(ut, "roster", None) or []:
-        if not loans.get(str(getattr(p, "id", "") or ""), False):
-            continue
-        _row(p, roster="NHL (loaned)")
+    nhl_loaned = [
+        p
+        for p in getattr(ut, "roster", None) or []
+        if _wjc_loan_mode_active(loans, str(getattr(p, "id", "") or ""))
+    ]
+    for idx, p in enumerate(sorted(nhl_loaned, key=lambda x: -_player_ovr01(x))):
+        mode = loans.get(str(getattr(p, "id", "") or ""))
+        roster_label = "NHL (loaned)" if mode in (True, "full", "loan") else "NHL (RR only)"
+        _row(p, roster=roster_label, depth_rank=idx)
 
     out.sort(key=lambda x: (-int(x.get("made_wjc_team") or 0), str(x.get("roster") or ""), str(x.get("name") or "")))
     return out

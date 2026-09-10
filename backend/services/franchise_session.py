@@ -150,6 +150,8 @@ class FranchiseSession:
     wjc_nhl_u20_loan: Dict[str, bool] = field(default_factory=dict)  # player_id -> True if loaned to WJC
     wjc_draft_score_boosts: Dict[str, float] = field(default_factory=dict)
     wjc_stock_evaluated_seasons: Set[int] = field(default_factory=set)
+    # Post-WJC tournament lines keyed by draft prospect id (draft board / scouting UI).
+    wjc_prospect_tournament_results: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     # Contract/cap bootstrap health: ready | repaired | partial | failed
     financials_status: str = "partial"

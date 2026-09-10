@@ -46,6 +46,7 @@ import {
   zoneTierMeta,
   humanizePlayStyleLabel,
   buildStubProspectProfile,
+  resolveWjcDossierBlock,
 } from "./prospectDossierHelpers";
 
 let TRANSCENDENT_BOSS_AUDIO_URL = null;
@@ -5059,6 +5060,8 @@ function ProspectProfileModal({
         { label: "+/-", value: formatSignalSigned(analytics.plus_minus, 0) },
       ];
 
+  const wjcBlock = resolveWjcDossierBlock(profile, isGoalie);
+
   return (
     <div
       className={`dc-profile-modal dc-profile-modal--prospect dc-profile-modal--file-open${isTranscendent ? " prospect-modal--transcendent" : ""}${rank > 32 || (confPct != null && confPct < 45) ? " dc-profile-modal--uncertain" : ""}`}
@@ -5242,6 +5245,26 @@ function ProspectProfileModal({
                   </div>
                 </div>
                 <ProspectStatGradeStrip rows={statStrip} />
+                {wjcBlock ? (
+                  <section className="dc-brochure-block dc-brochure-block--compact dc-wjc-dossier">
+                    <span className="dc-profile-tags__label">
+                      World Juniors (U20)
+                      {wjcBlock.grade ? <span className="wr-muted"> · {wjcBlock.grade}</span> : null}
+                    </span>
+                    <p className="dc-wjc-dossier__headline">{wjcBlock.headline}</p>
+                    {wjcBlock.summary ? <p className="dc-wjc-dossier__summary">{wjcBlock.summary}</p> : null}
+                    <div className="dc-signal-metrics dc-signal-metrics--focus dc-signal-metrics--dossier">
+                      {wjcBlock.tiles.map((tile) => (
+                        <SignalMetricTile key={`wjc-${tile.label}`} label={tile.label} value={tile.value} />
+                      ))}
+                    </div>
+                    {wjcBlock.impactLines?.length ? (
+                      <ul className="dc-wjc-dossier__impact">
+                        {wjcBlock.impactLines.map((line) => <li key={line}>{line}</li>)}
+                      </ul>
+                    ) : null}
+                  </section>
+                ) : null}
               </div>
             ) : (
               <div className="dc-dossier-pane dc-dossier-pane--intel">
@@ -5263,6 +5286,18 @@ function ProspectProfileModal({
                     </div>
                   </div>
                 </section>
+                {wjcBlock ? (
+                  <section className="dc-brochure-block dc-brochure-block--compact dc-wjc-dossier">
+                    <span className="dc-profile-tags__label">World Juniors impact</span>
+                    <p className="dc-wjc-dossier__headline">{wjcBlock.headline}</p>
+                    {wjcBlock.summary ? <p className="dc-wjc-dossier__summary">{wjcBlock.summary}</p> : null}
+                    {wjcBlock.impactLines?.length ? (
+                      <ul className="dc-wjc-dossier__impact">
+                        {wjcBlock.impactLines.map((line) => <li key={`intel-${line}`}>{line}</li>)}
+                      </ul>
+                    ) : null}
+                  </section>
+                ) : null}
               </div>
             )}
 

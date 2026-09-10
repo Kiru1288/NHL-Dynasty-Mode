@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -484,5 +485,12 @@ def spawn_player_from_dynasty_entry(
         enforce_floor_on_init=False,
     )
     apply_dynasty_entry_to_player(player, entry, seed=seed)
+    try:
+        from services.player_bio_parser import apply_player_bio_by_name, load_player_bio_registry
+
+        bio_registry = load_player_bio_registry(as_of=date(int(year), 9, 15))
+        apply_player_bio_by_name(player, bio_registry, as_of_year=year)
+    except Exception:
+        pass
     league_players.append(player)
     return player

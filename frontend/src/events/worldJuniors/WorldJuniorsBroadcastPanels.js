@@ -3,6 +3,7 @@ import PlayerHeadshot from "../../components/PlayerHeadshot";
 import { ensurePlayerHeadshotFields } from "../../utils/playerHeadshots";
 import { wjcFlagUrl } from "../../utils/countryFlags";
 import { WJC_HOSTS } from "./wjcBroadcastScripts";
+import { isWjcNpc } from "./wjcBroadcastBuilder";
 
 function asArray(v) {
   return Array.isArray(v) ? v : [];
@@ -233,16 +234,15 @@ export function DeskControls({
 }
 
 export function DraftStockSidebar({ rows, onSelectPlayer }) {
-  const draftRows = asArray(rows).filter(
-    (row) =>
-      row.prospect_classification !== "drafted_user" &&
-      row.prospect_classification !== "tournament_npc"
+  const displayRows = asArray(rows).filter((row) => !isWjcNpc(row));
+  const draftRows = displayRows.filter(
+    (row) => row.prospect_classification !== "drafted_user"
   );
-  const displayRows = draftRows.length
+  const sortedSource = draftRows.length
     ? draftRows
-    : asArray(rows).filter((r) => r.prospect_classification === "drafted_user");
+    : displayRows.filter((r) => r.prospect_classification === "drafted_user");
 
-  const sorted = [...displayRows].sort(
+  const sorted = [...sortedSource].sort(
     (a, b) =>
       Math.abs(Number(b.stock_delta) || 0) -
       Math.abs(Number(a.stock_delta) || 0)
@@ -255,7 +255,7 @@ export function DraftStockSidebar({ rows, onSelectPlayer }) {
         <em>WJC Board Movement</em>
       </header>
       {sorted.length === 0 ? (
-        <p className="wjc-empty">No prospect data</p>
+        <p className="wjc-empty">Draft stock updates appear once tournament games are played.</p>
       ) : (
         <ul className="wjc-stock-sidebar-list wjc-scroll-panel">
           {sorted.slice(0, 20).map((row) => {
@@ -344,6 +344,14 @@ export function StatLeadersSidebar({ leaders }) {
     { id: "pts", title: "Points", rows: asArray(leaders?.byPts), metric: "pts", label: "PTS" },
     { id: "g", title: "Goals", rows: asArray(leaders?.byGoals), metric: "g", label: "G" },
     { id: "pm", title: "Plus/Minus", rows: asArray(leaders?.byPm), metric: "plus_minus", label: "+/−" },
+    {
+      id: "goalies",
+      title: "Goalies",
+      rows: asArray(leaders?.byGoalies),
+      metric: "sv_pct",
+      label: "SV%",
+      goalies: true,
+    },
     { id: "teams", title: "Teams", rows: asArray(leaders?.teamLeaders), metric: "pts", label: "PTS", teams: true },
   ];
   const [activeId, setActiveId] = useState("pts");
@@ -423,14 +431,21 @@ export function StatLeadersSidebar({ leaders }) {
                   </td>
                 </tr>
               ) : (
-                active.rows.slice(0, 10).map((row, i) => (
+                active.rows.slice(0, 10).map((row, i) => {
+                  if (isWjcNpc(row)) return null;
+                  return (
                   <tr key={row.player_id || `${active.id}-${i}`}>
                     <td>{i + 1}</td>
                     <td title={safeText(row.name)}>{safeText(row.name, "—")}</td>
                     <td>{abbrCode(row.wjc_country)}</td>
-                    <td>{row[active.metric] ?? 0}</td>
+                    <td>
+                      {active.goalies
+                        ? `${row.w ?? 0}-${row.l ?? 0} · ${row.sv ?? 0} SV (${((Number(row.sv_pct) || 0) * 100).toFixed(1)}%)`
+                        : row[active.metric] ?? 0}
+                    </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -521,8 +536,10 @@ export function BroadcastSubtitle({ line, activeSpeakerId }) {
 
 export function ProspectDetailModal({ prospect, tournamentStats, franchiseState, onClose, onOpenDraftBoard }) {
   if (!prospect) return null;
+  if (isWjcNpc(prospect)) return null;
   const player = wjcPlayerHeadshot(prospect);
   const wjc = tournamentStats || {};
+  const isGoalie = String(prospect.position || wjc.position || "F").toUpperCase() === "G";
   const prospectId = prospect.draft_prospect_id || prospect.player_id;
   const profiles = franchiseState?.draft_class_hud?.prospect_profiles_by_id || {};
   const profile = profiles[prospectId] || null;
@@ -588,13 +605,25 @@ export function ProspectDetailModal({ prospect, tournamentStats, franchiseState,
           </article>
           <article>
             <h4>World Juniors</h4>
-            <ul>
-              <li>
-                {wjc.gp ?? prospect.tournament_gp ?? 0} GP · {wjc.g ?? prospect.tournament_g ?? 0}G · {wjc.a ?? 0}A ·{" "}
-                {wjc.pts ?? prospect.tournament_pts ?? 0} PTS
-              </li>
-              <li>Plus-minus {wjc.plus_minus ?? 0}</li>
-            </ul>
+            {isGoalie ? (
+              <ul>
+                <li>
+                  {wjc.gp ?? prospect.tournament_gp ?? 0} GP · {wjc.w ?? 0}-{wjc.l ?? 0} · {wjc.sv ?? 0} SV
+                </li>
+                <li>
+                  {wjc.ga ?? 0} GA · {((Number(wjc.sv_pct) || 0) * 100).toFixed(1)}% SV
+                  {wjc.shutouts ? ` · ${wjc.shutouts} SO` : ""}
+                </li>
+              </ul>
+            ) : (
+              <ul>
+                <li>
+                  {wjc.gp ?? prospect.tournament_gp ?? 0} GP · {wjc.g ?? prospect.tournament_g ?? 0}G · {wjc.a ?? 0}A ·{" "}
+                  {wjc.pts ?? prospect.tournament_pts ?? 0} PTS
+                </li>
+                <li>Plus-minus {wjc.plus_minus ?? 0}</li>
+              </ul>
+            )}
           </article>
           {isDraftEligible ? (
             <article>
@@ -647,6 +676,18 @@ export function GameResultModal({ game, onClose, formatScoreLine, gameCode }) {
   const box = game.box_score || {};
   const homeLines = asArray(box.home);
   const awayLines = asArray(box.away);
+  const homeGoalie = box.home_goalie;
+  const awayGoalie = box.away_goalie;
+
+  const renderGoalie = (row) => {
+    if (!row || typeof row !== "object") return null;
+    return (
+      <li key={row.player_id || row.name}>
+        {row.name} — {row.w ?? 0}-{row.l ?? 0}, {row.sv ?? 0}/{row.sa ?? 0} SV (
+        {((Number(row.sv_pct) || 0) * 100).toFixed(1)}%)
+      </li>
+    );
+  };
 
   return (
     <div className="wjc-game-modal-backdrop" role="presentation" onClick={onClose}>
@@ -676,7 +717,7 @@ export function GameResultModal({ game, onClose, formatScoreLine, gameCode }) {
             <b>{game.away_goals}</b>
           </div>
         </div>
-        {homeLines.length || awayLines.length ? (
+        {homeLines.length || awayLines.length || homeGoalie || awayGoalie ? (
           <div className="wjc-game-modal__box">
             <div>
               <h4>{gameCode(game, "home")} Skaters</h4>
@@ -687,6 +728,12 @@ export function GameResultModal({ game, onClose, formatScoreLine, gameCode }) {
                   </li>
                 ))}
               </ul>
+              {homeGoalie ? (
+                <>
+                  <h4>{gameCode(game, "home")} Goalie</h4>
+                  <ul>{renderGoalie(homeGoalie)}</ul>
+                </>
+              ) : null}
             </div>
             <div>
               <h4>{gameCode(game, "away")} Skaters</h4>
@@ -697,6 +744,12 @@ export function GameResultModal({ game, onClose, formatScoreLine, gameCode }) {
                   </li>
                 ))}
               </ul>
+              {awayGoalie ? (
+                <>
+                  <h4>{gameCode(game, "away")} Goalie</h4>
+                  <ul>{renderGoalie(awayGoalie)}</ul>
+                </>
+              ) : null}
             </div>
           </div>
         ) : (

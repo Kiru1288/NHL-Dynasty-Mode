@@ -515,6 +515,21 @@ def _evidence_strengths(row: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "context": "Produced against international draft peers",
                 "confidence": "High",
             })
+        wjc_grade = str(row.get("wjc_performance_grade") or "").lower()
+        wjc_ovr_delta = _f(row.get("wjc_ovr_delta") or 0)
+        wjc_pot_delta = _f(row.get("wjc_potential_delta") or 0)
+        if wjc_grade in ("breakout", "positive") and (wjc_ovr_delta > 0 or wjc_pot_delta > 0):
+            bits = []
+            if wjc_ovr_delta > 0:
+                bits.append(f"+{wjc_ovr_delta:.1f} OVR")
+            if wjc_pot_delta > 0:
+                bits.append(f"+{wjc_pot_delta:.1f} ceiling")
+            out.append({
+                "title": "WJC development bump",
+                "fact": " · ".join(bits),
+                "context": str(row.get("wjc_summary") or "Strong international tournament shifted projection"),
+                "confidence": "High" if wjc_grade == "breakout" else "Medium",
+            })
         gap = max(0.0, pot - ovr)
         if pot >= 82 and gap >= 12 and not hidden_ceiling:
             out.append({
@@ -584,8 +599,41 @@ def _evidence_weaknesses(row: Dict[str, Any]) -> List[Dict[str, Any]]:
     weight = _f(row.get("weight"))
     height_disp = _fmt_height(row)
     sv = _f(row.get("save_pct") or row.get("sv_pct") or row.get("save_percentage"))
+    wjc_gp = _i(row.get("wjc_gp") or row.get("wjc_games") or 0)
+    wjc_pts = _i(row.get("wjc_points") or 0)
+    wjc_grade = str(row.get("wjc_performance_grade") or "").lower()
+    wjc_ovr_delta = _f(row.get("wjc_ovr_delta") or 0)
+    wjc_pot_delta = _f(row.get("wjc_potential_delta") or 0)
 
-    if pos == "G":
+    if wjc_grade in ("setback", "quiet") and wjc_gp >= 3:
+        if pos == "G":
+            wjc_sv = _f(row.get("wjc_sv_pct") or 0)
+            if wjc_sv > 0 and wjc_sv < 0.880:
+                out.append({
+                    "title": "WJC goaltending",
+                    "fact": f".{str(int(round(wjc_sv * 1000))).zfill(3)} SV% in {wjc_gp} WJC games",
+                    "context": "International stage exposed stop-rate concerns",
+                    "confidence": "High",
+                })
+        elif wjc_pts <= 1:
+            out.append({
+                "title": "WJC production",
+                "fact": f"{wjc_pts} points in {wjc_gp} WJC games",
+                "context": "Quiet tournament against draft peer competition",
+                "confidence": "Medium",
+            })
+        if wjc_ovr_delta < 0 or wjc_pot_delta < 0:
+            bits = []
+            if wjc_ovr_delta < 0:
+                bits.append(f"{wjc_ovr_delta:.1f} OVR")
+            if wjc_pot_delta < 0:
+                bits.append(f"{wjc_pot_delta:.1f} ceiling")
+            out.append({
+                "title": "WJC projection trim",
+                "fact": " · ".join(bits),
+                "context": str(row.get("wjc_summary") or "Poor WJC sample lowered development outlook"),
+                "confidence": "Medium",
+            })
         if sv > 0 and sv < 0.900 and gp >= 15:
             out.append({
                 "title": "Save rate",
@@ -2665,15 +2713,37 @@ def build_prospect_profile(
     wjc_raw = row.get("wjc_stats") if isinstance(row.get("wjc_stats"), dict) else None
     wjc_gp = _i(row.get("wjc_gp") or row.get("wjc_games") or (wjc_raw or {}).get("gp"))
     if wjc_gp > 0 or wjc_raw:
+        wjc_pos = str(
+            row.get("wjc_position")
+            or (wjc_raw or {}).get("position")
+            or row.get("position")
+            or "F"
+        ).upper()
         wjc_stats = {
             "played": True,
             "games": wjc_gp or _i((wjc_raw or {}).get("gp")),
             "goals": _i(row.get("wjc_goals") or (wjc_raw or {}).get("goals")),
             "assists": _i(row.get("wjc_assists") or (wjc_raw or {}).get("assists")),
             "points": _i(row.get("wjc_points") or (wjc_raw or {}).get("points")),
+            "plusMinus": _i(row.get("wjc_plus_minus") or (wjc_raw or {}).get("plus_minus")),
+            "wins": _i(row.get("wjc_w") or (wjc_raw or {}).get("w")),
+            "losses": _i(row.get("wjc_l") or (wjc_raw or {}).get("l")),
+            "shutouts": _i(row.get("wjc_shutouts") or (wjc_raw or {}).get("shutouts")),
+            "savePct": (wjc_raw or {}).get("sv_pct") if wjc_raw else row.get("wjc_sv_pct"),
             "team": row.get("wjc_team") or (wjc_raw or {}).get("team"),
             "year": row.get("wjc_year") or (wjc_raw or {}).get("year"),
             "result": row.get("wjc_result") or (wjc_raw or {}).get("result"),
+            "stockDelta": _i(row.get("wjc_stock_delta") or (wjc_raw or {}).get("stock_delta")),
+            "performanceGrade": row.get("wjc_performance_grade") or (wjc_raw or {}).get("performance_grade"),
+            "summary": row.get("wjc_summary") or (wjc_raw or {}).get("summary"),
+            "ovrDelta": (wjc_raw or {}).get("ovr_delta") if wjc_raw else row.get("wjc_ovr_delta"),
+            "potentialDelta": (wjc_raw or {}).get("potential_delta") if wjc_raw else row.get("wjc_potential_delta"),
+            "ovrBefore": row.get("wjc_ovr_before") or (wjc_raw or {}).get("ovr_before"),
+            "ovrAfter": row.get("wjc_ovr_after") or (wjc_raw or {}).get("ovr_after"),
+            "potentialBefore": row.get("wjc_potential_before") or (wjc_raw or {}).get("potential_before"),
+            "potentialAfter": row.get("wjc_potential_after") or (wjc_raw or {}).get("potential_after"),
+            "position": wjc_pos,
+            "isGoalie": wjc_pos == "G",
         }
         if wjc_stats["games"] and wjc_stats["points"] is not None:
             wjc_stats["ppg"] = round(wjc_stats["points"] / max(1, wjc_stats["games"]), 2)
@@ -2841,6 +2911,7 @@ def build_prospect_profile(
         },
         "analytics": analytics or None,
         "wjcStats": wjc_stats,
+        "wjcPerformance": wjc_stats,
         "playoffStats": playoff_stats,
         "competition": comp,
         "projection": projection,

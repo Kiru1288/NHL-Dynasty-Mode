@@ -5,6 +5,7 @@ import {
   buildWjcDraftStockRows,
   buildWjcShowcaseCards,
   buildWjcStatLeaders,
+  isWjcNpc,
 } from "./wjcBroadcastBuilder";
 
 import {
@@ -975,7 +976,9 @@ function WjcShowcaseGrid({
   payload,
   onSelectProspect,
 }) {
-  const visibleCards = asArray(cards).slice(0, 4);
+  const visibleCards = asArray(cards)
+    .filter((card) => card?.type === "player" && card?.name && !isWjcNpc(card))
+    .slice(0, 4);
 
   return (
     <section className="wjc-page-card wjc-page-showcase">
@@ -990,7 +993,7 @@ function WjcShowcaseGrid({
 
       {!visibleCards.length ? (
         <div className="wjc-page-empty">
-          Tournament spotlights will appear as players establish themselves.
+          Tournament spotlights appear after real games and draft-eligible production.
         </div>
       ) : (
         <div className="wjc-page-showcase__grid">
@@ -1003,6 +1006,9 @@ function WjcShowcaseGrid({
 
             const stockDelta =
               card?.stock_delta ?? card?.delta ?? null;
+            const natLabel =
+              card?.wjc_country_label ||
+              countryLabelFor(country, payload);
 
             return (
               <button
@@ -1027,6 +1033,10 @@ function WjcShowcaseGrid({
 
                 <strong>{getShowcaseName(card)}</strong>
                 <p>{getShowcaseText(card)}</p>
+                <span className="wjc-page-showcase-card__meta">
+                  {natLabel}
+                  {card?.gp != null ? ` · ${card.gp} GP · ${card.pts ?? 0} PTS` : ""}
+                </span>
 
                 {stockDelta != null ? (
                   <div
@@ -1188,7 +1198,7 @@ function mergeUserProspectsWithStats(payload) {
   const stats = asArray(payload?.player_stats);
   const tournamentProspects = asArray(
     payload?.tournament_prospects
-  );
+  ).filter((p) => !isWjcNpc(p));
 
   return asArray(payload?.user_prospects).map((prospect) => {
     const tournamentProfile = tournamentProspects.find(
@@ -1682,7 +1692,7 @@ export default function WorldJuniorsMenu({
 
   const handleSelectProspect = useCallback(
     (row) => {
-      if (!row) return;
+      if (!row || isWjcNpc(row)) return;
 
       const fullProfile =
         draftStockRows.find(
@@ -1693,7 +1703,7 @@ export default function WorldJuniorsMenu({
         asArray(payload.tournament_prospects).find(
           (candidate) =>
             String(candidate?.player_id) ===
-            String(row?.player_id)
+            String(row?.player_id) && !isWjcNpc(candidate)
         ) ||
         asArray(payload.user_prospects).find(
           (candidate) =>
@@ -1701,6 +1711,8 @@ export default function WorldJuniorsMenu({
             String(row?.player_id)
         ) ||
         row;
+
+      if (isWjcNpc(fullProfile)) return;
 
       setSelectedProspect({
         ...row,

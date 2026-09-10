@@ -19,6 +19,7 @@ import {
   getUniversalOverall,
 } from "../utils/playerOverall";
 import { getRosterMoves, moveRosterPlayer, getStatsCentral } from "../services/franchiseService";
+import { resolveWjcDossierBlock } from "./prospectDossierHelpers";
 
 /**
  * RosterScreen.js
@@ -5236,6 +5237,10 @@ function DevelopmentPanel({ player }) {
     .filter(Boolean);
 
   const hasCurve = validSnapshots.length >= 2;
+  const wjcProfile = {
+    wjcStats: player.wjcStats || player.wjc_tournament?.wjc_stats || player.wjc_tournament,
+  };
+  const wjcBlock = resolveWjcDossierBlock(wjcProfile, String(player.position || "").toUpperCase() === "G");
 
   return (
     <section className="nhlrost-development-layout">
@@ -5297,6 +5302,29 @@ function DevelopmentPanel({ player }) {
           />
         )}
       </article>
+
+      {wjcBlock ? (
+        <article className="nhlrost-panel">
+          <header className="nhlrost-panel__head">
+            <div>
+              <p>International</p>
+              <h3>World Juniors (U20)</h3>
+            </div>
+          </header>
+          <p className="nhlrost-wjc-headline">{wjcBlock.headline}</p>
+          {wjcBlock.summary ? <p className="nhlrost-wjc-summary">{wjcBlock.summary}</p> : null}
+          <div className="nhlrost-stat-grid nhlrost-stat-grid--wide">
+            {wjcBlock.tiles.map((tile) => (
+              <InfoPair key={`wjc-${tile.label}`} label={tile.label} value={tile.value} />
+            ))}
+          </div>
+          {wjcBlock.impactLines?.length ? (
+            <ul className="nhlrost-wjc-impact">
+              {wjcBlock.impactLines.map((line) => <li key={line}>{line}</li>)}
+            </ul>
+          ) : null}
+        </article>
+      ) : null}
     </section>
   );
 }

@@ -104,6 +104,11 @@ def is_active_nhl_roster_player(player: Any) -> bool:
         return False
     if is_on_ir(player) or is_on_ltir(player):
         return False
+    loan_mode = str(getattr(player, "wjc_loan_mode", "") or "")
+    if loan_mode == "full" or (
+        getattr(player, "wjc_tournament_loan", False) and getattr(player, "_wjc_cap_exempt", False)
+    ):
+        return False
     return True
 
 

@@ -6755,6 +6755,7 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     session.wjc_loan_prompts_enqueued = False
     session.wjc_nhl_u20_loan = {}
     session.wjc_draft_score_boosts = {}
+    session.wjc_prospect_tournament_results = {}
     try:
         arch = list(getattr(session, "showcase_archive", None) or [])
         session.showcase_archive = [
