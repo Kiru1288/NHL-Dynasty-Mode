@@ -377,12 +377,24 @@ def _rating_key_buckets(ratings: Mapping[str, Any]) -> Dict[str, List[str]]:
 
 def _derive_dossier_identity(row: Dict[str, Any], player: Any) -> None:
     """Ensure archetype and play style exist on the row from ratings + junior production."""
+    if getattr(player, "_identity_committed", False):
+        arch = getattr(player, "archetype", None)
+        ps = getattr(player, "playstyle", None)
+        if arch is not None:
+            row["dossier_archetype"] = str(getattr(arch, "value", arch) or "")
+            row.setdefault("archetype", row["dossier_archetype"])
+        if ps:
+            row["playstyle"] = str(ps)
+            row["dossier_play_style"] = str(ps).replace("_", " ").title()
+        if row.get("dossier_archetype"):
+            return
+
     if row.get("dossier_archetype"):
         row.setdefault("archetype", row.get("dossier_archetype"))
     else:
         pos = str(row.get("position") or getattr(player, "position", "") or "").upper()
         dev_arch = str(getattr(player, "_dev_archetype", "") or "").strip()
-        if dev_arch:
+        if dev_arch and not getattr(player, "_identity_committed", False):
             row.setdefault("dossier_archetype", dev_arch)
             row.setdefault("archetype", dev_arch)
         elif pos == "G":
@@ -486,8 +498,11 @@ def enrich_prospect_row_from_player(player: Any, row: Dict[str, Any]) -> None:
         if chem.get("defensive_buy_in") is not None:
             row.setdefault("defensive_buy_in", float(chem.get("defensive_buy_in")))
     arch = getattr(player, "archetype", None)
-    if arch is not None:
+    if arch is not None and not row.get("archetype"):
         row.setdefault("archetype", str(getattr(arch, "value", arch) or ""))
+    ps = getattr(player, "playstyle", None)
+    if ps and not row.get("playstyle"):
+        row["playstyle"] = str(ps)
     tier = str(getattr(player, "pipeline_tier", "") or "").strip()
     if tier:
         row.setdefault("pipeline_tier", tier)
@@ -979,7 +994,8 @@ def infer_prospect_role(row: Mapping[str, Any]) -> str:
     if pos == "G":
         return "goalie"
     blob = " ".join(
-        str(row.get(k) or "") for k in ("playstyle", "archetype", "player_type", "_dev_archetype")
+        str(row.get(k) or "")
+        for k in ("playstyle", "archetype", "player_type", "dossier_archetype", "dossier_play_style")
     ).lower().replace("_", " ")
     if pos in ("D", "LD", "RD", "LHD", "RHD"):
         if "offensive" in blob or "puck mover" in blob or "quarterback" in blob:

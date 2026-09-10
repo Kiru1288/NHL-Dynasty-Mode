@@ -3,7 +3,7 @@ import {
   resolveFranchiseTeamLogo,
   toLogoUrl,
 } from "../../utils/teamLogos";
-import { enterPlayoffs, playoffAction, continueOffseason } from "../../services/franchiseService";
+import { enterPlayoffs, playoffAction } from "../../services/franchiseService";
 import { isNetworkError, formatFranchiseApiError, isTimeoutError } from "../../services/api";
 import { useGameUI } from "../../game/GameUIContext";
 import "../../styles/nhlcalShell.css";
@@ -523,17 +523,16 @@ export default function PlayoffStartMenu({
   franchiseState = {},
   playoffData = {},
   onEnterPlayoffs,
+  onContinue,
   onBack,
 }) {
-  const { mergeFranchiseState, setFranchiseState, openFranchiseEvent } = useGameUI() || {};
+  const { mergeFranchiseState, setFranchiseState } = useGameUI() || {};
   const [busy, setBusy] = useState(false);
   const [simStatus, setSimStatus] = useState("");
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState(null);
   const [justSetIds, setJustSetIds] = useState(() => new Set());
   const prevTeamsRef = useRef(new Map());
-  const autoEnterRef = useRef(false);
-  const autoOpenAwardsRef = useRef(false);
 
   const phase = String(franchiseState?.season_phase || franchiseState?.phase || "").toLowerCase();
   const live = franchiseState?.playoff_live || playoffData?.live_state || null;
@@ -616,23 +615,6 @@ export default function PlayoffStartMenu({
     [mergeFranchiseState, setFranchiseState]
   );
 
-  const handoffToOffseason = useCallback(
-    async (res) => {
-      const st = res?.state || {};
-      const finished =
-        st.season_phase === "post_cup" ||
-        st.phase === "post_cup" ||
-        st.season_phase === "offseason" ||
-        res?.result?.finish?.status === "post_cup";
-      if (!finished) return;
-      autoOpenAwardsRef.current = true;
-      if (typeof openFranchiseEvent === "function") {
-        openFranchiseEvent();
-      }
-    },
-    [openFranchiseEvent]
-  );
-
   const runEnter = useCallback(async () => {
     setBusy(true);
     setError("");
@@ -677,7 +659,6 @@ export default function PlayoffStartMenu({
         if (res?.result?.series?.series_id) {
           setSelectedId(res.result.series.series_id);
         }
-        await handoffToOffseason(res);
         if (res?.result?.finish?.status === "post_cup" || res?.state?.season_phase === "post_cup") {
           setError("");
         }
@@ -695,7 +676,7 @@ export default function PlayoffStartMenu({
         setSimStatus("");
       }
     },
-    [isLive, cupComplete, runEnter, applyState, handoffToOffseason]
+    [isLive, cupComplete, runEnter, applyState]
   );
 
   const runSimSeries = useCallback(async () => {
@@ -741,17 +722,15 @@ export default function PlayoffStartMenu({
           res?.result?.finish?.status === "post_cup" ||
           Boolean(res?.result?.finish?.champion_id);
         if (finished) {
-          await handoffToOffseason(res);
           break;
         }
         // Let React paint bracket updates between day requests.
         await sleep(80);
       }
       if (!finished) {
-        setSimStatus("Finishing Cup run + awards…");
+        setSimStatus("Finishing Cup run…");
         const res = await playoffAction("sim_rest");
         applyState(res);
-        await handoffToOffseason(res);
       }
     } catch (e) {
       setError(
@@ -764,38 +743,23 @@ export default function PlayoffStartMenu({
       setBusy(false);
       setSimStatus("");
     }
-  }, [isLive, cupComplete, runEnter, applyState, handoffToOffseason, playoffDay]);
+  }, [isLive, cupComplete, runEnter, applyState, playoffDay]);
 
   const runContinueOffseason = useCallback(async () => {
     setBusy(true);
     setError("");
-    setSimStatus("Wrapping postseason…");
+    setSimStatus(phase === "post_cup" ? "Opening awards…" : "Wrapping postseason…");
     try {
-      // Cup can look complete in the UI while backend phase is still "playoffs".
-      // Always finish live playoffs first, then continue into awards.
+      if (phase === "post_cup") {
+        if (typeof onContinue === "function") await onContinue();
+        return;
+      }
       if (isLive || phase === "playoffs" || phase === "playoff_ready") {
         const action = cupComplete ? "finish" : "sim_rest";
         const res = await playoffAction(action);
         applyState(res);
-        await handoffToOffseason(res);
-        const st = res?.state || {};
-        if (
-          st.season_phase === "post_cup" ||
-          st.phase === "post_cup" ||
-          st.season_phase === "offseason" ||
-          res?.result?.finish?.status === "post_cup"
-        ) {
-          const next = await continueOffseason({ from_stage: "awards" });
-          applyState(next);
-          if (typeof openFranchiseEvent === "function") openFranchiseEvent();
-          return;
-        }
+        return;
       }
-      const res = await continueOffseason({
-        from_stage: String("awards"),
-      });
-      applyState(res);
-      if (typeof openFranchiseEvent === "function") openFranchiseEvent();
     } catch (e) {
       setError(
         isTimeoutError(e) || isNetworkError(e)
@@ -806,15 +770,7 @@ export default function PlayoffStartMenu({
       setBusy(false);
       setSimStatus("");
     }
-  }, [cupComplete, isLive, applyState, handoffToOffseason, openFranchiseEvent]);
-
-  // Land on the live bracket immediately from playoff_ready.
-  useEffect(() => {
-    if (autoEnterRef.current) return;
-    if (phase !== "playoff_ready" || isLive || busy) return;
-    autoEnterRef.current = true;
-    runEnter();
-  }, [phase, isLive, busy, runEnter]);
+  }, [cupComplete, isLive, phase, applyState, onContinue]);
 
   useEffect(() => {
     if (isLive && live?.intro_seen === false) {
@@ -1010,7 +966,7 @@ export default function PlayoffStartMenu({
                 <span className="po-hub-action-icon" aria-hidden>
                   ⏭
                 </span>
-                {userEliminated || !userSeries ? "Sim Playoffs → Awards" : "Sim Playoffs"}
+                {userEliminated || !userSeries ? "Sim Playoffs" : "Sim Playoffs"}
               </button>
             </>
           )}

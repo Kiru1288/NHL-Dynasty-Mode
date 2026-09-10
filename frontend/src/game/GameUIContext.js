@@ -559,6 +559,23 @@ export function GameUIProvider({ children }) {
   const advancingDepthRef = useRef(0);
   const advancingSafetyTimerRef = useRef(null);
   const [franchiseEventForceOpen, setFranchiseEventForceOpen] = useState(false);
+  const [franchisePhaseTransition, setFranchisePhaseTransition] = useState({
+    active: false,
+    label: "",
+  });
+  const franchisePhaseDepthRef = useRef(0);
+
+  const beginFranchisePhaseTransition = useCallback((label = "") => {
+    franchisePhaseDepthRef.current += 1;
+    setFranchisePhaseTransition({ active: true, label: String(label || "") });
+  }, []);
+
+  const endFranchisePhaseTransition = useCallback(() => {
+    franchisePhaseDepthRef.current = Math.max(0, franchisePhaseDepthRef.current - 1);
+    if (franchisePhaseDepthRef.current === 0) {
+      setFranchisePhaseTransition({ active: false, label: "" });
+    }
+  }, []);
 
   const beginAdvancing = useCallback((label = "Simulating league day…") => {
     advancingDepthRef.current += 1;
@@ -1150,7 +1167,7 @@ export function GameUIProvider({ children }) {
 
   const onEnterPlayoffs = useCallback(async () => {
     if (!franchiseState) return null;
-    beginAdvancing("Entering playoffs…");
+    beginFranchisePhaseTransition("Entering playoffs…");
     setError(null);
     try {
       const res = await enterPlayoffs();
@@ -1163,12 +1180,18 @@ export function GameUIProvider({ children }) {
       handleFranchiseApiError(e);
       return null;
     } finally {
-      endAdvancing();
+      endFranchisePhaseTransition();
     }
-  }, [franchiseState, handleFranchiseApiError, setFranchiseEventForceOpen, beginAdvancing, endAdvancing]);
+  }, [
+    franchiseState,
+    handleFranchiseApiError,
+    setFranchiseEventForceOpen,
+    beginFranchisePhaseTransition,
+    endFranchisePhaseTransition,
+  ]);
 
   const onAdvanceSeasonPhase = useCallback(async (payload = {}) => {
-    beginAdvancing("Advancing season phase…");
+    beginFranchisePhaseTransition("Advancing season…");
     setError(null);
     try {
       const res = await advanceSeasonPhase(payload);
@@ -1178,12 +1201,12 @@ export function GameUIProvider({ children }) {
       handleFranchiseApiError(e);
       return null;
     } finally {
-      endAdvancing();
+      endFranchisePhaseTransition();
     }
-  }, [handleFranchiseApiError, beginAdvancing, endAdvancing]);
+  }, [handleFranchiseApiError, beginFranchisePhaseTransition, endFranchisePhaseTransition]);
 
   const onContinueOffseason = useCallback(async () => {
-    beginAdvancing("Continuing offseason…");
+    beginFranchisePhaseTransition("Continuing…");
     setError(null);
     try {
       const fromStage = String(
@@ -1210,13 +1233,19 @@ export function GameUIProvider({ children }) {
       handleFranchiseApiError(e);
       return null;
     } finally {
-      endAdvancing();
+      endFranchisePhaseTransition();
     }
-  }, [franchiseState, handleFranchiseApiError, setFranchiseEventForceOpen, beginAdvancing, endAdvancing]);
+  }, [
+    franchiseState,
+    handleFranchiseApiError,
+    setFranchiseEventForceOpen,
+    beginFranchisePhaseTransition,
+    endFranchisePhaseTransition,
+  ]);
 
   const onReopenOffseasonStage = useCallback(
     async (stage = "free_agency") => {
-      beginAdvancing("Opening offseason stage…");
+      beginFranchisePhaseTransition("Opening stage…");
       setError(null);
       try {
         const res = await reopenOffseasonStage({ stage });
@@ -1229,10 +1258,15 @@ export function GameUIProvider({ children }) {
         handleFranchiseApiError(e);
         return null;
       } finally {
-        endAdvancing();
+        endFranchisePhaseTransition();
       }
     },
-    [handleFranchiseApiError, setFranchiseEventForceOpen, beginAdvancing, endAdvancing]
+    [
+      handleFranchiseApiError,
+      setFranchiseEventForceOpen,
+      beginFranchisePhaseTransition,
+      endFranchisePhaseTransition,
+    ]
   );
 
   const openFranchiseEvent = useCallback(() => {
@@ -1266,23 +1300,35 @@ export function GameUIProvider({ children }) {
   );
 
   const onGenerateNextSeason = useCallback(async () => {
-    beginAdvancing("Generating next season…");
+    beginFranchisePhaseTransition("Building next season…");
     setError(null);
     try {
       const res = await generateNextSeason();
       if (res?.state) {
         mergeFranchiseState(res.state);
-        // Roster Check → Generate lands on the September hub, not another cinematic.
-        setFranchiseEventForceOpen(false);
+        const stage = String(res.state.offseason_stage || "").toLowerCase();
+        const nextPhase = String(res.state.phase || res.state.season_phase || "").toLowerCase();
+        if (stage === "next_season_reveal" || nextPhase === "offseason") {
+          setFranchiseEventForceOpen(true);
+        } else if (nextPhase === "preseason" || nextPhase === "regular") {
+          setFranchiseEventForceOpen(false);
+        } else {
+          setFranchiseEventForceOpen(true);
+        }
       }
       return res;
     } catch (e) {
       handleFranchiseApiError(e);
       return null;
     } finally {
-      endAdvancing();
+      endFranchisePhaseTransition();
     }
-  }, [handleFranchiseApiError, setFranchiseEventForceOpen, beginAdvancing, endAdvancing]);
+  }, [
+    handleFranchiseApiError,
+    setFranchiseEventForceOpen,
+    beginFranchisePhaseTransition,
+    endFranchisePhaseTransition,
+  ]);
 
   const onResolveDecision = useCallback(async (decisionId, choiceId) => {
     setError(null);
@@ -1464,6 +1510,9 @@ export function GameUIProvider({ children }) {
       openFranchiseEvent,
       franchiseEventForceOpen,
       setFranchiseEventForceOpen,
+      franchisePhaseTransition,
+      beginFranchisePhaseTransition,
+      endFranchisePhaseTransition,
       worldJuniorsOpen,
       openWorldJuniors,
       closeWorldJuniors,
@@ -1528,6 +1577,9 @@ export function GameUIProvider({ children }) {
       openFranchiseEvent,
       franchiseEventForceOpen,
       setFranchiseEventForceOpen,
+      franchisePhaseTransition,
+      beginFranchisePhaseTransition,
+      endFranchisePhaseTransition,
       worldJuniorsOpen,
       openWorldJuniors,
       closeWorldJuniors,

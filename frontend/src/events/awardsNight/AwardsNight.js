@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useGameUI } from "../../game/GameUIContext";
 import PlayerHeadshot from "../../components/PlayerHeadshot";
 import {
   buildAwardsCeremonySlides,
@@ -450,7 +449,6 @@ export default function AwardsNight({
   const [continueError, setContinueError] = useState("");
   const timerRef = useRef(null);
   const spokenRef = useRef("");
-  const { openFranchiseEvent } = useGameUI() || {};
 
   const activeSlide = slides[activeIndex] || null;
   const awardRevealed =
@@ -590,7 +588,6 @@ export default function AwardsNight({
     setContinueError("");
     try {
       await onContinue();
-      if (typeof openFranchiseEvent === "function") openFranchiseEvent();
     } catch (error) {
       const message =
         error?.response?.data?.detail ||
@@ -604,7 +601,7 @@ export default function AwardsNight({
     } finally {
       setContinuing(false);
     }
-  }, [continuing, onContinue, openFranchiseEvent]);
+  }, [continuing, onContinue]);
 
   if (!slides.length) {
     return (

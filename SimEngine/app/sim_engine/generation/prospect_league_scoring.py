@@ -417,7 +417,6 @@ def _playstyle_bucket(prospect: Any) -> str:
         str(getattr(prospect, "playstyle", "") or ""),
         str(getattr(prospect, "archetype", "") or ""),
         str(getattr(prospect, "player_type", "") or ""),
-        str(getattr(prospect, "_dev_archetype", "") or ""),
     ]
     blob = " ".join(parts).lower().replace("_", " ").replace("-", " ")
     if _is_goalie(prospect):

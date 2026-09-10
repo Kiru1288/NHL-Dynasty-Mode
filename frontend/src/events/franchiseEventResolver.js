@@ -168,9 +168,10 @@ function resolveEventKey(franchiseState) {
   const stage = String(franchiseState.offseason_stage || "").toLowerCase();
   const next = String(franchiseState.next_important_event || "").toLowerCase();
 
-  if (phase === "post_cup") return "awards";
-  if (phase === "complete" && playoffsAreComplete(franchiseState)) return "awards";
-  if (next === "awards") return "awards";
+  if (phase === "post_cup") return "playoffs_start";
+  if (phase === "offseason" && stage === "awards") return "awards";
+  if (phase === "complete" && playoffsAreComplete(franchiseState)) return "playoffs_start";
+  if (next === "awards" && phase === "offseason") return "awards";
   if (phase === "offseason" && stage && EVENT_MAP[stage]) return stage;
   if (phase === "offseason" && next && EVENT_MAP[next]) return next;
   if (phase === "playoffs" || phase === "playoff_ready" || next === "enter_playoffs" || next === "playoffs") {
@@ -189,7 +190,10 @@ export function getFranchisePhaseCta(franchiseState) {
   const stage = String(franchiseState.offseason_stage || "").toLowerCase();
   const next = String(franchiseState.next_important_event || "").toLowerCase();
 
-  if (phase === "post_cup" || stage === "awards" || next === "awards") return "Resume Offseason Timeline";
+  if (phase === "post_cup") return "Continue to Awards";
+  if (stage === "awards" || (phase === "offseason" && next === "awards")) {
+    return "Resume Awards Night";
+  }
   if (phase === "playoffs") return "Resume Playoff Bracket";
   if (phase === "playoff_ready" || next === "enter_playoffs") {
     return userMadePlayoffs(franchiseState) ? "Enter Playoffs" : "View Playoff Bracket";

@@ -2727,6 +2727,12 @@ def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None
             setattr(player, key, score)
         except Exception:
             pass
+    try:
+        from app.sim_engine.generation.prospect_identity import refresh_player_identity
+
+        refresh_player_identity(player, stats=stats, min_gp=8)
+    except Exception:
+        pass
 
 
 def _dev_season_gap_ovr(player: Any) -> float:
@@ -6212,6 +6218,12 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
                     age_now = int(getattr(ident, "age", 99) or 99) if ident else int(getattr(p, "age", 99) or 99)
                 except Exception:
                     age_now = 99
+                try:
+                    from app.sim_engine.generation.prospect_identity import progress_season_body_and_identity
+
+                    progress_season_body_and_identity(p, rng, min_gp=6)
+                except Exception:
+                    pass
                 # Age out undrafted overagers from junior clubs.
                 drafted = bool(getattr(p, "drafted", False)) or bool(
                     getattr(p, "nhl_rights_team_id", None) or getattr(p, "rights_team_id", None)
@@ -6685,8 +6697,15 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
         from services.franchise_sim import _iter_league_players_for_aging, sync_player_age_to_season
 
         league_obj = getattr(sim, "league", None)
+        body_rng = getattr(sim, "rng", None)
         for pl in _iter_league_players_for_aging(league_obj) if league_obj is not None else []:
             sync_player_age_to_season(pl, next_sy)
+            try:
+                from app.sim_engine.generation.prospect_identity import progress_season_body_and_identity
+
+                progress_season_body_and_identity(pl, body_rng, min_gp=6)
+            except Exception:
+                pass
     except Exception:
         pass
     session.draft_completed = False
@@ -6817,14 +6836,19 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     session.next_season_payload = payload
     session.next_season_generated = True
     _mark_stage_completed(session, "free_agency")
-    # Seamless handoff: skip the reveal cinematic and park the club in September camp.
-    # Hub world opens with the new calendar; players are already aged from year-end.
     session.offseason_stage = "next_season_reveal"
     _mark_stage_entered(session, "next_season_reveal")
-    _finalize_next_season_reveal(session)
-    session.timeline.append(f"NEW SEASON: {next_sy}–{next_sy + 1} schedule generated — camp opens.")
+    session.phase = "offseason"
+    session.season_phase = "offseason"
+    session.next_important_event = "next_season_reveal"
+    session.timeline.append(f"NEW SEASON: {next_sy}–{next_sy + 1} schedule generated — reveal ready.")
     invalidate_session_payload_caches(session, "next_season")
-    return {"next_season": payload, "status": "preseason", "season_phase": "preseason"}
+    return {
+        "next_season": payload,
+        "status": "offseason",
+        "season_phase": "offseason",
+        "offseason_stage": "next_season_reveal",
+    }
 
 
 def _scrub_lifecycle_popups_for_new_season(session: FranchiseSession) -> None:

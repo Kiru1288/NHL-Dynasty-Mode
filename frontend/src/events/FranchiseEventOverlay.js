@@ -18,12 +18,22 @@ export default function FranchiseEventOverlay({
 
   const handleContinueFlow = useCallback(async () => {
     const key = current?.key;
+    const phase = String(
+      franchiseState?.season_phase || franchiseState?.phase || ""
+    ).toLowerCase();
     try {
       if (key === "free_agency" && franchiseState?.flags?.can_generate_next_season) {
         if (typeof onGenerateNextSeason === "function") await onGenerateNextSeason();
         return;
       }
       if (key === "playoffs_start") {
+        if (
+          phase === "post_cup" ||
+          franchiseState?.flags?.can_continue_offseason
+        ) {
+          if (typeof onContinueOffseason === "function") await onContinueOffseason();
+          return;
+        }
         if (typeof onEnterPlayoffs === "function") await onEnterPlayoffs();
         return;
       }

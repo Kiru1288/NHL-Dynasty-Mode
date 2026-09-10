@@ -36,6 +36,7 @@ from app.sim_engine.generation.prospect_body import (
     generate_position_height_cm,
     generate_realistic_weight_kg,
 )
+from app.sim_engine.generation.prospect_identity import spawn_youth_baseline_profile
 
 TRANSCENDENT_CLASS_PROB = 0.0001
 _BUILD_ROLE_SHAPED_RATINGS = None
@@ -259,9 +260,31 @@ def _spawn_player(
 ) -> Player:
     target_ovr = ovr_lo + rng.uniform(0, max(1e-6, ovr_hi - ovr_lo))
     target_ovr = max(0.30, min(0.92, target_ovr))
-    archetype = assign_skater_archetype(pos, rng)
     build_role_shaped_ratings = _build_role_shaped_ratings_cached()
-    ratings = build_role_shaped_ratings(position=pos, target_ovr=target_ovr, rng=rng)
+    junior_pool = str(pool_context or "").lower() in (
+        "junior",
+        "chl",
+        "ncaa",
+        "euro_jr",
+        "prep",
+        "development",
+        "juniors",
+    )
+    if junior_pool:
+        from app.sim_engine.engine import pop_generation_profile
+        from app.sim_engine.entities.player import archetype_from_generation_profile
+
+        youth_profile = spawn_youth_baseline_profile(pos)
+        ratings = build_role_shaped_ratings(
+            position=pos, target_ovr=target_ovr, rng=rng, profile=youth_profile
+        )
+        gen_profile = pop_generation_profile(ratings)
+        archetype = archetype_from_generation_profile(gen_profile, pos) or (
+            "TWO_WAY" if str(getattr(pos, "value", pos)).upper() == "D" else "TWO_WAY_F"
+        )
+    else:
+        archetype = assign_skater_archetype(pos, rng)
+        ratings = build_role_shaped_ratings(position=pos, target_ovr=target_ovr, rng=rng)
     age = _pick_spawn_age(
         rng, age_lo, age_hi, pool_context=pool_context, league_code=league_code
     )
@@ -282,8 +305,12 @@ def _spawn_player(
     hometown = str(ident.hometown or "Unknown")
     birth_city = hometown.split(",")[0].strip() if hometown else "Unknown"
     arch_name = str(getattr(archetype, "value", archetype) or "")
-    h_cm = generate_position_height_cm(rng, pos, archetype=arch_name)
-    w_kg = generate_realistic_weight_kg(h_cm, pos, archetype=arch_name, age=age)
+    if junior_pool:
+        h_cm = generate_position_height_cm(rng, pos)
+        w_kg = generate_realistic_weight_kg(h_cm, pos, age=age)
+    else:
+        h_cm = generate_position_height_cm(rng, pos, archetype=arch_name)
+        w_kg = generate_realistic_weight_kg(h_cm, pos, archetype=arch_name, age=age)
     identity = IdentityBio(
         name=str(ident.full_name),
         age=age,
@@ -320,6 +347,9 @@ def _spawn_player(
         enforce_floor_on_init=False,
     )
     setattr(player, "_dob_anchor_year", year)
+    if junior_pool:
+        setattr(player, "_identity_provisional", True)
+        setattr(player, "_identity_committed", False)
     try:
         player.age = age
     except Exception:

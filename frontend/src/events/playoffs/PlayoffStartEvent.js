@@ -6,6 +6,7 @@ export default function PlayoffStartEvent({
   franchiseState,
   playoffData,
   onEnterPlayoffs,
+  onContinue,
   onClose,
   onBack,
 }) {
@@ -15,6 +16,7 @@ export default function PlayoffStartEvent({
         franchiseState={franchiseState}
         playoffData={playoffData}
         onEnterPlayoffs={onEnterPlayoffs}
+        onContinue={onContinue}
         onBack={onBack || onClose}
       />
     </div>

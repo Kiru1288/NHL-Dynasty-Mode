@@ -26,6 +26,7 @@ export default function EventRouter({
         franchiseState={franchiseState}
         playoffData={playoffData || data}
         onEnterPlayoffs={onEnterPlayoffs}
+        onContinue={onContinue}
         onClose={onClose}
         onBack={onBack}
       />

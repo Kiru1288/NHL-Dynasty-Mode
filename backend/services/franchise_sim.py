@@ -14107,6 +14107,12 @@ def _franchise_nhl_age_and_phase_tick(session: FranchiseSession, teams: List[Any
                             pass
 
         age_after = _player_age_int(player)
+        try:
+            from app.sim_engine.generation.prospect_identity import apply_yearly_body_maturation
+
+            apply_yearly_body_maturation(player, getattr(getattr(session, "sim", None), "rng", None))
+        except Exception:
+            pass
         # Soft aging decline: older players sometimes lose a touch of overall.
         try:
             if age_after >= 29 and age_after > age_before:
