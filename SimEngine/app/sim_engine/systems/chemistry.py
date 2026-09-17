@@ -570,25 +570,30 @@ def calculate_pair_chemistry(player_a: Any, player_b: Any, context: Optional[Dic
     role_balance = clamp(100.0 - abs(_to_num(pa.get("ego"), 50) - _to_num(pb.get("ego"), 50)) * 0.55, 0.0, 100.0)
     morale = mood * 100.0
 
+    # Chemistry is a property of the pairing, not of how last night went. Mood and
+    # usage satisfaction are deliberately minor: two players who fit still fit after
+    # a loss, and a score that swings game to game is unreadable as a lineup signal.
     score01 = (
-        0.22 * p_comp
-        + 0.20 * s_comp
-        + 0.12 * (mood)
-        + 0.12 * (familiarity / 100.0)
-        + 0.12 * (pos_fit / 100.0)
+        0.26 * p_comp
+        + 0.25 * s_comp
+        + 0.05 * (mood)
+        + 0.14 * (familiarity / 100.0)
+        + 0.14 * (pos_fit / 100.0)
         + 0.10 * (coach_fit / 100.0)
-        + 0.07 * (usage / 100.0)
-        + 0.05 * (role_balance / 100.0)
-        - 0.12 * tension_pen
+        + 0.03 * (usage / 100.0)
+        + 0.06 * (role_balance / 100.0)
+        - 0.10 * tension_pen
     )
     synergy_bonus = _playstyle_synergy_points(pa.get("playstyle"), pb.get("playstyle"))
     synergy_bonus += _personality_synergy_points(pa.get("personality"), pb.get("personality"))
     if _to_num(pa.get("ego"), 50.0) > 72.0 and _to_num(pb.get("ego"), 50.0) > 72.0:
         synergy_bonus -= 12.0
+    # Time together is upside, not a prerequisite. An untested pairing of two players
+    # who fit reads as promising; only a genuinely long, unproductive history drags.
     if familiarity >= 80.0:
-        synergy_bonus += min(10.0, (familiarity - 75.0) * 0.45)
-    elif familiarity <= 35.0:
-        synergy_bonus -= min(12.0, (40.0 - familiarity) * 0.5)
+        synergy_bonus += min(12.0, (familiarity - 75.0) * 0.55)
+    elif fam_count and familiarity <= 25.0:
+        synergy_bonus -= min(6.0, (25.0 - familiarity) * 0.24)
     score = int(round(clamp(score01 * 100.0 + synergy_bonus, 0.0, 100.0)))
     scheme = {
         "position_fit": int(round(pos_fit)),
@@ -599,6 +604,31 @@ def calculate_pair_chemistry(player_a: Any, player_b: Any, context: Optional[Dic
         "morale": int(round(clamp(morale, 0, 100))),
         "usage_satisfaction": int(round(usage)),
     }
+    # Name the actual relationship so the lineup screen can say why two players work,
+    # rather than showing a bare number the GM cannot act on.
+    reasons: List[str] = []
+    sa = str(pa.get("playstyle") or "")
+    sb = str(pb.get("playstyle") or "")
+    styles = {sa, sb}
+    if "playmaker" in styles and "sniper" in styles:
+        reasons.append("Playmaker feeds the finisher")
+    if "shutdown" in styles and "puck_mover" in styles:
+        reasons.append("Shutdown presence frees the puck mover")
+    if "offensive_defenseman" in styles and "defensive_defenseman" in styles:
+        reasons.append("Balanced pair: one joins the rush, one stays home")
+    if sa == sb and sa in ("sniper", "offensive_defenseman"):
+        reasons.append(f"Overlapping roles — two {sa.replace('_', ' ')}s")
+    if pa["personality"] == "high_ego_star" and pb["personality"] == "high_ego_star":
+        reasons.append("Two high-ego stars competing for the same touches")
+    if "young_skilled" in (pa["personality"], pb["personality"]) and (
+        "mentor" in (pa["personality"], pb["personality"])
+        or "leader" in (pa["personality"], pb["personality"])
+    ):
+        reasons.append("Veteran steadies the young skill")
+    if familiarity >= 80.0:
+        reasons.append("Long history together")
+    elif not fam_count:
+        reasons.append("Untested pairing")
     return {
         "player_a_id": ida,
         "player_b_id": idb,
@@ -607,6 +637,7 @@ def calculate_pair_chemistry(player_a: Any, player_b: Any, context: Optional[Dic
         "chemistry": score,
         "label": chemistry_label(score),
         "familiarity": scheme["familiarity"],
+        "reasons": reasons,
         "scheme_fit": scheme,
     }
 

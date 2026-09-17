@@ -29,6 +29,10 @@ _FLOAT_KEYS = frozenset(
     }
 )
 
+# Single league-scoring calibration point. Structure, finishing and goalie quality
+# supply the spread; this only sets the overall goal environment.
+GOAL_PROBABILITY_CALIBRATION: float = 0.81
+
 # Abstract chance types: midpoint raw xG vs average shooter / average goalie.
 CHANCE_TYPE_RAW_XG: Dict[str, float] = {
     "LOW_DANGER_PERIMETER": 0.035,
@@ -129,6 +133,40 @@ def pick_chance_type(
     return rng.choices(labels, weights=weights, k=1)[0]
 
 
+def pick_chance_type_for_shooter(
+    rng: random.Random,
+    strength: str,
+    affinity: Optional[Mapping[str, float]] = None,
+    *,
+    quality_bias: float = 0.5,
+) -> str:
+    """
+    Pick a chance type conditioned on THIS shooter's shot diet.
+
+    `affinity` maps chance type -> multiplier centred on 1.0, so a one-timer
+    specialist genuinely takes one-timers and a net-front forward genuinely
+    lives in the blue paint, instead of every shooter drawing the league pool.
+    """
+    st = str(strength or "EV").upper()
+    if st == "PP":
+        pool = list(_CHANCE_PP_WEIGHTS)
+    elif st == "SH":
+        pool = list(_CHANCE_SH_WEIGHTS)
+    else:
+        pool = list(_CHANCE_EV_WEIGHTS)
+    labels: List[str] = []
+    weights: List[float] = []
+    for c, w in pool:
+        wt = float(w)
+        if "HIGH" in c or "NET" in c or "ONE" in c:
+            wt *= 1.0 + 0.35 * float(quality_bias)
+        if affinity:
+            wt *= max(0.05, float(affinity.get(c, 1.0)))
+        labels.append(c)
+        weights.append(max(1e-6, wt))
+    return rng.choices(labels, weights=weights, k=1)[0]
+
+
 def raw_xg_for_chance(chance_type: str, rng: random.Random) -> float:
     """Pre-finisher, pre-goalie expected goal probability for an abstract chance."""
     base = float(CHANCE_TYPE_RAW_XG.get(str(chance_type), 0.065))
@@ -162,16 +200,18 @@ def assist_count_probability(chance_type: str, strength: str) -> Tuple[float, fl
     p0 = zero_assist_probability(chance_type, strength)
     ct = str(chance_type or "")
     st = str(strength or "EV").upper()
+    # Two-assist share, matched to real NHL scoring-summary splits (~62% of goals
+    # carry two assists, ~33% one). A set power play chains more passes than a rush.
     if st == "PP":
-        p2 = 0.72 if ct in ("PP_ONE_TIMER", "PP_SLOT") else 0.66
+        p2 = 0.70 if ct in ("PP_ONE_TIMER", "PP_SLOT") else 0.64
     elif ct in ("RUSH_MEDIUM", "SH_RUSH"):
-        p2 = 0.58 if st == "SH" else 0.62
+        p2 = 0.42 if st == "SH" else 0.48
     elif ct in ("REBOUND", "NET_FRONT"):
-        p2 = 0.66
+        p2 = 0.52
     elif ct in ("POINT_SHOT", "SLOT", "HIGH_DANGER_SLOT", "ONE_TIMER"):
-        p2 = 0.68
+        p2 = 0.58
     else:
-        p2 = 0.64
+        p2 = 0.54
     p2 = max(0.0, min(0.78, p2))
     p1 = max(0.0, 1.0 - p0 - p2)
     s = p0 + p1 + p2
@@ -232,16 +272,16 @@ def resolve_goal_probability(
     *,
     situational_adj: float = 1.0,
 ) -> float:
-    """Final goal probability after shooter finishing and goalie quality.
+    """Final goal probability after shooter finishing, goalie quality and on-ice structure.
 
-    Scaled so full-event league SV% lands near .900–.907 (NHL-like) instead of
-    the historical ~.87 band that made user-team goalies look broken vs light sim.
+    `situational_adj` carries the structural read of the moment — screens, net-front
+    traffic, lane-blocking defenders, goalie sightline and rush vs. set play. It is
+    built mean-centred on 1.0, so it supplies spread without shifting league scoring.
     """
-    # Tuned so full-event GPG stays near modern NHL (~3.0/team) without the old
-    # overscore band, while not systematically trailing the light counting path.
-    prob = float(raw_xg) * 0.86 * max(0.55, min(1.45, float(finishing_adj)))
+    prob = float(raw_xg) * GOAL_PROBABILITY_CALIBRATION * max(0.55, min(1.45, float(finishing_adj)))
     prob *= max(0.55, min(1.45, float(goalie_adj)))
-    prob *= max(0.85, min(1.15, float(situational_adj)))
+    # Wide enough for a genuine screened point shot or a fully-boxed-out net front.
+    prob *= max(0.45, min(2.20, float(situational_adj)))
     return max(0.010, min(0.72, prob))
 
 
