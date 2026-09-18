@@ -907,12 +907,91 @@ def _public_board_thresholds(overall_pick: int) -> Dict[str, int]:
     return {"expected": 14, "early_value": 28, "reach_steal": 29}
 
 
+def _slot_expected_ovr(overall_pick: int) -> float:
+    """Current-ability a pick slot is normally expected to return."""
+    pick = max(1, int(overall_pick))
+    if pick <= 32:
+        return 70.0 - (pick - 1) * (70.0 - 60.0) / 31.0
+    if pick <= 96:
+        return 60.0 - (pick - 32) * (60.0 - 54.0) / 64.0
+    return max(48.0, 54.0 - (pick - 96) * 0.02)
+
+
+def _true_outcome_flags(
+    overall_pick: int,
+    true_ovr: Optional[float],
+    pipeline_steal: bool,
+    pipeline_bust: bool,
+) -> Dict[str, Any]:
+    """Outcome measured against hidden truth, not against the public board.
+
+    The public label only says whether a pick disagreed with consensus. This says
+    whether the pick was actually good.
+    """
+    out: Dict[str, Any] = {
+        "true_outcome_label": None,
+        "true_ovr_vs_slot": None,
+        "is_hidden_gem": bool(pipeline_steal),
+        "is_bust_risk": bool(pipeline_bust),
+    }
+    if true_ovr is None:
+        return out
+    try:
+        delta = float(true_ovr) - _slot_expected_ovr(overall_pick)
+    except (TypeError, ValueError):
+        return out
+    out["true_ovr_vs_slot"] = round(delta, 1)
+    if pipeline_bust or delta <= -6.0:
+        out["true_outcome_label"] = "Bust Risk"
+    elif pipeline_steal or delta >= 6.0:
+        out["true_outcome_label"] = "Home Run"
+    elif delta >= 2.5:
+        out["true_outcome_label"] = "Good Pick"
+    elif delta <= -2.5:
+        out["true_outcome_label"] = "Underwhelming"
+    else:
+        out["true_outcome_label"] = "On Slot"
+    return out
+
+
+def _revealed_ability_payload(player: Any) -> Dict[str, Any]:
+    """Post-draft ability, revealed for every pick regardless of scouting."""
+    out: Dict[str, Any] = {
+        "overall": None,
+        "drafted_overall": None,
+        "drafted_potential": None,
+        "ability_revealed": False,
+    }
+    if player is None:
+        return out
+    try:
+        from services.franchise_sim import _draft_potential99, _player_display_ovr99
+
+        ovr = round(float(_player_display_ovr99(player)), 1)
+        if ovr <= 0:
+            return out
+        out.update(
+            {
+                "overall": int(round(ovr)),
+                "drafted_overall": ovr,
+                "drafted_potential": round(float(_draft_potential99(player, ovr)), 1),
+                "ability_revealed": True,
+            }
+        )
+    except Exception:
+        pass
+    return out
+
+
 def _selection_label_from_public(
     public_rank: Optional[int],
     overall_pick: int,
     *,
     consensus_low: Optional[int] = None,
     consensus_high: Optional[int] = None,
+    true_ovr: Optional[float] = None,
+    pipeline_steal: bool = False,
+    pipeline_bust: bool = False,
 ) -> Dict[str, Any]:
     """
     Grade a pick against the PUBLIC consensus board at selection time.
@@ -976,6 +1055,8 @@ def _selection_label_from_public(
 
     return {
         "selection_label": label,
+        "value_vs_consensus": label,
+        **_true_outcome_flags(overall_pick, true_ovr, pipeline_steal, pipeline_bust),
         **flags,
         "was_off_board": False,
         "public_rank_delta": delta,
@@ -992,6 +1073,7 @@ def _classify_pick(
     needs: List[Dict[str, Any]],
     *,
     best_available_rank: Optional[int] = None,
+    player: Any = None,
 ) -> Dict[str, Any]:
     need_pos = str(entry.get("position") or "").upper()
     need_match = any(
@@ -1009,11 +1091,32 @@ def _classify_pick(
     elif isinstance(consensus, dict):
         c_lo, c_hi = consensus.get("low"), consensus.get("high")
 
+    true_ovr = None
+    if player is not None:
+        try:
+            from services.franchise_sim import _player_display_ovr99
+
+            true_ovr = float(_player_display_ovr99(player)) or None
+        except Exception:
+            true_ovr = None
+    if true_ovr is None and entry.get("true_ovr") is not None:
+        try:
+            true_ovr = float(entry["true_ovr"])
+        except (TypeError, ValueError):
+            true_ovr = None
+
     grade = _selection_label_from_public(
         public_rank,
         overall_pick,
         consensus_low=c_lo,
         consensus_high=c_hi,
+        true_ovr=true_ovr,
+        pipeline_steal=bool(
+            entry.get("is_gem") or getattr(player, "pipeline_steal", False)
+        ),
+        pipeline_bust=bool(
+            entry.get("is_bust_risk") or getattr(player, "pipeline_bust", False)
+        ),
     )
     # True BPA: the selected prospect is (near) the highest-ranked prospect STILL
     # AVAILABLE, not merely close to the pick slot. best_available_rank is the
@@ -1637,6 +1740,7 @@ def _classify_pick_team_relative(
     needs: List[Dict[str, Any]],
     *,
     best_available_rank: Optional[int] = None,
+    player: Any = None,
 ) -> Dict[str, Any]:
     """
     Public-board grades drive Reach/Steal/Value/Expected/Off Board.
@@ -1645,6 +1749,7 @@ def _classify_pick_team_relative(
     base = _classify_pick(
         entry, pub_rank, tb_rank, overall, philosophy, needs,
         best_available_rank=best_available_rank,
+        player=player,
     )
     team_delta = int(tb_rank) - int(overall) if tb_rank else None
     base["team_board_delta"] = team_delta
@@ -2183,6 +2288,7 @@ def _execute_pick_locked(
     cls = _classify_pick_team_relative(
         entry, pub_rank, tb_rank, overall, phil["philosophy"], needs,
         best_available_rank=best_available_rank,
+        player=player,
     )
     scout_notes = tb_entry.get("scouting_notes") or []
     reason = _pick_reason(entry, cls, phil, needs, pub_rank, tb_rank, scout_notes)
@@ -2259,6 +2365,9 @@ def _execute_pick_locked(
             or entry.get("expected_ceiling_estimate")
             or entry.get("ceiling_score")
         ),
+        # Once a prospect is off the board his ability is public: you can see what
+        # you took, and what every other team took. Fog only applies pre-draft.
+        **_revealed_ability_payload(player),
         "risk_score": entry.get("risk"),
         "nhl_readiness": entry.get("nhl_readiness"),
         "player_type": entry.get("player_type"),

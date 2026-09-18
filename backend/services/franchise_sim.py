@@ -2916,6 +2916,24 @@ def _player_ovr99(player: Any) -> float:
     return v * 99.0 if v <= 1.5 else v
 
 
+def _player_display_ovr99(player: Any) -> float:
+    """Canonical user-facing OVR.
+
+    Must match what the roster screen shows, otherwise a prospect's overall
+    visibly changes the moment he is drafted. Sim-internal decisions keep using
+    `_player_ovr99`; anything a user reads goes through here.
+    """
+    try:
+        from app.sim_engine.franchise.storyline_conduct import get_base_ovr_display
+
+        v = float(get_base_ovr_display(player))
+        if v > 0:
+            return v
+    except Exception:
+        pass
+    return _player_ovr99(player)
+
+
 class _GeneratedContract:
     """Lightweight contract record attached to players at bootstrap."""
 
@@ -7557,8 +7575,41 @@ GENERATIONAL_GOALIE_SCORE_PCT = 0.985  # goalie must beat ~98.5% of class to esc
 GOALIE_RANK_PENALTY = 5.0  # score points removed from non-generational goalies
 
 
+def _prospect_headroom_bounds(p: Any, ovr99: float) -> Tuple[float, float]:
+    """Plausible min/max ceiling for a prospect given age and current ability.
+
+    `dev_potential` is rolled separately from ratings, so it can land below a
+    prospect's current overall or absurdly far above it. These bounds keep the
+    ceiling coherent with the tools actually on the sheet.
+    """
+    try:
+        age = int(float(getattr(p, "age", 18) or 18))
+    except (TypeError, ValueError):
+        age = 18
+    # Younger prospects are allowed more runway; older ones are closer to done.
+    max_gap = 22.0 if age <= 17 else (18.0 if age <= 18 else (14.0 if age <= 20 else 9.0))
+    min_gap = 5.0 if age <= 18 else (3.0 if age <= 20 else 1.0)
+    return (min(99.0, ovr99 + min_gap), min(99.0, ovr99 + max_gap))
+
+
 def _draft_potential99(p: Any, ovr99: float) -> float:
     """Resolve prospect expected ceiling on the 0–99 display scale via development profile."""
+    return _clamp_potential99(p, ovr99, _raw_draft_potential99(p, ovr99))
+
+
+def _clamp_potential99(p: Any, ovr99: float, pot99: float) -> float:
+    try:
+        ovr = float(ovr99)
+        pot = float(pot99)
+    except (TypeError, ValueError):
+        return float(pot99)
+    if ovr <= 0:
+        return pot
+    lo, hi = _prospect_headroom_bounds(p, ovr)
+    return round(max(lo, min(hi, pot)), 1)
+
+
+def _raw_draft_potential99(p: Any, ovr99: float) -> float:
     try:
         from app.sim_engine.entities.player import display_rating, normalize_rating
         from app.sim_engine.progression.development import resolve_development_profile
@@ -8095,7 +8146,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                 pk = str(getattr(p, "id", "") or "")
                 if not pk:
                     continue
-                ovr99 = round(_player_ovr99(p), 1)
+                ovr99 = round(_player_display_ovr99(p), 1)
                 pot99 = round(_draft_potential99(p, ovr99), 1)
                 pos = _pos_str(p)
                 h = abs(hash(pk)) % 997
@@ -8348,10 +8399,22 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
     try:
         from app.sim_engine.league_hierarchy_bootstrap import ensure_board_prospect_ovr_floors
 
-        ensure_board_prospect_ovr_floors(
-            board_prospects,
-            rng=rng if rng is not None else random.Random(42),
-        )
+        # Reshaping is a one-time class-shaping step. Re-running it on every board
+        # rebuild would silently rewrite the ratings of a prospect the user has
+        # already scouted (or fully revealed), changing his overall after the fact.
+        unlocked = [r for r in board_prospects if not getattr(r.get("_player"), "_ovr_floor_locked", False)]
+        if unlocked:
+            ensure_board_prospect_ovr_floors(
+                unlocked,
+                rng=rng if rng is not None else random.Random(42),
+            )
+        for row in board_prospects:
+            p = row.get("_player")
+            if p is not None:
+                try:
+                    p._ovr_floor_locked = True
+                except Exception:
+                    pass
         for row in board_prospects:
             p = row.get("_player")
             if p is not None and row.get("_ovr_floor_repaired"):
@@ -8604,14 +8667,12 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
             t_ovr = float(raw_true_ovr if raw_true_ovr is not None else row.get("true_ovr") or 0)
         except (TypeError, ValueError):
             t_ovr = 0.0
-        scout_for_ovr = scout_overlay_pct if scout_overlay_pct > 0 else conf
-        ovr_gap = max(2.0, (100.0 - scout_for_ovr) * 0.2)
-        ovr_bias = ((int(scout_for_ovr) % 11) - 5) * 0.15
-        ovr_lo = max(40.0, t_ovr - ovr_gap + ovr_bias)
-        ovr_hi = min(95.0, t_ovr + ovr_gap * 0.45 + ovr_bias)
-        ovr_est = round((ovr_lo + ovr_hi) / 2.0, 1)
         from services.franchise_scouting import DRAFT_OVR_REVEAL_THRESHOLD
 
+        # One shared band for every surface (board, scouting screen, draft night).
+        # Re-deriving the fog per screen is what made the same prospect show three
+        # different overalls.
+        scout_for_ovr = scout_overlay_pct if scout_overlay_pct > 0 else conf
         ovr_revealed = bool(row.get("ovr_revealed")) or scout_overlay_pct >= float(DRAFT_OVR_REVEAL_THRESHOLD)
         pub_ovr = compute_public_ovr_band(
             t_ovr,
@@ -8619,7 +8680,16 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
             seed_key=key,
             reveal_threshold=float(DRAFT_OVR_REVEAL_THRESHOLD),
         )
-        if ovr_revealed and scout_overlay_pct >= float(DRAFT_OVR_REVEAL_THRESHOLD):
+        own_ovr = compute_public_ovr_band(
+            t_ovr,
+            scout_for_ovr,
+            seed_key=f"{key}:own",
+            reveal_threshold=float(DRAFT_OVR_REVEAL_THRESHOLD),
+        )
+        ovr_lo = float(own_ovr["low"])
+        ovr_hi = float(own_ovr["high"])
+        ovr_est = round((ovr_lo + ovr_hi) / 2.0, 1)
+        if ovr_revealed:
             ovr_lo = ovr_hi = round(t_ovr, 1)
             ovr_est = ovr_lo
         entry.update(
@@ -8669,6 +8739,34 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                 "eta": calculate_prospect_eta(row, final_rank=rank),
             }
         )
+        # The ceiling shown is a fogged estimate while the current OVR may be exact,
+        # so the two can cross and render a peak below the player's present ability.
+        _shown_now = float(ovr_hi if ovr_revealed else ovr_est)
+        _peak_floor = round(_shown_now + 0.5, 1)
+        try:
+            if float(entry.get("potential_score") or 0) < _peak_floor:
+                entry["potential_score"] = _peak_floor
+            if float(entry.get("expected_ceiling_estimate") or 0) < _peak_floor:
+                entry["expected_ceiling_estimate"] = _peak_floor
+            for _rk in ("potential_range", "ceiling_range"):
+                _rv = entry.get(_rk)
+                if isinstance(_rv, Mapping):
+                    _lo = float(_rv.get("low") or 0)
+                    _hi = float(_rv.get("high") or 0)
+                    if _lo < _peak_floor or _hi < _peak_floor:
+                        entry[_rk] = {
+                            **_rv,
+                            "low": max(_lo, _peak_floor),
+                            "high": max(_hi, _peak_floor),
+                        }
+                elif isinstance(_rv, (list, tuple)) and len(_rv) == 2:
+                    entry[_rk] = [
+                        max(float(_rv[0] or 0), _peak_floor),
+                        max(float(_rv[1] or 0), _peak_floor),
+                    ]
+        except (TypeError, ValueError):
+            pass
+
         _ov = _scout_prospects.get(key) if isinstance(_scout_prospects, dict) else None
         if isinstance(_ov, dict):
             if _ov.get("public_miss_type"):

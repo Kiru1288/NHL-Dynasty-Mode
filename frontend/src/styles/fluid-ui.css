@@ -52,8 +52,12 @@ html.ui-fluid .command-placeholder-screen {
   min-height: 0;
 }
 
+/* Stay viewport-anchored: `position: absolute` re-anchors `inset: 0` to whichever
+   ancestor happens to be positioned, which sheared the identity rail off the left
+   edge instead of filling the screen. */
 html.ui-fluid .dc-profile-modal {
-  position: absolute;
+  position: fixed;
+  inset: 0;
 }
 
 /* Display class → type and spacing. Same relationships, different resolution. */

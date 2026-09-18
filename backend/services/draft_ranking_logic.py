@@ -17,6 +17,11 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Half-width of the displayed current-OVR band when a prospect is completely
+# unscouted. The gauge should read like a tight scouting disagreement (~5 points
+# wide), not a 30-point "we have no idea" range.
+OVR_BAND_MAX_HALF_SPAN = 2.5
+
 
 def _stable_unit(*parts: Any) -> float:
     """Deterministic float in [0,1) from arbitrary parts.
@@ -1627,9 +1632,15 @@ def compute_public_ovr_band(
     *,
     seed_key: str = "",
     reveal_threshold: float = 72.0,
-    max_span: float = 5.0,
+    max_span: float = OVR_BAND_MAX_HALF_SPAN,
 ) -> Dict[str, Any]:
-    """Public consensus OVR band with ±span disagreement; YOUR file narrows it."""
+    """Public consensus OVR band, symmetric around a lightly biased center.
+
+    The band is deliberately tight (about `2 * max_span` wide when completely
+    unscouted, collapsing to an exact value at the reveal threshold). It is also
+    symmetric: an asymmetric band pulls the midpoint below the true overall, so
+    every prospect scouts low and fog alone manufactures "steals".
+    """
     try:
         t = float(true_ovr or 0)
     except (TypeError, ValueError):
@@ -1639,11 +1650,12 @@ def compute_public_ovr_band(
     except (TypeError, ValueError):
         scout = 0.0
     hsh = _stable_int(1000, seed_key or "pub", "ovr")
-    public_bias = ((hsh % 11) - 5) * 0.45
-    center = t + public_bias * max(0.0, 1.0 - scout / max(1.0, reveal_threshold))
-    span = max(0.8, float(max_span) * (1.0 - min(1.0, scout / max(1.0, reveal_threshold))))
+    public_bias = ((hsh % 11) - 5) * 0.18
+    unknown = max(0.0, 1.0 - min(1.0, scout / max(1.0, reveal_threshold)))
+    center = t + public_bias * unknown
+    span = max(0.5, float(max_span) * unknown)
     lo = max(35.0, center - span)
-    hi = min(99.0, center + span * 0.65)
+    hi = min(99.0, center + span)
     if scout >= reveal_threshold:
         lo = hi = round(t, 1)
     return {

@@ -503,7 +503,7 @@ def rights_card_payload(player: Any, *, team: Any = None, season_year: Optional[
         "path_visual": _path_visual(path),
         "elc_evaluation": elc_eval,
         "decision_status": decision_status,
-        "overall": int(ovr) if ovr else None,
+        "overall": int(round(ovr)) if ovr and ovr > 0 else None,
         "nhl_readiness": getattr(player, "nhl_readiness", None),
         "nhl_eta_label": getattr(player, "nhl_eta_label", None),
         "draft_year": getattr(player, "draft_year", None),
@@ -761,7 +761,19 @@ def apply_prospect_rights_decision(
 
 
 def _safe_player_ovr(player: Any) -> float:
-    """Resolve overall when it may be a property, method, or missing."""
+    """Resolve overall when it may be a property, method, or missing.
+
+    Prefers the canonical display overall so a freshly drafted prospect reads the
+    same here as on the roster screen.
+    """
+    try:
+        from services.franchise_sim import _player_display_ovr99
+
+        v = float(_player_display_ovr99(player))
+        if v > 0:
+            return v
+    except Exception:
+        pass
     for key in ("overall", "ovr", "current_ovr", "true_ovr"):
         raw = getattr(player, key, None)
         if raw is None:
@@ -772,9 +784,12 @@ def _safe_player_ovr(player: Any) -> float:
             except TypeError:
                 continue
         try:
-            return float(raw)
+            val = float(raw)
         except (TypeError, ValueError):
             continue
+        # Ratings are stored on a 0-1 scale in some paths; without this guard
+        # int(0.82) collapses to 0 and the card renders a blank overall.
+        return val * 99.0 if 0 < val <= 1.5 else val
     return 0.0
 
 

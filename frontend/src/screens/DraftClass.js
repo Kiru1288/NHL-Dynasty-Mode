@@ -3311,15 +3311,33 @@ function ProspectScoutingDesk({ desk, confPct, compact = false, maxEntries = nul
 }
 
 function ProspectStatGradeStrip({ rows }) {
+  const [showRaw, setShowRaw] = useState(false);
   if (!rows?.length) return null;
+  const hasValues = rows.some((row) => row.value != null);
   return (
-    <div className="wr-stat-strip" role="group" aria-label="Tool letter grades">
-      {rows.map((row) => (
-        <div key={row.label} className={`wr-stat-strip__cell is-${row.tone || "gold"}`}>
-          <span>{row.label}</span>
-          <strong className={`wr-num-${row.tone || "gold"}`}>{row.grade}</strong>
-        </div>
-      ))}
+    <div
+      className={`wr-stat-strip${hasValues ? " is-toggleable" : ""}`}
+      role="group"
+      aria-label="Tool letter grades"
+    >
+      {rows.map((row) => {
+        const tone = row.tone || "gold";
+        const showNumber = showRaw && row.value != null;
+        return (
+          <button
+            key={row.label}
+            type="button"
+            className={`wr-stat-strip__cell is-${tone}`}
+            onClick={() => hasValues && setShowRaw((v) => !v)}
+            disabled={!hasValues}
+            title={row.value != null ? `${row.label} ${row.value} / 99 — click to toggle grade and score` : row.label}
+            aria-label={`${row.label} ${row.grade}${row.value != null ? `, ${row.value} of 99` : ""}`}
+          >
+            <span>{row.label}</span>
+            <strong className={`wr-num-${tone}`}>{showNumber ? row.value : row.grade}</strong>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -4966,7 +4984,16 @@ function ProspectProfileModal({
     : (profile?.play_style ? { label: profile.play_style, source: "backend" } : null);
   const playStyle = playStyleTag?.label || null;
   const devTrajectory = profile?.development_trajectory || profile?.developmentTrajectory || "";
-  const reportBlurb = truncateScoutLine(profile?.scout_report || profile?.micro_summary || "", 168);
+  // `archetype.blurb` already carries `scout_report`, so sourcing it here too
+  // rendered the same paragraph twice (once full, once truncated).
+  const reportBlurb = (() => {
+    const extra = truncateScoutLine(profile?.micro_summary || "", 168);
+    if (!extra) return "";
+    const base = String(archetype.blurb || "").trim().toLowerCase();
+    const cand = extra.trim().toLowerCase().replace(/[.…]+$/, "");
+    if (!base || !cand) return extra;
+    return base.startsWith(cand.slice(0, 60)) ? "" : extra;
+  })();
   const projectedRange = resolveProjectedRangeLabel(player, profile, ceilingHidden);
   const scoutingDesk = buildScoutingDeskEntries(player, profile, { gp, analytics });
   const statStrip = resolveBottomStatStrip(player, profile, toolsWithNotes, isGoalie);
@@ -4978,6 +5005,14 @@ function ProspectProfileModal({
       : "Career outcome bands");
   const headroom = ovrBands.headroom;
   const overageNote = overageStockNote(player);
+  // Dashboard metrics (derived from data already on the profile — nothing invented).
+  const nhlProbability = Number(profile?.potential?.nhl_probability);
+  const readinessPct = Number.isFinite(nhlProbability)
+    ? Math.max(4, Math.min(100, Math.round(nhlProbability)))
+    : null;
+  const etaText = profile?.eta?.label || profile?.eta?.text
+    || (typeof profile?.eta === "string" ? profile.eta : null)
+    || profile?.nhl_eta || player?.nhlEta || "—";
   const strengthLines = (Array.isArray(profile?.strengths) && profile.strengths.length)
     ? profile.strengths
     : (Array.isArray(profile?.strengthsEvidence) ? profile.strengthsEvidence.map((e) => (typeof e === "string" ? e : `${e.title} — ${e.fact}`)) : []);
@@ -5183,50 +5218,88 @@ function ProspectProfileModal({
 
             {dossierTab === "file" ? (
               <div className="dc-dossier-pane dc-dossier-pane--file">
-                <ProspectZoneMap tools={toolsWithNotes} profile={profile} position={player.position} isGoalie={isGoalie} compact />
-                <section className="dc-brochure-block dc-brochure-block--compact">
-                  <span className="dc-profile-tags__label">Career outcome distribution <span className="wr-muted">//</span> {outcomeRibbonLabel}</span>
-                  {ribbonSegs ? (
-                    <>
-                      <div className="wr-outcome-ribbon" role="img" aria-label="Outcome distribution">
-                        {ribbonSegs.map((seg) => (
-                          <span
-                            key={seg.key}
-                            className={`wr-outcome-ribbon__seg is-${seg.key}`}
-                            style={{ flex: `${Math.max(0.5, seg.pct)} 1 0%` }}
-                            title={`${seg.label} ${Math.round(seg.pct)}%`}
-                          >
-                            {seg.pct >= 8 ? Math.round(seg.pct) : ""}
-                          </span>
-                        ))}
+                <div className="dc-dossier-topgrid">
+                  <ProspectZoneMap tools={toolsWithNotes} profile={profile} position={player.position} isGoalie={isGoalie} compact />
+                  <section className="dc-brochure-block dc-brochure-block--compact dc-outcome-block">
+                    <span className="dc-profile-tags__label">Career outcome distribution <span className="wr-muted">//</span> {outcomeRibbonLabel}</span>
+                    {ribbonSegs ? (
+                      <>
+                        <div className="wr-outcome-ribbon" role="img" aria-label="Outcome distribution">
+                          {ribbonSegs.map((seg) => (
+                            <span
+                              key={seg.key}
+                              className={`wr-outcome-ribbon__seg is-${seg.key}`}
+                              style={{ flex: `${Math.max(0.5, seg.pct)} 1 0%` }}
+                              title={`${seg.label} ${Math.round(seg.pct)}%`}
+                            >
+                              {seg.pct >= 8 ? Math.round(seg.pct) : ""}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="wr-outcome-legend">
+                          {ribbonSegs.map((seg) => (
+                            <span key={`leg-${seg.key}`}>{seg.label} {Math.round(seg.pct)}%</span>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="wr-outcome-ribbon is-unavailable" title="Distribution unavailable — backend model pending" />
+                    )}
+                  </section>
+                </div>
+
+                <div className="dc-dossier-dashboard">
+                  {/* Column 1 — read of the player right now */}
+                  <div className="dc-dash-col">
+                    <OffIceFrameStrip player={player} tools={toolsWithNotes} profile={profile} />
+                    <article className="dc-report-card dc-metric-card">
+                      <h4>NHL readiness</h4>
+                      {readinessPct != null ? (
+                        <div className="dc-meter" aria-label={`${readinessPct}% NHL projection`}>
+                          <i style={{ width: `${readinessPct}%` }} />
+                        </div>
+                      ) : null}
+                      <p className="dc-metric-card__lead">{readinessLabel || "Projecting"}</p>
+                      <ul className="dc-kv">
+                        <li><span>Projected role</span><strong>{roleLens?.label || "—"}</strong></li>
+                        <li><span>ETA</span><strong>{etaText}</strong></li>
+                        {readinessPct != null ? (
+                          <li><span>NHL probability</span><strong>{readinessPct}%</strong></li>
+                        ) : null}
+                      </ul>
+                    </article>
+                    <article className="dc-report-card dc-metric-card">
+                      <h4>Scout confidence</h4>
+                      <div className="dc-meter" aria-label={`${confPct ?? 0}% scouting confidence`}>
+                        <i style={{ width: `${confPct ?? 0}%` }} />
                       </div>
-                      <div className="wr-outcome-legend">
-                        {ribbonSegs.map((seg) => (
-                          <span key={`leg-${seg.key}`}>{seg.label} {Math.round(seg.pct)}%</span>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="wr-outcome-ribbon is-unavailable" title="Distribution unavailable — backend model pending" />
-                  )}
-                </section>
-                <div className="dc-brochure-split-panels dc-brochure-split-panels--compact">
-                  <OffIceFrameStrip player={player} tools={toolsWithNotes} profile={profile} />
-                  <div className="dc-report-stack dc-report-stack--compact">
+                      <p className="dc-metric-card__lead">{confPct != null ? `${confPct}%` : "—"} · {confBand}</p>
+                      {confNote ? <small className="dc-metric-card__note">{confNote}</small> : null}
+                    </article>
+                  </div>
+
+                  {/* Column 2 — the written report */}
+                  <div className="dc-dash-col">
                     <article className="dc-report-card">
                       <h4>Strengths</h4>
                       <ul>{(strengths.filter(Boolean).length ? strengths.filter(Boolean) : strengthLines).map((line) => <li key={line}>{line}</li>)}</ul>
                     </article>
                     <article className="dc-report-card">
                       <h4>Weaknesses</h4>
-                      <ul>{(weaknessLines.length ? weaknessLines : []).map((line) => <li key={line}>{line}</li>)}</ul>
+                      {weaknessLines.length ? (
+                        <ul>{weaknessLines.map((line) => <li key={line}>{line}</li>)}</ul>
+                      ) : (
+                        <p className="dc-report-card__empty">
+                          {confPct != null && confPct < 45
+                            ? "Not enough coverage to flag concerns — keep scouting."
+                            : "No material weaknesses flagged on the current file."}
+                        </p>
+                      )}
                     </article>
-                    {overageNote ? (
-                      <article className="dc-report-card is-overage">
-                        <h4>Overage file</h4>
-                        <p>{overageNote}</p>
-                      </article>
-                    ) : null}
+                  </div>
+
+                  {/* Column 3 — character + projection */}
+                  <div className="dc-dash-col">
                     <article className={`dc-report-card${player.characterConcerns ? " is-concern" : ""}`}>
                       <h4>{player.characterConcerns ? "Character · flagged on file" : "Life & character"}</h4>
                       <p>
@@ -5242,8 +5315,38 @@ function ProspectProfileModal({
                         </ul>
                       ) : null}
                     </article>
+                    <article className="dc-report-card dc-metric-card">
+                      <h4>Development path</h4>
+                      <p>{devTrajectory || "Projection sharpens as looks accumulate."}</p>
+                      <ul className="dc-kv">
+                        <li><span>Upside role</span><strong>{roleLens?.label || "—"}</strong></li>
+                        <li><span>Volatility</span><strong>{volatilityDisplay}</strong></li>
+                        {!ceilingHidden && ovrBands.peakText ? (
+                          <li><span>Peak</span><strong>{ovrBands.peakText}</strong></li>
+                        ) : null}
+                      </ul>
+                    </article>
+                    <article className="dc-report-card dc-metric-card">
+                      <h4>Draft projection</h4>
+                      <ul className="dc-kv">
+                        <li><span>Board rank</span><strong>#{rank}</strong></li>
+                        {projectedRange.text ? (
+                          <li><span>Range</span><strong>{projectedRange.text}</strong></li>
+                        ) : (draftWindow ? (
+                          <li><span>Window</span><strong>{draftWindow}</strong></li>
+                        ) : null)}
+                        {boardYear ? <li><span>Class</span><strong>{boardYear}</strong></li> : null}
+                      </ul>
+                    </article>
+                    {overageNote ? (
+                      <article className="dc-report-card is-overage">
+                        <h4>Overage file</h4>
+                        <p>{overageNote}</p>
+                      </article>
+                    ) : null}
                   </div>
                 </div>
+
                 <ProspectStatGradeStrip rows={statStrip} />
                 {wjcBlock ? (
                   <section className="dc-brochure-block dc-brochure-block--compact dc-wjc-dossier">

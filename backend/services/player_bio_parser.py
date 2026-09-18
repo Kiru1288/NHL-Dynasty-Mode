@@ -784,6 +784,10 @@ def apply_player_bios_to_league(league: Any, *, as_of_year: Optional[int] = None
         players.extend(getattr(team, "roster", None) or [])
         players.extend(getattr(team, "ahl_roster", None) or [])
         players.extend(getattr(team, "echl_roster", None) or [])
+        # Rights-held org prospects live here — without this pass, player_bios.txt
+        # never reaches the My Prospects / Rights Held screen.
+        players.extend(getattr(team, "prospect_pool", None) or [])
+        players.extend(getattr(team, "prospects", None) or [])
     for block in getattr(league, "development_leagues", None) or []:
         for tm in block.get("teams") or []:
             players.extend(tm.get("players") or [])

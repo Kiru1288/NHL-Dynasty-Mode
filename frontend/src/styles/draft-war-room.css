@@ -602,7 +602,9 @@
   width: 7px;
   height: 10px;
   background: rgba(118, 200, 245, 0.18);
-  clip-path: var(--wr-cut-sm);
+  /* No --wr-cut-sm here: its 8px corner cuts exceed this element's 7px width,
+     which collapses the polygon into a sliver. */
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 3px), calc(100% - 3px) 100%, 0 100%);
 }
 .wr-office-pips i.is-on {
   background: var(--wr-fill-cyan);
@@ -961,7 +963,9 @@
   flex: 0 0 clamp(200px, 18vw, 260px);
   max-width: 280px;
   min-width: 190px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
   border-right: 1px solid rgba(118, 200, 245, 0.14);
   padding: 8px 10px 10px;
   background: linear-gradient(180deg, rgba(8, 22, 36, 0.96), rgba(4, 12, 20, 0.88));
@@ -1051,13 +1055,39 @@
 .dc-report-stack--compact {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px;
+  grid-auto-rows: min-content;
+  gap: 8px;
   min-height: unset;
   overflow: visible;
+  align-content: start;
 }
 .dc-report-stack--compact .dc-report-card {
   min-height: unset;
   overflow: visible;
+  padding: 8px 10px;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.dc-report-stack--compact .dc-report-card:hover {
+  border-color: rgba(43, 228, 255, 0.4);
+  background: rgba(10, 32, 50, 0.55);
+}
+.dc-report-stack--compact .dc-report-card h4 {
+  margin: 0 0 5px;
+  font-family: var(--dc-font-title);
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #7fa6c2;
+}
+.dc-report-stack--compact .dc-report-card li,
+.dc-report-stack--compact .dc-report-card p {
+  font-size: 0.78rem;
+  line-height: 1.38;
+}
+.dc-report-card__empty {
+  margin: 0;
+  color: #5f7f96;
+  font-style: italic;
 }
 .dc-report-stack--compact .dc-report-card ul,
 .dc-report-stack--compact .dc-report-card p {
@@ -1258,6 +1288,19 @@
 .dc-profile-modal--prospect {
   background: rgba(2, 8, 16, 0.96);
   padding: 0;
+  /* The dossier can mount outside `.dc-root.dc-screen` (portal / standalone use),
+     where these tokens are undefined and type silently falls back to the default
+     serif. Restate them here so the modal always matches the board. */
+  --dc-font-title: "Barlow Condensed", var(--font-broadcast-display), "Archivo Black", "Rajdhani", "Arial Narrow", sans-serif;
+  --dc-font-number: var(--dc-font-title);
+  --dc-font-ui: var(--font-ops-ui);
+  font-family: var(--dc-font-ui);
+}
+.dc-profile-modal--prospect h2,
+.dc-profile-modal--prospect h3,
+.dc-profile-modal--prospect h4 {
+  font-family: var(--dc-font-title);
+  letter-spacing: 0.04em;
 }
 .dc-profile-modal--prospect .dc-signal-panel.dc-dossier-shell {
   margin: 0;
@@ -1359,34 +1402,128 @@
   gap: 6px 8px;
   align-items: center;
 }
-.dc-dossier-pane--file {
-  display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.15fr);
-  grid-template-rows: auto auto minmax(160px, 1fr) minmax(92px, 0.42fr);
-  gap: 10px 14px;
-  padding: 10px 14px 14px;
-  align-content: stretch;
-}
-.dc-dossier-pane--file > .dc-brochure-split-panels,
-.dc-dossier-pane--file > .wr-stat-strip,
+/* Information-dense file tab: top row uses width, dashboard uses a 3-column grid,
+   every card sizes to its content. No fixed heights, no dead bands. */
 .dc-dossier-pane--file > * {
-  grid-column: 1 / -1;
-}
-.dc-dossier-pane--file > .dc-brochure-split-panels {
   min-height: 0;
 }
-.dc-dossier-pane--file > .wr-stat-strip {
-  align-self: stretch;
-  min-height: 88px;
-  height: 100%;
+.dc-dossier-pane--file {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-gap, 12px);
+  padding: clamp(8px, 1.4vh, 16px) clamp(12px, 1.2vw, 22px) clamp(10px, 1.6vh, 18px);
+  overflow-y: auto;
 }
-.dc-dossier-pane--file .wr-stat-strip__cell {
+.dc-dossier-topgrid {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.92fr) minmax(0, 1.08fr);
+  gap: var(--ds-gap, 12px);
+  align-items: stretch;
+}
+.dc-dossier-topgrid > * {
+  min-width: 0;
+  margin: 0;
+}
+.dc-outcome-block {
   display: flex;
   flex-direction: column;
   justify-content: center;
+  gap: clamp(6px, 1vh, 12px);
 }
-.dc-dossier-pane--file .wr-stat-strip__cell strong {
-  font-size: clamp(1.8rem, 4.2vh, 2.8rem);
+.dc-dossier-dashboard {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--ds-gap, 12px);
+  align-items: start;
+}
+.dc-dash-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-gap, 12px);
+  min-width: 0;
+}
+.dc-dash-col > * {
+  margin: 0;
+}
+.dc-dash-col .wr-office-strip,
+.dc-dash-col .wr-office-strip--frame {
+  margin: 0;
+}
+
+/* Intel tab has fewer blocks; let its analytics section take the slack. */
+.dc-dossier-pane--intel {
+  flex: 1 1 auto;
+}
+.dc-dossier-pane--intel > .dc-brochure-analytics {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.dc-dossier-pane--intel > .wr-scout-desk {
+  flex: 0 0 auto;
+}
+
+/* Metric cards (readiness, confidence, dev path, projection) */
+.dc-metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(3px, 0.6vh, 7px);
+}
+.dc-metric-card .dc-meter {
+  height: clamp(6px, 1vh, 11px);
+  background: rgba(118, 200, 245, 0.14);
+  border: 1px solid rgba(118, 200, 245, 0.2);
+  overflow: hidden;
+}
+.dc-metric-card .dc-meter i {
+  display: block;
+  height: 100%;
+  background: var(--wr-fill-cyan);
+}
+.dc-metric-card__lead {
+  margin: 0;
+  font-family: var(--dc-font-title);
+  font-size: var(--ds-head, 0.9rem);
+  letter-spacing: 0.04em;
+  color: #dbeafe;
+}
+.dc-metric-card__note {
+  color: #6d8ba3;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-size: var(--ds-label, 0.62rem);
+}
+.dc-kv {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: clamp(3px, 0.6vh, 7px);
+}
+.dc-kv li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.dc-kv li span {
+  color: #6d8ba3;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: var(--ds-label, 0.62rem);
+  white-space: nowrap;
+}
+.dc-kv li strong {
+  color: #dbeafe;
+  text-align: right;
+  font-size: var(--ds-body, 0.9rem);
+}
+
+@media (max-width: 1240px) {
+  .dc-dossier-topgrid { grid-template-columns: 1fr; }
+  .dc-dossier-dashboard { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 820px) {
+  .dc-dossier-dashboard { grid-template-columns: 1fr; }
 }
 .dc-archetype-head .wr-now-peak--wide {
   align-self: flex-start;
@@ -1506,8 +1643,8 @@
 .wr-office-strip__grid { display: grid; gap: 9px; }
 .wr-office-strip__row {
   display: grid;
-  grid-template-columns: 84px 1fr minmax(72px, 96px) 34px;
-  gap: 11px;
+  grid-template-columns: 84px auto minmax(0, 1fr) 34px;
+  gap: 10px;
   align-items: center;
 }
 .wr-office-strip__label {
@@ -1603,24 +1740,45 @@
   gap: 1px;
   background: #16354a;
   border-top: 1px solid rgba(118, 200, 245, 0.18);
+  border-bottom: 1px solid rgba(118, 200, 245, 0.1);
 }
 .wr-stat-strip__cell {
-  padding: 10px 8px;
-  text-align: center;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  padding: 7px 10px;
+  text-align: left;
   background: linear-gradient(180deg, #061523, #030d16);
+  transition: background 120ms ease, box-shadow 120ms ease;
+  border: 0;
+  color: inherit;
+  font: inherit;
+}
+.wr-stat-strip.is-toggleable .wr-stat-strip__cell {
+  cursor: pointer;
+}
+.wr-stat-strip__cell:disabled {
+  cursor: default;
+}
+.wr-stat-strip__cell:hover:not(:disabled),
+.wr-stat-strip__cell:focus-visible {
+  background: linear-gradient(180deg, #0a2032, #04121f);
+  box-shadow: inset 0 -2px 0 rgba(43, 228, 255, 0.5);
+  outline: none;
 }
 .wr-stat-strip__cell span {
-  display: block;
-  font-size: 0.56rem;
-  letter-spacing: 0.24em;
+  font-size: 0.58rem;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
-  color: #4f6d84;
+  color: #6d8ba3;
+  white-space: nowrap;
 }
 .wr-stat-strip__cell strong {
-  display: block;
-  margin-top: 3px;
   font-family: var(--dc-font-title);
-  font-size: 1.75rem;
+  font-size: 1.32rem;
+  line-height: 1;
+  letter-spacing: 0.02em;
 }
 .dc-brochure-analytics--inline {
   display: grid;
@@ -2032,4 +2190,146 @@
   .dc-brochure-analytics { grid-template-columns: 1fr; }
   .dc-media-grid { grid-template-columns: 1fr; }
   .dc-media-card--wide { grid-column: span 1; }
+}
+
+/* ==========================================================================
+   Full-screen dossier — scale with the viewport, centre inside the panels.
+   The shell fills the screen, so panel content must grow with it and sit in
+   the middle of its box. Otherwise the panels stretch while the text stays
+   small in the top-left corner and the screen reads empty.
+   ========================================================================== */
+.dc-profile-modal--prospect .dc-dossier-shell {
+  --ds-label: clamp(0.6rem, 0.95vh + 0.16rem, 0.86rem);
+  --ds-head: clamp(0.74rem, 1.05vh + 0.22rem, 1rem);
+  --ds-body: clamp(0.8rem, 1.15vh + 0.28rem, 1.12rem);
+  --ds-num: clamp(1.3rem, 3vh, 2.2rem);
+  --ds-gap: clamp(8px, 1.5vh, 20px);
+}
+
+.dc-profile-modal--prospect .dc-profile-tags__label {
+  font-size: var(--ds-label);
+  letter-spacing: 0.18em;
+}
+
+/* Hero copy */
+.dc-profile-modal--prospect .dc-archetype-head__blurb,
+.dc-profile-modal--prospect .dc-archetype-head__report,
+.dc-profile-modal--prospect .dc-archetype-head__metrics .dc-dev-trajectory {
+  font-size: var(--ds-body);
+  line-height: 1.5;
+}
+
+/* Give the written report the room and the zone map less dead width */
+.dc-profile-modal--prospect .dc-dossier-pane--file > .dc-brochure-split-panels {
+  grid-template-columns: minmax(0, 0.85fr) minmax(320px, 1.15fr);
+  gap: var(--ds-gap);
+}
+
+/* Report panels: centre the content, scale the type */
+.dc-profile-modal--prospect .dc-dossier-pane--file .dc-report-stack--compact {
+  align-content: stretch;
+  gap: var(--ds-gap);
+}
+.dc-profile-modal--prospect .dc-dossier-pane--file .dc-report-stack--compact .dc-report-card {
+  justify-content: center;
+  padding: clamp(10px, 1.7vh, 24px) clamp(12px, 1.3vw, 26px);
+}
+.dc-profile-modal--prospect .dc-report-stack--compact .dc-report-card h4 {
+  font-size: var(--ds-head);
+  margin-bottom: clamp(5px, 1vh, 12px);
+}
+.dc-profile-modal--prospect .dc-report-stack--compact .dc-report-card li,
+.dc-profile-modal--prospect .dc-report-stack--compact .dc-report-card p {
+  font-size: var(--ds-body);
+  line-height: 1.5;
+}
+.dc-profile-modal--prospect .dc-report-stack--compact .dc-report-card ul {
+  display: grid;
+  gap: clamp(4px, 0.8vh, 11px);
+  margin: 0;
+}
+.dc-profile-modal--prospect .dc-char-traits {
+  margin-top: clamp(5px, 1vh, 12px);
+}
+
+/* Off-ice & chapter scores: centre in its column and use the width */
+.dc-profile-modal--prospect .wr-office-strip--frame {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--ds-gap);
+}
+.dc-profile-modal--prospect .wr-office-strip__grid {
+  gap: clamp(8px, 1.4vh, 18px);
+}
+.dc-profile-modal--prospect .wr-office-strip__row {
+  grid-template-columns: minmax(92px, 0.7fr) auto minmax(0, 1.3fr) 46px;
+  gap: clamp(8px, 1vw, 18px);
+}
+.dc-profile-modal--prospect .wr-office-strip__label {
+  font-size: var(--ds-head);
+}
+.dc-profile-modal--prospect .wr-office-strip__row em {
+  font-size: var(--ds-body);
+}
+.dc-profile-modal--prospect .wr-office-strip__row strong {
+  font-size: var(--ds-num);
+}
+.dc-profile-modal--prospect .wr-office-pips i {
+  width: clamp(7px, 0.65vw, 12px);
+  height: clamp(10px, 1.5vh, 19px);
+}
+
+/* Zone map + outcome ribbon span their row */
+.dc-profile-modal--prospect .wr-rink__board,
+.dc-profile-modal--prospect .wr-rink__svg {
+  width: 100%;
+}
+.dc-profile-modal--prospect .wr-outcome-ribbon {
+  height: clamp(16px, 2.6vh, 30px);
+}
+.dc-profile-modal--prospect .wr-outcome-legend {
+  font-size: var(--ds-label);
+}
+
+/* Tool grades scale with the screen */
+.dc-profile-modal--prospect .wr-stat-strip__cell {
+  padding: clamp(8px, 1.5vh, 20px) 12px;
+  gap: clamp(6px, 0.8vw, 14px);
+}
+.dc-profile-modal--prospect .wr-stat-strip__cell span {
+  font-size: var(--ds-label);
+}
+.dc-profile-modal--prospect .wr-stat-strip__cell strong {
+  font-size: var(--ds-num);
+}
+
+/* Identity rail keeps pace */
+.dc-profile-modal--prospect .dc-signal-bio li div span {
+  font-size: var(--ds-label);
+}
+.dc-profile-modal--prospect .dc-signal-bio li div strong {
+  font-size: var(--ds-body);
+}
+.dc-profile-modal--prospect .dc-file-depth strong,
+.dc-profile-modal--prospect .dc-file-depth em,
+.dc-profile-modal--prospect .dc-file-depth small {
+  font-size: var(--ds-label);
+}
+
+/* Intel tab: centre its analytics so it does not leave a tall gap */
+.dc-profile-modal--prospect .dc-dossier-pane--intel > .dc-brochure-analytics {
+  display: grid;
+  align-content: center;
+  gap: var(--ds-gap);
+}
+.dc-profile-modal--prospect .dc-signal-metrics--dossier {
+  gap: var(--ds-gap);
+}
+.dc-profile-modal--prospect .wr-scout-desk__row {
+  padding: clamp(6px, 1.1vh, 14px) clamp(8px, 0.9vw, 16px);
+}
+.dc-profile-modal--prospect .wr-scout-desk__quote p,
+.dc-profile-modal--prospect .wr-scout-desk__name {
+  font-size: var(--ds-body);
 }

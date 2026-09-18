@@ -111,12 +111,36 @@ def _draft_scout_completion(rank: int, month: Optional[int], key: str) -> float:
 
 
 def _draft_ovr_range(true_ovr: float, scouted: float) -> Dict[str, float]:
-    spread = max(4.0, 18.0 - (float(scouted) * 0.16))
-    low = max(40.0, float(true_ovr) - spread)
-    high = min(99.0, float(true_ovr) + spread * 0.65)
-    if scouted >= DRAFT_OVR_REVEAL_THRESHOLD:
-        low = high = round(float(true_ovr), 1)
-    return {"low": round(low, 1), "high": round(high, 1)}
+    """Current-ability band around a known true OVR.
+
+    Delegates to the shared band so the scouting screen, the big board and draft
+    night cannot drift apart.
+    """
+    from services.draft_ranking_logic import compute_public_ovr_band
+
+    band = compute_public_ovr_band(
+        float(true_ovr),
+        float(scouted),
+        seed_key=f"{round(float(true_ovr), 1)}",
+        reveal_threshold=float(DRAFT_OVR_REVEAL_THRESHOLD),
+    )
+    return {"low": float(band["low"]), "high": float(band["high"])}
+
+
+def _coerce_ovr_range(raw: Any) -> Optional[Dict[str, float]]:
+    """Accept either {'low','high'} or a [low, high] pair from the board."""
+    if isinstance(raw, Mapping):
+        low, high = raw.get("low"), raw.get("high")
+    elif isinstance(raw, (list, tuple)) and len(raw) == 2:
+        low, high = raw[0], raw[1]
+    else:
+        return None
+    if low is None or high is None:
+        return None
+    try:
+        return {"low": round(float(low), 1), "high": round(float(high), 1)}
+    except (TypeError, ValueError):
+        return None
 
 ACTION_SCOUTED_GAIN: Dict[str, float] = {
     "region_sweep": 6.0,
@@ -793,17 +817,27 @@ def _normalize_prospect(
             region = "Europe" if country not in ("Unknown", "") else "International"
 
     scouted = _scouted_pct(entry, overlay, month)
-    potential = float(entry.get("potential_score") or entry.get("true_ovr") or 70)
-    true_ovr = float(entry.get("true_ovr") or potential or 70)
-    ovr_revealed = scouted >= float(DRAFT_OVR_REVEAL_THRESHOLD)
-    raw_range = entry.get("ovr_range")
-    if isinstance(raw_range, dict) and raw_range.get("low") is not None and raw_range.get("high") is not None:
-        ovr_range = {
-            "low": round(float(raw_range["low"]), 1),
-            "high": round(float(raw_range["high"]), 1),
-        }
-    else:
-        ovr_range = _draft_ovr_range(true_ovr, scouted)
+    potential = float(entry.get("potential_score") or 70)
+    ovr_revealed = bool(entry.get("ovr_revealed")) or scouted >= float(DRAFT_OVR_REVEAL_THRESHOLD)
+
+    # The board strips `true_ovr` for unrevealed prospects, so never fall back to
+    # `potential_score` here — that centers the *current* OVR band on the ceiling.
+    # Prefer the band the board already computed; only re-derive when we truly
+    # hold the revealed overall.
+    true_ovr_raw = entry.get("true_ovr")
+    true_ovr = float(true_ovr_raw) if true_ovr_raw is not None else 0.0
+    ovr_range = _coerce_ovr_range(entry.get("ovr_range")) or _coerce_ovr_range(
+        entry.get("current_ovr_range")
+    )
+    if ovr_range is None:
+        if true_ovr_raw is not None:
+            ovr_range = _draft_ovr_range(true_ovr, scouted)
+        else:
+            est = entry.get("current_ovr_estimate")
+            if est is not None:
+                ovr_range = {"low": round(float(est), 1), "high": round(float(est), 1)}
+            else:
+                ovr_range = {"low": 0.0, "high": 0.0}
     floor = float(ovr_range["low"])
 
     traits = list(overlay.get("traits") or [])

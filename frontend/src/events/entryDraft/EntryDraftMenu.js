@@ -459,6 +459,9 @@ function formatOvrRange(low, high) {
 
 function resolveCurrentOvrLabel(p) {
   if (!p) return null;
+  // A drafted prospect's ability is public — no fog once he is off the board.
+  if (p.ability_revealed && p.drafted_overall != null) return `${roundInt(p.drafted_overall)}`;
+  if (p.overall != null) return `${roundInt(p.overall)}`;
   if (p.ovr_revealed && p.true_ovr != null) return `${roundInt(p.true_ovr)}`;
   const lo = roundInt(
     p.floor_grade ??
@@ -782,11 +785,14 @@ function numOrDash(v) {
 }
 
 function ovrVal(p) {
-  return numOrDash(p?.floor_grade ?? p?.true_ovr ?? p?.scouted_ovr);
+  // Drafted players are revealed; the fogged floor_grade is only a pre-draft value.
+  return numOrDash(
+    p?.drafted_overall ?? p?.overall ?? p?.floor_grade ?? p?.true_ovr ?? p?.scouted_ovr
+  );
 }
 
 function potVal(p) {
-  const v = p?.ceiling_grade ?? p?.potential_score;
+  const v = p?.drafted_potential ?? p?.ceiling_grade ?? p?.potential_score;
   if (v != null && !Number.isNaN(Number(v))) return Math.round(Number(v));
   return p?.potential_grade || "—";
 }
@@ -1114,7 +1120,7 @@ const SHEET = `
   margin:0;padding:6px 12px 0;font-size:11px;color:var(--ed-ink-3);letter-spacing:.04em;
 }
 .edraft-log-row{
-  display:grid;grid-template-columns:34px 22px minmax(0,1fr) auto auto;align-items:center;gap:8px;
+  display:grid;grid-template-columns:34px 22px minmax(0,1fr) auto auto auto;align-items:center;gap:8px;
   width:100%;padding:8px 12px;background:none;border:0;border-bottom:1px solid var(--ed-line-soft);
   text-align:left;color:inherit;font:inherit;cursor:pointer;
 }
@@ -1132,6 +1138,12 @@ const SHEET = `
 .edraft-log-body{min-width:0;}
 .edraft-log-body strong{display:block;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .edraft-log-body span{display:block;font-size:11.5px;color:var(--ed-ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.edraft-log-ovr{
+  display:inline-flex;align-items:baseline;gap:4px;flex:none;padding:2px 7px;
+  border:1px solid rgba(19,216,231,.26);background:rgba(19,216,231,.08);
+}
+.edraft-log-ovr b{font-family:var(--ed-head);font-size:15px;line-height:1;color:var(--ed-cyan);}
+.edraft-log-ovr i{font-style:normal;font-size:10.5px;line-height:1;color:var(--gold);opacity:.85;}
 .edraft-empty{padding:22px 14px;color:var(--ed-ink-3);font-size:12.5px;text-align:center;}
 
 /* ---------- badges ---------- */
@@ -1848,6 +1860,18 @@ function OnDeckRail({ upcoming, userTeamId }) {
 /* Left pane — draft log + floor buzz                                  */
 /* ------------------------------------------------------------------ */
 
+function DraftedOvrChip({ pick }) {
+  const ovr = resolveCurrentOvrLabel(pick);
+  if (!ovr) return null;
+  const pot = roundInt(pick?.drafted_potential ?? pick?.ceiling_grade);
+  return (
+    <span className={`${PREFIX}-log-ovr`} title="Overall now / projected peak">
+      <b className={`${PREFIX}-tabular`}>{ovr}</b>
+      {pot != null ? <i className={`${PREFIX}-tabular`}>{pot}</i> : null}
+    </span>
+  );
+}
+
 function LeftPane({ completed, selectedPick, onSelectPick, userTeamId, tweets, feedEnabled }) {
   const [pane, setPane] = useState("log");
   const [filter, setFilter] = useState("all");
@@ -1954,6 +1978,7 @@ function LeftPane({ completed, selectedPick, onSelectPick, userTeamId, tweets, f
                         ].filter(Boolean).join(" · ")}
                       </span>
                     </span>
+                    <DraftedOvrChip pick={p} />
                     <PickBadge tag={tag} tone={tone} />
                   </button>
                 );

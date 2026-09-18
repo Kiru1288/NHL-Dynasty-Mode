@@ -2336,6 +2336,20 @@ function inferWeight(player) {
   return safeStr(pickFirstDefined(player?.wgt), "—");
 }
 
+function formatBirthday(player) {
+  const raw = safeStr(
+    pickFirstDefined(player?.birth_date, player?.birthDate, player?.birthday, player?.dob),
+    ""
+  );
+  if (!raw || raw === "—" || raw.startsWith("0000") || raw.startsWith("1900-01")) return "—";
+  // Accept YYYY-MM-DD and render as "Mar 25, 2005"
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return raw;
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const month = months[Math.max(0, Math.min(11, Number(m[2]) - 1))];
+  return `${month} ${Number(m[3])}, ${m[1]}`;
+}
+
 function inferRole(player, position, trueOverall) {
   const raw = safeStr(
     pickFirstDefined(
@@ -3073,6 +3087,8 @@ function normalizeLivePlayer(player, franchiseState, index) {
       ) || null,
     hgt: inferHeight(source),
     wgt: inferWeight(source),
+    birthday: formatBirthday(source),
+    birth_date: safeStr(pickFirstDefined(source?.birth_date, source?.birthDate), ""),
     hand: inferHandedness(source) || "Unknown",
     archetype: normalizeArchetype(source),
     morale: normalizePercentScale(source.morale, 50),
@@ -3228,6 +3244,8 @@ function normalizeDraftPlayer(row, index) {
     nat: inferNationality(source),
     hgt: inferHeight(source),
     wgt: inferWeight(source),
+    birthday: formatBirthday(source),
+    birth_date: safeStr(pickFirstDefined(source?.birth_date, source?.birthDate), ""),
     hand: inferHandedness(source) || "Unknown",
     archetype: normalizeArchetype(source),
     morale: 50,
@@ -3955,6 +3973,14 @@ function PremiumPlayerRow({ player, selected, onSelect, showTeam = false }) {
 
       <span className="nhlrost-board-row__age">{player.age ? round0(player.age) : "—"}</span>
 
+      <span className="nhlrost-board-row__ht" title={player.birthday || undefined}>
+        {formatHeightDisplay(player.hgt)}
+      </span>
+
+      <span className="nhlrost-board-row__wt">{formatWeightDisplay(player.wgt)}</span>
+
+      <span className="nhlrost-board-row__dob">{player.birthday || "—"}</span>
+
       <span className="nhlrost-board-row__contract">{capHitDisplay(player)}</span>
 
       <span className="nhlrost-board-row__status">
@@ -3989,6 +4015,9 @@ function RosterBoardView({ players, selectedPlayerKey, onSelectPlayer, showTeam 
         <span>Pos</span>
         <span>OVR</span>
         <span>Age</span>
+        <span>Ht</span>
+        <span>Wt</span>
+        <span>Birthday</span>
         <span>Contract</span>
         <span>Status</span>
         <span>Role</span>
@@ -8561,15 +8590,18 @@ function RosterScreenStyles() {
         z-index: 2;
         display: grid;
         grid-template-columns:
-          minmax(168px, 1.55fr)
-          44px
-          52px
+          minmax(150px, 1.35fr)
           40px
+          48px
+          36px
+          52px
+          56px
+          88px
           72px
-          minmax(72px, 0.75fr)
-          minmax(84px, 0.85fr)
-          minmax(128px, 1.15fr)
-          minmax(64px, 0.62fr);
+          minmax(68px, 0.65fr)
+          minmax(80px, 0.75fr)
+          minmax(110px, 1fr)
+          minmax(64px, 0.55fr);
         align-items: center;
         gap: 8px;
         padding: 0 10px;
@@ -8594,15 +8626,18 @@ function RosterScreenStyles() {
         min-height: 42px;
         display: grid;
         grid-template-columns:
-          minmax(168px, 1.55fr)
-          44px
-          52px
+          minmax(150px, 1.35fr)
           40px
+          48px
+          36px
+          52px
+          56px
+          88px
           72px
-          minmax(72px, 0.75fr)
-          minmax(84px, 0.85fr)
-          minmax(128px, 1.15fr)
-          minmax(64px, 0.62fr);
+          minmax(68px, 0.65fr)
+          minmax(80px, 0.75fr)
+          minmax(110px, 1fr)
+          minmax(64px, 0.55fr);
         align-items: center;
         gap: 8px;
         padding: 0 10px;
@@ -8853,6 +8888,9 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-board-row__age,
+      .nhlrost-board-row__ht,
+      .nhlrost-board-row__wt,
+      .nhlrost-board-row__dob,
       .nhlrost-board-row__role,
       .nhlrost-board-row__avail {
         font-size: var(--type-table-value-size, 0.8125rem);
@@ -12030,15 +12068,18 @@ function RosterScreenStyles() {
       .nhlrost-board-sheet__head,
       .nhlrost-board-row {
         grid-template-columns:
-          minmax(168px, 1.5fr)
-          44px
-          52px
+          minmax(150px, 1.35fr)
           40px
-          86px
-          minmax(76px, 0.7fr)
-          minmax(88px, 0.8fr)
-          minmax(104px, 0.9fr)
-          minmax(92px, 0.72fr);
+          48px
+          36px
+          52px
+          56px
+          88px
+          78px
+          minmax(68px, 0.6fr)
+          minmax(80px, 0.7fr)
+          minmax(96px, 0.85fr)
+          minmax(80px, 0.65fr);
       }
 
       .nhlrost-board-sheet__head span,

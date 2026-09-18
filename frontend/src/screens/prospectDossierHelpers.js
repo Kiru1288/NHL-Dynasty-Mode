@@ -484,11 +484,23 @@ export function resolveBottomStatStrip(player, profile, tools, isGoalie) {
   }
   const pick = (label) => tools?.find((t) => t.label === label);
   return [
-    { label: "Skating", grade: gradeForTool(pick("Skating"), "skating"), tone: "gold" },
-    { label: "Shot", grade: gradeForTool(pick("Shot"), "shooting"), tone: "cyan" },
-    { label: "Vision", grade: gradeForTool(pick("Vision"), "passing"), tone: "gold" },
-    { label: "Physical", grade: gradeForTool(pick("Physical"), "physical"), tone: "amber" },
+    { label: "Skating", grade: gradeForTool(pick("Skating"), "skating"), value: valueForTool(player, pick("Skating"), "skating"), tone: "gold" },
+    { label: "Shot", grade: gradeForTool(pick("Shot"), "shooting"), value: valueForTool(player, pick("Shot"), "shooting"), tone: "cyan" },
+    { label: "Vision", grade: gradeForTool(pick("Vision"), "passing"), value: valueForTool(player, pick("Vision"), "passing"), tone: "gold" },
+    { label: "Physical", grade: gradeForTool(pick("Physical"), "physical"), value: valueForTool(player, pick("Physical"), "physical"), tone: "amber" },
   ];
+}
+
+/** Numeric backing for a letter grade, so the strip can reveal the raw tool score. */
+function valueForTool(player, tool, ...playerKeys) {
+  const raw = tool?.raw != null && Number.isFinite(Number(tool.raw)) ? Number(tool.raw) : null;
+  if (raw != null) return Math.round(raw);
+  for (const key of playerKeys) {
+    const v = num(player?.[key]);
+    if (v != null) return Math.round(v);
+  }
+  const mid = tool?.mid != null && Number.isFinite(Number(tool.mid)) ? Number(tool.mid) : null;
+  return mid != null ? Math.round(mid) : null;
 }
 
 export function developmentTrajectoryNarrative(player, profile, tools, skillNotes, isGoalie) {
