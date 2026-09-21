@@ -7431,6 +7431,16 @@ class SimEngine:
             )
         if curve == "boom_bust" and rng.random() < 0.11:
             growth += rng.uniform(0.008, 0.026)
+        # In-season pulses already paid part of this year's growth: only the remainder lands now.
+        _paid = float(getattr(prospect, "_pool_inseason_spent", 0.0) or 0.0)
+        if _paid > 0.0:
+            if growth > 0.0:
+                growth = max(0.0, growth - _paid)
+            try:
+                setattr(prospect, "_pool_inseason_spent", 0.0)
+                setattr(prospect, "_pool_season_plan", None)
+            except Exception:
+                pass
         ceil = float(getattr(prospect, "_pipeline_ceiling", hi))
         fl = float(getattr(prospect, "_pipeline_floor", lo))
         lo = max(0.35, min(0.97, lo + growth * 0.55))
@@ -15741,6 +15751,12 @@ class SimEngine:
         season_counters: Dict[str, int] = {"trade_executions": 0, "waiver_claims": 0, "major_injuries": 0}
         milestone_seen: Set[Tuple[str, str, int]] = set()
         run_hist: Dict[str, List[str]] = {}
+        news_team_label: Dict[str, str] = {}
+        for _t in teams:
+            _tid = str(getattr(_t, "team_id", None) or getattr(_t, "id", "") or "")
+            _lab = f"{getattr(_t, 'city', '') or ''} {getattr(_t, 'name', '') or ''}".strip()
+            if _tid and _lab:
+                news_team_label[_tid] = _lab
         max_cal = max((int(s.day) for s in schedule), default=0)
 
         by_day: Dict[int, List[Any]] = {}
@@ -15943,7 +15959,10 @@ class SimEngine:
                             {
                                 "type": "streak",
                                 "date": int(day),
-                                "headline": f"{tid} riding a {streak}-game {letter} streak",
+                                "headline": (
+                                    f"{news_team_label.get(str(tid), tid)} riding a "
+                                    f"{streak}-game {'winning' if letter == 'W' else 'losing'} streak"
+                                ),
                                 "team": tid,
                                 "players": [],
                                 "priority": "LOW",

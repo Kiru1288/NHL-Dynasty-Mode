@@ -331,7 +331,7 @@ _LEAGUE_PPG_SCALE: Dict[str, float] = {
     "WHL": 0.96,
     "QMJHL": 1.06,
     "USHL": 0.74,
-    "NCAA": 0.56,
+    "NCAA": 0.66,
     "SHL": 0.40,
     "LIIGA": 0.44,
     "EUROPE_JUNIOR": 0.46,
@@ -511,6 +511,17 @@ def enrich_prospect_row_from_player(player: Any, row: Dict[str, Any]) -> None:
     tier = str(getattr(player, "pipeline_tier", "") or "").strip()
     if tier:
         row.setdefault("pipeline_tier", tier)
+
+    # Hidden truth: how far this prospect's true potential moved this season. Gated for the
+    # public payload (scouting confidence / ceiling visibility) where the board row is built.
+    try:
+        from services.prospect_in_season_growth import prospect_growth_fields
+
+        _chg = prospect_growth_fields(player).get("potential_change_season")
+        if _chg is not None:
+            row["_potential_change_true"] = int(_chg)
+    except Exception:
+        pass
 
     ratings = getattr(player, "ratings", None)
     if not isinstance(ratings, dict):
@@ -1054,17 +1065,27 @@ def _role_expected_ppg(row: Mapping[str, Any], role: str) -> float:
     return base * scale * talent * age_mult
 
 
+def _league_difficulty(key: str) -> float:
+    """League scoring difficulty from the scoring module's profiles (single source of truth)."""
+    try:
+        from app.sim_engine.generation.prospect_league_scoring import get_league_scoring_profile
+
+        return float(get_league_scoring_profile(key or "JUNIOR").get("difficulty", 0.62))
+    except Exception:
+        if key in ("QMJHL", "OHL", "CHL", "WHL") or key.startswith("CHL"):
+            return 0.62
+        if key == "NCAA":
+            return 0.82
+        if key in ("SHL", "LIIGA", "EUROPE_JUNIOR", "DEL") or key.startswith("EU_"):
+            return 0.88
+        return 0.62
+
+
 def _ppg_to_production_score(ppg: float, row: Mapping[str, Any]) -> float:
-    diff = 0.62
     # Read the SAME source fields as _league_ppg_scale so a row with league_code
     # but no league_scoring_profile is normalized consistently by both functions.
     key = str(row.get("league_scoring_profile") or row.get("league_code") or "").upper()
-    if key in ("QMJHL", "OHL", "CHL", "WHL") or key.startswith("CHL"):
-        diff = 0.62
-    elif key == "NCAA":
-        diff = 0.82
-    elif key in ("SHL", "LIIGA", "EUROPE_JUNIOR", "DEL") or key.startswith("EU_"):
-        diff = 0.88
+    diff = _league_difficulty(key)
     adj = ppg * (1.0 - diff * 0.35)
     if int(row.get("age") or 18) >= 20:
         adj *= 0.82
@@ -1201,6 +1222,27 @@ def build_draft_rank_reason_codes(row: Dict[str, Any]) -> List[str]:
     return codes[:6]
 
 
+_PRODUCTION_LIFT_NEUTRAL = 8.0
+
+
+def _production_ceiling_lift(row: Mapping[str, Any], prod: float, ppg: float) -> float:
+    """Ceiling lift the market reads from production.
+
+    Junior/minor PPG is generated from ratings, role and league, so raw points mostly restate
+    ability that `ovr` already carries (and inflate whole leagues). The lift is therefore
+    `neutral + (lift earned - lift expected for this ovr/role/league)`: a player matching his
+    expectation gets the neutral lift in ANY league; only real over/under-production moves it.
+    """
+    earned = min(16.0, prod * 9.5 + ppg * 4.0)
+    role = infer_prospect_role(row)
+    if role == "goalie":
+        return earned
+    exp_ppg = _role_expected_ppg(row, role)
+    exp_prod = _ppg_to_production_score(exp_ppg, row)
+    expected = min(16.0, exp_prod * 9.5 + exp_ppg * 4.0)
+    return max(0.0, min(16.0, _PRODUCTION_LIFT_NEUTRAL + (earned - expected)))
+
+
 def compute_consensus_potential_evaluation(row: Dict[str, Any]) -> float:
     """League/market-facing ceiling estimate from observable signals only.
 
@@ -1218,7 +1260,7 @@ def compute_consensus_potential_evaluation(row: Dict[str, Any]) -> float:
     code = str(row.get("league_code") or "").upper()
     pos = str(row.get("position") or "").upper()
 
-    prod_lift = min(16.0, prod * 9.5 + ppg * 4.0)
+    prod_lift = _production_ceiling_lift(row, prod, ppg)
     production_ceiling = ovr + prod_lift
 
     tool_lift = 0.0

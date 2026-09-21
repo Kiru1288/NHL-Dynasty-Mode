@@ -1462,6 +1462,9 @@ function mapBackendDraftBoard(entries, dateContext) {
         ? Number(row.floor_score)
         : (row?.floorScore != null ? Number(row.floorScore) : null),
       potentialLabel: coalesce(row?.potential, row?.potential_label),
+      potentialTrend: coalesce(row?.potential_trend, row?.potentialTrend),
+      potentialTrendLabel: coalesce(row?.potential_trend_label, row?.potentialTrendLabel),
+      potentialChangeEst: row?.potential_change_est != null ? Number(row.potential_change_est) : null,
       potentialScore: (row?.ceiling_hidden ?? row?.ceilingHidden)
         ? null
         : (row?.potential_score != null ? Number(row.potential_score) : null),
@@ -3486,6 +3489,15 @@ function ProspectBoardRow({ player, index, selected, expanded, onSelect, onPrefe
             />
           )}
         </span>
+        {ceilingFog !== "hidden" && (player.potentialTrend === "rising" || player.potentialTrend === "falling") ? (
+          <span
+            className={`dc-pot-trend is-${player.potentialTrend}`}
+            title={player.potentialTrendLabel || (player.potentialTrend === "rising" ? "Scouts see the ceiling rising" : "Scouts see the ceiling slipping")}
+          >
+            {player.potentialTrend === "rising" ? "▲" : "▼"}
+            {player.potentialChangeEst != null ? Math.abs(player.potentialChangeEst) : ""}
+          </span>
+        ) : null}
       </span>
       <span className="dc-prospect-row__cell dc-prospect-row__proj">{player.projection || projectionForRank(rank)}</span>
       <ScoutingFileSplit player={player} compact />

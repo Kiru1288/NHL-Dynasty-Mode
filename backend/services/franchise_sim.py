@@ -2189,7 +2189,7 @@ def start_franchise(
         _normalized_notification(
             notification_id=f"system:franchise_ready:{uid}",
             notification_type="system",
-            text=f"Franchise ready ΓÇö {_display_team(user_team)} ({uid}).",
+            text=f"Franchise ready — {_display_team(user_team)} ({uid}).",
             priority="LOW",
             calendar_day=0,
             calendar_iso=start_iso,
@@ -2202,7 +2202,7 @@ def start_franchise(
             notification_id=f"system:coach_hired:{uid}:{season_y}",
             notification_type="system",
             text=(
-                f"Hired {coach.name} ({coach_archetype}). NHL calendar {season_y}ΓÇô{season_y + 1} ┬╖ "
+                f"Hired {coach.name} ({coach_archetype}). NHL calendar {season_y}–{season_y + 1} ┬╖ "
                 f"{len(nhl_cal)} days ┬╖ {len(days_sorted)} game dates ┬╖ ~{gp} GP."
             ),
             priority="LOW",
@@ -2247,7 +2247,7 @@ def start_franchise(
                 session.notifications.append(f"Brady chaos skipped: {brady_err}")
         npl = len(getattr(league, "players", None) or [])
         session.notifications.append(
-            f"League depth online ΓÇö NHL affiliates (AHL/ECHL), UFA pools, overseas, juniors (~{npl} player records)."
+            f"League depth online — NHL affiliates (AHL/ECHL), UFA pools, overseas, juniors (~{npl} player records)."
         )
     except Exception as e:
         session.notifications.append(f"League depth bootstrap skipped: {e}")
@@ -5723,7 +5723,7 @@ def _stats_integrity_payload(rows: List[Dict[str, Any]], game_results: List[Dict
         "warnings": warnings,
     }
 def _build_schedule_upcoming(session: FranchiseSession, *, limit: int = 14) -> List[Dict[str, Any]]:
-    """Next NHL calendar days from the current cursor (real dates) ΓÇö hub / calendar UI."""
+    """Next NHL calendar days from the current cursor (real dates) — hub / calendar UI."""
     if str(getattr(session, "phase", "")) != "regular":
         return []
     cal = getattr(session, "nhl_calendar", None) or []
@@ -5963,7 +5963,7 @@ def _saved_game_is_final(g: Dict[str, Any]) -> bool:
 
 
 def _game_result_calendar_index(g: Dict[str, Any]) -> Optional[int]:
-    """Calendar index from a saved game box (day 0 is valid ΓÇö never use `value or default` on day)."""
+    """Calendar index from a saved game box (day 0 is valid — never use `value or default` on day)."""
     if not isinstance(g, dict):
         return None
     v = g.get("day")
@@ -6842,6 +6842,14 @@ def _serialize_player_row(
     elif getattr(p, "undrafted", False):
         row["drafted"] = False
         row["undrafted"] = True
+    # Season-long growth for prospects: OVR and potential move independently.
+    try:
+        from services.prospect_in_season_growth import is_growth_prospect, prospect_growth_fields
+
+        if is_growth_prospect(p):
+            row.update(prospect_growth_fields(p))
+    except Exception:
+        pass
     # Rights / org status always (prospects + veterans).
     try:
         row["rights_type"] = str(getattr(p, "rights_type", "") or "") or None
@@ -7063,7 +7071,24 @@ def _serialize_player_row(
             elif is_echl:
                 row["league"] = "ECHL"
                 row["league_code"] = "ECHL"
+                echl_compact = _ahl_light_season_stats(
+                    p, session=session, is_goalie=(pos_str == "G"), team=_team, league_code="ECHL"
+                )
                 if nhl_compact and int(nhl_compact.get("gp", 0) or 0) > 0:
+                    nhl_line = dict(nhl_compact)
+                    nhl_line["league"] = "NHL"
+                    nhl_line.pop("is_ahl_synthetic", None)
+                    _merge_current_season_into_career_seasons(
+                        row, nhl_line, session=session, team=_team
+                    )
+                if echl_compact:
+                    compact = echl_compact
+                    affiliate = str(echl_compact.get("team_name") or "")
+                    if affiliate:
+                        row["team_name"] = affiliate
+                        row["teamName"] = affiliate
+                        row["affiliate_team_name"] = affiliate
+                elif nhl_compact and int(nhl_compact.get("gp", 0) or 0) > 0:
                     compact = nhl_compact
             else:
                 if nhl_compact and int(nhl_compact.get("gp", 0) or 0) > 0:
@@ -7072,6 +7097,10 @@ def _serialize_player_row(
             if compact:
                 row["season_stats"] = compact
                 _merge_current_season_into_career_seasons(row, compact, session=session, team=_team)
+            # Earlier stints (other leagues / earlier seasons) — synthetic minor/junior lines.
+            _hist = getattr(p, "prospect_stat_history", None)
+            if isinstance(_hist, list) and _hist:
+                row["prospect_stat_history"] = [dict(h) for h in _hist if isinstance(h, dict)]
         except Exception:
             pass
         try:
@@ -7126,22 +7155,38 @@ def _serialize_player_row(
     return row
 
 
+def _minor_league_team_display_name(team: Any, league_code: str) -> str:
+    if str(league_code).upper() == "ECHL":
+        for attr in ("echl_team_name", "echl_affiliate_name"):
+            raw = getattr(team, attr, None) if team is not None else None
+            if raw and str(raw).strip():
+                return str(raw).strip()
+        city = str(getattr(team, "city", "") or "").strip() if team is not None else ""
+        name = str(getattr(team, "name", "") or "").strip() if team is not None else ""
+        if name:
+            return f"{city} {name} (ECHL)".strip() if city else f"{name} (ECHL)"
+        return "ECHL Affiliate"
+    return _ahl_affiliate_display_name(team)
+
+
 def _ahl_light_season_stats(
     p: Any,
     *,
     session: Optional[FranchiseSession] = None,
     is_goalie: bool = False,
     team: Optional[Any] = None,
+    league_code: str = "AHL",
 ) -> Dict[str, Any]:
-    """Light season line for AHL affiliate players.
+    """Light season line for AHL / ECHL affiliate players.
 
-    AHL games are not simulated player-by-player like the NHL schedule, so
+    Minor-league games are not simulated player-by-player like the NHL schedule, so
     `session.player_season_stats` never has an entry for them. Reuse the same
     prospect-league statistical model that drives junior/NCAA/European stat
-    lines (deterministic per player, calendar-advanced) under an "AHL"
+    lines (deterministic per player, calendar-advanced) under an "AHL" / "ECHL"
     scoring profile so affiliate players show real basic totals instead of
-    a blank stat line.
+    a blank stat line. The line belongs to the player's *current stint* only.
     """
+    league_code = str(league_code or "AHL").upper()
     try:
         from app.sim_engine.generation.prospect_league_scoring import prospect_stats_for_api
     except Exception:
@@ -7157,7 +7202,7 @@ def _ahl_light_season_stats(
     try:
         stats = prospect_stats_for_api(
             p,
-            "AHL",
+            league_code,
             calendar_iso=calendar_iso,
             season_year=season_year or None,
         )
@@ -7168,16 +7213,18 @@ def _ahl_light_season_stats(
     if gp <= 0:
         return {}
 
-    affiliate = _ahl_affiliate_display_name(team)
+    affiliate = _minor_league_team_display_name(team, league_code)
     out: Dict[str, Any] = {
         "gp": gp,
         "pim": int(stats.get("pim") or 0),
         "ppg": stats.get("ppg") or stats.get("points_per_game") or 0.0,
-        "league": "AHL",
-        "league_code": "AHL",
+        "league": league_code,
+        "league_code": league_code,
         "team": affiliate,
         "team_name": affiliate,
         "is_ahl_synthetic": True,
+        "is_synthetic": True,
+        "gp_missed": int(stats.get("gp_missed") or 0),
     }
     if is_goalie:
         out.update(
@@ -7377,6 +7424,9 @@ def _merge_current_season_into_career_seasons(
         "league": league,
         "gp": gp_now,
         "is_current_season": True,
+        # Minor-league lines are model output, not simulated games; keep them
+        # distinguishable from real imported NHL career rows.
+        "is_synthetic": bool(compact.get("is_synthetic") or compact.get("is_ahl_synthetic")),
     }
     if is_goalie_row:
         entry.update(
@@ -8658,6 +8708,17 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
 
         intel = _enforce_peak_range_span(intel, rank)
         entry = {k: v for k, v in row.items() if not k.startswith("_")}
+        # Ceiling movement is public only as a fogged hint: hidden ceilings show nothing, thin
+        # files show direction only, deep files (your own scouting) also show the size.
+        _pchg = row.get("_potential_change_true")
+        if _pchg is not None and not ceiling_hidden and float(conf) >= 40.0 and abs(int(_pchg)) >= 1:
+            _up = int(_pchg) > 0
+            entry["potential_trend"] = "rising" if _up else "falling"
+            entry["potential_trend_label"] = (
+                "Scouts report the ceiling is rising" if _up else "Scouts report the ceiling is slipping"
+            )
+            if gm_scout_pct >= 60.0:
+                entry["potential_change_est"] = int(_pchg)
         # Strip hidden truth fields before public serialization.
         raw_true_ovr = entry.pop("true_ovr", None)
         entry.pop("true_potential_score", None)
@@ -8866,7 +8927,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
     return {
         "entries": entries,
         "class_strength": class_strength,
-        "subtitle": f"{class_strength} ┬╖ draft-age (Γëñ20) in dev leagues ┬╖ showing {len(entries)}",
+        "subtitle": f"{class_strength} ┬╖ draft-age (≤20) in dev leagues ┬╖ showing {len(entries)}",
         "total": total,
         "stock_market_summary": stock_summary,
         "tier_summary": tier_summary,
@@ -9866,61 +9927,154 @@ def _trade_popup_age(player: Any) -> Optional[int]:
     return None
 
 
-def _trade_popup_season_stats(session: Optional[FranchiseSession], player_id: str) -> Dict[str, Any]:
-    if session is None or not player_id:
-        return {}
-    row = dict((getattr(session, "player_season_stats", None) or {}).get(str(player_id)) or {})
-    if not row:
-        return {}
-    gp = int(row.get("gp") or 0)
-    g = int(row.get("g") or 0)
-    a = int(row.get("a") or 0)
-    pts = int(row.get("pts") or (g + a))
-    xgf_pct = None
-    war = None
-    xgf_sample = float(row.get("xgf") or 0) + float(row.get("xga") or 0)
-    xgf_gp = int(row.get("xgf_pct_gp") or 0)
-    has_xgf_sample = xgf_sample > 0 or xgf_gp > 0
+def _trade_popup_num(v: Any, default: Optional[float] = None) -> Optional[float]:
     try:
-        from app.sim_engine.gameplay.game_analytics_ledger import season_xgf_pct_from_row  # noqa: WPS433
-        from app.sim_engine.generation.player_analytics import enrich_player_row  # noqa: WPS433
+        if v is None or v == "":
+            return default
+        return float(v)
+    except (TypeError, ValueError):
+        return default
 
-        enriched = enrich_player_row(row)
-        if has_xgf_sample:
-            raw_xgf = enriched.get("xgf_pct")
-            if raw_xgf is None:
-                raw_xgf = season_xgf_pct_from_row(row)
-            if raw_xgf is not None:
-                xf = float(raw_xgf)
-                xgf_pct = round(xf * 100.0, 1) if xf <= 1.5 else round(xf, 1)
-        war_raw = enriched.get("war")
-        # Prefer computed WAR whenever the player has played; enrichment always derives it.
-        if war_raw is not None and gp > 0:
-            war = round(float(war_raw), 1)
-    except Exception:
-        # Fallback: derive xGF% from ledger totals when enrichment is unavailable.
+
+def _trade_popup_prior_nhl_line(player: Any) -> Dict[str, Any]:
+    """Most recent completed season with NHL games from stored career history (no invention)."""
+    career = getattr(player, "career_stats", None)
+    if not isinstance(career, dict):
+        return {}
+    seasons = career.get("seasons") or career.get("by_season") or career.get("history")
+    if not isinstance(seasons, list):
+        return {}
+    for row in reversed(seasons):
+        if not isinstance(row, dict):
+            continue
+        league = str(row.get("league") or row.get("league_code") or "NHL").upper()
+        gp = int(_trade_popup_num(row.get("gp"), 0) or 0)
+        if league != "NHL" or gp <= 0:
+            continue
+        return dict(row)
+    return {}
+
+
+def _trade_popup_season_stats(
+    session: Optional[FranchiseSession],
+    player_id: str,
+    player: Any = None,
+) -> Dict[str, Any]:
+    """Season line for a traded player, self-describing so the UI never has to guess.
+
+    Returns {"kind": "skater" | "goalie", "source": ..., "label": ..., stats...} where source is
+    "nhl_current", "minors" (AHL/ECHL/junior model line), "nhl_prior" (last NHL season on record)
+    or "none". A player with no games gets source "none" and a note — never a row of zeros or dashes.
+    """
+    pid = str(player_id or "")
+    is_goalie = bool(player is not None and _pos_str(player) == "G")
+    row = dict((getattr(session, "player_season_stats", None) or {}).get(pid) or {}) if session is not None and pid else {}
+    if str(row.get("position") or row.get("pos") or "").upper() == "G":
+        is_goalie = True
+    kind = "goalie" if is_goalie else "skater"
+    season_y = int(getattr(session, "season_calendar_year", 0) or 0) if session is not None else 0
+    season_label = f"{season_y}-{(season_y + 1) % 100:02d}" if season_y else ""
+    gp = int(_trade_popup_num(row.get("gp"), 0) or 0)
+
+    # 1) Current-season NHL games (real simulated stats).
+    if row and gp > 0:
+        compact = _compact_season_stats_for_player(session, pid) if session is not None else {}
+        out: Dict[str, Any] = {"kind": kind, "source": "nhl_current", "label": f"{season_label} NHL".strip(), "gp": gp}
+        if is_goalie:
+            out.update(
+                {
+                    "w": compact.get("w"),
+                    "l": compact.get("l"),
+                    "sv_pct": compact.get("sv_pct"),
+                    "gaa": compact.get("gaa"),
+                    "so": int(_trade_popup_num(row.get("so", row.get("shutouts")), 0) or 0),
+                }
+            )
+            return out
+        g = int(row.get("g") or 0)
+        a = int(row.get("a") or 0)
+        out.update({"g": g, "a": a, "pts": int(row.get("pts") or (g + a)), "xgf_pct": None, "war": None})
+        xgf_sample = float(row.get("xgf") or 0) + float(row.get("xga") or 0)
+        xgf_gp = int(row.get("xgf_pct_gp") or 0)
         try:
-            if xgf_sample > 0:
-                xgf_pct = round((float(row.get("xgf") or 0) / xgf_sample) * 100.0, 1)
-            elif xgf_gp > 0:
-                xgf_pct = round((float(row.get("xgf_pct_sum") or 0) / float(xgf_gp)) * 100.0, 1)
-            elif row.get("xgf_pct") is not None:
-                xf = float(row.get("xgf_pct"))
-                xgf_pct = round(xf * 100.0, 1) if xf <= 1.5 else round(xf, 1)
+            from app.sim_engine.gameplay.game_analytics_ledger import season_xgf_pct_from_row  # noqa: WPS433
+            from app.sim_engine.generation.player_analytics import enrich_player_row  # noqa: WPS433
+
+            enriched = enrich_player_row(row)
+            if xgf_sample > 0 or xgf_gp > 0:
+                raw_xgf = enriched.get("xgf_pct")
+                if raw_xgf is None:
+                    raw_xgf = season_xgf_pct_from_row(row)
+                if raw_xgf is not None:
+                    xf = float(raw_xgf)
+                    out["xgf_pct"] = round(xf * 100.0, 1) if xf <= 1.5 else round(xf, 1)
+            if enriched.get("war") is not None:
+                out["war"] = round(float(enriched.get("war")), 1)
         except Exception:
-            xgf_pct = None
-        try:
-            if row.get("war") is not None and gp > 0:
-                war = round(float(row.get("war")), 1)
-        except Exception:
-            war = None
+            try:
+                if xgf_sample > 0:
+                    out["xgf_pct"] = round((float(row.get("xgf") or 0) / xgf_sample) * 100.0, 1)
+                if row.get("war") is not None:
+                    out["war"] = round(float(row.get("war")), 1)
+            except Exception:
+                pass
+        return out
+
+    # 2) Minor-league / junior model line for the current stint (prospects and AHL/ECHL players).
+    ps = getattr(player, "_prospect_season_stats", None) if player is not None else None
+    if isinstance(ps, dict) and int(_trade_popup_num(ps.get("gp"), 0) or 0) > 0:
+        stint = getattr(player, "_prospect_stint", None)
+        league_key = str((stint or {}).get("league_key") or "").upper() if isinstance(stint, dict) else ""
+        asg = getattr(player, "_franchise_assignment", None)
+        if not league_key and isinstance(asg, dict):
+            league_key = str(asg.get("league_code") or asg.get("level") or "").upper()
+        league_txt = league_key.replace("CHL_", "").replace("EU_J_", "") or "Minors"
+        mg = int(_trade_popup_num(ps.get("gp"), 0) or 0)
+        out = {"kind": kind, "source": "minors", "label": f"{season_label} {league_txt}".strip(), "gp": mg}
+        if is_goalie:
+            out.update(
+                {
+                    "w": int(_trade_popup_num(ps.get("wins"), 0) or 0),
+                    "l": int(_trade_popup_num(ps.get("losses"), 0) or 0),
+                    "sv_pct": _trade_popup_num(ps.get("save_pct")),
+                    "gaa": _trade_popup_num(ps.get("gaa")),
+                    "so": int(_trade_popup_num(ps.get("shutouts"), 0) or 0),
+                }
+            )
+        else:
+            g = int(_trade_popup_num(ps.get("goals"), 0) or 0)
+            a = int(_trade_popup_num(ps.get("assists"), 0) or 0)
+            out.update({"g": g, "a": a, "pts": int(_trade_popup_num(ps.get("points"), g + a) or (g + a))})
+        return out
+
+    # 3) Last completed NHL season on record (traded before playing this season).
+    prior = _trade_popup_prior_nhl_line(player) if player is not None else {}
+    if prior:
+        pg = int(_trade_popup_num(prior.get("gp"), 0) or 0)
+        label = str(prior.get("season") or "Last season")
+        out = {"kind": kind, "source": "nhl_prior", "label": f"{label} NHL", "gp": pg}
+        if is_goalie:
+            out.update(
+                {
+                    "w": int(_trade_popup_num(prior.get("w", prior.get("wins")), 0) or 0),
+                    "l": int(_trade_popup_num(prior.get("l", prior.get("losses")), 0) or 0),
+                    "sv_pct": _trade_popup_num(prior.get("sv_pct", prior.get("svPct", prior.get("save_pct")))),
+                    "gaa": _trade_popup_num(prior.get("gaa")),
+                    "so": int(_trade_popup_num(prior.get("so", prior.get("shutouts")), 0) or 0),
+                }
+            )
+        else:
+            g = int(_trade_popup_num(prior.get("g", prior.get("goals")), 0) or 0)
+            a = int(_trade_popup_num(prior.get("a", prior.get("assists")), 0) or 0)
+            out.update({"g": g, "a": a, "pts": int(_trade_popup_num(prior.get("pts", prior.get("points")), g + a) or (g + a))})
+        return out
+
     return {
-        "gp": gp,
-        "g": g,
-        "a": a,
-        "pts": pts,
-        "xgf_pct": xgf_pct,
-        "war": war,
+        "kind": kind,
+        "source": "none",
+        "label": season_label,
+        "gp": 0,
+        "note": "No games played this season",
     }
 
 
@@ -10068,7 +10222,7 @@ def _structured_trade_assets_from_execution(
                 archetype = _trade_popup_archetype_label(player)
                 cap_hit, years_left = _trade_popup_contract_bits(player)
                 age = _trade_popup_age(player)
-            stats = _trade_popup_season_stats(session, pid)
+            stats = _trade_popup_season_stats(session, pid, player)
             tv = value_by_id.get(pid)
             bucket.append(
                 {
@@ -10355,6 +10509,8 @@ def _compose_cpu_trade_wire_payload(
         "draft_context": bool(ev.get("draft_context")),
         "theme": "info",
         "icon": "⇄",
+        # False for bulk-sim light payloads (names only); popups rebuild with full player data.
+        "assets_resolved": bool(resolve_players),
     }
 
 
@@ -10604,6 +10760,7 @@ def _maybe_emit_trade_wire_rumors(
                             "position": _pos_str(player),
                             "ovr": ovr,
                             "trade_value": round(float(tv or 0), 1) if tv else None,
+                            "season_stats": _trade_popup_season_stats(session, pid, player),
                         }
                     ],
                 },
@@ -10646,6 +10803,20 @@ def _enqueue_cpu_trade_popup(session: FranchiseSession, ev: Dict[str, Any], *, c
         except Exception:
             pass
         return
+    if not popup.get("assets_resolved", True):
+        # Bulk sim built a names-only payload for speed. This trade earned a modal, so resolve the
+        # players now (position, OVR, contract, season stats) instead of showing an empty stat row.
+        try:
+            popup = _compose_cpu_trade_wire_payload(
+                session,
+                ev,
+                calendar_idx=calendar_idx,
+                iso=iso,
+                trade_id=str(popup.get("trade_id") or _trade_event_id(ev, calendar_idx)),
+                resolve_players=True,
+            )
+        except Exception:
+            pass
     try:
         popup["max_player_trade_value"] = round(float(max_player_value), 1)
     except Exception:
@@ -10722,7 +10893,7 @@ def _franchise_enqueue_critical_notice(
 
 
 def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -> None:
-    """Waivers / trades / call-ups (SimEngine helpers) before the day's games ΓÇö mutates league rosters."""
+    """Waivers / trades / call-ups (SimEngine helpers) before the day's games — mutates league rosters."""
     if int(getattr(session, "_last_socio_tick_idx", -99)) == int(calendar_idx):
         return
     # Bulk calendar advance: socio/trades dominate wall time. Keep features by
@@ -11385,7 +11556,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         gs = f"{hg}-{ag}"
         if ot:
             gs += " OT"
-        user_line = f"{wl} vs {_display_team(opp)} ({gs}) ΓÇö calendar day {d}"
+        user_line = f"{wl} vs {_display_team(opp)} ({gs}) — calendar day {d}"
 
     try:
         from app.sim_engine.franchise.storyline_stat_bridge import (  # noqa: WPS433
@@ -11703,12 +11874,15 @@ def _sync_prospect_stats_to_calendar(session: FranchiseSession, *, force: bool =
     last_iso = str(getattr(session, "_prospect_stats_synced_iso", "") or "")
     needs_scoring_retune = not bool(getattr(session, "_prospect_retune_v4_applied", False))
     try:
-        from app.sim_engine.generation.prospect_league_scoring import advance_all_development_league_stats
+        from app.sim_engine.generation.prospect_league_scoring import (
+            advance_all_development_league_stats,
+            development_league_stat_max_age,
+        )
 
         cache_key = (
             f"{int(getattr(session, 'season_calendar_year', 2025) or 2025)}"
             f"|{len(getattr(getattr(sim, 'league', None), 'development_leagues', []) or [])}"
-            f"|ahl_echl_v1"
+            f"|dev_rows_v3"
         )
         cached_key = str(getattr(session, "_prospect_sync_cache_key", "") or "")
         rows = getattr(session, "_prospect_sync_rows", None)
@@ -11717,38 +11891,17 @@ def _sync_prospect_stats_to_calendar(session: FranchiseSession, *, force: bool =
             league = getattr(sim, "league", None)
             for block in getattr(league, "development_leagues", None) or []:
                 code = str(block.get("league_code") or "")
+                max_age = development_league_stat_max_age(code)
                 for tm in block.get("teams") or []:
                     for p in tm.get("players") or []:
                         if getattr(p, "retired", False):
                             continue
                         ident = getattr(p, "identity", None)
                         age = int(getattr(ident, "age", 99) or 99) if ident else 99
-                        if age <= 20:
+                        if age <= max_age:
                             rows.append((p, code))
-            # Affiliate minors advance on the same calendar with AHL/ECHL scoring profiles.
-            for tm in getattr(league, "teams", None) or []:
-                for p in getattr(tm, "ahl_roster", None) or []:
-                    if getattr(p, "retired", False):
-                        continue
-                    ident = getattr(p, "identity", None)
-                    age = (
-                        int(getattr(ident, "age", 99) or 99)
-                        if ident
-                        else int(getattr(p, "age", 99) or 99)
-                    )
-                    if age <= 23:
-                        rows.append((p, "AHL"))
-                for p in getattr(tm, "echl_roster", None) or []:
-                    if getattr(p, "retired", False):
-                        continue
-                    ident = getattr(p, "identity", None)
-                    age = (
-                        int(getattr(ident, "age", 99) or 99)
-                        if ident
-                        else int(getattr(p, "age", 99) or 99)
-                    )
-                    if age <= 23:
-                        rows.append((p, "ECHL"))
+            # AHL / ECHL are NOT cached here: advance_all_development_league_stats reads the live
+            # roster lists every run, so call-ups, send-downs and signings are seen immediately.
             session._prospect_sync_rows = rows
             session._prospect_sync_cache_key = cache_key
 
@@ -11813,6 +11966,14 @@ def _depth_pool_progression_tick(session: FranchiseSession) -> None:
         for pool_attr in ("free_agents", "overseas_free_agents")
         for p in getattr(league, pool_attr, None) or []
     }
+    # Growing prospects are handled by the gradual prospect tick, not this one-shot lump.
+    try:
+        from services.prospect_in_season_growth import iter_growth_prospects
+
+        _gradual = {id(p) for p in iter_growth_prospects(league) if getattr(p, "ratings", None)}
+        pool = [p for p in pool if id(p) not in _gradual]
+    except Exception:
+        pass
     rng.shuffle(pool)
     for p in pool[: min(72, len(pool))]:
         try:
@@ -11961,6 +12122,10 @@ def _run_bulk_incremental_catchup(session: FranchiseSession, *, steps_n: int) ->
         for _ in range(max(1, steps_n // 8)):
             try:
                 _nhl_in_season_development_tick(session)
+            except Exception:
+                pass
+            try:
+                _prospect_in_season_development_tick(session)
             except Exception:
                 pass
         for _ in range(max(1, steps_n // 5)):
@@ -12254,7 +12419,7 @@ def _finalize_regular_calendar_day(
             tail = len(league_lines) - len(bits)
             slate = " ┬╖ ".join(bits)
             if tail > 0:
-                slate += f" ΓÇª +{tail} more"
+                slate += f" … +{tail} more"
             session.timeline.append(f"League: {slate}")
         for ln in user_lines[:6]:
             session.timeline.append(ln)
@@ -12309,6 +12474,10 @@ def _finalize_regular_calendar_day(
     if not bulk and int(session.calendar_days_finished) % 8 == 0:
         try:
             _nhl_in_season_development_tick(session)
+        except Exception:
+            pass
+        try:
+            _prospect_in_season_development_tick(session)
         except Exception:
             pass
 
@@ -12405,6 +12574,13 @@ def _snapshot_season_start_ovrs(session: FranchiseSession) -> None:
         from app.sim_engine.franchise.storyline_conduct import get_base_ovr_display
     except Exception:
         get_base_ovr_display = None  # type: ignore
+    try:
+        # Dev-league + prospect-pool kids first; the AHL/ECHL pass below then wins for its own players.
+        from services.prospect_in_season_growth import snapshot_prospect_season_start
+
+        snapshot_prospect_season_start(session)
+    except Exception:
+        pass
     league = getattr(getattr(session, "sim", None), "league", None)
     for tm in list(getattr(league, "teams", None) or []):
         pools = (
@@ -12427,6 +12603,14 @@ def _snapshot_season_start_ovrs(session: FranchiseSession) -> None:
                     setattr(p, "_in_season_ovr_delta_accum", 0.0)
                 except Exception:
                     continue
+
+
+def _prospect_in_season_development_tick(session: FranchiseSession) -> int:
+    """Gradual OVR pulses + monthly potential review for prospects (dev leagues, pools, kids in the minors)."""
+    from services.prospect_in_season_growth import prospect_in_season_tick
+
+    res = prospect_in_season_tick(session)
+    return int(res.get("moved", 0)) + int(res.get("potential", 0))
 
 
 def _nhl_in_season_development_tick(session: FranchiseSession) -> int:
@@ -12870,6 +13054,13 @@ def _apply_wjc_development_to_prospects(
                 pid = str(getattr(p, "id", "") or "")
                 if pid:
                     by_id[pid] = p
+    # Drafted prospects (any club's pool, user's AHL/NHL club) also play the WJC.
+    for tm in list(getattr(league, "teams", None) or []):
+        for attr in ("prospect_pool", "ahl_roster", "roster"):
+            for p in getattr(tm, attr, None) or []:
+                pid = str(getattr(p, "id", "") or "")
+                if pid and pid not in by_id:
+                    by_id[pid] = p
 
     try:
         from app.sim_engine.entities.player import (
@@ -12888,7 +13079,8 @@ def _apply_wjc_development_to_prospects(
     )
 
     for row in prospects_stocked:
-        if str(row.get("prospect_classification") or "") != "draft_eligible":
+        # Every real prospect who played (draft-eligible AND already drafted), never NPC filler.
+        if str(row.get("prospect_classification") or "") not in ("draft_eligible", "drafted_user"):
             continue
         if bool(row.get("is_npc")):
             continue
@@ -13018,7 +13210,7 @@ def _store_wjc_tournament_results_on_session(
     stored = dict(getattr(session, "wjc_prospect_tournament_results", None) or {})
     impact_map = dict(impacts or {})
     for p in prospects_stocked:
-        if str(p.get("prospect_classification") or "") != "draft_eligible":
+        if str(p.get("prospect_classification") or "") not in ("draft_eligible", "drafted_user"):
             continue
         if bool(p.get("is_npc")):
             continue
@@ -14131,6 +14323,23 @@ def _apply_wjc_stock_after(
         if str(row.get("prospect_classification") or "") == "drafted_user":
             row["stock_rank_after"] = None
             row["stock_delta"] = None
+            # Drafted prospects have no draft stock, but still played: carry their tournament
+            # line so WJC development (skills + potential) applies to them too.
+            dst = stats_by_id.get(str(row.get("player_id") or "")) or {}
+            dgp = int(dst.get("gp") or 0)
+            if dgp > 0:
+                dpts = int(dst.get("pts") or 0)
+                dgoals = int(dst.get("g") or 0)
+                row["tournament_gp"] = dgp
+                row["tournament_pts"] = dpts
+                row["tournament_g"] = dgoals
+                row["tournament_a"] = max(0, dpts - dgoals)
+                row["tournament_plus_minus"] = int(dst.get("plus_minus") or 0)
+                if str(dst.get("position") or row.get("position") or "").upper() == "G":
+                    row["tournament_w"] = int(dst.get("w") or 0)
+                    row["tournament_l"] = int(dst.get("l") or 0)
+                    row["tournament_shutouts"] = int(dst.get("shutouts") or 0)
+                    row["tournament_sv_pct"] = dst.get("sv_pct")
             out.append(row)
             continue
         pid = str(row.get("player_id") or "")
@@ -14742,7 +14951,7 @@ def _allstar_game_payload(session: FranchiseSession, rng: random.Random) -> Dict
     return {
         "kind": "allstar_game",
         "title": "NHL All-Star Game",
-        "season_label": f"{session.season_calendar_year}ΓÇô{int(session.season_calendar_year) + 1}",
+        "season_label": f"{session.season_calendar_year}–{int(session.season_calendar_year) + 1}",
         "team_a_label": "Team Pacific / Metro",
         "team_b_label": "Team Atlantic / Central",
         "team_a_score": ha,
@@ -14897,7 +15106,7 @@ def _maybe_enqueue_post_day_decisions(session: FranchiseSession, user_lines: Lis
                 "kind": "injury_protocol",
                 "priority": "CRITICAL" if tier == "major" else "HIGH",
                 "title": "Medical staff report",
-                "description": f"{pname} ΓÇö {tier} injury (~{games} games). Choose how you message the room.",
+                "description": f"{pname} — {tier} injury (~{games} games). Choose how you message the room.",
                 "options": [
                     {
                         "id": "transparent",
@@ -14992,7 +15201,7 @@ def _maybe_enqueue_post_day_decisions(session: FranchiseSession, user_lines: Lis
                 "options": [
                     {
                         "id": "listen",
-                        "label": "Stay open ΓÇö scouting will dig",
+                        "label": "Stay open — scouting will dig",
                         "effects": {"trade_activity_delta": 2, "asset_risk_delta": 1},
                         "effect_summary": "Increases market optionality with mild valuation risk.",
                     },
@@ -15160,7 +15369,7 @@ def _franchise_nhl_age_and_phase_tick(session: FranchiseSession, teams: List[Any
 def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str, Any]:
     """
     After the regular-season calendar: NHL roster aging + the same progression stack as the
-    universe runner (development pass ΓåÆ major career events ΓåÆ soft anti-inflation guard).
+    universe runner (development pass → major career events → soft anti-inflation guard).
     """
     out: Dict[str, Any] = {"aged": True, "lifecycle": None, "retired_removed": 0}
     sim = session.sim
@@ -15969,7 +16178,7 @@ def advance_franchise_to_next_user_game(
 
 
 def advance_franchise_one_game(session: FranchiseSession) -> Dict[str, Any]:
-    """One real NHL calendar day (same as advance day ΓÇö game-by-game calendar progression removed)."""
+    """One real NHL calendar day (same as advance day — game-by-game calendar progression removed)."""
     return advance_franchise_day(session)
 
 
@@ -16537,7 +16746,7 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
         headline = f"{title}: {label}"
         summary = f"You chose: {label}."
         if player_name:
-            summary = f"{player_name} ΓÇö {summary}"
+            summary = f"{player_name} — {summary}"
 
         if chosen.get("effect_summary"):
             summary += f" {chosen.get('effect_summary')}"

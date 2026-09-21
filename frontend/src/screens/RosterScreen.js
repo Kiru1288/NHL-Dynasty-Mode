@@ -5250,6 +5250,8 @@ function DevelopmentPanel({ player }) {
   const hasFatigue = player.fatigue != null && Number.isFinite(Number(player.fatigue));
   const hasGrowth = player.growth != null && Number.isFinite(Number(player.growth));
   const seasonStartOvr = safeNumOrNull(player.season_start_ovr);
+  const ovrChangeSeason = safeNumOrNull(player.ovr_change_season);
+  const potentialChangeSeason = safeNumOrNull(player.potential_change_season);
 
   const rawHistory = Array.isArray(player.development_history) ? player.development_history : EMPTY_ARRAY;
   const validSnapshots = rawHistory
@@ -5285,6 +5287,12 @@ function DevelopmentPanel({ player }) {
           {seasonStartOvr !== null ? <InfoPair label="Season Start OVR" value={seasonStartOvr} /> : null}
           <InfoPair label="Age" value={player.age || "—"} />
           <InfoPair label="Potential" value={player.potential || "—"} />
+          {ovrChangeSeason !== null ? (
+            <InfoPair label="OVR This Season" value={formatSignedNumber(ovrChangeSeason, 0)} tone={ovrChangeSeason > 0 ? "good" : ovrChangeSeason < 0 ? "warn" : "neutral"} />
+          ) : null}
+          {potentialChangeSeason !== null ? (
+            <InfoPair label="Potential This Season" value={formatSignedNumber(potentialChangeSeason, 0)} tone={potentialChangeSeason > 0 ? "good" : potentialChangeSeason < 0 ? "warn" : "neutral"} />
+          ) : null}
           <InfoPair label="Stage" value={player.stage || "—"} />
           <InfoPair label="Role" value={player.roleLabel || player.role || "—"} />
           {hasGrowth ? (

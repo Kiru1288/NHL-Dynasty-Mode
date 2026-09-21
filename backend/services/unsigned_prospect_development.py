@@ -136,6 +136,15 @@ def develop_unsigned_prospect(
     budget = calculate_season_growth_budget(player, ctx) * prod_mod
     # Deterministic jitter from franchise-stable hash (no unseeded random).
     budget *= 0.92 + 0.16 * _rng((getattr(player, "id", ""), season_year, "g"))
+    # In-season pulses already paid out most of this year's growth: pay only what is still owed.
+    try:
+        from app.sim_engine.progression.development import prospect_offseason_leftover
+
+        _owed = prospect_offseason_leftover(player)
+        if _owed is not None:
+            budget = _owed * (0.92 + 0.16 * _rng((getattr(player, "id", ""), season_year, "left")))
+    except Exception:
+        pass
 
     ratings = getattr(player, "ratings", None)
     delta_display = 0.0
@@ -203,6 +212,17 @@ def develop_unsigned_prospect(
     ledger["source_path"] = "unsigned_prospect"
     ledger["ovr_after"] = round(float(ovr_after), 4)
 
+    # Potential moves on its own track from the season's real production (not tied to OVR growth).
+    potential_review: Dict[str, Any] = {}
+    try:
+        from app.sim_engine.progression.development import apply_prospect_potential_review
+
+        potential_review = apply_prospect_potential_review(
+            player, random.Random(int(_rng((getattr(player, "id", ""), season_year, "pot")) * 1e9)), sid
+        )
+    except Exception:
+        potential_review = {}
+
     try:
         persist_recomputed_ovr(player)
     except Exception:
@@ -231,6 +251,9 @@ def develop_unsigned_prospect(
         "path": path,
         "attribute_deltas": attr_out,
         "development_trend": str(getattr(player, "development_trend", "") or ""),
+        "potential_delta": float(potential_review.get("display_delta", 0.0) or 0.0)
+        if potential_review.get("applied")
+        else 0.0,
     }
 
 
