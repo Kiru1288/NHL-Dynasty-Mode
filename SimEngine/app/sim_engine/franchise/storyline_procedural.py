@@ -313,14 +313,23 @@ def compose_data_story_copy(stype: str, ctx: Dict[str, Any], rng: random.Random,
         return f"Playoff-race pressure on {team} ({record})"
 
     if stype == "losing_skid":
+        if streak >= 2:
+            if body:
+                return f"{team} has dropped {streak} straight ({record})."
+            return f"{team} on a {streak}-game skid ({record})"
+        # No verified streak length: never print "0-game" — talk about the record instead.
         if body:
-            return f"{team} has dropped {streak} straight ({record})."
-        return f"{team} on a {streak}-game skid ({record})"
+            return f"{team} is {record} and has struggled recently."
+        return f"{team} struggling at {record}"
 
     if stype == "win_streak":
+        if streak >= 2:
+            if body:
+                return f"{team} has won {streak} straight ({record})."
+            return f"{team} riding a {streak}-game win streak ({record})"
         if body:
-            return f"{team} has won {streak} straight ({record})."
-        return f"{team} riding a {streak}-game win streak"
+            return f"{team} is {record} and playing well."
+        return f"{team} on a run at {record}"
 
     if stype == "goal_drought":
         if body:

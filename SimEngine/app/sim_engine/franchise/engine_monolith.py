@@ -1866,7 +1866,7 @@ def start_franchise(
         _normalized_notification(
             notification_id=f"system:franchise_ready:{uid}",
             notification_type="system",
-            text=f"Franchise ready ΓÇö {_display_team(user_team)} ({uid}).",
+            text=f"Franchise ready — {_display_team(user_team)} ({uid}).",
             priority="LOW",
             calendar_day=0,
             calendar_iso=start_iso,
@@ -1879,7 +1879,7 @@ def start_franchise(
             notification_id=f"system:coach_hired:{uid}:{season_y}",
             notification_type="system",
             text=(
-                f"Hired {coach.name} ({coach_archetype}). NHL calendar {season_y}ΓÇô{season_y + 1} ┬╖ "
+                f"Hired {coach.name} ({coach_archetype}). NHL calendar {season_y}–{season_y + 1} ┬╖ "
                 f"{len(nhl_cal)} days ┬╖ {len(days_sorted)} game dates ┬╖ ~{gp} GP."
             ),
             priority="LOW",
@@ -1906,7 +1906,7 @@ def start_franchise(
         bootstrap_full_league_hierarchy(league, sim.rng, season_year=season_y)
         npl = len(getattr(league, "players", None) or [])
         session.notifications.append(
-            f"League depth online ΓÇö NHL affiliates (AHL/ECHL), UFA pools, overseas, juniors (~{npl} player records)."
+            f"League depth online — NHL affiliates (AHL/ECHL), UFA pools, overseas, juniors (~{npl} player records)."
         )
     except Exception as e:
         session.notifications.append(f"League depth bootstrap skipped: {e}")
@@ -2776,7 +2776,7 @@ def _stats_integrity_payload(rows: List[Dict[str, Any]], game_results: List[Dict
         "warnings": warnings,
     }
 def _build_schedule_upcoming(session: FranchiseSession, *, limit: int = 14) -> List[Dict[str, Any]]:
-    """Next NHL calendar days from the current cursor (real dates) ΓÇö hub / calendar UI."""
+    """Next NHL calendar days from the current cursor (real dates) — hub / calendar UI."""
     if str(getattr(session, "phase", "")) != "regular":
         return []
     cal = getattr(session, "nhl_calendar", None) or []
@@ -2832,7 +2832,7 @@ def _nhl_today_payload(session: FranchiseSession) -> Dict[str, Any]:
     cur = int(getattr(session, "calendar_cursor", 0) or 0)
     last = int(getattr(session, "nhl_regular_season_last_index", 0) or 0)
     if cur > last:
-        return {"headline": "Regular season complete ΓÇö advance for playoffs", "iso": "", "segment": "regular", "calendar_index": cur}
+        return {"headline": "Regular season complete — advance for playoffs", "iso": "", "segment": "regular", "calendar_index": cur}
     cur = max(0, min(cur, len(cal) - 1))
     row = dict(cal[cur])
     row["calendar_index"] = int(cur)
@@ -3015,7 +3015,7 @@ def _saved_game_is_final(g: Dict[str, Any]) -> bool:
 
 
 def _game_result_calendar_index(g: Dict[str, Any]) -> Optional[int]:
-    """Calendar index from a saved game box (day 0 is valid ΓÇö never use `value or default` on day)."""
+    """Calendar index from a saved game box (day 0 is valid — never use `value or default` on day)."""
     if not isinstance(g, dict):
         return None
     v = g.get("day")
@@ -3524,7 +3524,7 @@ def _serialize_player_row(
         "age": int(getattr(ident, "age", 0) or 0),
         "nationality": str(getattr(ident, "birth_country", "") or ""),
         "height_cm": hcm,
-        "height_display": height_cm_to_imperial(hcm) if hcm else "ΓÇö",
+        "height_display": height_cm_to_imperial(hcm) if hcm else "—",
         "archetype": str(getattr(p, "archetype", "") or ""),
         "contract": {
             "salary": round(_player_cap_hit_millions(p), 3),
@@ -3753,7 +3753,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         )
     return {
         "entries": entries,
-        "subtitle": f"Draft-age (Γëñ20) in dev leagues ┬╖ showing {len(entries)}",
+        "subtitle": f"Draft-age (≤20) in dev leagues ┬╖ showing {len(entries)}",
         "total": len(prospects),
     }
 
@@ -4167,7 +4167,7 @@ def _franchise_enqueue_critical_notice(
 
 
 def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -> None:
-    """Waivers / trades / call-ups (SimEngine helpers) before the day's games ΓÇö mutates league rosters."""
+    """Waivers / trades / call-ups (SimEngine helpers) before the day's games — mutates league rosters."""
     if int(getattr(session, "_last_socio_tick_idx", -99)) == int(calendar_idx):
         return
     sim = session.sim
@@ -4216,7 +4216,7 @@ def _franchise_fanout_player_storylines(session: FranchiseSession, calendar_idx:
 
 
 def _maybe_roll_storyline_arc(session: FranchiseSession, day_meta: Dict[str, Any], rng: random.Random) -> None:
-    """Rare narrative beats (normal + wacky) ΓÇö morale nudge on user club when applicable."""
+    """Rare narrative beats (normal + wacky) — morale nudge on user club when applicable."""
     if rng.random() > 0.038:
         return
     iso = str(day_meta.get("iso") or "")
@@ -4224,7 +4224,7 @@ def _maybe_roll_storyline_arc(session: FranchiseSession, day_meta: Dict[str, Any
     pool = [
         ("normal", "Player breakout buzz", "Scouts league-wide note a rising star on your depth chart."),
         ("normal", "Underdog surge", "National pundits spotlight your club's improved underlying numbers."),
-        ("wacky", "Locker-room scuffle", "Practice intensity boiled over ΓÇö coaches reset the room."),
+        ("wacky", "Locker-room scuffle", "Practice intensity boiled over — coaches reset the room."),
         ("wacky", "Social media storm", "A viral clip from the airport spun into a week of distraction."),
         ("wacky", "League discipline review", "DoPS is reviewing a borderline hit from last game."),
     ]
@@ -4496,7 +4496,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         gs = f"{hg}-{ag}"
         if ot:
             gs += " OT"
-        user_line = f"{wl} vs {_display_team(opp)} ({gs}) ΓÇö calendar day {d}"
+        user_line = f"{wl} vs {_display_team(opp)} ({gs}) — calendar day {d}"
 
     return user_line, league_line
 
@@ -4668,7 +4668,7 @@ def _finalize_regular_calendar_day(
         tail = len(league_lines) - len(bits)
         slate = " ┬╖ ".join(bits)
         if tail > 0:
-            slate += f" ΓÇª +{tail} more"
+            slate += f" … +{tail} more"
         session.timeline.append(f"League: {slate}")
     for ln in user_lines[:6]:
         session.timeline.append(ln)
@@ -5049,7 +5049,7 @@ def _rr_standings_from_slice(codes: List[str], label_by: Dict[str, str], rr_slic
 
 
 def _simulate_wjc_national_bundle(rng: random.Random) -> Dict[str, Any]:
-    """Full U20 worlds ΓÇö national teams only (deterministic from rng)."""
+    """Full U20 worlds — national teams only (deterministic from rng)."""
     countries = _wjc_countries_meta()
     codes = [c for c, _ in countries]
     label_by = {c: lab for c, lab in countries}
@@ -5203,8 +5203,8 @@ def _wjc_live_tournament_payload(session: FranchiseSession, iso: str, d_idx: int
         "calendar_iso": iso,
         "wjc_day": d_idx + 1,
         "wjc_days_total": n_days,
-        "title": f"World Juniors (U20) ΓÇö day {d_idx + 1} of {n_days}",
-        "season_label": f"{sy}ΓÇô{sy + 1}",
+        "title": f"World Juniors (U20) — day {d_idx + 1} of {n_days}",
+        "season_label": f"{sy}–{sy + 1}",
         "countries": countries,
         "round_robin_games": rr_slice,
         "round_robin_total": n_rr,
@@ -5346,7 +5346,7 @@ def _allstar_game_payload(session: FranchiseSession, rng: random.Random) -> Dict
     return {
         "kind": "allstar_game",
         "title": "NHL All-Star Game",
-        "season_label": f"{session.season_calendar_year}ΓÇô{int(session.season_calendar_year) + 1}",
+        "season_label": f"{session.season_calendar_year}–{int(session.season_calendar_year) + 1}",
         "team_a_label": "Team Pacific / Metro",
         "team_b_label": "Team Atlantic / Central",
         "team_a_score": ha,
@@ -5444,7 +5444,7 @@ def _maybe_enqueue_showcase_popups(session: FranchiseSession, day_meta: Dict[str
                 {
                     "kind": "showcase_game",
                     "subkind": "four_nations",
-                    "title": "4 Nations Face-Off ΓÇö Final",
+                    "title": "4 Nations Face-Off — Final",
                     "iso": iso,
                     "home": {"abbr": a, "name": a, "id": ""},
                     "away": {"abbr": b, "name": b, "id": ""},
@@ -5485,7 +5485,7 @@ def _maybe_enqueue_post_day_decisions(session: FranchiseSession, user_lines: Lis
                 "kind": "injury_protocol",
                 "priority": "CRITICAL" if tier == "major" else "HIGH",
                 "title": "Medical staff report",
-                "description": f"{pname} ΓÇö {tier} injury (~{games} games). Choose how you message the room.",
+                "description": f"{pname} — {tier} injury (~{games} games). Choose how you message the room.",
                 "options": [
                     {
                         "id": "transparent",
@@ -5580,7 +5580,7 @@ def _maybe_enqueue_post_day_decisions(session: FranchiseSession, user_lines: Lis
                 "options": [
                     {
                         "id": "listen",
-                        "label": "Stay open ΓÇö scouting will dig",
+                        "label": "Stay open — scouting will dig",
                         "effects": {"trade_activity_delta": 2, "asset_risk_delta": 1},
                         "effect_summary": "Increases market optionality with mild valuation risk.",
                     },
@@ -5674,7 +5674,7 @@ def _franchise_nhl_age_and_phase_tick(session: FranchiseSession, teams: List[Any
 def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str, Any]:
     """
     After the regular-season calendar: NHL roster aging + the same progression stack as the
-    universe runner (development pass ΓåÆ major career events ΓåÆ soft anti-inflation guard).
+    universe runner (development pass → major career events → soft anti-inflation guard).
     """
     out: Dict[str, Any] = {"aged": True, "lifecycle": None, "retired_removed": 0}
     sim = session.sim
@@ -6188,7 +6188,7 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
         "pending_decisions": _pending_decision_snapshot(session),
     }
 def advance_franchise_one_game(session: FranchiseSession) -> Dict[str, Any]:
-    """One real NHL calendar day (same as advance day ΓÇö game-by-game calendar progression removed)."""
+    """One real NHL calendar day (same as advance day — game-by-game calendar progression removed)."""
     return advance_franchise_day(session)
 
 
@@ -6467,7 +6467,7 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
         headline = f"{title}: {label}"
         summary = f"You chose: {label}."
         if player_name:
-            summary = f"{player_name} ΓÇö {summary}"
+            summary = f"{player_name} — {summary}"
 
         if chosen.get("effect_summary"):
             summary += f" {chosen.get('effect_summary')}"
@@ -7024,7 +7024,7 @@ def build_state_payload(session: FranchiseSession) -> Dict[str, Any]:
     prog = None
     nhl_today = _nhl_today_payload(session)
     nhl_strip = _nhl_calendar_strip(session)
-    season_lbl = f"{session.season_calendar_year}ΓÇô{int(session.season_calendar_year) + 1}"
+    season_lbl = f"{session.season_calendar_year}–{int(session.season_calendar_year) + 1}"
     if session.phase == "regular" and session.nhl_calendar:
         last = int(session.nhl_regular_season_last_index)
         cur = int(session.calendar_cursor)
@@ -7034,14 +7034,14 @@ def build_state_payload(session: FranchiseSession) -> Dict[str, Any]:
             day_display = (
                 f"Next league day: {cd.get('iso', '')}"
                 + (f" ({wd})" if wd else "")
-                + f" ΓÇö {cd.get('ui_phase', '')}"
+                + f" — {cd.get('ui_phase', '')}"
             )
             prog = f"{cur + 1} / {last + 1}"
         else:
-            day_display = "Regular season complete ΓÇö advance for playoffs"
+            day_display = "Regular season complete — advance for playoffs"
             prog = f"{last + 1} / {last + 1}"
     elif session.phase == "complete":
-        day_display = f"Season complete ΓÇö Cup: {session.champion_id or '?'}"
+        day_display = f"Season complete — Cup: {session.champion_id or '?'}"
 
     try:
         _merge_simengine_league_news_into_storylines(session)

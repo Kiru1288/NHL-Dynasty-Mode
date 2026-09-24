@@ -242,25 +242,6 @@
   border-color: transparent;
 }
 
-.dc-board-nav {
-  display: flex !important;
-  flex-direction: row !important;
-  align-items: stretch;
-  gap: 0;
-  overflow: hidden;
-}
-.dc-board-nav__stack {
-  display: grid !important;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  width: 100%;
-}
-.dc-board-nav__item {
-  min-height: 44px;
-  border-radius: 0 !important;
-  border-right: 1px solid rgba(118, 200, 245, 0.16) !important;
-}
-.dc-board-nav__item:last-child { border-right: 0 !important; }
-
 .dc-prospect-row {
   position: relative;
   overflow: hidden;
@@ -290,6 +271,10 @@
   overflow: hidden;
 }
 .dc-prospect-row.is-top5 .dc-prospect-row__shot { width: 48px; height: 48px; flex-basis: 48px; }
+/* Fit the portrait to its slot — a 72/148px headshot clipped to 36/48px read
+   as a dark sliver instead of a face. */
+.dc-prospect-row .dc-prospect-row__shot .dc-shared-headshot.player-headshot { --size: 36px; }
+.dc-prospect-row.is-top5 .dc-prospect-row__shot .dc-shared-headshot.player-headshot { --size: 48px; }
 .dc-mini-dossier {
   grid-column: 1 / -1;
   padding: 8px 10px 10px 52px;

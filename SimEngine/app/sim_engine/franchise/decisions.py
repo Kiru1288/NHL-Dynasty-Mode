@@ -34,7 +34,7 @@ def _maybe_enqueue_post_day_decisions(session: FranchiseSession, user_lines: Lis
                 "kind": "injury_protocol",
                 "priority": "CRITICAL" if tier == "major" else "HIGH",
                 "title": "Medical staff report",
-                "description": f"{pname} ΓÇö {tier} injury (~{games} games). Choose how you message the room.",
+                "description": f"{pname} — {tier} injury (~{games} games). Choose how you message the room.",
                 "options": [
                     {
                         "id": "transparent",
@@ -129,7 +129,7 @@ def _maybe_enqueue_post_day_decisions(session: FranchiseSession, user_lines: Lis
                 "options": [
                     {
                         "id": "listen",
-                        "label": "Stay open ΓÇö scouting will dig",
+                        "label": "Stay open — scouting will dig",
                         "effects": {"trade_activity_delta": 2, "asset_risk_delta": 1},
                         "effect_summary": "Increases market optionality with mild valuation risk.",
                     },
@@ -653,7 +653,7 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
         headline = f"{title}: {label}"
         summary = f"You chose: {label}."
         if player_name:
-            summary = f"{player_name} ΓÇö {summary}"
+            summary = f"{player_name} — {summary}"
 
         if chosen.get("effect_summary"):
             summary += f" {chosen.get('effect_summary')}"

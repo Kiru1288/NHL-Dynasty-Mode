@@ -129,7 +129,7 @@ def _rr_standings_from_slice(codes: List[str], label_by: Dict[str, str], rr_slic
         )
     return rows
 def _simulate_wjc_national_bundle(rng: random.Random) -> Dict[str, Any]:
-    """Full U20 worlds ΓÇö national teams only (deterministic from rng)."""
+    """Full U20 worlds — national teams only (deterministic from rng)."""
     countries = _wjc_countries_meta()
     codes = [c for c, _ in countries]
     label_by = {c: lab for c, lab in countries}
@@ -267,8 +267,8 @@ def _wjc_live_tournament_payload(session: FranchiseSession, iso: str, d_idx: int
         "calendar_iso": iso,
         "wjc_day": d_idx + 1,
         "wjc_days_total": n_days,
-        "title": f"World Juniors (U20) ΓÇö day {d_idx + 1} of {n_days}",
-        "season_label": f"{sy}ΓÇô{sy + 1}",
+        "title": f"World Juniors (U20) — day {d_idx + 1} of {n_days}",
+        "season_label": f"{sy}–{sy + 1}",
         "countries": countries,
         "round_robin_games": rr_slice,
         "round_robin_total": n_rr,
@@ -457,7 +457,7 @@ def _allstar_game_payload(session: FranchiseSession, rng: random.Random) -> Dict
     return {
         "kind": "allstar_game",
         "title": "NHL All-Star Game",
-        "season_label": f"{session.season_calendar_year}ΓÇô{int(session.season_calendar_year) + 1}",
+        "season_label": f"{session.season_calendar_year}–{int(session.season_calendar_year) + 1}",
         "team_a_label": "Team Pacific / Metro",
         "team_b_label": "Team Atlantic / Central",
         "team_a_score": ha,
@@ -553,7 +553,7 @@ def _maybe_enqueue_showcase_popups(session: FranchiseSession, day_meta: Dict[str
                 {
                     "kind": "showcase_game",
                     "subkind": "four_nations",
-                    "title": "4 Nations Face-Off ΓÇö Final",
+                    "title": "4 Nations Face-Off — Final",
                     "iso": iso,
                     "home": {"abbr": a, "name": a, "id": ""},
                     "away": {"abbr": b, "name": b, "id": ""},

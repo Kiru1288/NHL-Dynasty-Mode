@@ -2,9 +2,10 @@ import React, { useState, useCallback, useEffect } from "react";
 import { toLogoUrl } from "../../utils/teamLogos";
 
 export function initialsFromTeam(teamName = "NHL") {
-  return String(teamName)
-    .split(/\s+/)
-    .filter(Boolean)
+  const words = String(teamName).split(/\s+/).filter(Boolean);
+  // League / club codes ("KHL", "AHL", "SHL") read as themselves, not one letter.
+  if (words.length === 1 && words[0].length <= 5) return words[0].toUpperCase();
+  return words
     .slice(0, 2)
     .map((word) => word[0])
     .join("")

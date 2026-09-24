@@ -355,7 +355,7 @@ def build_state_payload(session: FranchiseSession) -> Dict[str, Any]:
     prog = None
     nhl_today = _nhl_today_payload(session)
     nhl_strip = _nhl_calendar_strip(session)
-    season_lbl = f"{session.season_calendar_year}ΓÇô{int(session.season_calendar_year) + 1}"
+    season_lbl = f"{session.season_calendar_year}–{int(session.season_calendar_year) + 1}"
     if session.phase == "regular" and session.nhl_calendar:
         last = int(session.nhl_regular_season_last_index)
         cur = int(session.calendar_cursor)
@@ -365,14 +365,14 @@ def build_state_payload(session: FranchiseSession) -> Dict[str, Any]:
             day_display = (
                 f"Next league day: {cd.get('iso', '')}"
                 + (f" ({wd})" if wd else "")
-                + f" ΓÇö {cd.get('ui_phase', '')}"
+                + f" — {cd.get('ui_phase', '')}"
             )
             prog = f"{cur + 1} / {last + 1}"
         else:
-            day_display = "Regular season complete ΓÇö advance for playoffs"
+            day_display = "Regular season complete — advance for playoffs"
             prog = f"{last + 1} / {last + 1}"
     elif session.phase == "complete":
-        day_display = f"Season complete ΓÇö Cup: {session.champion_id or '?'}"
+        day_display = f"Season complete — Cup: {session.champion_id or '?'}"
 
     try:
         _merge_simengine_league_news_into_storylines(session)

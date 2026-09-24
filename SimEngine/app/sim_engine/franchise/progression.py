@@ -66,7 +66,7 @@ def _franchise_nhl_age_and_phase_tick(session: FranchiseSession, teams: List[Any
 def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str, Any]:
     """
     After the regular-season calendar: NHL roster aging + the same progression stack as the
-    universe runner (development pass ΓåÆ major career events ΓåÆ soft anti-inflation guard).
+    universe runner (development pass → major career events → soft anti-inflation guard).
     """
     out: Dict[str, Any] = {"aged": True, "lifecycle": None, "retired_removed": 0}
     sim = session.sim

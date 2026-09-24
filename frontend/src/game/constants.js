@@ -76,7 +76,7 @@ export const NHL_TEAM_NAME_BY_ABBR = Object.freeze({
   STL: "St. Louis Blues",
   TBL: "Tampa Bay Lightning",
   TOR: "Toronto Maple Leafs",
-  UTA: "Utah Hockey Club",
+  UTA: "Utah Mammoth",
   VAN: "Vancouver Canucks",
   VGK: "Vegas Golden Knights",
   WSH: "Washington Capitals",
@@ -136,11 +136,18 @@ export const NHL_RIVALRY_LOOKUP = new Set(
   NHL_RIVALRY_PAIRS.map(([a, b]) => _nhlPairKey(String(a), String(b)))
 );
 
-const NHL_NAME_TO_ABBR = Object.freeze(
-  Object.fromEntries(
+/** Former club names the API or old saves may still send. */
+const NHL_LEGACY_TEAM_NAMES = Object.freeze({
+  "utah hockey club": "UTA",
+  "arizona coyotes": "UTA",
+});
+
+const NHL_NAME_TO_ABBR = Object.freeze({
+  ...Object.fromEntries(
     Object.entries(NHL_TEAM_NAME_BY_ABBR).map(([abbr, name]) => [String(name).toLowerCase(), String(abbr)])
-  )
-);
+  ),
+  ...NHL_LEGACY_TEAM_NAMES,
+});
 
 export function normalizeNhlAbbr(raw) {
   let s = String(raw || "").trim().toUpperCase().replace(/[^A-Z]/g, "");

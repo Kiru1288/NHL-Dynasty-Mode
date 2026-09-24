@@ -1317,7 +1317,7 @@ def start_franchise(
         _normalized_notification(
             notification_id=f"system:franchise_ready:{uid}",
             notification_type="system",
-            text=f"Franchise ready ΓÇö {_display_team(user_team)} ({uid}).",
+            text=f"Franchise ready — {_display_team(user_team)} ({uid}).",
             priority="LOW",
             calendar_day=0,
             calendar_iso=start_iso,
@@ -1330,7 +1330,7 @@ def start_franchise(
             notification_id=f"system:coach_hired:{uid}:{season_y}",
             notification_type="system",
             text=(
-                f"Hired {coach.name} ({coach_archetype}). NHL calendar {season_y}ΓÇô{season_y + 1} ┬╖ "
+                f"Hired {coach.name} ({coach_archetype}). NHL calendar {season_y}–{season_y + 1} ┬╖ "
                 f"{len(nhl_cal)} days ┬╖ {len(days_sorted)} game dates ┬╖ ~{gp} GP."
             ),
             priority="LOW",
@@ -1357,7 +1357,7 @@ def start_franchise(
         bootstrap_full_league_hierarchy(league, sim.rng, season_year=season_y)
         npl = len(getattr(league, "players", None) or [])
         session.notifications.append(
-            f"League depth online ΓÇö NHL affiliates (AHL/ECHL), UFA pools, overseas, juniors (~{npl} player records)."
+            f"League depth online — NHL affiliates (AHL/ECHL), UFA pools, overseas, juniors (~{npl} player records)."
         )
     except Exception as e:
         session.notifications.append(f"League depth bootstrap skipped: {e}")

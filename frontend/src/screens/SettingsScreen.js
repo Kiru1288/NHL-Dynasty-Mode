@@ -62,10 +62,10 @@ export function SettingsScreen() {
       <GameHeader teamName={franchiseState?.team?.name || "—"} sectionTitle="SETTINGS" />
       <div className="settings-shell">
         <header className="settings-shell__head">
-          <span className="settings-shell__kicker">Shell · System Registry</span>
-          <h2 className="settings-shell__title">Rule Presentation</h2>
+          <span className="settings-shell__kicker">Settings</span>
+          <h2 className="settings-shell__title">Display &amp; Rules</h2>
           <p className="settings-shell__copy">
-            Adjust local slider values for penalty emphasis. These controls are not yet bound to the simulation engine.
+            Display scale applies immediately. Penalty sliders are saved locally and do not change simulation results yet.
           </p>
         </header>
 

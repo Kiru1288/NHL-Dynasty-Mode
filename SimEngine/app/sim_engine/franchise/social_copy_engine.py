@@ -304,6 +304,19 @@ AMBIENT_FAN: Dict[str, List[str]] = {
     ] * 4,
 }
 
+# Openers that need only data almost every player story has. The angle-specific openers ask for
+# five or six fields (rank, overall, goals, expected points...) and used to render only because
+# the missing ones were invented; with real data they need a fallback that does not.
+_GENERIC_REPORTER_OPENERS: List[str] = [
+    "{name} is the name to watch for {team}",
+    "{team} ({team_record}): {name} stays in the conversation",
+    "{name}: {points} points in {games_played} GP for {team}",
+    "{name} ({team}) keeps drawing attention",
+]
+for _frag in REPORTER_FRAGMENTS.values():
+    _frag["openers"] = list(_frag.get("openers") or []) + _GENERIC_REPORTER_OPENERS
+
+
 _REPORTER_STYLE_OVERRIDES: Dict[str, Any] = {
     "hart": lambda t: t.replace("Sources", "HOT TAKE: Sources").replace(".", " — and I'm not sorry."),
     "reid": lambda t: f"{t} (cap table attached)" if "cap" not in t.lower() else t,
@@ -407,22 +420,50 @@ def _lookup_session_evidence(session: Any, storyline: Dict[str, Any]) -> Dict[st
                     continue
                 if "name" not in out:
                     out["name"] = str(getattr(player, "name", "") or getattr(player, "player_name", "") or "").strip()
-                if "overall" not in out or not out.get("overall"):
-                    ovr = getattr(player, "overall", None) or getattr(player, "ovr", None)
-                    if ovr not in (None, "", 0):
-                        out["overall"] = round(float(ovr), 1)
-                cap = getattr(player, "cap_hit", None) or getattr(player, "salary", None)
-                if cap not in (None, "", 0):
-                    cap_m = float(cap)
-                    if cap_m > 1000:
-                        cap_m /= 1_000_000
-                    out["cap_hit"] = round(cap_m, 2)
+                # Player.ovr is a METHOD and Player has no `overall`/`cap_hit`/`salary`: float() on the
+                # method raised TypeError for every rostered player. Use the shared helpers instead.
+                try:
+                    from app.sim_engine.franchise.storyline_engine import (  # noqa: WPS433
+                        _contract_years_left,
+                        _player_age,
+                        _player_ovr99,
+                    )
+
+                    if "overall" not in out or not out.get("overall"):
+                        ovr_v = float(_player_ovr99(player) or 0)
+                        if ovr_v > 0:
+                            out["overall"] = round(ovr_v, 1)
+                    yrs = _contract_years_left(player)
+                    if yrs is not None:
+                        out["years_remaining"] = yrs
+                    age_v = int(_player_age(player) or 0)
+                    if age_v > 0:
+                        out["age"] = age_v
+                except Exception:
+                    pass
+                try:
+                    from app.sim_engine.economy.cap_engine import player_cap_hit_millions  # noqa: WPS433
+
+                    cap_m = float(player_cap_hit_millions(player) or 0)
+                    if cap_m > 0:
+                        out["cap_hit"] = round(cap_m, 2)
+                except Exception:
+                    pass
                 if not tid:
                     tid = str(getattr(tm, "id", "") or "")
                 break
 
     if tid and "team_record" not in out:
         out["team_record"] = _team_record_label(session, tid)
+    if tid and "league_rank" not in out:
+        try:
+            from app.sim_engine.franchise.storyline_engine import _league_points_rank  # noqa: WPS433
+
+            rank_v = int(_league_points_rank(session, tid) or 0)
+            if rank_v > 0:
+                out["league_rank"] = rank_v
+        except Exception:
+            pass
     team_name = str(storyline.get("team_name") or "").strip()
     if team_name:
         out["team"] = team_name
@@ -455,7 +496,7 @@ def _resolve_team_cap_context(session: Any, team_id: str) -> Dict[str, Any]:
         cap = float(getattr(team, "cap_space_m", 0) or getattr(team, "cap_space", 0) or 0)
         if cap:
             out["cap_space"] = round(cap, 2)
-        sal = float(getattr(team, "salary_cap_m", 0) or getattr(team, "salary_cap", 0) or 88.0)
+        sal = float(getattr(team, "salary_cap_m", 0) or getattr(team, "salary_cap", 0) or 0)
         if sal:
             out["salary_cap"] = round(sal, 2)
     return out
@@ -467,9 +508,11 @@ def _resolve_locker_room_context(session: Any, team_id: str) -> Dict[str, Any]:
         return out
     room = (getattr(session, "universe_locker_rooms", None) or {}).get(str(team_id)) or {}
     culture = dict(room.get("culture") or {})
-    if culture:
-        out["locker_unity"] = round(float(culture.get("unity") or 55), 0)
-        out["morale"] = round(float(culture.get("morale") or culture.get("confidence") or 55), 0)
+    if culture.get("unity") is not None:
+        out["locker_unity"] = round(float(culture["unity"]), 0)
+    morale = culture.get("morale") if culture.get("morale") is not None else culture.get("confidence")
+    if morale is not None:
+        out["morale"] = round(float(morale), 0)
     return out
 
 
@@ -505,8 +548,13 @@ def enrich_dynasty_context(
     ctx: Dict[str, Any],
     rng: Optional[random.Random] = None,
 ) -> Dict[str, Any]:
-    """Bind franchise-session fields used by dynasty social templates."""
-    r = rng or random.Random()
+    """Bind franchise-session fields used by dynasty social templates.
+
+    Only values that exist are added. Nothing is made up: the previous version filled a random
+    contract length, a random prior overall, a random draft round, a random rival cap hit/term,
+    and default cap space / morale, and posts presented them as fact. A template that needs a
+    value that is not here is skipped (see filter_templates / _safe_format).
+    """
     merged = dict(ctx)
     tid = str(storyline.get("team_id") or getattr(session, "user_team_id", "") or "")
     pid = str(storyline.get("player_id") or "")
@@ -515,11 +563,17 @@ def enrich_dynasty_context(
     merged.update(_resolve_locker_room_context(session, tid))
     merged.update(_resolve_player_entity_psych(session, pid))
 
-    merged["headline"] = str(storyline.get("headline") or merged.get("headline") or "").strip()
-    merged["summary"] = str(storyline.get("summary") or merged.get("summary") or "").strip()
-    merged["prospect_name"] = str(
-        storyline.get("prospect_name") or storyline.get("player_name") or merged.get("name") or "this prospect"
+    headline = str(storyline.get("headline") or merged.get("headline") or "").strip()
+    summary = str(storyline.get("summary") or merged.get("summary") or "").strip()
+    if headline:
+        merged["headline"] = headline
+    if summary:
+        merged["summary"] = summary
+    prospect_name = str(
+        storyline.get("prospect_name") or storyline.get("player_name") or merged.get("name") or ""
     ).strip()
+    if prospect_name:
+        merged["prospect_name"] = prospect_name
     prospect_ovr = storyline.get("prospect_overall") or storyline.get("player_overall") or merged.get("overall")
     if prospect_ovr not in (None, "", 0):
         merged["prospect_overall"] = round(float(prospect_ovr), 1)
@@ -527,35 +581,20 @@ def enrich_dynasty_context(
     prior = storyline.get("prior_overall") or storyline.get("previous_overall")
     if prior not in (None, "", 0):
         merged["prior_overall"] = round(float(prior), 1)
-    elif merged.get("overall"):
-        merged["prior_overall"] = max(55.0, round(float(merged["overall"]) - r.uniform(2.0, 5.0), 1))
 
     years = storyline.get("years_remaining") or storyline.get("contract_years")
     if years not in (None, ""):
         merged["years_remaining"] = int(float(years))
-    else:
-        merged["years_remaining"] = r.randint(1, 3)
 
-    merged["draft_pick"] = str(storyline.get("draft_pick") or storyline.get("pick_label") or f"round {r.randint(1, 3)}")
-    merged["rival_team"] = str(storyline.get("rival_team") or _resolve_rival_team(session, tid, r))
-    merged["rival_player"] = str(storyline.get("rival_player") or merged.get("name") or "their star")
-    merged["rival_cap_hit"] = round(float(storyline.get("rival_cap_hit") or merged.get("cap_hit") or r.uniform(4.5, 9.5)), 2)
-    merged["rival_term"] = int(storyline.get("rival_term") or r.randint(5, 8))
+    for key in ("draft_pick", "pick_label", "rival_team", "rival_player", "rival_cap_hit", "rival_term"):
+        val = storyline.get(key)
+        if val not in (None, ""):
+            merged["draft_pick" if key == "pick_label" else key] = val
 
-    if "confidence" not in merged and merged.get("morale"):
+    if "confidence" not in merged and merged.get("morale") is not None:
         merged["confidence"] = merged["morale"]
-    if "morale" not in merged and merged.get("confidence"):
+    if "morale" not in merged and merged.get("confidence") is not None:
         merged["morale"] = merged["confidence"]
-
-    for key, default in (
-        ("cap_space", 2.5),
-        ("salary_cap", 88.0),
-        ("locker_unity", 55),
-        ("morale", 55),
-        ("confidence", 55),
-    ):
-        if merged.get(key) in (None, "", 0):
-            merged[key] = default
 
     return merged
 
@@ -568,6 +607,11 @@ _BROKEN_SOCIAL_PATTERNS = (
     re.compile(r"\b0 starts\b", re.I),
     re.compile(r"\b0\.00 ppg through 0\b", re.I),
     re.compile(r"\{[a-z_]+\}"),
+    re.compile(r"\bunknown player\b", re.I),
+    re.compile(r"\bNone\b|\bnan\b"),
+    re.compile(r"\$0(\.0+)?M\b"),
+    re.compile(r"\brank\s*[\u2014-]\s*(?:[.,]|$)", re.I),
+    re.compile(r"[(:]\s*[\u2014-]\s*[),.]"),
 )
 
 
@@ -591,35 +635,58 @@ def _headline_fallback_post(storyline: Dict[str, Any], reporter: Dict[str, Any])
 
 
 def build_evidence_context(storyline: Dict[str, Any], session: Any = None) -> Dict[str, Any]:
+    """Template context from real evidence only.
+
+    A missing value is simply absent: templates that need it are skipped (or the post falls back
+    to the headline). It is never replaced with a plausible default such as .900 SV%, 2.80 GAA,
+    0.00 PPG, "Unknown player", "the club" or a $0M cap hit.
+    """
     ev = dict(storyline.get("evidence") or {})
     if session is not None:
         enriched = _lookup_session_evidence(session, storyline)
         for key, val in enriched.items():
-            if key not in ev or ev.get(key) in (None, "", 0, "0", "0.00", ".900", "—"):
+            if key not in ev or ev.get(key) in (None, "", 0, "0", "0.00", "\u2014"):
                 ev[key] = val
     pname = str(storyline.get("player_name") or ev.get("name") or "").strip()
-    if not pname or pname.lower() == "the player":
+    if pname.lower() in ("the player", "unknown player", "player"):
         pname = str(ev.get("name") or "").strip()
-    ctx = {
-        "name": pname or "Unknown player",
-        "team": str(storyline.get("team_name") or ev.get("team") or "the club"),
-        "ppg": ev.get("ppg", ev.get("points_per_game", storyline.get("ppg", "0.00"))),
-        "points": ev.get("points", storyline.get("points", 0)),
-        "goals": ev.get("goals", 0),
-        "assists": ev.get("assists", 0),
-        "games_played": ev.get("games_played", ev.get("last_n", 0)),
-        "overall": ev.get("overall", storyline.get("player_overall", 0)),
-        "cap_hit": ev.get("cap_hit", 0),
-        "team_record": ev.get("team_record", "—"),
-        "league_rank": ev.get("league_rank", ev.get("rank", "—")),
-        "save_pct": ev.get("save_pct", ".900"),
-        "gaa": ev.get("gaa", "2.80"),
-        "expected_save_pct": ev.get("expected_save_pct", ".905"),
-        "expected_points": ev.get("expected_points", ev.get("points", 0)),
-        "injury_type": ev.get("injury_type", "undisclosed"),
-        "age": ev.get("age", storyline.get("age", 0)),
-        "heat": int(storyline.get("heat") or 0),
+        if pname.lower() in ("the player", "unknown player", "player"):
+            pname = ""
+
+    def _first(*vals: Any) -> Any:
+        for v in vals:
+            if v is not None and v != "":
+                return v
+        return None
+
+    def _positive(v: Any) -> Any:
+        try:
+            return v if v is not None and float(v) > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    raw: Dict[str, Any] = {
+        "name": pname or None,
+        "team": _first(str(storyline.get("team_name") or "").strip() or None, ev.get("team")),
+        "ppg": _first(ev.get("ppg"), ev.get("points_per_game"), storyline.get("ppg")),
+        "points": _first(ev.get("points"), storyline.get("points")),
+        "goals": ev.get("goals"),
+        "assists": ev.get("assists"),
+        "games_played": _first(ev.get("games_played"), ev.get("last_n")),
+        "overall": _positive(_first(ev.get("overall"), storyline.get("player_overall"))),
+        "cap_hit": _positive(ev.get("cap_hit")),
+        "team_record": ev.get("team_record"),
+        "league_rank": _first(ev.get("league_rank"), ev.get("rank")),
+        "save_pct": ev.get("save_pct"),
+        "gaa": ev.get("gaa"),
+        "expected_save_pct": ev.get("expected_save_pct"),
+        "expected_points": ev.get("expected_points"),
+        "injury_type": ev.get("injury_type"),
+        "age": _positive(_first(ev.get("age"), storyline.get("age"))),
+        "years_remaining": ev.get("years_remaining"),
     }
+    ctx: Dict[str, Any] = {k: v for k, v in raw.items() if v is not None and v != ""}
+    ctx["heat"] = int(storyline.get("heat") or 0)
     for k, v in list(ctx.items()):
         if isinstance(v, float):
             ctx[k] = round(v, 3) if k in ("ppg", "save_pct", "expected_save_pct", "gaa") else round(v, 2)
@@ -630,16 +697,24 @@ def build_evidence_context(storyline: Dict[str, Any], session: Any = None) -> Di
 
 def build_entity_context(entity: Dict[str, Any]) -> Dict[str, Any]:
     ident = dict(entity.get("identity") or {})
-    return {
-        "name": str(entity.get("player_name") or ident.get("name") or "Player"),
-        "team": str(entity.get("team_name") or entity.get("team_id") or "the team"),
-        "points": entity.get("points", entity.get("season_points", 0)),
-        "games_played": entity.get("games_played", 0),
-        "ppg": entity.get("ppg", 0),
-        "overall": entity.get("overall", ident.get("overall", 0)),
-        "team_record": entity.get("team_record", "—"),
-        "goals": entity.get("goals", 0),
+    raw = {
+        "name": _first_real(entity.get("player_name"), ident.get("name")),
+        "team": _first_real(entity.get("team_name"), entity.get("team_id")),
+        "points": entity.get("points", entity.get("season_points")),
+        "games_played": entity.get("games_played"),
+        "ppg": entity.get("ppg"),
+        "overall": _first_real(entity.get("overall"), ident.get("overall")),
+        "team_record": entity.get("team_record"),
+        "goals": entity.get("goals"),
     }
+    return {k: v for k, v in raw.items() if v is not None and v != ""}
+
+
+def _first_real(*vals: Any) -> Any:
+    for v in vals:
+        if v is not None and v != "":
+            return v
+    return None
 
 
 def _active_storyline_boost(session: Any, storyline: Dict[str, Any]) -> float:
@@ -760,7 +835,14 @@ def compose_reporter_post(
             ctx = dict(ctx)
             ctx["name"] = f"{parts_name[-1]}, {parts_name[0]}"
     urgent = _active_storyline_boost(session, storyline) > 1.2 if session else int(ctx.get("heat") or 0) >= 55
-    opener, clause, closer = _pick_slots(frags, rng, urgent)
+    # The opener carries the subject; without it the clause/closer are sentence fragments.
+    # Retry other openers, and fall back to the real headline if none can be filled.
+    for _attempt in range(8):
+        opener, clause, closer = _pick_slots(frags, rng, urgent)
+        if _safe_format(opener, ctx):
+            break
+    else:
+        return _apply_reporter_voice(_headline_fallback_post(storyline, reporter)[:280], reporter)
     mode = rng.random()
     if mode < 0.28:
         parts = [_safe_format(opener, ctx)]
@@ -772,10 +854,12 @@ def compose_reporter_post(
     if parts and parts[0] and rng.random() < 0.22:
         parts[0] = f"{rng.choice(REPORTER_LEADS)} {parts[0]}"
     stat_keys = ["points", "ppg", "goals", "games_played", "cap_hit", "save_pct", "team_record", "league_rank"]
-    stat_key = rng.choice(stat_keys)
-    stat_val = ctx.get(stat_key, ctx.get("points", 0))
-    if not re.search(r"\d", " ".join(parts)) and stat_val not in (None, "", 0, "—"):
-        parts.append(f"({stat_key.replace('_', ' ')}: {stat_val})")
+    # Only label a stat the context actually has. (It used to fall back to `points` while keeping the
+    # randomly chosen label, printing e.g. "(cap hit: 18)" for an 18-point player.)
+    available_stats = [k for k in stat_keys if ctx.get(k) not in (None, "", 0, "—")]
+    if available_stats and not re.search(r"\d", " ".join(parts)):
+        stat_key = rng.choice(available_stats)
+        parts.append(f"({stat_key.replace('_', ' ')}: {ctx[stat_key]})")
     if rng.random() < 0.22:
         parts.insert(0, f"{reporter.get('outlet', 'Desk')} —")
     if int(ctx.get("heat") or 0) >= 70 and rng.random() < 0.4:
@@ -797,7 +881,10 @@ def compose_reporter_post(
 def compose_player_post(entity: Dict[str, Any], mood: str, rng: random.Random) -> str:
     skel = MOOD_SKELETONS.get(mood) or MOOD_SKELETONS["win"]
     ctx = build_entity_context(entity)
-    opener, clause, closer = _pick_slots(skel, rng, urgent=False)
+    for _attempt in range(8):
+        opener, clause, closer = _pick_slots(skel, rng, urgent=False)
+        if _safe_format(opener, ctx):
+            break
     style = str((entity.get("social") or {}).get("style") or "polished")
     raw = " ".join(p for p in (_safe_format(opener, ctx), _safe_format(clause, ctx), _safe_format(closer, ctx)) if p)
     if not re.search(r"\d", raw) and int(ctx.get("points") or 0) > 0:

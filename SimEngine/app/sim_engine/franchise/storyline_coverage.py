@@ -683,14 +683,14 @@ def emit_org_desk_storylines(session: Any, rng: random.Random) -> int:
         coach = str(getattr(tm, "coach_name", None) or getattr(tm, "coach", None) or "")
         if tid == user_tid:
             coach = coach or str(getattr(session, "head_coach_name", "") or "Head Coach")
-        coach = coach or f"{tname} bench"
+        # AI teams have no coach record: `coach` stays empty and the headline stays generic.
         if gp >= 18 and rank >= 24:
             stable = f"coachhot|{tid}|{season}"
             if _can_fire(session, stable, day, "minor")[0]:
                 _emit_public(
                     session,
-                    headline=f"Heat rising on {coach}",
-                    summary=f"{tname} sits near the bottom (rank {rank}) and the bench is the first place the noise lands.",
+                    headline=f"Heat rising on {coach}" if coach else f"Pressure building on {tname}'s coaching staff",
+                    summary=f"{tname} sits near the bottom (rank {rank}, {gp} GP) and the bench is the first place the noise lands.",
                     cause_type="COACH_HOT_SEAT",
                     category="league",
                     heat=68 if tid == user_tid else 54,
@@ -704,7 +704,7 @@ def emit_org_desk_storylines(session: Any, rng: random.Random) -> int:
                 _mark_fired(session, stable, day, "minor", 0)
                 emitted += 1
         if gp >= 22 and rank >= 26:
-            gm_name = str(getattr(tm, "gm_name", None) or getattr(session, "gm_name", None) or "the general manager")
+            gm_name = str(getattr(tm, "gm_name", None) or (getattr(session, "gm_name", None) if tid == user_tid else None) or "the front office")
             stable = f"gmseat|{tid}|{season}"
             if _can_fire(session, stable, day, "minor")[0]:
                 _emit_public(

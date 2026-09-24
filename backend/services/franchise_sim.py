@@ -379,15 +379,24 @@ def _team_schedule_penalty(days: List[int]) -> float:
     if len(days) != len(set(days)):
         return 1e12
     ds = sorted(days)
-    ds_set = set(ds)
     pen = 0.0
     lo, hi = ds[0], ds[-1]
+    # present[i] / games_before[i] index day lo+i; games_before gives O(1) window counts.
+    span = hi - lo + 1
+    present = [False] * span
+    for x in ds:
+        present[x - lo] = True
+    games_before = [0] * (span + 1)
+    for i in range(span):
+        games_before[i + 1] = games_before[i] + (1 if present[i] else 0)
 
     for start in range(lo, hi - 1):
-        if all((start + k) in ds_set for k in range(3)):
+        i = start - lo
+        if present[i] and present[i + 1] and present[i + 2]:
             pen += 7500.0
     for start in range(lo, hi - 2):
-        if all((start + k) in ds_set for k in range(4)):
+        i = start - lo
+        if present[i] and present[i + 1] and present[i + 2] and present[i + 3]:
             pen += 60000.0
 
     for i in range(len(ds) - 1):
@@ -404,7 +413,7 @@ def _team_schedule_penalty(days: List[int]) -> float:
             pen += 95.0 + float(gap - 5) * 38.0
 
     for w in range(lo, hi - 5):
-        inc = sum(1 for x in ds if w <= x <= w + 6)
+        inc = games_before[min(w + 6, hi) - lo + 1] - games_before[w - lo]
         if inc > 4:
             pen += float(inc - 4) * 3200.0
         elif inc < 2:
@@ -1989,7 +1998,10 @@ def start_franchise(
     season_start_year: Optional[int] = None,
     injuries_enabled: bool = True,
     player_universe: str = "generated",
+    warm_draft_cache: bool = True,
 ) -> FranchiseSession:
+    """``warm_draft_cache=False`` lets the HTTP start route warm the draft board after it has
+    built its response, so the warm thread does not compete with the request for the GIL."""
     ensure_simengine_path()
     from app.sim_engine.engine import SimEngine
 
@@ -2286,10 +2298,11 @@ def start_franchise(
         pass
     # Warm rankings/HUD off the request thread so the first Draft Class open is a
     # cache hit. Ranking formulas are unchanged — this only precomputes the board.
-    try:
-        _schedule_draft_class_cache_warm(session)
-    except Exception:
-        pass
+    if warm_draft_cache:
+        try:
+            _schedule_draft_class_cache_warm(session)
+        except Exception:
+            pass
     try:
         from app.sim_engine.systems.chemistry import materialize_roster_chemistry_profiles  # noqa: WPS433
 
@@ -3736,6 +3749,24 @@ def _find_game_result_by_id(session: FranchiseSession, game_id: str) -> Optional
     return None
 
 
+_LIGHT_MODE_PARAM_CACHE: Dict[Any, bool] = {}
+
+
+def _accepts_light_mode(fn: Any) -> bool:
+    """Whether a stat accumulator takes ``light_mode`` (signature inspected once per function)."""
+    key = getattr(fn, "__func__", fn)
+    hit = _LIGHT_MODE_PARAM_CACHE.get(key)
+    if hit is None:
+        try:
+            import inspect
+
+            hit = "light_mode" in inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            hit = False
+        _LIGHT_MODE_PARAM_CACHE[key] = hit
+    return hit
+
+
 def _accumulate_franchise_game_stats(
     session: FranchiseSession,
     *,
@@ -3797,14 +3828,8 @@ def _accumulate_franchise_game_stats(
         "home_b2b": bool(home_b2b),
         "away_b2b": bool(away_b2b),
     }
-    try:
-        import inspect
-
-        sig = inspect.signature(sim.accumulate_unified_game_stats)
-        if "light_mode" in sig.parameters:
-            stat_kw["light_mode"] = light_stats
-    except (TypeError, ValueError):
-        pass
+    if _accepts_light_mode(sim.accumulate_unified_game_stats):
+        stat_kw["light_mode"] = light_stats
 
     box = sim.accumulate_unified_game_stats(
         rng,
