@@ -36,6 +36,7 @@ export function getPlayerName(player) {
   if (typeof player === "string") return player;
   return (
     player.name ||
+    player.prospect_name ||
     player.full_name ||
     player.fullName ||
     player.player_name ||

@@ -291,8 +291,31 @@ function rememberBackendIdentity(instanceId, codeRevision) {
 }
 
 /**
- * Drop saved session id + client lineup caches when the backend process restarted
- * or its live code fingerprint changed (uvicorn --reload / new python process).
+ * True when the current localStorage session id is live on this API process.
+ * Uses always-200 probes so a missing session does not log as a console 404.
+ */
+export async function pingFranchiseSession() {
+  if (!getFranchiseSessionId()) return false;
+  try {
+    const health = await api.get("/api/health", { timeout: 8000 });
+    if (typeof health.data?.session_exists === "boolean") {
+      return health.data.session_exists === true;
+    }
+    const state = await api.get("/api/franchise/state", {
+      timeout: 8000,
+      validateStatus: (status) => status === 200 || status === 404 || status === 400,
+    });
+    return state.status === 200;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Drop the client session id when this API process no longer has it.
+ *
+ * Do not POST /api/franchise/reset here. After an API restart the frontend
+ * should only clear the client session id when the server no longer has that save.
  */
 export async function syncFranchiseSessionWithBackend() {
   try {
@@ -300,37 +323,20 @@ export async function syncFranchiseSessionWithBackend() {
     const { data } = await api.get("/api/health", { timeout: 8000 });
     const instanceId = String(data?.instance_id || "").trim();
     const codeRevision = String(data?.code_revision || data?.code?.revision || "").trim();
-    const prevInstance = localStorage.getItem(API_INSTANCE_STORAGE_KEY);
-    const prevRevision = localStorage.getItem(API_CODE_REVISION_STORAGE_KEY);
-    const sid = getFranchiseSessionId();
-    // Only invalidate when the backend process or code fingerprint actually changed —
-    // not on every refresh when health is slow or features are temporarily missing.
-    const backendChanged =
-      (instanceId && prevInstance && prevInstance !== instanceId) ||
-      (codeRevision && prevRevision && prevRevision !== codeRevision);
-
-    if (backendChanged) {
-      clearFranchiseClientCaches();
-      // Drop server-side in-memory saves too — otherwise /state can still revive them.
-      await resetFranchiseServerSessions();
-      rememberBackendIdentity(instanceId, codeRevision);
-      return true;
-    }
-
     rememberBackendIdentity(instanceId, codeRevision);
 
+    const sid = getFranchiseSessionId();
     if (!sid) return false;
 
-    const probe = await api.get("/api/franchise/state", {
-      timeout: 8000,
-      validateStatus: (status) => status === 200 || status === 404 || status === 400,
-    });
-    if (probe.status === 404 || probe.status === 400) {
+    let exists = typeof data?.session_exists === "boolean" ? data.session_exists : null;
+    if (exists == null) {
+      exists = await pingFranchiseSession();
+    }
+    if (!exists) {
       clearFranchiseClientCaches();
       rememberBackendIdentity(instanceId, codeRevision);
       return true;
     }
-
     return false;
   } catch {
     return false;
@@ -349,22 +355,16 @@ function noteBackendIdentityFromHeaders(headers) {
     (instanceId && prevInstance && prevInstance !== instanceId) ||
     (codeRevision && prevRevision && prevRevision !== codeRevision);
 
-  if (changed) {
-    clearFranchiseClientCaches();
-    rememberBackendIdentity(instanceId, codeRevision);
-    // Fire-and-forget: purge obsolete in-memory saves on the server.
-    resetFranchiseServerSessions();
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(
-        new CustomEvent("nhl-franchise-backend-changed", {
-          detail: { instanceId, codeRevision },
-        })
-      );
-    }
-    return;
-  }
-
   rememberBackendIdentity(instanceId, codeRevision);
+  if (!changed || typeof window === "undefined") return;
+
+  // Tell the open tab to re-check its own session. Never reset all server
+  // sessions — that would delete CLI-loaded snapshots in this new process.
+  window.dispatchEvent(
+    new CustomEvent("nhl-franchise-backend-changed", {
+      detail: { instanceId, codeRevision },
+    })
+  );
 }
 
 function _perfNoteAxios(config, error) {

@@ -9,6 +9,7 @@ one-slot bump. Target identity is fogged: three names are shown, one is real.
 
 from __future__ import annotations
 
+import hashlib
 import random
 from typing import Any, Dict, List, Optional
 
@@ -81,6 +82,49 @@ def _partner_true_target(
     return true_target
 
 
+def _public_rank_band(rank: int) -> str:
+    if rank <= 15:
+        return "lottery tier"
+    if rank <= 32:
+        return "first-round board"
+    if rank <= 64:
+        return "early day two"
+    return "mid-board"
+
+
+def _candidate_intel_row(entry: Dict[str, Any], *, need_pos: str, rng: random.Random, emphasis: bool) -> Dict[str, Any]:
+    try:
+        pub = int(entry.get("rank") or entry.get("public_rank") or entry.get("final_rank") or 99)
+    except (TypeError, ValueError):
+        pub = 99
+    pos = str(entry.get("position") or "").upper()
+    need_fit = bool(need_pos and pos and (pos == need_pos or (need_pos == "F" and pos in ("C", "LW", "RW", "W"))))
+    buzz_pool = [
+        "Private workout buzz",
+        "Combine interviews went well",
+        "Scouts like the toolkit",
+        "Medical cleared — clubs circling",
+        "Late stock riser on the floor",
+        "Strong WJC tape in the room",
+    ]
+    if emphasis:
+        buzz_pool = [
+            "Multiple teams checked him twice today",
+            "War room has him pinned on the short list",
+            "Would be stunned if he lasts past the next run",
+            "GM told insiders this is the guy",
+        ] + buzz_pool
+    return {
+        "prospect_id": _entry_key(entry),
+        "name": str(entry.get("name") or "Prospect"),
+        "position": pos or None,
+        "public_rank": pub if pub < 900 else None,
+        "public_rank_band": _public_rank_band(pub),
+        "need_fit": need_fit,
+        "scout_buzz": rng.choice(buzz_pool),
+    }
+
+
 def _decoy_targets(
     true_target: Dict[str, Any],
     available: List[Dict[str, Any]],
@@ -104,6 +148,90 @@ def _decoy_targets(
     trio = [true_target, *decoys[:2]]
     rng.shuffle(trio)
     return trio[:3]
+
+
+def _offer_id(overall: int, partner: str, partner_overall: int, pick_a: str, pick_b: str) -> str:
+    raw = f"{overall}:{partner}:{partner_overall}:{pick_a}:{pick_b}"
+    return "dd-" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def _build_intel_lines(
+    *,
+    partner_name: str,
+    partner_overall: int,
+    overall: int,
+    slots_moved: int,
+    need_pos: str,
+    urgency: str,
+    gap: float,
+    rng: random.Random,
+) -> List[str]:
+    lines = [
+        f"{partner_name} is trying to jump {slots_moved} slot{'s' if slots_moved != 1 else ''} into #{overall}.",
+    ]
+    if need_pos:
+        lines.append(f"Room intel ties the climb to {need_pos} depth — one name is real, the rest is smoke.")
+    if urgency == "high":
+        lines.append("Clock pressure: their staff is on the phone with the league table.")
+    elif urgency == "medium":
+        lines.append("They will walk if another club beats them to this window.")
+    if gap <= 6:
+        lines.append("Package is tight — mostly a straight swap with light sweetener capital.")
+    elif gap >= 14:
+        lines.append("They are paying up with future capital to secure the prospect tier.")
+    if rng.random() < 0.45:
+        lines.append("Accepting moves you to a better value pocket on the chart.")
+    return lines[:4]
+
+
+def _preview_trade_value_meter(
+    *,
+    user_id: str,
+    partner_id: str,
+    pick_a: str,
+    pick_b: str,
+    sweetener_ids: List[str],
+    league: Any,
+    team_by_id: Dict[str, Any],
+    ctx: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Chart-priced totals for the trade-down UI bar (user on clock)."""
+    try:
+        from app.sim_engine.trades.trade_evaluator import evaluate_trade_package
+    except Exception:
+        return {}
+    package = {
+        user_id: [{"type": "pick", "id": pick_b, "team": partner_id}],
+        partner_id: [{"type": "pick", "id": pick_a, "team": user_id}],
+    }
+    for sid in sweetener_ids:
+        pid = str(sid or "").strip()
+        if pid and pid not in (pick_a, pick_b):
+            package[user_id].append({"type": "pick", "id": pid, "team": partner_id})
+    try:
+        evaluation = evaluate_trade_package(
+            package,
+            league=league,
+            team_by_id=team_by_id,
+            context={**(ctx or {}), "draft_day_trade": True},
+            user_team_id=user_id,
+        )
+    except Exception:
+        return {}
+    vb = dict(evaluation.get("value_breakdown") or {})
+    user_row = vb.get(str(user_id)) or {}
+    partner_row = vb.get(str(partner_id)) or {}
+    send_val = float(user_row.get("outgoing_total") or 0.0)
+    recv_val = float(user_row.get("incoming_total") or 0.0)
+    gap = float(evaluation.get("fairness_gap") or 0.0)
+    return {
+        "user_send_value": round(send_val, 2),
+        "user_receive_value": round(recv_val, 2),
+        "fairness_gap": round(gap, 2),
+        "partner_net": round(float(partner_row.get("net") or 0.0), 2),
+        "can_execute": bool(evaluation.get("can_execute")),
+        "value_grade": evaluation.get("value_grade") or evaluation.get("grade"),
+    }
 
 
 def generate_draft_day_trade_offers(
@@ -180,7 +308,8 @@ def generate_draft_day_trade_offers(
 
     # Later slots that might pay to climb — never invent interest without a target.
     # Keep the look-ahead modest so only nearby climbers show up.
-    lookahead = order[overall : min(len(order), overall + 10)]
+    lookahead = order[overall : min(len(order), overall + 14)]
+    forced_one = False
     for future in lookahead:
         partner = str(future.get("team_id") or "")
         if not partner or partner == on_clock or partner in seen_partners:
@@ -217,14 +346,20 @@ def generate_draft_day_trade_offers(
             continue
         # User on the clock still needs selective partners — but always allow at
         # least one climber so the Trade Down desk is never empty at pick time.
-        if user_on_clock and offers and not _partner_willing_to_climb(
+        willing = _partner_willing_to_climb(
             session,
             partner,
             overall=overall,
             partner_overall=partner_overall,
             true_target=true_target,
             rng=rng,
-        ):
+        )
+        if user_on_clock and offers and not willing and not forced_one:
+            forced_one = True
+            willing = True
+        elif not user_on_clock and not willing:
+            continue
+        elif user_on_clock and offers and not willing:
             continue
 
         partner_pick_id = str(future.get("pick_id") or "")
@@ -276,12 +411,50 @@ def generate_draft_day_trade_offers(
             need_pos = str(needs[0].get("position") if isinstance(needs[0], dict) else needs[0] or "").upper()
 
         grade = "Fair" if gap <= 8 else ("Lean +" if gap <= 14 else "Plus")
+        urgency = "high" if overall <= 15 or user_on_clock else "medium"
+        true_key = _entry_key(true_target)
+        candidate_intel = [
+            _candidate_intel_row(
+                c,
+                need_pos=need_pos,
+                rng=rng,
+                emphasis=_entry_key(c) == true_key,
+            )
+            for c in candidates
+        ]
+        intel_lines = _build_intel_lines(
+            partner_name=_team_name(session, partner),
+            partner_overall=partner_overall,
+            overall=overall,
+            slots_moved=slots_moved,
+            need_pos=need_pos,
+            urgency=urgency,
+            gap=float(gap),
+            rng=rng,
+        )
+        value_meter: Dict[str, Any] = {}
+        if user_on_clock and league is not None and on_clock == user_id:
+            value_meter = _preview_trade_value_meter(
+                user_id=user_id,
+                partner_id=partner,
+                pick_a=on_clock_pick_id,
+                pick_b=partner_pick_id,
+                sweetener_ids=sweetener_ids,
+                league=league,
+                team_by_id=team_by_id,
+                ctx=ctx,
+            )
+        offer_style = "desperate" if urgency == "high" and slots_moved <= 4 else "standard"
+        if float(gap) >= 12 and sweeteners:
+            offer_style = "pay_up"
         offers.append(
             {
+                "offer_id": _offer_id(overall, partner, partner_overall, on_clock_pick_id, partner_pick_id),
                 "from_team_id": partner,
                 "team_name": _team_name(session, partner),
                 "to_team_id": on_clock,
                 "partner_overall_pick": partner_overall,
+                "slots_moved": slots_moved,
                 "partner_pick_id": partner_pick_id,
                 "on_clock_pick_id": on_clock_pick_id,
                 "on_clock_overall_pick": overall,
@@ -294,17 +467,24 @@ def generate_draft_day_trade_offers(
                 "slot_value_gap": round(gap, 2),
                 # Fogged: FE shows candidates only — do not surface the true name.
                 "target_candidates": candidate_rows,
-                "true_target_prospect_id": _entry_key(true_target),
-                "target_prospect_id": _entry_key(true_target),
+                "candidate_intel": candidate_intel,
+                "intel_lines": intel_lines,
+                "pitch_headline": f"Move back to #{partner_overall} and add capital",
+                "true_target_prospect_id": true_key,
+                "target_prospect_id": true_key,
                 "target_prospect_name": None,
                 "value": grade,
                 "value_grade": "B" if gap <= 8 else "B+",
                 "risk": "Only one rumored name is their real target",
-                "urgency": "high" if overall <= 15 or user_on_clock else "medium",
+                "urgency": urgency,
+                "urgency_label": "On the phone" if urgency == "high" else "Monitoring",
                 "reason": "board_priority" if true_target else "trade_down",
+                "reason_headline": "Board priority still on the table",
                 "philosophy_fit": True,
                 "user_on_clock": user_on_clock,
                 "trade_down": True,
+                "offer_style": offer_style,
+                "value_meter": value_meter,
                 "partner_board_rank": (
                     partner_board[0].get("team_board_rank") if partner_board else None
                 ),

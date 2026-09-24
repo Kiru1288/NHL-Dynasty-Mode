@@ -371,6 +371,17 @@ def post_franchise_start(body: FranchiseStartBody) -> Any:
     return {"ok": True, "session_id": session.session_id, "state": state}
 
 
+@app.get("/api/franchise/session")
+def get_franchise_session_probe(
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """Always-200 existence check so boot probes do not show up as console 404s."""
+    sid = str(x_franchise_session or "").strip()
+    if not sid:
+        return {"ok": True, "exists": False}
+    return {"ok": True, "exists": get_session(sid) is not None}
+
+
 @app.get("/api/franchise/state")
 def get_franchise_state(
     crisis_tick: int = Query(default=0, alias="crisis_tick"),
@@ -1569,18 +1580,11 @@ def post_burner(session_id: str, body: BurnerPostBody) -> dict[str, Any]:
     return {**result, "state": franchise_sim.build_state_payload(s, include_heavy=False)}
 
 
-# DEV ONLY — delete dev_jump_to_draft.py and remove this block when done testing draft UI.
-try:
-    from dev_jump_to_draft import register_dev_routes
-
-    register_dev_routes(app)
-except ImportError:
-    pass
-
 @app.get("/api/health")
-def health() -> dict:
+def health(x_franchise_session: Optional[str] = Header(default=None)) -> dict:
     root = Path(__file__).resolve().parent.parent / "SimEngine"
     fp = _api_code_fingerprint()
+    sid = str(x_franchise_session or "").strip()
     return {
         "ok": True,
         "api_version": "0.2.1",
@@ -1590,6 +1594,7 @@ def health() -> dict:
         "code_revision": fp.get("revision"),
         "live_code_revision": live_code_revision(),
         "active_sessions": active_session_count(),
+        "session_exists": bool(sid) and get_session(sid) is not None,
         "simengine": str(root),
         "run_sim_on_disk": (root / "run_sim.py").is_file(),
         "code": fp,

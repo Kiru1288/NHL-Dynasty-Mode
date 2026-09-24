@@ -21612,7 +21612,11 @@ def get_cached_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict
     cached = getattr(session, "_cached_draft_class_rankings", None)
     cached_rev = int(getattr(session, "_cached_draft_class_rankings_rev", -1) or -1)
     if isinstance(cached, dict) and cached and cached_rev == rev:
-        cached_cursor = int(cached.get("calendar_cursor", -1) or -1)
+        # NOTE: must not be `cached.get(...) or -1` — calendar_cursor is legitimately 0
+        # at the start of a season/draft, and `0 or -1` collapses to -1, so the cache
+        # would never match and every pick would rebuild the entire draft board.
+        raw_cached_cursor = cached.get("calendar_cursor")
+        cached_cursor = int(raw_cached_cursor) if raw_cached_cursor is not None else -1
         if cached_cursor == cur_cursor:
             _rebuild_draft_board_entry_index(session, cached)
             return cached
@@ -21631,7 +21635,8 @@ def get_cached_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict
         cached = getattr(session, "_cached_draft_class_rankings", None)
         cached_rev = int(getattr(session, "_cached_draft_class_rankings_rev", -1) or -1)
         if isinstance(cached, dict) and cached and cached_rev == rev:
-            cached_cursor = int(cached.get("calendar_cursor", -1) or -1)
+            raw_cached_cursor = cached.get("calendar_cursor")
+            cached_cursor = int(raw_cached_cursor) if raw_cached_cursor is not None else -1
             if cached_cursor == cur_cursor:
                 _rebuild_draft_board_entry_index(session, cached)
                 return cached

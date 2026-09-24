@@ -26,8 +26,20 @@
     radial-gradient(circle at 20% 0%, rgba(19, 216, 231, 0.1), transparent 32%),
     radial-gradient(circle at 88% 12%, rgba(233, 168, 60, 0.07), transparent 28%),
     linear-gradient(180deg, var(--ops-black) 0%, var(--ops-navy-deep) 100%);
-  font-family: var(--font-ops-ui);
+  --ed-head: "Barlow Condensed", var(--font-broadcast-display), "Archivo Black", "Rajdhani", "Arial Narrow", sans-serif;
+  --ed-number: var(--ed-head);
+  --ed-mono: var(--font-mono-data, "IBM Plex Mono", Consolas, "Courier New", monospace);
+  --ed-body: var(--font-ops-ui);
+  font-family: var(--ed-body);
   isolation: isolate;
+}
+
+.edraft-broadcast h1,
+.edraft-broadcast h2,
+.edraft-broadcast h3,
+.edraft-broadcast h4 {
+  font-family: var(--ed-head);
+  letter-spacing: 0.04em;
 }
 
 .edraft-broadcast .edraft-bg,
@@ -234,6 +246,7 @@
 }
 
 .edraft-broadcast .edraft-tabular {
+  font-family: var(--ed-mono, var(--font-mono-data));
   font-variant-numeric: tabular-nums;
 }
 

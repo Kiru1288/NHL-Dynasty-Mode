@@ -23,6 +23,7 @@ import {
   formatFranchiseApiError,
   getFranchiseSessionId,
   isExpiredFranchiseSessionError,
+  pingFranchiseSession,
   readFranchiseHubSnapshot,
   resetFranchiseServerSessions,
   resolveApiBaseUrl,
@@ -848,7 +849,7 @@ export function GameUIProvider({ children }) {
       const backendRestarted = await syncFranchiseSessionWithBackend();
       if (cancelled) return;
 
-      if (backendRestarted) {
+      if (backendRestarted || !getFranchiseSessionId()) {
         clearFranchiseSession();
         resetFranchiseStateCache();
         setFranchiseState(null);
@@ -872,9 +873,10 @@ export function GameUIProvider({ children }) {
     })();
 
     const onBackendChanged = () => {
-      expireFranchiseSession(
-        "Backend process changed while the app was open. Start a new franchise."
-      );
+      (async () => {
+        const alive = await pingFranchiseSession();
+        if (!alive) expireFranchiseSession();
+      })();
     };
     window.addEventListener("nhl-franchise-backend-changed", onBackendChanged);
 

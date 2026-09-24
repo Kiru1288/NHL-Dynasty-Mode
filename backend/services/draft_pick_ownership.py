@@ -109,7 +109,13 @@ def annotate_lottery_picks_with_ownership(session: Any, picks: List[Dict[str, An
     return out
 
 
-def apply_registry_owner_to_slot(session: Any, slot: Dict[str, Any], draft_year: int) -> Dict[str, Any]:
+def apply_registry_owner_to_slot(
+    session: Any,
+    slot: Dict[str, Any],
+    draft_year: int,
+    *,
+    ensure_registry: bool = True,
+) -> Dict[str, Any]:
     league = getattr(getattr(session, "sim", None), "league", None)
     if league is None:
         return dict(slot)
@@ -121,7 +127,8 @@ def apply_registry_owner_to_slot(session: Any, slot: Dict[str, Any], draft_year:
         from app.sim_engine.trades.trade_pick_registry import ensure_draft_pick_registry, get_pick_by_id
         from app.sim_engine.trades.trade_asset import canonical_pick_id
 
-        ensure_draft_pick_registry(league, start_year=draft_year)
+        if ensure_registry:
+            ensure_draft_pick_registry(league, start_year=draft_year)
         pick_id = str(slot.get("pick_id") or canonical_pick_id(draft_year, rnd, orig))
         row = get_pick_by_id(league, pick_id)
         if isinstance(row, dict) and not row.get("resolved"):
@@ -163,6 +170,17 @@ def refresh_draft_order_ownership(session: Any) -> List[Dict[str, Any]]:
         for p in (state.get("completed_picks") or [])
         if p.get("prospect_id")
     }
+    # Ensure/reconcile the registry ONCE up front — ownership can't change mid-loop,
+    # so redoing this (a full registry scan) inside apply_registry_owner_to_slot for
+    # every one of the up-to-224 remaining slots was pure O(slots) duplicate work.
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is not None:
+        try:
+            from app.sim_engine.trades.trade_pick_registry import ensure_draft_pick_registry
+
+            ensure_draft_pick_registry(league, start_year=draft_year)
+        except Exception:
+            pass
     refreshed: List[Dict[str, Any]] = []
     overall = int(state.get("overall_pick") or 1)
     for idx, slot in enumerate(order):
@@ -172,7 +190,7 @@ def refresh_draft_order_ownership(session: Any) -> List[Dict[str, Any]]:
             frozen = dict(slot)
             refreshed.append(frozen)
             continue
-        refreshed.append(apply_registry_owner_to_slot(session, dict(slot), draft_year))
+        refreshed.append(apply_registry_owner_to_slot(session, dict(slot), draft_year, ensure_registry=False))
 
     current = refreshed[overall - 1] if 0 < overall <= len(refreshed) else None
     user_id = str(getattr(session, "user_team_id", "") or "")

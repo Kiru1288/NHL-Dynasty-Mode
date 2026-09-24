@@ -19,7 +19,7 @@ Major goals:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 
 POINTS_FOR_WIN = 2

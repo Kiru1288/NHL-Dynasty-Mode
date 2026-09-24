@@ -182,6 +182,9 @@ def test_user_on_clock_gets_trade_down_offers():
     assert offers[0].get("target_prospect_name") is None
     assert isinstance(offers[0].get("incoming_assets"), list)
     assert len(offers[0].get("incoming_assets") or []) >= 1
+    assert offers[0].get("offer_id")
+    assert isinstance(offers[0].get("intel_lines"), list)
+    assert isinstance(offers[0].get("candidate_intel"), list)
 
 
 def test_solid_player_accepts_near_market_cheap_deal():

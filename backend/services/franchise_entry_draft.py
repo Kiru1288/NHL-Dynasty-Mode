@@ -1393,6 +1393,9 @@ def _sync_row_live_stats(
             season_year = int(getattr(session, "season_calendar_year", 0) or 0) or None
         except Exception:
             pass
+        if not cal_iso and str(getattr(session, "phase", "") or "").lower() == "offseason":
+            year = int(getattr(session, "season_calendar_year", 0) or 2026)
+            cal_iso = f"{year}-06-25"
         rng = getattr(getattr(session, "sim", None), "rng", None)
         actual = ensure_prospect_season_stats(
             player,
@@ -1431,6 +1434,20 @@ def _sync_row_live_stats(
             "points": pts_now,
             "ppg": ppg_now,
         }
+        proj = getattr(player, "_prospect_projected_stats", None)
+        if isinstance(proj, dict) and (proj.get("gp") or proj.get("goals") or proj.get("points")):
+            out["projected_stats"] = {
+                "gp": proj.get("gp") or proj.get("projected_gp"),
+                "projected_gp": proj.get("projected_gp") or proj.get("gp"),
+                "goals": proj.get("goals") or proj.get("projected_goals"),
+                "assists": proj.get("assists") or proj.get("projected_assists"),
+                "points": proj.get("points") or proj.get("projected_points"),
+                "ppg": proj.get("ppg") or proj.get("projected_ppg"),
+                "wins": proj.get("wins"),
+                "save_pct": proj.get("save_pct"),
+                "gaa": proj.get("gaa"),
+                "shutouts": proj.get("shutouts"),
+            }
         try:
             full = prospect_stats_for_api(
                 player,
@@ -1452,6 +1469,220 @@ def _sync_row_live_stats(
             pass
     except Exception:
         pass
+    return out
+
+
+_JUNIOR_STAT_KEYS = (
+    "gp",
+    "games_played",
+    "goals",
+    "assists",
+    "points",
+    "ppg",
+    "points_per_game",
+    "wins",
+    "losses",
+    "ot_losses",
+    "save_pct",
+    "gaa",
+    "shutouts",
+    "primary_points",
+    "production_adjusted_score",
+    "plus_minus",
+    "pim",
+)
+
+_PROSPECT_BIO_KEYS = (
+    "age",
+    "height",
+    "weight",
+    "handedness",
+    "shoots",
+    "shot_side",
+    "catches",
+    "nationality",
+    "country",
+    "country_code",
+    "first_name",
+    "last_name",
+    "player_type",
+    "play_style",
+    "playstyle",
+    "archetype",
+    "prospect_role",
+    "nhl_readiness",
+    "risk",
+    "stock_label",
+    "stock_reason",
+    "stock_delta",
+    "character_score",
+    "character_concerns",
+    "attitude_label",
+    "combine_status",
+    "league_code",
+    "league_name",
+    "league_display",
+)
+
+
+def _completed_pick_file_ready(pick: Dict[str, Any]) -> bool:
+    if not isinstance(pick, dict) or not pick.get("prospect_file_complete"):
+        return False
+    dossier = pick.get("dossier") if isinstance(pick.get("dossier"), dict) else {}
+    stats = pick.get("actual_stats") if isinstance(pick.get("actual_stats"), dict) else {}
+    chapters = (pick.get("chapter_profile") or {}).get("chapters") if isinstance(pick.get("chapter_profile"), dict) else None
+    has_name = bool(pick.get("name") or pick.get("prospect_name") or dossier.get("name"))
+    has_stats = bool(
+        stats.get("gp")
+        or stats.get("games_played")
+        or pick.get("gp")
+        or ((pick.get("projected_stats") or {}).get("gp") if isinstance(pick.get("projected_stats"), dict) else None)
+    )
+    has_chapters = isinstance(chapters, dict) and len(chapters) >= 3
+    return has_name and has_stats and has_chapters
+
+
+def _hydrate_completed_pick(
+    session: FranchiseSession,
+    pick: Dict[str, Any],
+    *,
+    board_entry: Optional[Dict[str, Any]] = None,
+    player: Any = None,
+    block: Optional[Dict] = None,
+    home_index: Optional[Dict[str, Tuple[Any, Optional[Dict], Optional[Dict]]]] = None,
+    roster_rows: Optional[List[Dict[str, Any]]] = None,
+    team_status: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Attach junior identity, live ledger stats, true chapters, and a full dossier.
+
+    Completed pick records are selection metadata (NHL team, slot, classification).
+    The prospect file still lives on the draft-class board / junior player entity.
+    """
+    out = dict(pick or {})
+    if _completed_pick_file_ready(out):
+        return out
+
+    pid = str(out.get("prospect_id") or out.get("selected_prospect_id") or out.get("key") or "")
+    row = dict(board_entry or {})
+    if player is None and pid:
+        player, block, _tm = _lookup_prospect_player(session, pid, home_index)
+    if player is not None and not row.get("league_code"):
+        row["league_code"] = (
+            (block or {}).get("league_code")
+            or getattr(getattr(player, "context", None), "league_code", None)
+            or row.get("league")
+        )
+    if player is not None:
+        row = _sync_row_live_stats(session, row, player, block)
+        try:
+            from services.draft_ranking_logic import _attach_chapter_profile_to_row
+
+            _attach_chapter_profile_to_row(player, row, {})
+        except Exception:
+            try:
+                from app.sim_engine.entities.chapter_attributes import serialize_chapter_profile_for_api
+
+                payload = serialize_chapter_profile_for_api(player)
+                if isinstance(payload, dict) and payload.get("chapters"):
+                    row["chapter_profile"] = payload
+            except Exception:
+                pass
+
+    nhl_team_name = out.get("team_name")
+    junior_team = (
+        row.get("team_name")
+        or row.get("team")
+        or out.get("junior_team")
+        or getattr(getattr(player, "identity", None), "team_name", None)
+    )
+    junior_league = (
+        row.get("league")
+        or row.get("league_name")
+        or row.get("league_display")
+        or out.get("junior_league")
+        or out.get("league")
+    )
+    name = str(row.get("name") or out.get("prospect_name") or out.get("name") or "").strip()
+    if name:
+        out["name"] = name
+        out["prospect_name"] = name
+    if junior_team:
+        out["junior_team"] = junior_team
+        out["club"] = junior_team
+    if junior_league:
+        out["junior_league"] = junior_league
+        if not out.get("league"):
+            out["league"] = junior_league
+    if nhl_team_name:
+        out["nhl_team_name"] = nhl_team_name
+        out["team_name"] = nhl_team_name
+
+    for key in _PROSPECT_BIO_KEYS:
+        val = row.get(key)
+        if val is not None and val != "" and out.get(key) in (None, "", []):
+            out[key] = val
+    for key in _JUNIOR_STAT_KEYS:
+        if row.get(key) is not None:
+            out[key] = row.get(key)
+    if isinstance(row.get("actual_stats"), dict):
+        out["actual_stats"] = row["actual_stats"]
+    if isinstance(row.get("projected_stats"), dict):
+        out["projected_stats"] = row["projected_stats"]
+    if isinstance(row.get("analytics"), dict):
+        out["analytics"] = row["analytics"]
+    if isinstance(row.get("wjc_stats"), dict):
+        out["wjc_stats"] = row["wjc_stats"]
+    if isinstance(row.get("chapter_profile"), dict):
+        out["chapter_profile"] = row["chapter_profile"]
+        for ck, cv in (row["chapter_profile"].get("chapters") or {}).items():
+            if cv is not None:
+                out[str(ck)] = cv
+    if row.get("storyline"):
+        out.setdefault("storyline", row.get("storyline"))
+
+    dossier = out.get("dossier") if isinstance(out.get("dossier"), dict) else {}
+    needs_dossier = not dossier or not (dossier.get("stats") or dossier.get("scout_report") or dossier.get("name"))
+    if needs_dossier and row:
+        try:
+            from services.draft_prospect_profile import build_prospect_profile
+
+            built = build_prospect_profile(row, roster_rows=roster_rows, team_status=team_status)
+            if isinstance(built, dict) and built:
+                out["dossier"] = {**dossier, **built}
+                dossier = out["dossier"]
+        except Exception:
+            pass
+    if junior_team and isinstance(out.get("dossier"), dict):
+        out["dossier"].setdefault("team", junior_team)
+        out["dossier"].setdefault("club", junior_team)
+        out["dossier"].setdefault("currentClub", junior_team)
+    if name and isinstance(out.get("dossier"), dict):
+        out["dossier"].setdefault("name", name)
+        out["dossier"].setdefault("fullName", name)
+
+    if player is not None:
+        try:
+            from services.draft_rights_engine import rights_card_payload
+
+            if not out.get("rights_card"):
+                out["rights_card"] = rights_card_payload(player)
+        except Exception:
+            pass
+
+    stats = out.get("actual_stats") if isinstance(out.get("actual_stats"), dict) else {}
+    chapters = (out.get("chapter_profile") or {}).get("chapters") if isinstance(out.get("chapter_profile"), dict) else None
+    proj = out.get("projected_stats") if isinstance(out.get("projected_stats"), dict) else {}
+    gp = 0
+    try:
+        gp = int(stats.get("gp") or stats.get("games_played") or out.get("gp") or proj.get("gp") or 0)
+    except (TypeError, ValueError):
+        gp = 0
+    out["prospect_file_complete"] = bool(
+        (out.get("name") or out.get("prospect_name"))
+        and (gp > 0 or bool(out.get("dossier")))
+        and isinstance(chapters, dict)
+        and len(chapters) >= 3
+    )
     return out
 
 
@@ -2038,36 +2269,64 @@ def get_entry_draft_payload(
     team_board_by_key = {str(r.get("key") or ""): r for r in team_board}
     deep_keys = {str(r.get("key") or "") for r in available[:DEEP_ENRICH_LIMIT]}
     deep_keys.update(k for k in team_board_by_key.keys() if k)
-    home_index = _build_dev_home_index(session)
+    home_index: Optional[Dict[str, Any]] = None
+
+    # Per-prospect deep enrichment (dossier narrative, rights card, scouted estimate,
+    # live-stat sync) is the dominant per-pick cost — none of those inputs change when
+    # a pick is made, only which prospects are still on the board. Cache each
+    # prospect's heavy output for the life of the current board revision so a single
+    # "Sim Pick" click doesn't regenerate ~64 full scouting dossiers from scratch.
+    # `_board_revision` already invalidates this whenever ranks/confidence/potential
+    # actually change (weekly ticks, combine, scouting), so this stays fresh.
+    deep_cache = cache.setdefault("deep_profiles", {})
 
     for idx, row in enumerate(available):
         pid = str(row.get("key") or "")
         ub = team_board_by_key.get(pid) or row
         deep = pid in deep_keys or idx < DEEP_ENRICH_LIMIT
         if deep:
-            if pid not in overlay_cache:
-                ov = _scouting_overlay(session, pid, team_id=user_id)
-                _, _, notes = _scouting_event_adjustments(
-                    session, user_id, row, ov, user_phil
-                )
-                overlay_cache[pid] = notes
-            player, block, _tm = _lookup_prospect_player(session, pid, home_index)
-            if player is not None:
-                row = _sync_row_live_stats(session, row, player, block)
-            rights = rights_card_payload(player) if player is not None else {}
-            try:
-                scouted = enrich_board_entry_with_team_scouting(
-                    row,
-                    team_id=user_id or "league",
-                    scouting_quality=user_scout_quality,
-                    draft_year=draft_year,
-                )
-            except Exception:
-                scouted = {}
-            try:
-                dossier = build_prospect_profile(row, roster_rows=roster_rows, team_status=team_status)
-            except Exception:
-                dossier = {}
+            cached_deep = deep_cache.get(pid)
+            if cached_deep is not None:
+                notes = cached_deep["notes"]
+                row = cached_deep["row"]
+                rights = cached_deep["rights"]
+                scouted = cached_deep["scouted"]
+                dossier = cached_deep["dossier"]
+            else:
+                if pid not in overlay_cache:
+                    ov = _scouting_overlay(session, pid, team_id=user_id)
+                    _, _, notes = _scouting_event_adjustments(
+                        session, user_id, row, ov, user_phil
+                    )
+                    overlay_cache[pid] = notes
+                else:
+                    notes = overlay_cache[pid]
+                if home_index is None:
+                    home_index = _build_dev_home_index(session)
+                player, block, _tm = _lookup_prospect_player(session, pid, home_index)
+                if player is not None:
+                    row = _sync_row_live_stats(session, row, player, block)
+                rights = rights_card_payload(player) if player is not None else {}
+                try:
+                    scouted = enrich_board_entry_with_team_scouting(
+                        row,
+                        team_id=user_id or "league",
+                        scouting_quality=user_scout_quality,
+                        draft_year=draft_year,
+                    )
+                except Exception:
+                    scouted = {}
+                try:
+                    dossier = build_prospect_profile(row, roster_rows=roster_rows, team_status=team_status)
+                except Exception:
+                    dossier = {}
+                deep_cache[pid] = {
+                    "notes": notes,
+                    "row": row,
+                    "rights": rights,
+                    "scouted": scouted,
+                    "dossier": dossier,
+                }
             enriched_available.append(
                 {
                     **_strip_private_fields(row),
@@ -2075,7 +2334,7 @@ def get_entry_draft_payload(
                     "team_board_rank": ub.get("team_board_rank"),
                     "stock_history": list(hist.get(pid) or []),
                     "storyline": _prospect_storyline(row),
-                    "scouting_event_notes": ub.get("scouting_notes") or overlay_cache.get(pid) or [],
+                    "scouting_event_notes": ub.get("scouting_notes") or notes or [],
                     "combine_status": ub.get("combine_score") or row.get("combine_status"),
                     "interview_notes": next((n for n in (ub.get("scouting_notes") or []) if "Interview" in n), None),
                     "rights_card": rights,
@@ -2107,12 +2366,42 @@ def get_entry_draft_payload(
             )
 
     completed = list(state.get("completed_picks") or [])
+    board_by_key = cache.get("entry_by_key") or {}
+    completed_files = cache.setdefault("completed_files", {})
+    if home_index is None and any(not _completed_pick_file_ready(p) for p in completed):
+        home_index = _build_dev_home_index(session)
+    hydrated_completed: List[Dict[str, Any]] = []
+    dirty_completed = False
     for pick in completed:
-        if pick.get("rights_card"):
+        pid = str(pick.get("prospect_id") or pick.get("selected_prospect_id") or "")
+        cached_file = completed_files.get(pid) if pid else None
+        if isinstance(cached_file, dict) and _completed_pick_file_ready(cached_file):
+            merged = {
+                **pick,
+                **{k: v for k, v in cached_file.items() if k not in ("team_name", "team_id") or pick.get(k) in (None, "")},
+            }
+            merged["team_name"] = pick.get("team_name")
+            merged["team_id"] = pick.get("team_id")
+            hydrated_completed.append(merged)
             continue
-        p, _, _ = _lookup_prospect_player(session, str(pick.get("prospect_id") or ""), home_index)
-        if p is not None:
-            pick["rights_card"] = rights_card_payload(p)
+        entry = board_by_key.get(pid) if pid else None
+        hydrated = _hydrate_completed_pick(
+            session,
+            pick,
+            board_entry=entry,
+            home_index=home_index,
+            roster_rows=roster_rows,
+            team_status=team_status,
+        )
+        if pid:
+            completed_files[pid] = hydrated
+        dirty_completed = True
+        hydrated_completed.append(hydrated)
+    completed = hydrated_completed
+    if dirty_completed:
+        state["completed_picks"] = completed
+        state["draft_results"] = completed
+        session.draft_state = state
 
     payload = {
         **_strip_private_fields(state),
@@ -2379,6 +2668,13 @@ def _execute_pick_locked(
         **cls,
         "timestamp": _now_iso(),
     }
+    result = _hydrate_completed_pick(
+        session,
+        result,
+        board_entry=entry,
+        player=player,
+        block=block,
+    )
 
     completed = list(state.get("completed_picks") or [])
     completed.append(result)

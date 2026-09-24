@@ -282,6 +282,21 @@ def ensure_draft_pick_registry(
             start_year = upcoming_draft_year(cal) if getattr(league, "season_is_calendar", True) else cal
     start_year = int(start_year)
 
+    # Fast path: this is called once PER DRAFT-ORDER SLOT during a live draft (up to
+    # ~224x per single pick via refresh_draft_order_ownership), and previously redid
+    # the full teams x years x rounds populate scan (with a linear _find_team lookup
+    # per team) every single time — the dominant per-pick cost. Once this exact (year
+    # window, rounds, roster) coverage has been ensured, every pick_id it would mint
+    # already exists in `reg` (this function only ever adds entries, never
+    # removes/renames them), so re-scanning to confirm that is a guaranteed no-op and
+    # can be skipped. The reconciliation pass below still runs every call — it also
+    # picks up picks marked `resolved` directly (e.g. by a live draft selection)
+    # since the last call, which must drop out of `owned_pick_ids`.
+    coverage_key = (start_year, years_ahead, rounds, tuple(sorted(team_ids)))
+    if getattr(league, "_pick_registry_coverage_key", None) == coverage_key:
+        reconcile_pick_registry_consistency(league)
+        return reg
+
     for tid in team_ids:
         team = _find_team(league, tid)
         owned = _get_team_pick_ids(team) if team is not None else []
@@ -317,6 +332,7 @@ def ensure_draft_pick_registry(
 
     setattr(league, "draft_pick_registry", reg)
     reconcile_pick_registry_consistency(league)
+    setattr(league, "_pick_registry_coverage_key", coverage_key)
     return reg
 
 
