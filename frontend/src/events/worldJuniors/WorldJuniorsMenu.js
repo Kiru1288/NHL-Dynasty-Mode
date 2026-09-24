@@ -9,7 +9,7 @@ import {
 } from "./wjcBroadcastBuilder";
 
 import {
-  DraftStockSidebar,
+  DraftRisingPanel,
   GameResultModal,
   GamesBrowser,
   NationFlagsBar,
@@ -18,6 +18,7 @@ import {
 } from "./WorldJuniorsBroadcastPanels";
 
 import { wjcFlagUrl } from "../../utils/countryFlags";
+import { resolveFranchiseTeamLogo } from "../../utils/teamLogos";
 
 import bg1 from "./gettyimages-136461654-612x612.jpg";
 import bg2 from "./gettyimages-136295976-612x612.jpg";
@@ -26,6 +27,122 @@ import bg4 from "./gettyimages-84179721-612x612.jpg";
 import bg5 from "./gettyimages-2254829655-612x612.jpg";
 
 const WJC_HERO_BACKGROUNDS = [bg1, bg2, bg3, bg4, bg5];
+
+const WJC_OPS_ICON_GLYPHS = {
+  sim: "▶▶",
+  step: "▶",
+  board: "☰",
+  back: "✕",
+  search: "⌕",
+  chart: "▤",
+  target: "◎",
+};
+
+const WJC_OPS_ICON_TONES = {
+  sim: "cyan",
+  step: "cyan",
+  board: "blue",
+  back: "danger",
+  search: "cyan",
+  chart: "blue",
+  target: "cyan",
+};
+
+function WjcNhlTeamLogo({ abbr, size = 28 }) {
+  const code = String(abbr || "").trim().toUpperCase();
+  if (!code || code === "YOU") return null;
+  const src = resolveFranchiseTeamLogo({ abbreviation: code, abbr: code }, code);
+  if (!src) return <span className="wjc-nhl-team-logo wjc-nhl-team-logo--fallback">{code}</span>;
+  return (
+    <img
+      className="wjc-nhl-team-logo"
+      src={src}
+      alt=""
+      width={size}
+      height={size}
+      loading="lazy"
+    />
+  );
+}
+
+function formatProspectOverall(prospect) {
+  if (prospect?.overall != null && Number.isFinite(Number(prospect.overall))) {
+    return Math.round(Number(prospect.overall));
+  }
+  const ovr = prospect?.ovr;
+  if (ovr != null && Number.isFinite(Number(ovr))) {
+    const n = Number(ovr);
+    return Math.round(n > 1.5 ? n : n * 99);
+  }
+  return "—";
+}
+
+function formatProspectPotential(prospect) {
+  const pot =
+    prospect?.potential ??
+    prospect?.potential_score ??
+    prospect?.dev_potential;
+  if (pot != null && Number.isFinite(Number(pot))) {
+    const n = Number(pot);
+    return Math.round(n > 1.5 ? n : n * 99);
+  }
+  return "—";
+}
+
+function buildProspectOwnerMap(tournamentProspects) {
+  const map = {};
+  asArray(tournamentProspects).forEach((row) => {
+    const pid = String(row?.player_id || "");
+    if (!pid) return;
+    if (
+      row?.owner_team_abbr ||
+      row?.prospect_classification === "drafted_user" ||
+      row?.is_user_prospect
+    ) {
+      map[pid] = {
+        abbr: row.owner_team_abbr || "YOU",
+        isUser: Boolean(row.is_user_prospect || row.is_user_org),
+      };
+    }
+  });
+  return map;
+}
+
+function WjcOpsStat({ label, value, tone = "cyan", alert = false, title }) {
+  return (
+    <div className={`wjc-ops-stat${alert ? " is-alert" : ""}`}>
+      <span className="wjc-ops-stat__label">{label}</span>
+      <strong
+        className={`wjc-ops-num-pop tone-${tone} wjc-ops-tabular`}
+        title={title || undefined}
+      >
+        {value}
+      </strong>
+    </div>
+  );
+}
+
+function WjcOpsIcon({ name, size = 12, tone, well = false, className = "" }) {
+  const glyph = WJC_OPS_ICON_GLYPHS[name];
+  if (!glyph) return null;
+  const resolvedTone = tone || WJC_OPS_ICON_TONES[name] || "neutral";
+  if (well) {
+    return (
+      <span className={`wjc-ops-icon-well tone-${resolvedTone} ${className}`.trim()} aria-hidden="true">
+        <span style={{ fontSize: size }}>{glyph}</span>
+      </span>
+    );
+  }
+  return (
+    <span
+      className={`wjc-ops-action-icon tone-${resolvedTone} ${className}`.trim()}
+      aria-hidden="true"
+      style={{ fontSize: size }}
+    >
+      {glyph}
+    </span>
+  );
+}
 
 /* -------------------------------------------------------------------------- */
 /* Payload resolver                                                           */
@@ -658,9 +775,9 @@ function WjcPageToolbar({
   ];
 
   return (
-    <div className="wjc-page-toolbar">
+    <div className="wjc-page-toolbar wjc-ops-command">
       <nav
-        className="wjc-page-tabs"
+        className="wjc-page-tabs wjc-ops-tabs"
         role="tablist"
         aria-label="World Juniors sections"
       >
@@ -679,15 +796,38 @@ function WjcPageToolbar({
             </button>
           );
         })}
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeSection === "draftRisers"}
+          className={`wjc-ops-tabs__aux${activeSection === "draftRisers" ? " is-active" : ""}`}
+          onClick={() => onSectionChange("draftRisers")}
+          title="Draft board movement and scouting notes"
+        >
+          <WjcOpsIcon name="board" size={13} tone="gold" />
+          <span>Draft Rising</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeSection === "stats"}
+          className={`wjc-ops-tabs__aux${activeSection === "stats" ? " is-active" : ""}`}
+          onClick={() => onSectionChange("stats")}
+          title="Tournament stat leaders"
+        >
+          <WjcOpsIcon name="chart" size={13} tone="cyan" />
+          <span>Stats</span>
+        </button>
       </nav>
 
-      <div className="wjc-page-actions">
+      <div className="wjc-page-actions wjc-ops-command__actions">
         {typeof onOpenDraftBoard === "function" ? (
           <button
             type="button"
-            className="wjc-page-action wjc-page-action--secondary"
+            className="nhlcal-advance-button-secondary wjc-ops-btn"
             onClick={onOpenDraftBoard}
           >
+            <WjcOpsIcon name="board" size={11} />
             Draft Board
           </button>
         ) : null}
@@ -695,7 +835,7 @@ function WjcPageToolbar({
         {typeof onSimDay === "function" ? (
           <button
             type="button"
-            className="wjc-page-action wjc-page-action--primary"
+            className="nhlcal-advance-button wjc-ops-btn"
             onClick={onSimDay}
             disabled={simBusy || !canSim}
             aria-busy={simBusy ? "true" : undefined}
@@ -705,15 +845,17 @@ function WjcPageToolbar({
                 : "Tournament complete"
             }
           >
+            <WjcOpsIcon name="sim" size={11} />
             {simBusy ? "Simulating..." : simLabel}
           </button>
         ) : null}
 
         <button
           type="button"
-          className="wjc-page-action wjc-page-action--exit"
+          className="nhlcal-advance-button-secondary wjc-ops-btn wjc-ops-btn--back"
           onClick={onLeave}
         >
+          <WjcOpsIcon name="back" size={11} />
           Back
         </button>
       </div>
@@ -789,30 +931,27 @@ function WjcSummaryHero({
         )}
 
         {!compact ? (
-          <div className="wjc-page-hero__facts">
-            <div>
-              <span>Season</span>
-              <strong>{getYear(payload, franchiseState)}</strong>
-            </div>
-            <div>
-              <span>Day</span>
-              <strong>{dayValue}</strong>
-            </div>
-            <div>
-              <span>Games</span>
-              <strong>{gamesCount}</strong>
-            </div>
-            <div>
-              <span>Your Club</span>
-              <strong title={getUserTeamName(franchiseState)}>
-                {getUserTeamName(franchiseState)}
-              </strong>
-            </div>
+          <div className="wjc-ops-stat-strip wjc-page-hero__facts">
+            <WjcOpsStat
+              label="Season"
+              value={getYear(payload, franchiseState)}
+              tone="gold"
+            />
+            <WjcOpsStat label="Day" value={dayValue} tone="cyan" />
+            <WjcOpsStat label="Games" value={gamesCount} tone="cyan" />
+            <WjcOpsStat
+              label="Your Club"
+              value={getUserTeamName(franchiseState)}
+              tone="default"
+              title={getUserTeamName(franchiseState)}
+            />
             {loanDecisionCount > 0 ? (
-              <div className="is-alert">
-                <span>Loan Decisions</span>
-                <strong>{loanDecisionCount}</strong>
-              </div>
+              <WjcOpsStat
+                label="Loan Decisions"
+                value={loanDecisionCount}
+                tone="orange"
+                alert
+              />
             ) : null}
           </div>
         ) : null}
@@ -829,7 +968,7 @@ function WjcStandingsTable({ standings, payload }) {
   const rows = asArray(standings);
 
   return (
-    <section className="wjc-page-card wjc-page-standings">
+    <section className="wjc-page-card wjc-page-standings wjc-page-standings--wide">
       <header className="wjc-page-card__header">
         <div>
           <span>Tournament Table</span>
@@ -888,19 +1027,23 @@ function WjcStandingsTable({ standings, payload }) {
                     <td>{row.l ?? 0}</td>
                     <td>{row.gf ?? 0}</td>
                     <td>{row.ga ?? 0}</td>
-                    <td
-                      className={
-                        diff > 0
-                          ? "is-positive"
-                          : diff < 0
-                            ? "is-negative"
-                            : ""
-                      }
-                    >
-                      {formatDiff(diff)}
+                    <td>
+                      <span
+                        className={`wjc-ops-num-pop wjc-ops-tabular${
+                          diff > 0
+                            ? " tone-green"
+                            : diff < 0
+                              ? " tone-danger"
+                              : " tone-muted"
+                        }`}
+                      >
+                        {formatDiff(diff)}
+                      </span>
                     </td>
                     <td className="wjc-page-standings__points">
-                      {row.pts ?? 0}
+                      <span className="wjc-ops-num-pop tone-cyan wjc-ops-tabular">
+                        {row.pts ?? 0}
+                      </span>
                     </td>
                   </tr>
                 );
@@ -1062,18 +1205,36 @@ function WjcShowcaseGrid({
 function WjcProgressStrip({ payload }) {
   const steps = getTournamentProgressSteps(payload);
   return (
-    <section className="wjc-page-card wjc-progress-strip" aria-label="Tournament progress">
-      <header className="wjc-page-card__header">
+    <section className="wjc-ops-sec wjc-progress-strip" aria-label="Tournament progress">
+      <header className="wjc-ops-sec__head">
         <div>
-          <span>Tournament Path</span>
+          <span className="wjc-ops-text-pop tone-cyan">Tournament Path</span>
           <h2>Stage Progress</h2>
         </div>
       </header>
-      <ol className="wjc-progress-strip__list">
+      <ol className="wjc-ops-progress__list wjc-progress-strip__list">
         {steps.map((step) => (
           <li key={step.id} className={`is-${step.state}`}>
-            <strong>{step.label}</strong>
-            <span>
+            <strong
+              className={
+                step.state === "current"
+                  ? "wjc-ops-text-pop tone-cyan"
+                  : step.state === "complete"
+                    ? "wjc-ops-text-pop tone-green"
+                    : ""
+              }
+            >
+              {step.label}
+            </strong>
+            <span
+              className={
+                step.state === "current"
+                  ? "wjc-ops-text-pop tone-gold"
+                  : step.state === "complete"
+                    ? "wjc-ops-text-pop tone-muted"
+                    : ""
+              }
+            >
               {step.state === "complete"
                 ? "Complete"
                 : step.state === "current"
@@ -1146,29 +1307,27 @@ function WjcOverviewSection({
 }) {
   return (
     <div className="wjc-page-section-stack">
-      <div className="wjc-overview-summary">
-        <div>
-          <span>Stage</span>
-          <strong>
-            {getTournamentPhaseLabel(payload.wjc_day, payload.medals_final)}
-          </strong>
-        </div>
-        <div>
-          <span>Day</span>
-          <strong>
-            {payload.wjc_day != null
+      <div className="wjc-ops-stat-strip wjc-overview-summary">
+        <WjcOpsStat
+          label="Stage"
+          value={getTournamentPhaseLabel(payload.wjc_day, payload.medals_final)}
+          tone="gold"
+        />
+        <WjcOpsStat
+          label="Day"
+          value={
+            payload.wjc_day != null
               ? `${payload.wjc_day}/${payload.wjc_days_total}`
-              : "—"}
-          </strong>
-        </div>
-        <div>
-          <span>Games</span>
-          <strong>{gamesCount}</strong>
-        </div>
-        <div>
-          <span>Your Prospects</span>
-          <strong>{userProspectCount}</strong>
-        </div>
+              : "—"
+          }
+          tone="cyan"
+        />
+        <WjcOpsStat label="Games" value={gamesCount} tone="cyan" />
+        <WjcOpsStat
+          label="Your Prospects"
+          value={userProspectCount}
+          tone="green"
+        />
       </div>
 
       <WjcProgressStrip payload={payload} />
@@ -1194,28 +1353,39 @@ function WjcOverviewSection({
 /* Prospect page                                                              */
 /* -------------------------------------------------------------------------- */
 
-function mergeUserProspectsWithStats(payload) {
+function mergeLeagueNhlProspectsWithStats(payload) {
   const stats = asArray(payload?.player_stats);
-  const tournamentProspects = asArray(
-    payload?.tournament_prospects
-  ).filter((p) => !isWjcNpc(p));
+  const tournamentProspects = asArray(payload?.tournament_prospects).filter(
+    (p) => !isWjcNpc(p)
+  );
 
-  return asArray(payload?.user_prospects).map((prospect) => {
-    const tournamentProfile = tournamentProspects.find(
-      (candidate) =>
-        String(candidate?.player_id) ===
-        String(prospect?.player_id)
-    );
+  const nhlRows = tournamentProspects.filter(
+    (p) =>
+      p?.prospect_classification === "drafted_user" ||
+      p?.is_user_prospect ||
+      Boolean(p?.owner_team_abbr)
+  );
 
+  const byId = new Map();
+  nhlRows.forEach((row) => {
+    const pid = String(row?.player_id || "");
+    if (!pid) return;
+    byId.set(pid, { ...row });
+  });
+
+  asArray(payload?.user_prospects).forEach((prospect) => {
+    const pid = String(prospect?.player_id || "");
+    if (!pid) return;
+    byId.set(pid, { ...(byId.get(pid) || {}), ...prospect });
+  });
+
+  return [...byId.values()].map((prospect) => {
     const tournamentStats = stats.find(
       (candidate) =>
-        String(candidate?.player_id) ===
-        String(prospect?.player_id)
+        String(candidate?.player_id) === String(prospect?.player_id)
     );
-
     return {
       ...prospect,
-      ...(tournamentProfile || {}),
       ...(tournamentStats || {}),
     };
   });
@@ -1252,8 +1422,8 @@ function WjcProspectsSection({
     <section className="wjc-page-card wjc-page-prospects">
       <header className="wjc-page-card__header">
         <div>
-          <span>Organization Tracker</span>
-          <h2>Your WJC Prospects</h2>
+          <span>League Tracker</span>
+          <h2>NHL Prospects at WJC</h2>
         </div>
         <div className="wjc-page-prospects__actions">
           <strong>
@@ -1264,9 +1434,10 @@ function WjcProspectsSection({
           {typeof onOpenDraftBoard === "function" ? (
             <button
               type="button"
-              className="wjc-page-inline-action"
+              className="nhlcal-advance-button-secondary wjc-ops-btn wjc-ops-btn--compact"
               onClick={onOpenDraftBoard}
             >
+              <WjcOpsIcon name="board" size={11} />
               Open Draft Board
             </button>
           ) : null}
@@ -1275,14 +1446,15 @@ function WjcProspectsSection({
 
       {!sorted.length ? (
         <div className="wjc-page-empty wjc-page-empty--structured">
-          <strong>No organization prospects are participating.</strong>
-          <p>Review tournament draft risers in the side board, or open the draft class.</p>
+          <strong>No NHL-affiliated prospects are in this tournament yet.</strong>
+          <p>League org prospects appear here once national rosters are set.</p>
           {typeof onOpenDraftBoard === "function" ? (
             <button
               type="button"
-              className="wjc-page-inline-action"
+              className="nhlcal-advance-button-secondary wjc-ops-btn wjc-ops-btn--compact"
               onClick={onOpenDraftBoard}
             >
+              <WjcOpsIcon name="board" size={11} />
               Open Draft Board
             </button>
           ) : null}
@@ -1365,6 +1537,10 @@ function WjcProspectsSection({
                 onClick={() => onSelectProspect(prospect)}
               >
                 <div className="wjc-page-prospect-row__identity">
+                  <WjcNhlTeamLogo
+                    abbr={prospect.owner_team_abbr}
+                    size={34}
+                  />
                   <CountryFlag
                     code={
                       prospect.wjc_country ||
@@ -1377,12 +1553,23 @@ function WjcProspectsSection({
                   <div>
                     <strong>{prospect.name || "Unknown Player"}</strong>
                     <span>
-                      {prospect.position || "—"} · Age {prospect.age ?? "—"}
-                      {prospect.stock_after != null || prospect.stock_before != null
-                        ? ` · #${prospect.stock_after ?? prospect.stock_before}`
-                        : ""}
+                      {prospect.owner_team_abbr || "—"}
+                      <span aria-hidden="true"> · </span>
+                      {prospect.position || "—"}
+                      <span aria-hidden="true"> · </span>
+                      Age {prospect.age ?? "—"}
                     </span>
                   </div>
+                </div>
+                <div className="wjc-page-prospect-row__ratings">
+                  <span>OVR</span>
+                  <strong className="wjc-ops-num-pop tone-gold wjc-ops-tabular">
+                    {formatProspectOverall(prospect)}
+                  </strong>
+                  <span>POT</span>
+                  <strong className="wjc-ops-num-pop tone-cyan wjc-ops-tabular">
+                    {formatProspectPotential(prospect)}
+                  </strong>
                 </div>
                 <div className="wjc-page-prospect-row__status">
                   <span>Status</span>
@@ -1627,6 +1814,18 @@ export default function WorldJuniorsMenu({
     [payload, franchiseState]
   );
 
+  const draftRiserRows = useMemo(() => {
+    const byId = {};
+    asArray(payload.tournament_prospects).forEach((row) => {
+      const pid = String(row?.player_id || "");
+      if (pid) byId[pid] = row;
+    });
+    return draftStockRows.map((row) => ({
+      ...(byId[String(row.player_id || "")] || {}),
+      ...row,
+    }));
+  }, [draftStockRows, payload.tournament_prospects]);
+
   const statLeaders = useMemo(
     () => buildWjcStatLeaders(payload),
     [payload]
@@ -1647,9 +1846,14 @@ export default function WorldJuniorsMenu({
     [payload]
   );
 
-  const userProspects = useMemo(
-    () => mergeUserProspectsWithStats(payload),
+  const leagueNhlProspects = useMemo(
+    () => mergeLeagueNhlProspectsWithStats(payload),
     [payload]
+  );
+
+  const prospectOwnerMap = useMemo(
+    () => buildProspectOwnerMap(payload.tournament_prospects),
+    [payload.tournament_prospects]
   );
 
   const loanDecisions = useMemo(
@@ -1764,15 +1968,15 @@ export default function WorldJuniorsMenu({
 
   return (
     <section
-      className={`wjc-page-root wjc-page-root--${activeSection}`}
+      className={`wjc-page-root wjc-ops-desk wjc-page-root--${activeSection}`}
       data-register="ops"
       aria-label="World Juniors tournament centre"
     >
-      <header className="wjc-page-header">
-        <div className="wjc-page-brand">
-          <span className="wjc-page-brand__mark">WJC</span>
-          <div>
-            <p>IIHF · U20 Championship</p>
+      <header className="wjc-page-header wjc-ops-command">
+        <div className="wjc-page-brand wjc-ops-command__brand">
+          <WjcOpsIcon name="target" size={16} tone="cyan" className="wjc-ops-brand-mark" />
+          <div className="wjc-ops-titles">
+            <p className="wjc-ops-phase">IIHF · U20 Championship</p>
             <h1>World Juniors</h1>
           </div>
         </div>
@@ -1824,14 +2028,7 @@ export default function WorldJuniorsMenu({
           </section>
         ) : null}
 
-        <div className="wjc-page-workspace">
-          <aside className="wjc-page-rail wjc-page-rail--left">
-            <DraftStockSidebar
-              rows={draftStockRows}
-              onSelectPlayer={handleSelectProspect}
-            />
-          </aside>
-
+        <div className="wjc-page-workspace is-full-main">
           <section className="wjc-page-content" role="tabpanel">
             {activeSection === "overview" ? (
               <WjcOverviewSection
@@ -1839,7 +2036,7 @@ export default function WorldJuniorsMenu({
                 showcaseCards={showcaseCards}
                 onSelectProspect={handleSelectProspect}
                 onSelectGame={setSelectedGame}
-                userProspectCount={userProspects.length}
+                userProspectCount={leagueNhlProspects.length}
                 gamesCount={tournamentGames.length}
               />
             ) : null}
@@ -1871,10 +2068,33 @@ export default function WorldJuniorsMenu({
             {activeSection === "prospects" ? (
               <WjcProspectsSection
                 payload={payload}
-                prospects={userProspects}
+                prospects={leagueNhlProspects}
                 onSelectProspect={handleSelectProspect}
                 onOpenDraftBoard={onOpenDraftBoard}
               />
+            ) : null}
+
+            {activeSection === "draftRisers" ? (
+              <DraftRisingPanel
+                rows={draftRiserRows}
+                onSelectPlayer={handleSelectProspect}
+              />
+            ) : null}
+
+            {activeSection === "stats" ? (
+              <section className="wjc-page-card wjc-page-stats-hub" aria-label="Tournament statistics">
+                <header className="wjc-page-card__header">
+                  <div>
+                    <span>Tournament Leaders</span>
+                    <h2>Player &amp; Team Stats</h2>
+                  </div>
+                </header>
+                <StatLeadersSidebar
+                  leaders={statLeaders}
+                  ownerByPlayerId={prospectOwnerMap}
+                  layout="main"
+                />
+              </section>
             ) : null}
 
             {activeSection === "playoffs" ? (
@@ -1885,9 +2105,6 @@ export default function WorldJuniorsMenu({
             ) : null}
           </section>
 
-          <aside className="wjc-page-rail wjc-page-rail--right">
-            <StatLeadersSidebar leaders={statLeaders} />
-          </aside>
         </div>
       </main>
 

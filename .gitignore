@@ -31,4 +31,5 @@ SimEngine/runs_verify2/
 _audit_temp/
 backend/audit_20_results.json
 
+# Disposable WJC/draft dev snapshots (safe to delete)
 backend/tmp/

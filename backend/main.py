@@ -1580,6 +1580,14 @@ def post_burner(session_id: str, body: BurnerPostBody) -> dict[str, Any]:
     return {**result, "state": franchise_sim.build_state_payload(s, include_heavy=False)}
 
 
+# DEV ONLY — delete dev_jump_to_wjc.py and remove this block when done testing WJC UI.
+try:
+    from dev_jump_to_wjc import register_dev_routes as register_dev_wjc_routes
+
+    register_dev_wjc_routes(app)
+except ImportError:
+    pass
+
 @app.get("/api/health")
 def health(x_franchise_session: Optional[str] = Header(default=None)) -> dict:
     root = Path(__file__).resolve().parent.parent / "SimEngine"

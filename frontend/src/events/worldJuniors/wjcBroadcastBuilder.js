@@ -406,6 +406,67 @@ export function buildWjcShowcaseCards(payload) {
   return cards.slice(0, 6);
 }
 
+export function buildDraftRiserDetail(row) {
+  const delta = int(row?.stock_delta);
+  const gp = int(row?.tournament_gp ?? row?.gp);
+  const pts = int(row?.tournament_pts ?? row?.pts);
+  const goals = int(row?.tournament_g ?? row?.g);
+  const plus = int(row?.tournament_plus_minus ?? row?.plus_minus);
+  const before = row?.stock_before ?? row?.stock_rank_before;
+  const after = row?.stock_after ?? row?.stock_rank_after;
+
+  const movement =
+    delta > 0
+      ? `Up ${delta} spots (#${before} → #${after})`
+      : delta < 0
+        ? `Down ${Math.abs(delta)} spots (#${before} → #${after})`
+        : before != null && after != null
+          ? `Holding at #${after}`
+          : "Board position unchanged";
+
+  const reasons = [];
+  if (row?.stock_reason) reasons.push(String(row.stock_reason));
+  if (gp > 0 && !row?.stock_reason) {
+    if (String(row?.position || "").toUpperCase() === "G") {
+      const w = int(row?.tournament_w ?? row?.w);
+      const l = int(row?.tournament_l ?? row?.l);
+      reasons.push(`Net ${w}-${l} through ${gp} GP at the tournament`);
+    } else {
+      reasons.push(
+        `${pts} point${pts === 1 ? "" : "s"} (${goals}G) in ${gp} GP${plus ? `, ${plus >= 0 ? "+" : ""}${plus} plus/minus` : ""}`
+      );
+    }
+  }
+  if (row?.team_wins != null) {
+    reasons.push(`Nation ${int(row.team_wins)}-${int(row.team_losses)} in group play`);
+  }
+
+  const growth = [];
+  const skill = row?.skill_bump ?? row?.wjc_skill_bump;
+  const potBump = row?.potential_bump ?? row?.wjc_potential_bump;
+  if (skill != null && Number(skill) !== 0) {
+    growth.push(
+      `Skill trajectory ${Number(skill) > 0 ? "+" : ""}${Number(skill).toFixed(1)} from WJC run`
+    );
+  }
+  if (potBump != null && Number(potBump) !== 0) {
+    growth.push(
+      `Potential ceiling ${Number(potBump) > 0 ? "+" : ""}${Number(potBump).toFixed(1)} after evaluation`
+    );
+  }
+  const pot = row?.potential ?? row?.potential_score;
+  const ovr = row?.overall ?? (row?.ovr != null ? (Number(row.ovr) > 1.5 ? row.ovr : Number(row.ovr) * 99) : null);
+  if (ovr != null) growth.push(`Current OVR ${Math.round(Number(ovr))}`);
+  if (pot != null) growth.push(`Development ceiling ${Math.round(Number(pot) > 1.5 ? pot : Number(pot) * 99)}`);
+
+  return {
+    movement,
+    reasons: reasons.length ? reasons : ["Scouts are still gathering tape from the tournament."],
+    growth,
+    delta,
+  };
+}
+
 export function buildWjcDraftStockRows(payload, franchiseState) {
   const backend = asArray(payload?.tournament_prospects).filter(
     (p) => isRealWjcProspect(p) && !isWjcNpc(p)
@@ -441,6 +502,15 @@ export function buildWjcDraftStockRows(payload, franchiseState) {
       owner_team_abbr: p.owner_team_abbr,
       is_user_prospect: p.is_user_prospect,
       is_npc: false,
+      stock_reason: p.stock_reason,
+      skill_bump: p.skill_bump ?? p.wjc_skill_bump,
+      potential_bump: p.potential_bump ?? p.wjc_potential_bump,
+      overall: p.overall,
+      potential: p.potential ?? p.potential_score,
+      ovr: p.ovr,
+      team_wins: p.team_wins,
+      team_losses: p.team_losses,
+      tournament_plus_minus: p.tournament_plus_minus,
     }));
 
     const draftEligible = rows.filter(

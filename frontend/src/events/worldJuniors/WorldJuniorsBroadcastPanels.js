@@ -3,7 +3,20 @@ import PlayerHeadshot from "../../components/PlayerHeadshot";
 import { ensurePlayerHeadshotFields } from "../../utils/playerHeadshots";
 import { wjcFlagUrl } from "../../utils/countryFlags";
 import { WJC_HOSTS } from "./wjcBroadcastScripts";
-import { isWjcNpc } from "./wjcBroadcastBuilder";
+import { buildDraftRiserDetail, isWjcNpc } from "./wjcBroadcastBuilder";
+import { resolveFranchiseTeamLogo } from "../../utils/teamLogos";
+
+function NhlOrgLogo({ abbr, size = 20 }) {
+  const code = String(abbr || "").trim().toUpperCase();
+  if (!code || code === "YOU") return null;
+  const src = resolveFranchiseTeamLogo({ abbreviation: code, abbr: code }, code);
+  if (!src) {
+    return <span className="wjc-nhl-team-logo wjc-nhl-team-logo--fallback">{code}</span>;
+  }
+  return (
+    <img className="wjc-nhl-team-logo" src={src} alt="" width={size} height={size} loading="lazy" />
+  );
+}
 
 function asArray(v) {
   return Array.isArray(v) ? v : [];
@@ -297,7 +310,12 @@ export function DraftStockSidebar({ rows, onSelectPlayer }) {
                     />
                   </span>
                   <div className="wjc-stock-sidebar-card__body">
-                    <strong>{safeText(row.name, "Unknown")}</strong>
+                    <div className="wjc-stock-sidebar-card__title">
+                      {row.owner_team_abbr ? (
+                        <NhlOrgLogo abbr={row.owner_team_abbr} size={18} />
+                      ) : null}
+                      <strong>{safeText(row.name, "Unknown")}</strong>
+                    </div>
                     <span className="wjc-stock-sidebar-card__meta">
                       <FlagImg code={row.wjc_country} size={16} />
                       <span>{abbrCode(row.wjc_country)}</span>
@@ -310,19 +328,30 @@ export function DraftStockSidebar({ rows, onSelectPlayer }) {
                       </span>
                     ) : (
                       <div className="wjc-stock-sidebar-card__metrics">
-                        <span title="Draft rank before / after WJC">
+                        <span
+                          className="wjc-ops-num-pop tone-muted wjc-ops-tabular"
+                          title="Draft rank before / after WJC"
+                        >
                           #{row.stock_before ?? "—"}
                           <i aria-hidden="true">→</i>
                           #{row.stock_after ?? "—"}
                         </span>
                         <span
-                          className={`wjc-stock-sidebar-card__delta${moveClass}`}
+                          className={`wjc-ops-num-pop wjc-ops-tabular wjc-stock-sidebar-card__delta${moveClass}${
+                            !hasDelta
+                              ? " tone-muted"
+                              : delta > 0
+                                ? " tone-green"
+                                : delta < 0
+                                  ? " tone-danger"
+                                  : " tone-muted"
+                          }`}
                           title="Board spots gained or lost"
                         >
                           {moveText}
                         </span>
                         {pts != null ? (
-                          <span className="wjc-stock-sidebar-card__pts">
+                          <span className="wjc-ops-num-pop tone-cyan wjc-ops-tabular wjc-stock-sidebar-card__pts">
                             {pts} PTS
                           </span>
                         ) : null}
@@ -339,7 +368,107 @@ export function DraftStockSidebar({ rows, onSelectPlayer }) {
   );
 }
 
-export function StatLeadersSidebar({ leaders }) {
+function intMetric(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+export function DraftRisingPanel({ rows, onSelectPlayer }) {
+  const draftRows = asArray(rows)
+    .filter((row) => !isWjcNpc(row) && row.prospect_classification !== "drafted_user")
+    .sort(
+      (a, b) =>
+        Math.abs(intMetric(b.stock_delta)) - Math.abs(intMetric(a.stock_delta)) ||
+        intMetric(b.tournament_pts) - intMetric(a.tournament_pts)
+    );
+
+  return (
+    <section className="wjc-page-card wjc-draft-rising-hub" aria-label="Draft board movement">
+      <header className="wjc-page-card__header">
+        <div>
+          <span>Scouting Desk</span>
+          <h2>Draft Rising &amp; Falling</h2>
+        </div>
+        <strong>{draftRows.length} tracked</strong>
+      </header>
+      {draftRows.length === 0 ? (
+        <p className="wjc-empty">Draft stock shifts appear once WJC games are played.</p>
+      ) : (
+        <ul className="wjc-draft-rising-list">
+          {draftRows.slice(0, 40).map((row) => {
+            const detail = buildDraftRiserDetail(row);
+            const delta = detail.delta;
+            const player = wjcPlayerHeadshot(row);
+            const tone =
+              delta > 0 ? "tone-green" : delta < 0 ? "tone-danger" : "tone-muted";
+            const deltaText =
+              delta > 0 ? `▲ ${delta}` : delta < 0 ? `▼ ${Math.abs(delta)}` : "— 0";
+            return (
+              <li key={row.player_id || row.name}>
+                <button
+                  type="button"
+                  className="wjc-draft-rising-card"
+                  onClick={() => onSelectPlayer?.(row)}
+                >
+                  <span className="wjc-draft-rising-card__shot">
+                    <PlayerHeadshot
+                      player={player}
+                      size="sm"
+                      variant="card"
+                      flag={row.wjc_country}
+                    />
+                  </span>
+                  <div className="wjc-draft-rising-card__body">
+                    <div className="wjc-draft-rising-card__title">
+                      {row.owner_team_abbr ? (
+                        <NhlOrgLogo abbr={row.owner_team_abbr} size={22} />
+                      ) : null}
+                      <strong>{safeText(row.name, "Unknown")}</strong>
+                    </div>
+                    <span className="wjc-draft-rising-card__meta">
+                      <FlagImg code={row.wjc_country} size={18} />
+                      <span>{abbrCode(row.wjc_country)}</span>
+                      <span>{safeText(row.position, "—")}</span>
+                      {row.age != null ? <span>Age {row.age}</span> : null}
+                      {row.junior_league ? <span>{row.junior_league}</span> : null}
+                    </span>
+                    <div className="wjc-draft-rising-card__story">
+                      {detail.reasons.map((line, i) => (
+                        <p key={i}>{line}</p>
+                      ))}
+                    </div>
+                    {detail.growth.length ? (
+                      <ul className="wjc-draft-rising-card__growth">
+                        {detail.growth.map((line, i) => (
+                          <li key={i} className="wjc-ops-text-pop tone-gold">{line}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                  <div className="wjc-draft-rising-card__metrics">
+                    <span className={`wjc-draft-rising-card__delta wjc-ops-num-pop wjc-ops-tabular ${tone}`}>
+                      {deltaText}
+                    </span>
+                    <span className="wjc-ops-num-pop tone-muted wjc-ops-tabular">
+                      #{row.stock_before ?? row.stock_rank_before ?? "—"}
+                      <i aria-hidden="true"> → </i>
+                      #{row.stock_after ?? row.stock_rank_after ?? "—"}
+                    </span>
+                    <span className="wjc-ops-num-pop tone-cyan wjc-ops-tabular">
+                      {intMetric(row.tournament_pts)} PTS · {intMetric(row.tournament_gp)} GP
+                    </span>
+                  </div>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+export function StatLeadersSidebar({ leaders, ownerByPlayerId = {}, layout = "rail" }) {
   const blocks = [
     { id: "pts", title: "Points", rows: asArray(leaders?.byPts), metric: "pts", label: "PTS" },
     { id: "g", title: "Goals", rows: asArray(leaders?.byGoals), metric: "g", label: "G" },
@@ -357,8 +486,14 @@ export function StatLeadersSidebar({ leaders }) {
   const [activeId, setActiveId] = useState("pts");
   const active = blocks.find((b) => b.id === activeId) || blocks[0];
 
+  const panelClass =
+    layout === "main"
+      ? "wjc-side-panel wjc-side-panel--leaders wjc-side-panel--leaders-main wjc-stats-mega"
+      : "wjc-side-panel wjc-side-panel--leaders";
+  const rowLimit = layout === "main" ? 15 : 10;
+
   return (
-    <aside className="wjc-side-panel wjc-side-panel--leaders" aria-label="Tournament leaders">
+    <aside className={panelClass} aria-label="Tournament leaders">
       <header className="wjc-side-panel__head">
         <span>Tournament Leaders</span>
         <em>{active.title}</em>
@@ -398,11 +533,15 @@ export function StatLeadersSidebar({ leaders }) {
                   </td>
                 </tr>
               ) : (
-                active.rows.slice(0, 10).map((row, i) => (
+                active.rows.slice(0, rowLimit).map((row, i) => (
                   <tr key={row.code || i}>
                     <td>{i + 1}</td>
                     <td>
-                      <FlagImg code={row.code} size={22} className="wjc-standings-table__flag" />
+                      <FlagImg
+                        code={row.code}
+                        size={layout === "main" ? 40 : 22}
+                        className="wjc-standings-table__flag"
+                      />
                     </td>
                     <td title={row.label || row.code}>{abbrCode(row.code)}</td>
                     <td>{row.w ?? 0}</td>
@@ -418,27 +557,41 @@ export function StatLeadersSidebar({ leaders }) {
             <thead>
               <tr>
                 <th>#</th>
+                <th aria-label="NHL team" />
                 <th>Player</th>
-                <th>Cty</th>
+                <th>Nation</th>
                 <th>{active.label}</th>
               </tr>
             </thead>
             <tbody>
               {active.rows.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="wjc-empty-inline">
+                  <td colSpan={5} className="wjc-empty-inline">
                     No stats yet
                   </td>
                 </tr>
               ) : (
-                active.rows.slice(0, 10).map((row, i) => {
+                active.rows.slice(0, rowLimit).map((row, i) => {
                   if (isWjcNpc(row)) return null;
+                  const owner = ownerByPlayerId[String(row.player_id || "")];
+                  const ownerAbbr = owner?.abbr || row.owner_team_abbr;
+                  const logoSize = layout === "main" ? 36 : 22;
+                  const flagSize = layout === "main" ? 36 : 20;
                   return (
                   <tr key={row.player_id || `${active.id}-${i}`}>
                     <td>{i + 1}</td>
-                    <td title={safeText(row.name)}>{safeText(row.name, "—")}</td>
-                    <td>{abbrCode(row.wjc_country)}</td>
-                    <td>
+                    <td className="wjc-mini-table__logo">
+                      <NhlOrgLogo abbr={ownerAbbr} size={logoSize} />
+                    </td>
+                    <td className="wjc-mini-table__player" title={safeText(row.name)}>
+                      {safeText(row.name, "—")}
+                    </td>
+                    <td className="wjc-mini-table__flag">
+                      <FlagImg code={row.wjc_country} size={flagSize} />
+                    </td>
+                    <td
+                      className={`wjc-mini-table__metric${active.goalies ? " is-text" : ""}`}
+                    >
                       {active.goalies
                         ? `${row.w ?? 0}-${row.l ?? 0} · ${row.sv ?? 0} SV (${((Number(row.sv_pct) || 0) * 100).toFixed(1)}%)`
                         : row[active.metric] ?? 0}

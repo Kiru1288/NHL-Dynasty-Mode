@@ -12835,27 +12835,50 @@ def _player_ovr01(p: Any) -> float:
     return float(ov)
 
 
-def _wjc_user_team_abbr(session: FranchiseSession) -> str:
-    ut = session.team_by_id.get(str(session.user_team_id))
-    if ut is None:
+def _wjc_team_abbr(team: Any) -> str:
+    if team is None:
         return ""
     for attr in ("abbreviation", "abbr"):
-        val = getattr(ut, attr, None)
+        val = getattr(team, attr, None)
         if val:
             return str(val).upper()[:8]
-    name = str(getattr(ut, "name", "") or "")
+    name = str(getattr(team, "name", "") or "")
     return name[:3].upper() if name else ""
 
 
-def _wjc_find_roster_player(session: FranchiseSession, player_id: str) -> Any:
-    pid = str(player_id or "")
+def _wjc_user_team_abbr(session: FranchiseSession) -> str:
     ut = session.team_by_id.get(str(session.user_team_id))
-    if ut is None:
+    return _wjc_team_abbr(ut)
+
+
+def _wjc_find_roster_player(
+    session: FranchiseSession,
+    player_id: str,
+    team_id: Optional[str] = None,
+) -> Any:
+    pid = str(player_id or "")
+    if not pid:
         return None
-    for roster_name in ("ahl_roster", "roster"):
-        for p in getattr(ut, roster_name, None) or []:
-            if str(getattr(p, "id", "") or "") == pid:
-                return p
+    team_ids: List[str] = []
+    if team_id:
+        team_ids = [str(team_id)]
+    else:
+        team_ids = [str(session.user_team_id)]
+    for tid in team_ids:
+        ut = session.team_by_id.get(str(tid))
+        if ut is None:
+            continue
+        for roster_name in ("ahl_roster", "roster"):
+            for p in getattr(ut, roster_name, None) or []:
+                if str(getattr(p, "id", "") or "") == pid:
+                    return p
+    if team_id:
+        return None
+    for ut in (session.team_by_id or {}).values():
+        for roster_name in ("ahl_roster", "roster"):
+            for p in getattr(ut, roster_name, None) or []:
+                if str(getattr(p, "id", "") or "") == pid:
+                    return p
     return None
 
 
@@ -12868,7 +12891,8 @@ def _wjc_enrich_prospect_row(
 ) -> Dict[str, Any]:
     pid = str(row.get("player_id") or "")
     entry = by_key.get(pid)
-    player = _wjc_find_roster_player(session, pid)
+    owner_tid = str(row.get("owner_team_id") or session.user_team_id or "")
+    player = _wjc_find_roster_player(session, pid, owner_tid or None)
     try:
         before_rank = int(row.get("stock_rank_before")) if row.get("stock_rank_before") is not None else None
     except (TypeError, ValueError):
@@ -12901,7 +12925,15 @@ def _wjc_enrich_prospect_row(
                 "scouting_confidence": entry.get("scouting_confidence"),
             }
         )
-    elif bool(row.get("is_user_prospect")):
+    elif bool(row.get("is_user_prospect")) or str(row.get("prospect_classification") or "") == "drafted_user":
+        owner_abbr = str(row.get("owner_team_abbr") or ut_abbr or "YOU")
+        ovr99 = round(float(ovr01) * 99.0, 1)
+        pot99 = ovr99
+        if player is not None:
+            try:
+                pot99 = round(float(_draft_potential99(player, ovr99)), 1)
+            except Exception:
+                pot99 = ovr99
         row.update(
             {
                 "draft_prospect_id": None,
@@ -12909,9 +12941,12 @@ def _wjc_enrich_prospect_row(
                 "stock_rank_before": None,
                 "stock_rank_after": None,
                 "stock_delta": None,
-                "owner_team_abbr": ut_abbr or "YOU",
+                "owner_team_abbr": owner_abbr,
                 "position": pos,
                 "ovr": ovr01,
+                "overall": ovr99,
+                "potential": pot99,
+                "potential_score": pot99,
             }
         )
     return row
@@ -13432,13 +13467,21 @@ def _wjc_sync_stock_display_after_persist(
     return out
 
 
-def _collect_user_wjc_prospects(session: FranchiseSession, rng: random.Random) -> List[Dict[str, Any]]:
-    """U20 on your AHL affiliate, plus NHL U20 only if the user loaned them to their WJC country."""
+def _collect_team_wjc_nhl_prospects(
+    session: FranchiseSession,
+    rng: random.Random,
+    team: Any,
+    *,
+    include_cuts: bool,
+) -> List[Dict[str, Any]]:
+    """U20 on an NHL org's AHL affiliate, plus NHL U20 loans (user org only)."""
     out: List[Dict[str, Any]] = []
-    ut = session.team_by_id.get(str(session.user_team_id))
-    if ut is None:
+    if team is None:
         return out
-    loans = getattr(session, "wjc_nhl_u20_loan", None) or {}
+    tid = str(getattr(team, "id", "") or "")
+    is_user_org = tid == str(session.user_team_id)
+    owner_abbr = _wjc_team_abbr(team)
+    loans = getattr(session, "wjc_nhl_u20_loan", None) or {} if is_user_org else {}
     sy = int(session.season_calendar_year)
     cutoff = _wjc_eligibility_cutoff(sy)
 
@@ -13464,6 +13507,8 @@ def _collect_user_wjc_prospects(session: FranchiseSession, rng: random.Random) -
             if made
             else f"Released from {lab} U20 national camp before the tournament."
         )
+        if not include_cuts and not made:
+            return
         out.append(
             {
                 "player_id": pid,
@@ -13475,25 +13520,37 @@ def _collect_user_wjc_prospects(session: FranchiseSession, rng: random.Random) -
                 "made_wjc_team": made,
                 "note": note,
                 "roster": roster,
+                "owner_team_id": tid,
+                "owner_team_abbr": owner_abbr,
+                "is_user_org": is_user_org,
             }
         )
 
-    ahl = list(getattr(ut, "ahl_roster", None) or [])
+    ahl = list(getattr(team, "ahl_roster", None) or [])
     for idx, p in enumerate(sorted(ahl, key=lambda x: -_player_ovr01(x))):
         _row(p, roster="AHL", depth_rank=idx)
 
-    nhl_loaned = [
-        p
-        for p in getattr(ut, "roster", None) or []
-        if _wjc_loan_mode_active(loans, str(getattr(p, "id", "") or ""))
-    ]
-    for idx, p in enumerate(sorted(nhl_loaned, key=lambda x: -_player_ovr01(x))):
-        mode = loans.get(str(getattr(p, "id", "") or ""))
-        roster_label = "NHL (loaned)" if mode in (True, "full", "loan") else "NHL (RR only)"
-        _row(p, roster=roster_label, depth_rank=idx)
+    if is_user_org:
+        nhl_loaned = [
+            p
+            for p in getattr(team, "roster", None) or []
+            if _wjc_loan_mode_active(loans, str(getattr(p, "id", "") or ""))
+        ]
+        for idx, p in enumerate(sorted(nhl_loaned, key=lambda x: -_player_ovr01(x))):
+            mode = loans.get(str(getattr(p, "id", "") or ""))
+            roster_label = "NHL (loaned)" if mode in (True, "full", "loan") else "NHL (RR only)"
+            _row(p, roster=roster_label, depth_rank=idx)
 
     out.sort(key=lambda x: (-int(x.get("made_wjc_team") or 0), str(x.get("roster") or ""), str(x.get("name") or "")))
     return out
+
+
+def _collect_user_wjc_prospects(session: FranchiseSession, rng: random.Random) -> List[Dict[str, Any]]:
+    """U20 on your AHL affiliate, plus NHL U20 only if the user loaned them to their WJC country."""
+    ut = session.team_by_id.get(str(session.user_team_id))
+    if ut is None:
+        return []
+    return _collect_team_wjc_nhl_prospects(session, rng, ut, include_cuts=True)
 
 
 def _rr_standings_from_slice(codes: List[str], label_by: Dict[str, str], rr_slice: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -13797,31 +13854,36 @@ def _collect_wjc_tournament_prospects(
     }
     ut_abbr = _wjc_user_team_abbr(session)
 
-    for p in _collect_user_wjc_prospects(session, rng):
-        if not p.get("made_wjc_team"):
-            continue
-        c = str(p.get("wjc_country") or "")
-        if c not in by_code:
-            continue
-        pid = str(p.get("player_id") or "")
-        if not pid or pid in seen_ids:
-            continue
-        seen_ids.add(pid)
-        row = {
-            "player_id": pid,
-            "name": str(p.get("name") or "?"),
-            "wjc_country": c,
-            "wjc_country_label": str(p.get("wjc_country_label") or label_by.get(c, c)),
-            "position": "F",
-            "age": int(p.get("age") or 19),
-            "nationality": str(p.get("nationality") or ""),
-            "is_user_prospect": True,
-            "roster": str(p.get("roster") or ""),
-            "wjc_loan_mode": (getattr(session, "wjc_nhl_u20_loan", None) or {}).get(pid) or "",
-        }
-        row = _wjc_enrich_prospect_row(session, row, by_key, rank_by_key, ut_abbr)
-        by_code[c].append(row)
-        all_rows.append(row)
+    for tm in (session.team_by_id or {}).values():
+        team_abbr = _wjc_team_abbr(tm)
+        is_user_org = str(getattr(tm, "id", "") or "") == str(session.user_team_id)
+        for p in _collect_team_wjc_nhl_prospects(session, rng, tm, include_cuts=False):
+            if not p.get("made_wjc_team"):
+                continue
+            c = str(p.get("wjc_country") or "")
+            if c not in by_code:
+                continue
+            pid = str(p.get("player_id") or "")
+            if not pid or pid in seen_ids:
+                continue
+            seen_ids.add(pid)
+            row = {
+                "player_id": pid,
+                "name": str(p.get("name") or "?"),
+                "wjc_country": c,
+                "wjc_country_label": str(p.get("wjc_country_label") or label_by.get(c, c)),
+                "position": "F",
+                "age": int(p.get("age") or 19),
+                "nationality": str(p.get("nationality") or ""),
+                "is_user_prospect": is_user_org,
+                "owner_team_id": str(p.get("owner_team_id") or getattr(tm, "id", "") or ""),
+                "owner_team_abbr": str(p.get("owner_team_abbr") or team_abbr or ""),
+                "roster": str(p.get("roster") or ""),
+                "wjc_loan_mode": (getattr(session, "wjc_nhl_u20_loan", None) or {}).get(pid) or "",
+            }
+            row = _wjc_enrich_prospect_row(session, row, by_key, rank_by_key, team_abbr or ut_abbr)
+            by_code[c].append(row)
+            all_rows.append(row)
 
     sy = int(session.season_calendar_year)
     cutoff = _wjc_eligibility_cutoff(sy)
