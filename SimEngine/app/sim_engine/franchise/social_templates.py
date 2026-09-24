@@ -1279,6 +1279,14 @@ REDDIT_THREAD_TEMPLATES: List[RedditTemplate] = [
 # Utility: render a template with context
 # ---------------------------------------------------------------------------
 
+def _has_value(ctx: Dict[str, Any], key: str) -> bool:
+    """True when the context really has this value. 0 is a real value; None / "" are missing."""
+    if key not in ctx:
+        return False
+    v = ctx[key]
+    return v is not None and str(v).strip() != ""
+
+
 def render_template(template: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[str]:
     """
     Fill all {placeholder} tokens using ctx.
@@ -1286,16 +1294,20 @@ def render_template(template: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[s
     """
     requires: List[str] = list(template.get("requires") or [])
     for key in requires:
-        if not ctx.get(key):
+        if not _has_value(ctx, key):
             return None
 
     source = template.get("text") or template.get("title") or ""
     body   = template.get("body", "")
 
+    # Every {placeholder} must resolve. A missing one used to be left in the text as a literal
+    # "{key}" (or, elsewhere, silently rendered empty); now the template is simply not used.
+    needed = set(re.findall(r"\{(\w+)\}", f"{source} {body}"))
+    if any(not _has_value(ctx, key) for key in needed):
+        return None
+
     def _fill(s: str) -> str:
-        def replacer(m: re.Match) -> str:
-            return str(ctx.get(m.group(1), m.group(0)))
-        return re.sub(r"\{(\w+)\}", replacer, s)
+        return re.sub(r"\{(\w+)\}", lambda m: str(ctx[m.group(1)]), s)
 
     if body:
         return f"{_fill(source)}\n\n{_fill(body)}"
@@ -1339,7 +1351,7 @@ def filter_templates(
         if angle and not _angle_matches(row, angle):
             continue
         requires: List[str] = list(row.get("requires") or [])
-        if any(not ctx.get(k) for k in requires):
+        if any(not _has_value(ctx, k) for k in requires):
             continue
         out.append(row)
 

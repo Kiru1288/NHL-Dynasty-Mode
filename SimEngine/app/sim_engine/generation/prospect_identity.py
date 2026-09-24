@@ -19,16 +19,31 @@ def _pos_key(position: Any) -> str:
     return "F"
 
 
+# (rating key, patterns) -> whether the key belongs to that pattern group. Rating keys come
+# from a fixed schema, so this replaces a substring scan per key on every call.
+_KEY_PATTERN_MATCH: Dict[Tuple[str, Tuple[str, ...]], bool] = {}
+
+
+def _key_in_patterns(key: Any, patterns: Tuple[str, ...]) -> bool:
+    ks = str(key)
+    ck = (ks, patterns)
+    hit = _KEY_PATTERN_MATCH.get(ck)
+    if hit is None:
+        if len(_KEY_PATTERN_MATCH) > 20000:
+            _KEY_PATTERN_MATCH.clear()
+        kl = ks.lower()
+        hit = (not ks.startswith("_")) and any(p in kl for p in patterns)
+        _KEY_PATTERN_MATCH[ck] = hit
+    return hit
+
+
 def _rating_avg(player: Any, patterns: Tuple[str, ...]) -> float:
     ratings = getattr(player, "ratings", None) or {}
     if not isinstance(ratings, dict):
         return 50.0
     vals = []
     for key, val in ratings.items():
-        if str(key).startswith("_"):
-            continue
-        kl = str(key).lower()
-        if any(p in kl for p in patterns):
+        if _key_in_patterns(key, patterns):
             try:
                 vals.append(float(val))
             except (TypeError, ValueError):

@@ -383,7 +383,7 @@ def _franchise_enqueue_critical_notice(
         },
     )
 def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -> None:
-    """Waivers / trades / call-ups (SimEngine helpers) before the day's games ΓÇö mutates league rosters."""
+    """Waivers / trades / call-ups (SimEngine helpers) before the day's games — mutates league rosters."""
     if int(getattr(session, "_last_socio_tick_idx", -99)) == int(calendar_idx):
         return
     sim = session.sim
@@ -745,7 +745,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         gs = f"{hg}-{ag}"
         if ot:
             gs += " OT"
-        user_line = f"{wl} vs {_display_team(opp)} ({gs}) ΓÇö calendar day {d}"
+        user_line = f"{wl} vs {_display_team(opp)} ({gs}) — calendar day {d}"
 
     try:
         from app.sim_engine.franchise.storyline_stat_bridge import (  # noqa: WPS433
@@ -918,7 +918,7 @@ def _finalize_regular_calendar_day(
         tail = len(league_lines) - len(bits)
         slate = " ┬╖ ".join(bits)
         if tail > 0:
-            slate += f" ΓÇª +{tail} more"
+            slate += f" … +{tail} more"
         session.timeline.append(f"League: {slate}")
     for ln in user_lines[:6]:
         session.timeline.append(ln)
@@ -1201,7 +1201,7 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
         "pending_decisions": _pending_decision_snapshot(session),
     }
 def advance_franchise_one_game(session: FranchiseSession) -> Dict[str, Any]:
-    """One real NHL calendar day (same as advance day ΓÇö game-by-game calendar progression removed)."""
+    """One real NHL calendar day (same as advance day — game-by-game calendar progression removed)."""
     return advance_franchise_day(session)
 def advance_franchise_bulk(
     session: FranchiseSession,

@@ -507,6 +507,39 @@ def _key_matches_any(key: str, patterns: Tuple[str, ...]) -> bool:
     return any(p in kl for p in patterns)
 
 
+# Pattern groups → relative weight (group order matters: weights are summed in this order).
+_GROWTH_PATTERN_GROUPS: Dict[str, Tuple[str, ...]] = {
+    "shooting": ("shot", "shoot", "accuracy", "wrist", "slap", "release"),
+    "passing": ("pass", "vision", "playmak"),
+    "off_aware": ("offensive_aware", "off_aware", "offense_iq", "creativity"),
+    "puck": ("puck_control", "handling", "deke", "dangle"),
+    "physical": ("strength", "balance", "physical", "body", "fight", "hit"),
+    "defense": ("defensive_aware", "def_aware", "stick_check", "block", "poke"),
+    "skating": ("speed", "accel", "skating", "agility", "edge"),
+    "faceoff": ("faceoff", "draw"),
+    "stamina": ("stamina", "endurance", "condition"),
+    "discipline": ("disciplin", "penalty"),
+    "consistency": ("consist", "poise", "clutch", "pressure"),
+    "iq": ("iq", "awareness", "anticipation", "read"),
+    "glove": ("glove", "catch"),
+    "blocker": ("blocker", "pad"),
+    "rebound": ("rebound", "recovery"),
+    "positioning": ("position", "angle", "depth"),
+}
+
+# rating key -> matching group names, in _GROWTH_PATTERN_GROUPS order. Keys come from a
+# fixed schema, so this stays small; it replaces ~16 substring scans per key per call.
+_GROWTH_KEY_GROUPS_CACHE: Dict[str, Tuple[str, ...]] = {}
+
+
+def _growth_key_groups(key: str) -> Tuple[str, ...]:
+    hit = _GROWTH_KEY_GROUPS_CACHE.get(key)
+    if hit is None:
+        hit = tuple(g for g, pats in _GROWTH_PATTERN_GROUPS.items() if _key_matches_any(key, pats))
+        _GROWTH_KEY_GROUPS_CACHE[key] = hit
+    return hit
+
+
 def _playstyle_bucket(player: Any) -> str:
     style = str(
         getattr(player, "playstyle", "")
@@ -539,26 +572,6 @@ def distribute_growth_by_player_type(
     style = _playstyle_bucket(player)
     goalie = _is_goalie(player)
     defense = _is_defense(player)
-
-    # Pattern groups → relative weight
-    groups: Dict[str, Tuple[str, ...]] = {
-        "shooting": ("shot", "shoot", "accuracy", "wrist", "slap", "release"),
-        "passing": ("pass", "vision", "playmak"),
-        "off_aware": ("offensive_aware", "off_aware", "offense_iq", "creativity"),
-        "puck": ("puck_control", "handling", "deke", "dangle"),
-        "physical": ("strength", "balance", "physical", "body", "fight", "hit"),
-        "defense": ("defensive_aware", "def_aware", "stick_check", "block", "poke"),
-        "skating": ("speed", "accel", "skating", "agility", "edge"),
-        "faceoff": ("faceoff", "draw"),
-        "stamina": ("stamina", "endurance", "condition"),
-        "discipline": ("disciplin", "penalty"),
-        "consistency": ("consist", "poise", "clutch", "pressure"),
-        "iq": ("iq", "awareness", "anticipation", "read"),
-        "glove": ("glove", "catch"),
-        "blocker": ("blocker", "pad"),
-        "rebound": ("rebound", "recovery"),
-        "positioning": ("position", "angle", "depth"),
-    }
 
     # Style → group weights (higher = more growth share). Archetype beats position bucket.
     weight_map: Dict[str, float] = {}
@@ -607,9 +620,8 @@ def distribute_growth_by_player_type(
     key_weights: Dict[str, float] = {}
     for k in ratings.keys():
         w = 0.35  # baseline so every attribute gets some growth
-        for group, patterns in groups.items():
-            if _key_matches_any(k, patterns):
-                w += weight_map.get(group, 0.65)
+        for group in _growth_key_groups(k):
+            w += weight_map.get(group, 0.65)
         key_weights[k] = w
 
     total_w = sum(key_weights.values()) or 1.0

@@ -37,16 +37,29 @@ import time
 DEBUG_STATS_PIPELINE: bool = False
 
 
+# Read once at import: this is checked on every ledger credit (thousands per game).
+_ENV_DEBUG_STATS_PIPELINE: bool = os.environ.get("NHL_DEBUG_STATS_PIPELINE", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
+
 def _stats_pipeline_debug() -> bool:
-    return bool(DEBUG_STATS_PIPELINE) or os.environ.get("NHL_DEBUG_STATS_PIPELINE", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
+    return bool(DEBUG_STATS_PIPELINE) or _ENV_DEBUG_STATS_PIPELINE
 
 
 _GM_FLOAT_LEDGER_KEYS = frozenset(
     {"cf", "ca", "ff", "fa", "xgf", "xga", "ixg", "xa", "gf_on", "ga_on", "xgf_pct_sum", "on_ice_shots_for", "on_ice_shots_against", "goalie_xga"}
+)
+_GM_INT_MERGE_LEDGER_KEYS = frozenset(
+    {
+        "gp", "g", "a", "pts", "sog", "pp_sog", "pim", "hit", "blk", "toi_sec",
+        "ev_toi_sec", "pp_toi_sec", "pk_toi_sec",
+        "ppg", "ppa", "shg", "sha", "ga", "w", "l", "otl", "saves", "shots_against",
+        "goalie_shots_against", "goalie_ga", "so", "missed_shots", "blocked_attempts_for",
+        "analytics_gp", "primary_assists", "secondary_assists", "xgf_pct_gp",
+    }
 )
 
 _SKATER_LEDGER_ANALYTICS_KEYS = (
@@ -4435,10 +4448,11 @@ def _system_archetype_line_bonus(team: Any, styles: List[str]) -> float:
     return min(0.09, b)
 
 
-def calculate_line_chemistry(line: List[Any], team: Any = None) -> float:
+def calculate_line_chemistry(line: List[Any], team: Any = None, pair_memo: Optional[Dict[Any, Any]] = None) -> float:
     """
     Synergy-based chemistry for forward trios or D pairs (0–1).
     Prefer canonical systems.chemistry scores when available.
+    ``pair_memo`` lets a search loop reuse pair scores across candidate lines.
     """
     if not line:
         return 0.5
@@ -4449,10 +4463,13 @@ def calculate_line_chemistry(line: List[Any], team: Any = None) -> float:
         )
 
         pos = [_player_position_label(p) for p in line]
+        chem_ctx: Dict[str, Any] = {"team": team}
+        if pair_memo is not None:
+            chem_ctx["_pair_memo"] = pair_memo
         if len(line) >= 2 and all(x == "D" for x in pos):
-            score100 = float(calculate_defense_pair_chemistry(line, context={"team": team}).get("chemistry", 50))
+            score100 = float(calculate_defense_pair_chemistry(line, context=chem_ctx).get("chemistry", 50))
         else:
-            score100 = float(calculate_forward_line_chemistry(line, context={"team": team}).get("chemistry", 50))
+            score100 = float(calculate_forward_line_chemistry(line, context=chem_ctx).get("chemistry", 50))
         return clamp(score100 / 100.0, 0.26, 0.91)
     except Exception:
         pass
@@ -4629,11 +4646,13 @@ def _best_forward_triplet(team: Any, pool: List[Any], league: Any) -> List[Any]:
     n = len(top)
     best: Optional[List[Any]] = None
     best_score = -1e9
+    # 165 candidate trios share only 55 player pairings; score each pairing once.
+    pair_memo: Dict[Any, Any] = {}
     for i in range(n):
         for j in range(i + 1, n):
             for k in range(j + 1, n):
                 tri = [top[i], top[j], top[k]]
-                chem = calculate_line_chemistry(tri, team)
+                chem = calculate_line_chemistry(tri, team, pair_memo=pair_memo)
                 ovr = _player_ovr01(tri[0]) + _player_ovr01(tri[1]) + _player_ovr01(tri[2])
                 score = chem * 1.22 + ovr * 0.11
                 if score > best_score:
@@ -10764,6 +10783,17 @@ class SimEngine:
         Uses weighted top-end roster talent so top-line clubs create more offense.
         Optional skaters_subset limits the pool (e.g. injury-eligible players only).
         """
+        scope = getattr(self, "_gm_game_scope", None)
+        if skaters_subset is None and scope is not None:
+            cached = scope["team_offense"].get(id(team))
+            if cached is not None and cached[0] is team:
+                return cached[1]
+            val = self._team_offense_skill_uncached(team, None)
+            scope["team_offense"][id(team)] = (team, val)
+            return val
+        return self._team_offense_skill_uncached(team, skaters_subset)
+
+    def _team_offense_skill_uncached(self, team: Any, skaters_subset: Optional[List[Any]]) -> float:
         if skaters_subset is not None:
             roster = [p for p in skaters_subset if not getattr(p, "retired", False)]
         else:
@@ -10855,6 +10885,19 @@ class SimEngine:
         tid = str(team_id or "")
         if not pid or not tid:
             return True
+        scope = getattr(self, "_gm_game_scope", None)
+        if scope is not None:
+            # Rosters cannot change mid-game: resolve each club's roster ids once per game.
+            credited = scope["credited"]
+            if tid not in credited:
+                roster_ids = None
+                for tm in getattr(self.league, "teams", None) or []:
+                    if str(getattr(tm, "team_id", None) or getattr(tm, "id", "") or "") == tid:
+                        roster_ids = {_id_str(cand, "id") for cand in (getattr(tm, "roster", None) or [])}
+                        break
+                credited[tid] = roster_ids
+            roster_ids = credited[tid]
+            return True if roster_ids is None else pid in roster_ids
         teams = list(getattr(self.league, "teams", None) or [])
         if not teams:
             return True
@@ -11089,8 +11132,30 @@ class SimEngine:
     def _gm_rating_avg(self, p: Any, keys: List[str], default: float = None) -> float:
         if default is None:
             default = float(DEFAULT_NHL_RATING)
+        scope = getattr(self, "_gm_game_scope", None)
+        if scope is not None:
+            # Ratings are fixed for the length of a game; the event loop asks for the
+            # same averages thousands of times.
+            ck = (id(p), tuple(keys), default)
+            cached = scope["rating_avg"].get(ck)
+            if cached is not None and cached[0] is p:
+                return cached[1]
         vals = [self._gm_rating_lookup(p, k, default=default) for k in keys]
-        return sum(vals) / max(1, len(vals))
+        avg = sum(vals) / max(1, len(vals))
+        if scope is not None:
+            scope["rating_avg"][ck] = (p, avg)
+        return avg
+
+    def _gm_begin_game_scope(self) -> bool:
+        """Open a per-game memo scope; returns True when this caller owns it."""
+        if getattr(self, "_gm_game_scope", None) is not None:
+            return False
+        self._gm_game_scope = {"credited": {}, "rating_avg": {}, "team_offense": {}}
+        return True
+
+    def _gm_end_game_scope(self, owned: bool) -> None:
+        if owned:
+            self._gm_game_scope = None
 
     def _gm_player_type_str(self, p: Any) -> str:
         pt = getattr(p, "player_type", None) or getattr(p, "archetype", None) or ""
@@ -13111,7 +13176,14 @@ class SimEngine:
                 out.append(self._gm_pick_weighted(rng, pool2, _secondary_w, temperature=1.20, weight_floor=0.04))
         return out[:2]
 
-    def _run_event_driven_game(
+    def _run_event_driven_game(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        owned = self._gm_begin_game_scope()
+        try:
+            return self._run_event_driven_game_impl(*args, **kwargs)
+        finally:
+            self._gm_end_game_scope(owned)
+
+    def _run_event_driven_game_impl(
         self,
         rng: random.Random,
         home: Any,
@@ -14126,7 +14198,14 @@ class SimEngine:
         ratio = len(active) / max(9.0, float(len(all_sk)))
         return max(0.87, min(1.0, 0.88 + 0.14 * ratio))
 
-    def _accumulate_light_strength_game_stats(
+    def _accumulate_light_strength_game_stats(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        owned = self._gm_begin_game_scope()
+        try:
+            return self._accumulate_light_strength_game_stats_impl(*args, **kwargs)
+        finally:
+            self._gm_end_game_scope(owned)
+
+    def _accumulate_light_strength_game_stats_impl(
         self,
         rng: random.Random,
         home: Any,
@@ -15314,13 +15393,7 @@ class SimEngine:
             for k, v in row.items():
                 if k in _GM_FLOAT_LEDGER_KEYS:
                     dst[k] = round(float(dst.get(k, 0) or 0) + float(v or 0), 4)
-                elif k in (
-                    "gp", "g", "a", "pts", "sog", "pp_sog", "pim", "hit", "blk", "toi_sec",
-                    "ev_toi_sec", "pp_toi_sec", "pk_toi_sec",
-                    "ppg", "ppa", "shg", "sha", "ga", "w", "l", "otl", "saves", "shots_against",
-                    "goalie_shots_against", "goalie_ga", "so", "missed_shots", "blocked_attempts_for",
-                    "analytics_gp", "primary_assists", "secondary_assists", "xgf_pct_gp",
-                ):
+                elif k in _GM_INT_MERGE_LEDGER_KEYS:
                     dst[k] = int(dst.get(k, 0) or 0) + int(v or 0)
                 elif k not in dst or dst[k] in (None, "", 0, 0.0):
                     dst[k] = v

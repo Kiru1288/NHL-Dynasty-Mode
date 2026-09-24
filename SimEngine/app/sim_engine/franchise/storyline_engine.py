@@ -13,7 +13,7 @@ import os
 import random
 import re
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.sim_engine.franchise.storyline_copy import (
     classify_story_lane,
@@ -81,6 +81,43 @@ def _expected_points_per_game(ovr: float, pos: str, age: int, is_rookie: bool) -
 
 def _expected_save_pct(ovr: float) -> float:
     return round(0.870 + (ovr - 70.0) * 0.0018, 3)
+
+
+_EVIDENCE_LABELS = (
+    ("games_played", "Games played", "{v}"),
+    ("points", "Points", "{v}"),
+    ("goals", "Goals", "{v}"),
+    ("points_per_game", "Points per game", "{v:.2f}"),
+    ("expected_points", "Expected points", "{v:.1f}"),
+    ("save_pct", "Save %", "{v:.3f}"),
+    ("expected_save_pct", "Expected save %", "{v:.3f}"),
+    ("gaa", "GAA", "{v:.2f}"),
+    ("team_record", "Team record", "{v}"),
+    ("streak", "Streak", "{v} straight"),
+    ("league_rank", "League rank", "{v}"),
+    ("cap_hit", "Cap hit", "${v:.2f}M"),
+    ("years_remaining", "Years remaining", "{v}"),
+    ("previous_rank", "Previous rank", "{v}"),
+    ("current_rank", "Current rank", "{v}"),
+    ("games_out", "Games out", "{v}"),
+)
+
+
+def _evidence_reason_lines(evidence: Any) -> List[Dict[str, Any]]:
+    """Real numbers from the evidence dict as trigger-reason rows (skips anything absent)."""
+    if not isinstance(evidence, dict) or not evidence:
+        return []
+    out: List[Dict[str, Any]] = []
+    for key, label, fmt in _EVIDENCE_LABELS:
+        v = evidence.get(key)
+        if v is None or v == "":
+            continue
+        try:
+            shown = fmt.format(v=float(v) if any(t in fmt for t in (":.1f", ":.2f", ":.3f")) else v)
+        except (TypeError, ValueError):
+            continue
+        out.append({"code": f"ev_{key}", "label": label, "value": shown})
+    return out
 
 
 def _storyline_id(stable_key: str) -> str:
@@ -413,6 +450,14 @@ def _u_enqueue_story_impact_popup(
         "team_id": tid,
         "player_id": str(storyline.get("player_id") or ""),
         "player_name": str(storyline.get("player_name") or ""),
+        "player_position": storyline.get("player_position"),
+        "player_overall": storyline.get("player_overall"),
+        "team_name": storyline.get("team_name"),
+        # The numbers behind the story (previously dropped, so a slump popup could not show them).
+        "evidence": dict(storyline.get("evidence") or {}),
+        "trigger_reason": str(storyline.get("trigger_reason") or ""),
+        "trigger_reasons": list(storyline.get("trigger_reasons") or []),
+        "cause": str(storyline.get("cause") or ""),
         "calendar_day": day,
         "calendar_iso": iso,
         "severity": impact.get("severity") or storyline.get("severity") or "minor",
@@ -540,17 +585,42 @@ def _player_age(player: Any) -> int:
 
 
 def _cap_hit_m(player: Any) -> float:
-    c = getattr(player, "contract", None)
-    if c is None:
+    """Cap hit in $M from the canonical cap engine (handles dict and object contracts).
+
+    The old version read three attributes off the contract with getattr(), which returned 0 for
+    every rostered player, so cap-driven stories (contract pressure) could never fire.
+    """
+    try:
+        from app.sim_engine.economy.cap_engine import player_cap_hit_millions  # noqa: WPS433
+
+        return float(player_cap_hit_millions(player) or 0.0)
+    except Exception:
         return 0.0
-    for attr in ("cap_hit_m", "aav_m", "salary_m"):
-        try:
-            v = float(getattr(c, attr, 0) or 0)
-            if v > 0:
-                return v
-        except (TypeError, ValueError):
-            pass
-    return 0.0
+
+
+def _contract_years_left(player: Any) -> Optional[int]:
+    """Years remaining on the contract, or None when it cannot be read (never a made-up 99)."""
+    if player is None:
+        return None
+    contract = getattr(player, "contract", None)
+
+    def _read(obj: Any, key: str) -> Any:
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    for key in ("years_remaining", "years_left", "term_years", "years"):
+        for src in (contract, player):
+            raw = _read(src, key)
+            if raw is None or raw == "":
+                continue
+            try:
+                return max(0, int(float(raw)))
+            except (TypeError, ValueError):
+                continue
+    return None
 
 
 def _apply_storyline_effects(session: Any, team_id: str, player_id: str, effects: Dict[str, Any]) -> None:
@@ -701,6 +771,8 @@ def _build_storyline(
         "surprise_team": "WINNING_STREAK",
         "contender_collapse": "LOSING_STREAK",
         "playoff_race": "WINNING_CONCERN",
+        "prospect_rising": "PROSPECT_RISING",
+        "prospect_falling": "PROSPECT_FALLING",
     }
     cause_type = cause_type_map.get(str(stype), "")
     lane = classify_story_lane(
@@ -770,6 +842,13 @@ def _build_storyline(
         row["trigger_context"] = trigger_context
         row["trigger_reason"] = str(trigger_context.get("reason_text") or "")
         row["trigger_reasons"] = list(trigger_context.get("reason_lines") or [])
+    ev_lines = _evidence_reason_lines(evidence)
+    if ev_lines:
+        # Always show the concrete numbers behind the story, whatever the rule engine produced.
+        known = {str(r.get("code")) for r in row.get("trigger_reasons") or [] if isinstance(r, dict)}
+        row["trigger_reasons"] = list(row.get("trigger_reasons") or []) + [
+            r for r in ev_lines if r["code"] not in known
+        ]
     return row
 
 
@@ -800,6 +879,37 @@ def _team_games_played(session: Any, team_id: str) -> int:
     return w + l + o
 
 
+def _team_current_streak(session: Any, team_id: str) -> Tuple[str, int]:
+    """Verified current streak from completed game results: ("W" | "L" | "", length).
+
+    A loss is any non-win (regulation or overtime). Returns ("", 0) when the club has no
+    completed game on record — callers must not print a streak length in that case.
+    """
+    tid = str(team_id)
+    kind = ""
+    n = 0
+    for box in reversed(list(getattr(session, "game_results", None) or [])):
+        if not isinstance(box, dict):
+            continue
+        hid = str(box.get("home_id") or "")
+        aid = str(box.get("away_id") or "")
+        if tid not in (hid, aid):
+            continue
+        try:
+            hg = int(box.get("home_goals", box.get("home_score")))
+            ag = int(box.get("away_goals", box.get("away_score")))
+        except (TypeError, ValueError):
+            continue
+        won = (hg > ag) if tid == hid else (ag > hg)
+        k = "W" if won else "L"
+        if not kind:
+            kind = k
+        elif k != kind:
+            break
+        n += 1
+    return kind, n
+
+
 def _underperform_actions() -> List[Dict[str, Any]]:
     return [
         {"id": "back_publicly", "label": "Publicly back the player", "effects": {"player_confidence": 3, "media_pressure": -1, "fan_confidence": -1}, "effect_summary": "Confidence +3 · Media -1"},
@@ -823,6 +933,30 @@ def _goalie_meltdown_actions() -> List[Dict[str, Any]]:
         {"id": "another_chance", "label": "Give starter another chance", "effects": {"goalie_confidence": 2, "media_pressure": 2}, "effect_summary": "Confidence +2 · Media +2"},
         {"id": "call_up_ahl", "label": "Call up AHL goalie", "effects": {"depth_pressure": 1, "room_tension": 1}, "effect_summary": "Depth pressure +1"},
     ]
+
+
+def _prospect_position(player: Any) -> str:
+    ident = getattr(player, "identity", None)
+    pos = getattr(ident, "position", None) if ident is not None else None
+    if pos is None:
+        pos = getattr(player, "position", None)
+    raw = str(getattr(pos, "value", pos) or "").strip().upper()
+    return raw.split(".")[-1] or "F"
+
+
+def _draft_prospect_index(session: Any) -> Dict[str, Dict[str, Any]]:
+    """player id -> {player, league, club} for every development-league player."""
+    out: Dict[str, Dict[str, Any]] = {}
+    league = getattr(getattr(session, "sim", None), "league", None)
+    for block in getattr(league, "development_leagues", None) or []:
+        title = str(block.get("league_name") or block.get("league_code") or "")
+        for tm in block.get("teams") or []:
+            club = str(tm.get("name") or "")
+            for p in tm.get("players") or []:
+                pid = str(getattr(p, "id", "") or "")
+                if pid:
+                    out[pid] = {"player": p, "league": title, "club": club}
+    return out
 
 
 def run_data_storyline_pass(
@@ -1001,18 +1135,11 @@ def run_data_storyline_pass(
         if ovr >= 86 and gp >= SKATER_GP_MAJOR and pts >= 14:
             rank = int(rank_by_team.get(tid, len(rank_by_team) or 16))
             if rank >= 20 and ppg >= 0.85:
-                years_left = 99
-                pl = player_by_id.get(str(pid))
-                if pl is not None:
-                    contract = getattr(pl, "contract", None)
-                    try:
-                        years_left = int(getattr(contract, "years_remaining", None) or getattr(contract, "years", 99) or 99)
-                    except (TypeError, ValueError):
-                        years_left = 99
+                years_left = _contract_years_left(player_by_id.get(str(pid)))
                 carry_ctx = story_ctx(
                     **ctx,
                     league_rank=rank,
-                    contract_year=years_left <= 1,
+                    contract_year=(years_left <= 1) if years_left is not None else None,
                     pp_pts=_stat_int(row, "pp_pts", "pp_points"),
                 )
                 try_emit(
@@ -1032,7 +1159,13 @@ def run_data_storyline_pass(
                     player_name=pname,
                     player_position=pos,
                     player_overall=round(ovr, 1),
-                    evidence={"points": pts, "games_played": gp, "team_record": trec, "league_rank": rank, "contract_year": years_left <= 1},
+                    evidence={
+                        "points": pts,
+                        "games_played": gp,
+                        "team_record": trec,
+                        "league_rank": rank,
+                        **({"contract_year": years_left <= 1, "years_remaining": years_left} if years_left is not None else {}),
+                    },
                     effects={"player_morale": -1, "fan_confidence": 2, "media_pressure": 3, "trade_market_heat": 2},
                     heat=50,
                 )
@@ -1216,7 +1349,15 @@ def run_data_storyline_pass(
         rank = int(rank_by_team.get(tid, len(rank_by_team) or 16))
         strength = float((getattr(session, "strength_map", None) or {}).get(tid, 0.5) or 0.5)
         tname = team_name_by_id.get(tid, tid)
-        tctx = story_ctx(name=tname, team=tname, record=trec, gp=gp)
+        skind, slen = _team_current_streak(session, tid)
+        tctx = story_ctx(
+            name=tname,
+            team=tname,
+            record=trec,
+            gp=gp,
+            streak=slen if slen else None,
+            streak_kind=skind or None,
+        )
 
         # Surprise team
         if strength < 0.46 and win_pct >= 0.58 and gp >= TEAM_GP_MIN:
@@ -1279,42 +1420,42 @@ def run_data_storyline_pass(
                 heat=70 if tid == uid else 50,
             )
 
-        # Losing streak proxy
-        if l >= 4 and w <= 2 and gp >= TEAM_GP_MIN:
+        # Losing streak (verified from completed games)
+        if skind == "L" and slen >= 4 and gp >= TEAM_GP_MIN:
             try_emit(
-                stable_key=f"losing_skid|{tid}|{season}",
+                stable_key=f"losing_skid|{tid}|{season}|{4 if slen < 7 else 7 if slen < 10 else 10}",
                 stype="cold_streak_team",
                 category="team",
                 severity="minor",
                 priority="MEDIUM",
                 tone="negative",
                 headline=pick_line(r, "losing_skid", tctx),
-                description=f"Team record {trec} with mounting losses.",
-                short_summary=f"Skid · {trec}",
-                cause="Multiple losses in current standings snapshot.",
+                description=f"{tname} has lost {slen} straight; record {trec}.",
+                short_summary=f"{slen}-game skid · {trec}",
+                cause=f"{slen} consecutive losses in completed games.",
                 team_id=tid,
                 team_name=tname,
-                evidence={"team_record": trec, "losses": l},
+                evidence={"team_record": trec, "losses": l, "streak": slen, "streak_kind": "L"},
                 effects={"team_morale": -2, "media_pressure": 3, "room_tension": 2},
                 heat=52,
             )
 
-        # Win streak proxy
-        if w >= 6 and gp >= TEAM_GP_MIN:
+        # Win streak (verified from completed games)
+        if skind == "W" and slen >= 5 and gp >= TEAM_GP_MIN:
             try_emit(
-                stable_key=f"win_streak|{tid}|{season}",
+                stable_key=f"win_streak|{tid}|{season}|{5 if slen < 8 else 8 if slen < 12 else 12}",
                 stype="hot_streak_team",
                 category="team",
                 severity="minor",
                 priority="LOW",
                 tone="positive",
                 headline=pick_line(r, "win_streak", tctx),
-                description=f"Strong run reflected in {trec} record.",
-                short_summary=f"Heating up · {trec}",
-                cause="Standings show sustained winning.",
+                description=f"{tname} has won {slen} straight; record {trec}.",
+                short_summary=f"{slen}-game win streak · {trec}",
+                cause=f"{slen} consecutive wins in completed games.",
                 team_id=tid,
                 team_name=tname,
-                evidence={"team_record": trec, "wins": w},
+                evidence={"team_record": trec, "wins": w, "streak": slen, "streak_kind": "W"},
                 effects={"team_morale": 2, "fan_confidence": 3},
                 heat=46,
             )
@@ -1323,49 +1464,80 @@ def run_data_storyline_pass(
     ranks = dict(getattr(session, "draft_rank_prev", None) or {})
     prev = dict(getattr(session, "draft_preseason_rank", None) or ranks)
     if ranks and prev:
-        for key, rank in list(ranks.items())[:80]:
+        movers: List[Tuple[str, int, int, int]] = []
+        # Scan the TOP of the board (was: the first 80 dict entries, i.e. arbitrary prospects).
+        for key, rank in sorted(ranks.items(), key=lambda kv: int(kv[1]))[:80]:
             old = int(prev.get(key, rank))
             cur = int(rank)
             delta = old - cur  # positive = rose (lower rank number is better)
-            if abs(delta) < 4:
-                continue
-            pname = str(key).split("|")[-1][:40] or "Prospect"
-            if delta >= 8:
-                try_emit(
-                    stable_key=f"prospect_riser|{key}|{season}",
-                    stype="prospect_rising",
-                    category="draft",
-                    severity="minor",
-                    priority="MEDIUM",
-                    tone="positive",
-                    headline="Anonymous draft hopeful has rudely entered the first-round conversation",
-                    description=f"{pname} climbed from rank ~{old} to ~{cur} on internal boards.",
-                    short_summary=f"Stock +{delta} spots",
-                    cause="Draft rank improved materially vs preseason baseline.",
-                    team_id=uid,
-                    team_name=team_name_by_id.get(uid, "League"),
-                    evidence={"previous_rank": old, "current_rank": cur, "delta": delta},
-                    effects={"draft_stock": min(12, delta), "scout_attention": 2},
-                    heat=50,
-                )
-            elif delta <= -8:
-                try_emit(
-                    stable_key=f"prospect_faller|{key}|{season}",
-                    stype="prospect_falling",
-                    category="draft",
-                    severity="minor",
-                    priority="MEDIUM",
-                    tone="negative",
-                    headline="Top prospect's draft stock now sliding like a Zamboni with bad brakes",
-                    description=f"{pname} dropped from ~{old} to ~{cur} on the board.",
-                    short_summary=f"Stock -{abs(delta)} spots",
-                    cause="Draft rank fell materially vs preseason baseline.",
-                    team_id=uid,
-                    team_name=team_name_by_id.get(uid, "League"),
-                    evidence={"previous_rank": old, "current_rank": cur, "delta": delta},
-                    effects={"draft_stock": -min(10, abs(delta)), "scouting_uncertainty": 2},
-                    heat=48,
-                )
+            if delta >= 8 or delta <= -8:
+                movers.append((str(key), old, cur, delta))
+        prospect_index = _draft_prospect_index(session) if movers else {}
+        for key, old, cur, delta in movers:
+            info = prospect_index.get(key)
+            if info is None:
+                continue  # never publish a prospect story we cannot name
+            pl = info["player"]
+            pname = _u_name(pl)
+            ppos = _prospect_position(pl)
+            page = _player_age(pl)
+            club = str(info.get("club") or "")
+            league_name = str(info.get("league") or "")
+            evidence: Dict[str, Any] = {
+                "previous_rank": old,
+                "current_rank": cur,
+                "delta": delta,
+                "age": page,
+                "position": ppos,
+                "league": league_name,
+                "club": club,
+            }
+            line = ""
+            ps = getattr(pl, "_prospect_season_stats", None)
+            if isinstance(ps, dict) and int(ps.get("gp") or 0) > 0:
+                pgp = int(ps.get("gp") or 0)
+                evidence["games_played"] = pgp
+                if ppos == "G":
+                    if ps.get("save_pct") is not None:
+                        evidence["save_pct"] = round(float(ps.get("save_pct")), 3)
+                    if ps.get("gaa") is not None:
+                        evidence["gaa"] = round(float(ps.get("gaa")), 2)
+                        line = f" Season line: {evidence.get('save_pct', '?')} SV%, {evidence['gaa']} GAA in {pgp} GP."
+                else:
+                    ppts = int(ps.get("points") or 0)
+                    evidence["goals"] = int(ps.get("goals") or 0)
+                    evidence["assists"] = int(ps.get("assists") or 0)
+                    evidence["points"] = ppts
+                    evidence["points_per_game"] = round(ppts / max(1, pgp), 2)
+                    line = f" Season line: {ppts} P in {pgp} GP ({evidence['points_per_game']:.2f} P/GP)."
+            who = f"{pname} ({ppos}, {page}, {club}{', ' + league_name if league_name and league_name != club else ''})"
+            rising = delta > 0
+            try_emit(
+                stable_key=f"{'prospect_riser' if rising else 'prospect_faller'}|{key}|{season}",
+                stype="prospect_rising" if rising else "prospect_falling",
+                category="draft",
+                severity="minor",
+                priority="MEDIUM",
+                tone="positive" if rising else "negative",
+                headline=(
+                    f"{pname} climbs {delta} spots to No. {cur} on draft boards"
+                    if rising
+                    else f"{pname} slips {abs(delta)} spots to No. {cur} on draft boards"
+                ),
+                description=f"{who} moved from No. {old} to No. {cur} vs the preseason board.{line}",
+                short_summary=f"{pname}: No. {old} to No. {cur}",
+                cause=f"Draft rank {'improved' if rising else 'fell'} {abs(delta)} spots vs the preseason baseline.",
+                # A prospect is not on the user's club: no team attribution, so the user-team
+                # gates (negative-cause validation, user popups) do not apply to league draft news.
+                team_id="",
+                team_name=club or league_name,
+                player_id=key,
+                player_name=pname,
+                player_position=ppos,
+                evidence=evidence,
+                effects={"draft_stock": min(12, delta)} if rising else {"draft_stock": -min(10, abs(delta))},
+                heat=50 if rising else 48,
+            )
 
     # --- Injury ripple (recent major injuries) ---
     for inj in list(getattr(session, "injury_log_major", None) or [])[-12:]:
@@ -3983,12 +4155,23 @@ def _build_press_moment_context(session: Any, sl: Dict[str, Any]) -> Dict[str, A
         "storyline_heat": int(sl.get("heat") or 0) >= 55,
     }
     trigger_labels: List[Dict[str, Any]] = []
+    skind, slen = _team_current_streak(session, utid)
     if triggers["losing_skid"]:
-        trigger_labels.append({"code": "losing_skid", "label": f"Losing skid ({rec})"})
+        trigger_labels.append(
+            {
+                "code": "losing_skid",
+                "label": f"Losing skid — {slen} straight ({rec})" if skind == "L" and slen >= 3 else f"Losing skid ({rec})",
+            }
+        )
     if triggers["cold_record"] and not triggers["losing_skid"]:
         trigger_labels.append({"code": "cold_record", "label": f"Cold record ({rec})"})
     if triggers["win_streak"]:
-        trigger_labels.append({"code": "win_streak", "label": f"Winning run ({rec})"})
+        trigger_labels.append(
+            {
+                "code": "win_streak",
+                "label": f"Winning run — {slen} straight ({rec})" if skind == "W" and slen >= 3 else f"Winning run ({rec})",
+            }
+        )
     elif triggers["hot_team"]:
         trigger_labels.append({"code": "hot_team", "label": f"Strong record ({rec})"})
     if triggers["playoff_race"]:
@@ -7028,7 +7211,15 @@ def build_universe_matchup_context(session: Any, home_team_id: str, away_team_id
     meta = dict(game_meta or {})
     base_game_id = str(meta.get("game_id") or f"matchup_{home_team_id}_{away_team_id}_{_u_current_meta(session)[0]}")
     home = build_universe_game_context(session, home_team_id, away_team_id, {**meta, "game_id": f"{base_game_id}:home"})
-    away = build_universe_game_context(session, away_team_id, home_team_id, {**meta, "game_id": f"{base_game_id}:away"})
+    # The home build just ran a full sync; since then only the home locker room changed,
+    # so re-syncing the home club reproduces a second full sync exactly.
+    away = build_universe_game_context(
+        session,
+        away_team_id,
+        home_team_id,
+        {**meta, "game_id": f"{base_game_id}:away"},
+        _sync_only_team_ids={str(home_team_id)},
+    )
     net_home_delta = float(home.get("win_probability_delta", 0)) - float(away.get("win_probability_delta", 0))
     return {
         "id": base_game_id,
@@ -7395,6 +7586,7 @@ _V3_CAUSE_TYPES = frozenset(
     }
 )
 STORYLINE_CAUSE_TYPES = frozenset(set(STORYLINE_CAUSE_TYPES) | set(_V3_CAUSE_TYPES))
+STORYLINE_CAUSE_TYPES = frozenset(set(STORYLINE_CAUSE_TYPES) | {"PROSPECT_RISING", "PROSPECT_FALLING"})
 _CLAIM_CAUSE_TYPES = frozenset(set(_CLAIM_CAUSE_TYPES) | {"PRIVATE_TRADE_DEMAND", "TRADE_DEMAND", "TRADE_PROPOSAL_EXPOSURE"})
 _FACT_CAUSE_TYPES = frozenset(
     set(_FACT_CAUSE_TYPES)
@@ -8078,10 +8270,14 @@ def _u_sync_player_entities(
     *,
     player_id: Optional[str] = None,
     team_id: Optional[str] = None,
+    refresh_team_ids: Optional[Set[str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Sync real players into Universe state while preserving V3 mental/life ledgers.
 
     Optional player_id / team_id scopes avoid syncing the entire league on single-player reads.
+    ``refresh_team_ids`` re-syncs exactly the rows a full sync would produce for those clubs
+    (NHL + AHL buckets, same dedupe), for callers that just ran a full sync and have since
+    changed only those clubs' locker rooms.
     """
     _u_migrate_v2(session)
     entities = dict(getattr(session, "universe_players", None) or {})
@@ -8089,7 +8285,10 @@ def _u_sync_player_entities(
     scope_player = str(player_id or "").strip()
     scope_team = str(team_id or "").strip()
     player_rows: List[Tuple[str, Any]] = []
-    if scope_player:
+    if refresh_team_ids is not None:
+        wanted = {str(t) for t in refresh_team_ids}
+        player_rows = [(tid, p) for tid, p in _u_all_players(session) if str(tid) in wanted]
+    elif scope_player:
         player = _player_from_roster(session, scope_player)
         if player is not None:
             found_team = scope_team
@@ -8107,7 +8306,7 @@ def _u_sync_player_entities(
                 player_rows.append((scope_team, player))
     else:
         player_rows = list(_u_all_players(session))
-    full_sync = not scope_player and not scope_team
+    full_sync = not scope_player and not scope_team and refresh_team_ids is None
     for team_id, player in player_rows:
         player_id = str(getattr(player, "id", "") or "")
         active_ids.append(player_id)
@@ -9975,10 +10174,20 @@ def narrative_universe_v2_daily_pass(session: Any, calendar_idx: int, day_meta: 
     }
 
 
-def build_universe_game_context(session: Any, team_id: str, opponent_id: str = "", game_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def build_universe_game_context(
+    session: Any,
+    team_id: str,
+    opponent_id: str = "",
+    game_meta: Optional[Dict[str, Any]] = None,
+    *,
+    _sync_only_team_ids: Optional[Set[str]] = None,
+) -> Dict[str, Any]:
     """V3 sim bridge with effective OVR and stat-specific fingerprints for realData generation."""
     migrate_session_storyline_state(session)
-    _u_sync_player_entities(session)
+    if _sync_only_team_ids is not None:
+        _u_sync_player_entities(session, refresh_team_ids=_sync_only_team_ids)
+    else:
+        _u_sync_player_entities(session)
     room = _u_rebuild_locker_room(session, str(team_id))
     culture = room.get("culture") or {}
     entities = getattr(session, "universe_players", None) or {}

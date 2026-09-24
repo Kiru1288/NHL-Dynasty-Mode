@@ -700,7 +700,7 @@ def _stats_integrity_payload(rows: List[Dict[str, Any]], game_results: List[Dict
         "warnings": warnings,
     }
 def _build_schedule_upcoming(session: FranchiseSession, *, limit: int = 14) -> List[Dict[str, Any]]:
-    """Next NHL calendar days from the current cursor (real dates) ΓÇö hub / calendar UI."""
+    """Next NHL calendar days from the current cursor (real dates) — hub / calendar UI."""
     if str(getattr(session, "phase", "")) != "regular":
         return []
     cal = getattr(session, "nhl_calendar", None) or []
@@ -754,7 +754,7 @@ def _nhl_today_payload(session: FranchiseSession) -> Dict[str, Any]:
     cur = int(getattr(session, "calendar_cursor", 0) or 0)
     last = int(getattr(session, "nhl_regular_season_last_index", 0) or 0)
     if cur > last:
-        return {"headline": "Regular season complete ΓÇö advance for playoffs", "iso": "", "segment": "regular", "calendar_index": cur}
+        return {"headline": "Regular season complete — advance for playoffs", "iso": "", "segment": "regular", "calendar_index": cur}
     cur = max(0, min(cur, len(cal) - 1))
     row = dict(cal[cur])
     row["calendar_index"] = int(cur)
@@ -929,7 +929,7 @@ def _saved_game_is_final(g: Dict[str, Any]) -> bool:
 
     return explicit_final or bool(g.get("simmed") or g.get("completed") or g.get("is_final"))
 def _game_result_calendar_index(g: Dict[str, Any]) -> Optional[int]:
-    """Calendar index from a saved game box (day 0 is valid ΓÇö never use `value or default` on day)."""
+    """Calendar index from a saved game box (day 0 is valid — never use `value or default` on day)."""
     if not isinstance(g, dict):
         return None
     v = g.get("day")
@@ -1406,7 +1406,7 @@ def _serialize_player_row(
         "age": int(getattr(ident, "age", 0) or 0),
         "nationality": str(getattr(ident, "birth_country", "") or ""),
         "height_cm": hcm,
-        "height_display": height_cm_to_imperial(hcm) if hcm else "ΓÇö",
+        "height_display": height_cm_to_imperial(hcm) if hcm else "—",
         "archetype": str(getattr(p, "archetype", "") or ""),
         "contract": {
             "salary": round(_player_cap_hit_millions(p), 3),
@@ -1941,7 +1941,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         )
     return {
         "entries": entries,
-        "subtitle": f"Draft-age (Γëñ20) in dev leagues ┬╖ showing {len(entries)}",
+        "subtitle": f"Draft-age (≤20) in dev leagues ┬╖ showing {len(entries)}",
         "total": len(prospects),
     }
 def snapshot_draft_rank_prev(session: FranchiseSession, sim: Any) -> None:

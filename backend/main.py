@@ -10,7 +10,7 @@ from services._simengine_bootstrap import ensure_simengine_path
 
 ensure_simengine_path()
 
-from fastapi import Body, FastAPI, Header, HTTPException, Query
+from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -316,7 +316,7 @@ def reset_franchise_sessions() -> dict[str, Any]:
 
 
 @app.post("/api/franchise/start")
-def post_franchise_start(body: FranchiseStartBody) -> Any:
+def post_franchise_start(body: FranchiseStartBody, background_tasks: BackgroundTasks) -> Any:
     try:
         session = franchise_sim.start_franchise(
             team_query=body.team_query,
@@ -327,6 +327,7 @@ def post_franchise_start(body: FranchiseStartBody) -> Any:
             season_start_year=body.season_start_year,
             injuries_enabled=bool(body.injuries_enabled),
             player_universe=str(getattr(body, "player_universe", None) or "generated"),
+            warm_draft_cache=False,
         )
     except ValueError as e:
         log.warning("POST /api/franchise/start validation: %s", e)
@@ -363,6 +364,9 @@ def post_franchise_start(body: FranchiseStartBody) -> Any:
             },
         )
     state = franchise_sim.build_state_payload(session, include_heavy=False)
+    # Warm the draft board after the response is sent: started inside start_franchise,
+    # the warm thread held the GIL/import lock and delayed this reply by several seconds.
+    background_tasks.add_task(franchise_sim._schedule_draft_class_cache_warm, session)
     log.info(
         "POST /api/franchise/start ok session_id=%s schedule_slots=%s",
         session.session_id,

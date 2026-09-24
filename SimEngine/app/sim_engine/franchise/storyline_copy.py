@@ -330,13 +330,16 @@ def story_ctx(**kwargs: Any) -> Dict[str, Any]:
 
 
 def _format_line(template: str, ctx: Dict[str, Any]) -> str:
-    safe = defaultdict(str)
-    for key, value in (ctx or {}).items():
-        safe[key] = value
+    """Fill a template, or return "" if any placeholder has no value.
+
+    (It used to render a missing key as an empty string, which produced sentences such as
+    "riding a -game win streak".) Callers treat "" as "do not publish this line".
+    """
+    values = {k: v for k, v in (ctx or {}).items() if v is not None and str(v).strip() != ""}
     try:
-        return str(template).format_map(safe).strip()
-    except (KeyError, ValueError, TypeError):
-        return str(template).strip()
+        return str(template).format_map(values).strip()
+    except (KeyError, ValueError, TypeError, IndexError):
+        return ""
 
 
 def pick_line(rng: random.Random, stype: str, ctx: Dict[str, Any], body: bool = False) -> str:

@@ -306,14 +306,23 @@ def credit_shot_attempt_event(
 
     outcome: BLOCKED | MISSED | SAVED | GOAL
     """
-    att_ids = [player_id(p) for p in attacking_skaters if player_id(p)]
-    def_ids = [player_id(p) for p in defending_skaters if player_id(p)]
     rxg = round(float(raw_xg), 4)
 
+    # On-ice credits are batched into one ledger_add per skater (each key is summed
+    # independently, so this matches crediting them one call at a time).
+    if outcome == "BLOCKED":
+        att_kw: Dict[str, Any] = {"cf": 1.0}
+        def_kw: Dict[str, Any] = {"ca": 1.0}
+    elif outcome == "MISSED":
+        att_kw = {"cf": 1.0, "ff": 1.0}
+        def_kw = {"ca": 1.0, "fa": 1.0}
+    else:
+        att_kw = {"cf": 1.0, "ff": 1.0, "on_ice_shots_for": 1.0, "xgf": rxg}
+        def_kw = {"ca": 1.0, "fa": 1.0, "on_ice_shots_against": 1.0, "xga": rxg}
     for p in attacking_skaters:
-        ledger_add(ledger, p, team_id, cf=1.0)
+        ledger_add(ledger, p, team_id, **att_kw)
     for p in defending_skaters:
-        ledger_add(ledger, p, opp_team_id, ca=1.0)
+        ledger_add(ledger, p, opp_team_id, **def_kw)
 
     if outcome == "BLOCKED":
         ledger_add(ledger, shooter, team_id, blocked_attempts_for=1)
@@ -321,27 +330,13 @@ def credit_shot_attempt_event(
             ledger_add(ledger, blocker, opp_team_id, blk=1)
         return
 
-    for p in attacking_skaters:
-        ledger_add(ledger, p, team_id, ff=1.0)
-    for p in defending_skaters:
-        ledger_add(ledger, p, opp_team_id, fa=1.0)
-
     if outcome == "MISSED":
         ledger_add(ledger, shooter, team_id, missed_shots=1)
         return
 
-    for p in attacking_skaters:
-        ledger_add(ledger, p, team_id, on_ice_shots_for=1.0)
-    for p in defending_skaters:
-        ledger_add(ledger, p, opp_team_id, on_ice_shots_against=1.0)
-
     ledger_add(ledger, shooter, team_id, sog=1, ixg=rxg)
     if str(strength or "").upper() == "PP":
         ledger_add(ledger, shooter, team_id, pp_sog=1)
-    for p in attacking_skaters:
-        ledger_add(ledger, p, team_id, xgf=rxg)
-    for p in defending_skaters:
-        ledger_add(ledger, p, opp_team_id, xga=rxg)
     if defending_goalie is not None:
         goalie_kw: Dict[str, Any] = {"goalie_xga": rxg, "goalie_shots_against": 1}
         if outcome == "GOAL":

@@ -4,16 +4,6 @@ import { SCREENS } from "../../game/constants";
 import { isFranchiseCinematicPopup } from "../../events/franchiseEventKinds";
 import { getTeamLogoSrc, toLogoUrl } from "../../utils/teamLogos";
 
-function playerInitials(name) {
-  const parts = String(name || "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-  if (!parts.length) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
 function resolveAlertTheme(pop) {
   const theme = pop.theme || pop.presentation_type || "";
   if (theme === "danger" || pop.legal_severity === "major" || pop.kind === "legal_trouble") {
@@ -36,10 +26,25 @@ function isTradePopup(pop) {
 
 function StatCard({ label, value, sub }) {
   return (
-    <div className="media-alert__stat">
-      <span className="media-alert__stat-label">{label}</span>
-      <strong className="media-alert__stat-value">{value}</strong>
-      {sub ? <small className="media-alert__stat-sub">{sub}</small> : null}
+    <div className="media-alert__fact">
+      <span className="media-alert__fact-label">{label}</span>
+      <span className="media-alert__fact-value">{value}</span>
+      {sub ? <span className="media-alert__fact-sub">{sub}</span> : null}
+    </div>
+  );
+}
+
+/** Free-form label/value lines. Rows with nothing to say are dropped, never shown as "—". */
+function FactList({ facts }) {
+  const rows = (facts || []).filter(
+    (f) => f && f.value != null && String(f.value).trim() !== "" && f.value !== "—"
+  );
+  if (!rows.length) return null;
+  return (
+    <div className="media-alert__facts">
+      {rows.map((f) => (
+        <StatCard key={f.label} label={f.label} value={f.value} sub={f.sub} />
+      ))}
     </div>
   );
 }
@@ -82,8 +87,12 @@ function formatStat(v, digits = 0) {
   return digits > 0 ? n.toFixed(digits) : String(Math.round(n));
 }
 
+function teamAbbr(team) {
+  return String(team?.abbreviation || team?.team_id || "?").toUpperCase();
+}
+
 function TeamMark({ team }) {
-  const abbr = String(team?.abbreviation || team?.team_id || "?").toUpperCase();
+  const abbr = teamAbbr(team);
   const src = toLogoUrl(
     getTeamLogoSrc({
       abbrev: abbr,
@@ -92,65 +101,98 @@ function TeamMark({ team }) {
       team_name: team?.display_name,
     })
   );
-  if (src) {
-    return <img className="trade-wire__logo" src={src} alt="" />;
+  return src ? <img className="trade-wire__logo" src={src} alt="" /> : null;
+}
+
+function formatSvPct(v) {
+  const n = Number(v);
+  if (v == null || !Number.isFinite(n)) return null;
+  const t = n.toFixed(3);
+  return t.startsWith("0") ? t.slice(1) : t;
+}
+
+function tradeStatItems(stats) {
+  const has = (v) => v != null && v !== "" && Number.isFinite(Number(v));
+  const items = [];
+  const add = (label, v, digits = 0) => {
+    if (has(v)) items.push([label, formatStat(v, digits)]);
+  };
+  add("GP", stats.gp);
+  if (stats.kind === "goalie") {
+    add("W", stats.w);
+    add("L", stats.l);
+    const sv = formatSvPct(stats.sv_pct);
+    if (sv) items.push(["SV%", sv]);
+    add("GAA", stats.gaa, 2);
+    add("SO", stats.so);
+  } else {
+    add("G", stats.g);
+    add("A", stats.a);
+    add("PTS", stats.pts);
+    add("xGF%", stats.xgf_pct, 1);
+    add("WAR", stats.war, 1);
   }
-  return <span className="trade-wire__logo-fallback">{abbr.slice(0, 3)}</span>;
+  return items;
+}
+
+/** One plain line of stats. Says so when there are none instead of a row of dashes. */
+function TradeStatLine({ stats, fallbackLabel }) {
+  const gp = Number(stats?.gp);
+  const known = stats && typeof stats === "object" && Object.keys(stats).length > 0;
+  const hasLine = known && (stats.source ? stats.source !== "none" : gp > 0);
+  if (!hasLine) {
+    const note = stats?.note || (known ? "No games played this season" : "Season stats not available");
+    return <div className="trade-wire__stats-none">{note}</div>;
+  }
+  const label = stats.label || (fallbackLabel ? `${fallbackLabel} stats` : "");
+  const suffix = stats.source === "nhl_prior" ? " · last season" : "";
+  return (
+    <div className="trade-wire__stats">
+      {label ? (
+        <span className="trade-wire__stats-label">
+          {label}
+          {suffix}
+        </span>
+      ) : null}
+      {tradeStatItems(stats).map(([k, v]) => (
+        <span key={k} className="trade-wire__stat-item">
+          <strong>{v}</strong> {k}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function TradePlayerCard({ asset, seasonLabel }) {
-  const stats = asset?.season_stats || {};
   const role = asset?.role_line || [asset?.position, asset?.archetype].filter(Boolean).join(" | ");
   const cap = formatCapHit(asset?.cap_hit_m);
   const years = asset?.years_left;
   const age = asset?.age;
   const metaBits = [];
-  if (age != null) metaBits.push(`AGE ${age}`);
-  if (cap) metaBits.push(`${cap} CAP HIT`);
-  if (years != null) metaBits.push(`${years} YEAR${years === 1 ? "" : "S"} LEFT`);
-  if (asset?.retained_salary) metaBits.push(`${asset.retained_salary}% RET`);
+  if (age != null) metaBits.push(`Age ${age}`);
+  if (cap) metaBits.push(`${cap} cap hit`);
+  if (years != null) metaBits.push(`${years} year${years === 1 ? "" : "s"} left`);
+  if (asset?.retained_salary) metaBits.push(`${asset.retained_salary}% retained`);
 
   return (
-    <div className="trade-wire__player-card">
-      <div className="trade-wire__player-top">
-        <div className="trade-wire__player-id">
-          <div className="trade-wire__player-name">{asset?.display_name || "Player"}</div>
-          {role ? <div className="trade-wire__player-role">{role}</div> : null}
-        </div>
-        {asset?.ovr != null ? (
-          <div className="trade-wire__ovr">
-            <span>OVR</span>
-            <strong>{asset.ovr}</strong>
-          </div>
-        ) : null}
+    <div className="trade-wire__player">
+      <div className="trade-wire__player-line">
+        <span className="trade-wire__player-name">{asset?.display_name || "Player"}</span>
+        {asset?.ovr != null ? <span className="trade-wire__ovr-inline">{asset.ovr} OVR</span> : null}
       </div>
-      {metaBits.length ? <div className="trade-wire__contract">{metaBits.join(" | ")}</div> : null}
-      <div className="trade-wire__stats-head">{seasonLabel ? `${seasonLabel} STATS` : "SEASON STATS"}</div>
-      <div className="trade-wire__stats-row">
-        {[
-          ["GP", formatStat(stats.gp)],
-          ["G", formatStat(stats.g)],
-          ["A", formatStat(stats.a)],
-          ["PTS", formatStat(stats.pts)],
-          ["xGF%", stats.xgf_pct != null ? formatStat(stats.xgf_pct, 1) : "—"],
-          ["WAR", stats.war != null ? formatStat(stats.war, 1) : "—"],
-        ].map(([label, value]) => (
-          <div key={label} className="trade-wire__stat">
-            <span>{label}</span>
-            <strong>{value}</strong>
-          </div>
-        ))}
-      </div>
+      {role ? <div className="trade-wire__player-role">{role}</div> : null}
+      {metaBits.length ? <div className="trade-wire__contract">{metaBits.join(" · ")}</div> : null}
+      <TradeStatLine stats={asset?.season_stats} fallbackLabel={seasonLabel} />
     </div>
   );
 }
 
 function TradePickChip({ asset }) {
   return (
-    <div className="trade-wire__pick-chip">
+    <div className="trade-wire__pick">
       <span className="trade-wire__pick-label">{asset?.display_name || "Draft Pick"}</span>
       {asset?.trade_value != null ? (
-        <span className="trade-wire__pick-val">TV {formatStat(asset.trade_value, 1)}</span>
+        <span className="trade-wire__pick-val"> · TV {formatStat(asset.trade_value, 1)}</span>
       ) : null}
     </div>
   );
@@ -167,33 +209,31 @@ function TradeSideColumn({ team, seasonLabel }) {
     const t = String(a?.asset_type || "").toLowerCase();
     return t !== "player" && t !== "draft_pick" && t !== "pick";
   });
-  const abbr = String(team?.abbreviation || team?.team_id || "TEAM").toUpperCase();
+  const abbr = teamAbbr(team);
 
   return (
     <div className="trade-wire__side">
       <div className="trade-wire__side-head">
         <TeamMark team={team} />
-        <div>
-          <div className="trade-wire__side-name">{abbr}</div>
-          <div className="trade-wire__side-receives">RECEIVES</div>
+        <div className="trade-wire__side-title">
+          <span className="trade-wire__side-name">{abbr}</span>
+          <span className="trade-wire__side-receives"> receives</span>
         </div>
       </div>
       <div className="trade-wire__side-assets">
-        {players.length
-          ? players.map((p, i) => (
-              <TradePlayerCard key={`${p.player_id || p.display_name}-${i}`} asset={p} seasonLabel={seasonLabel} />
-            ))
-          : null}
+        {players.map((p, i) => (
+          <TradePlayerCard key={`${p.player_id || p.display_name}-${i}`} asset={p} seasonLabel={seasonLabel} />
+        ))}
         {picks.length ? (
           <div className="trade-wire__picks">
-            <div className="trade-wire__picks-label">DRAFT PICKS</div>
+            <div className="trade-wire__picks-label">Draft picks</div>
             {picks.map((pk, i) => (
               <TradePickChip key={`${pk.pick_id || pk.display_name}-${i}`} asset={pk} />
             ))}
           </div>
         ) : null}
         {other.map((a, i) => (
-          <div key={`other-${i}`} className="trade-wire__pick-chip">
+          <div key={`other-${i}`} className="trade-wire__pick">
             <span className="trade-wire__pick-label">{a.display_name || "Asset"}</span>
           </div>
         ))}
@@ -218,12 +258,10 @@ function TradeValueBar({ leftTeam, rightTeam, leftValue, rightValue }) {
 
   return (
     <section className="trade-wire__value">
-      <div className="trade-wire__section-label">
-        <span aria-hidden>▮</span> TRADE VALUE
-      </div>
+      <div className="trade-wire__section-label">Trade value</div>
       <div className="trade-wire__value-row">
         <div className="trade-wire__value-end">
-          <TeamMark team={leftTeam} />
+          <span className="trade-wire__abbr">{teamAbbr(leftTeam)}</span>
           <strong>{hasLeft ? formatStat(left, 1) : "—"}</strong>
         </div>
         <div className="trade-wire__value-track" aria-hidden>
@@ -232,7 +270,7 @@ function TradeValueBar({ leftTeam, rightTeam, leftValue, rightValue }) {
         </div>
         <div className="trade-wire__value-end is-right">
           <strong>{hasRight ? formatStat(right, 1) : "—"}</strong>
-          <TeamMark team={rightTeam} />
+          <span className="trade-wire__abbr">{teamAbbr(rightTeam)}</span>
         </div>
       </div>
     </section>
@@ -275,30 +313,29 @@ function TradeWireBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
   const reasoning = pop.reason_text || pop.cause || pop.story_report || pop.effect_summary || "";
   const tradeType = pop.trade_type_label || String(pop.trade_category || "League Trade").replace(/_/g, " ");
   const seasonLabel = pop.season_label || "";
+  const isRumor = /rumou?r/i.test(
+    `${pop.trade_category || ""} ${pop.cause_type || ""} ${pop.knowledge_type || ""} ${pop.category || ""}`
+  );
 
   return (
     <div className="trade-wire">
       <div className="trade-wire__source-row">
-        <span className="trade-wire__source-icon" aria-hidden>
-          ⇄
-        </span>
         <div className="trade-wire__source-copy">
-          <p className="trade-wire__source">{pop.source_label || "League Trade Wire"}</p>
-          {pop.calendar_iso ? <span className="trade-wire__date">{pop.calendar_iso}</span> : null}
+          <p className="trade-wire__source">
+            {pop.source_label || "League Trade Wire"}
+            {pop.calendar_iso ? <span className="trade-wire__date"> · {pop.calendar_iso}</span> : null}
+          </p>
         </div>
         <button type="button" className="trade-wire__close" onClick={onDismiss} aria-label="Close">
           ×
         </button>
       </div>
 
-      <h3 className="trade-wire__title">TRADE COMPLETED</h3>
+      <h3 className="trade-wire__title">{isRumor ? "Trade rumor" : "Trade completed"}</h3>
       <p className="trade-wire__summary">{summary}</p>
 
       <div className="trade-wire__exchange">
         <TradeSideColumn team={left} seasonLabel={seasonLabel} />
-        <div className="trade-wire__swap" aria-hidden>
-          ⇄
-        </div>
         <TradeSideColumn team={right} seasonLabel={seasonLabel} />
       </div>
 
@@ -306,11 +343,11 @@ function TradeWireBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
 
       <section className="trade-wire__reason">
         <div className="trade-wire__reason-meta">
-          <span className="trade-wire__section-label">TRADE TYPE</span>
-          <span className="trade-wire__type-pill">{tradeType}</span>
+          <span className="trade-wire__section-label">Trade type</span>
+          <span className="trade-wire__type-text">{tradeType}</span>
         </div>
         <div className="trade-wire__reason-body">
-          <div className="trade-wire__section-label">REASONING</div>
+          <div className="trade-wire__section-label">Reasoning</div>
           <p>{reasoning || "Roster management trade."}</p>
         </div>
       </section>
@@ -343,46 +380,37 @@ function TradeWireBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
 function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [], queueCount = 0 }) {
   const theme = resolveAlertTheme(pop);
   const source = pop.source_label || pop.title || "League Update";
-  const icon = pop.icon || "◉";
-  const kindLabel = String(pop.kind || pop.type || "alert")
+  const kindLabel = String(pop.kind || pop.type || "")
     .replace(/_/g, " ")
     .toUpperCase();
+  const team = pop.team_abbrev || pop.team_abbr;
+  const showKind = kindLabel && kindLabel.toLowerCase() !== String(source).toLowerCase();
 
   return (
-    <div className={`media-alert media-alert--${theme} media-alert--v2`}>
-      <div className="media-alert__topbar">
-        <span className="media-alert__kind-pill">{kindLabel}</span>
+    <div className={`media-alert media-alert--${theme} media-alert--v2 media-alert--free`}>
+      <div className="media-alert__dateline">
+        <span className="media-alert__source">{source}</span>
+        {showKind ? <span className="media-alert__dateline-part">{kindLabel}</span> : null}
+        {pop.calendar_iso ? <span className="media-alert__dateline-part">{pop.calendar_iso}</span> : null}
         {queueCount > 1 ? (
-          <span className="media-alert__queue-pill">{queueCount - 1} more queued</span>
+          <span className="media-alert__dateline-part media-alert__dateline-queue">{queueCount - 1} more queued</span>
         ) : null}
         <button type="button" className="media-alert__close" onClick={onDismiss} aria-label="Dismiss alert">
           ×
         </button>
       </div>
 
-      <div className="media-alert__source-row">
-        <span className="media-alert__icon" aria-hidden>
-          {icon}
-        </span>
-        <div>
-          <p className="media-alert__source">{source}</p>
-          {pop.calendar_iso ? <span className="media-alert__date">{pop.calendar_iso}</span> : null}
-        </div>
-      </div>
-
-      <div className="media-alert__hero">
-        <div className="media-alert__avatar">{playerInitials(pop.player_name)}</div>
-        <div className="media-alert__hero-text">
-          <h3 className="media-alert__headline" id="showcase-popup-title">
-            {pop.headline || pop.title || "Update"}
-          </h3>
-          <p className="media-alert__player-line">
-            <strong>{pop.player_name || "—"}</strong>
-            {pop.team_abbrev || pop.team_abbr ? (
-              <span className="media-alert__team-badge">{pop.team_abbrev || pop.team_abbr}</span>
-            ) : null}
+      <div className="media-alert__hero-text">
+        <h3 className="media-alert__headline" id="showcase-popup-title">
+          {pop.headline || pop.title || "Update"}
+        </h3>
+        {pop.player_name || team ? (
+          <p className="media-alert__byline">
+            {pop.player_name ? <strong>{pop.player_name}</strong> : null}
+            {pop.player_name && team ? " · " : null}
+            {team ? <span>{team}</span> : null}
           </p>
-        </div>
+        ) : null}
       </div>
 
       <div className="media-alert__body-scroll">{children}</div>
@@ -442,9 +470,9 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
     "Team Report";
 
   const stats = [
-    { label: "Source", value: sourceLabel },
-    { label: "Player", value: pop.player_name || pop.culprit_player_name || "—" },
-    { label: "Team", value: pop.team_abbrev || pop.team_abbr || "—" },
+    { label: "Player", value: pop.player_name ? null : pop.culprit_player_name || null },
+    { label: "Position", value: pop.player_position || null },
+    { label: "OVR", value: Number(pop.player_overall) > 0 ? Math.round(Number(pop.player_overall)) : null },
     {
       label: "Status",
       value: demand
@@ -494,6 +522,16 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
     });
   }
 
+  // Only show the impact section when there is something real to say (never a filler line).
+  const hasImpactContent = Boolean(
+    impactText ||
+      pop.overall_delta != null ||
+      pop.overall_before != null ||
+      pop.base_overall != null ||
+      hasGames ||
+      (Array.isArray(pop.impact_lines) && pop.impact_lines.length)
+  );
+
   const actions = [
     { id: "storylines", label: "Open Storylines", primary: !demand },
     { id: demand ? "tradehub" : "roster", label: demand ? "Open Trade Hub" : "View Player", primary: Boolean(demand) },
@@ -504,11 +542,7 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
 
   return (
     <MediaAlertShell pop={{ ...pop, source_label: sourceLabel, headline: pop.headline || sourceLabel }} onDismiss={onDismiss} onAction={onAction} actions={actions} queueCount={queueCount}>
-      <div className="media-alert__stat-grid">
-        {stats.map((s) => (
-          <StatCard key={s.label} label={s.label} value={s.value} sub={s.sub} />
-        ))}
-      </div>
+      <FactList facts={stats} />
 
       {demand?.dossier_label ? (
         <p className="media-alert__callout">{demand.dossier_label}</p>
@@ -559,7 +593,7 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
             }
           />
         </section>
-      ) : (
+      ) : hasImpactContent ? (
         <section className="media-alert__section media-alert__section--impact">
           <h4 className="media-alert__section-title">Franchise Impact</h4>
           <OvrImpactBlock
@@ -582,11 +616,8 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
               ))}
             </ul>
           ) : null}
-          {!impactText && pop.overall_delta == null && !(Array.isArray(pop.impact_lines) && pop.impact_lines.length) ? (
-            <p className="media-alert__impact-muted">No direct rating change reported.</p>
-          ) : null}
         </section>
-      )}
+      ) : null}
 
       {pop.requires_decision ? (
         <p className="media-alert__callout">GM response may be required — check Storylines → Decisions.</p>
@@ -604,7 +635,6 @@ function InjuryBody({ pop, onDismiss, onAction, queueCount = 0 }) {
       pop={{
         ...pop,
         source_label: "Medical Desk Report",
-        icon: "+",
         theme: "warning",
       }}
       onDismiss={onDismiss}
@@ -615,12 +645,12 @@ function InjuryBody({ pop, onDismiss, onAction, queueCount = 0 }) {
         { id: "storylines", label: "Open Storylines" },
       ]}
     >
-      <div className="media-alert__stat-grid">
-        <StatCard label="Player" value={pop.player_name || "—"} />
-        <StatCard label="Team" value={pop.team_abbrev || "—"} />
-        <StatCard label="Severity" value={tier || "unknown"} />
-        <StatCard label="Timeline" value={pop.games != null ? `${pop.games} games` : "TBD"} sub={inj || ""} />
-      </div>
+      <FactList
+        facts={[
+          { label: "Severity", value: tier || null },
+          { label: "Timeline", value: pop.games != null ? `${pop.games} games` : null, sub: inj || "" },
+        ]}
+      />
 
       <section className="media-alert__section">
         <h4 className="media-alert__section-title">Medical Report</h4>
@@ -1093,6 +1123,113 @@ function ShowcasePopupStyles() {
         letter-spacing: 0.14em;
         text-transform: uppercase;
       }
+
+      /* ---- free-form layout: no boxed icons, tiles, cards or pills ---- */
+      .media-alert--free { gap: 12px; }
+      .media-alert__dateline {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 2px 12px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+      }
+      .media-alert__dateline-part {
+        font-size: var(--type-table-meta-size, 0.72rem);
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--ops-text-secondary, #8096a8);
+      }
+      .media-alert__dateline-queue { color: var(--ops-gold, #e9a83c); }
+      .media-alert__close {
+        margin-left: auto;
+        border: 0;
+        background: transparent;
+        color: var(--ops-text-secondary, #8096a8);
+        font-size: 1.25rem;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0 4px;
+      }
+      .media-alert__close:hover { color: var(--ops-text, #e9f7fb); }
+      .media-alert--free .media-alert__headline { font-size: 1.2rem; }
+      .media-alert__byline {
+        margin: 4px 0 0;
+        font-size: var(--type-body-size, 0.875rem);
+        color: var(--ops-text-secondary, #8096a8);
+      }
+      .media-alert__byline strong { color: var(--ops-text, #e9f7fb); }
+      .media-alert__facts { display: flex; flex-wrap: wrap; gap: 4px 22px; }
+      .media-alert__fact { display: inline-flex; align-items: baseline; gap: 6px; }
+      .media-alert__fact-label {
+        font-size: var(--type-phase-label-size, 0.68rem);
+        font-weight: 900;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--ops-text-secondary, #8096a8);
+      }
+      .media-alert__fact-value { font-size: var(--type-body-size, 0.875rem); font-weight: 800; }
+      .media-alert__fact-sub { font-size: 0.75rem; color: var(--ops-text-secondary, #8096a8); }
+      .media-alert--free .media-alert__section,
+      .media-alert--free .media-alert__section--impact {
+        padding: 10px 0;
+        margin: 0;
+        border: 0;
+        border-top: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+        border-radius: 0;
+        background: none;
+      }
+      .media-alert--free .media-alert__ovr { text-align: left; padding: 0; }
+      .media-alert--free .media-alert__ovr-row { justify-content: flex-start; }
+      .media-alert--free .media-alert__callout {
+        margin: 0;
+        padding: 2px 0 2px 10px;
+        border: 0;
+        border-left: 2px solid var(--ops-gold, #e9a83c);
+        border-radius: 0;
+        background: none;
+      }
+      .trade-wire__source-row { display: flex; align-items: baseline; gap: 10px; }
+      .trade-wire__exchange {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 0 20px;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: none;
+      }
+      .trade-wire__side + .trade-wire__side {
+        padding-left: 20px;
+        border-left: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+      }
+      .trade-wire__side-title { line-height: 1.1; }
+      .trade-wire__side-receives { font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ops-text-secondary, #8096a8); font-size: 0.68rem; }
+      .trade-wire__player { padding: 0 0 12px; border: 0; background: none; }
+      .trade-wire__player-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+      .trade-wire__ovr-inline { font-size: 0.78rem; font-weight: 900; color: var(--ops-cyan, #13d8e7); }
+      .trade-wire__stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px 12px;
+        margin-top: 6px;
+        font-size: 0.78rem;
+        color: var(--ops-text-secondary, #8096a8);
+      }
+      .trade-wire__stats-label {
+        width: 100%;
+        font-size: 0.68rem;
+        font-weight: 900;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+      .trade-wire__stat-item strong { color: var(--ops-text, #e9f7fb); font-weight: 900; }
+      .trade-wire__stats-none { margin-top: 6px; font-size: 0.78rem; font-style: italic; color: var(--ops-text-secondary, #8096a8); }
+      .trade-wire__pick { padding: 2px 0; border: 0; background: none; font-size: 0.8rem; }
+      .trade-wire__pick-val { color: var(--ops-text-secondary, #8096a8); }
+      .trade-wire__abbr { font-weight: 900; letter-spacing: 0.06em; font-size: 0.8rem; }
+      .trade-wire__type-text { font-size: 0.8rem; font-weight: 800; text-transform: capitalize; }
     `}</style>
   );
 }

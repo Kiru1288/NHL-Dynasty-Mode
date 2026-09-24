@@ -6158,7 +6158,10 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
     import random as _random
 
     from app.sim_engine.entities.player import Position
-    from app.sim_engine.generation.prospect_league_scoring import initialize_prospect_season
+    from app.sim_engine.generation.prospect_league_scoring import (
+        development_league_stat_max_age,
+        initialize_prospect_season,
+    )
     from app.sim_engine.league_hierarchy_bootstrap import _set_assignment, _spawn_player
     from services.franchise_sim import (
         _bump_prospect_revision,
@@ -6224,11 +6227,12 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
                     progress_season_body_and_identity(p, rng, min_gp=6)
                 except Exception:
                     pass
-                # Age out undrafted overagers from junior clubs.
+                # Age out undrafted overagers from junior clubs. NCAA players stay draft-eligible
+                # to 24 (the draft board's own cut-off) — culling them at 21 deleted eligible players.
                 drafted = bool(getattr(p, "drafted", False)) or bool(
                     getattr(p, "nhl_rights_team_id", None) or getattr(p, "rights_team_id", None)
                 )
-                if (not drafted) and age_now > 20:
+                if (not drafted) and age_now > development_league_stat_max_age(code):
                     culled += 1
                     continue
                 try:

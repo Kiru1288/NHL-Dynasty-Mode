@@ -10,6 +10,7 @@ numbers while carrying translation risk.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import random
 from datetime import date
@@ -266,6 +267,107 @@ _LEAGUE_FRAC_OFFSET: Dict[str, float] = {
 }
 
 
+
+# Where a typical roster of each league sits on the offensive-composite axis.
+# PPG is mapped from (composite - center) so a league's own talent level, not the
+# absolute composite, decides where a player lands inside that league's bands.
+_LEAGUE_TALENT_CENTER: Dict[str, float] = {
+    "AHL": 0.605,
+    "ECHL": 0.535,
+    "NCAA": 0.450,
+    "USHL": 0.415,
+    "CHL": 0.430,
+    "OHL": 0.430,
+    "WHL": 0.430,
+    "QMJHL": 0.430,
+    "JUNIOR": 0.430,
+    "EUROPE_JUNIOR": 0.430,
+    "SHL": 0.430,
+    "LIIGA": 0.430,
+}
+_TALENT_SIGMA = 0.05
+
+# Baseline goalie environment per league: (save pct, shots against per game).
+_GOALIE_ENV: Dict[str, Tuple[float, float]] = {
+    "CHL": (0.893, 30.0),
+    "OHL": (0.893, 30.0),
+    "WHL": (0.893, 30.0),
+    "QMJHL": (0.891, 30.5),
+    "JUNIOR": (0.893, 30.0),
+    "USHL": (0.895, 29.0),
+    "NCAA": (0.903, 27.5),
+    "SHL": (0.905, 26.0),
+    "LIIGA": (0.905, 26.0),
+    "EUROPE_JUNIOR": (0.902, 26.5),
+    "AHL": (0.903, 29.0),
+    "ECHL": (0.900, 30.0),
+}
+
+# Injury hazard per game played (was per *update*, which made injury rates depend
+# on how often the calendar was advanced).
+_INJURY_HAZARD_PER_GAME = 0.006
+
+
+def development_league_stat_max_age(code: Any) -> int:
+    """Oldest player kept on the daily development-league stat sync for this league."""
+    return 24 if normalize_prospect_league_key(code) == "NCAA" else 20
+
+
+def _stable_rng(prospect: Any, tag: str, *parts: Any) -> random.Random:
+    """Deterministic RNG per (player, tag, parts) — draws that must not change between calls."""
+    ident = getattr(prospect, "identity", None)
+    pid = getattr(prospect, "id", None) or getattr(ident, "name", None) or ""
+    seed = getattr(prospect, "rng_seed", None)
+    if not pid and seed is None:
+        pid = id(prospect)
+    raw = "|".join(str(x) for x in (pid, seed, tag) + tuple(parts))
+    return random.Random(int(hashlib.md5(raw.encode("utf-8")).hexdigest()[:12], 16))
+
+
+def _season_year_of(prospect: Any) -> int:
+    return _safe_int(getattr(prospect, "_prospect_season_year", 0), 0)
+
+
+def _seed_year(prospect: Any, fallback: Optional[int] = None) -> int:
+    """Year used to seed this season's per-player draws.
+
+    Pinned when the season is initialised so the projection and the live PPG target use the
+    *same* usage/luck draw (players spawned before the calendar year is known would otherwise
+    project with one draw and play with another, faking over/under-performance).
+    """
+    pinned = getattr(prospect, "_prospect_ppg_seed_year", None)
+    if pinned is not None:
+        return _safe_int(pinned, 0)
+    if fallback is not None:
+        return int(fallback)
+    return _season_year_of(prospect)
+
+
+def _poisson(lam: float, rng: random.Random) -> int:
+    lam = max(0.0, float(lam))
+    if lam <= 0.0:
+        return 0
+    if lam < 30.0:
+        threshold = math.exp(-lam)
+        prod = 1.0
+        k = 0
+        while prod > threshold:
+            k += 1
+            prod *= rng.random()
+        return max(0, k - 1)
+    return max(0, int(round(lam + rng.gauss(0.0, math.sqrt(lam)))))
+
+
+def _binomial(n: int, p: float, rng: random.Random) -> int:
+    n = max(0, int(n))
+    p = _clamp(p, 0.0, 1.0)
+    if n == 0 or p <= 0.0:
+        return 0
+    if p >= 1.0:
+        return n
+    return sum(1 for _ in range(n) if rng.random() < p)
+
+
 def _safe_float(v: Any, default: float = 0.0) -> float:
     try:
         if v is None or v == "":
@@ -388,7 +490,7 @@ def _player_ovr_0_1(prospect: Any) -> float:
     return v
 
 
-def _draft_mid(prospect: Any) -> float:
+def _draft_mid(prospect: Any) -> float:  # HIDDEN-TRUTH: draft/board code only — never feed into stats/analytics
     dr = getattr(prospect, "draft_value_range", None)
     if dr and len(dr) >= 2:
         try:
@@ -450,14 +552,18 @@ def _playstyle_bucket(prospect: Any) -> str:
 
 
 def _offensive_talent_score(prospect: Any) -> float:
-    """0–1 offensive talent estimate from ratings, OVR, potential, and tags."""
+    """0–1 *public* offensive talent estimate: current OVR + offensive ratings + style only.
+
+    Deliberately excludes potential, pipeline tier, steal/bust flags and dev type so the
+    analytics and stock movement built on it cannot leak hidden ceiling information.
+    """
     cached = getattr(prospect, "_prospect_cached_offensive_talent", None)
     if cached is not None:
         return float(cached)
     ovr = _player_ovr_0_1(prospect)
-    mid = _draft_mid(prospect)
-    score = ovr * 0.38 + mid * 0.42
+    score = 0.0
 
+    off_avg: Optional[float] = None
     ratings = getattr(prospect, "ratings", None)
     if isinstance(ratings, dict) and ratings:
         off_vals: List[float] = []
@@ -466,25 +572,11 @@ def _offensive_talent_score(prospect: Any) -> float:
             if any(x in kl for x in ("shot", "shoot", "pass", "off", "puck", "skill", "handling", "accuracy")):
                 off_vals.append(_safe_float(v, 50.0) / 99.0)
         if off_vals:
-            score += sum(off_vals) / len(off_vals) * 0.24
-        pot = ratings.get("dev_potential")
-        if pot is not None:
-            score += (_safe_float(pot, 70.0) / 99.0) * 0.12
-
-    tier = str(getattr(prospect, "pipeline_tier", "") or "").lower()
-    if tier in ("transcendent", "franchise"):
-        score += 0.16
-    elif tier == "elite":
-        score += 0.10
-    elif tier == "top":
-        score += 0.05
-
-    if getattr(prospect, "pipeline_steal", False):
-        score += 0.10
-    if getattr(prospect, "is_transcendent", False) or getattr(prospect, "transcendent_talent", False):
-        score += 0.14
-    if str(getattr(prospect, "dev_type", "") or "").lower() in ("elite", "steal"):
-        score += 0.06
+            off_avg = sum(off_vals) / len(off_vals)
+    if off_avg is None:
+        score += ovr * 0.90
+    else:
+        score += ovr * 0.50 + off_avg * 0.40
 
     style = _playstyle_bucket(prospect)
     if style in ("sniper", "playmaker", "power_forward", "scoring_forward", "offensive_defenseman"):
@@ -588,12 +680,101 @@ def _league_season_fraction(league: Any, month: int, day: int) -> float:
     return frac
 
 
-def expected_games_for_date(league: Any, projected_gp: int, calendar_iso: Any) -> int:
-    """How many GP should have occurred by calendar_iso for this league."""
+def expected_games_for_date(league: Any, projected_gp: int, calendar_iso: Any, start_frac: float = 0.0) -> int:
+    """How many GP should have occurred by calendar_iso for this league.
+
+    ``start_frac`` is the fraction of the season already gone when this stint began, so a
+    player who arrives mid-season is not credited games played before he got there.
+    """
     month, day = _parse_calendar_iso(calendar_iso)
     frac = _league_season_fraction(league, month, day)
-    gp = int(round(int(projected_gp) * frac))
-    return max(0, min(int(projected_gp), gp))
+    start = _clamp(start_frac, 0.0, 1.0)
+    cap = max(0, int(round(int(projected_gp) * (1.0 - start))))
+    gp = int(round(int(projected_gp) * max(0.0, frac - start)))
+    return max(0, min(cap, gp))
+
+
+def _stint(prospect: Any) -> Optional[Dict[str, Any]]:
+    st = getattr(prospect, "_prospect_stint", None)
+    return st if isinstance(st, dict) else None
+
+
+def _stint_team_label(prospect: Any) -> str:
+    asg = getattr(prospect, "_franchise_assignment", None)
+    if isinstance(asg, dict) and asg.get("club"):
+        return str(asg.get("club"))
+    return str(getattr(getattr(prospect, "context", None), "current_team_id", "") or "")
+
+
+def begin_prospect_stint(
+    prospect: Any,
+    league: Any,
+    *,
+    start_frac: float = 0.0,
+    iso: str = "",
+    season_year: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Open a stat stint: one league + team for one continuous stretch of one season.
+
+    A stat line belongs to the stint, not the player. ``start_frac`` is how much of the
+    season had passed when the player arrived — games before that are never credited.
+    """
+    st = {
+        "league_key": normalize_prospect_league_key(league),
+        "team": _stint_team_label(prospect),
+        "start_frac": float(_clamp(start_frac, 0.0, 1.0)),
+        "start_iso": str(iso or "")[:10],
+        "last_live_iso": str(iso or "")[:10],
+        "season_year": int(season_year) if season_year is not None else _season_year_of(prospect),
+        "open": True,
+    }
+    try:
+        setattr(prospect, "_prospect_stint", st)
+    except Exception:
+        pass
+    return st
+
+
+def archive_prospect_stint(prospect: Any, *, reason: str = "left_level") -> bool:
+    """Close the open stint and file its line in ``prospect_stat_history`` (if any games)."""
+    st = _stint(prospect)
+    if st is None or not st.get("open", True):
+        return False
+    st["open"] = False
+    actual = getattr(prospect, "_prospect_season_stats", None)
+    if not isinstance(actual, dict):
+        return False
+    gp = _safe_int(actual.get("gp"), 0)
+    if gp <= 0:
+        return False
+    row: Dict[str, Any] = {
+        "season_year": st.get("season_year"),
+        "league": st.get("league_key"),
+        "team": st.get("team"),
+        "reason": reason,
+        "start_iso": st.get("start_iso"),
+        "gp": gp,
+        "synthetic": True,
+    }
+    if _is_goalie(prospect):
+        for k in ("wins", "losses", "ot_losses", "save_pct", "gaa", "shutouts", "shots_against", "goals_against"):
+            if actual.get(k) is not None:
+                row[k] = actual.get(k)
+    else:
+        for k in ("goals", "assists", "points", "ppg", "pim"):
+            if actual.get(k) is not None:
+                row[k] = actual.get(k)
+    hist = list(getattr(prospect, "prospect_stat_history", None) or [])
+    hist.append(row)
+    try:
+        setattr(prospect, "prospect_stat_history", hist[-24:])
+    except Exception:
+        pass
+    return True
+
+
+def end_prospect_stint(prospect: Any, reason: str = "left_level") -> bool:
+    return archive_prospect_stint(prospect, reason=reason)
 
 
 def _empty_actual_stat_line() -> Dict[str, Any]:
@@ -616,23 +797,24 @@ def _empty_actual_stat_line() -> Dict[str, Any]:
     }
 
 
-def _recalc_skater_line_from_totals(stats: Dict[str, Any], style: str, rng: random.Random) -> None:
+def _recalc_skater_line_from_totals(stats: Dict[str, Any], style: str = "", rng: Optional[random.Random] = None) -> None:
+    """Refresh per-game rates from the *accumulated* line. Never re-splits goals/assists."""
     gp = max(0, _safe_int(stats.get("gp"), 0))
     pts = max(0, _safe_int(stats.get("points"), 0))
+    goals = max(0, _safe_int(stats.get("goals"), 0))
+    if goals > pts:
+        goals = pts
+    stats["goals"] = goals
+    stats["assists"] = max(0, pts - goals)
     if gp <= 0:
-        stats["goals"] = 0
-        stats["assists"] = 0
         stats["ppg"] = 0.0
         stats["points_per_game"] = 0.0
         return
-    goals, assists = _split_goals_assists(pts, style, rng)
-    stats["goals"] = goals
-    stats["assists"] = assists
     ppg = round(pts / gp, 3)
     stats["ppg"] = ppg
     stats["points_per_game"] = ppg
-    stats["goals_per_game"] = round(goals / gp, 3)
-    stats["assists_per_game"] = round(assists / gp, 3)
+    stats["goals_per_game"] = round(stats["goals"] / gp, 3)
+    stats["assists_per_game"] = round(stats["assists"] / gp, 3)
 
 
 def _sample_prospect_game_points(
@@ -643,7 +825,7 @@ def _sample_prospect_game_points(
     hot_game: bool = False,
     elite_tail: bool = False,
 ) -> int:
-    """Discrete point draw preserving E[pts] ≈ target_ppg without upward rounding bias."""
+    """Single-game point draw (kept for callers/tests). Season sim uses _sample_points_block."""
     lam = max(0.0, float(target_ppg))
     if hot_game:
         lam *= rng.uniform(1.14, 1.38)
@@ -651,68 +833,61 @@ def _sample_prospect_game_points(
         lam *= rng.uniform(1.22, 1.48)
     elif overdispersion > 0.01:
         lam *= rng.uniform(1.0 - overdispersion * 0.30, 1.0 + overdispersion * 0.45)
-    if lam <= 0.001:
+    return _poisson(lam, rng)
+
+
+def _sample_points_block(
+    target_ppg: float,
+    n: int,
+    rng: random.Random,
+    *,
+    vol: float,
+    offensive: float,
+    boom_bust: bool,
+    concerns: bool,
+) -> int:
+    """Points over ``n`` games. Same distribution whether n is 1 (daily) or 60 (bulk sim).
+
+    Every per-game effect is applied as an *expected count* over the block (binomial number
+    of hot games, scoreless games, tail games) so E[points] == target_ppg * n regardless of
+    how the calendar was chunked, and variance scales like a sum of n independent games.
+    """
+    n = int(n)
+    if n <= 0 or target_ppg <= 0.0:
         return 0
-    if lam < 14.0:
-        threshold = math.exp(-lam)
-        prod = 1.0
-        k = 0
-        while prod > threshold:
-            k += 1
-            prod *= rng.random()
-        return max(0, k - 1)
-    return max(0, int(round(lam + rng.gauss(0, math.sqrt(lam) * 0.22))))
+    p_hot = (0.035 if offensive >= 0.80 else 0.0) + (0.012 if boom_bust else 0.0)
+    hot = _binomial(n, p_hot, rng) if p_hot > 0 else 0
+    tail = _binomial(n, 0.022, rng) if offensive >= 0.76 else 0
+    zeros = _binomial(n, 0.04, rng) if concerns else 0
+    lam = target_ppg * max(0, n - zeros)
+    lam += target_ppg * hot * 0.26  # E[hot multiplier - 1] = mean(1.14, 1.38) - 1
+    lam += target_ppg * tail * 0.35  # E[tail multiplier - 1] = mean(1.22, 1.48) - 1
+    if vol > 0.01:
+        lo, hi = 1.0 - 0.30 * vol, 1.0 + 0.45 * vol
+        mean_u = 0.5 * (lo + hi)
+        lam *= max(0.2, 1.0 + (rng.uniform(lo, hi) - mean_u) / math.sqrt(n))
+    return _poisson(lam, rng)
 
 
 def _prospect_role_multiplier(prospect: Any, league: Any) -> float:
-    """Usage/role opportunity without revealing hidden potential."""
-    skills = _prospect_event_skills(prospect)
-    offensive = skills["volume"] * 0.22 + skills["finishing"] * 0.28 + skills["playmaking"] * 0.30 + skills["process"] * 0.20
+    """Deployment opportunity from explicit role flags and age only.
+
+    Talent and league scale are already in the PPG curve; multiplying them in again here
+    double-counted both. PP1 / top-line flags are honoured when a roster system sets them.
+    """
     age = _player_age(prospect)
-    mult = 0.82 + offensive * 0.28
+    mult = 1.0
     if age <= 17:
         mult *= 0.94
     elif age == 18:
         mult *= 0.98
     elif age >= 20:
         mult *= 1.04
-    try:
-        profile = get_league_scoring_profile(league)
-        pk = str(profile.get("profile_key") or "").upper()
-        if pk in ("CHL", "OHL", "WHL", "QMJHL", "JUNIOR"):
-            mult *= 1.08
-        elif pk in ("SHL", "LIIGA", "EUROPE_JUNIOR", "DEL"):
-            mult *= 0.86
-        elif pk == "NCAA":
-            mult *= 0.94
-    except Exception:
-        pass
-    if getattr(prospect, "pp1_usage", False) or str(getattr(prospect, "pp_role", "") or "").upper() in ("PP1", "PP1"):
+    if getattr(prospect, "pp1_usage", False) or str(getattr(prospect, "pp_role", "") or "").upper() == "PP1":
         mult *= 1.08
     if str(getattr(prospect, "line_role", "") or "").lower() in ("top", "top_line", "first"):
         mult *= 1.06
     return _clamp(mult, 0.55, 1.12)
-
-
-def _league_junior_stat_multiplier(profile: Dict[str, Any]) -> float:
-    """League-relative scoring scale — CHL high, NCAA moderate, SHL/Euro lower."""
-    key = str(profile.get("profile_key") or profile.get("league_key") or "JUNIOR").upper()
-    table = {
-        "QMJHL": 1.24,
-        "OHL": 1.22,
-        "CHL": 1.20,
-        "WHL": 1.18,
-        "JUNIOR": 1.14,
-        "USHL": 1.08,
-        "NCAA": 0.94,
-        "EUROPE_JUNIOR": 0.84,
-        "SHL": 0.72,
-        "LIIGA": 0.78,
-        "DEL": 0.80,
-        "AHL": 0.88,
-        "ECHL": 0.92,
-    }
-    return float(table.get(key, 1.0))
 
 
 def _volatility_factor(prospect: Any) -> float:
@@ -734,7 +909,14 @@ def _simulate_skater_games(
     stats: Dict[str, Any],
     target_ppg: float,
 ) -> None:
-    if delta_gp <= 0:
+    """Advance a skater's running line by ``delta_gp`` games.
+
+    One code path for daily and bulk advances: the block sampler gives the same
+    expected total and variance however the games are chunked, and goals/assists
+    accumulate (only newly scored points are split), so totals never go backwards.
+    """
+    n = int(delta_gp)
+    if n <= 0:
         return
     style = _playstyle_bucket(prospect)
     vol = _volatility_factor(prospect)
@@ -745,102 +927,45 @@ def _simulate_skater_games(
         + skills["playmaking"] * 0.32
         + skills["process"] * 0.26
     )
-    recent: List[int] = list(stats.get("_recent_game_points") or [])
-    cur_pts = _safe_int(stats.get("points"), 0)
-    cur_gp = _safe_int(stats.get("gp"), 0)
-    cur_pim = _safe_int(stats.get("pim"), 0)
+    pts = _sample_points_block(
+        target_ppg,
+        n,
+        rng,
+        vol=vol,
+        offensive=offensive,
+        boom_bust=_is_boom_bust(prospect),
+        concerns=_has_character_concerns(prospect),
+    )
+    _add_points(stats, pts, _season_goal_share(prospect, style), rng)
 
-    # Large catch-up (season/bulk end): aggregate sampling — same expected totals,
-    # O(chunks) instead of O(delta_gp) per-game loops across thousands of prospects.
-    if delta_gp > 16:
-        chunks = min(12, delta_gp)
-        base = delta_gp // chunks
-        rem = delta_gp % chunks
-        for i in range(chunks):
-            n = base + (1 if i < rem else 0)
-            if n <= 0:
-                continue
-            streak = 1.0
-            if len(recent) >= 3:
-                avg3 = sum(recent[-3:]) / 3.0
-                if avg3 >= target_ppg * 1.35:
-                    streak = rng.uniform(0.90, 1.02)
-                elif avg3 <= target_ppg * 0.55:
-                    streak = rng.uniform(0.98, 1.10)
-            game_lam = target_ppg * streak * n
-            hot_game = offensive >= 0.80 and rng.random() < min(0.25, 0.035 * n)
-            if _has_character_concerns(prospect) and rng.random() < min(0.2, 0.04 * n):
-                chunk_pts = max(0, int(round(game_lam * rng.uniform(0.35, 0.7))))
-            else:
-                chunk_pts = _sample_prospect_game_points(
-                    game_lam,
-                    rng,
-                    overdispersion=vol,
-                    hot_game=hot_game,
-                    elite_tail=offensive >= 0.76,
-                )
-            # Spread a few recent samples for form/stock (not one giant game).
-            per = max(0, chunk_pts // max(1, n))
-            leftover = max(0, chunk_pts - per * n)
-            for j in range(min(n, 8)):
-                recent.append(per + (1 if j < leftover else 0))
-            if len(recent) > 8:
-                recent = recent[-8:]
-            cur_pts += chunk_pts
-            cur_gp += n
-            if style in ("grinder", "power_forward"):
-                cur_pim += int(rng.randint(0, 4) * n * 0.55)
-            else:
-                cur_pim += int(rng.randint(0, 2) * n * 0.35)
-        stats["gp"] = cur_gp
-        stats["games_played"] = cur_gp
-        stats["points"] = cur_pts
-        stats["pim"] = cur_pim
-        stats["_recent_game_points"] = recent
-        _recalc_skater_line_from_totals(stats, style, rng)
-        return
+    # Spread the block's points over its games so recent-form / weekly heat stay realistic.
+    games = [0] * n
+    for _ in range(pts):
+        games[rng.randrange(n)] += 1
+    recent = (list(stats.get("_recent_game_points") or []) + games)[-8:]
 
-    for _ in range(delta_gp):
-        streak = 1.0
-        if len(recent) >= 3:
-            avg3 = sum(recent[-3:]) / 3.0
-            if avg3 >= target_ppg * 1.35:
-                streak = rng.uniform(0.88, 1.02)
-            elif avg3 <= target_ppg * 0.55:
-                streak = rng.uniform(0.98, 1.12)
-        game_lam = target_ppg * streak
-        hot_game = False
-        elite_tail = offensive >= 0.76
-        if _is_boom_bust(prospect) and rng.random() < 0.012:
-            hot_game = True
-        if offensive >= 0.80 and rng.random() < 0.035:
-            hot_game = True
-        if _has_character_concerns(prospect) and rng.random() < 0.04:
-            game_pts = 0
-        else:
-            game_pts = _sample_prospect_game_points(
-                game_lam,
-                rng,
-                overdispersion=vol,
-                hot_game=hot_game,
-                elite_tail=elite_tail,
-            )
-        recent.append(game_pts)
-        if len(recent) > 8:
-            recent = recent[-8:]
-        cur_pts += game_pts
-        cur_gp += 1
-        if style in ("grinder", "power_forward"):
-            cur_pim += rng.randint(0, 4)
-        elif rng.random() < 0.35:
-            cur_pim += rng.randint(0, 2)
-
-    stats["gp"] = cur_gp
-    stats["games_played"] = cur_gp
-    stats["points"] = cur_pts
-    stats["pim"] = cur_pim
+    if style in ("grinder", "power_forward"):
+        pim_mean, pim_sd = 2.0, 1.4
+    else:
+        pim_mean, pim_sd = 0.35, 0.6
+    stats["pim"] = _safe_int(stats.get("pim"), 0) + max(
+        0, int(round(rng.gauss(n * pim_mean, math.sqrt(n) * pim_sd)))
+    )
+    stats["gp"] = _safe_int(stats.get("gp"), 0) + n
+    stats["games_played"] = stats["gp"]
     stats["_recent_game_points"] = recent
-    _recalc_skater_line_from_totals(stats, style, rng)
+    _recalc_skater_line_from_totals(stats)
+
+
+def _goalie_ability(prospect: Any) -> float:
+    """0–1 goalie quality from goalie ratings + current OVR (skater tools are irrelevant)."""
+    ovr = _player_ovr_0_1(prospect)
+    ratings = getattr(prospect, "ratings", None)
+    if isinstance(ratings, dict) and ratings:
+        vals = [_safe_float(v, 50.0) / 99.0 for k, v in ratings.items() if str(k).lower().startswith("g_")]
+        if vals:
+            return _clamp(0.5 * ovr + 0.5 * (sum(vals) / len(vals)), 0.15, 0.95)
+    return _clamp(ovr, 0.15, 0.95)
 
 
 def _simulate_goalie_games(
@@ -851,89 +976,48 @@ def _simulate_goalie_games(
     stats: Dict[str, Any],
     projected: Dict[str, Any],
 ) -> None:
-    if delta_gp <= 0:
+    """Advance a goalie by ``delta_gp`` games using shots against and goals against.
+
+    SV% and GAA are *derived* from accumulated shots/goals, so they stay consistent with
+    each other and with the season total (the old model averaged the last 12 noise draws).
+    """
+    n = int(delta_gp)
+    if n <= 0:
         return
-    offensive = _offensive_talent_score(prospect)
     vol = _volatility_factor(prospect)
     proj_gp = max(1, _safe_int(projected.get("gp"), 40))
-    proj_sv = _safe_float(projected.get("save_pct"), 0.905)
-    proj_gaa = _safe_float(projected.get("gaa"), 2.85)
-    proj_w = _safe_int(projected.get("wins"), int(proj_gp * 0.5))
+    sv_true = _clamp(_safe_float(projected.get("save_pct"), 0.895), 0.84, 0.95)
+    sa_pg = max(15.0, _safe_float(projected.get("shots_against_per_game"), 29.0))
+    win_rate = _clamp(_safe_int(projected.get("wins"), int(proj_gp * 0.5)) / float(proj_gp), 0.25, 0.75)
 
-    cur_gp = _safe_int(stats.get("gp"), 0)
-    cur_w = _safe_int(stats.get("wins"), 0)
-    cur_so = _safe_int(stats.get("shutouts"), 0)
-    sv_samples: List[float] = list(stats.get("_sv_samples") or [])
-    gaa_samples: List[float] = list(stats.get("_gaa_samples") or [])
+    sa = max(n, int(round(rng.gauss(n * sa_pg, math.sqrt(n) * 5.5))))
+    lam = sa * (1.0 - sv_true)
+    if vol > 0.01:
+        lo, hi = 1.0 - 0.15 * vol, 1.0 + 0.20 * vol
+        lam *= max(0.3, 1.0 + (rng.uniform(lo, hi) - 0.5 * (lo + hi)) / math.sqrt(n))
+    ga = min(sa, _poisson(lam, rng))
 
-    win_rate = proj_w / float(proj_gp)
-    if delta_gp > 16:
-        chunks = min(12, delta_gp)
-        base = delta_gp // chunks
-        rem = delta_gp % chunks
-        for i in range(chunks):
-            n = base + (1 if i < rem else 0)
-            if n <= 0:
-                continue
-            sv = _clamp(proj_sv + rng.uniform(-vol * 0.08, vol * 0.06), 0.845, 0.945)
-            gaa = _clamp(proj_gaa + rng.uniform(-vol * 0.9, vol * 0.9), 1.85, 4.10)
-            for _ in range(min(n, 2)):
-                sv_samples.append(sv)
-                gaa_samples.append(gaa)
-            if len(sv_samples) > 12:
-                sv_samples = sv_samples[-12:]
-            if len(gaa_samples) > 12:
-                gaa_samples = gaa_samples[-12:]
-            cur_gp += n
-            wins_chunk = sum(1 for _ in range(n) if rng.random() < win_rate * rng.uniform(0.88, 1.12))
-            cur_w += wins_chunk
-            if sv >= 0.94 and gaa <= 2.1 and rng.random() < min(0.35, (0.12 + offensive * 0.08) * n):
-                cur_so += 1
-        stats["gp"] = cur_gp
-        stats["games_played"] = cur_gp
-        stats["wins"] = cur_w
-        stats["losses"] = max(0, cur_gp - cur_w - rng.randint(0, min(3, cur_gp)))
-        stats["ot_losses"] = max(0, cur_gp - cur_w - _safe_int(stats.get("losses"), 0))
-        if sv_samples:
-            avg_sv = sum(sv_samples) / len(sv_samples)
-            stats["save_pct"] = round(avg_sv, 3)
-            stats["savePct"] = stats["save_pct"]
-        if gaa_samples:
-            stats["gaa"] = round(sum(gaa_samples) / len(gaa_samples), 2)
-        stats["shutouts"] = cur_so
-        stats["_sv_samples"] = sv_samples
-        stats["_gaa_samples"] = gaa_samples
-        return
-
-    for _ in range(delta_gp):
-        sv = _clamp(proj_sv + rng.uniform(-vol * 0.08, vol * 0.06), 0.845, 0.945)
-        gaa = _clamp(proj_gaa + rng.uniform(-vol * 0.9, vol * 0.9), 1.85, 4.10)
-        sv_samples.append(sv)
-        gaa_samples.append(gaa)
-        if len(sv_samples) > 12:
-            sv_samples = sv_samples[-12:]
-        if len(gaa_samples) > 12:
-            gaa_samples = gaa_samples[-12:]
-        cur_gp += 1
-        if rng.random() < win_rate * rng.uniform(0.88, 1.12):
-            cur_w += 1
-        if sv >= 0.94 and gaa <= 2.1 and rng.random() < 0.12 + offensive * 0.08:
-            cur_so += 1
-
-    stats["gp"] = cur_gp
-    stats["games_played"] = cur_gp
-    stats["wins"] = cur_w
-    stats["losses"] = max(0, cur_gp - cur_w - rng.randint(0, min(3, cur_gp)))
-    stats["ot_losses"] = max(0, cur_gp - cur_w - _safe_int(stats.get("losses"), 0))
-    if sv_samples:
-        avg_sv = sum(sv_samples) / len(sv_samples)
-        stats["save_pct"] = round(avg_sv, 3)
+    stats["shots_against"] = _safe_int(stats.get("shots_against"), 0) + sa
+    stats["goals_against"] = _safe_int(stats.get("goals_against"), 0) + ga
+    stats["saves"] = stats["shots_against"] - stats["goals_against"]
+    gp_total = _safe_int(stats.get("gp"), 0) + n
+    stats["gp"] = gp_total
+    stats["games_played"] = gp_total
+    if stats["shots_against"] > 0:
+        sv_now = 1.0 - stats["goals_against"] / float(stats["shots_against"])
+        stats["save_pct"] = round(sv_now, 3)
         stats["savePct"] = stats["save_pct"]
-    if gaa_samples:
-        stats["gaa"] = round(sum(gaa_samples) / len(gaa_samples), 2)
-    stats["shutouts"] = cur_so
-    stats["_sv_samples"] = sv_samples
-    stats["_gaa_samples"] = gaa_samples
+    stats["gaa"] = round(stats["goals_against"] / float(max(1, gp_total)), 2)
+
+    sv_block = 1.0 - ga / float(max(1, sa))
+    p_win = _clamp(win_rate + (sv_block - sv_true) * 3.0, 0.15, 0.85)
+    w_new = _binomial(n, p_win, rng)
+    otl_new = _binomial(n - w_new, 0.12, rng)
+    stats["wins"] = _safe_int(stats.get("wins"), 0) + w_new
+    stats["ot_losses"] = _safe_int(stats.get("ot_losses"), 0) + otl_new
+    stats["losses"] = _safe_int(stats.get("losses"), 0) + (n - w_new - otl_new)
+    ga_pg = sa_pg * (1.0 - sv_true)
+    stats["shutouts"] = _safe_int(stats.get("shutouts"), 0) + _binomial(n, math.exp(-ga_pg), rng)
     stats["ppg"] = 0.0
     stats["points_per_game"] = 0.0
 
@@ -1006,10 +1090,6 @@ def _analytics_process_score(prospect: Any, actual: Dict[str, Any], projected: D
         if target > 0.01:
             base += _clamp((avg3 - target) / max(0.12, target), -0.35, 0.35) * 0.45
 
-    if getattr(prospect, "pipeline_steal", False):
-        base += 0.12
-    if getattr(prospect, "pipeline_bust", False):
-        base -= 0.18
     return _clamp(base, -1.0, 1.0)
 
 
@@ -1406,10 +1486,12 @@ def initialize_prospect_season(
     calendar_iso: Optional[str] = None,
     force: bool = False,
     preserve_actual: bool = False,
+    stint_start_frac: float = 0.0,
+    stint_iso: str = "",
 ) -> Dict[str, Any]:
     """
-    Build full-season projection and zero/early actual stats.
-    Does NOT simulate the entire season upfront.
+    Build the full-season projection and a zeroed actual line for a new stint.
+    Does NOT simulate the season upfront. Any previous open stint is filed to history.
     """
     if not force:
         proj = getattr(prospect, "_prospect_projected_stats", None)
@@ -1421,11 +1503,26 @@ def initialize_prospect_season(
         seed = getattr(prospect, "rng_seed", None) or getattr(prospect, "seed", None) or id(prospect)
         rng = random.Random(int(seed) & 0xFFFFFFFF)
 
+    key = normalize_prospect_league_key(league)
+    if not preserve_actual:
+        archive_prospect_stint(prospect, reason="new_stint")
+    if season_year is not None:
+        try:
+            setattr(prospect, "_prospect_season_year", int(season_year))
+        except Exception:
+            pass
+    sy = int(season_year) if season_year is not None else _season_year_of(prospect)
+    try:
+        setattr(prospect, "_prospect_ppg_seed_year", sy)
+    except Exception:
+        pass
+
     profile = get_league_scoring_profile(league)
-    proj_gp = _default_games_played(profile, _player_age(prospect), rng)
-    projected = generate_prospect_scoring_line(prospect, league, games_played=proj_gp, rng=rng)
+    seeded = _stable_rng(prospect, "projection", sy, key)
+    proj_gp = _default_games_played(profile, _player_age(prospect), seeded)
+    projected = generate_prospect_scoring_line(prospect, league, games_played=proj_gp, rng=seeded)
     projected["stat_source"] = "season_projection"
-    projected["projected_gp"] = proj_gp
+    projected["projected_gp"] = int(projected.get("gp") or proj_gp)
 
     prev_actual = getattr(prospect, "_prospect_season_stats", None)
     if preserve_actual and isinstance(prev_actual, dict):
@@ -1435,7 +1532,7 @@ def initialize_prospect_season(
 
     target_ppg = _safe_float(projected.get("ppg", projected.get("points_per_game")), 0.0)
     if not _is_goalie(prospect):
-        target_ppg = calculate_prospect_ppg_scale(prospect, league, rng)
+        target_ppg = calculate_prospect_ppg_scale(prospect, league, season_year=sy)
 
     try:
         setattr(prospect, "_prospect_projected_stats", dict(projected))
@@ -1443,10 +1540,13 @@ def initialize_prospect_season(
         setattr(prospect, "_prospect_season_stats", dict(actual))
         if not preserve_actual:
             setattr(prospect, "_prospect_last_stat_update_iso", "")
-        if season_year is not None:
-            setattr(prospect, "_prospect_season_year", int(season_year))
+            setattr(prospect, "_prospect_injury_games_remaining", 0)
     except Exception:
         pass
+    if not preserve_actual or _stint(prospect) is None:
+        begin_prospect_stint(
+            prospect, league, start_frac=stint_start_frac, iso=stint_iso, season_year=sy
+        )
 
     if calendar_iso:
         advance_prospect_stats_to_date(
@@ -1461,65 +1561,13 @@ def initialize_prospect_season(
     return dict(actual) if isinstance(actual, dict) else actual
 
 
-def _maybe_retune_underproduced_prospect_line(
-    prospect: Any,
-    league: Any,
-    actual: Dict[str, Any],
-    target_ppg: float,
-    rng: random.Random,
-) -> None:
-    """
-    Catch-up for seasons simulated under the over-moderated PPG model.
-    Pulls toward ~96% of the retuned target so draft boards show real junior scoring.
-    """
-    if _is_goalie(prospect):
-        return
-    if bool(getattr(prospect, "_prospect_scoring_retune_v5", False)):
-        return
-    gp = _safe_int(actual.get("gp"), 0)
-    pts = _safe_int(actual.get("points"), 0)
-    if gp < 10 or target_ppg <= 0.05:
-        try:
-            setattr(prospect, "_prospect_scoring_retune_v5", True)
-        except Exception:
-            pass
-        return
-    cur_ppg = pts / float(gp)
-    desired = float(target_ppg) * 0.96
-    if cur_ppg >= desired * 0.94:
-        try:
-            setattr(prospect, "_prospect_scoring_retune_v5", True)
-        except Exception:
-            pass
-        return
-    new_pts = max(pts, int(round(desired * gp)))
-    # Allow a larger one-time jump so mid/late junior seasons catch up to CHL reality.
-    max_pts = pts + int(round(0.95 * gp))
-    new_pts = min(new_pts, max_pts)
-    if new_pts <= pts:
-        try:
-            setattr(prospect, "_prospect_scoring_retune_v5", True)
-        except Exception:
-            pass
-        return
-    style = _playstyle_bucket(prospect)
-    goals, assists = _split_goals_assists(new_pts, style, rng)
-    actual["points"] = int(new_pts)
-    actual["goals"] = int(goals)
-    actual["assists"] = int(assists)
-    actual["ppg"] = round(new_pts / float(gp), 3)
-    actual["points_per_game"] = actual["ppg"]
-    actual["goals_per_game"] = round(goals / float(gp), 3)
-    actual["assists_per_game"] = round(assists / float(gp), 3)
-    try:
-        setattr(prospect, "_prospect_scoring_retune_v4", True)
-        setattr(prospect, "_prospect_season_stats", dict(actual))
-    except Exception:
-        pass
-
-
 def _prospect_injury_games(prospect: Any, delta_gp: int, rng: random.Random) -> int:
-    """Return GP lost to injury this advance window."""
+    """Return GP lost to injury in this advance window.
+
+    Hazard is per *game*, so the expected number of injuries is the same whether the
+    calendar advances daily or in one bulk step. ``remaining`` carries an injury that
+    outlasts the window into the next one (no game is missed twice).
+    """
     if delta_gp <= 0:
         return 0
     remaining = _safe_int(getattr(prospect, "_prospect_injury_games_remaining", 0), 0)
@@ -1530,6 +1578,7 @@ def _prospect_injury_games(prospect: Any, delta_gp: int, rng: random.Random) -> 
             setattr(prospect, "_prospect_injury_games_remaining", left)
             if left <= 0:
                 setattr(prospect, "prospect_injured", False)
+                setattr(prospect, "injured", False)
                 setattr(prospect, "injury_status", None)
                 setattr(prospect, "injury_note", None)
             else:
@@ -1539,26 +1588,45 @@ def _prospect_injury_games(prospect: Any, delta_gp: int, rng: random.Random) -> 
         except Exception:
             pass
         return missed
-    injury_risk = 0.014
+    hazard = _INJURY_HAZARD_PER_GAME
     traits = getattr(prospect, "traits", None)
     if traits is not None:
         mod = getattr(traits, "injury_risk_mod", None) if not isinstance(traits, dict) else traits.get("injury_risk_mod")
         if mod is not None:
-            injury_risk += _safe_float(mod, 0.0)
-    if rng.random() > injury_risk:
+            hazard += _safe_float(mod, 0.0) * (_INJURY_HAZARD_PER_GAME / 0.014)
+    hazard = _clamp(hazard, 0.0, 0.05)
+    if rng.random() >= 1.0 - (1.0 - hazard) ** int(delta_gp):
         return 0
-    missed = rng.randint(1, min(8, max(1, delta_gp)))
-    note = f"Injury — expected to miss {missed} GP"
+    total = rng.randint(1, 8)
+    missed = min(int(delta_gp), total)
+    left = total - missed
+    note = f"Injury — expected to miss {total} GP"
     try:
-        setattr(prospect, "_prospect_injury_games_remaining", missed)
-        setattr(prospect, "prospect_injured", True)
-        setattr(prospect, "injured", True)
-        setattr(prospect, "injury_status", note)
+        setattr(prospect, "_prospect_injury_games_remaining", left)
+        setattr(prospect, "prospect_injured", left > 0)
+        setattr(prospect, "injured", left > 0)
+        setattr(prospect, "injury_status", note if left > 0 else None)
         setattr(prospect, "injury_note", note)
         setattr(prospect, "weekly_stock_reason", note)
     except Exception:
         pass
     return missed
+
+
+def _apply_stock_to_actual(prospect: Any, actual: Dict[str, Any], weekly_stock: Dict[str, Any]) -> None:
+    actual.update(weekly_stock)
+    actual["stock_delta"] = weekly_stock.get("weekly_stock_delta", 0)
+    actual["stock_label"] = weekly_stock.get("weekly_stock_label", "Holding")
+    actual["stock_trend"] = weekly_stock.get("weekly_stock_trend", "Holding")
+    actual["stock_reason"] = weekly_stock.get("weekly_stock_reason", "")
+    try:
+        setattr(prospect, "stock_delta", actual["stock_delta"])
+        setattr(prospect, "weekly_stock_delta", actual["stock_delta"])
+        setattr(prospect, "stock_label", actual["stock_label"])
+        setattr(prospect, "stock_trend", actual["stock_trend"])
+        setattr(prospect, "weekly_stock_reason", actual["stock_reason"])
+    except Exception:
+        pass
 
 
 def advance_prospect_stats_to_date(
@@ -1570,11 +1638,15 @@ def advance_prospect_stats_to_date(
     season_year: Optional[int] = None,
     expected_gp_override: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Simulate only the GP delta between last update and calendar_iso."""
+    """Simulate only the games owed to this stint between the last update and calendar_iso.
+
+    The result depends on the calendar date reached, not on how many updates it took.
+    """
     if not isinstance(rng, random.Random):
         seed = getattr(prospect, "rng_seed", None) or getattr(prospect, "seed", None) or id(prospect)
         rng = random.Random(int(seed) & 0xFFFFFFFF)
 
+    key = normalize_prospect_league_key(league)
     stored_year = getattr(prospect, "_prospect_season_year", None)
     # Reset when the calendar year advances — including the first tick after a
     # rollover where `_prospect_season_year` was never stamped (None). Without
@@ -1613,14 +1685,44 @@ def advance_prospect_stats_to_date(
         )
         projected = getattr(prospect, "_prospect_projected_stats", None) or {}
 
-    proj_gp = max(1, _safe_int(projected.get("gp"), 60))
     target_iso = str(calendar_iso or "")[:10]
+    month, day = _parse_calendar_iso(target_iso)
+    frac_now = _league_season_fraction(league, month, day)
+
+    # ---- stint bookkeeping: a new league / a returning player starts a fresh stint with no backfill
+    stint = _stint(prospect)
+    if stint is None:
+        stint = begin_prospect_stint(
+            prospect, league, start_frac=0.0, iso=target_iso, season_year=season_year
+        )
+    elif (not stint.get("open", True)) or str(stint.get("league_key")) != key:
+        initialize_prospect_season(
+            prospect,
+            league,
+            rng=rng,
+            season_year=season_year,
+            calendar_iso=None,
+            force=True,
+            stint_start_frac=frac_now,
+            stint_iso=target_iso,
+        )
+        projected = getattr(prospect, "_prospect_projected_stats", None) or projected
+        stint = _stint(prospect) or stint
+    start_frac = _safe_float(stint.get("start_frac"), 0.0)
+
+    if season_year is not None:
+        try:
+            setattr(prospect, "_prospect_season_year", int(season_year))
+        except Exception:
+            pass
+
+    proj_gp = max(1, _safe_int(projected.get("gp"), 60))
     last_iso = str(getattr(prospect, "_prospect_last_stat_update_iso", "") or "")[:10]
 
     # Catch prior-season lines that kept high GP after a calendar rollover
     # when `_prospect_season_year` was already stamped to the new year.
     try:
-        expected_probe = expected_games_for_date(league, proj_gp, target_iso) if target_iso else 0
+        expected_probe = expected_games_for_date(league, proj_gp, target_iso, start_frac) if target_iso else 0
         actual_probe = getattr(prospect, "_prospect_season_stats", None)
         cur_probe = _safe_int(actual_probe.get("gp"), 0) if isinstance(actual_probe, dict) else 0
         if target_iso and cur_probe > int(expected_probe) + 8:
@@ -1631,6 +1733,8 @@ def advance_prospect_stats_to_date(
                 season_year=season_year,
                 calendar_iso=None,
                 force=True,
+                stint_start_frac=start_frac,
+                stint_iso=str(stint.get("start_iso") or target_iso),
             )
             projected = getattr(prospect, "_prospect_projected_stats", None) or projected
             proj_gp = max(1, _safe_int(projected.get("gp"), 60))
@@ -1638,20 +1742,9 @@ def advance_prospect_stats_to_date(
     except Exception:
         pass
 
-    if season_year is not None:
-        try:
-            setattr(prospect, "_prospect_season_year", int(season_year))
-        except Exception:
-            pass
-
     if last_iso == target_iso and target_iso:
         cached = getattr(prospect, "_prospect_season_stats", None)
         actual = dict(cached) if isinstance(cached, dict) else _empty_actual_stat_line()
-        if not _is_goalie(prospect) and not bool(getattr(prospect, "_prospect_scoring_retune_v4", False)):
-            fresh_ppg = calculate_prospect_ppg_scale(prospect, league, rng)
-            _maybe_retune_underproduced_prospect_line(prospect, league, actual, fresh_ppg, rng)
-            cached = getattr(prospect, "_prospect_season_stats", None)
-            actual = dict(cached) if isinstance(cached, dict) else actual
         # Refresh weekly stock even on a same-day cache hit so the board isn't stuck
         # at +0 after stock-logic changes or a quiet mid-week baseline reset.
         try:
@@ -1659,42 +1752,21 @@ def advance_prospect_stats_to_date(
             _sync_prospect_week_baseline(prospect, actual, week_key)
             week_delta = _week_stat_delta(prospect, actual)
             weekly_stock = _compute_weekly_stock_fields(prospect, week_delta, projected, league, actual=actual)
-            actual.update(weekly_stock)
-            actual["stock_delta"] = weekly_stock.get("weekly_stock_delta", 0)
-            actual["stock_label"] = weekly_stock.get("weekly_stock_label", "Holding")
-            actual["stock_trend"] = weekly_stock.get("weekly_stock_trend", "Holding")
-            actual["stock_reason"] = weekly_stock.get("weekly_stock_reason", "")
+            _apply_stock_to_actual(prospect, actual, weekly_stock)
             setattr(prospect, "_prospect_season_stats", dict(actual))
-            setattr(prospect, "stock_delta", weekly_stock.get("weekly_stock_delta", 0))
-            setattr(prospect, "weekly_stock_delta", weekly_stock.get("weekly_stock_delta", 0))
-            setattr(prospect, "stock_label", weekly_stock.get("weekly_stock_label", "Holding"))
-            setattr(prospect, "weekly_stock_reason", weekly_stock.get("weekly_stock_reason", ""))
         except Exception:
             pass
         return actual
 
     if expected_gp_override is None:
-        expected_gp = expected_games_for_date(league, proj_gp, target_iso)
+        expected_gp = expected_games_for_date(league, proj_gp, target_iso, start_frac)
     else:
         expected_gp = int(max(0, min(proj_gp, int(expected_gp_override))))
     actual = dict(getattr(prospect, "_prospect_season_stats", None) or _empty_actual_stat_line())
     cur_gp = _safe_int(actual.get("gp"), 0)
-    delta_gp = max(0, expected_gp - cur_gp)
-
-    target_ppg = _safe_float(
-        getattr(prospect, "_prospect_expected_ppg", None),
-        _safe_float(projected.get("ppg", projected.get("points_per_game")), 0.5),
-    )
-    if not _is_goalie(prospect):
-        # Refresh pace so mid-season drafts pick up scoring retunes.
-        fresh_ppg = calculate_prospect_ppg_scale(prospect, league, rng)
-        if fresh_ppg > target_ppg * 1.04 or target_ppg <= 0.05:
-            target_ppg = fresh_ppg
-        try:
-            setattr(prospect, "_prospect_expected_ppg", float(target_ppg))
-        except Exception:
-            pass
-        _maybe_retune_underproduced_prospect_line(prospect, league, actual, target_ppg, rng)
+    missed_total = _safe_int(actual.get("gp_missed"), 0)
+    # Games lost to injury are gone for good — they must not be re-simulated later.
+    delta_gp = max(0, expected_gp - cur_gp - missed_total)
 
     week_key = _iso_week_key(target_iso)
     prior_stock_week = str(getattr(prospect, "_prospect_last_stock_week_key", "") or "")
@@ -1713,34 +1785,31 @@ def advance_prospect_stats_to_date(
         week_delta = _week_stat_delta(prospect, actual)
         weekly_stock = _compute_weekly_stock_fields(prospect, week_delta, projected, league, actual=actual)
         cached = dict(getattr(prospect, "_prospect_season_stats", None) or actual)
-        cached.update(weekly_stock)
-        cached["stock_delta"] = weekly_stock.get("weekly_stock_delta", 0)
-        cached["stock_label"] = weekly_stock.get("weekly_stock_label", "Holding")
-        cached["stock_trend"] = weekly_stock.get("weekly_stock_trend", "Holding")
-        cached["stock_reason"] = weekly_stock.get("weekly_stock_reason", "")
+        _apply_stock_to_actual(prospect, cached, weekly_stock)
         try:
             setattr(prospect, "_prospect_season_stats", dict(cached))
             setattr(prospect, "_prospect_last_stat_update_iso", target_iso)
             setattr(prospect, "_prospect_games_simulated_to_date", expected_gp)
             setattr(prospect, "_prospect_last_stock_week_key", week_key)
-            setattr(prospect, "stock_delta", weekly_stock.get("weekly_stock_delta", 0))
-            setattr(prospect, "stock_label", weekly_stock.get("weekly_stock_label", "Holding"))
-            setattr(prospect, "stock_trend", weekly_stock.get("weekly_stock_trend", "Holding"))
-            setattr(prospect, "weekly_stock_delta", weekly_stock.get("weekly_stock_delta", 0))
-            setattr(prospect, "weekly_stock_reason", weekly_stock.get("weekly_stock_reason", ""))
         except Exception:
             pass
         return dict(cached)
 
     _sync_prospect_week_baseline(prospect, actual, week_key)
 
-    if delta_gp > 0:
-        injury_gp = _prospect_injury_games(prospect, delta_gp, rng)
-        playable_gp = max(0, delta_gp - injury_gp)
-        if _is_goalie(prospect):
-            _simulate_goalie_games(prospect, league, playable_gp, rng, actual, projected)
-        else:
-            _simulate_skater_games(prospect, league, playable_gp, rng, actual, target_ppg)
+    injury_gp = _prospect_injury_games(prospect, delta_gp, rng)
+    if injury_gp:
+        actual["gp_missed"] = missed_total + injury_gp
+    playable_gp = max(0, delta_gp - injury_gp)
+    if _is_goalie(prospect):
+        _simulate_goalie_games(prospect, league, playable_gp, rng, actual, projected)
+    else:
+        target_ppg = calculate_prospect_ppg_scale(prospect, league, season_year=season_year)
+        try:
+            setattr(prospect, "_prospect_expected_ppg", float(target_ppg))
+        except Exception:
+            pass
+        _simulate_skater_games(prospect, league, playable_gp, rng, actual, target_ppg)
 
     actual["stat_source"] = "calendar_sim"
     week_delta = _week_stat_delta(prospect, actual)
@@ -1757,13 +1826,9 @@ def advance_prospect_stats_to_date(
     ctx = attach_prospect_production_context(prospect, league, actual, rng)
     actual.update(ctx)
     actual.update(season_stock)
-    actual.update(weekly_stock)
-    actual["recent_form"] = recent_form
     # Display stock is weekly (non-cumulative); season signal stays internal for ranking.
-    actual["stock_delta"] = weekly_stock.get("weekly_stock_delta", 0)
-    actual["stock_label"] = weekly_stock.get("weekly_stock_label", "Holding")
-    actual["stock_trend"] = weekly_stock.get("weekly_stock_trend", "Holding")
-    actual["stock_reason"] = weekly_stock.get("weekly_stock_reason", "")
+    _apply_stock_to_actual(prospect, actual, weekly_stock)
+    actual["recent_form"] = recent_form
     actual["season_stock_delta"] = season_stock.get("stock_delta", 0)
 
     try:
@@ -1771,15 +1836,27 @@ def advance_prospect_stats_to_date(
         setattr(prospect, "_prospect_last_stat_update_iso", target_iso)
         setattr(prospect, "_prospect_games_simulated_to_date", expected_gp)
         setattr(prospect, "_prospect_last_stock_week_key", week_key)
-        setattr(prospect, "stock_delta", weekly_stock.get("weekly_stock_delta", 0))
-        setattr(prospect, "stock_label", weekly_stock.get("weekly_stock_label", "Holding"))
-        setattr(prospect, "stock_trend", weekly_stock.get("weekly_stock_trend", "Holding"))
-        setattr(prospect, "weekly_stock_delta", weekly_stock.get("weekly_stock_delta", 0))
-        setattr(prospect, "weekly_stock_reason", weekly_stock.get("weekly_stock_reason", ""))
     except Exception:
         pass
 
     return dict(actual)
+
+
+def _live_minor_levels(league: Any) -> Dict[int, Tuple[Any, str]]:
+    """Players currently on an AHL / ECHL roster list, keyed by object id."""
+    live: Dict[int, Tuple[Any, str]] = {}
+    for tm in getattr(league, "teams", None) or []:
+        for p in getattr(tm, "ahl_roster", None) or []:
+            if not getattr(p, "retired", False):
+                live[id(p)] = (p, "AHL")
+        for p in getattr(tm, "echl_roster", None) or []:
+            if not getattr(p, "retired", False):
+                live[id(p)] = (p, "ECHL")
+    return live
+
+
+def _still_at_junior(p: Any) -> bool:
+    return str(getattr(p, "roster_location", "") or "").lower() not in ("nhl", "ahl", "echl")
 
 
 def advance_all_development_league_stats(
@@ -1790,7 +1867,13 @@ def advance_all_development_league_stats(
     rng: Optional[random.Random] = None,
     prospect_rows: Optional[List[Tuple[Any, str]]] = None,
 ) -> int:
-    """Advance draft-age prospect stats across all development leagues to calendar_iso."""
+    """Advance junior / NCAA / Europe / AHL / ECHL stat lines to calendar_iso.
+
+    AHL and ECHL membership is read from the live roster lists every run (a cached row list
+    goes stale the moment someone is called up). A player who leaves a level closes his stint;
+    one who returns — or who missed a sync while elsewhere — opens a new stint at the current
+    date instead of being back-filled with games he was not there for.
+    """
     league = getattr(sim, "league", None)
     if league is None:
         return 0
@@ -1799,76 +1882,86 @@ def advance_all_development_league_stats(
     if not isinstance(rng, random.Random):
         rng = random.Random()
 
+    live = _live_minor_levels(league)
+
     rows: List[Tuple[Any, str]] = []
     if isinstance(prospect_rows, list):
-        rows = list(prospect_rows)
+        for p, code in prospect_rows:
+            if code in ("AHL", "ECHL"):
+                if id(p) not in live:
+                    end_prospect_stint(p, reason="left_level")
+                continue
+            if getattr(p, "retired", False):
+                continue
+            if not _still_at_junior(p):
+                end_prospect_stint(p, reason="left_level")
+                continue
+            rows.append((p, code))
     else:
         for block in getattr(league, "development_leagues", None) or []:
             code = str(block.get("league_code") or "")
+            max_age = development_league_stat_max_age(code)
             for tm in block.get("teams") or []:
                 for p in tm.get("players") or []:
-                    if getattr(p, "retired", False):
+                    if getattr(p, "retired", False) or not _still_at_junior(p):
                         continue
                     ident = getattr(p, "identity", None)
                     age = int(getattr(ident, "age", 99) or 99) if ident else 99
-                    if age <= 20:
+                    if age <= max_age:
                         rows.append((p, code))
-        for tm in getattr(league, "teams", None) or []:
-            for p in getattr(tm, "ahl_roster", None) or []:
-                if getattr(p, "retired", False):
-                    continue
-                ident = getattr(p, "identity", None)
-                age = int(getattr(ident, "age", 99) or 99) if ident else int(getattr(p, "age", 99) or 99)
-                if age <= 23:
-                    rows.append((p, "AHL"))
-            for p in getattr(tm, "echl_roster", None) or []:
-                if getattr(p, "retired", False):
-                    continue
-                ident = getattr(p, "identity", None)
-                age = int(getattr(ident, "age", 99) or 99) if ident else int(getattr(p, "age", 99) or 99)
-                if age <= 23:
-                    rows.append((p, "ECHL"))
+    rows.extend(live.values())
 
-    month, day = _parse_calendar_iso(calendar_iso)
+    iso = str(calendar_iso or "")[:10]
+    sy = int(season_year) if season_year is not None else 0
+    state = getattr(league, "_prospect_stat_sync_state", None)
+    if not isinstance(state, dict):
+        state = {}
+    prev_iso = str(state.get("iso") or "") if int(state.get("season") or 0) == sy else ""
+    first_run = not prev_iso
+
+    month, day = _parse_calendar_iso(iso)
     frac_by_code: Dict[str, float] = {}
-    expected_gp_cache: Dict[Tuple[str, int], int] = {}
     updated = 0
     for p, code in rows:
-        if getattr(p, "retired", False):
-            continue
         try:
+            ckey = str(code or "")
+            st = _stint(p)
+            if (
+                st is not None
+                and st.get("open", True)
+                and prev_iso
+                and str(st.get("last_live_iso") or "") < prev_iso
+                and _safe_int(st.get("season_year"), 0) == sy
+            ):
+                # Missed a sync while somewhere else (e.g. an NHL call-up): that stretch is not his.
+                end_prospect_stint(p, reason="absent")
+
             projected = getattr(p, "_prospect_projected_stats", None)
             if not isinstance(projected, dict) or not projected.get("gp"):
+                if ckey not in frac_by_code:
+                    frac_by_code[ckey] = _league_season_fraction(ckey, month, day)
                 initialize_prospect_season(
                     p,
                     code,
                     rng=rng,
                     season_year=season_year,
                     calendar_iso=None,
+                    # First sync of a season: everyone has been here since day one.
+                    stint_start_frac=0.0 if first_run else frac_by_code[ckey],
+                    stint_iso=iso,
                 )
-                projected = getattr(p, "_prospect_projected_stats", None) or {}
 
-            proj_gp = max(1, _safe_int(projected.get("gp"), 60))
-            ckey = str(code or "")
-            if ckey not in frac_by_code:
-                frac_by_code[ckey] = _league_season_fraction(ckey, month, day)
-            gp_key = (ckey, proj_gp)
-            exp_gp = expected_gp_cache.get(gp_key)
-            if exp_gp is None:
-                exp_gp = max(0, min(proj_gp, int(round(proj_gp * frac_by_code[ckey]))))
-                expected_gp_cache[gp_key] = exp_gp
-
-            advance_prospect_stats_to_date(
-                p,
-                code,
-                calendar_iso,
-                rng=rng,
-                season_year=season_year,
-                expected_gp_override=exp_gp,
-            )
+            advance_prospect_stats_to_date(p, code, iso, rng=rng, season_year=season_year)
+            st = _stint(p)
+            if st is not None:
+                st["last_live_iso"] = iso
             updated += 1
         except Exception:
             pass
+    try:
+        setattr(league, "_prospect_stat_sync_state", {"iso": iso, "season": sy})
+    except Exception:
+        pass
     return updated
 
 
@@ -1876,6 +1969,9 @@ def _prospect_event_skills(prospect: Any) -> Dict[str, float]:
     """Latent event-skill dimensions shared with NHL event simulation philosophy."""
     ratings = getattr(prospect, "ratings", None) or {}
     style = _playstyle_bucket(prospect)
+    # The all-ratings fallback below is identical for every skill (same ratings, same
+    # default), so compute it at most once per call.
+    fallback_vals: Dict[float, List[float]] = {}
 
     def _avg(keys: List[str], default: float = 68.0) -> float:
         vals = [_safe_float(ratings.get(k), default) for k in keys if k in ratings]
@@ -1897,7 +1993,11 @@ def _prospect_event_skills(prospect: Any) -> Dict[str, float]:
                         vals.append(_safe_float(ratings.get(alt), default))
                         break
         if not vals:
-            vals = [_safe_float(v, default) for v in ratings.values() if isinstance(v, (int, float))]
+            if default not in fallback_vals:
+                fallback_vals[default] = [
+                    _safe_float(v, default) for v in ratings.values() if isinstance(v, (int, float))
+                ]
+            vals = fallback_vals[default]
         return (sum(vals) / max(1, len(vals))) / 99.0 if vals else 0.55
 
     volume = _avg(["shooting", "shot_power", "wrist_shot_accuracy", "offensive_awareness"])
@@ -1907,16 +2007,8 @@ def _prospect_event_skills(prospect: Any) -> Dict[str, float]:
     defense = _avg(["defensive_awareness", "shot_blocking", "stick_checking", "strength"])
 
     # Blend overall so draft-board talent (not only sparse rating dicts) drives PPG bands.
-    ovr_raw = _safe_float(getattr(prospect, "ovr", None), 0.0)
-    if ovr_raw <= 0:
-        ovr_raw = _safe_float(getattr(prospect, "overall", None), 0.0)
-    if ovr_raw > 1.5:
-        ovr_n = _clamp(ovr_raw / 99.0, 0.20, 0.95)
-    elif ovr_raw > 0:
-        # Latent prospect OVR is typically ~0.30–0.60; keep it in that band.
-        ovr_n = _clamp(ovr_raw, 0.28, 0.92)
-    else:
-        ovr_n = 0.50
+    # Player.ovr is a *method*; float(method) used to fail silently and pin this to 0.50.
+    ovr_n = _clamp(_player_ovr_0_1(prospect), 0.20, 0.95)
     volume = _clamp(volume * 0.88 + ovr_n * 0.12, 0.15, 0.98)
     finishing = _clamp(finishing * 0.86 + ovr_n * 0.14, 0.15, 0.98)
     playmaking = _clamp(playmaking * 0.88 + ovr_n * 0.12, 0.15, 0.98)
@@ -1945,21 +2037,61 @@ def _prospect_event_skills(prospect: Any) -> Dict[str, float]:
     }
 
 
+def _ppg_curve(profile: Dict[str, Any], z: float) -> float:
+    """League PPG for a forward ``z`` talent-sigmas from the league's typical roster.
+
+    Continuous through the league's average -> star -> elite bands. (The old model bucketed
+    players into three tiers by absolute composite, and no generated player ever reached the
+    star or elite tiers, so ~90% of a league drew from one uniform band regardless of talent.)
+    """
+    avg_lo, avg_hi = profile.get("average_ppg_target", (0.45, 0.85))
+    star_lo, star_hi = profile.get("star_ppg_target", (1.0, 1.45))
+    elite_lo, elite_hi = profile.get("elite_ppg_target", (1.35, 1.85))
+    pts = (
+        (-3.0, avg_lo * 0.50),
+        (-1.5, avg_lo * 0.72),
+        (0.0, avg_lo + 0.35 * (avg_hi - avg_lo)),
+        (1.5, avg_hi),
+        (3.0, 0.5 * (avg_hi + star_lo)),
+        (4.5, star_lo),
+        (7.0, star_hi),
+        (9.0, elite_lo),
+        (11.0, elite_hi),
+    )
+    if z <= pts[0][0]:
+        return float(pts[0][1])
+    if z >= pts[-1][0]:
+        return float(pts[-1][1])
+    for (z0, v0), (z1, v1) in zip(pts, pts[1:]):
+        if z0 <= z <= z1:
+            return float(v0 + (v1 - v0) * (z - z0) / (z1 - z0))
+    return float(pts[-1][1])
+
+
 def calculate_prospect_ppg_scale(
     prospect: Any,
     league: Any,
     rng: Optional[random.Random] = None,
+    *,
+    season_year: Optional[int] = None,
 ) -> float:
     """
-    Return expected PPG after league difficulty, age, archetype, and risk volatility.
-    """
-    if not isinstance(rng, random.Random):
-        rng = random.Random()
+    Expected PPG after league, talent, usage, age, archetype and risk.
 
+    Deterministic per (player, season, league): every random draw comes from a stable seeded
+    stream, so calling this again — daily, weekly or once — returns the same target unless the
+    player's ratings actually changed. (It used to redraw on every call and keep any draw that
+    was 4%+ higher, so the target drifted up with the number of calendar updates.)
+    ``rng`` is accepted for backwards compatibility and ignored.
+    """
     if _is_goalie(prospect):
         return 0.0
 
     profile = get_league_scoring_profile(league)
+    key = str(profile.get("profile_key") or "JUNIOR")
+    sy = _seed_year(prospect, season_year)
+    srng = _stable_rng(prospect, "ppg", sy, key)
+
     skills = _prospect_event_skills(prospect)
     offensive = (
         skills["volume"] * 0.18
@@ -1971,35 +2103,26 @@ def calculate_prospect_ppg_scale(
     style = _playstyle_bucket(prospect)
     defense = _is_defense(prospect)
 
-    avg_lo, avg_hi = profile.get("average_ppg_target", (0.45, 0.85))
-    star_lo, star_hi = profile.get("star_ppg_target", (1.0, 1.45))
-    elite_lo, elite_hi = profile.get("elite_ppg_target", (1.35, 1.85))
+    z = (offensive - _LEAGUE_TALENT_CENTER.get(key, 0.43)) / _TALENT_SIGMA
+    base = _ppg_curve(profile, z)
 
-    if offensive >= 0.78:
-        base = rng.uniform(elite_lo * 0.95, elite_hi * 1.05)
-    elif offensive >= 0.66:
-        base = rng.uniform(star_lo * 0.95, star_hi * 1.02)
-    elif offensive >= 0.50:
-        base = rng.uniform(avg_hi * 0.85, star_lo * 0.98)
-    else:
-        base = rng.uniform(avg_lo * 0.92, avg_hi * 0.95)
-
-    base *= rng.uniform(0.94, 1.10)
-
-    league_mult = _league_junior_stat_multiplier(profile)
-    diff = _safe_float(profile.get("difficulty"), 0.7)
-    base *= league_mult * (1.0 + (0.62 - diff) * 0.06)
+    # Deployment: first-line minutes vs. fourth-line minutes matter as much as talent.
+    # Pro leagues talent-compress (pool floors), so deployment is what separates a top-line AHL
+    # scorer from a fourth-liner; give it a wider spread there.
+    usage_sigma = 0.31 if key in ("AHL", "ECHL") else 0.26
+    usage = math.exp(srng.gauss(0.0, usage_sigma) + 0.06 * _clamp(z, -2.0, 3.0) - 0.5 * usage_sigma ** 2 * 0.5)
+    base *= _clamp(usage, 0.55, 1.75)
 
     if defense:
         base *= _safe_float(profile.get("defensive_translation_penalty"), 0.90)
         if style == "offensive_defenseman":
-            base *= rng.uniform(1.06, 1.18)
+            base *= srng.uniform(0.90, 1.05)
         elif style == "defensive_defenseman":
-            base *= rng.uniform(0.42, 0.58)
+            base *= srng.uniform(0.32, 0.45)
         else:
-            base *= rng.uniform(0.72, 0.88)
+            base *= srng.uniform(0.58, 0.75)
     elif style == "grinder":
-        base *= rng.uniform(0.52, 0.72)
+        base *= srng.uniform(0.52, 0.72)
     elif style in ("sniper", "playmaker", "power_forward", "scoring_forward"):
         style_mult = 0.92 + offensive * 0.22
         if style == "playmaker":
@@ -2009,23 +2132,27 @@ def calculate_prospect_ppg_scale(
         base *= style_mult
 
     if age >= 20:
-        base *= _safe_float(profile.get("overager_bonus"), 1.06) * rng.uniform(1.00, 1.05)
+        base *= _safe_float(profile.get("overager_bonus"), 1.06) * srng.uniform(1.00, 1.05)
     elif age == 19:
-        base *= rng.uniform(0.96, 1.04)
+        base *= srng.uniform(0.96, 1.04)
     elif age <= 17:
-        base *= rng.uniform(0.92, 0.98)
+        base *= srng.uniform(0.92, 0.98)
 
     if _is_boom_bust(prospect):
-        base *= rng.uniform(0.88, 1.12)
+        base *= srng.uniform(0.88, 1.12)
 
     if _has_character_concerns(prospect):
-        base *= rng.uniform(0.86, 1.04)
+        base *= srng.uniform(0.86, 1.04)
 
     base *= _prospect_role_multiplier(prospect, league)
 
-    floor = 0.18 if defense else 0.32
+    avg_lo = _safe_float((profile.get("average_ppg_target") or (0.45, 0.85))[0], 0.45)
+    elite_hi = _safe_float((profile.get("elite_ppg_target") or (1.35, 1.85))[1], 1.85)
+    star_lo = _safe_float((profile.get("star_ppg_target") or (1.0, 1.45))[0], 1.0)
+    avg_hi = _safe_float((profile.get("average_ppg_target") or (0.45, 0.85))[1], 0.85)
+    floor = max(0.06, avg_lo * 0.28) if defense else max(0.10, avg_lo * 0.50)
     ceiling = elite_hi * 1.02
-    if profile["profile_key"] in ("QMJHL", "OHL", "CHL", "WHL"):
+    if key in ("QMJHL", "OHL", "CHL", "WHL"):
         if offensive >= 0.80:
             ceiling = max(ceiling, 2.40)
         elif offensive >= 0.70:
@@ -2039,35 +2166,55 @@ def calculate_prospect_ppg_scale(
             ceiling = min(ceiling, avg_hi * 0.55)
         else:
             ceiling = min(ceiling, star_lo * 0.78)
-        floor = 0.14
     return _clamp(base, floor, ceiling)
 
 
+def _draw_goal_share(style: str, rng: random.Random) -> float:
+    if style == "sniper":
+        share = rng.uniform(0.48, 0.62)
+    elif style == "playmaker":
+        share = rng.uniform(0.22, 0.38)
+    elif style == "power_forward":
+        share = rng.uniform(0.42, 0.55)
+    elif style == "grinder":
+        share = rng.uniform(0.35, 0.50)
+    elif style == "offensive_defenseman":
+        share = rng.uniform(0.18, 0.32)
+    elif style == "defensive_defenseman":
+        share = rng.uniform(0.28, 0.42)
+    elif style == "two_way_defenseman":
+        share = rng.uniform(0.24, 0.38)
+    else:
+        share = rng.uniform(0.34, 0.48)
+    if _is_boom_bust_style(style, rng):
+        share = rng.uniform(0.15, 0.70)
+    return share
+
+
+def _season_goal_share(prospect: Any, style: str) -> float:
+    """A player's share of his points that are goals — fixed for the season, never re-rolled."""
+    return _draw_goal_share(
+        style, _stable_rng(prospect, "goal_share", _seed_year(prospect))
+    )
+
+
 def _split_goals_assists(points: int, style: str, rng: random.Random) -> Tuple[int, int]:
+    """One-shot split of a *projected* total. Live stat lines accumulate via _add_points."""
     if points <= 0:
         return 0, 0
-    if style == "sniper":
-        goal_share = rng.uniform(0.48, 0.62)
-    elif style == "playmaker":
-        goal_share = rng.uniform(0.22, 0.38)
-    elif style == "power_forward":
-        goal_share = rng.uniform(0.42, 0.55)
-    elif style == "grinder":
-        goal_share = rng.uniform(0.35, 0.50)
-    elif style == "offensive_defenseman":
-        goal_share = rng.uniform(0.18, 0.32)
-    elif style == "defensive_defenseman":
-        goal_share = rng.uniform(0.28, 0.42)
-    elif style == "two_way_defenseman":
-        goal_share = rng.uniform(0.24, 0.38)
-    else:
-        goal_share = rng.uniform(0.34, 0.48)
-    if _is_boom_bust_style(style, rng):
-        goal_share = rng.uniform(0.15, 0.70)
-    goals = int(round(points * goal_share))
+    goals = int(round(points * _draw_goal_share(style, rng)))
     goals = max(0, min(points, goals))
-    assists = max(0, points - goals)
-    return goals, assists
+    return goals, max(0, points - goals)
+
+
+def _add_points(stats: Dict[str, Any], new_points: int, share: float, rng: random.Random) -> None:
+    """Add newly scored points to the running line, splitting only the *new* points."""
+    if new_points <= 0:
+        return
+    g_new = _binomial(new_points, share, rng)
+    stats["goals"] = _safe_int(stats.get("goals"), 0) + g_new
+    stats["assists"] = _safe_int(stats.get("assists"), 0) + (new_points - g_new)
+    stats["points"] = _safe_int(stats.get("points"), 0) + new_points
 
 
 def _is_boom_bust_style(style: str, rng: random.Random) -> bool:
@@ -2075,13 +2222,27 @@ def _is_boom_bust_style(style: str, rng: random.Random) -> bool:
 
 
 def generate_goalie_prospect_line(prospect: Any, league: Any, games_played: int, rng: random.Random) -> Dict[str, Any]:
+    """Projected goalie season. ``games_played`` is the *team's* schedule; the goalie's own
+    GP is his share of it (starters play more than backups) — not a full season each.
+
+    Built from goalie ratings and the league's goalie environment only; the old version keyed
+    off the skater-oriented offensive talent score, which included hidden potential.
+    """
     profile = get_league_scoring_profile(league)
-    offensive = _offensive_talent_score(prospect)
-    gp = max(12, int(games_played))
-    wins = int(round(gp * rng.uniform(0.42, 0.58) * (0.9 + offensive * 0.2)))
-    wins = max(0, min(gp, wins))
-    save_pct = _clamp(0.870 + offensive * 0.045 + rng.uniform(-0.025, 0.020), 0.845, 0.945)
-    gaa = _clamp(3.35 - offensive * 1.05 - (1.0 - profile["difficulty"]) * 0.35 + rng.uniform(-0.35, 0.35), 1.85, 3.80)
+    key = str(profile.get("profile_key") or "JUNIOR")
+    srng = _stable_rng(prospect, "goalie", _seed_year(prospect), key)
+    ability = _goalie_ability(prospect)
+    z = (ability - _LEAGUE_TALENT_CENTER.get(key, 0.43)) / 0.06
+    sv_base, sa_base = _GOALIE_ENV.get(key, (0.895, 29.0))
+    save_pct = _clamp(sv_base + 0.010 * _clamp(z, -3.0, 5.0) + srng.gauss(0.0, 0.006), 0.850, 0.945)
+    sa_pg = sa_base * srng.uniform(0.92, 1.08)
+    share = _clamp(srng.gauss(0.42 + 0.05 * _clamp(z, -2.0, 3.0), 0.20), 0.10, 0.88)
+    gp = max(8, int(round(int(games_played) * share)))
+    win_rate = _clamp(0.47 + 0.02 * _clamp(z, -3.0, 4.0) + srng.gauss(0.0, 0.05), 0.30, 0.68)
+    wins = int(round(gp * win_rate))
+    non_wins = gp - wins
+    otl = int(round(non_wins * 0.12))
+    gaa = sa_pg * (1.0 - save_pct)
     return {
         "gp": gp,
         "games_played": gp,
@@ -2089,12 +2250,13 @@ def generate_goalie_prospect_line(prospect: Any, league: Any, games_played: int,
         "assists": 0,
         "points": 0,
         "wins": wins,
-        "losses": max(0, gp - wins - rng.randint(0, 4)),
-        "ot_losses": rng.randint(0, 3),
+        "losses": max(0, non_wins - otl),
+        "ot_losses": otl,
         "save_pct": round(save_pct, 3),
         "savePct": round(save_pct, 3),
         "gaa": round(gaa, 2),
-        "shutouts": rng.randint(0, max(1, int(gp * 0.06))),
+        "shutouts": int(round(gp * math.exp(-gaa))),
+        "shots_against_per_game": round(sa_pg, 1),
         "ppg": 0.0,
         "points_per_game": 0.0,
     }
@@ -2277,10 +2439,9 @@ def ensure_prospect_season_stats(
 
 
 def _defensive_talent_score(prospect: Any) -> float:
-    """0–1 defensive talent estimate from ratings, profile, and playstyle."""
+    """0–1 defensive talent estimate from current ratings and playstyle (no potential input)."""
     ovr = _player_ovr_0_1(prospect)
-    mid = _draft_mid(prospect)
-    score = ovr * 0.26 + mid * 0.20
+    score = ovr * 0.36
 
     ratings = getattr(prospect, "ratings", None)
     if isinstance(ratings, dict) and ratings:
@@ -2426,13 +2587,12 @@ def derive_prospect_analytics(
         sv = _safe_float(stat_line.get("save_pct"), 0.905)
         gaa = _safe_float(stat_line.get("gaa"), 2.85)
         wins = _safe_int(stat_line.get("wins"), 0)
-        off_talent = _offensive_talent_score(prospect)
         if gp <= 0:
             return {
                 "gsax": None,
                 "quality_starts": None,
             }
-        shots_against = gp * (27.5 + off_talent * 2.5)
+        shots_against = _safe_float(stat_line.get("shots_against"), 0.0) or gp * 29.0
         gsax = round((sv - 0.905) * shots_against, 2)
         qs_rate = _clamp(0.42 + (sv - 0.885) * 3.2 - max(0.0, gaa - 2.75) * 0.12, 0.18, 0.82)
         qs = int(round(gp * qs_rate))
@@ -2448,8 +2608,9 @@ def derive_prospect_analytics(
     def_talent = _defensive_talent_score(prospect)
     league_diff = _safe_float(profile.get("difficulty"), 0.65)
     prod_adj = _safe_float(stat_line.get("production_adjusted_score"), ppg * (1.0 - league_diff * 0.28))
-    draft_mid = _draft_mid(prospect)
-    rank_signal = 1.0 - _clamp((float(draft_rank or 120) - 1.0) / 119.0, 0.0, 1.0) if draft_rank else draft_mid
+    # Public signal only: the published draft rank, else current ability. (Was hidden potential.)
+    public_ability = _clamp(_player_ovr_0_1(prospect) * 1.08, 0.2, 0.99)
+    rank_signal = 1.0 - _clamp((float(draft_rank or 120) - 1.0) / 119.0, 0.0, 1.0) if draft_rank else public_ability
 
     shots_raw = stat_line.get("shots", stat_line.get("sog", stat_line.get("shots_on_goal")))
     shots = _safe_int(shots_raw, 0) if shots_raw not in (None, "") else 0
@@ -2678,6 +2839,11 @@ def prospect_stats_for_api(
         if v is not None:
             out[k] = v
 
+    out["stat_history"] = [dict(r) for r in (getattr(prospect, "prospect_stat_history", None) or []) if isinstance(r, dict)]
+    st_now = _stint(prospect)
+    if st_now:
+        out["stint_league"] = st_now.get("league_key")
+        out["stint_start_iso"] = st_now.get("start_iso")
     analytics = derive_prospect_analytics(prospect, league, out)
     out["analytics"] = analytics
     for field in ("shots", "plus_minus", "primary_points", "shooting_pct", "shot_rate"):

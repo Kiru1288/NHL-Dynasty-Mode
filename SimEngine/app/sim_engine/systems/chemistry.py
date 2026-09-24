@@ -116,8 +116,14 @@ def _chemistry_profile_is_stub(player: Any, raw: Any) -> bool:
     if raw.get("_materialized") is not True:
         return True
     current = str(raw.get("playstyle") or "")
-    inferred = _infer_playstyle(player, _player_chemistry_rng(player))
-    distinctive = {
+    # Only a generic stored playstyle can be a stub; skip the (seeded) inference otherwise.
+    if current not in ("two_way", "balanced", ""):
+        return False
+    return _inferred_playstyle_cached(player) in _DISTINCTIVE_PLAYSTYLES
+
+
+_DISTINCTIVE_PLAYSTYLES = frozenset(
+    {
         "playmaker",
         "sniper",
         "power_forward",
@@ -129,7 +135,28 @@ def _chemistry_profile_is_stub(player: Any, raw: Any) -> bool:
         "hybrid_goalie",
         "butterfly_goalie",
     }
-    return inferred in distinctive and current in ("two_way", "balanced", "")
+)
+
+# (rng seed, archetype text, position) -> inferred playstyle. _infer_playstyle reads only
+# those inputs and its rng is freshly seeded per player, so the result is a pure function.
+_INFERRED_PLAYSTYLE_CACHE: Dict[Tuple[str, str, str], str] = {}
+
+
+def _inferred_playstyle_cached(player: Any) -> str:
+    arch = str(
+        getattr(player, "archetype", "")
+        or getattr(player, "_generated_profile", "")
+        or getattr(player, "player_type", "")
+        or ""
+    )
+    key = (_canonical_player_id(player) or _player_name(player), arch, _player_position(player))
+    hit = _INFERRED_PLAYSTYLE_CACHE.get(key)
+    if hit is None:
+        if len(_INFERRED_PLAYSTYLE_CACHE) > 50000:
+            _INFERRED_PLAYSTYLE_CACHE.clear()
+        hit = _infer_playstyle(player, _player_chemistry_rng(player))
+        _INFERRED_PLAYSTYLE_CACHE[key] = hit
+    return hit
 
 
 def _player_chemistry_rng(player: Any) -> random.Random:
@@ -538,6 +565,24 @@ def usage_satisfaction_score(player: Any) -> float:
 
 def calculate_pair_chemistry(player_a: Any, player_b: Any, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     context = context or {}
+    # Optional caller-owned memo for search loops that re-score the same pairing while
+    # nothing about the players changes (e.g. the forward-line optimizer).
+    memo = context.get("_pair_memo")
+    if isinstance(memo, dict):
+        mk = (
+            id(player_a),
+            id(player_b),
+            str(context.get("slot_a") or ""),
+            str(context.get("slot_b") or ""),
+            id(context.get("team")),
+        )
+        hit = memo.get(mk)
+        if hit is not None and hit[0] is player_a and hit[1] is player_b:
+            return hit[2]
+        ctx_plain = {k: v for k, v in context.items() if k != "_pair_memo"}
+        out = calculate_pair_chemistry(player_a, player_b, ctx_plain)
+        memo[mk] = (player_a, player_b, out)
+        return out
     pa = ensure_player_chemistry_profile(player_a, context.get("rng"))
     pb = ensure_player_chemistry_profile(player_b, context.get("rng"))
     psych_a = safe_get_psych(player_a)
@@ -666,8 +711,9 @@ def chemistry_trend_label(delta: float) -> str:
     return "→ stable"
 
 
-def _line_identity(players: List[Any], score: int) -> Tuple[str, str]:
-    styles = [ensure_player_chemistry_profile(p).get("playstyle", "balanced") for p in players]
+def _line_identity(players: List[Any], score: int, styles: Optional[List[str]] = None) -> Tuple[str, str]:
+    if styles is None:
+        styles = [ensure_player_chemistry_profile(p).get("playstyle", "balanced") for p in players]
     if "playmaker" in styles and "sniper" in styles:
         ident = "Creative line with finishing support"
     elif "shutdown" in styles or "defensive_defenseman" in styles:
@@ -718,17 +764,19 @@ def calculate_forward_line_chemistry(players: List[Any], context: Optional[Dict[
                 )
             )
     base = sum(p["chemistry"] for p in pairs) / max(1, len(pairs))
-    styles = [ensure_player_chemistry_profile(p).get("playstyle", "balanced") for p in line]
-    personalities = [ensure_player_chemistry_profile(p).get("personality", "balanced") for p in line]
+    # One profile read per player (each read returns the same values once pairs materialized them).
+    profs = [ensure_player_chemistry_profile(p) for p in line]
+    styles = [prof.get("playstyle", "balanced") for prof in profs]
+    personalities = [prof.get("personality", "balanced") for prof in profs]
     if "playmaker" in styles and "sniper" in styles:
         base += 4.0
     if personalities.count("high_ego_star") >= 2:
         base -= 4.0
-    defensive_buy_in = sum(ensure_player_chemistry_profile(p).get("defensive_buy_in", 50) for p in line) / len(line)
+    defensive_buy_in = sum(prof.get("defensive_buy_in", 50) for prof in profs) / len(line)
     if defensive_buy_in < 44:
         base -= 3.0
     score = int(round(clamp(base, 0.0, 100.0)))
-    ident, risk = _line_identity(line, score)
+    ident, risk = _line_identity(line, score, styles=styles)
     factors = []
     concerns = []
     if "playmaker" in styles and "sniper" in styles:
