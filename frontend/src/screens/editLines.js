@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGameUI } from "../game/GameUIContext";
-import { SCREENS } from "../game/constants";
+import { SCREENS, teamNameToNhlAbbr } from "../game/constants";
+import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
+import { CHEMISTRY_HIGH, CHEMISTRY_MID, chemistryLabel } from "../utils/chemistryScale";
 import { getFranchiseChemistry, saveFranchiseLines } from "../services/franchiseService";
 import { getFranchiseSessionId, readSessionLineupCache, writeSessionLineupCache } from "../services/api";
 import PlayerHeadshot from "../components/PlayerHeadshot";
@@ -14,8 +16,9 @@ const GROUPS = ["forwards", "defense", "goalies"];
 const LINEUP_MODES = { ALL: "all", FORWARDS: "forwards", DEFENSE: "defense", GOALIES: "goalies" };
 const AUTO_MODES = [["overall", "Best Overall"], ["chemistry", "Best Chemistry"], ["position", "Position Safe"], ["roles", "Balanced Roles"]];
 const TABS = ["unit", "fit", "player", "warnings"];
-const LINK_STRONG = 84;
-const LINK_FORMING = 70;
+// Shared scale (utils/chemistryScale) — same cut points as the Chemistry report.
+const LINK_STRONG = CHEMISTRY_HIGH;
+const LINK_FORMING = CHEMISTRY_MID;
 const CHEM_DISPLAY_LIFT = 8;
 const NEW_PAIR_FAMILIARITY = 34;
 
@@ -352,7 +355,8 @@ function backendPairScore(chemReport, a, b) {
   const match = indexed || backendPairMatch(backendPairRows(chemReport), a, b);
   if (!match) return null;
   return {
-    score: clamp((match.chemistry ?? 50) + CHEM_DISPLAY_LIFT),
+    // Backend scores are shown as-is so they match the Chemistry report.
+    score: clamp(match.chemistry ?? 50),
     familiarity: numberOrNull(match.familiarity ?? match.scheme_fit?.familiarity),
     projected: false,
   };
@@ -566,8 +570,9 @@ function backendChemistry(chemReport, players) {
   if (!match) return null;
   const scheme = match.scheme_fit || {};
   return {
-    score: clamp((match.chemistry ?? 50) + CHEM_DISPLAY_LIFT),
-    label: match.label || "Neutral",
+    // Backend scores are shown as-is so they match the Chemistry report.
+    score: clamp(match.chemistry ?? 50),
+    label: match.label || chemistryLabel(match.chemistry ?? 50),
     morale: percentOrNull(scheme.morale),
     roleBalance: percentOrNull(scheme.role_balance),
     positionFit: percentOrNull(scheme.position_fit),
@@ -582,18 +587,12 @@ function backendChemistry(chemReport, players) {
   };
 }
 function unitChemistryLabel(score) {
-  if (score >= 92) return "Excellent";
-  if (score >= 84) return "Strong";
-  if (score >= 76) return "Stable";
-  if (score >= 68) return "Uneven";
-  return "Weak";
+  return chemistryLabel(score);
 }
 function calculateUnitChemistry(players, unitType = "forward", chemReport = null) {
   const selected = players.filter(Boolean);
   const live = backendChemistry(chemReport, selected);
-  const styles = selected.map(resolvePlaystyle).filter(Boolean);
-  const liveLooksStub = live && live.score >= 70 && live.score <= 94 && styles.some((style) => style !== "two_way");
-  if (live && !liveLooksStub) return live;
+  if (live) return live;
   if (!selected.length) return { score: 0, label: "Empty", morale: null, roleBalance: 0, positionFit: 0, linemateFit: 0, familiarity: null, coachFit: null, usageSatisfaction: null, handednessFit: null, factors: [], concerns: ["Add players to calculate fit."], projected: true };
   const avgOverall = selected.reduce((sum, player) => sum + (Number(player.overall) || 0), 0) / selected.length;
   const moraleValues = selected.map((player) => profileValue(player, "morale", null)).filter((value) => value != null);
@@ -664,9 +663,10 @@ function sortPoolPlayers(list, sort, focusSlot) {
 }
 function teamIdentity(franchiseState, props) {
   const team = franchiseState?.user_team || franchiseState?.team || franchiseState?.current_team || props.currentTeam || props.team || {};
+  const name = team?.name || team?.team_name || franchiseState?.user_team_name || "";
   return {
-    abbreviation: String(team?.abbreviation || team?.abbr || franchiseState?.user_team_abbreviation || franchiseState?.user_team_abbr || "TEAM").slice(0, 4),
-    logo: team?.logo || team?.logo_url || team?.logoUrl || team?.team_logo || null,
+    abbreviation: String(team?.abbreviation || team?.abbr || franchiseState?.user_team_abbreviation || franchiseState?.user_team_abbr || teamNameToNhlAbbr(name) || "TEAM").slice(0, 4),
+    logo: team?.logo || team?.logo_url || team?.logoUrl || team?.team_logo || resolveFranchiseTeamLogo(team, name) || null,
   };
 }
 
@@ -679,18 +679,20 @@ function EditLinesStyles() {
 
 .linebuilder-root .lb-sidebar{height:100%;padding:10px 8px;border-right:1px solid var(--line);background:rgba(4,14,24,.94);display:flex;flex-direction:column;gap:10px;overflow:hidden}
 .linebuilder-root .lb-team-mark{height:46px;flex:0 0 46px;border:1px solid var(--line2);border-radius:6px;display:grid;place-items:center;color:var(--cyan);font-size:12px;font-weight:900;letter-spacing:.09em;background:rgba(19,216,231,.08)}
-.linebuilder-root .lb-nav{flex:1;min-height:0;display:grid;grid-template-rows:repeat(5,minmax(0,1fr));gap:8px}
-.linebuilder-root .lb-nav-btn{width:100%;height:100%;padding:6px 4px;border:1px solid transparent;border-radius:6px;color:var(--muted);background:transparent;cursor:pointer;display:grid;place-items:center;align-content:center;gap:3px}
-.linebuilder-root .lb-nav-btn:hover,.linebuilder-root .lb-nav-btn.active{color:var(--cyan);border-color:var(--line2);background:rgba(19,216,231,.12);box-shadow:inset 3px 0 0 var(--cyan)}
-.linebuilder-root .lb-nav-label{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
-.linebuilder-root .lb-glyph{width:22px;height:22px;display:inline-grid;place-items:center;border:1px solid currentColor;border-radius:3px;font-size:11px;font-weight:900;line-height:1}
+.linebuilder-root .lb-team-mark img{width:34px;height:34px;object-fit:contain}
+.linebuilder-root .lb-nav{flex:1;min-height:0;display:flex;flex-direction:column;gap:0}
+.linebuilder-root .lb-nav-btn{position:relative;width:100%;min-height:66px;padding:6px 4px;border:0;border-radius:0;color:var(--muted);background:transparent;cursor:pointer;display:grid;place-items:center;align-content:center;gap:4px}
+.linebuilder-root .lb-nav-btn:hover{color:var(--text);background:rgba(255,255,255,.03)}
+.linebuilder-root .lb-nav-btn.active{color:var(--cyan);background:linear-gradient(90deg,rgba(19,216,231,.12),transparent 72%);box-shadow:inset 3px 0 0 var(--cyan)}
+.linebuilder-root .lb-nav-label{font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;text-align:center;line-height:1.1}
+.linebuilder-root .lb-glyph{display:inline-grid;place-items:center;font-size:22px;font-weight:400;line-height:1}
 
 .linebuilder-root .lb-shell{min-width:0;min-height:0;height:100%;padding:10px;display:grid;grid-template-rows:58px 34px minmax(0,1fr);gap:8px;overflow:hidden}
 .linebuilder-root .lb-header{height:58px;border:1px solid var(--line);border-radius:8px;background:var(--panel);display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;position:relative;z-index:20}
 .linebuilder-root .lb-title-group{min-width:0;display:flex;align-items:center;gap:10px}
 .linebuilder-root .lb-logo{width:40px;height:40px;flex:0 0 40px;border:1px solid var(--line);border-radius:6px;background:rgba(0,0,0,.2);display:grid;place-items:center;overflow:hidden;color:var(--cyan);font-size:11px;font-weight:900}
 .linebuilder-root .lb-logo img{width:32px;height:32px;object-fit:contain}
-.linebuilder-root .lb-title{margin:0;font-size:clamp(17px,1.7vw,21px);line-height:1;letter-spacing:.02em;font-weight:950;text-transform:uppercase;white-space:nowrap}
+.linebuilder-root .lb-title{margin:0;font-family:var(--font-ops-head);font-size:clamp(20px,2vw,26px);line-height:1;letter-spacing:.04em;font-weight:800;text-transform:uppercase;white-space:nowrap}
 .linebuilder-root .lb-subtitle{margin-top:4px;color:var(--muted);font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap;display:flex;align-items:center;gap:6px}
 .linebuilder-root .lb-live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block}
 .linebuilder-root .lb-live-dot.projected{background:var(--gold)}
@@ -717,6 +719,8 @@ function EditLinesStyles() {
 .linebuilder-root .lb-pill-value.warn{color:var(--gold)}
 .linebuilder-root .lb-pill-value.bad{color:var(--red)}
 .linebuilder-root .lb-chemmeter{display:flex;gap:2px;margin-left:auto;padding:0 10px}
+.linebuilder-root .lb-chemmeter{align-items:center}
+.linebuilder-root .lb-chemmeter-label{margin-right:6px;color:var(--muted);font-size:10px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}
 .linebuilder-root .lb-chemseg{width:11px;height:7px;border-radius:1px;background:rgba(255,255,255,.09)}
 .linebuilder-root .lb-chemseg.strong{background:var(--green)}
 .linebuilder-root .lb-chemseg.forming{background:var(--gold)}
@@ -741,7 +745,8 @@ function EditLinesStyles() {
 .linebuilder-root .lb-player.assigned .lb-player-name{color:#b7c9d3}
 .linebuilder-root .lb-player.disabled{cursor:not-allowed;opacity:.42}
 .linebuilder-root .lb-player.locked{border-left-color:var(--gold)}
-.linebuilder-root .lb-player .player-headshot{width:26px!important;height:26px!important}
+/* Drive the portrait through --size so face and flag scale together. */
+.linebuilder-root .lb-player .player-headshot{--size:28px!important;width:28px!important;height:28px!important}
 .linebuilder-root .lb-player-copy{min-width:0}
 .linebuilder-root .lb-player-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:800;line-height:1.1}
 .linebuilder-root .lb-player-meta{margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted2);font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
@@ -756,6 +761,8 @@ function EditLinesStyles() {
 .linebuilder-root .lb-mode{padding:0 14px;border:0;border-bottom:2px solid transparent;color:var(--muted);background:transparent;cursor:pointer;display:inline-flex;align-items:center;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
 .linebuilder-root .lb-mode:hover{color:var(--text)}
 .linebuilder-root .lb-mode.active{color:var(--cyan);border-bottom-color:var(--cyan)}
+span.lb-mode,.linebuilder-root span.lb-mode:hover{cursor:default}
+.linebuilder-root .lb-icon.lb-icon--history{font-size:18px;font-weight:700;color:var(--text)}
 .linebuilder-root .lb-mobile-tools{display:none;margin-left:auto;gap:4px;align-items:center;padding:3px 0}
 
 /* ---- formation board ---- */
@@ -789,7 +796,7 @@ function EditLinesStyles() {
 .linebuilder-root .fm-unit-tag{position:absolute;left:0;top:50%;transform:translateY(-50%);z-index:3;display:flex;flex-direction:column;align-items:center;gap:1px;width:52px}
 .linebuilder-root .fm-unit-kicker{color:var(--muted2);font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}
 .linebuilder-root .fm-unit-num{font-size:26px;font-weight:950;line-height:1;font-variant-numeric:tabular-nums}
-.linebuilder-root .fm-unit-score{margin-top:3px;font-size:12px;font-weight:900;color:var(--cyan);font-variant-numeric:tabular-nums}
+.linebuilder-root .fm-unit-score{margin-top:3px;font-size:12px;font-weight:900;color:var(--green);font-variant-numeric:tabular-nums}
 .linebuilder-root .fm-unit-score.warn{color:var(--gold)}
 .linebuilder-root .fm-unit-score.bad{color:var(--red)}
 .linebuilder-root .fm-unit-warn{margin-top:3px;min-width:22px;height:18px;padding:0 5px;border:1px solid rgba(233,168,60,.45);border-radius:4px;background:rgba(233,168,60,.14);color:var(--gold);font-size:10px;font-weight:900;cursor:pointer}
@@ -1014,16 +1021,17 @@ function scoreTone(score) {
 
 function Glyph({ text }) { return <span className="lb-glyph" aria-hidden="true">{text}</span>; }
 
-function LineBuilderSidebar({ setScreen, abbreviation, activeScreen = SCREENS.EDIT_LINES }) {
+function LineBuilderSidebar({ setScreen, abbreviation, logo, activeScreen = SCREENS.EDIT_LINES }) {
   const items = [
-    { label: "Roster", glyph: "R", screen: SCREENS.ROSTER },
-    { label: "Lines", glyph: "L", screen: SCREENS.EDIT_LINES, active: activeScreen === SCREENS.EDIT_LINES },
-    { label: "Power Play", glyph: "PP", screen: SCREENS.POWER_PLAY, active: activeScreen === SCREENS.POWER_PLAY },
-    { label: "Penalty Kill", glyph: "PK", screen: SCREENS.PENALTY_KILL, active: activeScreen === SCREENS.PENALTY_KILL },
-    { label: "Back", glyph: "‹", screen: SCREENS.ROSTER },
+    { label: "Office", glyph: "▦", screen: SCREENS.HUB },
+    { label: "Roster", glyph: "◉", screen: SCREENS.ROSTER },
+    { label: "Lines", glyph: "▥", screen: SCREENS.EDIT_LINES, active: activeScreen === SCREENS.EDIT_LINES },
+    { label: "Power Play", glyph: "↯", screen: SCREENS.POWER_PLAY, active: activeScreen === SCREENS.POWER_PLAY },
+    { label: "Penalty Kill", glyph: "▣", screen: SCREENS.PENALTY_KILL, active: activeScreen === SCREENS.PENALTY_KILL },
+    { label: "Chemistry", glyph: "◍", screen: SCREENS.CHEMISTRY },
   ];
   return <aside className="lb-sidebar" aria-label="Line builder navigation">
-    <div className="lb-team-mark">{abbreviation}</div>
+    <div className="lb-team-mark">{logo ? <img src={logo} alt={`${abbreviation} logo`} /> : abbreviation}</div>
     <nav className="lb-nav">{items.map((item) => <button type="button" key={item.label} className={`lb-nav-btn ${item.active ? "active" : ""}`} onClick={() => item.screen && setScreen(item.screen)} aria-current={item.active ? "page" : undefined} title={item.label}><Glyph text={item.glyph} /><span className="lb-nav-label">{item.label}</span></button>)}</nav>
   </aside>;
 }
@@ -1039,8 +1047,8 @@ function LineBuilderHeader({ team, title = "Line Chemistry", subtitle, live, can
     </div>
     <div className="lb-actions">
       {showHistory ? <>
-        <button type="button" className="lb-icon" onClick={onUndo} disabled={!canUndo} aria-label="Undo lineup change" title="Undo">↶</button>
-        <button type="button" className="lb-icon" onClick={onRedo} disabled={!canRedo} aria-label="Redo lineup change" title="Redo">↷</button>
+        <button type="button" className="lb-icon lb-icon--history" onClick={onUndo} disabled={!canUndo} aria-label="Undo lineup change" title="Undo">↶</button>
+        <button type="button" className="lb-icon lb-icon--history" onClick={onRedo} disabled={!canRedo} aria-label="Redo lineup change" title="Redo">↷</button>
       </> : null}
       <button type="button" className="lb-btn subtle danger" onClick={onClear}>Clear</button>
       <button type="button" className="lb-btn subtle" onClick={onReset}>{resetLabel}</button>
@@ -1059,7 +1067,14 @@ function LineStatusStrip({ metrics, meter }) {
         <span className={`lb-pill-value ${metric.tone || ""}`}>{metric.value}</span>
       </div>
     ))}
-    {meter?.length ? <div className="lb-chemmeter" title="One segment per player-to-player link in the lineup">{meter.map((tier, index) => <span key={index} className={`lb-chemseg ${tier}`} />)}</div> : null}
+    {meter?.length ? (() => {
+      const count = (tier) => meter.filter((entry) => entry === tier).length;
+      const summary = `${meter.length} links · ${count("strong")} strong · ${count("forming")} medium · ${count("weak")} weak`;
+      return <div className="lb-chemmeter" title={`One segment per player-to-player link — ${summary}`} role="img" aria-label={summary}>
+        <span className="lb-chemmeter-label">Links</span>
+        {meter.map((tier, index) => <span key={index} className={`lb-chemseg ${tier}`} />)}
+      </div>;
+    })() : null}
   </div>;
 }
 
@@ -1079,10 +1094,11 @@ function PlayerPool({ players, assignedSet, lockedSet, selectedPlayerId, search,
         const assigned = assignedSet.has(player.id);
         const locked = lockedSet.has(player.id);
         const disabled = !player.availability?.placeable || locked;
-        const fit = focusSlot ? chemistryFitScore(player, focusSlot) : null;
+        // Fit only means something for players who can actually play the slot.
+        const fit = focusSlot && posFit(player, focusSlot) ? chemistryFitScore(player, focusSlot) : null;
         const status = player.availability?.key === "active" ? null : player.availability?.label;
-        const meta = [player.position, fit != null ? `${fit}% fit` : null, status, assigned ? "Dressed" : null].filter(Boolean).join(" · ");
-        return <div key={player.id} className={`lb-player ${assigned ? "assigned" : ""} ${selectedPlayerId === player.id ? "selected" : ""} ${disabled ? "disabled" : ""} ${locked ? "locked" : ""}`} draggable={!disabled} onDragStart={(event) => onDragStart(event, player.id)} onClick={() => onPlayerSelect(player.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onPlayerSelect(player.id); } }} role="button" tabIndex={0} aria-label={`${player.name}, ${player.position}, ${player.overall} overall`} title={disabled ? player.availability?.reason || "Player cannot be moved." : `${player.name} · ${player.position} · ${player.overall} overall`}>
+        const meta = [assigned ? `✓ ${player.position}` : player.position, fit != null ? `${fit} fit` : null, status].filter(Boolean).join(" · ");
+        return <div key={player.id} className={`lb-player ${assigned ? "assigned" : ""} ${selectedPlayerId === player.id ? "selected" : ""} ${disabled ? "disabled" : ""} ${locked ? "locked" : ""}`} draggable={!disabled} onDragStart={(event) => onDragStart(event, player.id)} onClick={() => onPlayerSelect(player.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onPlayerSelect(player.id); } }} role="button" tabIndex={0} aria-label={`${player.name}, ${player.position}, ${player.overall} overall${assigned ? ", dressed" : ""}`} title={disabled ? player.availability?.reason || "Player cannot be moved." : `${player.name} · ${player.position} · ${player.overall} overall${assigned ? " · Dressed" : ""}`}>
           <PlayerHeadshot player={player} size="md" />
           <div className="lb-player-copy">
             <div className="lb-player-name">{player.name}</div>
@@ -1161,7 +1177,7 @@ function UnitTag({ kicker, number, score, warnings, onWarnings, onMenu }) {
   return <div className="fm-unit-tag">
     <span className="fm-unit-kicker">{kicker}</span>
     <span className="fm-unit-num">{number}</span>
-    {score != null ? <span className={`fm-unit-score ${scoreTone(score)}`}>{score}%</span> : null}
+    {score != null ? <span className={`fm-unit-score ${scoreTone(score)}`}>{score}</span> : null}
     {warnings?.length ? <button type="button" className="fm-unit-warn" onClick={(event) => { event.stopPropagation(); onWarnings(); }} title={`${warnings.length} warnings`}>{warnings.length}</button> : null}
     <button type="button" className="fm-unit-menu-btn" onClick={(event) => { event.stopPropagation(); onMenu(); }} aria-label="Unit actions" title="Unit actions">···</button>
   </div>;
@@ -1183,10 +1199,12 @@ function UnitMenu({ line, group, locks, clipboard, actions }) {
   </div>;
 }
 
-function DepthConnector({ tier, score }) {
-  return <div className="fm-depth" aria-hidden="true">
+function DepthConnector({ tier, score, slot, from, to }) {
+  const what = `${slot === "C" ? "Centre" : "Left D"} bond, ${from} → ${to}`;
+  const text = score == null ? `${what}: no data` : `${what}: ${score} (${chemistryLabel(score)})`;
+  return <div className="fm-depth" role="img" aria-label={text} title={text}>
     <div className={`fm-depth-line ${tier}`} />
-    <span className={`fm-depth-badge ${tier}`}>{score == null ? "—" : score}</span>
+    <span className={`fm-depth-badge ${tier}`}>{slot} {score == null ? "—" : score}</span>
   </div>;
 }
 
@@ -1289,8 +1307,8 @@ function FormationBoard({
         <button type="button" key={id} className={`lb-mode ${mode === id ? "active" : ""}`} onClick={() => setMode(id)} title={`${label} · ${index + 1}`}>{label}</button>
       ))}
       <div className="lb-mobile-tools">
-        <button type="button" className="lb-icon" onClick={onTogglePool} aria-label="Open player pool" title="Players">P</button>
-        <button type="button" className="lb-icon" onClick={onToggleInspector} aria-label="Open unit details" title="Details">D</button>
+        <button type="button" className="lb-icon" onClick={onTogglePool} aria-label="Open player pool" title="Players">☰</button>
+        <button type="button" className="lb-icon" onClick={onToggleInspector} aria-label="Open unit details" title="Details">▤</button>
       </div>
     </div>
     {rosterEmpty ? <div className="lb-empty">Roster unavailable</div> : <div className="fm-scroll">
@@ -1311,7 +1329,7 @@ function FormationBoard({
             slots={["LW", "C", "RW"]}
             menuOpen={menuKey === `forwards:${line.id}`}
           />
-          {index < lineState.forwards.length - 1 ? <DepthConnector tier={depthLinks.forwards[index]?.tier || "empty"} score={depthLinks.forwards[index]?.score ?? null} /> : null}
+          {index < lineState.forwards.length - 1 ? <DepthConnector tier={depthLinks.forwards[index]?.tier || "empty"} score={depthLinks.forwards[index]?.score ?? null} slot="C" from={`Line ${index + 1}`} to={`Line ${index + 2}`} /> : null}
         </React.Fragment>)}
       </div> : null}
 
@@ -1332,7 +1350,7 @@ function FormationBoard({
             slots={["LD", "RD"]}
             menuOpen={menuKey === `defense:${line.id}`}
           />
-          {index < lineState.defense.length - 1 ? <DepthConnector tier={depthLinks.defense[index]?.tier || "empty"} score={depthLinks.defense[index]?.score ?? null} /> : null}
+          {index < lineState.defense.length - 1 ? <DepthConnector tier={depthLinks.defense[index]?.tier || "empty"} score={depthLinks.defense[index]?.score ?? null} slot="LD" from={`Pair ${index + 1}`} to={`Pair ${index + 2}`} /> : null}
         </React.Fragment>)}
       </div> : null}
 
@@ -1425,7 +1443,7 @@ function LineInspector({
           <div className="lb-block">
             <div className="lb-kv"><span className="lb-kv-label">Avg OVR</span><span className="lb-kv-value">{average ?? "—"}</span></div>
             <div className="lb-kv"><span className="lb-kv-label">Role mix</span><span className="lb-kv-value">{roles}</span></div>
-            {isGoalieUnit ? null : <div className="lb-kv"><span className="lb-kv-label">Avg bond</span><span className="lb-kv-value">{bondAverage == null ? "—" : `${bondAverage}%`}</span></div>}
+            {isGoalieUnit ? null : <div className="lb-kv"><span className="lb-kv-label">Avg bond</span><span className="lb-kv-value">{bondAverage == null ? "—" : bondAverage}</span></div>}
             {isGoalieUnit ? null : <div className="lb-kv"><span className="lb-kv-label">New pairings</span><span className={`lb-kv-value ${freshLinks.length ? "warn" : "ok"}`}>{freshLinks.length}</span></div>}
           </div>
           {isGoalieUnit ? null : <div className="lb-block">
@@ -1433,7 +1451,7 @@ function LineInspector({
             {(unitLinks || []).length ? unitLinks.map((link) => (
               <div className="lb-linkrow" key={link.key}>
                 <span className="lb-linkrow-names">{linkName(link.slotA)} — {linkName(link.slotB)}</span>
-                <span className={`lb-linkrow-score ${link.tier}`}>{link.score == null ? "—" : `${link.score}%`}</span>
+                <span className={`lb-linkrow-score ${link.tier}`}>{link.score == null ? "—" : link.score}</span>
               </div>
             )) : <div className="lb-note"><span className="lb-note-text">Fill the unit to score its links.</span></div>}
           </div>}
@@ -1595,7 +1613,9 @@ function EvenStrengthLines(props) {
     const hasBackend = Boolean(backend?.retained);
     const hasCache = Boolean(cache?.retained);
     const chosen = hasBackend ? backend : hasCache ? cache : { lineState: buildBestInitialLines(players, "position", showThird), removed: 0 };
-    const savedBase = hasBackend || hasCache ? chosen.lineState : emptyLines(showThird);
+    // Only the backend counts as "saved": a browser-cached or auto-built lineup
+    // is still unsaved, otherwise the Chemistry report projects different lines.
+    const savedBase = hasBackend ? chosen.lineState : emptyLines(showThird);
     hydratedSession.current = sessionId;
     setLineState(chosen.lineState);
     setLocks({});
@@ -1653,7 +1673,9 @@ function EvenStrengthLines(props) {
       const unitPlayers = Object.values(line.slots || {}).map((id) => playerMap[String(id || "")]).filter(Boolean);
       const computed = calculateUnitChemistry(unitPlayers, group === "defense" ? "defense" : group === "goalies" ? "goalie" : "forward", chemReport);
       const bondAvg = averageLinkScore(linksByUnit[`${group}:${line.id}`] || []);
-      if (bondAvg != null && (computed?.projected || Math.abs((computed?.score || 0) - bondAvg) >= 8)) {
+      // Backend unit scores win outright so this board matches the Chemistry report;
+      // the link average only stands in when the backend has no score for the unit.
+      if (bondAvg != null && computed?.projected) {
         result[`${group}:${line.id}`] = { ...computed, score: bondAvg, label: unitChemistryLabel(bondAvg), projected: true };
       } else {
         result[`${group}:${line.id}`] = computed;
@@ -1687,7 +1709,9 @@ function EvenStrengthLines(props) {
     if (!scores.length) return { score: 0, projected: true };
     return {
       score: Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length),
-      projected: Object.values(chemistryByUnit || {}).some((entry) => entry?.projected),
+      // Goalie tandems aren't scored as a unit by the backend, so only skater
+      // units decide whether the board is live or projected.
+      projected: Object.entries(chemistryByUnit || {}).some(([key, entry]) => !key.startsWith("goalies:") && entry?.projected),
     };
   }, [chemistryByUnit]);
   const statusMetrics = useMemo(() => {
@@ -1701,7 +1725,7 @@ function EvenStrengthLines(props) {
     return [
       { label: "Skaters", value: `${skaters.size}/18`, tone: skaters.size === 18 ? "good" : "warn" },
       { label: "Goalies", value: `${activeGoalies}/2`, tone: activeGoalies === 2 ? "good" : "warn" },
-      { label: "Team chem", value: assignedPlayers.length ? `${teamChemistry.score}%` : null, title: "Average chemistry across all dressed lines, pairs, and goalies" },
+      { label: "Team chem", value: assignedPlayers.length ? teamChemistry.score : null, title: "Average chemistry across all dressed lines, pairs, and goalies" },
       { label: "Avg OVR", value: average },
       { label: "New pairs", value: freshCount, tone: freshCount ? "warn" : "good", title: "Pairings with no shared history yet" },
       { label: "Scratches", value: scratches },
@@ -1989,11 +2013,11 @@ function EvenStrengthLines(props) {
 
   return <div className="linebuilder-root">
     <EditLinesStyles />
-    <LineBuilderSidebar setScreen={setScreen} abbreviation={team.abbreviation} activeScreen={SCREENS.EDIT_LINES} />
+    <LineBuilderSidebar setScreen={setScreen} abbreviation={team.abbreviation} logo={team.logo} activeScreen={SCREENS.EDIT_LINES} />
     <main className="lb-shell">
       <LineBuilderHeader
         team={team}
-        title="Line chemistry"
+        title="Lines"
         subtitle={subtitle}
         live={live}
         canUndo={history.length > 0}
@@ -2104,7 +2128,7 @@ function calculatePowerPlayChemistry(players) {
   const balance = (hasCenter ? 20 : 5) + (hasDefense ? 20 : 5) + (hasShooter ? 20 : 8) + (hasPlaymaker ? 20 : 8) + (hasNetFront ? 20 : 8);
   const handMixBonus = selected.some((p) => p.handedness === "L") && selected.some((p) => p.handedness === "R") ? 5 : 0;
   const score = clamp(avgOverall * 0.22 + creativity * 0.24 + movement * 0.22 + finishing * 0.2 + balance * 0.12 + handMixBonus);
-  const label = score >= 90 ? "Terrifying unit" : score >= 80 ? "Dangerous PP" : score >= 70 ? "Functional unit" : score >= 60 ? "Needs a trigger" : "Disconnected";
+  const label = chemistryLabel(score);
   const tips = [];
   if (!hasShooter) tips.push("Add a true shooter so the unit has a dangerous trigger.");
   if (!hasPlaymaker) tips.push("Add a playmaker to improve puck movement and zone control.");
@@ -2133,7 +2157,7 @@ function calculatePenaltyKillChemistry(players) {
     return role.includes("checker") || role.includes("grinder");
   }) ? 4 : 0;
   const score = clamp(avgOverall * 0.2 + defensive * 0.34 + discipline * 0.22 + workEthic * 0.14 + balance * 0.1 + roleBonus + checkerBonus);
-  const label = score >= 90 ? "Elite PK identity" : score >= 80 ? "Reliable killers" : score >= 70 ? "Playable unit" : score >= 60 ? "Risky mix" : "Needs work";
+  const label = chemistryLabel(score);
   const tips = [];
   if (defensive < 78) tips.push("Defensive buy-in is low. Add a shutdown defender or two-way forward.");
   if (discipline < 76) tips.push("Discipline is dragging this unit down. Avoid penalty-prone players here.");
@@ -2212,7 +2236,7 @@ function SpecialTeamsUnit({ kind, line, index, playerMap, chemReport, chemistry,
     <div className="fm-unit-tag">
       <span className="fm-unit-kicker">{isPP ? "PP" : "PK"}</span>
       <span className="fm-unit-num">{unitNumber}</span>
-      <span className={`fm-unit-score ${scoreTone(chemistry?.score)}`}>{chemistry?.score ?? 0}%</span>
+      <span className={`fm-unit-score ${scoreTone(chemistry?.score)}`}>{chemistry?.score ?? 0}</span>
     </div>
     {slots.map((slot) => {
       const descriptor = { key: `${line.id}:${slot}`, lineId: line.id, slot, playerId: String(line.slots?.[slot] || "") };
@@ -2281,6 +2305,31 @@ function SpecialTeamsLines({ kind, ...props }) {
     return emptySpecialTeamsLines(kind);
   });
   const hydratedSession = useRef("");
+  // Undo / redo, same as the even-strength builder.
+  const [stHistory, setStHistory] = useState([]);
+  const [stFuture, setStFuture] = useState([]);
+  const linesRef = useRef(lines);
+  useEffect(() => { linesRef.current = lines; }, [lines]);
+  const rememberLines = useCallback(() => {
+    setStHistory((current) => [...current, linesRef.current].slice(-HISTORY_LIMIT));
+    setStFuture([]);
+  }, []);
+  const undoLines = useCallback(() => {
+    if (!stHistory.length) return;
+    const previous = stHistory[stHistory.length - 1];
+    setStFuture((future) => [linesRef.current, ...future].slice(0, HISTORY_LIMIT));
+    setStHistory((current) => current.slice(0, -1));
+    setLines(previous);
+    setUnsaved(true);
+  }, [stHistory]);
+  const redoLines = useCallback(() => {
+    if (!stFuture.length) return;
+    const [next, ...rest] = stFuture;
+    setStHistory((history) => [...history, linesRef.current].slice(-HISTORY_LIMIT));
+    setStFuture(rest);
+    setLines(next);
+    setUnsaved(true);
+  }, [stFuture]);
 
   useEffect(() => {
     let active = true;
@@ -2320,6 +2369,8 @@ function SpecialTeamsLines({ kind, ...props }) {
     const cached = readSessionLineupCache(kind, sessionId);
     if (Array.isArray(cached) && cached.length) setLines(cached);
     else setLines(makeInitial(players));
+    // Not on the backend yet — keep Save live until the user commits it.
+    setUnsaved(true);
     hydratedSession.current = key;
   }, [players, kind, sessionId, franchiseState?.lines, makeInitial]);
 
@@ -2354,7 +2405,8 @@ function SpecialTeamsLines({ kind, ...props }) {
   }, [selectedPlayerId, playerMap, selectedLine, selectedSlot]);
   const filteredPool = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return sortPoolPlayers(players.filter((player) => !query || `${player.name} ${player.position} ${player.role}`.toLowerCase().includes(query)), "overall", null);
+    // Goalies never skate on special teams units — keep them out of this pool.
+    return sortPoolPlayers(players.filter((player) => !isGoalie(player.position) && (!query || `${player.name} ${player.position} ${player.role}`.toLowerCase().includes(query))), "overall", null);
   }, [players, search]);
   const missingCount = useMemo(() => lines.reduce((sum, line) => sum + Object.values(line.slots || {}).filter((id) => !id).length, 0), [lines]);
   const statusMetrics = useMemo(() => {
@@ -2363,12 +2415,12 @@ function SpecialTeamsLines({ kind, ...props }) {
     const average = Object.values(chemistryByLine).map((entry) => entry.score).filter(Boolean);
     return [
       { label: "Units", value: `${lines.length}` },
-      { label: "Filled", value: `${assignedSet.size}/${filled}`, tone: missingCount ? "warn" : "good" },
-      { label: "Avg unit", value: average.length ? `${Math.round(average.reduce((sum, value) => sum + value, 0) / average.length)}%` : null },
-      { label: "New pairs", value: freshCount, tone: freshCount ? "warn" : "good" },
+      { label: "Skaters", value: `${assignedSet.size}/${filled}`, tone: missingCount ? "warn" : "good" },
+      { label: "Team chem", value: average.length ? Math.round(average.reduce((sum, value) => sum + value, 0) / average.length) : null, title: `Average chemistry across all ${isPP ? "power play" : "penalty kill"} units` },
+      { label: "New pairs", value: freshCount, tone: freshCount ? "warn" : "good", title: "Pairings with no shared history yet" },
       { label: "Warnings", value: missingCount + (invalidMsg ? 1 : 0), tone: missingCount || invalidMsg ? "warn" : "good" },
     ];
-  }, [lines, assignedSet, missingCount, invalidMsg, allLinks, chemistryByLine]);
+  }, [lines, assignedSet, missingCount, invalidMsg, allLinks, chemistryByLine, isPP]);
 
   const placePlayer = useCallback((playerId, lineId, slot) => {
     const player = playerMap[String(playerId || "")];
@@ -2383,6 +2435,7 @@ function SpecialTeamsLines({ kind, ...props }) {
       return false;
     }
     setInvalidMsg("");
+    rememberLines();
     setLines((current) => {
       const from = findSpecialTeamsAssignment(current, player.id);
       const targetLine = current.find((line) => line.id === lineId);
@@ -2401,7 +2454,7 @@ function SpecialTeamsLines({ kind, ...props }) {
     setSelectedPlayerId("");
     setInspectorOpen(true);
     return true;
-  }, [playerMap, kind]);
+  }, [playerMap, kind, rememberLines]);
 
   const onDragStart = useCallback((event, playerId) => {
     event.dataTransfer.setData("application/x-nhl-player", JSON.stringify({ pid: playerId }));
@@ -2437,19 +2490,34 @@ function SpecialTeamsLines({ kind, ...props }) {
 
   const clearAll = useCallback(() => {
     if (!window.confirm(`Clear all ${isPP ? "power play" : "penalty kill"} slots?`)) return;
+    rememberLines();
     setLines(emptySpecialTeamsLines(kind));
     setUnsaved(true);
     setInvalidMsg("");
-  }, [kind, isPP]);
+  }, [kind, isPP, rememberLines]);
 
   const resetLines = useCallback(() => {
     const fresh = makeInitial(players);
+    rememberLines();
     setLines(fresh);
     writeSessionLineupCache(kind, fresh, sessionId);
     setUnsaved(true);
     setInvalidMsg("");
-    setToast({ type: "success", message: "Units auto-filled." });
-  }, [makeInitial, players, kind, sessionId]);
+    setToast({ type: "success", message: "Units auto-built." });
+  }, [makeInitial, players, kind, sessionId, rememberLines]);
+
+  /** Reset = back to what the backend has saved, like the even-strength Reset. */
+  const revertToSaved = useCallback(() => {
+    const saved = franchiseState?.lines?.[kind]?.lines;
+    if (!Array.isArray(saved) || !saved.length) {
+      setToast({ type: "warning", message: `No saved ${isPP ? "power play" : "penalty kill"} units yet.` });
+      return;
+    }
+    rememberLines();
+    setLines(saved);
+    setUnsaved(false);
+    setInvalidMsg("");
+  }, [franchiseState?.lines, kind, isPP, rememberLines]);
 
   const saveLines = useCallback(async () => {
     if (saving) return;
@@ -2494,24 +2562,26 @@ function SpecialTeamsLines({ kind, ...props }) {
 
   return <div className="linebuilder-root">
     <EditLinesStyles />
-    <LineBuilderSidebar setScreen={setScreen} abbreviation={team.abbreviation} activeScreen={activeScreen} />
+    <LineBuilderSidebar setScreen={setScreen} abbreviation={team.abbreviation} logo={team.logo} activeScreen={activeScreen} />
     <main className="lb-shell">
       <LineBuilderHeader
         team={team}
         title={title}
         subtitle={`${players.length} players · ${isPP ? "Creativity and puck movement weighted" : "Box coverage — every killer covers their partner"}`}
         live={!unsaved}
-        showHistory={false}
-        showAutoBuild={false}
+        canUndo={stHistory.length > 0}
+        canRedo={stFuture.length > 0}
+        onUndo={undoLines}
+        onRedo={redoLines}
         onClear={clearAll}
-        onReset={resetLines}
-        resetLabel="Auto fill"
+        onReset={revertToSaved}
+        onAutoBuild={resetLines}
         onSave={saveLines}
         saving={saving}
         unsaved={unsaved}
         saveError={saveError}
         disabled={!players.length}
-        saveLabel={unsaved ? `Save ${isPP ? "PP" : "PK"}` : "Saved"}
+        saveLabel={unsaved ? "Save units" : "Saved"}
       />
       <LineStatusStrip metrics={statusMetrics} meter={chemMeter} />
       <div className="lb-workspace">
@@ -2521,10 +2591,10 @@ function SpecialTeamsLines({ kind, ...props }) {
 
         <section className="lb-region lb-board-region">
           <div className="lb-modebar">
-            <button type="button" className="lb-mode active">{isPP ? "PP units" : "PK units"}</button>
+            <span className="lb-mode active" aria-current="page">{isPP ? "PP units" : "PK units"}</span>
             <div className="lb-mobile-tools">
-              <button type="button" className="lb-icon" onClick={() => setPoolOpen((v) => !v)} aria-label="Open player pool" title="Players">P</button>
-              <button type="button" className="lb-icon" onClick={() => setInspectorOpen((v) => !v)} aria-label="Open unit details" title="Details">D</button>
+              <button type="button" className="lb-icon" onClick={() => setPoolOpen((v) => !v)} aria-label="Open player pool" title="Players">☰</button>
+              <button type="button" className="lb-icon" onClick={() => setInspectorOpen((v) => !v)} aria-label="Open unit details" title="Details">▤</button>
             </div>
           </div>
           {!players.length && !rosterLoading ? <div className="lb-empty">Roster unavailable</div> : <div className="fm-scroll">
@@ -2576,10 +2646,10 @@ function SpecialTeamsLines({ kind, ...props }) {
                 {selectedLinks.length ? selectedLinks.map((link) => (
                   <div className="lb-linkrow" key={link.key}>
                     <span className="lb-linkrow-names">{linkName(link.slotA)} — {linkName(link.slotB)}</span>
-                    <span className={`lb-linkrow-score ${link.tier}`}>{link.score == null ? "—" : `${link.score}%`}</span>
+                    <span className={`lb-linkrow-score ${link.tier}`}>{link.score == null ? "—" : link.score}</span>
                   </div>
                 )) : <div className="lb-note"><span className="lb-note-text">Fill the unit to score its links.</span></div>}
-                <div className="lb-kv"><span className="lb-kv-label">Avg bond</span><span className="lb-kv-value">{bondAverage == null ? "—" : `${bondAverage}%`}</span></div>
+                <div className="lb-kv"><span className="lb-kv-label">Avg bond</span><span className="lb-kv-value">{bondAverage == null ? "—" : bondAverage}</span></div>
               </div>
               <div className="lb-block">
                 <div className="lb-block-title">Read on this unit</div>

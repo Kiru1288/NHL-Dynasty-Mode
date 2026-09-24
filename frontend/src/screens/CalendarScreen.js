@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
+import { getTeamLogoSrc as getSharedTeamLogoSrc } from "../utils/teamLogos";
 import { formatFranchiseApiError } from "../services/api";
 import WorldJuniorsEvent from "../events/worldJuniors/WorldJuniorsEvent";
 import { resolveWorldJuniorsPayload } from "../events/worldJuniors/WorldJuniorsMenu";
@@ -2220,6 +2221,15 @@ function CalendarScreen(props = {}) {
     setShowOnlyTeamGames(false);
   }, []);
 
+  /** Upcoming Stretch → team-only month view, opened on the next club game. */
+  const viewTeamSchedule = useCallback(() => {
+    setShowOnlyTeamGames(true);
+    const date = toDateObject(nextTeamGames[0]?.date) || toDateObject(currentDate);
+    if (!date) return;
+    setViewDate(new Date(date.getFullYear(), date.getMonth(), 1));
+    setSelectedDateISO(toISODate(date));
+  }, [nextTeamGames, currentDate]);
+
   useEffect(() => {
     const onKeyDown = (event) => {
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
@@ -2803,6 +2813,7 @@ function CalendarScreen(props = {}) {
                 games={nextTeamGames}
                 activeTeam={activeTeam}
                 allTeams={allTeams}
+                onViewSchedule={viewTeamSchedule}
               />
             ) : null}
           </aside>
@@ -3070,9 +3081,9 @@ function CalendarGameTile({ game, activeTeam, allTeams, standings = [], compact,
             <em>-</em>
             <span>{homeScore}</span>
           </div>
-        ) : (
+        ) : statusPillText && statusPillText !== "TBD" ? (
           <div className="nhlcal-game-status-pill">{statusPillText}</div>
-        )}
+        ) : null}
 
         <span className="nhlcal-game-chevron">{expanded ? "⌃" : "⌄"}</span>
       </div>
@@ -3631,7 +3642,7 @@ function StandingsCard({ activeTeam, allTeams = [], rows, groupLabel = "League S
   );
 }
 
-function UpcomingStretchCard({ games, activeTeam, allTeams }) {
+function UpcomingStretchCard({ games, activeTeam, allTeams, onViewSchedule }) {
   return (
     <section className="nhlcal-broadcast-strip nhlcal-stretch-card">
       <header className="nhlcal-mini-header">
@@ -3664,7 +3675,7 @@ function UpcomingStretchCard({ games, activeTeam, allTeams }) {
         )}
       </div>
 
-      <button type="button" className="nhlcal-mini-button">
+      <button type="button" className="nhlcal-mini-button" onClick={onViewSchedule}>
         View Full Schedule ›
       </button>
     </section>
@@ -4432,7 +4443,8 @@ function getTeamLogoSrc(team) {
     if (src) return src;
   }
 
-  return null;
+  // Shared resolver knows renamed clubs (e.g. Utah Mammoth → bundled crest).
+  return getSharedTeamLogoSrc(team) || null;
 }
 
 function resolveStandingsTeamRow(row, allTeams = []) {
@@ -6441,6 +6453,8 @@ function sanitizeExplicitTeamAbbr(raw) {
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
+  // A bare engine id ("22") is not an abbreviation — fall through to the name.
+  if (/^\d+$/.test(cleaned)) return "";
   return cleaned || "";
 }
 
@@ -8495,7 +8509,42 @@ function CalendarStyles() {
         display: grid;
         justify-items: end;
         gap: 3px;
-        min-width: 38px;
+      }
+
+      /* Month cells are ~120px wide: keep the matchup text readable instead of
+         letting the crest + status pill squeeze it to zero width. */
+      .nhlcal-month-grid .nhlcal-game-tile {
+        gap: 6px;
+        padding-left: 7px;
+        padding-right: 7px;
+      }
+
+      .nhlcal-month-grid .nhlcal-team-logo.size-tile-main,
+      .nhlcal-month-grid .nhlcal-team-badge.size-tile-main {
+        width: 30px;
+        height: 30px;
+        padding: 2px;
+        border-radius: 8px;
+      }
+
+      .nhlcal-month-grid .nhlcal-game-match-line strong {
+        font-size: 11px;
+        letter-spacing: 0;
+      }
+
+      /* The whole tile toggles; the chevron only eats matchup width here. */
+      .nhlcal-month-grid .nhlcal-game-chevron {
+        display: none;
+      }
+
+      .nhlcal-month-grid .nhlcal-game-match-line {
+        gap: 3px;
+      }
+
+      .nhlcal-month-grid .nhlcal-game-relation {
+        min-width: 0;
+        padding: 0 3px;
+        letter-spacing: 0.02em;
       }
 
       .nhlcal-game-score-mini {
@@ -8802,7 +8851,9 @@ function CalendarStyles() {
               .nhlcal-right-rail {
         min-width: 0;
         min-height: 0;
-        overflow: hidden;
+        /* Scroll rather than crush the standings table to a 1px body. */
+        overflow-x: hidden;
+        overflow-y: auto;
         display: flex;
         flex-direction: column;
         gap: 8px;
@@ -8977,6 +9028,16 @@ function CalendarStyles() {
       .nhlcal-preview-card .nhlcal-card-header {
         min-height: 46px;
         padding: 10px 12px 6px;
+        /* Narrow rail: let the count pill drop under the date instead of
+           crushing the title column into the strip below. */
+        flex-wrap: wrap;
+        row-gap: 6px;
+        flex-shrink: 0;
+      }
+
+      .nhlcal-preview-card .nhlcal-card-header > div {
+        flex: 1 1 140px;
+        min-width: 0;
       }
 
       .nhlcal-preview-card .nhlcal-card-header h3 {
@@ -9407,8 +9468,8 @@ function CalendarStyles() {
       }
 
       .nhlcal-standings-card--extended {
-        flex: 1 1 auto;
-        min-height: 0;
+        flex: 1 0 auto;
+        min-height: 280px;
       }
 
       .nhlcal-standings-header {

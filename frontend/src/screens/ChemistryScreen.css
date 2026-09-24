@@ -8,6 +8,8 @@
   --chem-text: var(--ops-text);
   --chem-muted: var(--ops-text-secondary);
 
+  min-width: 0;
+  height: 100dvh;
   padding: 18px 22px 96px;
   color: var(--chem-text);
   background:
@@ -28,12 +30,82 @@
   border-bottom: 1px solid var(--chem-line);
 }
 
-.chemistry-hero h2 {
-  margin: 0 0 6px;
-  font-family: var(--font-broadcast-display);
-  font-size: 1.35rem;
+.chemistry-hero-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.chemistry-team-logo {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 64px;
+  display: grid;
+  place-items: center;
+}
+
+.chemistry-team-logo img {
+  width: 58px;
+  height: 58px;
+  object-fit: contain;
+}
+
+.chemistry-kicker {
+  margin: 0 0 2px;
+  color: var(--ops-cyan) !important;
+  font-size: var(--type-phase-label-size) !important;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.chemistry-hero h1 {
+  margin: 0 0 4px;
+  font-family: var(--font-ops-head);
+  font-size: 1.9rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Projected-lines notice — the report is not describing the user's lineup. */
+.chemistry-projection-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border: 1px solid rgba(233, 168, 60, 0.4);
+  border-left: 3px solid var(--ops-gold);
+  border-radius: var(--radius-hud);
+  background: var(--ops-gold-soft);
+  font-size: var(--type-compact-size);
+  color: rgba(233, 247, 251, 0.88);
+}
+
+.chemistry-projection-note strong {
+  color: var(--ops-gold);
+}
+
+.chemistry-projection-note button {
+  flex-shrink: 0;
+  border: 1px solid rgba(233, 168, 60, 0.55);
+  background: rgba(233, 168, 60, 0.16);
+  color: var(--ops-gold);
+  border-radius: var(--radius-hud);
+  padding: 7px 12px;
+  font-size: 11px;
+  font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  cursor: pointer;
+}
+
+.chemistry-projection-note button:hover {
+  background: rgba(233, 168, 60, 0.26);
 }
 
 .chemistry-hero p {
@@ -130,7 +202,8 @@
 
 .chemistry-room-header h3,
 .chemistry-line-top > span:first-child {
-  font-size: var(--type-ops-heading-size);
+  font-family: var(--font-ops-head);
+  font-size: 1.1rem;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -138,7 +211,8 @@
 
 .chemistry-section-title {
   margin: 0 0 8px;
-  font-size: var(--type-ops-heading-size);
+  font-family: var(--font-ops-head);
+  font-size: 1.15rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -166,9 +240,10 @@
   color: var(--chem-muted);
 }
 
+/* Numerals in Inter, tabular — same as the Line Builder board. */
 .chemistry-meter-row strong {
   color: var(--chem-text);
-  font-family: var(--font-mono-data);
+  font-weight: 900;
   font-variant-numeric: tabular-nums;
 }
 
@@ -193,16 +268,29 @@
 
 /* Link chain — spatial relationship between linemates */
 .chemistry-line-players {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0 7px;
+  display: grid;
+  gap: 3px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
 }
 
 .chemistry-node {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
   align-items: baseline;
-  gap: 5px;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chemistry-node strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chemistry-connection-card .chemistry-node {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .chemistry-node strong {
@@ -265,13 +353,38 @@
 .chemistry-line-card[data-tone="low"] { border-left-color: var(--ops-injury); }
 
 .chemistry-line-top > span:first-child {
-  font-family: var(--font-broadcast-display);
-  font-size: 1rem;
+  font-family: var(--font-ops-head);
+  font-size: 1.1rem;
   color: var(--ops-text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Cards in a row share a height, and the worksheet sits on the bottom rule so
+   meters line up across cards even when one unit has extra notes. */
+.chemistry-grid--units > .chemistry-line-card,
+.chemistry-connection-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.chemistry-line-card .chemistry-worksheet {
+  margin-top: auto;
+}
+
+.chemistry-line-card .chemistry-chip-row {
+  margin: 8px 0;
+}
+
+.chemistry-connection-card {
+  gap: 8px;
+  justify-content: space-between;
 }
 
 /* Scheme-fit notation reads as a two-column coaching worksheet under a rule. */
-.chemistry-line-card .chemistry-grid {
+.chemistry-line-card .chemistry-worksheet {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 2px 18px;
   padding-top: 6px;
@@ -284,7 +397,7 @@
 
 /* Column rules so a value never reads as part of the next label. */
 .chemistry-line-card .chemistry-meter:nth-child(even),
-.chemistry-room-card .chemistry-meter + .chemistry-meter {
+.chemistry-room-card .chemistry-meter {
   padding-left: 16px;
   border-left: 1px solid var(--chem-line);
 }
@@ -320,17 +433,19 @@
 .chemistry-score-elite { color: var(--ops-success); }
 .chemistry-score-elite::before { background: var(--ops-success); width: 12px; }
 
-.chemistry-score-strong { color: #6be29c; }
-.chemistry-score-strong::before { background: #6be29c; }
+/* Three colour bands, same as the legend and the Line Builder:
+   green 75+ (Strong/Elite), gold 45–74 (Connected/Neutral), red <45. */
+.chemistry-score-strong { color: var(--ops-success); }
+.chemistry-score-strong::before { background: var(--ops-success); }
 
 .chemistry-score-connected { color: var(--ops-gold); }
 .chemistry-score-connected::before { background: var(--ops-gold); }
 
-.chemistry-score-neutral { color: var(--chem-muted); }
-.chemistry-score-neutral::before { background: var(--chem-muted); }
+.chemistry-score-neutral { color: var(--ops-gold); }
+.chemistry-score-neutral::before { background: var(--ops-gold); }
 
-.chemistry-score-awkward { color: #f5a37f; }
-.chemistry-score-awkward::before { background: #f5a37f; }
+.chemistry-score-awkward { color: var(--ops-injury); }
+.chemistry-score-awkward::before { background: var(--ops-injury); }
 
 .chemistry-score-broken { color: var(--ops-injury); }
 .chemistry-score-broken::before { background: var(--ops-injury); width: 12px; height: 10px; clip-path: polygon(50% 0, 100% 100%, 0 100%); }

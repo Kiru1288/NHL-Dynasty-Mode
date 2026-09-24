@@ -277,12 +277,18 @@ function buildProspectPoolRankings(organizations, developmentLeagues) {
 
 function teamLabel(state) {
   return str(
-    state?.user_team_name || state?.team_name || state?.franchise_team_name || "Your Team"
+    state?.user_team_name ||
+      state?.team_name ||
+      state?.franchise_team_name ||
+      state?.team?.name ||
+      "Your Team"
   );
 }
 function calendarLabel(state) {
   return str(
     state?.calendar_iso ||
+      state?.franchise_today_iso ||
+      state?.nhl_today?.iso ||
       state?.current_date_iso ||
       state?.date_iso ||
       state?.calendar_day_label ||
@@ -293,8 +299,8 @@ function calendarLabel(state) {
 function prettyDate(iso) {
   const s = str(iso);
   if (!/^\d{4}-\d{2}-\d{2}/.test(s)) return s || "—";
-  const d = new Date(s.slice(0, 10));
-  if (Number.isNaN(d.getTime())) return s;
+  const d = localDateFromIso(s);
+  if (!d) return s;
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
@@ -322,12 +328,16 @@ function categoryMeta(story) {
   return CATEGORY_META[key] || CATEGORY_META.storyline;
 }
 
+/** "YYYY-MM-DD" → local-midnight Date (avoids the UTC previous-day shift). */
+function localDateFromIso(iso) {
+  const [y, m, day] = String(iso).slice(0, 10).split("-").map(Number);
+  const d = new Date(y, m - 1, day);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 function parseStoryDate(raw) {
   const s = str(raw?.calendar_iso || raw?.date || "");
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
-    const d = new Date(s.slice(0, 10));
-    return Number.isNaN(d.getTime()) ? null : d;
-  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return localDateFromIso(s);
   const n = Number(raw?.calendar_day ?? raw?.date);
   if (Number.isFinite(n) && n > 1000) {
     const d = new Date(n);
@@ -1207,8 +1217,7 @@ function isTradeDeskStory(story) {
 function parseIsoDate(iso) {
   const s = str(iso);
   if (!/^\d{4}-\d{2}-\d{2}/.test(s)) return null;
-  const d = new Date(s.slice(0, 10));
-  return Number.isNaN(d.getTime()) ? null : d;
+  return localDateFromIso(s);
 }
 
 function socialPostTimestamp(post) {

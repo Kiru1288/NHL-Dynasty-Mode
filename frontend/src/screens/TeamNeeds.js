@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
+import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 
 /**
  * TeamNeeds.js
@@ -152,12 +153,12 @@ function TeamNeeds(props = {}) {
         </button>
 
         <nav className="teamneeds-side-nav" aria-label="Draft navigation">
-          <SideButton icon="⌂" label="Office" onClick={() => handleNavigate(SCREENS.OFFICE)} />
+          <SideButton icon="▦" label="Office" onClick={() => handleNavigate(SCREENS.HUB)} />
           <SideButton icon="◫" label="Calendar" onClick={() => handleNavigate(SCREENS.CALENDAR)} />
-          <SideButton icon="▦" label="Roster" onClick={() => handleNavigate(SCREENS.ROSTER)} />
+          <SideButton icon="◉" label="Roster" onClick={() => handleNavigate(SCREENS.ROSTER)} />
           <SideButton active icon="◈" label="Needs" onClick={() => handleNavigate(SCREENS.TEAM_NEEDS)} />
-          <SideButton icon="★" label="Scouting" onClick={() => handleNavigate(SCREENS.STATS)} />
-          <SideButton icon="◎" label="Lottery" onClick={() => handleNavigate(SCREENS.DRAFT_LOTTERY)} />
+          <SideButton icon="◎" label="Scouting" onClick={() => handleNavigate(SCREENS.SCOUTING)} />
+          <SideButton icon="◌" label="Lottery" onClick={() => handleNavigate(SCREENS.DRAFT_LOTTERY)} />
         </nav>
       </aside>
 
@@ -189,26 +190,26 @@ function TeamNeeds(props = {}) {
 
         <section className="teamneeds-ops-context" aria-label="Draft planning context">
           <ContextCell
-            code="ROS"
+            icon="◉"
             label="Roster"
             value={report.totalRoster || "—"}
             sub={`${report.nhlRosterCount} NHL · ${report.prospectCount} pipeline`}
           />
           <ContextCell
-            code="PRI"
+            icon="◎"
             label="Priority"
             value={report.biggestNeed?.position || "—"}
             sub={report.biggestNeed ? formatNeedContext(report.biggestNeed) : "No roster data loaded"}
             tone={report.biggestNeed?.tone}
           />
           <ContextCell
-            code="STR"
+            icon="☰"
             label="Strategy"
             value={report.strategyLabel}
             sub={report.strategySub}
           />
           <ContextCell
-            code="FIT"
+            icon="⌖"
             label="Best fit"
             value={report.bestDraftFit ? getPlayerName(report.bestDraftFit) : "—"}
             sub={report.bestDraftFit?.sub || "Load draft class to match needs"}
@@ -435,11 +436,11 @@ function SideButton({ active, icon, label, onClick }) {
   );
 }
 
-function ContextCell({ code, label, value, sub, tone }) {
+function ContextCell({ icon, label, value, sub, tone }) {
   return (
     <article className={`teamneeds-context-cell${tone ? ` tone-${tone}` : ""}`}>
       <span className="teamneeds-context-cell__icon" aria-hidden="true">
-        {code || "OPS"}
+        {icon || "◈"}
       </span>
       <div>
         <span className="teamneeds-context-cell__label">{label}</span>
@@ -524,11 +525,12 @@ function DraftTargetRow({ player, index }) {
 }
 
 function TeamLogo({ team }) {
-  const abbr = getTeamAbbreviation(team);
+  const name = getTeamDisplayName(team);
+  const logo = resolveFranchiseTeamLogo(team, name);
 
   return (
-    <div className="teamneeds-team-logo" aria-label={`${getTeamDisplayName(team)} logo placeholder`}>
-      <span>{abbr}</span>
+    <div className="teamneeds-team-logo" aria-label={`${name} logo`}>
+      {logo ? <img src={logo} alt="" /> : <span>{getTeamAbbreviation(team)}</span>}
     </div>
   );
 }
@@ -1367,6 +1369,12 @@ function TeamNeedsStyles() {
         flex: 0 0 auto;
       }
 
+      .teamneeds-team-logo img {
+        width: 44px;
+        height: 44px;
+        object-fit: contain;
+      }
+
       .teamneeds-team-logo span {
         font-size: 24px;
         font-weight: 1000;
@@ -1470,19 +1478,20 @@ function TeamNeedsStyles() {
         border-right: 0;
       }
 
+      /* Glyph well — same register as the Entry Draft icon wells. */
       .teamneeds-context-cell__icon {
         flex: 0 0 auto;
-        min-width: 28px;
-        padding: 3px 5px;
+        width: 28px;
+        height: 28px;
+        display: grid;
+        place-items: center;
         margin-top: 1px;
-        border: 1px solid var(--line);
-        border-radius: var(--radius-ops, 2px);
+        border: 1px solid rgba(19, 216, 231, 0.32);
+        border-radius: var(--radius-hud, 4px);
+        background: rgba(19, 216, 231, 0.13);
         color: var(--cyan);
-        font-size: 11px;
-        font-weight: 900;
-        letter-spacing: 0.08em;
-        line-height: 1.2;
-        text-align: center;
+        font-size: 15px;
+        line-height: 1;
       }
 
       .teamneeds-context-cell__label,

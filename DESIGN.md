@@ -38,7 +38,7 @@ typography:
     lineHeight: 1.1
     letterSpacing: "0.03em"
   headline:
-    fontFamily: "Chakra Petch, Arial Black, sans-serif"
+    fontFamily: "Barlow Condensed, Archivo Black, Rajdhani, Arial Narrow, sans-serif"
     fontSize: "1.1rem"
     fontWeight: 700
     lineHeight: 1.15
@@ -50,7 +50,7 @@ typography:
     lineHeight: 1.25
     letterSpacing: "0.08em"
   body:
-    fontFamily: "Inter, IBM Plex Sans, Segoe UI, system-ui, sans-serif"
+    fontFamily: "Inter, ui-sans-serif, Segoe UI, system-ui, sans-serif"
     fontSize: "0.875rem"
     fontWeight: 400
     lineHeight: 1.45
@@ -134,7 +134,7 @@ components:
 
 This product looks and feels like the private command center of an NHL general manager: a dark sanctum you return to, then luminous ops boards and broadcast nights when the league calendar demands attention. The visual system is intentionally multi-register—not one flat theme—because the season job itself switches between sitting in the office, working dense tools, and living cinematic events.
 
-Home is the **Office Sanctum**: warm charcoal, brass gold, condensed display type, glass HUD cards over a 3D office. Tools and many events speak **Broadcast Ops**: deep teal void, rink cyan accents, deadline gold highlights, hairline cyan rules, Inter UI. A third **Franchise Shell** register (navy, violet, arena orange, ice neon; Chakra Petch + IBM Plex) still wraps the app canvas and some hub chrome. Legacy NHL signal red remains available for older menu primitives but is not the default voice of new work.
+Home is the **Office Sanctum**: warm charcoal, brass gold, condensed display type, glass HUD cards over a 3D office. Tools and many events speak **Broadcast Ops**: deep teal void, rink cyan accents, deadline gold highlights, hairline cyan rules, Inter UI. A third **Franchise Shell** register (navy, violet, arena orange, ice neon; same Barlow Condensed + Inter type as the Entry Draft) still wraps the app canvas and some hub chrome. Legacy NHL signal red remains available for older menu primitives but is not the default voice of new work.
 
 Atmosphere is **glass over the void**: depth comes from stacked dark tones, frosted panels, soft inset highlights, and structural drop shadows—not from bright flat cards. Dense tables stay flatter; HUD cards and event boards lift. Reject light “sports marketing” dashboards, purple-on-white AI defaults, and toy/cartoon UI that breaks season-job seriousness.
 
@@ -182,15 +182,15 @@ A night-side palette: near-black voids, translucent teal panels, and scarce lumi
 ## Typography
 
 **Display Font:** Archivo Black (via `--font-motion-control`; fallbacks Rajdhani / Barlow Condensed / Arial Narrow) — office hub and condensed franchise titles  
-**Headline Font:** Chakra Petch — Franchise Shell headers and game chrome  
-**Body / Ops Font:** Inter (ops, calendar, many events) with IBM Plex Sans on the shell body  
+**Headline Font:** Barlow Condensed (`--font-ops-head`, the Entry Draft heading stack) — ops and shell headings  
+**Body / Ops Font:** Inter everywhere (ops, calendar, events, shell)  
 **Label Font:** Inter at heavy weight, wide tracking, often uppercase  
 
-**Character:** Condensed sports-broadcast authority meeting a serious GM desk. Display type is blocky and athletic; ops UI is tight Inter with uppercase phase labels; shell chrome is angular Chakra Petch.
+**Character:** Condensed sports-broadcast authority meeting a serious GM desk. Display type is blocky and athletic; ops UI is tight Inter with uppercase phase labels; headings use condensed Barlow, matching the Entry Draft floor.
 
 ### Hierarchy
 - **Display** (Archivo Black, ~1.1–1.4rem+, tracking ~0.03em): Office hub titles, sanctum identity.
-- **Headline** (Chakra Petch 600–700): Shell brands, section chrome in `game-ui`.
+- **Headline** (Barlow Condensed 700–900 via `--font-ops-head`): screen titles and section heads on ops and shell screens.
 - **Title** (Inter 800, tracked uppercase ~0.08em): Board section headers, event titles.
 - **Body** (Inter / IBM Plex 400–600, ~0.875rem): Tables, descriptions, feed copy. Prefer dense readable lines on dark panels.
 - **Label** (Inter 900, ~0.72rem, letter-spacing ~0.14em, uppercase): Phase chips, column headers, meta kicker text.

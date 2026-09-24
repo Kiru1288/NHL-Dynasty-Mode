@@ -11,6 +11,7 @@ import React, {
   import { baseURL as API_BASE, SESSION_STORAGE_KEY } from "../services/api";
   import { formatProspectLeague, formatProspectTeam } from "../events/prospectDevelopment/prospectDevelopmentHelpers";
   import PlayerHeadshot from "../components/PlayerHeadshot";
+  import { getTeamLogoSrc } from "../utils/teamLogos";
   
   /**
    * Scouting.js
@@ -1591,7 +1592,7 @@ import React, {
         "branding.logo",
       ]),
       ""
-    );
+    ) || getTeamLogoSrc(team) || "";
   }
   
   /* -------------------------------------------------------------------------- */
@@ -2481,11 +2482,11 @@ import React, {
           </button>
   
           <nav className="scout-side-nav" aria-label="Scouting navigation">
-            <SideButton label="Hub" icon="▦" onClick={() => setScreen(SCREENS.HUB)} />
+            <SideButton label="Office" icon="▦" onClick={() => setScreen(SCREENS.HUB)} />
             <SideButton label="Calendar" icon="◫" onClick={() => setScreen(SCREENS.CALENDAR)} />
             <SideButton label="Scouting" icon="◎" active onClick={() => setViewMode(VIEW_MODES.OVERVIEW)} />
-            <SideButton label="Draft" icon="▤" onClick={() => setScreen(SCREENS.DRAFT_CLASS)} />
-            <SideButton label="Office" icon="◆" onClick={() => setScreen(SCREENS.OFFICE)} />
+            <SideButton label="Draft" icon="▣" onClick={() => setScreen(SCREENS.DRAFT_CLASS)} />
+            <SideButton label="Needs" icon="◈" onClick={() => setScreen(SCREENS.TEAM_NEEDS)} />
           </nav>
   
           <button
@@ -3036,7 +3037,7 @@ function OverviewView({
                   );
                 })
               ) : (
-                <EmptyState title="No board" text="No prospects returned." icon="BD" />
+                <EmptyState title="No board" text="No prospects returned." icon="▤" />
               )}
             </div>
           </article>
@@ -3093,7 +3094,7 @@ function OverviewView({
                   </button>
                 ))
               ) : (
-                <EmptyState title="No prospects" text="Draft class unavailable this early in the season." icon="DP" />
+                <EmptyState title="No prospects" text="Draft class unavailable this early in the season." icon="☰" />
               )}
             </div>
           </article>
@@ -3147,7 +3148,7 @@ function OverviewView({
                   <AssignmentMiniCard key={assignment.id} assignment={assignment} />
                 ))
               ) : (
-                <EmptyState title="No assignments" text="Pick a scout target." icon="AS" />
+                <EmptyState title="No assignments" text="Pick a scout target." icon="⌖" />
               )}
             </div>
           </article>
@@ -3248,7 +3249,7 @@ function OverviewView({
   
   function CompactCountryList({ countries, metric, tone, onSelectCountry }) {
     if (!countries.length) {
-      return <EmptyState title="No countries" text="World data unavailable." icon="GL" />;
+      return <EmptyState title="No countries" text="World data unavailable." icon="◎" />;
     }
   
     return (
@@ -3389,7 +3390,7 @@ function OverviewView({
                 onSelectProspect={onSelectProspect}
               />
             ) : (
-              <EmptyState title="Select Country" text="Pins reveal targets." icon="MAP" />
+              <EmptyState title="Select Country" text="Pins reveal targets." icon="⌖" />
             )}
           </article>
         </section>
@@ -3473,7 +3474,7 @@ function OverviewView({
                 </button>
               ))
           ) : (
-            <EmptyState title="No players" text="No matches returned." icon="PL" />
+            <EmptyState title="No players" text="No matches returned." icon="◉" />
           )}
         </section>
       </div>
@@ -3701,7 +3702,7 @@ function OverviewView({
           </table>
   
           {!prospects.length ? (
-            <EmptyState title="No matches" text="Try fewer filters." icon="SR" />
+            <EmptyState title="No matches" text="Try fewer filters." icon="⌕" />
           ) : null}
         </section>
       </div>
@@ -4080,7 +4081,7 @@ function OverviewView({
             })}
           </section>
         ) : (
-          <EmptyState title="No scouts" text="Staff data not returned." icon="SC" />
+          <EmptyState title="No scouts" text="Staff data not returned." icon="◉" />
         )}
       </div>
     );
@@ -4104,7 +4105,7 @@ function OverviewView({
     if (!prospect) {
       return (
         <div className="player-view-empty">
-          <EmptyState title="Pick a player" text="Open the board or map." icon="PF" />
+          <EmptyState title="Pick a player" text="Open the board or map." icon="◉" />
   
           <div className="quick-player-list">
             {prospects.slice(0, 8).map((p) => (
@@ -4217,7 +4218,7 @@ function OverviewView({
                 <small>{formatMoney(country.cost)} trip</small>
               </div>
             ) : (
-              <EmptyState title="No country" text="World data missing." icon="GL" />
+              <EmptyState title="No country" text="World data missing." icon="◎" />
             )}
           </article>
   
@@ -4237,7 +4238,7 @@ function OverviewView({
                 ))}
               </div>
             ) : (
-              <EmptyState title="No ratings" text="Scout to unlock." icon="SK" />
+              <EmptyState title="No ratings" text="Scout to unlock." icon="▤" />
             )}
           </article>
   
@@ -4253,7 +4254,7 @@ function OverviewView({
                 ))}
               </div>
             ) : (
-              <EmptyState title="Unknown" text="No traits yet." icon="TR" />
+              <EmptyState title="Unknown" text="No traits yet." icon="✦" />
             )}
           </article>
   
@@ -4355,7 +4356,7 @@ function OverviewView({
                   ))}
               </div>
             ) : (
-              <EmptyState title="No notes" text="Assign a scout." icon="NT" />
+              <EmptyState title="No notes" text="Assign a scout." icon="☰" />
             )}
           </article>
         </section>
@@ -7449,11 +7450,12 @@ function OverviewView({
           height: 54px;
           display: grid;
           place-items: center;
-          border-radius: 999px;
-          border: 1px solid rgba(57, 185, 255, 0.24);
-          color: var(--scout-blue);
-          background: rgba(57, 185, 255, 0.08);
-          font-weight: 1000;
+          border-radius: var(--radius-hud, 4px);
+          border: 1px solid rgba(19, 216, 231, 0.32);
+          color: var(--ops-cyan, #13d8e7);
+          background: rgba(19, 216, 231, 0.13);
+          font-size: 22px;
+          line-height: 1;
         }
   
         .scout-empty h3 {

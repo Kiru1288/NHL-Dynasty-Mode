@@ -1000,11 +1000,11 @@ export default function DraftCombine({ franchiseState = {}, eventData = {}, onCo
   return (
     <div className="nhlcal-root dcb-root">
       <aside className="nhlcal-sidebar">
-        <button type="button" className="nhlcal-brand-button" onClick={() => navigate(SCREENS.OFFICE)} title="Office">
+        <button type="button" className="nhlcal-brand-button" onClick={() => navigate(SCREENS.HUB)} title="Office">
           <span className="nhlcal-shield-icon">⌂</span>
         </button>
         <nav className="nhlcal-side-nav" aria-label="Franchise navigation">
-          <button type="button" className="nhlcal-side-button" onClick={() => navigate(SCREENS.OFFICE)}>
+          <button type="button" className="nhlcal-side-button" onClick={() => navigate(SCREENS.HUB)}>
             <span className="nhlcal-side-icon">▦</span>
             <span className="nhlcal-side-label">Office</span>
           </button>
@@ -1013,7 +1013,7 @@ export default function DraftCombine({ franchiseState = {}, eventData = {}, onCo
             <span className="nhlcal-side-label">Calendar</span>
           </button>
           <button type="button" className="nhlcal-side-button is-active">
-            <span className="nhlcal-side-icon">◉</span>
+            <span className="nhlcal-side-icon">◆</span>
             <span className="nhlcal-side-label">Combine</span>
           </button>
         </nav>

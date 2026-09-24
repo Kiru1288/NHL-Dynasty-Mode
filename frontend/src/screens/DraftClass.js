@@ -7147,8 +7147,9 @@ export default function DraftClass() {
             font-weight: 700;
           }
           .dc-record-mini {
-            font-size: 0.92rem;
-            letter-spacing: 0.04em;
+            font-size: 1.2rem;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
             color: var(--dc-text);
             white-space: nowrap;
             height: 32px;
@@ -7157,8 +7158,8 @@ export default function DraftClass() {
             padding: 0 2px;
             border: 0;
             background: transparent;
-            font-family: var(--dc-font-mono);
-            font-weight: 700;
+            font-family: var(--dc-font-title);
+            font-weight: 800;
           }
           .dc-topbar__center-logo .dc-team-logo {
             width: clamp(56px, 4.8vw, 74px);
@@ -7503,14 +7504,14 @@ export default function DraftClass() {
           .dc-prospect-board__columns,
           .dc-prospect-row {
             display: grid;
-            grid-template-columns: 56px minmax(220px, 1.7fr) 42px minmax(72px, 0.7fr) 108px 72px 88px 78px;
+            grid-template-columns: 88px minmax(220px, 1.7fr) 42px minmax(72px, 0.7fr) 108px 72px 88px 78px;
             align-items: center;
             gap: 8px;
             padding: 0 10px;
           }
           .dc-prospect-board.is-consensus .dc-prospect-board__columns,
           .dc-prospect-board.is-consensus .dc-prospect-row {
-            grid-template-columns: 56px minmax(200px, 1.6fr) 42px minmax(72px, 0.7fr) 108px 72px 88px 78px 52px;
+            grid-template-columns: 88px minmax(200px, 1.6fr) 42px minmax(72px, 0.7fr) 108px 72px 88px 78px 52px;
           }
 
           .dc-prospect-board__columns {
@@ -8562,7 +8563,7 @@ export default function DraftClass() {
                a second line, so ranks and grades no longer aligned. */
             .dc-prospect-board__columns,
             .dc-prospect-row {
-              grid-template-columns: 52px minmax(200px, 1.6fr) 38px minmax(64px, 0.7fr) 96px 64px 80px 72px;
+              grid-template-columns: 88px minmax(200px, 1.6fr) 38px minmax(64px, 0.7fr) 96px 64px 80px 72px;
               gap: 9px;
               padding-left: 12px;
               padding-right: 12px;

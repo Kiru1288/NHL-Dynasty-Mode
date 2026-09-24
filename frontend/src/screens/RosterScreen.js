@@ -7516,11 +7516,16 @@ export function RosterScreen() {
         <nav className="nhlrost-side-nav" aria-label="Roster navigation">
           <button type="button" onClick={() => openScreen(SCREENS.HUB)}>
             <span>▦</span>
-            <em>Hub</em>
+            <em>Office</em>
           </button>
 
-          <button type="button" className="is-active">
+          <button type="button" onClick={() => openScreen(SCREENS.CALENDAR)}>
             <span>◫</span>
+            <em>Calendar</em>
+          </button>
+
+          <button type="button" className="is-active" aria-current="page">
+            <span>◉</span>
             <em>Roster</em>
           </button>
 
@@ -7534,7 +7539,7 @@ export function RosterScreen() {
             <em>Stories</em>
           </button>
 
-          <button type="button" onClick={() => openScreen(SCREENS.TRADE || SCREENS.TRADE_HUB || SCREENS.HUB)}>
+          <button type="button" onClick={() => openScreen(SCREENS.TRADE)}>
             <span>⇄</span>
             <em>Trade</em>
           </button>
@@ -7570,7 +7575,7 @@ export function RosterScreen() {
 
             <article className={`nhlrost-hud-tile ${capInfo.capSpace < 0 ? "is-danger" : ""}`}>
               <div className="nhlrost-hud-tile__body">
-                <small>Cap</small>
+                <small>Cap space</small>
                 <strong>
                   {capInfo.capSpace < 0
                     ? `-${formatMoneyMillions(Math.abs(capInfo.capSpace))}`
@@ -7983,7 +7988,7 @@ function RosterCommandDrawer({
                     </article>
 
                     <article>
-                      <span>Cap</span>
+                      <span>Cap hit</span>
                       <strong>{formatMoneyMillions(selectedPlayer.contract?.capHit)}</strong>
                     </article>
 
@@ -8085,7 +8090,7 @@ function RosterCommandDrawer({
                   <span>Draft class / scouting</span>
                 </button>
 
-                <button type="button" onClick={() => onNavigate(SCREENS.OFFICE || SCREENS.HUB)}>
+                <button type="button" onClick={() => onNavigate(SCREENS.HUB)}>
                   <strong>Office</strong>
                   <span>Inbox, owner, finance</span>
                 </button>
@@ -8180,17 +8185,20 @@ function RosterScreenStyles() {
         width: 100%;
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 0;
         align-items: stretch;
       }
 
+      /* Same rail language as the Calendar / Entry Draft sidebar: flat rows,
+         glyph over label, cyan leading bar on the active page. */
       .nhlrost-side-nav button,
       .nhlrost-menu-button {
+        position: relative;
         width: 100%;
-        min-height: 48px;
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 10px;
-        background: rgba(255, 255, 255, 0.025);
+        min-height: 60px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
         color: var(--muted);
         display: flex;
         flex-direction: column;
@@ -8199,7 +8207,6 @@ function RosterScreenStyles() {
         gap: 4px;
         cursor: pointer;
         transition:
-          transform 150ms ease,
           border-color 150ms ease,
           background 150ms ease,
           color 150ms ease;
@@ -8207,29 +8214,36 @@ function RosterScreenStyles() {
 
       .nhlrost-side-nav button:hover,
       .nhlrost-menu-button:hover {
-        transform: translateY(-1px);
-        border-color: rgba(0, 216, 223, 0.28);
-        background: rgba(0, 216, 223, 0.07);
+        background: rgba(255, 255, 255, 0.03);
         color: var(--text);
       }
 
       .nhlrost-side-nav button.is-active {
-        color: #ffffff;
-        border-color: rgba(0, 216, 223, 0.42);
-        background: rgba(0, 216, 223, 0.1);
+        color: var(--cyan);
+        background: linear-gradient(90deg, rgba(19, 216, 231, 0.12), transparent 72%);
+      }
+
+      .nhlrost-side-nav button.is-active::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 3px;
+        background: var(--cyan);
       }
 
       .nhlrost-side-nav span {
-        font-size: 0.95rem;
+        font-size: 22px;
         line-height: 1;
       }
 
       .nhlrost-side-nav em,
       .nhlrost-menu-button em {
-        font-size: 0.6875rem;
+        font-size: 11px;
         font-style: normal;
         text-transform: uppercase;
-        letter-spacing: 0.1em;
+        letter-spacing: 0.04em;
         font-weight: 800;
       }
 

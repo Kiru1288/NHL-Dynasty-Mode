@@ -269,15 +269,15 @@ export default function ProspectDevelopmentMenu({
         <button
           type="button"
           className="nhlcal-brand-button"
-          onClick={() => navigate(SCREENS.OFFICE)}
+          onClick={() => navigate(SCREENS.HUB)}
           title="Office"
         >
           <span className="nhlcal-shield-icon">⌂</span>
         </button>
         <nav className="nhlcal-side-nav" aria-label="Franchise navigation">
-          <SideNavButton icon="▦" label="Office" onClick={() => navigate(SCREENS.OFFICE)} />
+          <SideNavButton icon="▦" label="Office" onClick={() => navigate(SCREENS.HUB)} />
           <SideNavButton icon="◫" label="Calendar" onClick={() => navigate(SCREENS.CALENDAR)} />
-          <SideNavButton active icon="▤" label="Dev" onClick={() => {}} />
+          <SideNavButton active icon="▲" label="Dev" />
           <SideNavButton icon="◉" label="Roster" onClick={() => navigate(SCREENS.ROSTER)} />
         </nav>
       </aside>

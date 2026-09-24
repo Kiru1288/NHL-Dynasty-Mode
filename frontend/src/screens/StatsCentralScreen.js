@@ -9,7 +9,7 @@ import React, {
 import { getStatsCentral } from "../services/franchiseService";
 import { formatFranchiseApiError, isExpiredFranchiseSessionError } from "../services/api";
 import { useGameUI } from "../game/GameUIContext";
-import { SCREENS } from "../game/constants";
+import { SCREENS, teamNameToNhlAbbr } from "../game/constants";
 import {
   getBaseOverall,
   getOverallDrop,
@@ -7682,13 +7682,16 @@ function TeamMetricValue({
   const formatted = formatTeamStatValue(metric, team?.[metric]);
   const rank = getTeamLeagueRank(rankMaps, team, metric);
   const total = rankMaps?.__total || 0;
-  const tone = getTeamRankTone(metric, rank, total);
+  // Before opening night every club is tied at zero — a "#1" chip there is noise.
+  const hasPlayed = Number(team?.gp ?? team?.games_played ?? 0) > 0;
+  const tone = hasPlayed ? getTeamRankTone(metric, rank, total) : "";
 
   return (
     <span className={`sc-team-value ${tone}`}>
       <strong>{formatted}</strong>
 
       {formatted !== "—" &&
+      hasPlayed &&
       rank &&
       (rank <= 5 || rank > Math.max(0, total - 5)) ? (
         <em>#{rank}</em>
@@ -8204,7 +8207,7 @@ function TeamStatsProfile({
           <h2>{teamDisplayLabel(team)}</h2>
 
           <p>
-            {location || team?.team_abbrev || team?.team_id || "League"}
+            {location || team?.team_abbrev || teamNameToNhlAbbr(teamDisplayLabel(team)) || "League"}
           </p>
         </div>
       </div>
