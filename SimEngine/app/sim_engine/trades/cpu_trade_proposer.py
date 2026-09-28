@@ -18,6 +18,10 @@ from app.sim_engine.trades.trade_value import (
     evaluate_pick_asset_value,
     reduced_trade_value_fallback,
 )
+from app.sim_engine.trades.trade_market_adaptive import (
+    build_pool_sampling_weights,
+    compute_proposer_adaptive_knobs,
+)
 from app.sim_engine.economy.team_needs import TeamNeeds
 
 logger = logging.getLogger(__name__)
@@ -28,7 +32,7 @@ CPU_PAIR_COOLDOWN_DAYS = 18
 CPU_REACQUIRE_SOFT_DAYS = 35
 CPU_REVERSE_TRADE_PENALTY = 0.22  # retained as soft demote only; hard ban is season reverse block
 CPU_SEASON_PAIR_SOFT_CAP = 2
-CPU_PEER_ATTEMPT_MODULO = 6  # peer depth swaps — ambient volume when futures paths fail
+CPU_PEER_ATTEMPT_MODULO = 9  # peer depth swaps — less often so futures/pick packages get volume
 CPU_ONE_FOR_ONE_OVR_GAP_MAX = 7.0  # allow more talent asymmetry without futures
 CPU_SELLER_CORE_OVR = 86.0
 CPU_YOUNG_CORE_MAX_AGE = 23
@@ -631,11 +635,11 @@ def _choose_package_motive(
     if sw == "emerging" and bw == "emerging":
         return "depth_swap" if pair_rng.random() < 0.72 else "futures_package"
     roll = pair_rng.random()
-    if roll < 0.30:
+    if roll < 0.22:
         return "depth_swap"
-    if roll < 0.50:
+    if roll < 0.58:
         return "futures_package"
-    if roll < 0.72:
+    if roll < 0.76:
         return "rental_sale"
     if roll < 0.86:
         return "star_acquisition"
@@ -905,6 +909,20 @@ def propose_and_execute_cpu_trades(
             pass
     needs_model = TeamNeeds()
     deadline = _safe_float(ctx.get("deadline_phase"), 0.0)
+    adaptive = compute_proposer_adaptive_knobs(
+        league,
+        calendar_cursor=int(calendar_cursor),
+        regular_season_last_index=int(regular_season_last_index),
+        deadline_phase=deadline,
+        max_executions=int(max_executions),
+        base_fairness_gap=float(fairness_gap_max),
+    )
+    fairness_gap_max = float(adaptive.get("fairness_gap_max") or fairness_gap_max)
+    pick_only_boost = float(adaptive.get("prefer_pick_only_boost") or 0.0)
+    peer_modulo_dynamic = int(adaptive.get("peer_modulo") or CPU_PEER_ATTEMPT_MODULO)
+    value_delta_pick_threshold = float(adaptive.get("value_delta_pick_threshold") or 2.5)
+    rebuild_depth_pick_chance = float(adaptive.get("rebuild_depth_pick_chance") or 0.38)
+    max_executions = max(0, int(max_executions) + int(adaptive.get("max_exec_boost") or 0))
 
     def _direction_of(tm: Any) -> str:
         tid = team_id_of(tm)
@@ -945,6 +963,39 @@ def propose_and_execute_cpu_trades(
     if not buyers:
         buyers = teams[:]
 
+    seller_weights: List[float] = []
+    buyer_weights: List[float] = []
+    peer_weights: List[float] = []
+    buyer_weight_by_id: Dict[str, float] = {}
+    peer_weight_by_id: Dict[str, float] = {}
+    pair_candidate_cache: Dict[Tuple[str, str, str], Tuple[List[Any], List[Any]]] = {}
+
+    def _refresh_pool_weights() -> None:
+        nonlocal seller_weights, buyer_weights, peer_weights, buyer_weight_by_id, peer_weight_by_id
+        seller_weights = build_pool_sampling_weights(
+            sellers,
+            team_trade_counts,
+            team_id_fn=team_id_of,
+            ideology_fn=lambda tm, buyer_side=False: _ideo(tm, "future_asset_preference", 0.5),
+            buyer_side=False,
+        )
+        buyer_weights = build_pool_sampling_weights(
+            buyers,
+            team_trade_counts,
+            team_id_fn=team_id_of,
+            ideology_fn=lambda tm, buyer_side=True: _ideo(tm, "aggression", 0.5),
+            buyer_side=True,
+        )
+        peer_weights = build_pool_sampling_weights(
+            peers,
+            team_trade_counts,
+            team_id_fn=team_id_of,
+            ideology_fn=lambda tm, buyer_side=False: _ideo(tm, "future_asset_preference", 0.5),
+            buyer_side=False,
+        )
+        buyer_weight_by_id = {team_id_of(t): buyer_weights[i] for i, t in enumerate(buyers)}
+        peer_weight_by_id = {team_id_of(t): peer_weights[i] for i, t in enumerate(peers)}
+
     def _reclassify_pools() -> None:
         nonlocal sellers, buyers, peers
         sellers = [
@@ -967,11 +1018,13 @@ def propose_and_execute_cpu_trades(
                 buyers,
                 key=lambda t: (_team_window(t) != "contender", -_playoff_odds(t)),
             )
+        _refresh_pool_weights()
+        pair_candidate_cache.clear()
 
     executed: List[Dict[str, Any]] = []
     used_pairs: set = set()
     used_players: set = set()
-    attempts = max(12, int(max_executions) * (22 if deadline > 0.45 else 16))
+    attempts = int(adaptive.get("attempt_budget") or max(12, int(max_executions) * (22 if deadline > 0.45 else 16)))
     partner_memory = getattr(league, "cpu_market_runtime", None)
     if not isinstance(partner_memory, dict):
         partner_memory = {}
@@ -1008,29 +1061,30 @@ def propose_and_execute_cpu_trades(
     except Exception:
         pair_rng = _random.Random(day_seed)
     team_trade_counts: Dict[str, int] = {}
+    _reclassify_pools()
 
     for i in range(attempts):
         if len(executed) >= max(0, int(max_executions)):
             break
-        peer_path = bool(i % CPU_PEER_ATTEMPT_MODULO == (CPU_PEER_ATTEMPT_MODULO - 1) and peers)
+        peer_path = bool(i % peer_modulo_dynamic == (peer_modulo_dynamic - 1) and peers)
         if peer_path:
-            pool_a, pool_b = peers, peers
+            if not peers or not peer_weights:
+                continue
+            seller = pair_rng.choices(peers, weights=peer_weights, k=1)[0]
+            buyer_pool = [t for t in peers if team_id_of(t) != team_id_of(seller)]
+            if not buyer_pool:
+                continue
+            sub_w = [peer_weight_by_id.get(team_id_of(t), 0.05) for t in buyer_pool]
+            buyer = pair_rng.choices(buyer_pool, weights=sub_w, k=1)[0]
         else:
-            pool_a, pool_b = sellers, buyers
-        if not pool_a or not pool_b:
-            continue
-
-        def _weight(tm: Any, *, buyer_side: bool) -> float:
-            tid = team_id_of(tm)
-            w = 1.0 + _ideo(tm, "aggression" if buyer_side else "future_asset_preference", 0.5)
-            w /= 1.0 + 0.85 * float(team_trade_counts.get(tid, 0))
-            return max(0.05, w)
-
-        seller = pair_rng.choices(pool_a, weights=[_weight(t, buyer_side=False) for t in pool_a], k=1)[0]
-        buyer_pool = [t for t in pool_b if team_id_of(t) != team_id_of(seller)]
-        if not buyer_pool:
-            continue
-        buyer = pair_rng.choices(buyer_pool, weights=[_weight(t, buyer_side=True) for t in buyer_pool], k=1)[0]
+            if not sellers or not buyers or not seller_weights or not buyer_weights:
+                continue
+            seller = pair_rng.choices(sellers, weights=seller_weights, k=1)[0]
+            buyer_pool = [t for t in buyers if team_id_of(t) != team_id_of(seller)]
+            if not buyer_pool:
+                continue
+            sub_w = [buyer_weight_by_id.get(team_id_of(t), 0.05) for t in buyer_pool]
+            buyer = pair_rng.choices(buyer_pool, weights=sub_w, k=1)[0]
         try:
             s_div = str(getattr(seller, "division", None) or getattr(seller, "div", "") or "")
             b_div = str(getattr(buyer, "division", None) or getattr(buyer, "div", "") or "")
@@ -1074,6 +1128,10 @@ def propose_and_execute_cpu_trades(
             ctx["cpu_desperation_trade"] = True
         else:
             ctx.pop("cpu_desperation_trade", None)
+        if motive in ("futures_package", "rental_sale"):
+            ctx["cpu_futures_trade"] = True
+        else:
+            ctx.pop("cpu_futures_trade", None)
         ctx["cpu_package_motive"] = motive
 
         from app.sim_engine.trades.trade_asset import player_holds_nhl_spc
@@ -1092,15 +1150,21 @@ def propose_and_execute_cpu_trades(
 
         seller.needs = needs_model.evaluate(seller, context=ctx)
         buyer.needs = needs_model.evaluate(buyer, context=ctx)
-        ctx["_acquiring_team"] = buyer
-        s_candidates = _pick_trade_candidates(
-            s_roster, seller, seller=True, league=league, ctx=ctx, acquiring_team_id=bid, motive=motive,
-        )
-        ctx["_acquiring_team"] = seller
-        b_candidates = _pick_trade_candidates(
-            b_roster, buyer, seller=False, league=league, ctx=ctx, acquiring_team_id=sid, motive=motive,
-        )
-        ctx.pop("_acquiring_team", None)
+        cache_key = (sid, bid, motive)
+        cached = pair_candidate_cache.get(cache_key)
+        if cached is None:
+            ctx["_acquiring_team"] = buyer
+            s_candidates = _pick_trade_candidates(
+                s_roster, seller, seller=True, league=league, ctx=ctx, acquiring_team_id=bid, motive=motive,
+            )
+            ctx["_acquiring_team"] = seller
+            b_candidates = _pick_trade_candidates(
+                b_roster, buyer, seller=False, league=league, ctx=ctx, acquiring_team_id=sid, motive=motive,
+            )
+            ctx.pop("_acquiring_team", None)
+            pair_candidate_cache[cache_key] = (s_candidates, b_candidates)
+        else:
+            s_candidates, b_candidates = cached
         if not s_candidates or not b_candidates:
             continue
 
@@ -1138,7 +1202,11 @@ def propose_and_execute_cpu_trades(
                 buyer_window in ("contender", "emerging")
                 or direction_buyer in ("CONTENDER", "PLAYOFF_BUYER", "ALL_IN_CONTENDER")
             )
-            and pair_rng.random() < (0.62 if motive == "futures_package" else 0.42)
+            and pair_rng.random()
+            < min(
+                0.92,
+                (0.82 if motive == "futures_package" else 0.55) + pick_only_boost,
+            )
         )
         b_return = None
         if not prefer_pick_only:
@@ -1157,7 +1225,10 @@ def propose_and_execute_cpu_trades(
             allow_pick_only = (
                 motive in ("futures_package", "rental_sale", "desperation", "star_acquisition")
                 and seller_window in ("rebuild", "declining")
-                and buyer_window in ("contender", "emerging")
+                and (
+                    buyer_window in ("contender", "emerging")
+                    or motive in ("futures_package", "rental_sale")
+                )
             )
             if not allow_pick_only and motive == "depth_swap":
                 b_return = _match_return_player(
@@ -1260,13 +1331,18 @@ def propose_and_execute_cpu_trades(
                         prefer_quality="cheapest", pair_rng=pair_rng,
                     )
             else:
-                # Depth swap: only tiny balancers when clearly uneven.
-                if value_delta > 5.0:
+                if seller_window in ("rebuild", "declining") and pair_rng.random() < rebuild_depth_pick_chance:
                     buyer_pick = _select_tradeable_pick(
+                        league, buyer, ctx=ctx, max_round=3, protect_own_first=False,
+                        prefer_quality="mid", pair_rng=pair_rng,
+                    )
+                # Depth swap: attach picks when uneven (lower bar than before).
+                if value_delta > value_delta_pick_threshold:
+                    buyer_pick = buyer_pick or _select_tradeable_pick(
                         league, buyer, ctx=ctx, max_round=4, protect_own_first=True,
                         prefer_quality="cheapest", pair_rng=pair_rng,
                     )
-                elif value_delta < -5.0:
+                elif value_delta < -value_delta_pick_threshold:
                     seller_pick = _select_tradeable_pick(
                         league, seller, ctx=ctx, max_round=4, protect_own_first=True,
                         prefer_quality="cheapest", pair_rng=pair_rng,
@@ -1417,6 +1493,7 @@ def propose_and_execute_cpu_trades(
             telemetry["ovr_gap_n"] = int(telemetry.get("ovr_gap_n", 0) or 0) + 1
 
         _reclassify_pools()
+        pair_candidate_cache.clear()
         outgoing_labels = [str(getattr(s_offer, "name", None) or "Player")]
         incoming_labels: List[str] = []
         if b_return is not None:

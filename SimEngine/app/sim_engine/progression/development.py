@@ -236,6 +236,28 @@ def _expected_production_score_for_ovr(ovr100: float) -> float:
     return _clamp(score, 0.30, 0.92)
 
 
+# Beat this many points above OVR/potential expectation (prorated by GP) → OVR surge.
+_SEASON_SURPLUS_POINTS_BUFFER = 20.0
+
+
+def expected_season_points_for_player(player: Any, gp: int) -> float:
+    """Projected season points from display OVR + potential (pre-growth expectation)."""
+    if _is_goalie(player):
+        return 0.0
+    gp_i = max(1, int(gp))
+    ovr100 = _get_player_ovr_0_100(player)
+    pot01 = _get_player_potential(player)
+    pot100 = pot01 * 99.0 if pot01 <= 1.5 else float(pot01)
+    ppg_ovr = _expected_ppg_for_ovr(ovr100)
+    ppg_pot = _expected_ppg_for_ovr(pot100)
+    exp_ppg = 0.62 * ppg_ovr + 0.38 * max(ppg_ovr, ppg_pot * 0.88)
+    return float(exp_ppg * gp_i)
+
+
+def season_points_surplus_vs_expectation(player: Any, actual_pts: int, gp: int) -> float:
+    return float(actual_pts) - expected_season_points_for_player(player, gp)
+
+
 # ---------------------------------------------------------------------------
 # Career stage — franchise-readable lifecycle bucket
 # ---------------------------------------------------------------------------
@@ -1731,6 +1753,9 @@ def calculate_season_growth_budget(
     morale = _get_player_morale(player)
     ice_mod = _ice_time_modifier(player)
     ice_mod = _clamp(ice_mod, 0.55, 1.22)
+    gp = _games_played(player)
+    pot01 = _potential(player)
+    runway_pts = max(0.0, (pot01 - current) * 99.0)
     scratches = _safe_attr_int(player, ["healthy_scratches", "_healthy_scratches"], 0)
     if scratches >= 20:
         ice_mod *= 0.55
@@ -1750,6 +1775,9 @@ def calculate_season_growth_budget(
     mod *= env_g
     mod *= nar
     mod *= 1.0 + 0.18 * momentum
+    if age <= 23 and runway_pts >= 8.0 and gp >= 40:
+        # High-ceiling kids still gain when buried (3rd pair) — production alone was freezing them.
+        mod *= 1.0 + min(0.45, runway_pts * 0.03)
 
     if age < 20:
         mod *= 1.38 if not _is_goalie(player) else 1.22
@@ -1820,10 +1848,35 @@ def calculate_season_growth_budget(
     else:
         budget *= 0.95 + 0.12 * min(1.0, env_g)
 
+    surplus_pts = _safe_attr_float(player, ["_dev_season_points_surplus"], None)
+    if surplus_pts is None and gp > 0:
+        actual_pts = _safe_attr_int(
+            player, ["_dev_season_points", "season_points", "pts"], 0
+        )
+        if actual_pts > 0:
+            surplus_pts = season_points_surplus_vs_expectation(player, actual_pts, gp)
+
     if budget > 0:
         # Allow strong / breakout years to hit design targets (+5–10 display).
         hard_cap = 0.110 if phase == "SPIKE" else 0.085
         gap_cap = max(0.028, gap_exp * 0.78 + 0.022) if gap_exp > 0 else 0.028
+        if surplus_pts is not None and gp >= 40:
+            gp_scale = _clamp(float(gp) / 82.0, 0.45, 1.0)
+            threshold = _SEASON_SURPLUS_POINTS_BUFFER * gp_scale
+            if float(surplus_pts) >= threshold:
+                excess = float(surplus_pts) - threshold
+                surge = _clamp(0.024 + excess * 0.00145, 0.0, 0.078)
+                if age > 33:
+                    surge *= 0.68
+                elif age > 30:
+                    surge *= 0.82
+                elif age > 27:
+                    surge *= 0.92
+                budget = max(budget, surge)
+                gap_cap = max(gap_cap, min(0.072, gap_cap + surge * 0.72))
+        elif production >= 0.88 and gp >= 50:
+            surge = _clamp(0.014 + max(0.0, overperf) * 0.14, 0.0, 0.038)
+            budget = max(budget, surge)
         # Near expected but below maximum: still allow breakout polish into max.
         if gap_exp <= 0.02 and gap_max >= 0.03:
             gap_cap = max(gap_cap, min(0.055, gap_max * 0.85 + 0.015))
@@ -2262,6 +2315,29 @@ def apply_player_development(player: Any, rng: Any) -> None:
         or "normal"
     ).lower()
     dev_phase = _dev_archetype_phase_roll(archetype, age, curve_hint, rng)
+
+    # Established real-NHL / dynasty-txt identities should not yo-yo on random REGRESSION
+    # years when they met reasonable production for their rating band.
+    pinned_identity = bool(
+        getattr(player, "dynasty_ratings_import", False)
+        or str(getattr(player, "real_nhl_rating_note", "") or "") in ("dynasty_txt", "real_nhl")
+    )
+    try:
+        pin_ovr = float(getattr(player, "real_nhl_target_ovr", 0) or 0)
+    except (TypeError, ValueError):
+        pin_ovr = 0.0
+    if pin_ovr >= 0.84:
+        pinned_identity = True
+    if pinned_identity and dev_phase == "REGRESSION" and 25 <= age <= 32:
+        prod_early = _safe_attr_float(
+            player,
+            ["production_score", "recent_performance_score", "points_signal", "production"],
+            0.5,
+        )
+        ovr100_pin = ovr_before * 99.0 if ovr_before <= 1.5 else float(ovr_before)
+        expected_pin = _expected_production_score_for_ovr(ovr100_pin)
+        if prod_early >= expected_pin - 0.11:
+            dev_phase = "NORMAL" if rng.random() < 0.62 else "STALL"
 
     adj = int(getattr(player, "_nhl_adjustment_years_remaining", 0) or 0)
     if adj > 0:

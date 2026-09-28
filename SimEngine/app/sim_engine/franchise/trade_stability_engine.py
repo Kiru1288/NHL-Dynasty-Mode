@@ -45,7 +45,40 @@ def _to_0_100(raw: Any, default: float = 50.0) -> float:
 
 
 def _player_id(player: Any) -> str:
-    return str(_get(player, "id", "") or _get(player, "player_id", "") or "")
+    try:
+        from app.sim_engine.systems.chemistry import _canonical_player_id  # noqa: WPS433
+
+        return _canonical_player_id(player) or str(_get(player, "id", "") or _get(player, "player_id", "") or "")
+    except Exception:
+        raw = str(_get(player, "id", "") or _get(player, "player_id", "") or "")
+        return f"NHL_{raw}" if raw.isdigit() else raw
+
+
+def _canonical_slot_player_id(value: Any) -> str:
+    try:
+        from app.sim_engine.systems.chemistry import _canonical_player_id_from_string  # noqa: WPS433
+
+        return _canonical_player_id_from_string(value)
+    except Exception:
+        s = str(value or "").strip()
+        return f"NHL_{s}" if s.isdigit() else s
+
+
+def _season_stat_row_for_pid(session: Any, pid: str) -> Dict[str, Any]:
+    """Lookup season stats by canonical or legacy roster id keys."""
+    if session is None or not pid:
+        return {}
+    book = getattr(session, "player_season_stats", None) or {}
+    if not isinstance(book, dict):
+        return {}
+    canon = _canonical_slot_player_id(pid)
+    for key in (canon, pid, canon.replace("NHL_", "") if canon.startswith("NHL_") else ""):
+        if not key:
+            continue
+        row = book.get(key)
+        if isinstance(row, dict) and row:
+            return dict(row)
+    return {}
 
 
 def _player_ovr(player: Any) -> float:
@@ -275,18 +308,31 @@ def _line_rank_from_unit(group: str, line_id: str, slot: str) -> int:
 
 
 def _parse_line_ranks(lines: Any) -> Dict[str, int]:
+    """Map player id -> EV depth rank from saved Edit Lines (canonical ids)."""
     out: Dict[str, int] = {}
     if not isinstance(lines, dict):
         return out
     for group in ("forwards", "defense", "goalies"):
-        for line in lines.get(group) or []:
+        for idx, line in enumerate(lines.get(group) or []):
             if not isinstance(line, dict):
                 continue
             line_id = str(line.get("id") or "")
+            lid = line_id.lower()
             for slot, pid in (line.get("slots") or {}).items():
-                spid = str(pid or "")
-                if spid:
-                    out[spid] = _line_rank_from_unit(group, line_id, str(slot))
+                spid = _canonical_slot_player_id(pid)
+                if not spid:
+                    continue
+                if group == "goalies":
+                    rank = _line_rank_from_unit(group, line_id, str(slot))
+                elif group == "forwards":
+                    rank = int(_EV_LINE_RANK.get(lid, 0))
+                    if rank <= 0:
+                        rank = min(4, idx + 1)
+                else:
+                    rank = int(_DEF_PAIR_RANK.get(lid, 0))
+                    if rank <= 0:
+                        rank = min(3, idx + 1)
+                out[spid] = rank
     return out
 
 
@@ -328,10 +374,9 @@ def _season_stat_row(player: Any, session: Any = None) -> Dict[str, Any]:
     """Current-season box — prefers session.player_season_stats authority."""
     pid = _player_id(player)
     if session is not None and pid:
-        book = getattr(session, "player_season_stats", None) or {}
-        row = book.get(pid)
-        if isinstance(row, dict) and row:
-            return dict(row)
+        row = _season_stat_row_for_pid(session, pid)
+        if row:
+            return row
 
     raw = getattr(player, "season_stats", None)
     if not isinstance(raw, dict):
@@ -464,7 +509,11 @@ def resolve_player_deployment(session: Any, player: Any, team: Any) -> PlayerDep
     else:
         line_role = f"L{ev_rank}"
 
-    stat_source = "session.player_season_stats" if session is not None and pid in (getattr(session, "player_season_stats", None) or {}) else ""
+    stat_source = (
+        "session.player_season_stats"
+        if session is not None and _season_stat_row_for_pid(session, pid)
+        else ""
+    )
     if not stat_source and row:
         stat_source = str(row.get("stat_authority") or "player.season_stats")
 
@@ -484,6 +533,62 @@ def resolve_player_deployment(session: Any, player: Any, team: Any) -> PlayerDep
         stat_source=stat_source,
         line_source=line_source,
     )
+
+
+def audit_lineup_toi_consistency(
+    session: Any,
+    team: Any,
+    *,
+    min_gp: int = 5,
+    gap_min: float = 3.25,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """Skaters whose season TOI doesn't match saved Edit Lines depth (user team)."""
+    if session is None or team is None:
+        return []
+    if _team_id(team) != str(getattr(session, "user_team_id", "") or ""):
+        return []
+    ev_payload = _lines_unit_payload(session, team, "even_strength")
+    if not ev_payload:
+        return []
+
+    out: List[Dict[str, Any]] = []
+    for player in list(getattr(team, "roster", None) or []):
+        pos = str(
+            getattr(player, "position", "")
+            or getattr(getattr(player, "identity", None), "position", "")
+            or "C"
+        ).upper()
+        if pos in {"G", "GOALIE", "GOALTENDER"}:
+            continue
+        deploy = resolve_player_deployment(session, player, team)
+        if deploy.scratched or deploy.gp < min_gp:
+            continue
+        avg = deploy.avg_toi_min
+        if avg is None:
+            continue
+        ovr = _player_ovr(player)
+        is_defense = pos in {"D", "LD", "RD", "DEF", "DEFENSE"}
+        expected = _expected_toi_from_deployment(deploy, ovr=ovr, is_defense=is_defense)
+        delta = abs(float(avg) - expected)
+        if delta < gap_min:
+            continue
+        ident = getattr(player, "identity", None)
+        name = str(getattr(ident, "name", None) or getattr(player, "name", None) or deploy.player_id)
+        out.append(
+            {
+                "player_id": deploy.player_id,
+                "name": name,
+                "line_role": deploy.line_role,
+                "ev_line_rank": deploy.ev_line_rank,
+                "avg_toi_min": round(float(avg), 1),
+                "expected_toi_min": round(expected, 1),
+                "delta_min": round(delta, 1),
+                "line_source": deploy.line_source,
+            }
+        )
+    out.sort(key=lambda row: float(row.get("delta_min") or 0), reverse=True)
+    return out[: max(1, int(limit))]
 
 
 def sync_player_role_from_real_data(session: Any, player: Any, team: Any) -> PlayerDeploymentSnapshot:

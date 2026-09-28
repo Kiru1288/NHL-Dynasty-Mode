@@ -1395,7 +1395,7 @@ Matthew DiMarsico (F): 72 ovr, 78 cha, 78 off, 70 def, 78 tra, 74 men, 74 phy, 7
 Cooper Gay (RW/LW): 71 ovr, 78 cha, 76 off, 70 def, 78 tra, 74 men, 74 phy, 77 pot
 Tristen Nielsen (W/C): 71 ovr, 79 cha, 74 off, 72 def, 78 tra, 76 men, 76 phy, 74 pot
 Nikita Prishchepov (C/LW): 70 ovr, 77 cha, 74 off, 70 def, 78 tra, 73 men, 72 phy, 76 pot
-Taylor Makar (LW/C): 70 ovr, 78 cha, 74 off, 70 def, 78 tra, 74 men, 74 phy, 74 pot
+Taylor Makar (LW/C): 77 ovr, 76 cha, 74 off, 70 def, 76 tra, 74 men, 74 phy, 78 pot
 Sean Behrens (D): 73 ovr, 79 cha, 76 off, 76 def, 80 tra, 77 men, 68 phy, 80 pot
 Domenick Fensore (D): 72 ovr, 78 cha, 78 off, 70 def, 84 tra, 75 men, 60 phy, 78 pot
 Gustav Stjernberg (D): 72 ovr, 79 cha, 70 off, 78 def, 76 tra, 77 men, 78 phy, 78 pot

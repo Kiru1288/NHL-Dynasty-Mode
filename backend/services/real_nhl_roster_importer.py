@@ -18,6 +18,7 @@ AHL / juniors / UFAs stay generated via bootstrap_full_league_hierarchy after th
 from __future__ import annotations
 
 import json
+import os
 import random
 import urllib.error
 import urllib.parse
@@ -33,6 +34,33 @@ STATS_API = "https://api.nhle.com/stats/rest/en"
 HTTP_TIMEOUT_S = 45
 R4_OVERRIDES_PATH = Path(__file__).resolve().parent.parent / "data" / "real_nhl_r4_overrides.json"
 _PLAYER_LANDING_CACHE: Dict[int, Dict[str, Any]] = {}
+
+
+def _real_nhl_fast_import_enabled() -> bool:
+    """Fast path: dynasty txt ratings + roster API only (~30s start vs ~2min full scrape)."""
+    raw = os.environ.get("NHL_REAL_IMPORT_FAST", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _team_abbr(team: Any) -> str:
+    return str(
+        getattr(team, "abbreviation", None) or getattr(team, "abbr", None) or ""
+    ).upper()
+
+
+def _fetch_team_roster_bundle(
+    team: Any,
+    roster_season: int,
+    stats_primary_id: int,
+) -> Tuple[str, Optional[Dict[str, Any]], List[Dict[str, Any]], Optional[str]]:
+    abbr = _team_abbr(team)
+    if not abbr:
+        return "", None, [], f"missing abbr for {getattr(team, 'city', '?')}"
+    try:
+        payload, rows, _note = _fetch_merged_team_roster(abbr, roster_season, stats_primary_id)
+        return abbr, payload, rows, None
+    except RealNhlImportError as e:
+        return abbr, None, [], f"{abbr}: {e.message}"
 
 
 class RealNhlImportError(Exception):
@@ -1179,6 +1207,8 @@ def _build_player_from_roster_row(
     analytics_by_id: Optional[Dict[int, Dict[str, Any]]] = None,
     goalie_analytics_by_id: Optional[Dict[int, Dict[str, Any]]] = None,
     dynasty_registry: Optional[Any] = None,
+    align_rounds: int = 40,
+    skip_ledger_finalize: bool = False,
 ) -> Any:
     from app.sim_engine.engine import (
         build_role_shaped_ratings,
@@ -1358,17 +1388,19 @@ def _build_player_from_roster_row(
         try:
             from services.dynasty_ratings_parser import apply_dynasty_entry_to_player
 
-            apply_dynasty_entry_to_player(player, dynasty_entry, seed=nhl_id)
+            apply_dynasty_entry_to_player(
+                player, dynasty_entry, seed=nhl_id, align_rounds=align_rounds
+            )
             target_ovr = float(player.ovr()) if callable(getattr(player, "ovr", None)) else target_ovr
             rating_note = str(getattr(player, "real_nhl_rating_note", rating_note) or rating_note)
         except Exception:
             try:
-                align_attribute_ovr_to_target(player, float(target_ovr), rounds=40)
+                align_attribute_ovr_to_target(player, float(target_ovr), rounds=align_rounds)
             except Exception:
                 pass
     else:
         try:
-            align_attribute_ovr_to_target(player, float(target_ovr), rounds=40)
+            align_attribute_ovr_to_target(player, float(target_ovr), rounds=align_rounds)
         except Exception:
             try:
                 persist_recomputed_ovr(player)
@@ -1417,14 +1449,16 @@ def _build_player_from_roster_row(
         landing=landing,
         teams=all_teams or [],
     )
-    try:
-        from services.player_bio_parser import apply_player_bio_by_name, load_player_bio_registry
+    if not skip_ledger_finalize:
+        try:
+            from services.player_bio_parser import apply_player_bio_by_name, load_player_bio_registry
 
-        bio_registry = load_player_bio_registry(as_of=date(int(season_year), 9, 15))
-        apply_player_bio_by_name(player, bio_registry, as_of_year=season_year)
-    except Exception:
-        pass
-    _attach_career_stats(player, landing=landing, is_goalie=is_goalie)
+            bio_registry = load_player_bio_registry(as_of=date(int(season_year), 9, 15))
+            apply_player_bio_by_name(player, bio_registry, as_of_year=season_year)
+        except Exception:
+            pass
+    if landing:
+        _attach_career_stats(player, landing=landing, is_goalie=is_goalie)
 
     if contract or (r4 and isinstance(r4.get("contract"), dict)):
         _apply_real_contract(
@@ -1434,14 +1468,15 @@ def _build_player_from_roster_row(
             override=r4,
         )
 
-    finalize_created_player_for_game_ledger(
-        player,
-        league=league,
-        team=team,
-        rng=rng,
-        source="real_nhl_import",
-        season_year=int(season_year),
-    )
+    if not skip_ledger_finalize:
+        finalize_created_player_for_game_ledger(
+            player,
+            league=league,
+            team=team,
+            rng=rng,
+            source="real_nhl_import",
+            season_year=int(season_year),
+        )
     # Prefer stable NHL id when ledger assigned a random one.
     try:
         if nhl_id:
@@ -1919,6 +1954,7 @@ def build_real_nhl_league_players(
     r4_overrides = load_r4_overrides()
     dynasty_registry = None
     dynasty_meta: Dict[str, Any] = {}
+    fast_import = _real_nhl_fast_import_enabled()
     try:
         from services.dynasty_ratings_parser import load_dynasty_ratings_registry
 
@@ -1927,23 +1963,27 @@ def build_real_nhl_league_players(
     except Exception as e:
         dynasty_meta = {"load_error": str(e)}
 
-    try:
-        from services.real_nhl_analytics import (
-            fetch_moneypuck_goalie_analytics_prefer,
-            fetch_moneypuck_skater_analytics_prefer,
-        )
+    analytics_by_id: Dict[int, Dict[str, Any]] = {}
+    goalie_analytics_by_id: Dict[int, Dict[str, Any]] = {}
+    if not fast_import:
+        try:
+            from services.real_nhl_analytics import (
+                fetch_moneypuck_goalie_analytics_prefer,
+                fetch_moneypuck_skater_analytics_prefer,
+            )
 
-        # Align MoneyPuck with NHL boxcar primary season (completed prior year).
-        # Prefer sy-1 so thin/current-year MP rows do not overwrite full-season impact.
-        analytics_by_id = fetch_moneypuck_skater_analytics_prefer(sy - 1, sy)
-        goalie_analytics_by_id = fetch_moneypuck_goalie_analytics_prefer(sy - 1, sy)
-    except Exception:
-        analytics_by_id = {}
-        goalie_analytics_by_id = {}
+            analytics_by_id = fetch_moneypuck_skater_analytics_prefer(sy - 1, sy)
+            goalie_analytics_by_id = fetch_moneypuck_goalie_analytics_prefer(sy - 1, sy)
+        except Exception:
+            analytics_by_id = {}
+            goalie_analytics_by_id = {}
 
     try:
-        skater_a = _fetch_skater_summary(stats_primary_id)
-        goalie_a = _fetch_goalie_summary(stats_primary_id)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            sk_fut = pool.submit(_fetch_skater_summary, stats_primary_id)
+            gl_fut = pool.submit(_fetch_goalie_summary, stats_primary_id)
+            skater_a = sk_fut.result()
+            goalie_a = gl_fut.result()
     except RealNhlImportError:
         raise
     except Exception as e:
@@ -1951,47 +1991,44 @@ def build_real_nhl_league_players(
 
     skater_b: Dict[int, Dict[str, Any]] = {}
     goalie_b: Dict[int, Dict[str, Any]] = {}
-    try:
-        skater_b = _fetch_skater_summary(stats_secondary_id)
-        goalie_b = _fetch_goalie_summary(stats_secondary_id)
-    except Exception:
-        # Current season may be empty early — prior season alone is fine.
-        pass
+    if not fast_import:
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                sk_fut = pool.submit(_fetch_skater_summary, stats_secondary_id)
+                gl_fut = pool.submit(_fetch_goalie_summary, stats_secondary_id)
+                skater_b = sk_fut.result()
+                goalie_b = gl_fut.result()
+        except Exception:
+            pass
 
     if not hasattr(league, "players") or league.players is None:
         league.players = []
     league.players = [p for p in league.players if not getattr(p, "real_nhl_import", False)]
 
-    # Prefetch rosters, then landings + Spotrac contracts in parallel batches.
     roster_payloads: Dict[str, Dict[str, Any]] = {}
     roster_rows_by_abbr: Dict[str, List[Dict[str, Any]]] = {}
     roster_failures: List[str] = []
     all_rows: List[Tuple[str, Dict[str, Any]]] = []
-    for team in teams:
-        abbr = str(
-            getattr(team, "abbreviation", None)
-            or getattr(team, "abbr", None)
-            or ""
-        ).upper()
-        if not abbr:
-            roster_failures.append(f"missing abbr for {getattr(team, 'city', '?')}")
-            continue
-        try:
-            payload, rows, roster_note = _fetch_merged_team_roster(
-                abbr, roster_season, stats_primary_id
-            )
-        except RealNhlImportError as e:
-            roster_failures.append(f"{abbr}: {e.message}")
-            continue
-        if len(rows) < 12:
-            roster_failures.append(f"{abbr}: thin roster ({len(rows)})")
-        roster_payloads[abbr] = payload
-        roster_rows_by_abbr[abbr] = rows
-        if roster_note not in ("current",):
-            # Informational — not a hard failure.
-            pass
-        for row in rows:
-            all_rows.append((abbr, row))
+
+    roster_workers = min(20, max(8, len(teams)))
+    with ThreadPoolExecutor(max_workers=roster_workers) as pool:
+        futs = [
+            pool.submit(_fetch_team_roster_bundle, team, roster_season, stats_primary_id)
+            for team in teams
+        ]
+        for fut in as_completed(futs):
+            abbr, payload, rows, err = fut.result()
+            if err:
+                roster_failures.append(err)
+                continue
+            if not abbr or payload is None:
+                continue
+            if len(rows) < 12:
+                roster_failures.append(f"{abbr}: thin roster ({len(rows)})")
+            roster_payloads[abbr] = payload
+            roster_rows_by_abbr[abbr] = rows
+            for row in rows:
+                all_rows.append((abbr, row))
 
     nhl_ids = []
     for _, row in all_rows:
@@ -1999,7 +2036,10 @@ def build_real_nhl_league_players(
             nhl_ids.append(int(row.get("id") or 0))
         except Exception:
             pass
-    landings = fetch_landings_by_id(nhl_ids)
+
+    landings: Dict[int, Dict[str, Any]] = {}
+    if not fast_import:
+        landings = fetch_landings_by_id(nhl_ids, max_workers=24)
 
     from services.real_nhl_contracts import (
         fetch_league_contracts_by_team,
@@ -2007,9 +2047,16 @@ def build_real_nhl_league_players(
     )
 
     team_abbrs = list(roster_payloads.keys())
+    contracts_by_team: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    contract_failures: List[str] = []
+    dead_cap_by_team: Dict[str, Dict[str, Any]] = {}
+    # Spotrac contracts are required for realistic AAV/terms even in fast import.
     contracts_by_team, contract_failures, dead_cap_by_team = fetch_league_contracts_by_team(
-        team_abbrs, sy
+        team_abbrs, sy, max_workers=16
     )
+
+    align_rounds = 8 if fast_import else 40
+    skip_ledger_finalize = bool(fast_import)
 
     imported = 0
     per_team: Dict[str, int] = {}
@@ -2078,6 +2125,8 @@ def build_real_nhl_league_players(
                     analytics_by_id=analytics_by_id,
                     goalie_analytics_by_id=goalie_analytics_by_id,
                     dynasty_registry=dynasty_registry,
+                    align_rounds=align_rounds,
+                    skip_ledger_finalize=skip_ledger_finalize,
                 )
             except Exception as e:
                 failures.append(f"{abbr} player build failed: {e}")
@@ -2135,26 +2184,27 @@ def build_real_nhl_league_players(
             code="REAL_NHL_INCOMPLETE_IMPORT",
         )
 
-    # Soft league floors only — do not invent fake superstars over real ones.
-    try:
-        from app.sim_engine.entities.player import enforce_league_ovr_distribution_from_league
+    if not fast_import:
+        try:
+            from app.sim_engine.entities.player import enforce_league_ovr_distribution_from_league
 
-        enforce_league_ovr_distribution_from_league(league, rng=rng, target_90_plus=0)
-    except Exception:
-        pass
+            enforce_league_ovr_distribution_from_league(league, rng=rng, target_90_plus=0)
+        except Exception:
+            pass
 
-    # Brady Tkachuk house rule — after distribution so floors can't rescue him.
     brady_meta: Dict[str, Any] = {}
-    try:
-        from services.brady_tkachuk_chaos import apply_brady_chaos_to_league
+    if not fast_import:
+        try:
+            from services.brady_tkachuk_chaos import apply_brady_chaos_to_league
 
-        brady_meta = apply_brady_chaos_to_league(teams)
-    except Exception as e:
-        brady_meta = {"ok": False, "error": str(e)}
+            brady_meta = apply_brady_chaos_to_league(teams)
+        except Exception as e:
+            brady_meta = {"ok": False, "error": str(e)}
 
     try:
         setattr(league, "real_nhl_import_meta", {
             "season_year": sy,
+            "fast_import": bool(fast_import),
             "roster_season_id": roster_season,
             "stats_primary_season_id": stats_primary_id,
             "imported_players": imported,

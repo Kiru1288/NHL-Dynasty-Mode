@@ -6866,6 +6866,16 @@ def resolve_universe_interaction(session: Any, interaction_id: str, choice_id: s
     all_rows = list(getattr(session, "universe_interactions", None) or [])
     interaction = next((row for row in all_rows if str(row.get("id") or "") == str(interaction_id)), None)
     if interaction is None:
+        queue = list(getattr(session, "universe_interaction_queue", None) or [])
+        interaction = next((row for row in queue if str(row.get("id") or "") == str(interaction_id)), None)
+        if interaction is not None:
+            all_rows.append(dict(interaction))
+            session.universe_interactions = all_rows[-UNIVERSE_MAX_INTERACTIONS:]
+            interaction = next(
+                (row for row in all_rows if str(row.get("id") or "") == str(interaction_id)),
+                None,
+            )
+    if interaction is None:
         raise ValueError(f"Universe interaction not found: {interaction_id}")
     if str(interaction.get("status") or "") != "pending":
         raise ValueError(f"Universe interaction is already {interaction.get('status')}: {interaction_id}")
@@ -11358,9 +11368,6 @@ def resolve_player_meeting_interaction(session: Any, interaction_id: str, choice
     session.gm_meeting_history = hist[-GM_MEETING_HISTORY_MAX:]
     if player_id:
         _gm_mark_attention_addressed(session, player_id)
-        entity = _gm_entity(session, player_id)
-        state = entity.setdefault("state", {})
-        state["role_satisfaction"] = _u_clip(float(state.get("role_satisfaction", 55)) + 4)
     return {
         "ok": True,
         **result,

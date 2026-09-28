@@ -8,6 +8,7 @@ Out-of-league players receive light per-day development ticks during advance_day
 
 from __future__ import annotations
 
+import logging
 import os
 import random
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -421,30 +422,28 @@ def _positions_for_block(
     return slots
 
 
-def bootstrap_full_league_hierarchy(
+def development_league_player_count(league: Any) -> int:
+    total = 0
+    for block in getattr(league, "development_leagues", None) or []:
+        for tm in block.get("teams") or []:
+            total += len(tm.get("players") or [])
+    return total
+
+
+def ensure_development_leagues_for_draft_board(
     league: Any,
     rng: random.Random,
     season_year: Optional[int] = None,
-    dynasty_registry: Optional[Any] = None,
-) -> None:
-    """
-    Mutates league + NHL Team objects:
-      - team.ahl_roster, team.echl_roster
-      - league.free_agents, league.overseas_free_agents
-      - league.development_leagues (structured trees for UI)
-    Appends all new Player objects to league.players.
-    """
+) -> bool:
+    """Real-NHL fast bootstrap skips junior trees; rebuild them for draft/scouting boards."""
+    if development_league_player_count(league) > 0:
+        return False
     teams = list(getattr(league, "teams", None) or [])
     if not teams:
-        return
+        return False
 
     year = spawn_as_of_year(season_year)
     set_spawn_as_of_year(year)
-    try:
-        setattr(league, "season_start_year", year)
-    except Exception:
-        pass
-
     if not hasattr(league, "players") or league.players is None:
         league.players = []
     league_players: List[Any] = list(league.players)
@@ -454,197 +453,6 @@ def bootstrap_full_league_hierarchy(
         if ident and getattr(ident, "name", None):
             used_names.add(str(ident.name))
 
-    if dynasty_registry is None and getattr(league, "real_nhl_import_meta", None):
-        try:
-            from services.dynasty_ratings_parser import load_dynasty_ratings_registry
-
-            dynasty_registry = load_dynasty_ratings_registry()
-        except Exception:
-            dynasty_registry = None
-
-    # --- Affiliate rosters per NHL org ---
-    AHL_F, AHL_D, AHL_G = 14, 8, 2
-    ECHL_F, ECHL_D, ECHL_G = 11, 5, 2
-
-    for team in teams:
-        # Keep real-NHL overflow already assigned to the affiliate (23-man trim).
-        preserved_ahl = [
-            p
-            for p in (getattr(team, "ahl_roster", None) or [])
-            if getattr(p, "real_nhl_import", False)
-        ]
-        preserved_echl = [
-            p
-            for p in (getattr(team, "echl_roster", None) or [])
-            if getattr(p, "real_nhl_import", False)
-        ]
-
-        if not hasattr(team, "ahl_roster") or team.ahl_roster is None:
-            team.ahl_roster = []
-        else:
-            team.ahl_roster.clear()
-        if not hasattr(team, "echl_roster") or team.echl_roster is None:
-            team.echl_roster = []
-        else:
-            team.echl_roster.clear()
-
-        tid = str(getattr(team, "team_id", ""))
-        abbr = str(
-            getattr(team, "abbreviation", None) or getattr(team, "abbr", None) or tid
-        ).upper()
-        use_dynasty = bool(dynasty_registry) and bool(getattr(league, "real_nhl_import_meta", None))
-
-        ahl_slots = _positions_for_block(rng, forwards=AHL_F, defense=AHL_D, goalies=AHL_G)
-        # Leave room for preserved real NHL overflow so affiliates aren't bloated.
-        generated_ahl_budget = max(0, len(ahl_slots) - len(preserved_ahl))
-        dynasty_ahl: List[Any] = []
-        if use_dynasty:
-            try:
-                from services.dynasty_ratings_parser import spawn_player_from_dynasty_entry
-
-                for entry in dynasty_registry.entries_for_team(abbr, "ahl"):
-                    nm = str(entry.raw_name)
-                    if nm in used_names:
-                        continue
-                    if len(dynasty_ahl) >= generated_ahl_budget:
-                        break
-                    p = spawn_player_from_dynasty_entry(
-                        entry,
-                        rng=rng,
-                        pool_context="ahl",
-                        used_names=used_names,
-                        league_players=league_players,
-                        as_of_year=year,
-                    )
-                    p.context.current_team_id = f"AHL_{tid}"
-                    _set_assignment(p, org_nhl_team_id=tid, level="ahl", club=_team_label(team))
-                    dynasty_ahl.append(p)
-            except Exception:
-                dynasty_ahl = []
-
-        slot_idx = 0
-        for pos in ahl_slots[:generated_ahl_budget]:
-            if slot_idx < len(dynasty_ahl):
-                team.ahl_roster.append(dynasty_ahl[slot_idx])
-                slot_idx += 1
-                continue
-            lo, hi = (0.42, 0.62) if pos != Position.G else (0.48, 0.68)
-            p = _spawn_player(rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=20, age_hi=28, used_names=used_names, league_players=league_players, pool_context="ahl")
-            p.context.current_team_id = f"AHL_{tid}"
-            _set_assignment(p, org_nhl_team_id=tid, level="ahl", club=_team_label(team))
-            team.ahl_roster.append(p)
-        for p in preserved_ahl:
-            try:
-                p.in_minors = True
-                p.is_buried = True
-                p.buried = True
-                p.roster_location = "ahl"
-            except Exception:
-                pass
-            try:
-                p.context.current_team_id = f"AHL_{tid}"
-            except Exception:
-                pass
-            _set_assignment(p, org_nhl_team_id=tid, level="ahl", club=_team_label(team))
-            if p not in team.ahl_roster:
-                team.ahl_roster.append(p)
-
-        if use_dynasty:
-            try:
-                from services.dynasty_ratings_parser import spawn_player_from_dynasty_entry
-
-                if not hasattr(team, "prospect_pool") or team.prospect_pool is None:
-                    team.prospect_pool = []
-                else:
-                    team.prospect_pool.clear()
-                for entry in dynasty_registry.entries_for_team(abbr, "prospect"):
-                    nm = str(entry.raw_name)
-                    if nm in used_names:
-                        continue
-                    p = spawn_player_from_dynasty_entry(
-                        entry,
-                        rng=rng,
-                        pool_context="prospect",
-                        used_names=used_names,
-                        league_players=league_players,
-                        as_of_year=year,
-                    )
-                    try:
-                        p.nhl_rights_team_id = tid
-                        p.rights_team_id = tid
-                        p.signed = False
-                    except Exception:
-                        pass
-                    _set_assignment(p, org_nhl_team_id=tid, level="prospect", club=_team_label(team))
-                    team.prospect_pool.append(p)
-            except Exception:
-                pass
-
-        echl_slots = _positions_for_block(rng, forwards=ECHL_F, defense=ECHL_D, goalies=ECHL_G)
-        generated_echl_budget = max(0, len(echl_slots) - len(preserved_echl))
-        for pos in echl_slots[:generated_echl_budget]:
-            lo, hi = (0.36, 0.55) if pos != Position.G else (0.42, 0.60)
-            p = _spawn_player(rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=21, age_hi=30, used_names=used_names, league_players=league_players, pool_context="echl")
-            p.context.current_team_id = f"ECHL_{tid}"
-            _set_assignment(p, org_nhl_team_id=tid, level="echl", club=_team_label(team))
-            team.echl_roster.append(p)
-        for p in preserved_echl:
-            try:
-                p.in_minors = True
-                p.roster_location = "echl"
-            except Exception:
-                pass
-            if p not in team.echl_roster:
-                team.echl_roster.append(p)
-
-    # --- Free agents (NHL-contract eligible pool) ---
-    league.free_agents = []
-    for _ in range(520):
-        pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.D, Position.G])
-        lo, hi = (0.38, 0.58) if pos != Position.G else (0.45, 0.62)
-        age_lo, age_hi = (22, 34)
-        p = _spawn_player(rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=age_lo, age_hi=age_hi, used_names=used_names, league_players=league_players, pool_context="ufa")
-        p.context.current_team_id = "UFA"
-        _set_assignment(p, level="ufa", overseas=False)
-        league.free_agents.append(p)
-
-    # Sprinkle elite summer UFAs — otherwise stars only appear via contract cycle.
-    for _ in range(12):
-        pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.D, Position.G])
-        lo, hi = (0.78, 0.88) if pos != Position.G else (0.80, 0.90)
-        p = _spawn_player(
-            rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=27, age_hi=34,
-            used_names=used_names, league_players=league_players, pool_context="ufa_elite",
-        )
-        p.context.current_team_id = "UFA"
-        _set_assignment(p, level="ufa", overseas=False)
-        league.free_agents.append(p)
-
-    # --- Overseas / KHL-tier style unsigned runway ---
-    league.overseas_free_agents = []
-    for _ in range(220):
-        pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.G])
-        lo, hi = (0.40, 0.62) if pos != Position.G else (0.48, 0.70)
-        p = _spawn_player(rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=23, age_hi=32, used_names=used_names, league_players=league_players, pool_context="overseas")
-        p.context.current_team_id = "OVERSEAS"
-        _set_assignment(p, level="ufa", overseas=True, overseas_league=rng.choice(["KHL", "SHL", "Liiga", "NL", "DEL", "Czech Extraliga"]))
-        league.overseas_free_agents.append(p)
-
-    for _ in range(6):
-        pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.G])
-        lo, hi = (0.80, 0.90) if pos != Position.G else (0.82, 0.92)
-        p = _spawn_player(
-            rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=26, age_hi=33,
-            used_names=used_names, league_players=league_players, pool_context="overseas_elite",
-        )
-        p.context.current_team_id = "OVERSEAS"
-        _set_assignment(
-            p, level="ufa", overseas=True,
-            overseas_league=rng.choice(["KHL", "SHL", "Liiga", "NL", "DEL", "Czech Extraliga"]),
-        )
-        league.overseas_free_agents.append(p)
-
-    # --- Junior / NCAA style development leagues (real club names per league) ---
     from app.sim_engine.generation.prospect_league_teams import (
         LEAGUE_REGISTRY,
         choose_nationality_for_league,
@@ -706,6 +514,387 @@ def bootstrap_full_league_hierarchy(
     _add_league("CHL_QMJHL", "QMJHL", 12, 7, 3, 16, 20, 0.32, 0.52)
     _add_league("USHL", "USHL", 12, 6, 3, 16, 19, 0.30, 0.48)
     _add_league("NCAA", "NCAA", 13, 7, 3, 18, 24, 0.34, 0.55)
+    for code in (
+        "EU_J_SHL",
+        "EU_J_LIIGA",
+        "EU_J_DEL",
+        "EU_J_SWISS",
+        "EU_J_CZ",
+        "EU_J_SK",
+        "EU_J_KHL_JR",
+        "EU_J_NOR",
+        "EU_J_DEN",
+        "EU_J_AUT",
+    ):
+        label = str(LEAGUE_REGISTRY.get(code, {}).get("display") or code)
+        _add_league(code, label, 5, 3, 1, 16, 20, 0.30, 0.50)
+
+    if not dev:
+        return False
+
+    league.development_leagues = dev
+    league.players = league_players
+    _shape_draft_class_pipeline(league, rng)
+
+    all_new: List[Any] = []
+    for block in dev:
+        for tm in block.get("teams") or []:
+            all_new.extend(tm.get("players") or [])
+    _init_chars(league, rng, all_new)
+
+    try:
+        from services.player_bio_parser import apply_player_bios_to_league
+
+        apply_player_bios_to_league(league, as_of_year=year)
+    except Exception:
+        pass
+    return True
+
+
+def bootstrap_full_league_hierarchy(
+    league: Any,
+    rng: random.Random,
+    season_year: Optional[int] = None,
+    dynasty_registry: Optional[Any] = None,
+    *,
+    fast_depth: bool = False,
+) -> None:
+    """
+    Mutates league + NHL Team objects:
+      - team.ahl_roster, team.echl_roster
+      - league.free_agents, league.overseas_free_agents
+      - league.development_leagues (structured trees for UI)
+    Appends all new Player objects to league.players.
+    """
+    teams = list(getattr(league, "teams", None) or [])
+    if not teams:
+        return
+
+    year = spawn_as_of_year(season_year)
+    set_spawn_as_of_year(year)
+    try:
+        setattr(league, "season_start_year", year)
+    except Exception:
+        pass
+
+    if not hasattr(league, "players") or league.players is None:
+        league.players = []
+    league_players: List[Any] = list(league.players)
+    used_names: set = set()
+    for p in league_players:
+        ident = getattr(p, "identity", None)
+        if ident and getattr(ident, "name", None):
+            used_names.add(str(ident.name))
+
+    if dynasty_registry is None and getattr(league, "real_nhl_import_meta", None):
+        try:
+            from services.dynasty_ratings_parser import load_dynasty_ratings_registry
+
+            dynasty_registry = load_dynasty_ratings_registry()
+        except Exception:
+            dynasty_registry = None
+
+    # --- Affiliate rosters per NHL org ---
+    if fast_depth:
+        AHL_F, AHL_D, AHL_G = 12, 6, 2
+        ECHL_F, ECHL_D, ECHL_G = 6, 3, 1
+    else:
+        AHL_F, AHL_D, AHL_G = 14, 8, 2
+        ECHL_F, ECHL_D, ECHL_G = 11, 5, 2
+
+    spawn_align_rounds = 6 if fast_depth else 40
+    spawn_apply_bio = not fast_depth
+    spawn_bio_registry = None
+    if dynasty_registry and getattr(league, "real_nhl_import_meta", None):
+        try:
+            from services.dynasty_ratings_parser import _spawn_bio_registry
+
+            spawn_bio_registry = _spawn_bio_registry(int(year))
+        except Exception:
+            spawn_bio_registry = None
+
+    for team in teams:
+        # Keep real-NHL overflow already assigned to the affiliate (23-man trim).
+        preserved_ahl = [
+            p
+            for p in (getattr(team, "ahl_roster", None) or [])
+            if getattr(p, "real_nhl_import", False)
+        ]
+        preserved_echl = [
+            p
+            for p in (getattr(team, "echl_roster", None) or [])
+            if getattr(p, "real_nhl_import", False)
+        ]
+
+        if not hasattr(team, "ahl_roster") or team.ahl_roster is None:
+            team.ahl_roster = []
+        else:
+            team.ahl_roster.clear()
+        if not hasattr(team, "echl_roster") or team.echl_roster is None:
+            team.echl_roster = []
+        else:
+            team.echl_roster.clear()
+
+        tid = str(getattr(team, "team_id", ""))
+        abbr = str(
+            getattr(team, "abbreviation", None) or getattr(team, "abbr", None) or tid
+        ).upper()
+        use_dynasty = bool(dynasty_registry) and bool(getattr(league, "real_nhl_import_meta", None))
+
+        ahl_slots = _positions_for_block(rng, forwards=AHL_F, defense=AHL_D, goalies=AHL_G)
+        # Leave room for preserved real NHL overflow so affiliates aren't bloated.
+        generated_ahl_budget = max(0, len(ahl_slots) - len(preserved_ahl))
+        dynasty_ahl: List[Any] = []
+        if use_dynasty:
+            try:
+                from services.dynasty_ratings_parser import spawn_player_from_dynasty_entry
+
+                for entry in dynasty_registry.entries_for_team(abbr, "ahl"):
+                    nm = str(entry.raw_name)
+                    if nm in used_names:
+                        continue
+                    if len(dynasty_ahl) >= generated_ahl_budget:
+                        break
+                    p = spawn_player_from_dynasty_entry(
+                        entry,
+                        rng=rng,
+                        pool_context="ahl",
+                        used_names=used_names,
+                        league_players=league_players,
+                        as_of_year=year,
+                        align_rounds=spawn_align_rounds,
+                        apply_bio=spawn_apply_bio,
+                        bio_registry=spawn_bio_registry,
+                    )
+                    p.context.current_team_id = f"AHL_{tid}"
+                    _set_assignment(p, org_nhl_team_id=tid, level="ahl", club=_team_label(team))
+                    dynasty_ahl.append(p)
+            except Exception:
+                logging.getLogger("uvicorn.error").exception(
+                    "dynasty AHL spawn failed for %s", abbr
+                )
+                dynasty_ahl = []
+
+        slot_idx = 0
+        for pos in ahl_slots[:generated_ahl_budget]:
+            if slot_idx < len(dynasty_ahl):
+                team.ahl_roster.append(dynasty_ahl[slot_idx])
+                slot_idx += 1
+                continue
+            lo, hi = (0.42, 0.62) if pos != Position.G else (0.48, 0.68)
+            p = _spawn_player(rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=20, age_hi=28, used_names=used_names, league_players=league_players, pool_context="ahl")
+            p.context.current_team_id = f"AHL_{tid}"
+            _set_assignment(p, org_nhl_team_id=tid, level="ahl", club=_team_label(team))
+            team.ahl_roster.append(p)
+        for p in preserved_ahl:
+            try:
+                p.in_minors = True
+                p.is_buried = True
+                p.buried = True
+                p.roster_location = "ahl"
+            except Exception:
+                pass
+            try:
+                p.context.current_team_id = f"AHL_{tid}"
+            except Exception:
+                pass
+            _set_assignment(p, org_nhl_team_id=tid, level="ahl", club=_team_label(team))
+            if p not in team.ahl_roster:
+                team.ahl_roster.append(p)
+
+        if use_dynasty:
+            try:
+                from services.dynasty_ratings_parser import spawn_player_from_dynasty_entry
+
+                if not hasattr(team, "prospect_pool") or team.prospect_pool is None:
+                    team.prospect_pool = []
+                else:
+                    team.prospect_pool.clear()
+                for entry in dynasty_registry.entries_for_team(abbr, "prospect"):
+                    nm = str(entry.raw_name)
+                    if nm in used_names:
+                        continue
+                    p = spawn_player_from_dynasty_entry(
+                        entry,
+                        rng=rng,
+                        pool_context="prospect",
+                        used_names=used_names,
+                        league_players=league_players,
+                        as_of_year=year,
+                        align_rounds=spawn_align_rounds,
+                        apply_bio=spawn_apply_bio,
+                        bio_registry=spawn_bio_registry,
+                    )
+                    try:
+                        p.nhl_rights_team_id = tid
+                        p.rights_team_id = tid
+                        p.signed = False
+                    except Exception:
+                        pass
+                    _set_assignment(p, org_nhl_team_id=tid, level="prospect", club=_team_label(team))
+                    team.prospect_pool.append(p)
+            except Exception:
+                logging.getLogger("uvicorn.error").exception(
+                    "dynasty prospect spawn failed for %s", abbr
+                )
+
+        echl_slots = _positions_for_block(rng, forwards=ECHL_F, defense=ECHL_D, goalies=ECHL_G)
+        generated_echl_budget = max(0, len(echl_slots) - len(preserved_echl))
+        if fast_depth:
+            generated_echl_budget = 0
+        for pos in echl_slots[:generated_echl_budget]:
+            lo, hi = (0.36, 0.55) if pos != Position.G else (0.42, 0.60)
+            p = _spawn_player(rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=21, age_hi=30, used_names=used_names, league_players=league_players, pool_context="echl")
+            p.context.current_team_id = f"ECHL_{tid}"
+            _set_assignment(p, org_nhl_team_id=tid, level="echl", club=_team_label(team))
+            team.echl_roster.append(p)
+        for p in preserved_echl:
+            try:
+                p.in_minors = True
+                p.roster_location = "echl"
+            except Exception:
+                pass
+            if p not in team.echl_roster:
+                team.echl_roster.append(p)
+
+    # --- Free agents (NHL-contract eligible pool) ---
+    ufa_pool_size = 48 if fast_depth else 520
+    league.free_agents = []
+    for _ in range(ufa_pool_size):
+        pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.D, Position.G])
+        lo, hi = (0.38, 0.58) if pos != Position.G else (0.45, 0.62)
+        age_lo, age_hi = (22, 34)
+        p = _spawn_player(rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=age_lo, age_hi=age_hi, used_names=used_names, league_players=league_players, pool_context="ufa")
+        p.context.current_team_id = "UFA"
+        _set_assignment(p, level="ufa", overseas=False)
+        league.free_agents.append(p)
+
+    elite_ufa_count = 4 if fast_depth else 12
+    for _ in range(elite_ufa_count):
+        pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.D, Position.G])
+        lo, hi = (0.78, 0.88) if pos != Position.G else (0.80, 0.90)
+        p = _spawn_player(
+            rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=27, age_hi=34,
+            used_names=used_names, league_players=league_players, pool_context="ufa_elite",
+        )
+        p.context.current_team_id = "UFA"
+        _set_assignment(p, level="ufa", overseas=False)
+        league.free_agents.append(p)
+
+    overseas_pool_size = 24 if fast_depth else 220
+    league.overseas_free_agents = []
+    for _ in range(overseas_pool_size):
+        pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.G])
+        lo, hi = (0.40, 0.62) if pos != Position.G else (0.48, 0.70)
+        p = _spawn_player(rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=23, age_hi=32, used_names=used_names, league_players=league_players, pool_context="overseas")
+        p.context.current_team_id = "OVERSEAS"
+        _set_assignment(p, level="ufa", overseas=True, overseas_league=rng.choice(["KHL", "SHL", "Liiga", "NL", "DEL", "Czech Extraliga"]))
+        league.overseas_free_agents.append(p)
+
+    overseas_elite_count = 2 if fast_depth else 6
+    for _ in range(overseas_elite_count):
+        pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.G])
+        lo, hi = (0.80, 0.90) if pos != Position.G else (0.82, 0.92)
+        p = _spawn_player(
+            rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=26, age_hi=33,
+            used_names=used_names, league_players=league_players, pool_context="overseas_elite",
+        )
+        p.context.current_team_id = "OVERSEAS"
+        _set_assignment(
+            p, level="ufa", overseas=True,
+            overseas_league=rng.choice(["KHL", "SHL", "Liiga", "NL", "DEL", "Czech Extraliga"]),
+        )
+        league.overseas_free_agents.append(p)
+
+    # --- Junior / NCAA style development leagues (real club names per league) ---
+    from app.sim_engine.generation.prospect_league_teams import (
+        LEAGUE_REGISTRY,
+        choose_nationality_for_league,
+        teams_for_league,
+        validate_prospect_league_fit,
+    )
+
+    dev: List[Dict[str, Any]] = []
+
+    if fast_depth:
+        ensure_development_leagues_for_draft_board(league, rng, season_year=year)
+        league.players = league_players
+        all_new: List[Any] = []
+        for team in teams:
+            all_new.extend(team.ahl_roster)
+            all_new.extend(team.echl_roster)
+            all_new.extend(getattr(team, "prospect_pool", None) or [])
+        all_new.extend(league.free_agents)
+        all_new.extend(league.overseas_free_agents)
+        org_players: List[Any] = []
+        for team in teams:
+            org_players.extend(getattr(team, "roster", None) or [])
+            org_players.extend(team.ahl_roster)
+            org_players.extend(team.echl_roster)
+            org_players.extend(getattr(team, "prospect_pool", None) or [])
+        org_players.extend(league.free_agents)
+        org_players.extend(league.overseas_free_agents)
+        try:
+            from services.player_bio_parser import apply_player_bios_to_league
+
+            apply_player_bios_to_league(league, as_of_year=year)
+        except Exception:
+            pass
+        return
+
+    def _add_league(code: str, title: str, f: int, d: int, g: int, age_lo: int, age_hi: int, ovr_lo: float, ovr_hi: float) -> None:
+        team_specs = teams_for_league(code)
+        if not team_specs:
+            return
+        teams_out: List[Dict[str, Any]] = []
+        for ti, spec in enumerate(team_specs):
+            roster: List[Player] = []
+            slots = _positions_for_block(rng, forwards=f, defense=d, goalies=g)
+            city = str(spec.get("city") or "")
+            club_name = str(spec.get("name") or city)
+            tid_j = f"{code}_{ti + 1}"
+            for pos in slots:
+                nat = choose_nationality_for_league(rng, code)
+                p = None
+                for _attempt in range(10):
+                    p = _spawn_player(
+                        rng,
+                        pos=pos,
+                        ovr_lo=ovr_lo,
+                        ovr_hi=ovr_hi,
+                        age_lo=age_lo,
+                        age_hi=age_hi,
+                        used_names=used_names,
+                        league_players=league_players,
+                        pool_context=_pool_context_for_level("junior", code),
+                        nationality=nat,
+                        league_code=code,
+                    )
+                    birth_country = str(getattr(getattr(p, "identity", None), "birth_country", "") or "")
+                    if validate_prospect_league_fit(birth_country, code):
+                        break
+                    nat = choose_nationality_for_league(rng, code)
+                if p is None:
+                    continue
+                p.context.current_team_id = tid_j
+                _set_assignment(p, level="junior", league_code=code, club=club_name)
+                if not fast_depth:
+                    try:
+                        from app.sim_engine.generation.prospect_league_scoring import initialize_prospect_season
+
+                        initialize_prospect_season(p, code, rng=rng)
+                    except Exception:
+                        pass
+                roster.append(p)
+            teams_out.append({"team_id": tid_j, "name": club_name, "city": city, "players": roster})
+        display = str(LEAGUE_REGISTRY.get(code, {}).get("display") or title)
+        dev.append({"league_code": code, "league_name": display, "teams": teams_out})
+
+    _add_league("CHL_OHL", "OHL", 12, 7, 3, 16, 20, 0.32, 0.52)
+    _add_league("CHL_WHL", "WHL", 12, 7, 3, 16, 20, 0.32, 0.52)
+    _add_league("CHL_QMJHL", "QMJHL", 12, 7, 3, 16, 20, 0.32, 0.52)
+    _add_league("USHL", "USHL", 12, 6, 3, 16, 19, 0.30, 0.48)
+    _add_league("NCAA", "NCAA", 13, 7, 3, 18, 24, 0.34, 0.55)
 
     # European junior blocks span far more clubs (112 teams) than the CHL (61).
     # In reality the CHL is the dominant NHL-draft feeder, so each European club
@@ -730,19 +919,32 @@ def bootstrap_full_league_hierarchy(
     league.development_leagues = dev
     league.players = league_players
 
-    _shape_draft_class_pipeline(league, rng)
+    if not fast_depth:
+        _shape_draft_class_pipeline(league, rng)
 
     all_new: List[Any] = []
     for team in teams:
         all_new.extend(team.ahl_roster)
         all_new.extend(team.echl_roster)
+        all_new.extend(getattr(team, "prospect_pool", None) or [])
     all_new.extend(league.free_agents)
     all_new.extend(league.overseas_free_agents)
     for block in dev:
         for tm in block.get("teams") or []:
             all_new.extend(tm.get("players") or [])
 
-    _init_chars(league, rng, all_new)
+    if fast_depth:
+        org_players: List[Any] = []
+        for team in teams:
+            org_players.extend(getattr(team, "roster", None) or [])
+            org_players.extend(team.ahl_roster)
+            org_players.extend(team.echl_roster)
+            org_players.extend(getattr(team, "prospect_pool", None) or [])
+        org_players.extend(league.free_agents)
+        org_players.extend(league.overseas_free_agents)
+        _init_chars(league, rng, org_players)
+    else:
+        _init_chars(league, rng, all_new)
 
     try:
         from services.player_bio_parser import apply_player_bios_to_league

@@ -995,10 +995,147 @@ def advance_season_phase(session: FranchiseSession, target: Optional[str] = None
     return {"status": phase, "season_phase": phase}
 
 
+def _franchise_awards_are_complete(session: FranchiseSession) -> bool:
+    if not bool(getattr(session, "awards_generated", False)):
+        return False
+    payload = dict(getattr(session, "awards_payload", None) or {})
+    return bool(payload.get("awards"))
+
+
+def _playoff_result_from_session(session: FranchiseSession):
+    """Build a PlayoffResult for award compute when playoffs already finished."""
+    from app.sim_engine.league.playoffs import PlayoffResult, PlayoffSeries
+
+    champion = str(getattr(session, "champion_id", "") or "")
+    payload_po = dict(getattr(session, "playoff_payload", None) or {})
+    if not champion:
+        champion = str(payload_po.get("champion_id") or "")
+    live = getattr(session, "playoff_live", None)
+    if not champion and isinstance(live, dict):
+        champion = str(live.get("champion_id") or "")
+    finalists = [str(x) for x in (payload_po.get("finalist_ids") or []) if x]
+    if not finalists and isinstance(live, dict):
+        finalists = [str(x) for x in (live.get("finalist_ids") or []) if x]
+    series_objs: List[PlayoffSeries] = []
+    series_source = list(payload_po.get("series_list") or [])
+    if not series_source and isinstance(live, dict):
+        series_source = list(live.get("series") or [])
+    for s in series_source:
+        if not isinstance(s, dict):
+            continue
+        if not s.get("team_high_id") or not s.get("team_low_id"):
+            continue
+        series_objs.append(
+            PlayoffSeries(
+                round_index=int(s.get("round_index") or 1),
+                conference=s.get("conference"),
+                seed_high=int(s.get("seed_high") or 0),
+                seed_low=int(s.get("seed_low") or 0),
+                team_high_id=str(s.get("team_high_id")),
+                team_low_id=str(s.get("team_low_id")),
+                wins_high=int(s.get("wins_high") or 0),
+                wins_low=int(s.get("wins_low") or 0),
+            )
+        )
+    if not champion and not series_objs and not getattr(session, "playoffs_simulated", False):
+        return None
+    if not champion and finalists:
+        champion = finalists[0]
+    return PlayoffResult(
+        champion_id=champion,
+        finalist_ids=finalists or ([champion] if champion else []),
+        series_list=series_objs,
+    )
+
+
+def _ensure_franchise_awards_computed(session: FranchiseSession) -> bool:
+    """Compute and persist season awards if missing. Returns True when payload is usable."""
+    if _franchise_awards_are_complete(session):
+        return True
+
+    season_year = int(getattr(session, "season_calendar_year", 0) or 0)
+    existing = dict(getattr(session, "awards_payload", None) or {})
+    existing_meta = dict(existing.get("metadata") or {})
+    if existing.get("awards") and str(existing_meta.get("season_year") or "") == str(season_year):
+        session.awards_generated = True
+        return True
+
+    from app.sim_engine.league import compute_awards
+    from app.sim_engine.league.awards import apply_career_award_history, build_awards_payload
+    from services.franchise_sim import invalidate_session_payload_caches
+
+    sim = session.sim
+    teams = list(sim.league.teams)
+    award_rows = [
+        dict(v)
+        for v in (list((session.player_season_stats or {}).values()) if session.player_season_stats else [])
+    ]
+    for row in award_rows:
+        row.setdefault("stat_scope", "regular_season")
+    playoff_rows: List[Dict[str, Any]] = []
+    for key in ("playoff_player_stats", "player_playoff_stats", "playoff_stats"):
+        raw = getattr(session, key, None)
+        if isinstance(raw, dict):
+            playoff_rows = [dict(v) for v in raw.values()]
+            break
+        if isinstance(raw, list):
+            playoff_rows = [dict(v) for v in raw if isinstance(v, dict)]
+            break
+    for row in playoff_rows:
+        row["stat_scope"] = "playoffs"
+
+    season_seed = getattr(session, "franchise_seed", None)
+    if season_seed is None:
+        rng = getattr(sim, "rng", None)
+        raw_seed = getattr(rng, "_seed", None) if rng is not None else None
+        if isinstance(raw_seed, (int, float)) and not isinstance(raw_seed, bool):
+            season_seed = int(raw_seed) & 0xFFFFFFFF
+        else:
+            season_seed = int(season_year) & 0xFFFFFFFF
+    elif not isinstance(season_seed, (int, float)) or isinstance(season_seed, bool):
+        season_seed = int(season_year) & 0xFFFFFFFF
+    else:
+        season_seed = int(season_seed) & 0xFFFFFFFF
+
+    history_by_player = dict(getattr(session, "player_award_history", None) or {})
+    playoff_result = _playoff_result_from_session(session)
+    awards = compute_awards(
+        session.standings,
+        playoff_result,
+        teams,
+        player_season_stats=award_rows,
+        playoff_player_stats=playoff_rows,
+        season_seed=season_seed,
+        season_year=season_year,
+        season_length=int(getattr(session, "season_length", 82) or 82),
+        history_by_player=history_by_player,
+    )
+
+    result_id = f"awards:{season_year}:{season_seed}"
+    payload = build_awards_payload(
+        awards,
+        season=season_year,
+        season_seed=season_seed,
+        season_length=int(getattr(session, "season_length", 82) or 82),
+    )
+    payload["metadata"] = dict(payload.get("metadata") or {})
+    payload["metadata"]["season_year"] = season_year
+    payload["metadata"]["result_id"] = result_id
+    payload["metadata"]["computed_at_stage"] = "offseason_awards"
+    session.awards_payload = slim_awards_payload_for_client(payload)
+    session.awards_generated = True
+    try:
+        apply_career_award_history(teams, awards, season_year, result_id=result_id)
+    except Exception:
+        pass
+    invalidate_session_payload_caches(session, "offseason_awards_compute")
+    return _franchise_awards_are_complete(session)
+
+
 def _offseason_stage_ready(session: FranchiseSession, stage: str) -> bool:
     stage = str(stage or "")
     if stage == "awards":
-        return bool(session.awards_payload)
+        return _franchise_awards_are_complete(session)
     if stage == "retirements":
         return bool(session.retirements_processed)
     if stage == "salary_cap":
@@ -1112,25 +1249,23 @@ def continue_offseason(
             complete_playoffs(session)
         _sync_phase_fields(session)
 
-    # Awards Night is shown while phase is still post_cup. Continue from that screen
-    # must move into offseason and advance past awards → retirements.
-    # Only park on awards if awards data is still missing.
+    # First continue after the Cup must always land on Awards Night — even when
+    # awards were computed at Cup finish. A separate continue (from_stage awards)
+    # advances to retirements; never skip the ceremony in one API call.
     if str(session.phase) == "post_cup":
         session.phase = "offseason"
         session.season_phase = "offseason"
         session.offseason_stage = "awards"
         session.next_important_event = "awards"
         result = _enter_awards_stage(session)
-        if not _offseason_stage_ready(session, "awards"):
-            invalidate_session_payload_caches(session, "offseason_awards")
-            return {
-                **result,
-                "status": "offseason",
-                "season_phase": "offseason",
-                "offseason_stage": "awards",
-                "next_important_event": "awards",
-            }
-        # Awards already populated from Cup finish — fall through to next stage.
+        invalidate_session_payload_caches(session, "offseason_awards")
+        return {
+            **result,
+            "status": "offseason",
+            "season_phase": "offseason",
+            "offseason_stage": "awards",
+            "next_important_event": "awards",
+        }
 
     if str(session.phase) != "offseason":
         raise ValueError(f"Cannot continue offseason from phase {session.phase!r}")
@@ -1446,9 +1581,8 @@ def reopen_offseason_stage(session: FranchiseSession, stage: str) -> Dict[str, A
 
 
 def _enter_awards_stage(session: FranchiseSession) -> Dict[str, Any]:
-    if not session.awards_generated:
-        session.awards_payload = session.awards_payload or {"awards": {}, "items": []}
-    return {"awards": slim_awards_payload_for_client(session.awards_payload)}
+    _ensure_franchise_awards_computed(session)
+    return {"awards": slim_awards_payload_for_client(session.awards_payload or {})}
 
 
 def _process_retirements(session: FranchiseSession) -> Dict[str, Any]:
@@ -2704,6 +2838,20 @@ def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None
         setattr(player, "gp", int(gp))
     except Exception:
         pass
+    toi_sec = int(stats.get("toi_sec") or stats.get("toi_total_sec") or 0)
+    if toi_sec > 0:
+        avg_min = toi_sec / float(gp) / 60.0
+        if _dev_is_goalie(player):
+            toi_q = max(0.2, min(1.0, (avg_min - 48.0) / 18.0))
+        elif _dev_is_defense(player):
+            toi_q = max(0.18, min(1.0, (avg_min - 11.0) / 14.0))
+        else:
+            toi_q = max(0.18, min(1.0, (avg_min - 9.0) / 12.0))
+        try:
+            setattr(player, "toi_quality", round(toi_q, 3))
+            setattr(player, "_toi_quality", round(toi_q, 3))
+        except Exception:
+            pass
     if _dev_is_goalie(player):
         sv = float(stats.get("save_pct") or stats.get("sv_pct") or 0.0)
         if sv > 1.5:
@@ -2721,6 +2869,32 @@ def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None
             score = max(score, 0.90)
         if ppg >= 1.10:
             score = max(score, 0.95)
+        if ppg >= 1.15:
+            score = max(score, 0.98)
+        try:
+            from app.sim_engine.progression.development import (
+                expected_season_points_for_player,
+                season_points_surplus_vs_expectation,
+                _SEASON_SURPLUS_POINTS_BUFFER,
+            )
+
+            exp_pts = expected_season_points_for_player(player, gp)
+            surplus = season_points_surplus_vs_expectation(player, int(pts), gp)
+            setattr(player, "_dev_season_points", int(pts))
+            setattr(player, "_dev_expected_season_points", round(exp_pts, 2))
+            setattr(player, "_dev_season_points_surplus", round(surplus, 2))
+            gp_scale = max(0.45, min(1.0, float(gp) / 82.0))
+            if surplus >= 8.0 * gp_scale:
+                score = max(score, min(0.98, 0.68 + surplus * 0.0035))
+            if surplus >= _SEASON_SURPLUS_POINTS_BUFFER * gp_scale:
+                prev_mom = float(getattr(player, "_dev_breakout_momentum", 0.0) or 0.0)
+                bump = min(
+                    0.92,
+                    0.28 + (surplus - _SEASON_SURPLUS_POINTS_BUFFER * gp_scale) * 0.012,
+                )
+                setattr(player, "_dev_breakout_momentum", max(prev_mom, bump))
+        except Exception:
+            pass
     score = max(0.22, min(0.98, float(score)))
     for key in ("production_score", "recent_performance_score", "points_signal", "production"):
         try:

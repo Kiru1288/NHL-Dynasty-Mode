@@ -974,34 +974,85 @@ function resolveTradeableDraftYear(franchiseState, tradeAssets) {
   return draftDone ? draftYear + 1 : draftYear;
 }
 
+function readApiCapMoney(apiCap, keys) {
+  for (const key of keys) {
+    if (apiCap[key] == null || apiCap[key] === "") continue;
+    const n = normalizeMoneyMillions(apiCap[key]);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function getOrgCapSummaryFromBrowser(teamId, franchiseState) {
+  const org = safeArray(franchiseState?.roster_browser?.organizations).find(
+    (row) => String(row.team_id) === String(teamId),
+  );
+  const cap = org?.cap_summary || org?.capSummary || {};
+  if (!cap || typeof cap !== "object") return null;
+  const hit = readApiCapMoney(cap, ["total_cap_hit_m", "totalCapHitM", "total_cap_hit", "totalCapHit"]);
+  const limit = readApiCapMoney(cap, ["upper_limit_m", "upperLimitM", "upper_limit", "upperLimit"]);
+  const space = readApiCapMoney(cap, ["usable_cap_space_m", "usableCapSpaceM", "usable_cap_space", "usableCapSpace"]);
+  if (hit == null && limit == null && space == null) return null;
+  return { capHit: hit, capLimit: limit, capSpace: space };
+}
+
 function getTeamCapSummary(teamId, franchiseState, tradeAssets, rosterPlayers) {
   const tid = String(teamId);
   const userId = String(franchiseState?.team?.id || franchiseState?.user_team_id || "");
   const apiCap = tradeAssets?.teams?.[tid]?.cap || {};
   const isUser = tid === userId;
   const teamState = franchiseState?.team || {};
+  const browserCap = getOrgCapSummaryFromBrowser(tid, franchiseState);
 
-  // Prefer live trade-assets API snap over stale franchiseState mirrors —
-  // offseason pending July-1 exclusions and post-sign syncs land here first.
-  let capHit = normalizeMoneyMillions(
-    apiCap.total_cap_hit ?? apiCap.totalCapHit ?? (isUser ? teamState.cap_hit ?? teamState.capHit : null),
-  );
-  let capLimit = normalizeMoneyMillions(
-    apiCap.upper_limit ?? apiCap.upperLimit ?? (isUser ? teamState.salary_cap ?? teamState.cap_limit : null),
-  );
-  let capSpace = normalizeMoneyMillions(
-    apiCap.usable_cap_space ?? apiCap.usableCapSpace ?? (isUser ? teamState.cap_space ?? teamState.capSpace : null),
-  );
+  const hasApiHit = apiCap.total_cap_hit != null || apiCap.totalCapHit != null;
+  const hasApiSpace = apiCap.usable_cap_space != null || apiCap.usableCapSpace != null;
 
-  const rosterSum = safeArray(rosterPlayers).reduce((s, p) => s + (Number(p.capHit) || 0), 0);
-  if ((!capHit || capHit <= 0) && rosterSum > 0) capHit = rosterSum;
-  if (capLimit > 0 && capHit > 0 && (!Number.isFinite(capSpace) || capSpace === 0)) {
-    capSpace = capLimit - capHit;
+  let capHit = readApiCapMoney(apiCap, ["total_cap_hit", "totalCapHit"]);
+  if (capHit == null) capHit = browserCap?.capHit ?? null;
+  if (capHit == null && isUser) {
+    capHit = normalizeMoneyMillions(teamState.cap_hit ?? teamState.capHit);
   }
 
+  let capLimit = readApiCapMoney(apiCap, [
+    "effective_cap_limit",
+    "effectiveCapLimit",
+    "upper_limit",
+    "upperLimit",
+  ]);
+  if (capLimit == null) capLimit = browserCap?.capLimit ?? null;
+  if (capLimit == null && isUser) {
+    capLimit = normalizeMoneyMillions(teamState.salary_cap ?? teamState.cap_limit ?? teamState.cap_limit_m);
+  }
+
+  let capSpace = readApiCapMoney(apiCap, [
+    "usable_cap_space",
+    "usableCapSpace",
+    "projected_cap_space",
+    "projectedCapSpace",
+    "real_cap_space",
+    "realCapSpace",
+  ]);
+  if (capSpace == null) capSpace = browserCap?.capSpace ?? null;
+  if (capSpace == null && isUser) {
+    capSpace = normalizeMoneyMillions(
+      teamState.cap_space ?? teamState.capSpace ?? teamState.cap_snapshot?.usable_cap_space_m,
+    );
+  }
+
+  // Only derive missing space from engine totals — never from roster-browser sums
+  // (those ignore LTIR, retained, bury, and pending July-1 exclusions).
+  if (capSpace == null && !hasApiSpace && hasApiHit && capLimit != null && capHit != null) {
+    const effectiveLimit =
+      readApiCapMoney(apiCap, ["effective_cap_limit", "effectiveCapLimit"]) ?? capLimit;
+    capSpace = effectiveLimit - capHit;
+  }
+
+  const rosterSum = safeArray(rosterPlayers).reduce((s, p) => s + (Number(p.capHit) || 0), 0);
+  if (capHit == null && rosterSum > 0) capHit = rosterSum;
+
   return {
-    capHit: capHit > 0 ? capHit : null,
-    capLimit: capLimit > 0 ? capLimit : null,
+    capHit: capHit != null && capHit > 0 ? capHit : capHit === 0 ? 0 : null,
+    capLimit: capLimit != null && capLimit > 0 ? capLimit : capLimit === 0 ? 0 : null,
     capSpace: Number.isFinite(capSpace) ? capSpace : null,
   };
 }

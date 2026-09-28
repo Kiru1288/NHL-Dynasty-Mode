@@ -152,7 +152,15 @@ def _parse_yearly_team_html(html: str) -> Dict[str, Dict[str, Any]]:
         if not year_hits:
             continue
         aav_m = round(float(year_hits[0]), 3)
-        years_remaining = len(year_hits)
+        season_hits = list(year_hits)
+        if len(season_hits) >= 2 and abs(season_hits[0] - season_hits[1]) < 0.06:
+            season_hits = season_hits[1:]
+        years_remaining = 0
+        for hit in season_hits:
+            if float(hit or 0) <= 0.05:
+                break
+            years_remaining += 1
+        years_remaining = min(max(years_remaining, 1), 8)
         rights = "UFA"
         row_text = re.sub(r"<[^>]+>", " ", row)
         if re.search(r"\bRFA\b", row_text):
@@ -357,12 +365,18 @@ def _merge_cap_aav_over_yearly(
             merged["aav_m"] = cap_aav
             merged["cap_hit_m"] = cap_aav
             merged["source"] = "real_nhl_spotrac"
-            # Yearly boards often lead with an already-signed extension AAV. When the
-            # current-season hit disagrees, do not trust the future-year remaining count.
+            # Yearly boards often lead with an already-signed extension AAV. Only collapse
+            # term to the current deal when cap hit disagrees with the yearly grid.
+            yearly_yrs = int(merged.get("years_remaining") or merged.get("years") or 0)
             if old_aav > 0 and abs(old_aav - cap_aav) > 0.25:
                 merged["years_remaining"] = 1
                 merged["years"] = 1
                 merged["extension_aav_m"] = old_aav
+                if yearly_yrs > 1:
+                    merged["extension_years_remaining"] = min(yearly_yrs, 8)
+            elif yearly_yrs > 0:
+                merged["years_remaining"] = yearly_yrs
+                merged["years"] = yearly_yrs
             return merged
 
         if isinstance(existing, list):

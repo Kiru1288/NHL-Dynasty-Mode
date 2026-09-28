@@ -83,6 +83,7 @@ IMPACT_DEPTH = 42.0
 REPLACEMENT_POINTS_PER_60 = 0.85
 REPLACEMENT_XG_PER_60 = 0.55
 REPLACEMENT_XGA_PER_60 = 2.55
+REPLACEMENT_XGA_PER_60_DEFENSE = 2.95
 REPLACEMENT_FACE_OFF_PCT = 0.475
 
 CAP_SAFE_DEFAULT = 0.0
@@ -1194,7 +1195,7 @@ def calculate_skater_component_scores(row: Mapping[str, Any]) -> Dict[str, Any]:
         + safe_float(first_present(row, ["controlled_exit_rate"], 0.0), 0.0) * 12.0
         - giv60 * 5.0
         - penalties_taken60 * 4.0
-        - xga60 * (14.0 if is_d else 10.0)
+        - xga60 * (9.0 if is_d else 10.0)
         - hdca60 * (3.0 if is_d else 2.0)
     )
 
@@ -1339,6 +1340,22 @@ def calculate_skater_analytics_rating(row: Mapping[str, Any]) -> Dict[str, Any]:
         )
 
     rating = rating - regression_penalty - injury_risk_penalty
+    ovr = safe_float(first_present(row, ["overall", "ovr", "overall_rating"], 0.0), 0.0)
+    if ovr > 1.5:
+        rating = 0.54 * rating + 0.46 * ovr
+    elif ovr > 0:
+        rating = 0.54 * rating + 0.46 * (ovr * 99.0)
+    pts = safe_float(first_present(row, ["pts", "points"], 0.0), 0.0)
+    gp = max(1.0, safe_float(first_present(row, ["gp", "games_played"], 0.0), 0.0))
+    ppg = pts / gp
+    if ppg >= 1.20:
+        rating += 8.0
+    elif ppg >= 0.95:
+        rating += 5.0
+    elif ppg >= 0.75:
+        rating += 2.5
+    elif ppg >= 0.55:
+        rating += 0.8
     rating = clamp(rating, 0.0, 100.0)
 
     impact_score = rating
@@ -1357,6 +1374,8 @@ def calculate_skater_analytics_rating(row: Mapping[str, Any]) -> Dict[str, Any]:
 # ============================================================
 
 def calculate_skater_value_metrics(row: Mapping[str, Any]) -> Dict[str, Any]:
+    pos = normalize_position(first_present(row, ["position", "pos"], "F"))
+    is_d = pos == "D"
     gp = safe_int(first_present(row, ["gp", "games_played"], 0))
     pts = safe_int(first_present(row, ["pts", "points"], 0))
     g = safe_int(first_present(row, ["g", "goals"], 0))
@@ -1420,16 +1439,19 @@ def calculate_skater_value_metrics(row: Mapping[str, Any]) -> Dict[str, Any]:
     fo_pct = safe_float(first_present(row, ["fo_pct", "faceoff_pct"], 0.0), 0.0)
     faceoffs_taken = fow + fol
 
-    offensive_gar = (p60 - REPLACEMENT_POINTS_PER_60) * (toi_min / 60.0) * 0.28
+    off_rep = 0.72 if is_d else REPLACEMENT_POINTS_PER_60
+    offensive_gar = (p60 - off_rep) * (toi_min / 60.0) * (0.34 if is_d else 0.28)
     ixg_sample = safe_float(first_present(row, ["ixg", "individual_xg", "individual_expected_goals"], 0.0), 0.0)
     if ixg_sample > 0:
-        offensive_gar += (ixg60 - REPLACEMENT_XG_PER_60) * (toi_min / 60.0) * 0.32
+        offensive_gar += (ixg60 - REPLACEMENT_XG_PER_60) * (toi_min / 60.0) * (0.36 if is_d else 0.32)
     else:
         # Light boxes may omit ixg — don't punish production-only rows.
-        offensive_gar += (p60 - REPLACEMENT_POINTS_PER_60) * (toi_min / 60.0) * 0.12
+        offensive_gar += (p60 - off_rep) * (toi_min / 60.0) * (0.16 if is_d else 0.12)
 
     # Missing against-stats must not look like elite suppression (xga60==0 → huge WAR).
-    defensive_gar = (REPLACEMENT_XGA_PER_60 - xga60) * (toi_min / 60.0) * 0.55 if possession_sample_valid else 0.0
+    xga_rep = REPLACEMENT_XGA_PER_60_DEFENSE if is_d else REPLACEMENT_XGA_PER_60
+    def_wt = 0.42 if is_d else 0.55
+    defensive_gar = (xga_rep - xga60) * (toi_min / 60.0) * def_wt if possession_sample_valid else 0.0
     penalty_gar = penalty_diff60 * (toi_min / 60.0) * 0.12
     faceoff_gar = (fo_pct - REPLACEMENT_FACE_OFF_PCT) * faceoffs_taken * 0.015 if faceoffs_taken > 0 else 0.0
     if possession_sample_valid:

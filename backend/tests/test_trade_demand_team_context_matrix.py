@@ -356,6 +356,28 @@ class FranchiseDeploymentWiringTests(unittest.TestCase):
         self.assertTrue(deploy.scratched)
         self.assertEqual(deploy.line_role, "scratch")
 
+    def test_line_rank_uses_list_index_when_line_id_unknown(self):
+        from app.sim_engine.franchise.trade_stability_engine import resolve_player_deployment
+
+        player = _player("second_line", character=70, mental=68, ovr=82, avg_toi_min=16.0, pts=24)
+        team, _ = _team("TOR", [player], record=BAD_RECORD)
+        session = _session(types.SimpleNamespace(teams=[team]), "TOR", BAD_RECORD)
+        session.lines = {
+            "even_strength": {
+                "lines": {
+                    "forwards": [
+                        {"id": "f1", "slots": {"LW": "other", "C": "other2", "RW": "other3"}},
+                        {"id": "custom_unit", "slots": {"LW": "", "C": "second_line", "RW": ""}},
+                    ],
+                    "defense": [],
+                    "goalies": [],
+                }
+            }
+        }
+        deploy = resolve_player_deployment(session, player, team)
+        self.assertEqual(deploy.ev_line_rank, 2)
+        self.assertEqual(deploy.line_role, "L2")
+
     def test_power_play_unit_from_saved_lines(self):
         from app.sim_engine.franchise.trade_stability_engine import resolve_player_deployment
 

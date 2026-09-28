@@ -962,7 +962,21 @@ function normalizeSkater(row, index, teamId) {
     fo_pct: faceoffPct,
 
     plus_minus: (() => {
-      const raw = firstPresent(row?.plus_minus, row?.pm, row?.["+/-"], row?.goal_differential_on_ice);
+      const raw = firstPresent(row?.plus_minus, row?.pm, row?.plusMinus, row?.["+/-"], row?.goal_differential_on_ice);
+      if (raw !== undefined && raw !== null && raw !== "") return safeInt(raw, 0);
+      const gf = Number(firstPresent(row?.gf_on, row?.on_ice_gf) ?? 0) || 0;
+      const ga = Number(firstPresent(row?.ga_on, row?.on_ice_ga) ?? 0) || 0;
+      return Math.round(gf - ga);
+    })(),
+    pm: (() => {
+      const raw = firstPresent(row?.plus_minus, row?.pm, row?.plusMinus, row?.["+/-"]);
+      if (raw !== undefined && raw !== null && raw !== "") return safeInt(raw, 0);
+      const gf = Number(firstPresent(row?.gf_on, row?.on_ice_gf) ?? 0) || 0;
+      const ga = Number(firstPresent(row?.ga_on, row?.on_ice_ga) ?? 0) || 0;
+      return Math.round(gf - ga);
+    })(),
+    plusMinus: (() => {
+      const raw = firstPresent(row?.plus_minus, row?.plusMinus, row?.pm, row?.["+/-"]);
       if (raw !== undefined && raw !== null && raw !== "") return safeInt(raw, 0);
       const gf = Number(firstPresent(row?.gf_on, row?.on_ice_gf) ?? 0) || 0;
       const ga = Number(firstPresent(row?.ga_on, row?.on_ice_ga) ?? 0) || 0;
@@ -3662,7 +3676,7 @@ function PlayerOverviewTab({
       sortKey: "name",
       className: "is-player-col",
       render: (row) => (
-        <OverviewTablePlayerCell
+        <PlayerNameCell
           player={row}
           teams={teams}
           franchiseState={franchiseState}
@@ -3674,21 +3688,26 @@ function PlayerOverviewTab({
       label: "GP",
       sortKey: "gp",
       align: "right",
-      render: (row) => fmtZero(row.gp),
+      render: (row) => <SkaterStatCell value={fmtZero(row.gp)} />,
       onClick: () => changeSort("gp"),
     },
     {
       label: "G",
       sortKey: "g",
       align: "right",
-      render: (row) => fmtZero(row.g),
+      render: (row) => (
+        <SkaterStatCell
+          value={fmtZero(row.g)}
+          tone={getMetricTone("g", perGame(row.g, row.gp), row)}
+        />
+      ),
       onClick: () => changeSort("g"),
     },
     {
       label: "A",
       sortKey: "a",
       align: "right",
-      render: (row) => fmtZero(row.a),
+      render: (row) => <SkaterStatCell value={fmtZero(row.a)} />,
       onClick: () => changeSort("a"),
     },
     {
@@ -3696,44 +3715,71 @@ function PlayerOverviewTab({
       sortKey: "pts",
       align: "right",
       render: (row) => (
-        <strong className="sc-overview-pts">{fmtZero(row.pts)}</strong>
+        <SkaterStatCell
+          value={fmtZero(row.pts)}
+          tone={getMetricTone("pts", perGame(row.pts, row.gp), row)}
+        />
       ),
       onClick: () => changeSort("pts"),
+    },
+    {
+      label: "+/-",
+      sortKey: "plus_minus",
+      align: "right",
+      render: (row) => {
+        const pm = firstPresent(row.plus_minus, row.pm, row.plusMinus);
+        const n =
+          pm !== undefined && pm !== null && pm !== ""
+            ? safeInt(pm, 0)
+            : null;
+        return (
+          <SkaterStatCell
+            value={n != null ? formatSigned(n, 0) : "—"}
+          />
+        );
+      },
+      onClick: () => changeSort("plus_minus"),
     },
     {
       label: "P/GP",
       sortKey: "points_per_game",
       align: "right",
-      render: (row) =>
-        fmtMaybeTwo(
-          hasRealNumber(row.points_per_game)
-            ? row.points_per_game
-            : perGame(row.pts, row.gp)
-        ),
+      render: (row) => (
+        <SkaterStatCell
+          value={fmtMaybeTwo(
+            hasRealNumber(row.points_per_game)
+              ? row.points_per_game
+              : perGame(row.pts, row.gp)
+          )}
+        />
+      ),
       onClick: () => changeSort("points_per_game"),
     },
     {
       label: "SOG",
       sortKey: "sog",
       align: "right",
-      render: (row) => fmtZero(row.sog),
+      render: (row) => <SkaterStatCell value={fmtZero(row.sog)} />,
       onClick: () => changeSort("sog"),
     },
     {
       label: "SH%",
       sortKey: "shooting_pct",
       align: "right",
-      render: (row) =>
-        fmtOverviewShPct(
-          firstPresent(row.shooting_pct, row.sh_pct)
-        ) || "—",
+      render: (row) => (
+        <SkaterStatCell
+          value={
+            fmtOverviewShPct(firstPresent(row.shooting_pct, row.sh_pct)) || "—"
+          }
+        />
+      ),
       onClick: () => changeSort("shooting_pct"),
     },
     {
       label: "TOI/GP",
       sortKey: "toi_avg",
       align: "right",
-      render: (row) => formatSmallTOI(row),
+      render: (row) => <SkaterStatCell value={formatSmallTOI(row)} />,
       onClick: () => changeSort("toi_avg"),
     },
     {
@@ -3742,7 +3788,7 @@ function PlayerOverviewTab({
       align: "right",
       render: (row) => {
         const ovr = getUniversalOverall(row);
-        return ovr > 0 ? fmtZero(ovr) : "—";
+        return <SkaterStatCell value={ovr > 0 ? fmtZero(ovr) : "—"} />;
       },
       onClick: () => changeSort("overall"),
     },
@@ -3759,23 +3805,13 @@ function PlayerOverviewTab({
           scope={scope}
         />
 
-        <section className="sc-overview-featured-row">
+        <section className="sc-goalie-summary-row sc-overview-featured-row">
           <OverviewFeaturedLeaderCard
-            eyebrow="Featured Offensive Leader"
+            eyebrow="Scoring"
             player={topPoints}
             primaryLabel="PTS"
             primaryValue={topPoints ? fmtZero(topPoints.pts) : "—"}
-            supporting={[
-              topPoints ? `${fmtZero(topPoints.g)} G` : null,
-              topPoints ? `${fmtZero(topPoints.a)} A` : null,
-              topPoints
-                ? `${fmtMaybeTwo(perGame(topPoints.pts, topPoints.gp))} P/GP`
-                : null,
-            ].filter(Boolean)}
-            teams={teams}
-            franchiseState={franchiseState}
             onSelectPlayer={onSelectPlayer}
-            featured
           />
 
           <OverviewFeaturedLeaderCard
@@ -3783,16 +3819,6 @@ function PlayerOverviewTab({
             player={topGoals}
             primaryLabel="G"
             primaryValue={topGoals ? fmtZero(topGoals.g) : "—"}
-            supporting={[
-              topGoals ? `${fmtZero(topGoals.sog)} SOG` : null,
-              topGoals
-                ? fmtOverviewShPct(
-                    firstPresent(topGoals.shooting_pct, topGoals.sh_pct)
-                  )
-                : null,
-            ].filter(Boolean)}
-            teams={teams}
-            franchiseState={franchiseState}
             onSelectPlayer={onSelectPlayer}
           />
 
@@ -3801,16 +3827,11 @@ function PlayerOverviewTab({
             player={topAssists}
             primaryLabel="A"
             primaryValue={topAssists ? fmtZero(topAssists.a) : "—"}
-            supporting={[
-              topAssists ? `${fmtZero(topAssists.pts)} PTS` : null,
-            ].filter(Boolean)}
-            teams={teams}
-            franchiseState={franchiseState}
             onSelectPlayer={onSelectPlayer}
           />
 
           <OverviewFeaturedLeaderCard
-            eyebrow="Rate Leader"
+            eyebrow="Rate"
             player={topPpg}
             primaryLabel="P/GP"
             primaryValue={
@@ -3818,35 +3839,19 @@ function PlayerOverviewTab({
                 ? fmtMaybeTwo(perGame(topPpg.pts, topPpg.gp))
                 : "—"
             }
-            supporting={[
-              topPpg ? `${fmtZero(topPpg.pts)} PTS` : null,
-              topPpg ? `${fmtZero(topPpg.gp)} GP` : null,
-            ].filter(Boolean)}
-            teams={teams}
-            franchiseState={franchiseState}
             onSelectPlayer={onSelectPlayer}
           />
 
           <OverviewFeaturedLeaderCard
-            eyebrow="Defensive / TOI"
+            eyebrow="TOI"
             player={topToi}
             primaryLabel="TOI"
             primaryValue={topToi ? formatSmallTOI(topToi) : "—"}
-            supporting={[
-              topToi
-                ? normalizePosition(
-                    firstPresent(topToi.position, topToi.pos, "D")
-                  )
-                : null,
-              topToi ? `${fmtZero(topToi.pts)} PTS` : null,
-            ].filter(Boolean)}
-            teams={teams}
-            franchiseState={franchiseState}
             onSelectPlayer={onSelectPlayer}
           />
 
           <OverviewFeaturedLeaderCard
-            eyebrow="Goalie Leader"
+            eyebrow="Goalie"
             player={topGoalie}
             primaryLabel={
               topGoalie && hasRealNumber(topGoalie.gsax) ? "GSAx" : "SV%"
@@ -3858,14 +3863,6 @@ function PlayerOverviewTab({
                   : fmtOverviewSavePct(topGoalie.sv_pct) || "—"
                 : "—"
             }
-            supporting={[
-              topGoalie && hasRealPct(topGoalie.sv_pct)
-                ? fmtOverviewSavePct(topGoalie.sv_pct)
-                : null,
-              topGoalie ? `${fmtZero(topGoalie.gp)} GP` : null,
-            ].filter(Boolean)}
-            teams={teams}
-            franchiseState={franchiseState}
             onSelectPlayer={onSelectPlayer}
           />
         </section>
@@ -3895,6 +3892,7 @@ function PlayerOverviewTab({
           onPosFilter={setPosFilter}
           onSortPreset={applySortPreset}
           onSelectPlayer={onSelectPlayer}
+          scope={scope}
         />
       </section>
     </div>
@@ -3936,33 +3934,33 @@ function OverviewTeamSnapshotHeader({
   ].filter(Boolean);
 
   return (
-    <section className="sc-overview-team-header">
-      <div className="sc-overview-team-header-identity">
-        <TeamLogoMark team={team} size="large" />
-        <div>
-          <span>
-            {scope === "team" ? "TEAM SNAPSHOT" : "FRANCHISE CONTEXT"}
-          </span>
-          <h2>{teamDisplayLabel(team)}</h2>
-          <p>
-            {skaterCount} skaters · {goalieCount} goalies
-            {team.division ? ` · ${team.division}` : ""}
-            {team.conference ? ` · ${team.conference}` : ""}
-          </p>
-        </div>
+    <header className="sc-player-table-header sc-overview-team-header">
+      <div>
+        <span>
+          {scope === "team" ? "TEAM SNAPSHOT" : "FRANCHISE CONTEXT"}
+        </span>
+        <strong className="sc-overview-team-title">
+          <TeamLogoMark team={team} />
+          {teamDisplayLabel(team)}
+        </strong>
+        <em>
+          {skaterCount} skaters · {goalieCount} goalies
+          {team.division ? ` · ${team.division}` : ""}
+          {team.conference ? ` · ${team.conference}` : ""}
+        </em>
       </div>
 
       {chips.length ? (
         <div className="sc-overview-team-header-chips">
-          {chips.map((chip) => (
+          {chips.slice(0, 5).map((chip) => (
             <div key={`${chip.label}-${chip.value}`}>
-              <em>{chip.label}</em>
+              <span>{chip.label}</span>
               <strong>{chip.value}</strong>
             </div>
           ))}
         </div>
       ) : null}
-    </section>
+    </header>
   );
 }
 
@@ -3971,50 +3969,17 @@ function OverviewFeaturedLeaderCard({
   player,
   primaryLabel,
   primaryValue,
-  supporting = [],
-  teams = [],
-  franchiseState = null,
   onSelectPlayer,
-  featured = false,
 }) {
-  const ovr = getUniversalOverall(player);
-  const position = normalizePosition(
-    firstPresent(player?.position, player?.pos, featured ? "F" : "—")
-  );
-
   return (
     <button
       type="button"
-      className={`sc-overview-leader-tile ${featured ? "is-featured" : ""}`}
       disabled={!player}
       onClick={() => player && onSelectPlayer(player)}
     >
-      <span className="sc-overview-leader-eyebrow">{eyebrow}</span>
-      <div className="sc-overview-leader-tile-body">
-        <div className="sc-overview-leader-portrait">
-          <PlayerAvatar
-            player={player}
-            large={featured}
-            teams={teams}
-            franchiseState={franchiseState}
-          />
-        </div>
-        <div className="sc-overview-leader-copy">
-          <strong>{player?.name || "—"}</strong>
-          <em>
-            {player ? position : "—"}
-            {ovr > 0 ? ` · ${ovr} OVR` : ""}
-            {player?.gp != null ? ` · ${fmtZero(player.gp)} GP` : ""}
-          </em>
-          <div className="sc-overview-leader-metric">
-            <b>{primaryValue}</b>
-            <i>{primaryLabel}</i>
-          </div>
-          {supporting.length ? (
-            <p>{supporting.join(" · ")}</p>
-          ) : null}
-        </div>
-      </div>
+      <span>{eyebrow}</span>
+      <strong>{player?.name || "—"}</strong>
+      <em>{player ? `${primaryValue} ${primaryLabel}` : "—"}</em>
     </button>
   );
 }
@@ -4047,6 +4012,23 @@ function OverviewTablePlayerCell({
   );
 }
 
+function StatsChipGroup({ label, value, onChange, options }) {
+  return (
+    <div className="sc-column-preset-toggle" role="group" aria-label={label}>
+      {options.map(([id, text]) => (
+        <button
+          key={id}
+          type="button"
+          className={value === id ? "is-active" : ""}
+          onClick={() => onChange(id)}
+        >
+          {text}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function OverviewScoringLeadersPanel({
   rows,
   columns,
@@ -4057,47 +4039,39 @@ function OverviewScoringLeadersPanel({
   onPosFilter,
   onSortPreset,
   onSelectPlayer,
+  scope = "team",
 }) {
   return (
     <section className="sc-overview-module sc-overview-scoring-leaders">
-      <header className="sc-overview-module-header">
+      <header className="sc-player-table-header">
         <div>
           <span>SCORING LEADERS</span>
-          <strong>Team Skater Board</strong>
+          <strong>
+            {scope === "team" ? "Roster Performance" : "League Skaters"}
+          </strong>
+          <em>{rows.length} results · sorted by {String(sortKey).toUpperCase()}</em>
         </div>
         <div className="sc-overview-board-controls">
-          <div className="sc-overview-chip-group" role="group" aria-label="Position filter">
-            {[
+          <StatsChipGroup
+            label="Position filter"
+            value={posFilter}
+            onChange={onPosFilter}
+            options={[
               ["all", "All"],
               ["f", "Forwards"],
               ["d", "Defence"],
-            ].map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={posFilter === id ? "is-active" : ""}
-                onClick={() => onPosFilter(id)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="sc-overview-chip-group" role="group" aria-label="Sort presets">
-            {[
+            ]}
+          />
+          <StatsChipGroup
+            label="Sort presets"
+            value={sortPreset}
+            onChange={onSortPreset}
+            options={[
               ["points", "Points"],
               ["goals", "Goals"],
               ["rate", "Rate"],
-            ].map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={sortPreset === id ? "is-active" : ""}
-                onClick={() => onSortPreset(id)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+            ]}
+          />
         </div>
       </header>
 
@@ -4108,7 +4082,7 @@ function OverviewScoringLeadersPanel({
           sortKey={sortKey}
           sortDir={sortDir}
           density="compact"
-          tableClassName="sc-overview-scoring-table"
+          tableClassName="sc-skaters-table-v2 sc-skaters-table-v3 sc-overview-scoring-table"
           getRowId={(row) => row.player_id || row.id}
           onRowClick={onSelectPlayer}
           empty="No skater scoring rows match the current filters."
@@ -4121,7 +4095,7 @@ function OverviewScoringLeadersPanel({
 function OverviewTeamPerformancePanel({ metrics = [] }) {
   return (
     <section className="sc-overview-module sc-overview-team-performance">
-      <header className="sc-overview-module-header">
+      <header className="sc-player-table-header">
         <div>
           <span>TEAM PERFORMANCE</span>
           <strong>Scoring Context</strong>
@@ -4163,7 +4137,7 @@ function OverviewRosterContributionPanel({ metrics = [] }) {
 
   return (
     <section className="sc-overview-module sc-overview-roster-contribution">
-      <header className="sc-overview-module-header">
+      <header className="sc-player-table-header">
         <div>
           <span>ROSTER CONTRIBUTION</span>
           <strong>Where Scoring Comes From</strong>
@@ -4188,7 +4162,7 @@ function OverviewFrontOfficeReadPanel({ reads = [], onSelectPlayer }) {
 
   return (
     <section className="sc-overview-module sc-overview-front-office">
-      <header className="sc-overview-module-header">
+      <header className="sc-player-table-header">
         <div>
           <span>FRONT OFFICE READ</span>
           <strong>Quick Notes</strong>
@@ -6026,6 +6000,30 @@ function PlayersTab({
       onClick: () => changeSort("pts"),
     },
 
+    plusMinus: {
+      label: "+/-",
+      sortKey: "plus_minus",
+      align: "right",
+      render: (row) => {
+        const pm = firstPresent(row.plus_minus, row.pm, row.plusMinus);
+        const n = pm !== undefined && pm !== null && pm !== "" ? safeInt(pm, 0) : null;
+        return (
+          <SkaterStatCell
+            value={n != null ? formatSigned(n, 0) : "—"}
+            sub={rankSub(row, "plus_minus")}
+            tone={
+              n != null && n >= 15
+                ? "elite"
+                : n != null && n <= -15
+                  ? "warn"
+                  : ""
+            }
+          />
+        );
+      },
+      onClick: () => changeSort("plus_minus"),
+    },
+
     ppg: {
       label: "P/GP",
       sortKey: "points_per_game",
@@ -6289,6 +6287,20 @@ function PlayersTab({
       onClick: () => changeSort("war"),
     },
 
+    impact: {
+      label: "ANALYTICS",
+      sortKey: "analytics_rating",
+      align: "right",
+      render: (row) => (
+        <SkaterStatCell
+          value={fmtMaybeOne(row.analytics_rating)}
+          sub={getSkaterIdentityLabel(row)}
+          tone={getAnalyticsTone(row.analytics_rating)}
+        />
+      ),
+      onClick: () => changeSort("analytics_rating"),
+    },
+
     ppToi: {
       label: "PP TOI",
       sortKey: "pp_toi_sec",
@@ -6479,8 +6491,10 @@ function PlayersTab({
       "g",
       "a",
       "pts",
+      "plusMinus",
       "ppg",
       "toi",
+      "impact",
       "actions",
     ],
     scoring: [
@@ -6489,6 +6503,7 @@ function PlayersTab({
       "g",
       "a",
       "pts",
+      "plusMinus",
       "sog",
       "shootingPct",
       "ixg",
@@ -6498,11 +6513,16 @@ function PlayersTab({
     analytics: [
       "player",
       "gp",
+      "g",
+      "a",
+      "pts",
       "p60",
       "cfPct",
       "xgfPct",
       "gfPct",
+      "ixg",
       "war",
+      "impact",
       "actions",
     ],
     usage: [
@@ -6527,6 +6547,18 @@ function PlayersTab({
       "actions",
     ],
   };
+
+  const analyticsLeaders = useMemo(() => {
+    const pool = [...players].filter((p) => safe(p.gp, 0) >= 10);
+    const by = (key) =>
+      [...pool].sort((a, b) => safe(b?.[key], 0) - safe(a?.[key], 0))[0] || null;
+    return {
+      impact: by("analytics_rating"),
+      war: by("war"),
+      xgf: by("xgf_pct"),
+      cf: by("cf_pct"),
+    };
+  }, [players]);
 
   const columns = presetKeys[view]
     .map((key) => allColumns[key])
@@ -6576,7 +6608,7 @@ function PlayersTab({
     sortKey,
     sortDir,
     density,
-    tableClassName: "sc-skaters-table-v3",
+    tableClassName: "sc-skaters-table-v2 sc-skaters-table-v3",
     rowClassName: (row) =>
       getSkaterRowClass(row),
     getRowId: (row) =>
@@ -6623,6 +6655,49 @@ function PlayersTab({
           ))}
         </div>
       </header>
+
+      <section className="sc-goalie-summary-row" aria-label="Player analytics">
+        <GoalieLeaderCard
+          label="Analytics"
+          goalie={analyticsLeaders.impact}
+          value={
+            analyticsLeaders.impact
+              ? fmtMaybeOne(analyticsLeaders.impact.analytics_rating)
+              : "—"
+          }
+          onSelect={onSelectPlayer}
+        />
+        <GoalieLeaderCard
+          label="WAR"
+          goalie={analyticsLeaders.war}
+          value={
+            analyticsLeaders.war
+              ? fmtMaybeTwo(analyticsLeaders.war.war)
+              : "—"
+          }
+          onSelect={onSelectPlayer}
+        />
+        <GoalieLeaderCard
+          label="xGF%"
+          goalie={analyticsLeaders.xgf}
+          value={
+            analyticsLeaders.xgf
+              ? fmtMaybePct(analyticsLeaders.xgf.xgf_pct)
+              : "—"
+          }
+          onSelect={onSelectPlayer}
+        />
+        <GoalieLeaderCard
+          label="CF%"
+          goalie={analyticsLeaders.cf}
+          value={
+            analyticsLeaders.cf
+              ? fmtMaybePct(analyticsLeaders.cf.cf_pct)
+              : "—"
+          }
+          onSelect={onSelectPlayer}
+        />
+      </section>
 
       {scope === "team" ? (
         <div className="sc-roster-groups">
@@ -6878,7 +6953,7 @@ function GoaliesTab({
     sortKey,
     sortDir,
     density,
-    tableClassName: "sc-goalie-table-v2",
+    tableClassName: "sc-skaters-table-v2 sc-goalie-table-v2",
     getRowId: (row) =>
       row.player_id || row.id,
     selectedRowId: selectedPlayerId,
@@ -7186,7 +7261,7 @@ function AdvancedTab({
     sortKey,
     sortDir,
     density,
-    tableClassName: "sc-analytics-table-v2",
+    tableClassName: "sc-skaters-table-v2 sc-analytics-table-v2",
     getRowId: (row) =>
       row.player_id || row.id,
     selectedRowId: selectedPlayerId,
@@ -11573,66 +11648,42 @@ function StatsCentralRedesignStyles() {
       }
 
       .sc-overview-team-header {
-        display: grid;
-        grid-template-columns: minmax(0, 1.2fr) minmax(280px, 1fr);
-        gap: 16px;
-        align-items: center;
-        padding: 14px 16px;
-        background:
-          linear-gradient(90deg, rgba(0, 204, 218, 0.12), transparent 46%),
-          #081927;
+        min-height: 48px;
       }
 
-      .sc-overview-team-header-identity {
+      .sc-overview-team-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
         min-width: 0;
-        display: grid;
-        grid-template-columns: 72px minmax(0, 1fr);
-        gap: 14px;
-        align-items: center;
       }
 
-      .sc-overview-team-header-identity .sc-team-logo-mark.is-large {
-        width: 72px;
-        height: 72px;
-      }
-
-      .sc-overview-team-header-identity span {
-        color: #7ea0b3;
-        font-size: 11px;
-        font-weight: 900;
-        letter-spacing: 0.1em;
-      }
-
-      .sc-overview-team-header-identity h2 {
-        margin: 4px 0 0;
-        color: #f7fcff;
-        font-size: 26px;
-        line-height: 1;
-        font-weight: 950;
-      }
-
-      .sc-overview-team-header-identity p {
-        margin: 6px 0 0;
-        color: #6f90a3;
-        font-size: 11px;
-        font-weight: 750;
+      .sc-overview-team-title .sc-team-logo-mark {
+        width: 22px;
+        height: 22px;
+        flex: 0 0 22px;
       }
 
       .sc-overview-team-header-chips {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
-        gap: 8px;
+        grid-template-columns: repeat(5, minmax(72px, 1fr));
+        gap: 7px;
+        max-width: 58%;
       }
 
       .sc-overview-team-header-chips > div {
         min-width: 0;
-        padding: 8px 10px;
-        background: rgba(8, 28, 42, 0.72);
+        display: grid;
+        gap: 3px;
+        padding: 6px 8px;
+        border: 1px solid rgba(105, 172, 202, 0.17);
+        background: #091a28;
       }
 
+      .sc-overview-team-header-chips span,
       .sc-overview-team-header-chips em {
         display: block;
-        color: #7897a9;
+        color: #6c8a9d;
         font-size: 11px;
         font-style: normal;
         font-weight: 900;
@@ -11641,19 +11692,18 @@ function StatsCentralRedesignStyles() {
       }
 
       .sc-overview-team-header-chips strong {
-        display: block;
-        margin-top: 4px;
-        color: #5fd4e0;
-        font-size: 14px;
+        overflow: hidden;
+        color: #09dbc9;
+        font-size: 13px;
         line-height: 1.1;
+        font-weight: 1000;
         font-variant-numeric: tabular-nums;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .sc-overview-featured-row {
-        display: grid;
-        grid-template-columns: minmax(240px, 1.55fr) repeat(5, minmax(0, 1fr));
-        gap: 8px;
-        min-height: 0;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
       }
 
       .sc-overview-leader-tile {
@@ -11847,25 +11897,29 @@ function StatsCentralRedesignStyles() {
       }
 
       .sc-overview-module-header {
+        min-height: 48px;
         display: flex;
-        align-items: end;
+        align-items: center;
         justify-content: space-between;
-        gap: 10px;
-        padding: 10px 12px 8px;
+        gap: 12px;
+        padding: 7px 10px;
+        border: 1px solid rgba(105, 172, 202, 0.18);
+        background: #081927;
       }
 
       .sc-overview-module-header span {
         display: block;
-        color: #748fa1;
+        color: var(--ops-cyan, #13d8e7);
         font-size: 11px;
         font-weight: 900;
-        letter-spacing: 0.1em;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
       }
 
       .sc-overview-module-header strong {
         display: block;
-        margin-top: 3px;
-        color: #eef7fb;
+        margin-top: 2px;
+        color: #f2f9fc;
         font-size: 14px;
         font-weight: 950;
       }
@@ -11879,25 +11933,34 @@ function StatsCentralRedesignStyles() {
 
       .sc-overview-chip-group {
         display: inline-flex;
-        gap: 4px;
+        gap: 0;
+        border: 1px solid rgba(255, 255, 255, 0.085);
+        background: rgba(255, 255, 255, 0.02);
+        overflow: hidden;
       }
 
       .sc-overview-chip-group button {
-        padding: 5px 8px;
+        min-height: 24px;
+        padding: 0 9px;
         border: 0;
-        background: rgba(14, 36, 52, 0.95);
-        color: #8eacbd;
+        border-right: 1px solid rgba(255, 255, 255, 0.085);
+        background: transparent;
+        color: #7692a4;
         font-size: 11px;
-        font-weight: 900;
-        letter-spacing: 0.04em;
+        font-weight: 950;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
         cursor: pointer;
       }
 
+      .sc-overview-chip-group button:last-child {
+        border-right: 0;
+      }
+
       .sc-overview-chip-group button.is-active,
       .sc-overview-chip-group button:hover {
-        background: rgba(0, 204, 218, 0.16);
-        color: #5fd4e0;
+        background: var(--ops-cyan, #13d8e7);
+        color: #041318;
       }
 
       .sc-overview-scoring-leaders .sc-table-wrap {
@@ -11917,32 +11980,12 @@ function StatsCentralRedesignStyles() {
         table-layout: fixed;
       }
 
+      .sc-overview-scoring-leaders .sc-skaters-table-v2 {
+        min-width: 100%;
+      }
+
       .sc-overview-scoring-table .is-player-col {
         width: 30%;
-      }
-
-      .sc-overview-scoring-table thead th {
-        position: static;
-        height: 30px;
-        padding: 0 8px;
-        font-size: 12px;
-        background: rgba(10, 31, 48, 0.95);
-      }
-
-      .sc-overview-scoring-table thead th.is-sorted {
-        color: #5fd4e0;
-      }
-
-      .sc-overview-scoring-table td {
-        height: auto;
-        min-height: 58px;
-        padding: 6px 8px;
-        font-size: 12px;
-        vertical-align: middle;
-      }
-
-      .sc-overview-scoring-table tbody tr:hover td {
-        background: rgba(0, 216, 223, 0.06);
       }
 
       .sc-overview-table-player {
@@ -12236,26 +12279,34 @@ function StatsCentralRedesignStyles() {
       }
 
       .sc-column-preset-toggle {
-        display: flex;
-        gap: 3px;
-        padding: 3px;
-        border: 1px solid rgba(103, 169, 198, 0.18);
-        background: #071522;
+        display: inline-flex;
+        gap: 0;
+        padding: 0;
+        border: 1px solid rgba(255, 255, 255, 0.085);
+        background: rgba(255, 255, 255, 0.02);
+        overflow: hidden;
       }
 
       .sc-column-preset-toggle button {
         min-height: 27px;
         padding: 0 9px;
         border: 0;
+        border-right: 1px solid rgba(255, 255, 255, 0.085);
         background: transparent;
         color: #7692a4;
         font-size: 11px;
         font-weight: 950;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .sc-column-preset-toggle button:last-child {
+        border-right: 0;
       }
 
       .sc-column-preset-toggle button.is-active {
-        background: rgba(0, 207, 218, 0.14);
-        color: #ffffff;
+        background: var(--ops-cyan, #13d8e7);
+        color: #041318;
       }
 
       .sc-skaters-page-v3,
@@ -12269,7 +12320,7 @@ function StatsCentralRedesignStyles() {
       }
 
       .sc-skaters-page-v3 {
-        grid-template-rows: auto minmax(0, 1fr);
+        grid-template-rows: auto auto minmax(0, 1fr);
       }
 
       .sc-roster-groups {
@@ -12605,9 +12656,10 @@ function StatsCentralRedesignStyles() {
 
       .sc-skater-stat strong {
         color: #dfeef5;
-        font-size: 13px;
+        font-size: 18px;
         font-weight: 900;
         line-height: 1.05;
+        letter-spacing: 0.01em;
       }
 
       .sc-skater-stat span {
@@ -12697,6 +12749,10 @@ function StatsCentralRedesignStyles() {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 7px;
+      }
+
+      .sc-goalie-summary-row.sc-overview-featured-row {
+        grid-template-columns: repeat(6, minmax(0, 1fr));
       }
 
       .sc-goalie-summary-row button {
@@ -13434,7 +13490,7 @@ function StatsCentralRedesignStyles() {
         }
 
         .sc-overview-featured-row {
-          grid-template-columns: minmax(220px, 1.4fr) repeat(5, minmax(0, 1fr));
+          grid-template-columns: repeat(6, minmax(0, 1fr));
         }
 
         .sc-trend-content-grid {
@@ -13488,7 +13544,7 @@ function StatsCentralRedesignStyles() {
           grid-template-columns: repeat(3, minmax(0, 1fr));
         }
 
-        .sc-overview-featured-row > :nth-child(n + 4) {
+        .sc-overview-team-header-chips {
           display: none;
         }
 
@@ -13696,7 +13752,8 @@ function StatsCentralStretchStyles() {
         overflow: hidden !important;
       }
 
-      .sc-overview-module-header {
+      .sc-overview-module-header,
+      .sc-overview-module > .sc-player-table-header {
         flex: 0 0 auto !important;
       }
 
@@ -13740,7 +13797,7 @@ function StatsCentralStretchStyles() {
         height: 100% !important;
         min-height: 0 !important;
         display: grid !important;
-        grid-template-rows: auto minmax(0, 1fr) !important;
+        grid-template-rows: auto auto minmax(0, 1fr) !important;
         overflow: hidden !important;
       }
 
@@ -16577,7 +16634,7 @@ function StatsCentralStyles() {
 
       .sc-skater-stat strong {
         color: #ffffff;
-        font-size: 0.9rem;
+        font-size: 1.15rem;
         line-height: 1;
         font-weight: 950;
       }
@@ -16793,8 +16850,7 @@ function StatsCentralStyles() {
       /* Column presets read as a control-room switch bank. */
       .sc-column-preset-toggle {
         min-height: 26px;
-        display: inline-grid;
-        grid-template-columns: repeat(5, auto);
+        display: inline-flex;
         gap: 0;
         padding: 0;
         border-radius: var(--radius-ops, 2px);
@@ -16954,7 +17010,7 @@ function StatsCentralStyles() {
 
       .sc-skater-stat strong {
         color: #ffffff;
-        font-size: 0.88rem;
+        font-size: 1.18rem;
         line-height: 1;
         font-weight: 950;
       }
@@ -17057,6 +17113,36 @@ function StatsCentralStyles() {
         grid-template-columns: repeat(12, minmax(0, 1fr));
         gap: 8px;
         overflow: hidden;
+      }
+
+      .sc-player-analytics-strip {
+        display: grid;
+        grid-template-columns: minmax(140px, 0.85fr) repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        padding: 8px 10px 4px;
+        flex: 0 0 auto;
+      }
+
+      .sc-player-analytics-strip__title {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 4px;
+        min-width: 0;
+      }
+
+      .sc-player-analytics-strip__title span {
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--ops-cyan, #13d8e7);
+      }
+
+      .sc-player-analytics-strip__title strong {
+        font-size: 15px;
+        font-weight: 800;
+        color: #e9f7fb;
       }
 
       .sc-skater-summary-chip {

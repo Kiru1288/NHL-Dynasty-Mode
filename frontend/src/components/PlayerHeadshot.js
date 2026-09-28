@@ -63,6 +63,7 @@ export default function PlayerHeadshot({
   title,
   style = {},
   preferPhoto = true,
+  showFlag = true,
   ...rest
 }) {
   const portrait = useMemo(() => resolvePlayerHeadshot(player), [player]);
@@ -176,7 +177,7 @@ export default function PlayerHeadshot({
       {resolvedNumber != null && resolvedNumber !== "" ? (
         <span className="ph-number">{resolvedNumber}</span>
       ) : null}
-      {flagUrl ? (
+      {showFlag && flagUrl ? (
         <span className="ph-flag ph-flag--img" title={String(resolvedFlag || flagIso || "")}>
           <img
             className="ph-flag__img"
@@ -189,7 +190,7 @@ export default function PlayerHeadshot({
             }}
           />
         </span>
-      ) : resolvedFlag ? (
+      ) : showFlag && resolvedFlag ? (
         <span className="ph-flag">
           <span className="ph-flag__code">{resolvedFlag}</span>
         </span>

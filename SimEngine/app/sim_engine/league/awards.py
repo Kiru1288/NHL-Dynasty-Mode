@@ -8,11 +8,14 @@ deterministic ballot simulation, and payload assembly all live here.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
+import os
 import random
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +141,421 @@ def _pid(row: Mapping[str, Any]) -> str:
 
 def _tid(row: Mapping[str, Any]) -> str:
     return str(row.get("team_id") or "")
+
+
+def _isolated_scoring_pool(pool: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """Strip award-local scoring artifacts so shared stat rows cannot leak across ballots."""
+    out: List[Dict[str, Any]] = []
+    for row in pool:
+        if not isinstance(row, Mapping):
+            continue
+        clean = {
+            k: v
+            for k, v in row.items()
+            if not str(k).startswith("_") and k not in ("component_scores",)
+        }
+        out.append(clean)
+    return out
+
+
+STAT_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "gp": ("gp", "games_played"),
+    "g": ("g", "goals"),
+    "a": ("a", "assists"),
+    "pts": ("pts", "points"),
+    "pim": ("pim", "penalty_minutes"),
+    "plus_minus": ("plus_minus", "pm", "plusminus"),
+    "shots": ("shots", "sog"),
+    "toi": ("toi", "toi_minutes"),
+    "toi_pg": ("toi_per_game", "toi_per_gp", "avg_toi"),
+    "ev_toi": ("ev_toi", "es_toi"),
+    "pk_toi": ("pk_toi", "sh_toi"),
+    "es_pts": ("ev_points", "es_points"),
+    "takeaways": ("takeaways", "tk"),
+    "giveaways": ("giveaways", "gv", "giv"),
+    "blocks": ("blocked_shots", "blk", "blocks"),
+    "fow": ("fow", "faceoffs_won"),
+    "fol": ("fol", "faceoffs_lost"),
+    "fo_taken": ("fo_taken", "faceoffs_taken"),
+    "fo_pct": ("faceoff_pct", "fo_pct"),
+    "minors": ("minor_penalties", "minors"),
+    "majors": ("major_penalties", "majors", "fights", "misconducts"),
+    "xgf_pct": ("xgf_pct",),
+    "xga_60": ("xga_per_60", "xga60"),
+    "cf_pct": ("cf_pct", "corsi_pct"),
+    "war": ("war",),
+    "impact": ("impact_score",),
+    "sa": ("shots_against", "sa"),
+    "ga": ("ga", "goals_against"),
+    "en_ga": ("empty_net_goals", "en_goals"),
+    "saves": ("saves",),
+    "sv_pct": ("sv_pct", "save_pct"),
+    "gs": ("games_started", "gs"),
+    "so": ("shutouts", "so"),
+    "gsax": ("gsax",),
+    "hdsv": ("high_danger_save_pct",),
+    "qs_pct": ("quality_start_pct",),
+    "final_round_pts": ("final_round_points",),
+    "elim_pts": ("elimination_game_points",),
+}
+
+
+def stat(row: Mapping[str, Any], key: str) -> Optional[float]:
+    aliases = STAT_ALIASES.get(key, (key,))
+    for alias in aliases:
+        if alias not in row:
+            continue
+        val = row.get(alias)
+        if val is None:
+            continue
+        try:
+            x = float(val)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(x):
+            return x
+    return None
+
+
+def normalize_percentage_optional(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v):
+        return None
+    if v > 1.0:
+        v = v / 100.0
+    if v < 0.0:
+        return 0.0
+    if v > 1.0:
+        return 1.0
+    return v
+
+
+@dataclass(frozen=True)
+class Comp:
+    key: str
+    label: str
+    get: Callable[[Mapping[str, Any]], Optional[float]]
+    weight: float
+    higher_better: bool = True
+    shrink: Optional[Tuple[str, float]] = None
+    chain: Tuple[Callable[[Mapping[str, Any]], Optional[float]], ...] = ()
+    scope: Optional[Callable[[Mapping[str, Any]], bool]] = None
+    archetypes: FrozenSet[str] = frozenset()
+    fmt: str = "int"
+
+
+@dataclass
+class ScoredPool:
+    scores: Dict[str, float]
+    pct_by_comp: Dict[str, Dict[str, float]]
+    raw_by_comp: Dict[str, Dict[str, float]]
+    ranks: Dict[str, int]
+    active: List[Comp]
+    dropped: List[Comp]
+    coverage: Dict[str, float]
+    imputed: Dict[str, List[str]]
+    path_counts: Dict[str, int]
+
+
+def _midrank_percentile(sorted_vals: Sequence[float], value: float) -> float:
+    if not sorted_vals:
+        return 0.5
+    left = bisect_left(sorted_vals, value)
+    right = bisect_right(sorted_vals, value)
+    below = left
+    equal = max(0, right - left)
+    n = len(sorted_vals)
+    return (below + 0.5 * equal) / float(n)
+
+
+def _coverage(pool: Sequence[Mapping[str, Any]], getter: Callable[[Mapping[str, Any]], Optional[float]], scope: Optional[Callable[[Mapping[str, Any]], bool]]) -> float:
+    if not pool:
+        return 0.0
+    ok = 0
+    for row in pool:
+        if scope is not None and not scope(row):
+            ok += 1
+            continue
+        if getter(row) is not None:
+            ok += 1
+    return ok / float(len(pool))
+
+
+def score_pool(
+    award_id: str,
+    pool: Sequence[Mapping[str, Any]],
+    comps: Sequence[Comp],
+    *,
+    ref_pool: Optional[Sequence[Mapping[str, Any]]] = None,
+    min_coverage: float = 0.60,
+) -> ScoredPool:
+    ref = list(ref_pool or pool)
+    active: List[Comp] = []
+    dropped: List[Comp] = []
+    pct_by_comp: Dict[str, Dict[str, float]] = {}
+    raw_by_comp: Dict[str, Dict[str, float]] = {}
+    imputed: Dict[str, List[str]] = {_pid(r): [] for r in pool}
+
+    for comp in comps:
+        getter = comp.get
+        for alt in comp.chain:
+            if _coverage(ref, alt, comp.scope) >= min_coverage:
+                getter = alt
+                break
+        cov = _coverage(ref, getter, comp.scope)
+        if cov < min_coverage:
+            dropped.append(comp)
+            continue
+        active.append(comp)
+        shrink_key, shrink_k = comp.shrink or ("", 0.0)
+        present: List[Tuple[str, float]] = []
+        med = 0.5
+        if shrink_k > 0 and shrink_key:
+            vals = [getter(r) for r in ref if (comp.scope is None or comp.scope(r)) and getter(r) is not None]
+            if vals:
+                vals.sort()
+                med = vals[len(vals) // 2]
+        for row in ref:
+            pid = _pid(row)
+            in_scope = comp.scope is None or comp.scope(row)
+            raw = getter(row) if in_scope else None
+            if raw is None:
+                pct_by_comp.setdefault(comp.key, {})[pid] = 0.5
+                raw_by_comp.setdefault(comp.key, {})[pid] = raw if raw is not None else float("nan")
+                if in_scope:
+                    imputed.setdefault(pid, []).append(comp.key)
+                continue
+            n = stat(row, shrink_key) if shrink_k > 0 and shrink_key else None
+            adj = raw
+            if shrink_k > 0 and n is not None and n > 0:
+                adj = (n * raw + shrink_k * med) / (n + shrink_k)
+            present.append((pid, adj))
+        sorted_vals = sorted(v for _, v in present)
+        for pid, adj in present:
+            pct = _midrank_percentile(sorted_vals, adj)
+            if not comp.higher_better:
+                pct = 1.0 - pct
+            pct_by_comp.setdefault(comp.key, {})[pid] = pct
+            raw_by_comp.setdefault(comp.key, {})[pid] = adj
+
+    total_w = sum(c.weight for c in active) or 1.0
+    scores: Dict[str, float] = {}
+    ranks: Dict[str, int] = {}
+    for row in pool:
+        pid = _pid(row)
+        s = 0.0
+        for comp in active:
+            w = comp.weight / total_w
+            s += w * pct_by_comp.get(comp.key, {}).get(pid, 0.5)
+        scores[pid] = s
+
+    ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    for i, (pid, _) in enumerate(ordered, start=1):
+        ranks[pid] = i
+
+    return ScoredPool(
+        scores=scores,
+        pct_by_comp=pct_by_comp,
+        raw_by_comp=raw_by_comp,
+        ranks=ranks,
+        active=list(active),
+        dropped=dropped,
+        coverage={c.key: _coverage(ref, c.get, c.scope) for c in active},
+        imputed=imputed,
+        path_counts={"full": len(pool), "fallback": 0},
+    )
+
+
+def _onice_get(row: Mapping[str, Any]) -> Optional[float]:
+    x = normalize_percentage_optional(row.get("xgf_pct"))
+    if x is not None:
+        return x
+    c = normalize_percentage_optional(row.get("cf_pct"))
+    if c is not None:
+        return c
+    pm = stat(row, "plus_minus")
+    if pm is None:
+        return None
+    return max(0.0, min(1.0, 0.5 + pm / 80.0))
+
+
+def _value_get(row: Mapping[str, Any]) -> Optional[float]:
+    w = stat(row, "war")
+    if w is not None:
+        return w
+    return stat(row, "impact")
+
+
+def _pts_pg(row: Mapping[str, Any]) -> Optional[float]:
+    gp = stat(row, "gp")
+    pts = stat(row, "pts")
+    if gp is None or pts is None or gp <= 0:
+        return None
+    return pts / gp
+
+
+def _team_pts_pct(row: Mapping[str, Any], team_ctx: Mapping[str, Mapping[str, Any]]) -> Optional[float]:
+    ctx = team_ctx.get(_tid(row), {})
+    v = ctx.get("points_pct_norm")
+    if v is None:
+        return None
+    try:
+        x = float(v)
+        return x if math.isfinite(x) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _team_share_pts(row: Mapping[str, Any], team_ctx: Mapping[str, Mapping[str, Any]]) -> Optional[float]:
+    ctx = team_ctx.get(_tid(row), {})
+    gf = ctx.get("team_gf")
+    pts = stat(row, "pts")
+    if gf is None or pts is None:
+        return None
+    try:
+        gfv = float(gf)
+        if gfv <= 0:
+            return None
+        return pts / gfv
+    except (TypeError, ValueError):
+        return None
+
+
+def _toi_pg_minutes(row: Mapping[str, Any]) -> float:
+    for key in ("toi_per_game", "toi_per_gp", "avg_toi"):
+        if row.get(key) is not None:
+            return _safe_float(row.get(key))
+    gp = max(1, _gp(row))
+    total = _safe_float(row.get("toi"), _safe_float(row.get("toi_minutes"), 0.0))
+    if total > 0:
+        return total / float(gp)
+    return 0.0
+
+
+def _pk_toi_pg_minutes(row: Mapping[str, Any]) -> float:
+    for key in ("pk_toi_per_game", "pk_toi_pg"):
+        if row.get(key) is not None:
+            return _safe_float(row.get(key))
+    per_gp = _optional_stat_per_gp(row, ("pk_toi", "sh_toi"))
+    if per_gp is not None:
+        return per_gp
+    share = _safe_float(row.get("pk_toi_share"), 0.0)
+    if share > 0:
+        return share
+    return 0.0
+
+
+def _is_centre(row: Mapping[str, Any]) -> bool:
+    return _pos(row) in {"C", "CTR", "CENTER"}
+
+
+def _selke_fo_pct(row: Mapping[str, Any]) -> Optional[float]:
+    fo_taken = stat(row, "fo_taken")
+    if fo_taken is None:
+        fo_taken = _safe_int(row.get("faceoffs_taken"), 0)
+    if fo_taken < 300:
+        return None
+    fo = stat(row, "fo_pct")
+    if fo is not None:
+        return fo
+    return normalize_percentage_optional(row.get("faceoff_pct"))
+
+
+def _selke_tk_60(row: Mapping[str, Any]) -> Optional[float]:
+    raw = row.get("takeaways_per_60")
+    if raw is not None:
+        return _safe_float(raw)
+    tk = stat(row, "takeaways")
+    if tk is None:
+        return None
+    toi = stat(row, "toi")
+    if toi is not None and toi > 0:
+        return float(tk) / float(toi) * 60.0
+    gp = stat(row, "gp")
+    if gp is not None and gp > 0:
+        return float(tk) / float(gp)
+    return None
+
+
+def _selke_tk_gv_pg(row: Mapping[str, Any]) -> Optional[float]:
+    tk = stat(row, "takeaways")
+    gv = stat(row, "giveaways")
+    gp = stat(row, "gp")
+    if tk is None or gv is None or gp is None or gp <= 0:
+        return None
+    return (float(tk) - float(gv)) / float(gp)
+
+
+def _selke_blocks_60(row: Mapping[str, Any]) -> Optional[float]:
+    blk60 = row.get("blocks_per_60") or row.get("blocked_shots_per_60")
+    if blk60 is not None:
+        return _safe_float(blk60)
+    blocks = stat(row, "blocks")
+    toi = stat(row, "toi")
+    if blocks is not None and toi is not None and toi > 0:
+        return float(blocks) / float(toi) * 60.0
+    gp = stat(row, "gp")
+    if blocks is not None and gp is not None and gp > 0:
+        return float(blocks) / float(gp)
+    return None
+
+
+def _selke_comps() -> Tuple[Comp, ...]:
+    return (
+        Comp("xga_60", "Expected goals against/60", lambda r: stat(r, "xga_60"), 0.18, higher_better=False, archetypes=frozenset({"defense", "analytics"})),
+        Comp("onice", "On-ice impact", _onice_get, 0.18, chain=(_value_get,), archetypes=frozenset({"two_way", "analytics"})),
+        Comp("pk_toi_pg", "PK time per game", _pk_toi_pg_minutes, 0.14, archetypes=frozenset({"special_teams"})),
+        Comp("tk_60", "Takeaways per 60", _selke_tk_60, 0.12, archetypes=frozenset({"defense"})),
+        Comp("fo_pct", "Faceoff % (centres)", _selke_fo_pct, 0.10, scope=_is_centre, archetypes=frozenset({"centre"})),
+        Comp("tk_gv_pg", "Takeaways minus giveaways/GP", _selke_tk_gv_pg, 0.06, archetypes=frozenset({"defense"})),
+        Comp("blocks_60", "Blocks per 60", _selke_blocks_60, 0.04, archetypes=frozenset({"defense"})),
+        Comp("pts_pg", "Points per game", _pts_pg, 0.10, shrink=("gp", 20.0), archetypes=frozenset({"production"})),
+        Comp("toi_pg", "Ice time per game", _toi_pg_minutes, 0.08, archetypes=frozenset({"workload"})),
+    )
+
+
+def _hart_comps(team_ctx: Mapping[str, Mapping[str, Any]]) -> Tuple[Comp, ...]:
+    return (
+        Comp("pts_pg", "Points per game", _pts_pg, 0.26, shrink=("gp", 20.0), archetypes=frozenset({"production", "traditional"})),
+        Comp("pts", "Points", lambda r: stat(r, "pts"), 0.12, archetypes=frozenset({"production"})),
+        Comp("g", "Goals", lambda r: stat(r, "g"), 0.06, archetypes=frozenset({"production"})),
+        Comp("onice", "On-ice impact", _onice_get, 0.14, archetypes=frozenset({"two_way", "analytics"})),
+        Comp("value", "Individual value", _value_get, 0.14, archetypes=frozenset({"analytics"})),
+        Comp("team_sh", "Share of team scoring", lambda r: _team_share_pts(r, team_ctx), 0.10, archetypes=frozenset({"team_success"})),
+        Comp("team", "Team standing", lambda r: _team_pts_pct(r, team_ctx), 0.12, archetypes=frozenset({"team_success"})),
+        Comp("avail", "Availability", lambda r: (stat(r, "gp") / 82.0) if stat(r, "gp") is not None else None, 0.06, archetypes=frozenset({"workload"})),
+    )
+
+
+def score_award(
+    award_id: str,
+    pool: Sequence[Mapping[str, Any]],
+    *,
+    team_ctx: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    ref_pool: Optional[Sequence[Mapping[str, Any]]] = None,
+    season_length: int = 82,
+) -> Optional[ScoredPool]:
+    team_ctx = team_ctx or {}
+    aid = str(award_id or "")
+    if aid == "hart":
+        comps = _hart_comps(team_ctx)
+        assert abs(sum(c.weight for c in comps) - 1.0) < 1e-6
+        return score_pool(aid, pool, comps, ref_pool=ref_pool)
+    if aid == "ted_lindsay":
+        comps = tuple(c for c in _hart_comps(team_ctx) if c.key not in {"team_sh", "team"})
+        tw = sum(c.weight for c in comps)
+        comps = tuple(Comp(c.key, c.label, c.get, c.weight / tw, c.higher_better, c.shrink, c.chain, c.scope, c.archetypes, c.fmt) for c in comps)
+        return score_pool(aid, pool, comps, ref_pool=ref_pool)
+    if aid == "selke":
+        comps = _selke_comps()
+        assert abs(sum(c.weight for c in comps) - 1.0) < 1e-6
+        return score_pool(aid, pool, comps, ref_pool=ref_pool)
+    return None
 
 
 def _pts(row: Mapping[str, Any]) -> int:
@@ -389,7 +807,7 @@ AWARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         category="ballot",
         display_metric="Ballot points",
         watch_type="official_projected_ballot",
-        ceremony_enabled=False,
+        ceremony_enabled=True,
         eligibility="lady_byng",
         score="lady_byng",
         tiebreakers=["ballot_points", "first_place_votes", "canonical_score"],
@@ -401,7 +819,7 @@ AWARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         category="ballot",
         display_metric="Ballot points",
         watch_type="official_projected_ballot",
-        ceremony_enabled=False,
+        ceremony_enabled=True,
         eligibility="ted_lindsay",
         score="ted_lindsay",
         required_fields=["gp"],
@@ -454,7 +872,7 @@ AWARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         display_metric="Selection",
         supports_shared_winners=True,
         watch_enabled=False,
-        ceremony_enabled=False,
+        ceremony_enabled=True,
     ),
     "all_star_2": _defn(
         "all_star_2",
@@ -464,7 +882,7 @@ AWARD_REGISTRY: Dict[str, Dict[str, Any]] = {
         display_metric="Selection",
         supports_shared_winners=True,
         watch_enabled=False,
-        ceremony_enabled=False,
+        ceremony_enabled=True,
     ),
 }
 
@@ -1055,7 +1473,8 @@ def hart_ballot_score(row: Mapping[str, Any], team_context_by_tid: Optional[Mapp
     if not ctx and rank_by_tid is not None:
         # Minor fallback only — ordinal converted to percentile-ish soft signal.
         rk = int(rank_by_tid.get(_tid(row), 16) or 16)
-        ctx = {"points_pct_norm": max(0.0, 1.0 - (rk - 1) / 31.0), "goal_diff_norm": 0.5, "playoff_qualified": rk <= 16}
+        teams_n = max(2, int(rank_by_tid.get("__team_count__", 32) or 32))
+        ctx = {"points_pct_norm": max(0.0, 1.0 - (rk - 1) / float(teams_n - 1)), "goal_diff_norm": 0.5, "playoff_qualified": rk <= 16}
     parts = hart_components_for_row(row, ctx)
     # Relative weights after per-group use — production once, no separate goals double-count.
     return (
@@ -1243,22 +1662,28 @@ def simulate_award_ballots(
             pref = 0.0
             comps = tallies[pid]["component_scores"] or derive_pseudo_components(row, award_id, float(score))
             if arch == "production":
-                pref = _safe_float(comps.get("production_component"), float(score))
+                pref = _safe_float(
+                    comps.get("pts_pg", comps.get("production_component")),
+                    float(score),
+                )
             elif arch == "two_way":
                 pref = _safe_float(
-                    comps.get("two_way_component", comps.get("defensive_value")),
+                    comps.get("onice", comps.get("two_way_component", comps.get("defensive_value"))),
                     float(score),
                 )
             elif arch == "team_success":
-                pref = _safe_float(comps.get("team_context_component"), float(score))
+                pref = _safe_float(
+                    comps.get("team", comps.get("team_context_component")),
+                    float(score),
+                )
             elif arch == "analytics":
                 pref = _safe_float(
-                    comps.get("individual_value_component", comps.get("goals_saved_above_expected")),
+                    comps.get("value", comps.get("individual_value_component", comps.get("goals_saved_above_expected"))),
                     float(score),
                 )
             elif arch == "workload":
                 pref = _safe_float(
-                    comps.get("availability_component", comps.get("workload")),
+                    comps.get("avail", comps.get("availability_component", comps.get("workload"))),
                     float(score),
                 )
             else:
@@ -1287,6 +1712,141 @@ def simulate_award_ballots(
         "voter_count": int(voter_count),
         "margin": margin,
         "seed": _seed_int(season_seed, award_id),
+    }
+
+
+def _fmt_stat_value(value: Any, fmt: str) -> str:
+    if value is None:
+        return ""
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if fmt == "pct1":
+        return f"{x * 100:.1f}%" if x <= 1 else f"{x:.1f}%"
+    if fmt == "sv3":
+        return f"{x:.3f}" if x <= 1 else f"{x:.3f}"
+    if fmt == "dec2":
+        return f"{x:.2f}"
+    if fmt == "signed":
+        return f"{x:+.0f}" if abs(x - int(x)) < 1e-6 else f"{x:+.2f}"
+    return str(int(round(x)))
+
+
+def _stat_line_entry(row: Mapping[str, Any], key: str, label: str, fmt: str = "int") -> Optional[Dict[str, Any]]:
+    val = stat(row, key)
+    if val is None:
+        return None
+    return {"key": key, "label": label, "value": val, "fmt": fmt, "display": _fmt_stat_value(val, fmt)}
+
+
+def _build_award_evidence(
+    defn: Mapping[str, Any],
+    full_results: List[Dict[str, Any]],
+    finalists: List[Dict[str, Any]],
+    *,
+    voting: Optional[Dict[str, Any]] = None,
+    quality: str = "full",
+) -> Dict[str, Any]:
+    aid = str(defn.get("award_id") or "")
+    if not full_results:
+        return {}
+    winner_row = full_results[0]
+    runner = full_results[1] if len(full_results) > 1 else None
+    comps = dict(winner_row.get("component_scores") or {})
+    criteria = [{"key": k, "label": k.replace("_", " ").title(), "weight": round(v, 3)} for k, v in comps.items() if v is not None]
+    if criteria:
+        tw = sum(c["weight"] for c in criteria) or 1.0
+        for c in criteria:
+            c["weight"] = round(c["weight"] / tw, 3)
+
+    stat_keys: List[Tuple[str, str, str]] = []
+    if aid in {"hart", "art_ross", "ted_lindsay", "lady_byng", "calder"}:
+        stat_keys = [("gp", "GP", "int"), ("g", "G", "int"), ("pts", "PTS", "int"), ("plus_minus", "+/-", "signed")]
+    elif aid == "rocket":
+        stat_keys = [("g", "G", "int"), ("gp", "GP", "int"), ("pts", "PTS", "int")]
+    elif aid == "norris":
+        stat_keys = [("pts", "PTS", "int"), ("toi_pg", "TOI/GP", "dec2"), ("blocks", "BLK", "int"), ("gp", "GP", "int")]
+    elif aid == "selke":
+        stat_keys = [("pts", "PTS", "int"), ("takeaways", "TK", "int"), ("fo_pct", "FO%", "pct1"), ("plus_minus", "+/-", "signed")]
+    elif aid == "vezina":
+        stat_keys = [("gs", "GS", "int"), ("sv_pct", "SV%", "sv3"), ("ga", "GA", "int"), ("so", "SO", "int")]
+
+    winner_stats: List[Dict[str, Any]] = []
+    for key, label, fmt in stat_keys:
+        ent = _stat_line_entry(winner_row, key, label, fmt)
+        if ent:
+            winner_stats.append(ent)
+
+    why: List[str] = []
+    if voting and winner_row.get("ballot_points") is not None:
+        margin = float(voting.get("margin") or 0.0)
+        fpv = int(winner_row.get("first_place_votes") or 0)
+        vc = int(voting.get("voter_count") or VOTER_COUNT)
+        ru_name = str(runner.get("name") or "the field") if runner else "the field"
+        why.append(
+            f"{fpv} of {vc} first-place votes · {float(winner_row.get('ballot_points') or 0):.0f} points · "
+            f"+{margin:.0f} over {ru_name}"
+        )
+    if not why and winner_stats:
+        lead = winner_stats[0]
+        why.append(f"{lead['label']}: {lead.get('display') or _fmt_stat_value(lead['value'], lead['fmt'])}")
+    if not why:
+        why.append(str(defn.get("name") or "Award") + " on season results.")
+
+    fin_evidence = []
+    for cand in finalists[:3]:
+        line = []
+        for key, label, fmt in stat_keys[:3]:
+            ent = _stat_line_entry(cand, key, label, fmt)
+            if ent:
+                line.append(ent)
+        fin_evidence.append(
+            {
+                "entity_id": cand.get("entity_id") or cand.get("player_id"),
+                "name": cand.get("name"),
+                "team_id": cand.get("team_id"),
+                "team_name": cand.get("team_name"),
+                "position": cand.get("position"),
+                "score": cand.get("canonical_score"),
+                "stat_line": line,
+                "ballot": {
+                    "points": cand.get("ballot_points"),
+                    "first_place_votes": cand.get("first_place_votes"),
+                }
+                if cand.get("ballot_points") is not None
+                else None,
+            }
+        )
+
+    method = "ballot" if defn.get("category") == "ballot" else ("stat_race" if defn.get("category") == "stat_race" else "selection")
+    return {
+        "method": method,
+        "pool": {"size": len(full_results), "noun": "eligible players"},
+        "criteria": criteria,
+        "excluded_criteria": [],
+        "winner": {
+            "entity_id": winner_row.get("entity_id") or winner_row.get("player_id"),
+            "stat_line": winner_stats,
+            "components": [
+                {"key": k, "label": k.replace("_", " ").title(), "value": v, "fmt": "dec2", "pct": v, "weight": v}
+                for k, v in comps.items()
+            ],
+            "ballot": {
+                "points": winner_row.get("ballot_points"),
+                "first_place_votes": winner_row.get("first_place_votes"),
+                "voter_count": (voting or {}).get("voter_count"),
+                "margin": (voting or {}).get("margin"),
+                "runner_up_name": runner.get("name") if runner else None,
+            }
+            if winner_row.get("ballot_points") is not None
+            else None,
+        },
+        "finalists": fin_evidence,
+        "why": why[:3],
+        "close_vote": bool(voting and float(voting.get("margin") or 0) < 12.0),
+        "closest_of_night": False,
+        "data_quality": {"dropped": [], "imputed_share": {}, "gate_relaxed": False} if quality == "full" else {"dropped": [], "imputed_share": {}, "gate_relaxed": quality != "full"},
     }
 
 
@@ -1326,20 +1886,15 @@ def _candidate_from_tally(
 
 
 def _rationale_from_components(name: str, comps: Mapping[str, Any], quality: str, fallback_reason: Optional[str]) -> str:
+    if quality == "unavailable":
+        return fallback_reason or "Required season data was unavailable."
     if not comps:
-        base = f"{name} earned the award on the final scoreboard."
-    else:
-        ranked = sorted(((k, _safe_float(v)) for k, v in comps.items()), key=lambda kv: kv[1], reverse=True)
-        top = [k.replace("_", " ").replace(" component", "") for k, _ in ranked[:2]]
-        if len(top) == 1:
-            base = f"Driven by {top[0]}."
-        else:
-            base = f"Led by {top[0]} and {top[1]}."
-    if quality == "documented_fallback":
-        base += f" Calculated with documented fallback ({fallback_reason or 'limited inputs'})."
-    elif quality == "unavailable":
-        base = fallback_reason or "Required season data was unavailable."
-    return base
+        return f"{name} earned the award on the final scoreboard."
+    ranked = sorted(((k, _safe_float(v)) for k, v in comps.items()), key=lambda kv: kv[1], reverse=True)
+    top = [k.replace("_", " ").replace(" component", "") for k, _ in ranked[:2]]
+    if len(top) == 1:
+        return f"Driven by {top[0]}."
+    return f"Led by {top[0]} and {top[1]}."
 
 
 # ---------------------------------------------------------------------------
@@ -1435,6 +1990,9 @@ def _finalize_player_award(
     comps = dict(top.get("component_scores") or {})
     rationale = _rationale_from_components(str(defn["name"]), comps, quality, fallback_reason)
     finalists = full_results[: max(1, int(defn.get("finalist_count") or 3))]
+    evidence = _build_award_evidence(defn, full_results, finalists, voting=voting, quality=quality)
+    if evidence.get("why"):
+        rationale = str(evidence["why"][0])
     result = {
         "award_id": defn["award_id"],
         "name": defn["name"],
@@ -1455,6 +2013,7 @@ def _finalize_player_award(
         "stat_scope": stat_scope,
         "season": season,
         "voting": voting,
+        "evidence": evidence,
     }
     return Award(
         name=str(defn["name"]),
@@ -1503,6 +2062,7 @@ def _score_pool_with_quality(
     missing_counts = 0
     scored: List[Tuple[float, Dict[str, Any]]] = []
     for row in pool:
+        row = dict(row)
         missing = validate_required_award_fields(row, required_fields)
         optional_analytics = [f for f in ("war", "impact_score", "xgf_pct", "gsax", "defense_score") if f in required_fields or True]
         # Only fail hard if NONE of analytics-ish fields exist when required includes them
@@ -1538,18 +2098,43 @@ def _run_ballot_award(
     required_fields: Sequence[str],
     fallback_fn: Optional[Callable[[Dict[str, Any]], float]] = None,
     stat_scope: str = "regular_season",
+    team_ctx: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    season_length: int = 82,
 ) -> Award:
-    scored, quality, reason = _score_pool_with_quality(pool, score_fn, required_fields, fallback_fn)
-    if quality == "unavailable":
-        return _unavailable_award(defn, reason=reason or "Unavailable", season=season)
-    # Attach components for rationale/voters when present
+    pool = _isolated_scoring_pool(pool)
+    aid = str(defn.get("award_id") or "")
+    components_by_pid: Dict[str, Dict[str, float]] = {}
+    model = score_award(aid, pool, team_ctx=team_ctx, season_length=season_length)
+    if model is not None:
+        scored = []
+        for row in pool:
+            pid = _pid(row)
+            score = float(model.scores.get(pid, 0.0))
+            comps = {c.key: float(model.pct_by_comp.get(c.key, {}).get(pid, 0.5)) for c in model.active}
+            components_by_pid[pid] = comps
+            scored.append((score, dict(row)))
+        quality = "full"
+        reason = None
+        if not scored:
+            return _unavailable_award(defn, reason="No eligible candidates.", season=season)
+        scored.sort(key=lambda p: p[0], reverse=True)
+    else:
+        scored, quality, reason = _score_pool_with_quality(pool, score_fn, required_fields, fallback_fn)
+        if quality == "unavailable":
+            return _unavailable_award(defn, reason=reason or "Unavailable", season=season)
+        for score, row in scored:
+            pid = _pid(row)
+            comps = dict(row.get("_components") or row.get("component_scores") or {})
+            if not comps or comps == {"canonical": float(score)}:
+                comps = derive_pseudo_components(row, aid, float(score))
+            components_by_pid[pid] = comps
+            row.pop("_components", None)
+            row.pop("component_scores", None)
+            row.pop("_calc_quality", None)
     for score, row in scored:
-        comps = dict(row.get("_components") or row.get("component_scores") or {})
-        if not comps or comps == {"canonical": float(score)}:
-            comps = derive_pseudo_components(row, str(defn.get("award_id") or ""), float(score))
-        row["_components"] = comps
-        row["component_scores"] = comps
-    ballot = simulate_award_ballots(scored, award_id=str(defn["award_id"]), season_seed=season_seed)
+        pid = _pid(row)
+        row["component_scores"] = dict(components_by_pid.get(pid, {}))
+    ballot = simulate_award_ballots(scored, award_id=aid, season_seed=season_seed)
     full: List[Dict[str, Any]] = []
     for tally in ballot["candidates"]:
         cand = _candidate_from_tally(tally, team_map, display_metric=str(defn["display_metric"]))
@@ -1582,6 +2167,7 @@ def _run_stat_race(
     season: Any,
     eligibility_summary: str,
 ) -> Award:
+    pool = _isolated_scoring_pool(pool)
     if not pool:
         return _unavailable_award(defn, reason="No eligible candidates.", season=season)
 
@@ -1670,9 +2256,14 @@ def eligible_selke(rows: Sequence[Dict[str, Any]], season_length: int) -> List[D
     for r in rows:
         if not _is_forward(r) or _gp(r) < need:
             continue
-        ev = _safe_float(r.get("ev_toi"), _safe_float(r.get("toi"), 1.0))
-        if ev <= 0:
+        toi_pg = _toi_pg_minutes(r)
+        pk_pg = _pk_toi_pg_minutes(r)
+        if toi_pg < 14.0 and pk_pg < 1.0:
             continue
+        if toi_pg <= 0 and pk_pg <= 0:
+            ev = _safe_float(r.get("ev_toi"), _safe_float(r.get("es_toi"), 0.0))
+            if ev <= 0:
+                continue
         out.append(r)
     return out
 
@@ -1862,7 +2453,6 @@ def compute_jennings(
 # ---------------------------------------------------------------------------
 # Main compute
 # ---------------------------------------------------------------------------
-
 def compute_awards(
     standings: StandingsTable,
     playoff_result: Optional[PlayoffResult],
@@ -1875,6 +2465,9 @@ def compute_awards(
     season_length: int = 82,
     history_by_player: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Award]:
+    if season_seed is None:
+        season_seed = season_year  # otherwise every season reuses the same ballot RNG
+
     awards: Dict[str, Award] = {}
     team_map: Dict[str, Any] = {}
     for t in teams or []:
@@ -2026,6 +2619,25 @@ def compute_awards(
     skaters = [r for r in snap_rows if not _is_goalie(r)]
     goalies = [r for r in snap_rows if _is_goalie(r)]
 
+    # --- TEMP Selke audit: remove once checked ---
+    _analytics = ("war", "impact_score", "gsax", "defense_score", "analytics_rating")
+    for _r in sorted(eligible_selke(skaters, season_length), key=selke_ballot_score, reverse=True)[:5]:
+        logger.warning(
+            "SELKE %-22s full=%6.2f fb=%6.2f path=%s def=%s xgf=%s fo_taken=%s fo%%=%s pk_toi=%s pk_ga60=%s tk60=%s pts=%s",
+            _r.get("name"),
+            selke_ballot_score(_r),
+            selke_fallback_formula(dict(_r)),
+            "full" if any(_r.get(f) is not None for f in _analytics) else "fallback",
+            _r.get("defense_score"),
+            _r.get("xgf_pct"),
+            _r.get("fo_taken", _r.get("faceoffs_taken")),
+            _r.get("faceoff_pct"),
+            _r.get("pk_toi"),
+            _r.get("pk_xga_per_60", _r.get("pk_ga_per_60")),
+            _r.get("takeaways_per_60"),
+            _r.get("pts"),
+        )
+
     # Art Ross
     awards[AWARD_REGISTRY["art_ross"]["name"]] = _run_stat_race(
         AWARD_REGISTRY["art_ross"],
@@ -2059,6 +2671,8 @@ def compute_awards(
         eligibility_summary=f"Meaningful skater participation (>= {_season_games_threshold(season_length, 0.45, 30)} GP).",
         required_fields=["gp"],
         fallback_fn=hart_fallback_formula,
+        team_ctx=team_ctx,
+        season_length=season_length,
     )
 
     # Norris
@@ -2082,9 +2696,10 @@ def compute_awards(
         team_map=team_map,
         season_seed=season_seed,
         season=season,
-        eligibility_summary="Forwards with meaningful GP and even-strength usage.",
+        eligibility_summary="Forwards with meaningful GP and usage (14:00 TOI/GP or 1:00 PK/GP).",
         required_fields=["gp"],
-        fallback_fn=selke_fallback_formula,
+        team_ctx=team_ctx,
+        season_length=season_length,
     )
 
     # Calder
@@ -2143,6 +2758,8 @@ def compute_awards(
         eligibility_summary="Player-focused outstanding season (distinct from Hart team weighting).",
         required_fields=["gp"],
         fallback_fn=lambda r: float(_pts(r)) / max(1, _gp(r)) * 35.0,
+        team_ctx=team_ctx,
+        season_length=season_length,
     )
 
     # Jennings
@@ -2195,7 +2812,7 @@ def compute_awards(
     else:
         champ = str(getattr(playoff_result, "champion_id", "") or "")
         need = 1
-        pool = [snapshot_row(r, teams=teams) for r in po_rows if _gp(r) >= need]
+        pool = _isolated_scoring_pool([snapshot_row(r, teams=teams) for r in po_rows if _gp(r) >= need])
         awards[AWARD_REGISTRY["conn_smythe"]["name"]] = _run_ballot_award(
             AWARD_REGISTRY["conn_smythe"],
             pool,
@@ -2217,7 +2834,62 @@ def compute_awards(
     awards[AWARD_REGISTRY["all_star_1"]["name"]] = a1
     awards[AWARD_REGISTRY["all_star_2"]["name"]] = a2
 
+    if os.environ.get("NHL_FRANCHISE_AUDIT") == "1":
+        _log_awards_audit_bundle(awards, skaters=skaters, defense=[r for r in skaters if _is_defense(r)], goalies=goalies, playoff_rows=po_rows)
+
     return awards
+
+
+def _log_awards_audit_bundle(
+    awards: Mapping[str, Award],
+    *,
+    skaters: Sequence[Mapping[str, Any]],
+    defense: Sequence[Mapping[str, Any]],
+    goalies: Sequence[Mapping[str, Any]],
+    playoff_rows: Sequence[Mapping[str, Any]],
+) -> None:
+    for name, aw in awards.items():
+        if getattr(aw, "status", None) != "complete":
+            continue
+        ser = serialize_award(aw)
+        top5 = list(ser.get("full_results") or [])[:5]
+        logger.info(
+            "AWARDS_AUDIT %s",
+            json.dumps(
+                {
+                    "award_id": ser.get("award_id"),
+                    "pool_size": len(ser.get("full_results") or []),
+                    "path_counts": {"full": len(ser.get("full_results") or []), "fallback": 0},
+                    "top5": [
+                        {
+                            "name": c.get("name"),
+                            "pos": c.get("position"),
+                            "team": c.get("team_name"),
+                            "score": c.get("canonical_score"),
+                            "ballot_points": c.get("ballot_points"),
+                        }
+                        for c in top5
+                    ],
+                    "winner": ser.get("winner_name"),
+                    "public_rationale": ser.get("public_rationale"),
+                },
+                default=str,
+            ),
+        )
+    def _keys(row: Optional[Mapping[str, Any]]) -> List[str]:
+            return sorted(str(k) for k in (row or {}).keys())
+
+    logger.info(
+        "AWARDS_AUDIT_ROW_KEYS %s",
+        json.dumps(
+            {
+                "forward": _keys(next((r for r in skaters if _is_forward(r)), None)),
+                "defense": _keys(next((r for r in defense), None)),
+                "goalie": _keys(next((r for r in goalies), None)),
+                "playoff": _keys(next((r for r in playoff_rows), None)),
+            }
+        ),
+    )
 
 
 def _try_masterton(rows, team_map, season, season_seed) -> Award:
@@ -2409,6 +3081,7 @@ def serialize_award(award: Award) -> Dict[str, Any]:
         "stat_scope": award.stat_scope,
         "season": award.season,
         "voting": award.voting,
+        "evidence": (award.result or {}).get("evidence") if award.result else None,
     }
     if award.result:
         base.update({k: v for k, v in award.result.items() if k not in base or base.get(k) in (None, "", [], {})})
@@ -2445,18 +3118,21 @@ def build_awards_payload(
             if aid and AWARD_REGISTRY.get(aid, {}).get("ceremony_enabled", True):
                 reveal.append(aid)
 
-    # Stable reveal order — lean Awards Night (core hardware only).
     order = [
-        "calder",
-        "selke",
+        "presidents",
         "jennings",
-        "vezina",
-        "norris",
         "rocket",
         "art_ross",
+        "lady_byng",
+        "selke",
+        "calder",
+        "norris",
+        "vezina",
+        "ted_lindsay",
+        "all_star_2",
+        "all_star_1",
         "hart",
         "conn_smythe",
-        "presidents",
         "stanley",
     ]
     reveal_order = [a for a in order if a in reveal] + [a for a in reveal if a not in order]

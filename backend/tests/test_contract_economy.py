@@ -681,6 +681,35 @@ def test_fa_slot_limit_blocks_signing():
     assert "slot" in str(res.get("reason", "")).lower()
 
 
+def test_resign_validates_incremental_cap_not_full_aav():
+    from services.contract_economy import _validate_sign_cap, sign_player_to_team
+
+    target = _player("star", ovr=88, age=27)
+    target.contract = normalize_contract_dict({"aav_m": 8.0, "cap_hit_m": 8.0, "years_remaining": 1})
+    target.cap_hit_m = 8.0
+    target.signed_status = "signed"
+    roster = [target]
+    for i in range(22):
+        pl = _player(f"p{i}", ovr=72, age=27)
+        pl.contract = normalize_contract_dict({"aav_m": 3.5, "cap_hit_m": 3.5, "years_remaining": 2})
+        pl.cap_hit_m = 3.5
+        pl.signed_status = "signed"
+        roster.append(pl)
+    team = _team("OTT", roster)
+    league = _league([team])
+    # ~88M cap league — only need delta (8.5 - 8.0), not full 8.5M free space.
+    check = _validate_sign_cap(team, 8.5, league, player=target, context="re_sign")
+    assert check.get("ok"), check.get("reason")
+    res = sign_player_to_team(
+        target,
+        team,
+        league,
+        2025,
+        {"aav_m": 8.5, "years": 4, "context": "re_sign", "force": True},
+    )
+    assert res.get("ok"), res.get("reason")
+
+
 def test_resign_existing_player_does_not_count_extra_roster_spot():
     from app.sim_engine.economy.cap_engine import can_sign_player
     from services.contract_economy import sign_player_to_team

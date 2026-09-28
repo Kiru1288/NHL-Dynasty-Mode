@@ -2238,7 +2238,12 @@ def start_franchise(
     try:
         from app.sim_engine.league_hierarchy_bootstrap import bootstrap_full_league_hierarchy
 
-        bootstrap_full_league_hierarchy(league, sim.rng, season_year=season_y)
+        bootstrap_full_league_hierarchy(
+            league,
+            sim.rng,
+            season_year=season_y,
+            fast_depth=(universe == "real_nhl"),
+        )
         if universe == "real_nhl":
             from services.real_nhl_roster_importer import (
                 enforce_opening_night_cap_compliance,
@@ -2248,13 +2253,15 @@ def start_franchise(
             for tm in teams:
                 trim_team_roster_to_nhl_limit(tm)
             try:
-                from services.brady_tkachuk_chaos import (
-                    apply_brady_chaos_to_league,
-                    inject_brady_storylines,
-                )
+                import_meta = getattr(league, "real_nhl_import_meta", None) or {}
+                if not import_meta.get("fast_import"):
+                    from services.brady_tkachuk_chaos import (
+                        apply_brady_chaos_to_league,
+                        inject_brady_storylines,
+                    )
 
-                apply_brady_chaos_to_league(teams)
-                inject_brady_storylines(session, team_abbr="OTT")
+                    apply_brady_chaos_to_league(teams)
+                    inject_brady_storylines(session, team_abbr="OTT")
             except Exception as brady_err:
                 session.notifications.append(f"Brady chaos skipped: {brady_err}")
         npl = len(getattr(league, "players", None) or [])
@@ -3373,6 +3380,18 @@ def _ovr_weight(p: Any) -> float:
 
 def _player_role_usage_mult(p: Any) -> float:
     """Approximate TOI/opportunity weighting by lineup role and quality."""
+    li = getattr(p, "_gm_game_line_idx", None)
+    if li is not None:
+        try:
+            idx = max(0, min(3, int(li)))
+            line_mult = (2.35, 1.65, 0.92, 0.58)[idx]
+            drift = float(getattr(p, "_gm_toi_drift", 0.0) or 0.0)
+            return max(0.35, line_mult * (1.0 + max(-0.12, min(0.12, drift))))
+        except (TypeError, ValueError):
+            pass
+    # Ignore stale line_role when no deployed line index — use neutral usage.
+    if li is None and getattr(p, "_gm_game_pair_idx", None) is None:
+        return 0.92
     role_raw = str(
         getattr(p, "line_role", None)
         or getattr(p, "role", None)
@@ -6795,16 +6814,31 @@ def _serialize_player_row(
                 row["conduct_incident"] = serialize_incident_for_ui(inc)
     except Exception:
         pass
-    if include_ratings:
-        row["rating_groups"] = _rating_groups_for_player(p)
+    dynasty_tagged = bool(
+        getattr(p, "dynasty_ratings_import", False)
+        or str(getattr(p, "real_nhl_rating_note", "") or "") == "dynasty_txt"
+    )
+    if include_ratings or dynasty_tagged:
         try:
-            from app.sim_engine.entities.chapter_attributes import serialize_chapter_profile_for_api  # noqa: WPS433
+            from services.dynasty_ratings_parser import ensure_dynasty_chapter_profile_on_player  # noqa: WPS433
 
-            chapter_payload = serialize_chapter_profile_for_api(p)
-            if chapter_payload:
-                row["chapter_profile"] = chapter_payload
+            ensure_dynasty_chapter_profile_on_player(
+                p,
+                team=_team,
+                roster_kind=roster_kind,
+            )
         except Exception:
             pass
+    try:
+        from app.sim_engine.entities.chapter_attributes import serialize_chapter_profile_for_api  # noqa: WPS433
+
+        chapter_payload = serialize_chapter_profile_for_api(p)
+        if chapter_payload:
+            row["chapter_profile"] = chapter_payload
+    except Exception:
+        pass
+    if include_ratings:
+        row["rating_groups"] = _rating_groups_for_player(p)
     try:
         from app.sim_engine.franchise.storyline_conduct import (  # noqa: WPS433
             get_base_ovr_display,
@@ -7556,6 +7590,12 @@ def _build_roster_browser(
             "counts": {},
         }
     uid = str(user_team_id) if user_team_id is not None else ""
+    season_year = int(
+        getattr(league, "season_year", None)
+        or getattr(league, "current_season", None)
+        or getattr(franchise_session, "season_year", None)
+        or 2025
+    )
     orgs: List[Dict[str, Any]] = []
     for t in getattr(league, "teams", None) or []:
         raw_tid = getattr(t, "team_id", None)
@@ -7563,10 +7603,24 @@ def _build_roster_browser(
             raw_tid = getattr(t, "id", None)
         tid = str(raw_tid) if raw_tid is not None else ""
         is_user = bool(uid) and tid == uid
+        cap_summary: Dict[str, Any] = {}
+        try:
+            from services.contract_economy import get_team_cap_snapshot_full
+
+            cap_summary = get_team_cap_snapshot_full(
+                t,
+                league,
+                sim,
+                season_year=season_year,
+                calendar_cursor=int(getattr(league, "calendar_cursor", 0) or 0),
+            )
+        except Exception:
+            cap_summary = {}
         orgs.append(
             {
                 "team_id": tid,
                 "name": _display_team(t),
+                "cap_summary": cap_summary,
                 "nhl": _rows_from_players_list(
                     getattr(t, "roster", None),
                     include_ratings=is_user,
@@ -8112,6 +8166,22 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
     league = getattr(sim, "league", None)
     if league is None:
         return {"entries": [], "subtitle": "", "total": 0}
+    try:
+        from app.sim_engine.league_hierarchy_bootstrap import (
+            development_league_player_count,
+            ensure_development_leagues_for_draft_board,
+        )
+
+        if development_league_player_count(league) <= 0:
+            anchor = int(getattr(session, "season_calendar_year", 0) or 0)
+            boot_rng = getattr(sim, "rng", None) or random.Random(anchor or 42)
+            if ensure_development_leagues_for_draft_board(league, boot_rng, season_year=anchor):
+                session._cached_draft_class_rankings = None
+                session._cached_draft_class_hud_payload = None
+                session._draft_class_detail_cache = None
+                session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
+    except Exception:
+        pass
     # One-time repair: older franchises shaped #1 overalls into the low-50s while
     # "nhl_floor" depth sat higher. Bring pipeline stars up to realistic draft OVRs.
     try:
@@ -10917,15 +10987,77 @@ def _franchise_enqueue_critical_notice(
     )
 
 
+def _franchise_refresh_strength_map(session: FranchiseSession) -> None:
+    """Rebuild team strength from current rosters/lines (trades otherwise use stale preseason map)."""
+    sim = getattr(session, "sim", None)
+    league = getattr(sim, "league", None) if sim is not None else None
+    teams = list(getattr(league, "teams", None) or [])
+    if sim is None or not teams:
+        return
+    try:
+        session.strength_map = sim._build_strength_map(teams)
+    except Exception:
+        pass
+
+
+def _franchise_bootstrap_scoring_gravity(session: FranchiseSession, *, force: bool = False) -> None:
+    """
+    Franchise calendar sim never calls simulate_league_season(); without this,
+    _scoring_elite_player_ids and historic/surge scoring seasons stay empty.
+    """
+    sim = getattr(session, "sim", None)
+    league = getattr(sim, "league", None) if sim is not None else None
+    teams = list(getattr(league, "teams", None) or [])
+    if sim is None or not teams:
+        return
+    if force:
+        _franchise_refresh_strength_map(session)
+    sy = int(
+        getattr(session, "season_calendar_year", 0)
+        or getattr(session, "season_year", 0)
+        or getattr(league, "season_year", 0)
+        or 2025
+    )
+    stamped = getattr(session, "_scoring_gravity_bootstrap_year", None)
+    if not force and stamped == sy:
+        return
+    try:
+        sim._refresh_league_scoring_elite_set(teams)
+        sim._roll_historic_scoring_seasons(teams, sim.rng, sy)
+        session._scoring_gravity_bootstrap_year = sy
+    except Exception:
+        pass
+
+
+def _franchise_refresh_scoring_elite_pool(session: FranchiseSession) -> None:
+    """Cheap mid-season refresh so trades/call-ups don't leave the elite pool stale."""
+    sim = getattr(session, "sim", None)
+    league = getattr(sim, "league", None) if sim is not None else None
+    teams = list(getattr(league, "teams", None) or [])
+    if sim is None or not teams:
+        return
+    try:
+        sim._refresh_league_scoring_elite_set(teams)
+    except Exception:
+        pass
+    _franchise_refresh_strength_map(session)
+
+
 def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -> None:
     """Waivers / trades / call-ups (SimEngine helpers) before the day's games — mutates league rosters."""
     if int(getattr(session, "_last_socio_tick_idx", -99)) == int(calendar_idx):
         return
-    # Bulk calendar advance: socio/trades dominate wall time. Keep features by
-    # running on a throttle (every 5th day during multi-day/season sims).
+    if str(getattr(session, "phase", "") or "") in ("regular", "preseason"):
+        _franchise_bootstrap_scoring_gravity(session)
+        last_elite = int(getattr(session, "_scoring_elite_refresh_idx", -99) or -99)
+        if int(calendar_idx) - last_elite >= 14:
+            _franchise_refresh_scoring_elite_pool(session)
+            session._scoring_elite_refresh_idx = int(calendar_idx)
+    # Bulk calendar advance: socio/trades dominate wall time. Throttle waivers/roster
+    # pressure, but compensate trade cadence on the days we do run (see engine).
     bulk = bool(getattr(session, "_bulk_calendar_advance", False))
     light_bulk = bulk and bool(getattr(session, "_light_game_stat_accumulation", False))
-    socio_gap = 10 if light_bulk else 8
+    socio_gap = 4 if light_bulk else 8
     if bulk and not bool(getattr(session, "_bulk_run_socio_economics", False)):
         last_run = int(getattr(session, "_bulk_socio_last_idx", -99) or -99)
         if (int(calendar_idx) - last_run) < socio_gap:
@@ -10976,6 +11108,14 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
             from services.transcendent_tank_behavior import apply_tank_daily_behavior
 
             apply_tank_daily_behavior(session, sim, teams, rng, news_tmp, ctr)
+        try:
+            setattr(
+                league,
+                "_franchise_bulk_trade_day_multiplier",
+                int(socio_gap) if bulk else 1,
+            )
+        except Exception:
+            pass
         sim._season_daily_socio_economics(rng, int(calendar_idx), max_d, st, teams, news_tmp, ctr)
         socio_ok = True
     except Exception:
@@ -11049,6 +11189,55 @@ def _maybe_roll_storyline_arc(session: FranchiseSession, day_meta: Dict[str, Any
     return
 
 
+def _canonical_lineup_player_id(player: Any) -> str:
+    try:
+        from app.sim_engine.systems.chemistry import _canonical_player_id  # noqa: WPS433
+
+        return _canonical_player_id(player) or str(getattr(player, "id", "") or "")
+    except Exception:
+        raw = str(getattr(player, "id", "") or "")
+        return f"NHL_{raw}" if raw.isdigit() else raw
+
+
+def _synthetic_even_strength_lines_for_team(team: Any) -> Dict[str, Any]:
+    """OVR depth chart for CPU clubs (and user when no saved sheet) — same deploy path as Edit Lines."""
+    skaters = [p for p in getattr(team, "roster", None) or [] if _pos_str(p).upper() != "G"]
+    fw = [p for p in skaters if _pos_str(p).upper() not in ("D", "LD", "RD")]
+    defs = [p for p in skaters if _pos_str(p).upper() in ("D", "LD", "RD")]
+    fw.sort(key=lambda p: -_player_ovr99(p))
+    defs.sort(key=lambda p: -_player_ovr99(p))
+    goalies = sorted(
+        [p for p in getattr(team, "roster", None) or [] if _pos_str(p).upper() == "G"],
+        key=lambda p: -_player_ovr99(p),
+    )
+    forwards: List[Dict[str, Any]] = []
+    for n in range(4):
+        chunk = fw[n * 3 : (n + 1) * 3]
+        slots = {"LW": "", "C": "", "RW": ""}
+        if len(chunk) >= 1:
+            slots["LW"] = _canonical_lineup_player_id(chunk[0])
+        if len(chunk) >= 2:
+            slots["C"] = _canonical_lineup_player_id(chunk[1])
+        if len(chunk) >= 3:
+            slots["RW"] = _canonical_lineup_player_id(chunk[2])
+        forwards.append({"id": f"f{n + 1}", "name": f"Line {n + 1}", "slots": slots})
+    defense: List[Dict[str, Any]] = []
+    for n in range(3):
+        chunk = defs[n * 2 : (n + 1) * 2]
+        slots = {"LD": "", "RD": ""}
+        if len(chunk) >= 1:
+            slots["LD"] = _canonical_lineup_player_id(chunk[0])
+        if len(chunk) >= 2:
+            slots["RD"] = _canonical_lineup_player_id(chunk[1])
+        defense.append({"id": f"d{n + 1}", "name": f"Pair {n + 1}", "slots": slots})
+    gslots = {"Starter": "", "Backup": ""}
+    if goalies:
+        gslots["Starter"] = _canonical_lineup_player_id(goalies[0])
+    if len(goalies) > 1:
+        gslots["Backup"] = _canonical_lineup_player_id(goalies[1])
+    return {"forwards": forwards, "defense": defense, "goalies": [{"id": "g1", "name": "Goalies", "slots": gslots}]}
+
+
 def _attach_franchise_saved_lineups(
     session: FranchiseSession,
     home: Any,
@@ -11058,7 +11247,7 @@ def _attach_franchise_saved_lineups(
     away_id: str,
     user_tid: str,
 ) -> None:
-    """Attach Edit Lines / PP / PK payloads onto the user team for game deployment."""
+    """Attach line payloads for both teams — user sheet or OVR depth chart per club."""
     for tm in (home, away):
         if tm is None:
             continue
@@ -11071,7 +11260,7 @@ def _attach_franchise_saved_lineups(
 
     lines_root = getattr(session, "lines", None)
     if not isinstance(lines_root, dict):
-        return
+        lines_root = {}
 
     def _payload_for(unit_key: str) -> Optional[Any]:
         block = lines_root.get(unit_key)
@@ -11080,27 +11269,31 @@ def _attach_franchise_saved_lineups(
         inner = block.get("lines")
         return inner if inner is not None else block
 
-    even = _payload_for("even_strength")
-    pp = _payload_for("power_play")
-    pk = _payload_for("penalty_kill")
-    if even is None and pp is None and pk is None:
-        return
-
+    even_user = _payload_for("even_strength")
+    pp_user = _payload_for("power_play")
+    pk_user = _payload_for("penalty_kill")
     ut = str(user_tid or "")
-    target = None
-    if ut and ut == str(home_id):
-        target = home
-    elif ut and ut == str(away_id):
-        target = away
-    if target is None:
-        return
-    if isinstance(even, dict) and (even.get("forwards") or even.get("defense") or even.get("goalies")):
-        setattr(target, "_franchise_saved_lines", even)
-        setattr(target, "_franchise_saved_lines_bundle", lines_root.get("even_strength"))
-    if pp is not None:
-        setattr(target, "_franchise_saved_pp", pp)
-    if pk is not None:
-        setattr(target, "_franchise_saved_pk", pk)
+
+    for tm, tid in ((home, str(home_id)), (away, str(away_id))):
+        if tm is None:
+            continue
+        is_user = bool(ut and tid == ut)
+        even = even_user if is_user else None
+        if is_user and isinstance(even, dict) and not (
+            even.get("forwards") or even.get("defense") or even.get("goalies")
+        ):
+            even = None
+        if even is None:
+            even = _synthetic_even_strength_lines_for_team(tm)
+        if isinstance(even, dict) and (even.get("forwards") or even.get("defense")):
+            setattr(tm, "_franchise_saved_lines", even)
+            if is_user and even_user is not None:
+                setattr(tm, "_franchise_saved_lines_bundle", lines_root.get("even_strength"))
+        if is_user:
+            if pp_user is not None:
+                setattr(tm, "_franchise_saved_pp", pp_user)
+            if pk_user is not None:
+                setattr(tm, "_franchise_saved_pk", pk_user)
 
 
 def _clear_franchise_saved_lineups(home: Any, away: Any) -> None:
@@ -11243,7 +11436,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
             a_scale = max(0.93, min(1.07, float(sim._roster_injury_depth_penalty(away))))
             _, nh = sim._identity_runner_strength_noise_factors(home)
             _, na = sim._identity_runner_strength_noise_factors(away)
-            noise_scale = 0.5 * (nh + na)
+            noise_scale = min(1.04, 0.5 * (nh + na))
             hg, ag, ot = sim._simulate_game(
                 r,
                 home,
@@ -11323,23 +11516,20 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
             use_light = bool(getattr(session, "_light_game_stat_accumulation", False)) or (
                 manual_hybrid and not is_user_game
             )
-            try:
-                hg, ag, ot = sim._simulate_game(
-                    r,
-                    home,
-                    away,
-                    session.strength_map,
-                    home_strength_scale=h_scale,
-                    away_strength_scale=a_scale,
-                    noise_scale=noise_scale,
-                    is_playoff=is_playoff_slot,
-                    calendar_day=int(d),
-                    home_b2b=hb2b,
-                    away_b2b=ab2b,
-                    light_mode=use_light,
-                )
-            finally:
-                _clear_franchise_saved_lineups(home, away)
+            hg, ag, ot = sim._simulate_game(
+                r,
+                home,
+                away,
+                session.strength_map,
+                home_strength_scale=h_scale,
+                away_strength_scale=a_scale,
+                noise_scale=noise_scale,
+                is_playoff=is_playoff_slot,
+                calendar_day=int(d),
+                home_b2b=hb2b,
+                away_b2b=ab2b,
+                light_mode=use_light,
+            )
 
             world_momentum.update_momentum_after_game(home, hg, ag, r)
             world_momentum.update_momentum_after_game(away, ag, hg, r)
@@ -11447,23 +11637,20 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         _attach_franchise_saved_lineups(
             session, home, away, home_id=hid, away_id=aid, user_tid=user_tid
         )
-        try:
-            hg, ag, ot = sim._simulate_game(
-                r,
-                home,
-                away,
-                session.strength_map,
-                home_strength_scale=h_inj,
-                away_strength_scale=a_inj,
-                noise_scale=id_noise,
-                is_playoff=is_playoff_slot,
-                calendar_day=int(d),
-                home_b2b=hb2b,
-                away_b2b=ab2b,
-                light_mode=bool(getattr(session, "_light_game_stat_accumulation", False)),
-            )
-        finally:
-            _clear_franchise_saved_lineups(home, away)
+        hg, ag, ot = sim._simulate_game(
+            r,
+            home,
+            away,
+            session.strength_map,
+            home_strength_scale=h_inj,
+            away_strength_scale=a_inj,
+            noise_scale=id_noise,
+            is_playoff=is_playoff_slot,
+            calendar_day=int(d),
+            home_b2b=hb2b,
+            away_b2b=ab2b,
+            light_mode=bool(getattr(session, "_light_game_stat_accumulation", False)),
+        )
 
         if world_injuries is not None:
             for tm in (home, away):
@@ -11527,6 +11714,11 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         calendar_day=d,
     )
 
+    # Saved lines were attached for score sim; re-attach before stat allocation so
+    # TOI/G/A follow Edit Lines (they were previously cleared too early).
+    _attach_franchise_saved_lineups(
+        session, home, away, home_id=hid, away_id=aid, user_tid=user_tid
+    )
     box = _accumulate_franchise_game_stats(
         session,
         home=home,
@@ -11543,6 +11735,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         home_b2b=hb2b,
         away_b2b=ab2b,
     )
+    _clear_franchise_saved_lineups(home, away)
     if not isinstance(box, dict):
         box = {}
 
@@ -12589,6 +12782,10 @@ def _split_preseason_from_regular_if_needed(session: FranchiseSession, day_meta:
     setattr(session, "_regular_stats_split_done", True)
     try:
         _snapshot_season_start_ovrs(session)
+    except Exception:
+        pass
+    try:
+        _franchise_bootstrap_scoring_gravity(session, force=True)
     except Exception:
         pass
 
@@ -16305,6 +16502,8 @@ def advance_franchise_bulk(
     # single-day manual advance where the user may inspect box scores.
     use_light_bulk = eff_mode in ("season", "days")
     session._light_game_stat_accumulation = bool(use_light_bulk)
+    if use_light_bulk:
+        _franchise_refresh_strength_map(session)
     session._bulk_calendar_advance = True
     session._bulk_fa_days_pending = 0
     session._bulk_auto_resolve_injuries = bool(auto_resolve_decisions)
@@ -16499,6 +16698,19 @@ def _even_strength_lineup_gaps(session: FranchiseSession) -> List[str]:
             if not str((slots or {}).get(slot) or "").strip():
                 gaps.append(f"Goalie {slot}")
     return gaps
+
+
+def _lineup_toi_consistency_audit(session: FranchiseSession) -> List[Dict[str, Any]]:
+    """Saved Edit Lines depth vs season average TOI for the user team."""
+    user_team = session.team_by_id.get(str(session.user_team_id))
+    if user_team is None:
+        return []
+    try:
+        from app.sim_engine.franchise.trade_stability_engine import audit_lineup_toi_consistency  # noqa: WPS433
+
+        return audit_lineup_toi_consistency(session, user_team)
+    except Exception:
+        return []
 
 
 def _apply_press_storyline_choice(session: FranchiseSession, storyline_id: str, choice_id: str) -> bool:
@@ -17074,20 +17286,17 @@ def _append_decision_feedback(
         )
     )
 def list_teams_summary() -> List[Dict[str, str]]:
-    """Lightweight listing for setup UI (bootstraps engine, then throws away)."""
+    """Lightweight listing for setup UI — static NHL specs, no SimEngine bootstrap."""
     global _TEAM_SUMMARY_CACHE
     if isinstance(_TEAM_SUMMARY_CACHE, list) and _TEAM_SUMMARY_CACHE:
         return list(_TEAM_SUMMARY_CACHE)
     ensure_simengine_path()
-    from app.sim_engine.engine import SimEngine
+    from app.sim_engine.engine import _FRANCHISE_NHL_TEAM_SPECS
 
-    sim = SimEngine(seed=1, debug=False)
-    teams = list(getattr(sim.league, "teams", None) or [])
     out: List[Dict[str, str]] = []
-    for t in teams:
-        raw = getattr(t, "team_id", None)
-        tid = str(raw) if raw is not None else str(rs._team_id(t))
-        out.append({"team_id": tid, "name": _display_team(t)})
+    for i, (city, name, abbr, _div, _conf) in enumerate(_FRANCHISE_NHL_TEAM_SPECS):
+        label = f"{city} {name}".strip()
+        out.append({"team_id": str(i), "name": label, "abbr": str(abbr)})
     out.sort(key=lambda x: x["name"])
     _TEAM_SUMMARY_CACHE = list(out)
     return list(out)
@@ -20525,6 +20734,7 @@ def _build_lean_core_section(
                 and not _even_strength_lineup_gaps(session)
             ),
             "lineup_gaps": _even_strength_lineup_gaps(session),
+            "lineup_toi_mismatches": _lineup_toi_consistency_audit(session),
         },
         "last_gm_result": dict(getattr(session, "last_gm_result", None) or {}),
         "showcase_archive": list(getattr(session, "showcase_archive", None) or [])[-24:],
@@ -21073,6 +21283,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
                 and not _even_strength_lineup_gaps(session)
             ),
             "lineup_gaps": _even_strength_lineup_gaps(session),
+            "lineup_toi_mismatches": _lineup_toi_consistency_audit(session),
         },
         "last_gm_result": dict(getattr(session, "last_gm_result", None) or {}),
         "showcase_archive": list(getattr(session, "showcase_archive", None) or [])[-24:],
@@ -21268,11 +21479,53 @@ def save_franchise_lines(session: FranchiseSession, payload: Dict[str, Any]) -> 
         raise ValueError("Lineup payload missing 'lines'")
 
     user_team = session.team_by_id.get(str(session.user_team_id))
+    try:
+        from app.sim_engine.systems.chemistry import _canonical_player_id_from_string  # noqa: WPS433
+    except Exception:
+        def _canonical_player_id_from_string(value: Any) -> str:  # type: ignore[misc]
+            s = str(value or "").strip()
+            return f"NHL_{s}" if s.isdigit() else s
+
     roster_by_id: Dict[str, Any] = {}
     for p in getattr(user_team, "roster", None) or []:
         pid = str(getattr(p, "id", "") or "")
-        if pid:
-            roster_by_id[pid] = p
+        if not pid:
+            continue
+        roster_by_id[pid] = p
+        canon = _canonical_player_id_from_string(pid)
+        if canon:
+            roster_by_id[canon] = p
+        if canon.startswith("NHL_"):
+            bare = canon.replace("NHL_", "", 1)
+            if bare:
+                roster_by_id[bare] = p
+
+    def _normalize_line_player_ids(units: Any) -> Any:
+        if isinstance(units, list):
+            out_units = []
+            for unit in units:
+                if not isinstance(unit, dict):
+                    out_units.append(unit)
+                    continue
+                slots = {}
+                for slot, pid in (unit.get("slots") or {}).items():
+                    spid = str(pid or "").strip()
+                    if not spid:
+                        slots[slot] = ""
+                        continue
+                    canon = _canonical_player_id_from_string(spid)
+                    slots[slot] = canon if roster_by_id.get(canon) or roster_by_id.get(spid) else spid
+                out_units.append({**unit, "slots": slots})
+            return out_units
+        return units
+
+    if isinstance(lines, dict):
+        lines = {
+            **lines,
+            "forwards": _normalize_line_player_ids(lines.get("forwards")),
+            "defense": _normalize_line_player_ids(lines.get("defense")),
+            "goalies": _normalize_line_player_ids(lines.get("goalies")),
+        }
 
     warnings: List[str] = []
     seen: Dict[str, str] = {}
@@ -21340,6 +21593,12 @@ def save_franchise_lines(session: FranchiseSession, payload: Dict[str, Any]) -> 
         "source": "user",
     }
     session._cached_chemistry_report = None
+    if unit_type == "even_strength" and user_team is not None:
+        for row in _lineup_toi_consistency_audit(session)[:8]:
+            warnings.append(
+                f"TOI vs lines: {row.get('name')} saved as {row.get('line_role')} "
+                f"but averaging {row.get('avg_toi_min')} min (expected ~{row.get('expected_toi_min')} min)"
+            )
     storyline_events = [
         {
             "id": str(s.get("id") or s.get("storyline_id") or ""),

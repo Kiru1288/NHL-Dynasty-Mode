@@ -70,7 +70,7 @@ def test_light_strength_writes_plus_minus_toi_and_goalie_xga():
     sim._gm_skaters = lambda team: list(home_sk if team is home else away_sk)
     sim._gm_goalies = lambda team: list(home_g if team is home else away_g)
     sim._gm_determine_preferred_goalie = lambda gl, team: (gl[0] if gl else None)
-    sim._gm_allocate_conserved_toi = lambda _rng, dressed: {
+    sim._gm_allocate_conserved_toi = lambda _rng, dressed, *args, **kwargs: {
         str(getattr(p, "id")): 900 for p in dressed
     }
     sim._gm_pos_str = lambda p: str(getattr(p, "position", "C"))
@@ -147,7 +147,7 @@ def test_light_ixg_is_per_game_not_triangular():
     sim._gm_skaters = lambda team: list(home_sk if team is home else away_sk)
     sim._gm_goalies = lambda team: list(home_g if team is home else away_g)
     sim._gm_determine_preferred_goalie = lambda gl, team: (gl[0] if gl else None)
-    sim._gm_allocate_conserved_toi = lambda _rng, dressed: {
+    sim._gm_allocate_conserved_toi = lambda _rng, dressed, *args, **kwargs: {
         str(getattr(p, "id")): 900 for p in dressed
     }
     sim._gm_pos_str = lambda p: str(getattr(p, "position", "C"))
@@ -199,7 +199,7 @@ def test_light_possession_spreads_cf_by_talent():
     sim._gm_skaters = lambda team: list(home_sk if team is home else away_sk)
     sim._gm_goalies = lambda team: list(home_g if team is home else away_g)
     sim._gm_determine_preferred_goalie = lambda gl, team: (gl[0] if gl else None)
-    sim._gm_allocate_conserved_toi = lambda _rng, dressed: {
+    sim._gm_allocate_conserved_toi = lambda _rng, dressed, *args, **kwargs: {
         str(getattr(p, "id")): (1200 if int(str(getattr(p, "id"))[1:]) < 3 else 700) for p in dressed
     }
     sim._gm_pos_str = lambda p: str(getattr(p, "position", "C"))
@@ -259,7 +259,7 @@ def test_light_d_cf_tracks_team_share():
     sim._gm_skaters = lambda team: list(home_sk if team is home else away_sk)
     sim._gm_goalies = lambda team: list(home_g if team is home else away_g)
     sim._gm_determine_preferred_goalie = lambda gl, team: (gl[0] if gl else None)
-    sim._gm_allocate_conserved_toi = lambda _rng, dressed: {
+    sim._gm_allocate_conserved_toi = lambda _rng, dressed, *args, **kwargs: {
         str(getattr(p, "id")): 900 for p in dressed
     }
     sim._gm_pos_str = lambda p: str(getattr(p, "position", "C"))

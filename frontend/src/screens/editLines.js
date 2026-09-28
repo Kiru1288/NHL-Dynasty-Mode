@@ -1688,6 +1688,14 @@ function EvenStrengthLines(props) {
     for (const group of GROUPS) for (const line of lineState[group] || []) result[`${group}:${line.id}`] = unitWarnings(line, group, playerMap, chemReport, duplicateIds);
     return result;
   }, [lineState, playerMap, chemReport, duplicateIds]);
+  const seasonToiWarnings = useMemo(() => {
+    const rows = franchiseState?.flags?.lineup_toi_mismatches || [];
+    return rows.map((row) => ({
+      key: `toi-${row.player_id || row.name}`,
+      text: `${row.name}: saved as ${row.line_role}, but season TOI is ${row.avg_toi_min} min/game (expected ~${row.expected_toi_min} min for that line).`,
+      type: "toi",
+    }));
+  }, [franchiseState?.flags?.lineup_toi_mismatches]);
   const validation = useMemo(() => validateLineup(lineState, playerMap), [lineState, playerMap]);
   const selectedLine = useMemo(() => lineState[selectedUnit.group]?.find((line) => line.id === selectedUnit.lineId) || lineState[selectedUnit.group]?.[0] || null, [lineState, selectedUnit]);
   const selectedSlot = useMemo(() => findSlot(lineState, selectedSlotKey), [lineState, selectedSlotKey]);
@@ -1696,6 +1704,10 @@ function EvenStrengthLines(props) {
   const selectedChemistry = useMemo(() => chemistryByUnit[`${selectedUnit.group}:${selectedLine?.id}`] || calculateUnitChemistry([], "forward", chemReport), [chemistryByUnit, selectedUnit, selectedLine, chemReport]);
   const selectedLinks = useMemo(() => linksByUnit[`${selectedUnit.group}:${selectedLine?.id}`] || [], [linksByUnit, selectedUnit, selectedLine]);
   const selectedWarnings = useMemo(() => warningsByUnit[`${selectedUnit.group}:${selectedLine?.id}`] || validation.errors, [warningsByUnit, selectedUnit, selectedLine, validation.errors]);
+  const inspectorWarnings = useMemo(
+    () => (tab === "warnings" ? [...seasonToiWarnings, ...selectedWarnings] : selectedWarnings),
+    [tab, seasonToiWarnings, selectedWarnings],
+  );
   const focusSlot = useMemo(() => selectedSlot?.slot || Object.entries(selectedLine?.slots || {}).find(([, id]) => !id)?.[0] || Object.keys(selectedLine?.slots || {})[0] || null, [selectedSlot, selectedLine]);
 
   const filteredPool = useMemo(() => {
@@ -2081,7 +2093,7 @@ function EvenStrengthLines(props) {
           selectedSlot={selectedSlot}
           playerMap={playerMap}
           chemistry={selectedChemistry}
-          warnings={selectedWarnings}
+          warnings={inspectorWarnings}
           unitPlayers={unitPlayers}
           unitLinks={selectedLinks}
           comparisonPlayers={comparisonPlayers}

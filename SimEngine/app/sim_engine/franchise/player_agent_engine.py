@@ -225,14 +225,29 @@ def get_player_agent(player: Any, session: Optional[Any] = None) -> Dict[str, An
     return ensure_player_agent(player, session)
 
 
+def agent_deal_difficulty(agent: Dict[str, Any]) -> Tuple[str, str]:
+    """Public GM-facing negotiator temperament (hard / medium / easy)."""
+    neg = str(agent.get("negotiation") or "").lower()
+    patience = float(agent.get("patience", 0.5) or 0.5)
+    if neg in ("demanding", "aggressive") or patience < 0.34:
+        return "hard", "Hard negotiator"
+    if neg in ("patient", "stable") or patience >= 0.66:
+        return "easy", "Easy negotiator"
+    return "medium", "Balanced negotiator"
+
+
 def agent_public_view(player: Any, session: Optional[Any] = None) -> Dict[str, Any]:
     agent = ensure_player_agent(player, session)
+    tier, tier_label = agent_deal_difficulty(agent)
     return {
         "id": agent.get("id"),
         "name": agent.get("name"),
         "agency": agent.get("agency"),
         "style": agent.get("style"),
         "style_label": agent.get("style_label") or _STYLE_LABELS.get(str(agent.get("style")), ""),
+        "negotiation": agent.get("negotiation"),
+        "deal_difficulty": tier,
+        "deal_difficulty_label": tier_label,
     }
 
 

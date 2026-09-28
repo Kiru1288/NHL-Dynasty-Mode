@@ -803,35 +803,7 @@ function collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganiz
 
   const orgName = userOrganization?.name || franchiseState?.team?.name || "Organization";
 
-  (userOrganization?.ahl || EMPTY_ARRAY).forEach((player) => {
-    const affiliateName = safeStr(
-      pickFirstDefined(
-        player?.affiliate_team_name,
-        player?.season_stats?.team_name,
-        player?.season_stats?.team,
-        player?.team_name,
-        player?.teamName
-      ),
-      ""
-    );
-    push(player, {
-      league: "AHL",
-      team_name: affiliateName || orgName,
-      teamName: affiliateName || orgName,
-      affiliate_team_name: affiliateName || undefined,
-      pipeline_level: "AHL",
-    });
-  });
-
-  (userOrganization?.echl || EMPTY_ARRAY).forEach((player) => {
-    push(player, {
-      league: "ECHL",
-      team_name: player.team_name || orgName,
-      pipeline_level: "ECHL",
-    });
-  });
-
-  // Drafted prospects the club holds rights to but who are not on a pro roster.
+  // Rights Held = unsigned / junior pipeline only — not AHL or ECHL (use Organization → AHL/ECHL).
   (userOrganization?.prospects || EMPTY_ARRAY).forEach((player) => {
     const path = safeStr(player?.development_path || player?.post_draft_league, "");
     push(player, {
@@ -841,13 +813,14 @@ function collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganiz
     });
   });
 
+  const uid = safeStr(userTeamId, "").toLowerCase();
   (rb?.development_leagues || EMPTY_ARRAY).forEach((league) => {
     const leagueCode = league?.league_code || league?.league_name || "DEV";
     const leagueDisplay = formatProspectLeague(league);
 
     (league?.teams || EMPTY_ARRAY).forEach((team) => {
       (team?.players || EMPTY_ARRAY).forEach((player) => {
-        if (!isUserOwnedProspect(player, userTeamId)) return;
+        if (uid && !isUserOwnedProspect(player, userTeamId)) return;
 
         const ctx = {
           ...player,
@@ -3325,78 +3298,95 @@ function normalizeDraftTrend(row) {
   };
 }
 
-function comparePlayers(a, b, sortKey) {
-  const nameA = safeStr(a?.name, "").toLowerCase();
-  const nameB = safeStr(b?.name, "").toLowerCase();
-
-  const get = (player, path, fallback = 0) => {
-    if (!player) return fallback;
-    const parts = String(path).split(".");
-    let cur = player;
-
-    for (const part of parts) {
-      cur = cur?.[part];
-      if (cur === undefined || cur === null) return fallback;
-    }
-
-    return safeNum(cur, fallback);
+function buildPlayerSortFields(player) {
+  const stats = player?.season_stats || EMPTY_OBJECT;
+  const contract = player?.contract || EMPTY_OBJECT;
+  const asset = player?.asset || EMPTY_OBJECT;
+  return {
+    name: safeStr(player?.name, "").toLowerCase(),
+    ovr: safeNum(player?.ovr, 0),
+    trueOverall: safeNum(player?.trueOverall, 0),
+    potentialScore: safeNum(player?.potentialScore, 0),
+    age: safeNum(player?.age, 0),
+    morale: safeNum(player?.morale, 0),
+    fatigue: safeNum(player?.fatigue, 0),
+    pts: safeNum(stats.pts, 0),
+    goals: safeNum(stats.g, 0),
+    assists: safeNum(stats.a, 0),
+    ppg: safeNum(stats.ppg, 0),
+    capHit: safeNum(contract.capHit, 0),
+    term: safeNum(contract.term, 0),
+    assetScore: safeNum(asset.score, 0),
   };
+}
 
+function comparePlayerSortFields(a, b, sortKey) {
   switch (sortKey) {
     case "overall_asc":
-      return get(a, "ovr") - get(b, "ovr") || get(a, "age") - get(b, "age");
+      return a.ovr - b.ovr || a.age - b.age;
 
     case "overall_desc":
-      return get(b, "ovr") - get(a, "ovr") || get(a, "age") - get(b, "age");
+      return b.ovr - a.ovr || a.age - b.age;
 
     case "true_overall_desc":
-      return get(b, "trueOverall") - get(a, "trueOverall") || get(b, "ovr") - get(a, "ovr");
+      return b.trueOverall - a.trueOverall || b.ovr - a.ovr;
 
     case "potential_score_desc":
-      return get(b, "potentialScore") - get(a, "potentialScore") || get(a, "age") - get(b, "age");
+      return b.potentialScore - a.potentialScore || a.age - b.age;
 
     case "age_asc":
-      return get(a, "age") - get(b, "age") || get(b, "ovr") - get(a, "ovr");
+      return a.age - b.age || b.ovr - a.ovr;
 
     case "age_desc":
-      return get(b, "age") - get(a, "age") || get(b, "ovr") - get(a, "ovr");
+      return b.age - a.age || b.ovr - a.ovr;
 
     case "name_desc":
-      return nameB.localeCompare(nameA);
+      return b.name.localeCompare(a.name);
 
     case "name_asc":
-      return nameA.localeCompare(nameB);
+      return a.name.localeCompare(b.name);
 
     case "points_desc":
-      return get(b, "season_stats.pts") - get(a, "season_stats.pts") || get(b, "season_stats.g") - get(a, "season_stats.g");
+      return b.pts - a.pts || b.goals - a.goals;
 
     case "goals_desc":
-      return get(b, "season_stats.g") - get(a, "season_stats.g") || get(b, "season_stats.pts") - get(a, "season_stats.pts");
+      return b.goals - a.goals || b.pts - a.pts;
 
     case "assists_desc":
-      return get(b, "season_stats.a") - get(a, "season_stats.a") || get(b, "season_stats.pts") - get(a, "season_stats.pts");
+      return b.assists - a.assists || b.pts - a.pts;
 
     case "ppg_desc":
-      return get(b, "season_stats.ppg") - get(a, "season_stats.ppg") || get(b, "season_stats.pts") - get(a, "season_stats.pts");
+      return b.ppg - a.ppg || b.pts - a.pts;
 
     case "morale_desc":
-      return get(b, "morale") - get(a, "morale") || get(b, "ovr") - get(a, "ovr");
+      return b.morale - a.morale || b.ovr - a.ovr;
 
     case "fatigue_desc":
-      return get(b, "fatigue") - get(a, "fatigue") || get(b, "ovr") - get(a, "ovr");
+      return b.fatigue - a.fatigue || b.ovr - a.ovr;
 
     case "salary_desc":
-      return get(b, "contract.capHit") - get(a, "contract.capHit") || get(b, "ovr") - get(a, "ovr");
+      return b.capHit - a.capHit || b.ovr - a.ovr;
 
     case "term_desc":
-      return get(b, "contract.term") - get(a, "contract.term") || get(b, "contract.capHit") - get(a, "contract.capHit");
+      return b.term - a.term || b.capHit - a.capHit;
 
     case "asset_value_desc":
-      return get(b, "asset.score") - get(a, "asset.score") || get(b, "potentialScore") - get(a, "potentialScore");
+      return b.assetScore - a.assetScore || b.potentialScore - a.potentialScore;
 
     default:
-      return get(b, "ovr") - get(a, "ovr") || get(a, "age") - get(b, "age");
+      return b.ovr - a.ovr || a.age - b.age;
   }
+}
+
+function comparePlayers(a, b, sortKey) {
+  return comparePlayerSortFields(buildPlayerSortFields(a), buildPlayerSortFields(b), sortKey);
+}
+
+function sortPlayersByKey(rows, sortKey) {
+  if (!rows || rows.length <= 1) return rows || EMPTY_ARRAY;
+  const keyed = rows.map((player) => ({ player, fields: buildPlayerSortFields(player) }));
+  keyed.sort((a, b) => comparePlayerSortFields(a.fields, b.fields, sortKey));
+  return keyed.map((entry) => entry.player);
 }
 
 function statLineForPlayer(player) {
@@ -4575,6 +4565,7 @@ function PlayerOverviewPanel({ player, franchiseState }) {
   const chapterRows = chapterAttributeRows(player);
   const { strengths, concerns } = buildStrengthsConcerns(player);
   const tradeConcern = player.tradeStabilityConcern || resolvePlayerTradeStabilityConcern(player, franchiseState);
+  const careerAwards = Array.isArray(player.career_awards) ? player.career_awards : EMPTY_ARRAY;
   const measuredToi = safeNumOrNull(
     pickFirstDefined(player.explicitMinutes, getAverageTOIMinutes({ ...stats, gp }), stats.toi, stats.average_toi, stats.avg_toi)
   );
@@ -4686,6 +4677,8 @@ function PlayerOverviewPanel({ player, franchiseState }) {
           <p className="nhlrost-muted-text">{tradeConcern.title}</p>
         </article>
       ) : null}
+
+      <CareerAwardsCard awards={careerAwards} showWhenEmpty zoneLabel="Dossier" />
 
       <article className="nhlrost-profile-zone nhlrost-profile-zone--performance">
         <header className="nhlrost-profile-zone__head">
@@ -5656,19 +5649,23 @@ function CareerSeasonsTable({ seasons, isGoalie }) {
   );
 }
 
-function CareerAwardsCard({ awards }) {
-  if (!Array.isArray(awards) || !awards.length) return null;
+function CareerAwardsCard({ awards, showWhenEmpty = false, zoneLabel = "Career" }) {
+  const rows = Array.isArray(awards) ? awards : [];
+  if (!rows.length && !showWhenEmpty) return null;
 
   return (
     <article className="nhlrost-panel">
       <header className="nhlrost-panel__head">
         <div>
-          <p>Career</p>
+          <p>{zoneLabel}</p>
           <h3>Awards</h3>
         </div>
       </header>
+      {!rows.length ? (
+        <p className="nhlrost-muted-text">No NHL trophies or selections recorded yet.</p>
+      ) : null}
       <ul className="nhlrost-award-list">
-        {awards.map((award, index) => {
+        {rows.map((award, index) => {
           if (typeof award === "string" || typeof award === "number") {
             return <li key={index}>{award}</li>;
           }
@@ -6515,6 +6512,7 @@ export function RosterScreen() {
     refreshFranchise,
     setPendingMeetingPlayerId,
     hydrateFranchiseNarrative,
+    hydrateFranchiseHeavyState,
   } = gameUI;
 
   useEffect(() => {
@@ -6522,6 +6520,16 @@ export function RosterScreen() {
   }, [hydrateFranchiseNarrative]);
 
   const rb = franchiseState?.roster_browser || EMPTY_OBJECT;
+
+  useEffect(() => {
+    if (!hydrateFranchiseHeavyState) return undefined;
+    const orgs = rb?.organizations;
+    const hasOrgs = Array.isArray(orgs) && orgs.length > 0;
+    const hasDev = Array.isArray(rb?.development_leagues) && rb.development_leagues.length > 0;
+    if (hasOrgs || hasDev) return undefined;
+    hydrateFranchiseHeavyState({ includeRosterBrowser: true, includeDraftClassRankings: false, includeDraftClassHud: false });
+    return undefined;
+  }, [hydrateFranchiseHeavyState, franchiseState?.session_id, rb?.organizations, rb?.development_leagues]);
   const draftBoard = franchiseState?.draft_class_rankings || EMPTY_OBJECT;
   const organizations = useMemo(
     () => rb?.organizations || EMPTY_ARRAY,
@@ -6612,16 +6620,32 @@ export function RosterScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    getStatsCentral()
-      .then((payload) => {
-        if (cancelled || !payload || typeof payload !== "object") return;
-        setStatsCentralPayload(payload);
-      })
-      .catch(() => {
-        if (!cancelled) setStatsCentralPayload(null);
-      });
+    const load = () => {
+      if (cancelled) return;
+      getStatsCentral()
+        .then((payload) => {
+          if (cancelled || !payload || typeof payload !== "object") return;
+          setStatsCentralPayload(payload);
+        })
+        .catch(() => {
+          if (!cancelled) setStatsCentralPayload(null);
+        });
+    };
+    let idleId;
+    let timeoutId;
+    if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+      idleId = window.requestIdleCallback(load, { timeout: 4000 });
+    } else {
+      timeoutId = window.setTimeout(load, 800);
+    }
     return () => {
       cancelled = true;
+      if (idleId != null && typeof window.cancelIdleCallback === "function") {
+        window.cancelIdleCallback(idleId);
+      }
+      if (timeoutId != null) {
+        window.clearTimeout(timeoutId);
+      }
     };
   }, [franchiseState?.session_id, franchiseState?.stats_revision]);
 
@@ -6838,7 +6862,7 @@ export function RosterScreen() {
       return true;
     });
 
-    return [...rows].sort((a, b) => comparePlayers(a, b, sortKey));
+    return sortPlayersByKey(rows, sortKey);
   }, [
     players,
     searchTerm,

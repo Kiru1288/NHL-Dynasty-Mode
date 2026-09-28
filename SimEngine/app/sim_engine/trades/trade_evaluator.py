@@ -250,6 +250,11 @@ def _ai_interest_for_team(
         interest = 0.18
         reasons.append(f"Package net value ({net:.1f}) is too unfavorable")
 
+    if (context or {}).get("cpu_futures_trade") and window == "rebuild":
+        incoming_assets = package.incoming_by_team.get(team_id, [])
+        if any(isinstance(a, DraftPickTradeAsset) for a in incoming_assets):
+            interest = max(interest, 0.64)
+
     # Rebuilder pick protection — soften when the return is a clear premium NHL piece.
     if window == "rebuild":
         for asset in package.outgoing_by_team.get(team_id, []):
@@ -713,6 +718,8 @@ def evaluate_trade_package(
                     # Keep a firm floor, but do not let rebuild thresholds (0.58) block
                     # near-fair ambient depth swaps that already pass fairness_gap.
                     threshold = max(0.50, min(0.55, threshold))
+                    if (ctx or {}).get("cpu_futures_trade"):
+                        threshold = min(threshold, 0.46)
                     if fairness_gap <= CPU_AMBIENT_FAIRNESS_GAP_MAX and interest_level.get(tid, 0.0) >= 0.50:
                         threshold = min(threshold, 0.50)
             if interest_level.get(tid, 0.0) < threshold:

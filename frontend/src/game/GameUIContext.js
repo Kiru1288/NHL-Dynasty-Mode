@@ -800,7 +800,10 @@ export function GameUIProvider({ children }) {
             !Number.isFinite(liveCursor) ||
             boardCursor === liveCursor;
           const hudMatch = !hudIso || !liveIso || hudIso === liveIso || hudIso === String(prev.scouting_as_of_iso || "");
-          skipDraft = revMatch && isoMatch && cursorMatch && hudMatch;
+          const boardEmpty = !(
+            Array.isArray(prev.draft_class_rankings.entries) && prev.draft_class_rankings.entries.length
+          );
+          skipDraft = revMatch && isoMatch && cursorMatch && hudMatch && !boardEmpty;
         }
         if (includeNhlCalendarFull && Array.isArray(prev?.nhl_calendar_full) && prev.nhl_calendar_full.length > 120) {
           skipCalendar = true;
@@ -1064,6 +1067,7 @@ export function GameUIProvider({ children }) {
       primeHubAssets(HUB_WARMUP_STAGES.ENVIRONMENT);
       primeHubAssets(HUB_WARMUP_STAGES.CRESTS);
       primeHubAssets(HUB_WARMUP_STAGES.OPERATIONS);
+      // Do not block the setup → hub transition on roster browser / heavy state warm.
       void awaitHubReady();
       return { ok: true };
     } catch (e) {
@@ -1211,12 +1215,13 @@ export function GameUIProvider({ children }) {
     beginFranchisePhaseTransition("Continuing…");
     setError(null);
     try {
+      const phaseForContinue = String(
+        franchiseState?.phase || franchiseState?.season_phase || ""
+      ).toLowerCase();
       const fromStage = String(
-        franchiseState?.offseason_stage ||
-          (String(franchiseState?.phase || franchiseState?.season_phase || "").toLowerCase() === "post_cup"
-            ? "awards"
-            : "") ||
-          ""
+        phaseForContinue === "post_cup"
+          ? "post_cup"
+          : franchiseState?.offseason_stage || ""
       );
       const res = await continueOffseason({ from_stage: fromStage });
       if (res?.state) {

@@ -185,20 +185,57 @@ class DynastyRatingsRegistry:
         full_key = normalize_player_name(full_name)
         last_key = normalize_player_name(last_name or (full_name.split()[-1] if full_name else ""))
 
-        for key in (full_key, last_key):
-            if not key:
-                continue
-            for entry in pool:
-                if key in entry.lookup_keys:
+        if full_key:
+            primary_hits = [
+                e for e in pool if normalize_player_name(e.raw_name) == full_key
+            ]
+            if len(primary_hits) == 1:
+                return primary_hits[0]
+            key_hits = [e for e in pool if full_key in e.lookup_keys]
+            if len(key_hits) == 1:
+                only = key_hits[0]
+                primary_norm = normalize_player_name(only.raw_name)
+                if " " not in full_key and " " in primary_norm:
+                    pass
+                else:
+                    return only
+            for entry in self.by_name.get(full_key, []):
+                if entry.team_abbr == abbr and entry.level == lvl:
+                    primary_norm = normalize_player_name(entry.raw_name)
+                    if " " not in full_key and " " in primary_norm:
+                        continue
                     return entry
 
-        # Full-name match across keys stored globally (same team only)
-        for entry in self.by_name.get(full_key, []):
-            if entry.team_abbr == abbr and entry.level == lvl:
-                return entry
-        for entry in self.by_name.get(last_key, []):
-            if entry.team_abbr == abbr and entry.level == lvl:
-                return entry
+        if last_key:
+            first_key = ""
+            if full_key and " " in full_key:
+                first_key = full_key.split()[0]
+            if first_key:
+                for entry in pool:
+                    if last_key not in entry.lookup_keys:
+                        continue
+                    entry_first = normalize_player_name(
+                        (entry.raw_name or "").split()[0] if entry.raw_name else ""
+                    )
+                    if entry_first == first_key:
+                        return entry
+            elif not full_key:
+                last_hits = [e for e in pool if last_key in e.lookup_keys]
+                if len(last_hits) == 1:
+                    return last_hits[0]
+                global_last = [
+                    e for e in self.by_name.get(last_key, [])
+                    if e.team_abbr == abbr and e.level == lvl
+                ]
+                if len(global_last) == 1:
+                    return global_last[0]
+
+        if lvl == "nhl" and full_key and " " in full_key:
+            for alt_lvl in ("ahl", "prospect", "echl"):
+                alt_pool = list(self.by_team_level.get((abbr, alt_lvl), []))
+                for entry in alt_pool:
+                    if full_key in entry.lookup_keys:
+                        return entry
         return None
 
     def entries_for_team(self, team_abbr: str, level: str) -> List[DynastyRatingEntry]:
@@ -345,10 +382,16 @@ def apply_overall_patches(registry: DynastyRatingsRegistry, patch_text: str) -> 
     return applied
 
 
+_REGISTRY_CACHE: Optional[DynastyRatingsRegistry] = None
+
+
 def load_dynasty_ratings_registry(
     ratings_path: Optional[Path] = None,
     patches_path: Optional[Path] = None,
 ) -> DynastyRatingsRegistry:
+    global _REGISTRY_CACHE
+    if ratings_path is None and patches_path is None and _REGISTRY_CACHE is not None:
+        return _REGISTRY_CACHE
     rp = ratings_path or DYNASTY_RATINGS_PATH
     pp = patches_path or DYNASTY_PATCHES_PATH
     text = rp.read_text(encoding="utf-8")
@@ -357,10 +400,92 @@ def load_dynasty_ratings_registry(
         patch_text = pp.read_text(encoding="utf-8")
         n = apply_overall_patches(registry, patch_text)
         registry.parse_stats["patches_applied"] = n
+    if ratings_path is None and patches_path is None:
+        _REGISTRY_CACHE = registry
     return registry
 
 
-def apply_dynasty_entry_to_player(player: Any, entry: DynastyRatingEntry, *, seed: Optional[int] = None) -> None:
+def _team_abbr_from_team_obj(team: Any) -> str:
+    if team is None:
+        return ""
+    for attr in ("abbr", "code", "abbreviation", "short_name", "team_abbr"):
+        val = getattr(team, attr, None)
+        if val:
+            return str(val).upper()
+    return ""
+
+
+def _roster_level_from_kind(roster_kind: str) -> str:
+    rk = str(roster_kind or "").lower()
+    if rk == "ahl":
+        return "ahl"
+    if rk == "echl":
+        return "echl"
+    if rk in ("prospect", "prospects"):
+        return "prospect"
+    return "nhl"
+
+
+def _chapter_values_flat(chapters: Dict[str, int]) -> bool:
+    vals = [int(v) for v in (chapters or {}).values() if v is not None]
+    return len(vals) >= 3 and len(set(vals)) <= 1
+
+
+def ensure_dynasty_chapter_profile_on_player(
+    player: Any,
+    *,
+    team: Any = None,
+    roster_kind: str = "",
+) -> bool:
+    """Re-attach dynasty_ratings.txt chapters when profile is missing or collapsed to one number."""
+    try:
+        from app.sim_engine.entities.chapter_attributes import get_player_chapters
+    except Exception:
+        return False
+
+    chapters = get_player_chapters(player)
+    if chapters and not _chapter_values_flat(chapters):
+        return False
+
+    tagged = bool(
+        getattr(player, "dynasty_ratings_import", False)
+        or str(getattr(player, "real_nhl_rating_note", "") or "") == "dynasty_txt"
+    )
+    if not chapters and not tagged:
+        return False
+    if chapters and _chapter_values_flat(chapters) and not tagged:
+        return False
+
+    registry = load_dynasty_ratings_registry()
+    ident = getattr(player, "identity", None)
+    name = str(getattr(ident, "name", None) or getattr(player, "name", "") or "")
+    if not name.strip():
+        return False
+    abbr = _team_abbr_from_team_obj(team)
+    level = _roster_level_from_kind(roster_kind)
+    last = name.split()[-1] if name else ""
+    entry = registry.match_player(abbr, level, name, last_name=last)
+    if entry is None and level != "nhl":
+        entry = registry.match_player(abbr, "nhl", name, last_name=last)
+    if entry is None:
+        return False
+
+    apply_dynasty_entry_to_player(
+        player,
+        entry,
+        seed=getattr(player, "id", None) or getattr(player, "player_id", None),
+        align_rounds=6,
+    )
+    return True
+
+
+def apply_dynasty_entry_to_player(
+    player: Any,
+    entry: DynastyRatingEntry,
+    *,
+    seed: Optional[int] = None,
+    align_rounds: int = 40,
+) -> None:
     """Attach chapter profile from txt and sync legacy sim ratings."""
     from app.sim_engine.entities.chapter_attributes import (
         ensure_player_attribute_profile,
@@ -375,18 +500,18 @@ def apply_dynasty_entry_to_player(player: Any, entry: DynastyRatingEntry, *, see
         regenerate=True,
     )
     sync_legacy_ratings_from_profile(player, overwrite=True)
+    try:
+        player._invalidate_ovr_memo()
+    except Exception:
+        pass
 
     target = float(entry.chapters.get("overall", 75)) / 99.0
     target = max(0.30, min(0.99, target))
-    from app.sim_engine.engine import _nudge_player_ovr_toward
+    # persist_recomputed_ovr between nudges — a stale ovr() memo makes this
+    # loop slam NHL stars to 99 and leave AHL/juniors on the 40 floor.
+    from services.real_nhl_roster_importer import align_attribute_ovr_to_target
 
-    cur = float(player.ovr()) if callable(getattr(player, "ovr", None)) else target
-    for _ in range(40):
-        if abs(cur - target) < 0.005:
-            break
-        _nudge_player_ovr_toward(player, target)
-        cur = float(player.ovr())
-
+    align_attribute_ovr_to_target(player, target, rounds=max(1, int(align_rounds)))
     persist_recomputed_ovr(player)
     try:
         player._invalidate_ovr_memo()
@@ -417,6 +542,21 @@ def _position_from_hint(hint: Optional[str], *, is_goalie: bool = False) -> Any:
     return mapping.get(raw, Position.C)
 
 
+_SPAWN_BIO_REGISTRY_CACHE: Dict[int, Any] = {}
+
+
+def _spawn_bio_registry(as_of_year: int) -> Any:
+    year = int(as_of_year or 2026)
+    cached = _SPAWN_BIO_REGISTRY_CACHE.get(year)
+    if cached is not None:
+        return cached
+    from services.player_bio_parser import load_player_bio_registry
+
+    reg = load_player_bio_registry(as_of=date(year, 9, 15))
+    _SPAWN_BIO_REGISTRY_CACHE[year] = reg
+    return reg
+
+
 def spawn_player_from_dynasty_entry(
     entry: DynastyRatingEntry,
     *,
@@ -425,6 +565,9 @@ def spawn_player_from_dynasty_entry(
     used_names: Set[str],
     league_players: List[Any],
     as_of_year: Optional[int] = None,
+    align_rounds: int = 40,
+    apply_bio: bool = True,
+    bio_registry: Optional[Any] = None,
 ) -> Any:
     """Create a named player from a dynasty txt entry (AHL / prospect pools)."""
     from app.sim_engine.engine import build_role_shaped_ratings
@@ -440,7 +583,6 @@ def spawn_player_from_dynasty_entry(
         UpbringingType,
         assign_skater_archetype,
     )
-    from app.sim_engine.generation.identity_generator import spawn_as_of_year
 
     pos = _position_from_hint(entry.position_hint, is_goalie=entry.is_goalie)
     target_ovr = float(entry.chapters.get("overall", 70)) / 99.0
@@ -449,7 +591,12 @@ def spawn_player_from_dynasty_entry(
     ratings = build_role_shaped_ratings(position=pos, target_ovr=target_ovr, rng=rng)
     age_lo, age_hi = (18, 22) if pool_context == "prospect" else (20, 28)
     age = rng.randint(int(age_lo), int(age_hi))
-    year = spawn_as_of_year(as_of_year)
+    try:
+        year = int(as_of_year or 0)
+    except (TypeError, ValueError):
+        year = 0
+    if year < 2000:
+        year = date.today().year
     birth_year = int(year) - int(age)
     seed = rng.randint(1, 2_000_000_000)
     name = str(entry.raw_name)
@@ -484,13 +631,14 @@ def spawn_player_from_dynasty_entry(
         pool_context=pool_context,
         enforce_floor_on_init=False,
     )
-    apply_dynasty_entry_to_player(player, entry, seed=seed)
-    try:
-        from services.player_bio_parser import apply_player_bio_by_name, load_player_bio_registry
+    apply_dynasty_entry_to_player(player, entry, seed=seed, align_rounds=align_rounds)
+    if apply_bio:
+        try:
+            from services.player_bio_parser import apply_player_bio_by_name
 
-        bio_registry = load_player_bio_registry(as_of=date(int(year), 9, 15))
-        apply_player_bio_by_name(player, bio_registry, as_of_year=year)
-    except Exception:
-        pass
+            registry = bio_registry or _spawn_bio_registry(int(year))
+            apply_player_bio_by_name(player, registry, as_of_year=year)
+        except Exception:
+            pass
     league_players.append(player)
     return player

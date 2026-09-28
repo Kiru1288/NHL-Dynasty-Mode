@@ -20,6 +20,7 @@ import {
 import BurnerPanel from "../components/franchise/social/BurnerPanel";
 import { collectLockerPulse, buildHubStoryTicker, isRoutineLeagueTrade } from "../utils/lockerRoomPulse";
 import { resolveChapterMap, chapterNumericValue } from "../utils/chapterAttributes";
+import "../styles/storylinesTokens.css";
 
 /*
   StorylinesScreen — franchise narrative command center.
@@ -101,6 +102,7 @@ const DEPARTMENTS = [
   { id: "consequences", label: "Fallout", glyph: "⚠" },
   { id: "social", label: "Social", glyph: "◈" },
   { id: "prospect_pools", label: "Prospect Pools", glyph: "▲" },
+  { id: "prospect_leaderboard", label: "Top Prospects", glyph: "★" },
   { id: "insiders", label: "Insiders", glyph: "◇" },
   { id: "press_room", label: "Press Room", glyph: "▤" },
   { id: "archive", label: "Archive", glyph: "▥" },
@@ -195,7 +197,7 @@ function collectDevelopmentLeagueProspects(developmentLeagues, orgIndex) {
   return out;
 }
 
-function buildProspectPoolRankings(organizations, developmentLeagues) {
+function collectLeagueProspectsDeduped(organizations, developmentLeagues) {
   const orgs = asArray(organizations);
   const orgIndex = new Map(
     orgs.map((org) => [str(org.team_id || org.id).toUpperCase(), org])
@@ -219,6 +221,20 @@ function buildProspectPoolRankings(organizations, developmentLeagues) {
   deduped.sort(
     (a, b) => b.potential - a.potential || str(a.name).localeCompare(str(b.name))
   );
+  return deduped;
+}
+
+const LEAGUE_PROSPECT_LEADERBOARD_TOP_N = 75;
+
+function buildLeagueProspectLeaderboard(organizations, developmentLeagues) {
+  return collectLeagueProspectsDeduped(organizations, developmentLeagues)
+    .slice(0, LEAGUE_PROSPECT_LEADERBOARD_TOP_N)
+    .map((p, idx) => ({ ...p, leagueRank: idx + 1 }));
+}
+
+function buildProspectPoolRankings(organizations, developmentLeagues) {
+  const orgs = asArray(organizations);
+  const deduped = collectLeagueProspectsDeduped(organizations, developmentLeagues);
 
   const rankByPlayerId = new Map();
   deduped.forEach((p, idx) => {
@@ -2904,6 +2920,23 @@ export default function StorylinesScreen() {
     return prospectPoolRankings.find((row) => row.team_id === uid) || null;
   }, [prospectPoolRankings, franchiseState?.user_team_id, franchiseState?.userTeamId, franchiseState?.team_id]);
 
+  const leagueProspectLeaderboard = useMemo(
+    () =>
+      buildLeagueProspectLeaderboard(
+        franchiseState?.roster_browser?.organizations,
+        franchiseState?.roster_browser?.development_leagues
+      ),
+    [
+      franchiseState?.roster_browser?.organizations,
+      franchiseState?.roster_browser?.development_leagues,
+      franchiseState?.stats_revision,
+    ]
+  );
+  const userTeamProspectsOnLeaderboard = useMemo(() => {
+    const uid = userTeamId(franchiseState).toUpperCase();
+    return leagueProspectLeaderboard.filter((p) => p.team_id === uid);
+  }, [leagueProspectLeaderboard, franchiseState]);
+
   const redditPulse = useMemo(
     () => fanPulseTrend(narrativeUniverse?.reddit_engagement_pulse),
     [narrativeUniverse]
@@ -3163,7 +3196,7 @@ export default function StorylinesScreen() {
     : [];
 
   return (
-    <div className="nhlcal-sl-root">
+    <div className="nhlcal-sl-root storylines-skin">
       <style>{`
         .nhlcal-sl-root {
           --bg-deep: #030b13;
@@ -4691,6 +4724,100 @@ export default function StorylinesScreen() {
                   </div>
                 </div>
               ) : null}
+            </aside>
+          </div>
+        ) : department === "prospect_leaderboard" ? (
+          <div className="sl-two">
+            <div className="sl-feed">
+              {leagueProspectLeaderboard.length ? (
+                leagueProspectLeaderboard.map((p, idx) => {
+                  const isUser = p.team_id === userTeamId(franchiseState).toUpperCase();
+                  const logo =
+                    resolveFranchiseTeamLogo(
+                      { team_abbrev: p.team_id, abbrev: p.team_id, team_name: p.team_name },
+                      p.team_name || p.team_id
+                    ) || "";
+                  return (
+                    <article
+                      key={p.player_id || `${p.team_id}:${p.name}`}
+                      className="sl-insider"
+                      style={{ animationDelay: `${Math.min(idx, 12) * 20}ms` }}
+                    >
+                      <div className="sl-insider__head">
+                        <strong>
+                          #{p.leagueRank} · {p.name}
+                          {p.age != null ? ` · ${p.age}` : ""}
+                        </strong>
+                        <em>{p.potential} POT</em>
+                      </div>
+                      <p>
+                        Rights held by <strong>{p.team_name || p.team_id}</strong>
+                        {isUser ? " · Your org" : ""}
+                      </p>
+                      <div className="sl-insider__meta">
+                        {logo ? (
+                          <span>
+                            <img src={logo} alt="" width={16} height={16} style={{ verticalAlign: "middle" }} />{" "}
+                            {p.team_id}
+                          </span>
+                        ) : (
+                          <span>{p.team_id}</span>
+                        )}
+                        <span>League-wide potential rank</span>
+                      </div>
+                    </article>
+                  );
+                })
+              ) : (
+                <EmptyPanel
+                  kicker="Top Prospects · quiet"
+                  title="No ranked prospects yet"
+                  body="Individual potential ranks need rights-held prospects with potential data. Start or advance a Real NHL franchise to populate the board."
+                />
+              )}
+            </div>
+            <aside className="sl-rail">
+              <div className="sl-panel">
+                <div className="sl-pulse">
+                  <span>Your org on board</span>
+                  <strong>{userTeamProspectsOnLeaderboard.length}</strong>
+                  <p>
+                    {userTeamProspectsOnLeaderboard[0]
+                      ? `Best: ${userTeamProspectsOnLeaderboard[0].name} (#${userTeamProspectsOnLeaderboard[0].leagueRank} · ${userTeamProspectsOnLeaderboard[0].potential} POT)`
+                      : "No prospects in the top 75 yet"}
+                  </p>
+                </div>
+                <h3>Your pipeline (ranked)</h3>
+                <div className="sl-effects">
+                  {userTeamProspectsOnLeaderboard.length ? (
+                    userTeamProspectsOnLeaderboard.slice(0, 12).map((p) => (
+                      <div key={p.player_id || p.name} className="sl-trend">
+                        <b>{p.leagueRank}</b>
+                        <span>{p.name}</span>
+                        <em>{p.potential} POT</em>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="sl-trend">
+                      <b>—</b>
+                      <span>No ranked prospects</span>
+                      <em />
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="sl-panel">
+                <h3>League top 10</h3>
+                <div className="sl-effects">
+                  {leagueProspectLeaderboard.slice(0, 10).map((p) => (
+                    <div key={p.player_id || p.name} className="sl-trend">
+                      <b>{p.leagueRank}</b>
+                      <span>{p.name}</span>
+                      <em>{p.potential}</em>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </aside>
           </div>
         ) : department === "insiders" ? (

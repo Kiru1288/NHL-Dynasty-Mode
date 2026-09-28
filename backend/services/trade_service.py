@@ -513,16 +513,38 @@ def build_trade_assets_payload(session: Any) -> Dict[str, Any]:
                         except Exception:
                             pass
 
+    cap_kw = {
+        "season_year": int(ctx["season_year"]),
+        "calendar_cursor": int(ctx["calendar_cursor"]),
+        "regular_season_last_index": int(ctx["regular_season_last_index"]),
+    }
+
     for tid, team in (ctx["team_by_id"] or {}).items():
         _repair_mislabeled_affiliate_spcs(team)
-        snap = calculate_team_cap_snapshot(
-            team,
-            league=league,
-            sim=sim,
-            season_label=f"{ctx['season_year']}-{(ctx['season_year'] + 1) % 100:02d}",
-            calendar_cursor=ctx["calendar_cursor"],
-            regular_season_last_index=ctx["regular_season_last_index"],
-        )
+        cap_full: Dict[str, Any] = {}
+        try:
+            from services.contract_economy import sync_team_cap_fields
+
+            cap_full = sync_team_cap_fields(team, league, sim, **cap_kw)
+            snap = dict(cap_full.get("_raw") or {})
+            if not snap:
+                snap = calculate_team_cap_snapshot(
+                    team,
+                    league=league,
+                    sim=sim,
+                    season_label=f"{ctx['season_year']}-{(ctx['season_year'] + 1) % 100:02d}",
+                    calendar_cursor=ctx["calendar_cursor"],
+                    regular_season_last_index=ctx["regular_season_last_index"],
+                )
+        except Exception:
+            snap = calculate_team_cap_snapshot(
+                team,
+                league=league,
+                sim=sim,
+                season_label=f"{ctx['season_year']}-{(ctx['season_year'] + 1) % 100:02d}",
+                calendar_cursor=ctx["calendar_cursor"],
+                regular_season_last_index=ctx["regular_season_last_index"],
+            )
         needs = getattr(team, "needs", None) or needs_model.evaluate(team)
         picks = serialize_team_picks(
             league,
@@ -633,17 +655,31 @@ def build_trade_assets_payload(session: Any) -> Dict[str, Any]:
             "picks": picks,
             "players": player_values,
             "cap": {
-                "usable_cap_space": snap.get("usableCapSpace"),
-                "total_cap_hit": snap.get("totalCapHit"),
-                "upper_limit": snap.get("upperLimit"),
-                "effective_cap_limit": snap.get("effectiveCapLimit"),
-                "ltir_pool": snap.get("ltirPool"),
+                "usable_cap_space": snap.get("usableCapSpace")
+                if snap.get("usableCapSpace") is not None
+                else cap_full.get("usable_cap_space_m"),
+                "total_cap_hit": snap.get("totalCapHit")
+                if snap.get("totalCapHit") is not None
+                else cap_full.get("total_cap_hit_m"),
+                "upper_limit": snap.get("upperLimit")
+                if snap.get("upperLimit") is not None
+                else cap_full.get("upper_limit_m"),
+                "effective_cap_limit": snap.get("effectiveCapLimit")
+                if snap.get("effectiveCapLimit") is not None
+                else cap_full.get("upper_limit_m"),
+                "ltir_pool": snap.get("ltirPool") if snap.get("ltirPool") is not None else cap_full.get("ltir_pool_m"),
                 "is_using_ltir": snap.get("isUsingLTIR"),
                 "projected_deadline_space": snap.get("projectedDeadlineSpace"),
-                "retained_salary": snap.get("retainedSalary"),
+                "retained_salary": snap.get("retainedSalary")
+                if snap.get("retainedSalary") is not None
+                else cap_full.get("retained_salary_m"),
                 "retained_slots_used": snap.get("retainedSlotsUsed"),
                 "retained_slots_max": snap.get("retainedSlotsMax"),
-                "projected_cap_space": snap.get("usableCapSpace"),
+                "projected_cap_space": snap.get("usableCapSpace")
+                if snap.get("usableCapSpace") is not None
+                else cap_full.get("usable_cap_space_m"),
+                "buried_cap_hit": snap.get("buriedCapHit") if snap.get("buriedCapHit") is not None else cap_full.get("buried_cap_hit_m"),
+                "buyout_cap_hit": snap.get("buyoutCapHit") if snap.get("buyoutCapHit") is not None else cap_full.get("buyout_cap_hit_m"),
                 "incoming_cap_supported": True,
             },
             "team_direction": direction,
@@ -690,11 +726,17 @@ def build_trade_market_payload(session: Any) -> Dict[str, Any]:
             "needs_short": _summarize_team_needs(needs, direction).get("needs_short") or [],
         }
 
+    runtime = getattr(league, "cpu_market_runtime", None) or {}
+    adaptive = runtime.get("adaptive_knobs") if isinstance(runtime, dict) else None
+    telemetry = runtime.get("telemetry") if isinstance(runtime, dict) else None
+
     return {
         "market_temperature": temperature,
         "deadline_phase": round(deadline_phase, 3),
         "recent_trades": hist,
         "team_labels": team_labels,
+        "adaptive_market": adaptive if isinstance(adaptive, dict) else None,
+        "market_telemetry": telemetry if isinstance(telemetry, dict) else None,
     }
 
 

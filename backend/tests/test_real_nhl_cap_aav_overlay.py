@@ -48,3 +48,32 @@ def test_merge_prefers_cap_sheet_aav_over_extension_yearly():
     assert merged["shane pinto"]["extension_aav_m"] == 7.5
     assert merged["jordan spence"]["aav_m"] == 1.5
     assert merged["jordan spence"]["years_remaining"] == 1
+    assert merged["jordan spence"].get("extension_years_remaining") == 4
+
+
+def test_merge_keeps_yearly_term_when_cap_aav_matches():
+    yearly = {
+        "drake batherson": {
+            "name": "Drake Batherson",
+            "aav_m": 5.0,
+            "cap_hit_m": 5.0,
+            "years_remaining": 3,
+            "years": 3,
+            "spotrac_id": 9,
+            "source": "real_nhl_spotrac",
+        },
+    }
+    cap = {
+        "drake batherson": {
+            "name": "Drake Batherson",
+            "aav_m": 5.0,
+            "cap_hit_m": 5.0,
+            "years_remaining": 1,
+            "years": 1,
+            "spotrac_id": 9,
+            "source": "real_nhl_spotrac_cap",
+        },
+    }
+    merged = _merge_cap_aav_over_yearly(yearly, cap)
+    assert merged["drake batherson"]["years_remaining"] == 3
+    assert merged["drake batherson"]["aav_m"] == 5.0

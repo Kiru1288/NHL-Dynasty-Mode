@@ -341,6 +341,17 @@
   min-height: 0;
 }
 
+.cap-board-layout--desk > .cap-board-panel {
+  flex: 0 1 36%;
+  min-height: 200px;
+  max-height: 38vh;
+}
+
+.cap-board-layout--desk .cap-nego-dock {
+  flex: 1 1 64%;
+  min-height: min(56vh, 560px);
+}
+
 /* TOOLBAR */
 
 .cap-ledger-toolbar,
@@ -428,12 +439,12 @@
 
 .cap-board-head {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) 72px 76px 118px 76px 178px;
-  gap: 12px;
+  grid-template-columns: minmax(300px, 1fr) 84px 92px 132px 92px 200px;
+  gap: 14px;
   align-items: center;
-  padding: 10px 16px;
+  padding: 12px 18px;
   color: rgba(138, 160, 182, 0.72);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 950;
   letter-spacing: 0.13em;
   text-transform: uppercase;
@@ -487,11 +498,11 @@
 .cap-contract-row {
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) 72px 76px 118px 76px 178px;
-  gap: 12px;
+  grid-template-columns: minmax(300px, 1fr) 84px 92px 132px 92px 200px;
+  gap: 14px;
   align-items: center;
-  min-height: 38px;
-  padding: 4px 12px;
+  min-height: 54px;
+  padding: 8px 16px;
   border-radius: 0;
   border: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.055);
@@ -567,8 +578,8 @@
 
 .cap-card-headshot,
 .cap-contract-headshot {
-  width: 26px;
-  height: 26px;
+  width: 36px;
+  height: 36px;
   flex: 0 0 auto;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.06);
@@ -588,10 +599,10 @@
   overflow: hidden;
   margin: 0;
   color: var(--cap-text);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 900;
   letter-spacing: -0.01em;
-  line-height: 1.1;
+  line-height: 1.15;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -609,7 +620,7 @@
   display: block;
   margin-top: 0;
   color: var(--cap-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-style: normal;
   font-weight: 750;
   letter-spacing: 0.04em;
@@ -624,10 +635,10 @@
   display: block;
   color: var(--cap-text);
   font-family: var(--font-mono-data);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 800;
   letter-spacing: -0.02em;
-  line-height: 1;
+  line-height: 1.1;
   font-variant-numeric: tabular-nums;
 }
 
@@ -644,7 +655,7 @@
   border: 0;
   background: transparent;
   color: var(--cap-cyan);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 900;
   letter-spacing: 0.08em;
 }
@@ -891,18 +902,21 @@
 
 .cap-action-panel {
   position: relative;
-  flex: 0 0 clamp(180px, 32vh, 260px);
+  flex: 0 0 auto;
+  min-height: clamp(220px, 30vh, 340px);
   display: grid;
-  grid-template-columns: minmax(210px, 260px) 1fr auto;
-  grid-template-rows: auto auto;
-  gap: 10px 18px;
-  align-items: center;
-  padding: 14px 16px;
+  grid-template-columns: minmax(240px, 280px) 1fr minmax(200px, 260px);
+  grid-template-rows: auto auto auto;
+  gap: 12px 16px;
+  align-items: stretch;
+  padding: 16px 18px;
   border-radius: var(--radius-control);
   border: 1px solid var(--cap-line);
   border-left: 3px solid var(--cap-cyan);
-  background: var(--cap-panel);
-  box-shadow: var(--depth-registered);
+  background:
+    radial-gradient(120% 90% at 8% 0%, rgba(30, 58, 92, 0.28), transparent 58%),
+    linear-gradient(180deg, rgba(12, 28, 46, 0.94), rgba(6, 16, 28, 0.98));
+  box-shadow: var(--depth-registered), 0 0 24px rgba(19, 216, 231, 0.08);
 }
 
 .cap-action-panel--empty {
@@ -941,12 +955,89 @@
 
 .cap-action-panel__player {
   grid-column: 1;
-  grid-row: 1 / span 2;
+  grid-row: 1 / span 3;
   display: flex;
-  align-items: center;
-  gap: 12px;
+  align-items: flex-start;
+  gap: 14px;
   min-width: 0;
-  padding-right: 28px;
+  padding-right: 12px;
+}
+
+.cap-photo-well--lg {
+  width: 72px;
+  height: 72px;
+}
+
+.cap-action-panel__identity {
+  min-width: 0;
+}
+
+.cap-action-panel__role {
+  margin: 6px 0 0;
+  color: var(--cap-muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cap-action-panel__ratings {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+  font-size: 15px;
+}
+
+.cap-action-panel__dot {
+  color: var(--cap-muted);
+}
+
+.cap-action-panel__dossier {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+
+.cap-dossier-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 58px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 185, 205, 0.16);
+  background: rgba(4, 16, 26, 0.55);
+  box-shadow: var(--depth-registered), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.cap-dossier-tile__label {
+  font-family: var(--cap-ed-head, var(--font-broadcast-display));
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--cap-muted);
+}
+
+.cap-dossier-tile .cap-num-pop {
+  font-size: 15px;
+  line-height: 1.1;
+  word-break: break-word;
+}
+
+.cap-action-panel__ineligible {
+  display: block;
+  max-width: 220px;
+  color: var(--cap-muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+  text-align: right;
 }
 
 .cap-action-panel__headshot {
@@ -972,9 +1063,7 @@
 }
 
 .cap-action-panel__stats {
-  grid-column: 2;
-  grid-row: 1;
-  display: flex;
+  display: none;
   flex-wrap: wrap;
   gap: 10px;
 }
@@ -1014,21 +1103,35 @@
 
 .cap-action-panel__tags {
   grid-column: 2;
-  grid-row: 2;
+  grid-row: 3;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  align-items: center;
 }
 
 .cap-action-panel__actions {
   grid-column: 3;
   grid-row: 1 / span 2;
   display: flex;
-  flex-wrap: wrap;
-  align-content: center;
-  justify-content: flex-end;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-content: stretch;
+  justify-content: flex-start;
   gap: 8px;
-  max-width: 360px;
+  max-width: none;
+}
+
+.cap-edraft-action-btn {
+  min-height: 40px;
+  border-radius: 0;
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+  font-family: var(--cap-ed-head, var(--font-broadcast-display));
+  font-size: 11px;
+  font-weight: 1000;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  box-shadow: var(--depth-registered);
 }
 
 .cap-action-panel__moves {
@@ -1204,7 +1307,7 @@
   .cap-board-head,
   .cap-contract-card,
   .cap-contract-row {
-    grid-template-columns: minmax(220px, 1fr) 64px 70px 98px 64px 150px;
+    grid-template-columns: minmax(240px, 1fr) 72px 80px 110px 72px 170px;
   }
 
   .cap-ledger-grid,
@@ -1580,6 +1683,531 @@
   max-width: 130px;
 }
 
+/* Full-width negotiation dock (Contract Office — matches Entry Draft / re-sign desk) */
+.cap-nego-dock {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--cap-line);
+  border-left: 3px solid var(--cap-cyan);
+  background:
+    radial-gradient(120% 90% at 8% 0%, rgba(30, 58, 92, 0.32), transparent 58%),
+    linear-gradient(180deg, rgba(12, 28, 46, 0.96), rgba(6, 16, 28, 0.99));
+  box-shadow: var(--depth-registered), 0 0 28px rgba(19, 216, 231, 0.1);
+  overflow: hidden;
+}
+
+.cap-nego-desk {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 14px 18px 18px;
+  gap: 14px;
+}
+
+.cap-nego-desk__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.cap-nego-desk__title {
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+
+.cap-nego-desk__title h3 {
+  margin: 4px 0 0;
+  font-size: 1.25rem;
+  font-weight: 950;
+  letter-spacing: 0.02em;
+}
+
+.cap-nego-desk__title em {
+  font-size: 11px;
+  color: var(--cap-muted);
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cap-nego-desk__wells {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex: 1 1 320px;
+  justify-content: flex-end;
+}
+
+.cap-nego-desk__wells .cap-dossier-tile {
+  min-width: 108px;
+  padding: 10px 12px;
+}
+
+.cap-nego-desk__grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) 1fr;
+  gap: 18px;
+  overflow: auto;
+}
+
+.cap-nego-desk__hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.cap-nego-desk__hero-meta {
+  width: 100%;
+  text-align: center;
+}
+
+.cap-nego-desk__hero-meta strong {
+  display: block;
+  font-size: 17px;
+}
+
+.cap-nego-desk__hero-meta p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--cap-muted);
+}
+
+.cap-nego-desk__agent {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cap-nego-desk__player {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.cap-nego-desk__player strong {
+  display: block;
+  font-size: 15px;
+}
+
+.cap-nego-desk__player p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--cap-muted);
+}
+
+.cap-nego-desk__ask {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--cap-line);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.cap-nego-desk__ask span {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--cap-muted);
+}
+
+.cap-nego-desk__controls {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.cap-nego-desk__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.cap-nego-desk__actions .cap-action-btn {
+  flex: 1 1 160px;
+  min-height: 44px;
+}
+
+.cap-nego-desk__cap-note {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: rgba(160, 200, 220, 0.82);
+}
+
+.cap-nego__sync {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--cap-cyan);
+  margin-left: 8px;
+  font-style: normal;
+}
+
+.cap-nego__agent-id {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.cap-nego-meter-mark {
+  position: absolute;
+  top: -2px;
+  width: 2px;
+  height: 12px;
+  background: rgba(255, 255, 255, 0.55);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.cap-nego-meter-mark.is-instant {
+  background: var(--cap-gold, #f4bd52);
+}
+
+@media (max-width: 960px) {
+  .cap-nego-desk__grid {
+    grid-template-columns: 1fr;
+  }
+  .cap-board-layout--desk > .cap-board-panel {
+    max-height: 38vh;
+  }
+}
+
+.cap-nego__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.cap-nego__head h4 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(180, 220, 240, 0.9);
+}
+
+.cap-nego__back {
+  border: 1px solid rgba(80, 140, 180, 0.35);
+  background: rgba(8, 24, 40, 0.6);
+  color: #9ed4f0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.cap-nego__agent {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(12, 40, 62, 0.85), rgba(8, 22, 38, 0.92));
+  border: 1px solid rgba(60, 140, 200, 0.25);
+}
+
+.cap-nego__agent-id {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.cap-nego__agent-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cap-nego__agent-badge {
+  width: 34px;
+  height: 34px;
+  font-size: 13px;
+  border-radius: 10px;
+  flex: none;
+}
+
+.cap-nego__agent-style {
+  font-size: 11px;
+  font-weight: 750;
+  color: rgba(160, 200, 220, 0.82);
+  letter-spacing: 0.04em;
+}
+
+.cap-nego__agent-tier {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.cap-nego__agent-tier.tone-hard {
+  color: var(--cap-gold-bright, #f0c86a);
+}
+
+.cap-nego__agent-tier.tone-easy {
+  color: var(--ops-success, #52df94);
+}
+
+.cap-nego__agent-tier.tone-medium {
+  color: var(--cap-cyan);
+}
+
+.cap-nego__agent-id strong {
+  font-size: 14px;
+  color: #e8f7ff;
+}
+
+.cap-nego__agent-id em {
+  font-size: 11px;
+  color: rgba(160, 200, 220, 0.75);
+  font-style: normal;
+}
+
+.cap-nego__agent-line,
+.cap-nego__agent-mood {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(220, 240, 250, 0.88);
+}
+
+.cap-nego__agent-mood {
+  margin-top: 6px;
+  color: #f0c86a;
+  font-weight: 700;
+}
+
+.cap-nego-thread {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(80, 140, 180, 0.35);
+  background: rgba(6, 18, 32, 0.72);
+}
+
+.cap-nego-thread.tone-counter {
+  border-color: rgba(244, 189, 82, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(244, 189, 82, 0.08);
+}
+
+.cap-nego-thread.tone-reject {
+  border-color: rgba(255, 120, 120, 0.4);
+}
+
+.cap-nego-thread.tone-pending {
+  border-color: rgba(90, 220, 240, 0.4);
+}
+
+.cap-nego-thread__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.cap-nego-thread__badge {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cap-cyan, #5adcf0);
+}
+
+.cap-nego-thread.tone-counter .cap-nego-thread__badge {
+  color: var(--cap-gold-bright, #f0c86a);
+}
+
+.cap-nego-thread.tone-reject .cap-nego-thread__badge {
+  color: #ff9a9a;
+}
+
+.cap-nego-thread__round {
+  font-size: 10px;
+  font-weight: 800;
+  color: rgba(160, 200, 220, 0.7);
+  font-style: normal;
+}
+
+.cap-nego-thread__body,
+.cap-nego-thread__terms,
+.cap-nego-thread__hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(220, 240, 250, 0.9);
+}
+
+.cap-nego-thread__terms {
+  margin-top: 8px;
+}
+
+.cap-nego-thread__hint {
+  margin-top: 8px;
+  font-size: 11px;
+  color: rgba(160, 200, 220, 0.82);
+}
+
+.cap-nego__cap-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  font-size: 11px;
+}
+
+.cap-nego__cap-row span {
+  display: block;
+  color: rgba(150, 190, 210, 0.8);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 800;
+}
+
+.cap-nego__cap-row strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.cap-nego__cap-row strong.is-warn {
+  color: #ff8a8a;
+}
+
+.cap-nego-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cap-nego-meter-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(160, 200, 220, 0.85);
+}
+
+.cap-nego-meter-track {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.cap-nego-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+}
+
+.cap-nego-meter-fill.tone-bad {
+  background: linear-gradient(90deg, #ff606d, #f0a35a);
+}
+.cap-nego-meter-fill.tone-mid {
+  background: linear-gradient(90deg, #f0a35a, #e9a83c);
+}
+.cap-nego-meter-fill.tone-good {
+  background: linear-gradient(90deg, #52df94, #13d8e7);
+}
+.cap-nego-meter-fill.tone-instant {
+  background: linear-gradient(90deg, #f4bd52, #fff0c2);
+}
+
+.cap-nego-meter-note {
+  margin: 0;
+  font-size: 11px;
+  color: rgba(200, 225, 235, 0.75);
+}
+
+.cap-nego__slider-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(160, 200, 220, 0.85);
+}
+
+.cap-nego__range {
+  width: 100%;
+}
+
+.cap-nego__term {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cap-nego__term > span {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: rgba(160, 200, 220, 0.85);
+}
+
+.cap-nego__term-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cap-nego__term-btns button {
+  min-width: 32px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(80, 140, 180, 0.35);
+  background: rgba(8, 24, 40, 0.5);
+  color: #b8dce8;
+  font-weight: 800;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.cap-nego__term-btns button.is-active {
+  border-color: rgba(80, 200, 255, 0.6);
+  background: rgba(20, 80, 120, 0.55);
+  color: #fff;
+}
+
+.cap-nego__error {
+  margin: 0;
+  color: #ff9a9a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cap-nego__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 @media (max-width: 1440px) {
   .cap-fa-head,
   .cap-fa-list .cap-fa-row {
@@ -1599,4 +2227,660 @@
     grid-template-columns: 1fr auto;
     gap: 10px;
   }
+}
+
+/* ---------- Entry Draft visual parity (scoped) ---------- */
+
+.cap-office-edraft {
+  --cap-ed-head: "Barlow Condensed", var(--font-broadcast-display), "Archivo Black", "Rajdhani", "Arial Narrow", sans-serif;
+  --cap-ed-number: var(--cap-ed-head);
+  --cap-nego-num: clamp(22px, 2.8vw, 32px);
+  --cap-nego-num-lg: clamp(28px, 3.4vw, 40px);
+  font-size: 15px;
+  letter-spacing: 0.01em;
+}
+
+.cap-office-edraft h1,
+.cap-office-edraft h2,
+.cap-office-edraft h3 {
+  font-family: var(--cap-ed-head);
+  letter-spacing: 0.04em;
+}
+
+.cap-office-edraft .cap-ledger-hero,
+.cap-office-edraft .cap-office-topbar {
+  min-height: 88px;
+  border-radius: var(--radius-ops);
+  background:
+    radial-gradient(circle at 0% 0%, rgba(19, 216, 231, 0.08), transparent 42%),
+    var(--cap-panel);
+  box-shadow: var(--depth-registered);
+}
+
+.cap-office-edraft .cap-insignia {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--ops-grid-strong);
+  border-radius: var(--radius-hud);
+  background:
+    linear-gradient(145deg, rgba(19, 216, 231, 0.16), rgba(233, 168, 60, 0.12)),
+    var(--ops-panel);
+  font-family: var(--font-broadcast-display);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  line-height: 1.05;
+  text-transform: uppercase;
+  color: var(--cap-gold);
+  box-shadow: var(--depth-registered);
+}
+
+.cap-office-edraft .cap-office-titles .cap-office-kicker,
+.cap-office-edraft .cap-ledger-hero-main p.cap-office-kicker {
+  margin: 0 0 2px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cap-muted);
+}
+
+.cap-office-edraft .cap-ledger-hero-main h1 {
+  font-family: var(--cap-ed-head);
+  font-size: clamp(20px, 2.2vw, 26px);
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  line-height: 1.05;
+}
+
+.cap-office-edraft .cap-edraft-ghost-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-ops);
+  border: 1px solid var(--cap-line);
+  background: rgba(12, 31, 47, 0.85);
+  font-size: 16px;
+  box-shadow: var(--depth-registered);
+}
+
+.cap-office-edraft .cap-edraft-ghost-btn:hover {
+  border-color: rgba(19, 216, 231, 0.45);
+  background: rgba(19, 216, 231, 0.12);
+  color: var(--cap-cyan);
+}
+
+.cap-office-edraft .cap-metric-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px !important;
+}
+
+.cap-office-edraft .cap-office-metrics strong.cap-num-pop {
+  font-family: var(--cap-ed-number);
+  font-size: clamp(20px, 2.4vw, 26px);
+  font-weight: 800;
+  background: none;
+  color: inherit;
+}
+
+.cap-office-edraft .cap-icon-well {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: 8px;
+  background: rgba(148, 185, 205, 0.12);
+  border: 1px solid rgba(148, 185, 205, 0.14);
+  color: var(--cap-text);
+  font-family: var(--cap-ed-number);
+  font-size: 11px;
+  font-weight: 1000;
+  line-height: 1;
+  box-shadow: var(--depth-registered);
+}
+
+.cap-office-edraft .cap-icon-well.tone-cyan {
+  color: var(--cap-cyan);
+  background: var(--ops-cyan-soft);
+  border-color: rgba(19, 216, 231, 0.32);
+  box-shadow: 0 0 8px rgba(19, 216, 231, 0.28);
+}
+
+.cap-office-edraft .cap-icon-well.tone-gold {
+  color: var(--cap-gold);
+  background: var(--ops-gold-soft);
+  border-color: rgba(233, 168, 60, 0.32);
+  box-shadow: 0 0 8px rgba(233, 168, 60, 0.24);
+}
+
+.cap-office-edraft .cap-icon-well.tone-green {
+  color: var(--ops-success);
+  background: var(--ops-success-soft);
+  border-color: rgba(82, 223, 148, 0.32);
+  box-shadow: 0 0 8px rgba(82, 223, 148, 0.22);
+}
+
+.cap-office-edraft .cap-num-pop {
+  display: inline-block;
+  font-family: var(--cap-ed-number);
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.75)) drop-shadow(0 0 12px rgba(19, 216, 231, 0.28));
+}
+
+.cap-office-edraft .cap-num-pop.tone-cyan {
+  background: linear-gradient(180deg, #f4feff 0%, #3ae9f5 45%, #0d8f9c 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.cap-office-edraft .cap-num-pop.tone-gold {
+  background: linear-gradient(180deg, #fff4d6 0%, #f0b44a 48%, #b87412 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.75)) drop-shadow(0 0 12px rgba(233, 168, 60, 0.32));
+}
+
+.cap-office-edraft .cap-num-pop.tone-green {
+  background: linear-gradient(180deg, #e8fff2 0%, #52df94 48%, #1f9a5c 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 10px rgba(82, 223, 148, 0.28));
+}
+
+.cap-office-edraft .cap-num-pop.tone-blue {
+  background: linear-gradient(180deg, #eef4ff 0%, #8ab4ff 48%, #3d6fbf 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 10px rgba(138, 180, 255, 0.24));
+}
+
+.cap-office-edraft .cap-num-pop.tone-danger {
+  background: linear-gradient(180deg, #ffe8ea 0%, #ff606d 48%, #b81e2c 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 10px rgba(255, 96, 109, 0.26));
+}
+
+.cap-office-edraft .cap-num-pop.tone-muted {
+  background: linear-gradient(180deg, #f0f6fa 0%, #9eb4c4 48%, #5a7080 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.65));
+}
+
+.cap-office-edraft .cap-num-pop.tone-orange {
+  background: linear-gradient(180deg, #fff0e6 0%, #ff8a4c 48%, #c44e12 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 10px rgba(255, 138, 76, 0.28));
+}
+
+.cap-office-edraft .cap-num-pop.tone-danger {
+  background: linear-gradient(180deg, #ffe8ea 0%, #ff606d 48%, #b81e2c 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 10px rgba(255, 96, 109, 0.26));
+}
+
+.cap-office-edraft .cap-num-pop.tone-green {
+  background: linear-gradient(180deg, #e8fff2 0%, #52df94 48%, #1f9a5c 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 10px rgba(82, 223, 148, 0.28));
+}
+
+.cap-office-edraft .cap-office-seg {
+  border-radius: var(--radius-ops);
+  overflow: hidden;
+  box-shadow: var(--depth-registered);
+}
+
+.cap-office-edraft .cap-ledger-tab {
+  min-height: 42px;
+  min-width: 96px;
+  padding: 0 18px;
+  font-family: var(--cap-ed-head);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.cap-office-edraft .cap-ledger-tab-active,
+.cap-office-edraft .cap-ledger-tab.is-active {
+  background: rgba(19, 216, 231, 0.14);
+  color: var(--cap-text);
+  box-shadow: inset 0 -2px 0 var(--cap-cyan), 0 0 12px rgba(19, 216, 231, 0.12);
+}
+
+.cap-office-edraft .cap-filter-pill {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 4px;
+  font-family: var(--cap-ed-head);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  box-shadow: var(--depth-registered);
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease, color 0.2s ease;
+}
+
+.cap-office-edraft .cap-filter-pill:hover {
+  border-color: var(--cap-line-strong);
+  background: rgba(19, 216, 231, 0.12);
+  color: var(--cap-cyan);
+  transform: translateY(-1px);
+}
+
+.cap-office-edraft .cap-filter-pill.is-active {
+  border-color: rgba(19, 216, 231, 0.55);
+  background: rgba(19, 216, 231, 0.16);
+  color: var(--cap-cyan);
+  box-shadow: 0 0 10px rgba(19, 216, 231, 0.18);
+}
+
+.cap-office-edraft .cap-search {
+  min-height: 42px;
+  font-size: 14px;
+  border-radius: var(--radius-ops);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.cap-office-edraft .cap-office-panel.cap-board-panel {
+  background:
+    radial-gradient(120% 90% at 12% 0%, rgba(30, 58, 92, 0.22), transparent 60%),
+    linear-gradient(180deg, rgba(12, 28, 46, 0.92), rgba(6, 16, 28, 0.96));
+  box-shadow: var(--depth-registered), 0 0 24px rgba(19, 216, 231, 0.06);
+}
+
+.cap-office-edraft .cap-board-head {
+  background: linear-gradient(180deg, rgba(11, 31, 45, 0.72), rgba(7, 22, 34, 0.72));
+  font-family: var(--cap-ed-head);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+}
+
+.cap-office-edraft .cap-photo-well {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 8px;
+  border: 1px solid var(--cap-line);
+  background: linear-gradient(160deg, rgba(80, 200, 220, 0.22), rgba(212, 175, 55, 0.16));
+  box-shadow: var(--depth-registered);
+  overflow: hidden;
+}
+
+.cap-office-edraft .cap-card-headshot,
+.cap-office-edraft .cap-contract-headshot {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+}
+
+.cap-office-edraft .cap-contract-row {
+  min-height: 58px;
+  padding: 8px 16px;
+  background: rgba(255, 255, 255, 0.015);
+  transition: background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.cap-office-edraft .cap-contract-row:hover {
+  background: rgba(19, 216, 231, 0.06);
+  box-shadow: inset 2px 0 0 rgba(19, 216, 231, 0.35);
+}
+
+.cap-office-edraft .cap-contract-row.is-selected {
+  background: rgba(19, 216, 231, 0.1);
+  box-shadow: inset 3px 0 0 var(--cap-cyan), 0 0 14px rgba(19, 216, 231, 0.12);
+}
+
+.cap-office-edraft .cap-contract-row__name {
+  font-family: var(--cap-ed-head);
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+.cap-office-edraft .cap-stat-well {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 52px;
+  min-height: 34px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 185, 205, 0.16);
+  background: rgba(4, 16, 26, 0.55);
+  box-shadow: var(--depth-registered), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.cap-office-edraft .cap-stat-well.tone-cyan {
+  border-color: rgba(19, 216, 231, 0.28);
+  box-shadow: var(--depth-registered), 0 0 8px rgba(19, 216, 231, 0.14);
+}
+
+.cap-office-edraft .cap-stat-well.tone-gold {
+  border-color: rgba(233, 168, 60, 0.28);
+  box-shadow: var(--depth-registered), 0 0 8px rgba(233, 168, 60, 0.12);
+}
+
+.cap-office-edraft .cap-stat-well.tone-blue {
+  border-color: rgba(138, 180, 255, 0.28);
+  box-shadow: var(--depth-registered), 0 0 8px rgba(138, 180, 255, 0.1);
+}
+
+.cap-office-edraft .cap-stat-well .cap-num-pop {
+  font-size: 20px;
+}
+
+.cap-office-edraft .cap-stat-well__unit {
+  display: inline !important;
+  font-family: var(--cap-ed-head);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  color: var(--cap-muted);
+}
+
+.cap-office-edraft .cap-contract-row__cell strong {
+  font-size: inherit;
+}
+
+.cap-office-edraft .cap-contract-row__pos .cap-icon-well {
+  width: 36px;
+  height: 32px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+@supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+  .cap-office-edraft .cap-num-pop {
+    background: none !important;
+    color: var(--cap-cyan);
+    filter: none;
+  }
+  .cap-office-edraft .cap-num-pop.tone-gold {
+    color: var(--cap-gold);
+  }
+  .cap-office-edraft .cap-num-pop.tone-green {
+    color: var(--ops-success);
+  }
+}
+
+/* Negotiation desk — large broadcast figures (readable at 1080p) */
+.cap-office-edraft .cap-nego-desk {
+  padding: 20px 24px 24px;
+  gap: 20px;
+}
+
+.cap-office-edraft .cap-nego-desk__title h3 {
+  font-size: clamp(24px, 3vw, 34px);
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cap-office-edraft .cap-nego-desk__title em,
+.cap-office-edraft .cap-nego-desk__title .cap-office-kicker {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+}
+
+.cap-office-edraft .cap-nego-desk__wells .cap-dossier-tile {
+  min-width: 140px;
+  min-height: 76px;
+  padding: 12px 16px;
+  gap: 6px;
+}
+
+.cap-office-edraft .cap-nego-desk__wells .cap-dossier-tile__label {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+}
+
+.cap-office-edraft .cap-nego-desk__wells .cap-num-pop {
+  font-size: var(--cap-nego-num);
+}
+
+.cap-office-edraft .cap-nego-desk__player strong {
+  font-size: 18px;
+}
+
+.cap-office-edraft .cap-nego-desk__player p {
+  font-size: 14px;
+}
+
+.cap-office-edraft .cap-nego__agent-line,
+.cap-office-edraft .cap-nego__agent-mood {
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.cap-office-edraft .cap-nego__agent-id strong {
+  font-size: 16px;
+}
+
+.cap-office-edraft .cap-nego__agent-id {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.cap-office-edraft .cap-nego__agent-badge {
+  width: 40px;
+  height: 40px;
+  font-size: 15px;
+}
+
+.cap-office-edraft .cap-nego__agent-tier {
+  font-size: 11px;
+}
+
+.cap-office-edraft .cap-nego__agent-style {
+  font-size: 12px;
+}
+
+.cap-office-edraft .cap-nego-desk__ask {
+  padding: 14px 16px;
+  gap: 8px;
+}
+
+.cap-office-edraft .cap-nego-desk__ask span {
+  font-size: 11px;
+}
+
+.cap-office-edraft .cap-nego-desk__ask .cap-num-pop {
+  font-size: var(--cap-nego-num);
+}
+
+.cap-office-edraft .cap-nego-meter-head {
+  font-size: 12px;
+}
+
+.cap-office-edraft .cap-nego-meter-head strong {
+  font-size: var(--cap-nego-num);
+}
+
+.cap-office-edraft .cap-nego-meter-track {
+  height: 16px;
+  border-radius: 6px;
+}
+
+.cap-office-edraft .cap-nego-meter-note {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--cap-muted-strong);
+}
+
+.cap-office-edraft .cap-nego__slider-head {
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.cap-office-edraft .cap-nego__slider-head strong {
+  font-size: var(--cap-nego-num-lg);
+}
+
+.cap-office-edraft .cap-nego__range {
+  width: 100%;
+  height: 12px;
+  accent-color: var(--cap-cyan);
+}
+
+.cap-office-edraft .cap-nego__clauses {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cap-office-edraft .cap-nego__clauses > span {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cap-muted-strong, var(--cap-muted));
+}
+
+.cap-office-edraft .cap-nego__clause-btns button {
+  min-width: 56px;
+  min-height: 44px;
+  padding: 8px 12px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 185, 205, 0.22);
+  background: rgba(4, 16, 26, 0.72);
+  color: rgba(200, 230, 245, 0.92);
+  font-family: var(--cap-ed-head, var(--font-broadcast-display));
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  box-shadow: var(--depth-registered);
+}
+
+.cap-office-edraft .cap-nego__clause-btns button.is-active {
+  border-color: rgba(19, 216, 231, 0.55);
+  background: linear-gradient(180deg, rgba(19, 216, 231, 0.2), rgba(8, 32, 48, 0.95));
+  color: #fff;
+  box-shadow: 0 0 14px rgba(19, 216, 231, 0.28);
+}
+
+.cap-office-edraft .cap-nego__clause-btns button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cap-nego__clause-tag {
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--cap-gold-bright, #f0c86a);
+}
+
+.cap-office-edraft .cap-nego-desk__hero-shot.player-headshot {
+  --size: min(240px, 28vh);
+  width: var(--size);
+  height: var(--size);
+  max-width: 100%;
+  border-radius: 14px;
+  border: 2px solid rgba(19, 216, 231, 0.32);
+  box-shadow:
+    var(--depth-registered),
+    0 12px 36px rgba(0, 0, 0, 0.45),
+    0 0 24px rgba(19, 216, 231, 0.12);
+  overflow: hidden;
+}
+
+.cap-office-edraft .cap-nego-desk__hero-shot .ph-nhl-image {
+  object-fit: cover;
+  object-position: top center;
+}
+
+.cap-nego__term > span {
+  font-size: 12px;
+}
+
+.cap-office-edraft .cap-nego__term-btns button {
+  min-width: 48px;
+  min-height: 48px;
+  font-size: 16px;
+  font-weight: 900;
+  border-radius: 10px;
+}
+
+.cap-office-edraft .cap-nego-desk__cap-note {
+  font-size: 14px;
+}
+
+.cap-office-edraft .cap-nego-desk__actions .cap-action-btn {
+  min-height: 54px;
+  font-size: 13px;
+  letter-spacing: 0.1em;
+}
+
+.cap-office-edraft .cap-nego__back {
+  min-height: 44px;
+  padding: 8px 16px;
+  font-size: 12px;
+}
+
+.cap-office-edraft .cap-board-layout--desk .cap-stat-well {
+  min-width: 58px;
+  min-height: 38px;
+  padding: 6px 12px;
+}
+
+.cap-office-edraft .cap-board-layout--desk .cap-stat-well .cap-num-pop {
+  font-size: 21px;
+}
+
+.cap-office-edraft .cap-board-layout--desk .cap-board-head {
+  font-size: 13px;
+  padding: 14px 18px;
+}
+
+.cap-office-edraft .cap-board-layout--desk .cap-contract-list .cap-stat-well {
+  min-width: 58px;
+  min-height: 38px;
+  padding: 5px 11px;
+}
+
+.cap-office-edraft .cap-board-layout--desk .cap-contract-list .cap-stat-well .cap-num-pop {
+  font-size: 18px;
+}
+
+.cap-office-edraft .cap-board-layout--desk .cap-contract-list .cap-stat-well__unit {
+  font-size: 10px;
+}
+
+.cap-office-edraft .cap-board-layout--desk .cap-contract-row__name {
+  font-size: 15px;
 }

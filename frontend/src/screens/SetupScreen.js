@@ -715,7 +715,7 @@ export function SetupScreen() {
   useEffect(() => {
     primeHubAssets(HUB_WARMUP_STAGES.ENVIRONMENT);
     primeHubAssets(HUB_WARMUP_STAGES.CRESTS);
-    primeHubAssets(HUB_WARMUP_STAGES.OPERATIONS);
+    // OPERATIONS needs a franchise session — primed after /start in beginFranchise.
   }, [primeHubAssets]);
 
   const orderedTeams = useMemo(

@@ -1,6 +1,6 @@
 import { firstDefined, pickFranchiseData, safeArray } from "../shared/eventHelpers";
 import { resolveFranchiseTeamLogo, toLogoUrl } from "../../utils/teamLogos";
-import { ensurePlayerHeadshotFields } from "../../utils/playerHeadshots";
+import { ensurePlayerHeadshotFields, mergePlayerHeadshotIdentity } from "../../utils/playerHeadshots";
 
 /** Canonical display metadata keyed by normalized award id. */
 export const AWARD_CATALOG = {
@@ -378,7 +378,7 @@ const FAN_MARKETS = [
 
 export const AWARD_FAN_REACTION_TEMPLATES = {
   generic: [
-    "{winner} winning {award} feels right. The {topStat} number makes it hard to argue.",
+    "{winner} winning {award} feels right. That {topStat} line makes it hard to argue.",
     "I need the full voting breakdown, but {winner} taking {award} is not shocking at all.",
     "{award} discourse is about to be unbearable and honestly I am here for it.",
     "{winner} just added a real legacy line tonight. {legacy}",
@@ -504,19 +504,53 @@ function asNumber(value, fallback = null) {
 
 function roundStat(value) {
   const n = asNumber(value);
-  if (n === null) return "?";
+  if (n === null) return null;
   return String(Math.round(n));
+}
+
+export function formatEvidenceValue(entry) {
+  if (!entry || entry.value === undefined || entry.value === null) return null;
+  if (entry.display) return String(entry.display);
+  const fmt = String(entry.fmt || "int").toLowerCase();
+  const n = asNumber(entry.value);
+  if (n === null) return null;
+  if (fmt === "pct1") return n <= 1 ? `${(n * 100).toFixed(1)}%` : `${n.toFixed(1)}%`;
+  if (fmt === "sv3") return n <= 1 ? n.toFixed(3) : n.toFixed(3);
+  if (fmt === "dec2") return n.toFixed(2);
+  if (fmt === "signed") return `${n > 0 ? "+" : ""}${Math.round(n)}`;
+  if (fmt === "toi") return String(entry.value);
+  return String(Math.round(n));
+}
+
+export function evidenceToStatCards(evidence) {
+  const line = safeArray(evidence?.winner?.stat_line);
+  return line
+    .map((entry) => {
+      const value = formatEvidenceValue(entry);
+      if (value === null) return null;
+      return {
+        label: entry.label || entry.key || "Stat",
+        value,
+        tone: entry.key === "pts" || entry.key === "points" ? "primary" : "neutral",
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 5);
+}
+
+export function hasAwardEvidence(award) {
+  return Boolean(award?.evidence?.winner?.stat_line?.length);
 }
 
 function oneDecimal(value) {
   const n = asNumber(value);
-  if (n === null) return "?";
+  if (n === null) return null;
   return n.toFixed(1);
 }
 
 function percent(value) {
   const n = asNumber(value);
-  if (n === null) return "?";
+  if (n === null) return null;
   if (n <= 1) return `${Math.round(n * 100)}%`;
   return `${Math.round(n)}%`;
 }
@@ -583,14 +617,64 @@ function compactHandlePart(value) {
     .slice(0, 20);
 }
 
+const PLAYER_FACING_DIAGNOSTIC_RE =
+  /calculated with documented fallback|missing advanced analytics|participation fallback/gi;
+
+const WINNER_RESULT_PHRASE_RE =
+  /\b(just won|goes to|winning the|wins the|added a legacy line|takes home the)\b/i;
+
+export function dedupeRepeatedWords(text) {
+  return String(text || "").replace(/\b(\w+)\s+\1\b/gi, "$1");
+}
+
+export function sanitizePlayerFacingCopy(text) {
+  let clean = String(text || "").trim();
+  if (!clean) return "";
+  if (PLAYER_FACING_DIAGNOSTIC_RE.test(clean)) {
+    clean = clean.replace(PLAYER_FACING_DIAGNOSTIC_RE, "").replace(/\(\s*\)/g, "").trim();
+  }
+  return dedupeRepeatedWords(clean);
+}
+
+export function countCalculationFallbackAwards(awards) {
+  return safeArray(awards).filter((award) => {
+    const rationale = String(award?.rationale || "");
+    return (
+      PLAYER_FACING_DIAGNOSTIC_RE.test(rationale) ||
+      String(award?.calculationQuality || "").toLowerCase() === "fallback"
+    );
+  }).length;
+}
+
+export function mentionsWinner(text, winnerLabel) {
+  const hay = String(text || "").toLowerCase();
+  const full = String(winnerLabel || "").trim().toLowerCase();
+  if (!hay || !full) return false;
+  if (hay.includes(full)) return true;
+  const parts = full.split(/\s+/).filter(Boolean);
+  const last = parts[parts.length - 1];
+  if (last && last.length > 2 && hay.includes(last)) return true;
+  return false;
+}
+
+export function tweetSpoilsAward(text, award) {
+  const body = String(text || "");
+  if (!body) return false;
+  if (mentionsWinner(body, award?.winnerLabel)) return true;
+  if (WINNER_RESULT_PHRASE_RE.test(body)) return true;
+  return false;
+}
+
 function trimTweet(text, maxLength = 180) {
-  const clean = String(text || "")
-    .replace(/\s+/g, " ")
-    .replace(/\s+([.,!?;:])/g, "$1")
-    .trim();
+  const clean = dedupeRepeatedWords(
+    String(text || "")
+      .replace(/\s+/g, " ")
+      .replace(/\s+([.,!?;:])/g, "$1")
+      .trim()
+  );
 
   if (clean.length <= maxLength) return clean;
-  return `${clean.slice(0, maxLength - 1).trim()}?`;
+  return `${clean.slice(0, maxLength - 1).trim()}…`;
 }
 
 function replaceTemplate(template, values) {
@@ -630,7 +714,7 @@ export function getAwardCatalogEntry(rawName) {
   );
 }
 
-function collectPlayerRows(franchiseState) {
+export function collectPlayerRows(franchiseState) {
   const seen = new Set();
   const rows = [];
 
@@ -949,6 +1033,18 @@ function parseTeamStatsFromRationale(rationale) {
   };
 }
 
+export const CEREMONY_ADDITIONAL_HONOR_KEYS = [
+  "lady_byng",
+  "ted_lindsay",
+  "jennings",
+  "masterton",
+  "messier",
+  "jack_adams",
+  "conn_smythe",
+  "all_star_1",
+  "all_star_2",
+];
+
 export const CEREMONY_RAIL_GROUPS = [
   { id: "team", label: "Team Awards", awardKeys: ["presidents"] },
   {
@@ -956,11 +1052,41 @@ export const CEREMONY_RAIL_GROUPS = [
     label: "Player Awards",
     awardKeys: ["calder", "selke", "vezina", "norris", "rocket", "art_ross", "hart"],
   },
+  {
+    id: "additional",
+    label: "Additional Honors",
+    awardKeys: CEREMONY_ADDITIONAL_HONOR_KEYS,
+  },
   { id: "championship", label: "Championship", awardKeys: ["stanley"] },
 ];
 
-/** Computed hardware surfaced on the rail but outside the live reveal script. */
-export const CEREMONY_OFF_RAIL_AWARDS = ["lady_byng", "ted_lindsay", "all_star_1", "all_star_2"];
+/** @deprecated — all honors are on-ceremony slides now */
+export const CEREMONY_OFF_RAIL_AWARDS = [];
+
+function ceremonyBucketForAwardKey(awardKey) {
+  const key = String(awardKey || "");
+  if (key === "presidents") return 0;
+  if (key === "stanley") return 3;
+  if (CEREMONY_ADDITIONAL_HONOR_KEYS.includes(key)) return 2;
+  return 1;
+}
+
+function buildAllStarRosterSlots(award, franchiseState) {
+  const winners = safeArray(award?.winners).filter(Boolean);
+  return winners.map((row, index) => {
+    const name = getPlayerName(row) || String(row.name || "").trim();
+    const position = String(row.position || row.pos || row.slot || "—").trim();
+    const teamName = resolveCandidateTeamName(row, franchiseState);
+    const player = ensurePlayerHeadshotFields(row);
+    return {
+      slot: position,
+      label: name || "—",
+      teamName,
+      player,
+      teamLogoSrc: getTeamLogoSrc({ team_id: row.team_id, full_name: teamName }, franchiseState),
+    };
+  });
+}
 
 export const SEASON_MILESTONES = [
   { id: "regular", label: "Regular Season" },
@@ -1047,35 +1173,23 @@ export function buildOffRailCeremonySlide(award) {
   };
 }
 
-export function buildCeremonyRailGroups(slides, allAwards = []) {
-  const groups = CEREMONY_RAIL_GROUPS.map((group) => ({
+export function buildCeremonyRailGroups(slides) {
+  return CEREMONY_RAIL_GROUPS.map((group) => ({
     ...group,
     items: safeArray(slides)
-      .map((slide, index) => ({ slide, index, offRail: false }))
+      .map((slide, index) => ({ slide, index }))
       .filter(({ slide }) => group.awardKeys.includes(slide.awardKey)),
   })).filter((group) => group.items.length);
+}
 
-  const offRailAwards = safeArray(allAwards).filter(
-    (award) =>
-      CEREMONY_OFF_RAIL_AWARDS.includes(award.awardKey) &&
-      award.status !== "unavailable" &&
-      award.status !== "pending" &&
-      !award.unavailable
-  );
-  if (offRailAwards.length) {
-    groups.push({
-      id: "off_rail",
-      label: "Additional Honors",
-      offRail: true,
-      awardKeys: CEREMONY_OFF_RAIL_AWARDS,
-      items: offRailAwards.map((award) => ({
-        slide: buildOffRailCeremonySlide(award),
-        index: null,
-        offRail: true,
-      })),
-    });
-  }
-  return groups;
+export function listAwardsMissingFinalists(slides) {
+  return safeArray(slides)
+    .filter((slide) => {
+      if (slide.slideKind === "roster" || slide.awardKind === "team") return false;
+      const cards = slide.finalistCards?.length ? slide.finalistCards : slide.candidateCards;
+      return !safeArray(cards).length;
+    })
+    .map((slide) => slide.awardKey || slide.awardLabel);
 }
 
 function buildHeroBadges(award, entity, franchiseState) {
@@ -1469,13 +1583,20 @@ function buildCandidateCards(award, franchiseState) {
 
     let player = null;
     if (!isTeamAward) {
-      player = ensurePlayerHeadshotFields(item);
-      if (!player?.name) {
-        player = resolveWinnerPlayer(
-          { ...award, winner_name: name, winner_player_id: item.player_id },
-          franchiseState
-        );
-      }
+      const playerId = firstDefined(item.player_id, item.entity_id, item.id);
+      const rosterPlayer = resolveWinnerPlayer(
+        {
+          ...award,
+          winner_name: name,
+          winner_player_id: playerId,
+          winner_team_id: item.team_id,
+        },
+        franchiseState
+      );
+      player = mergePlayerHeadshotIdentity(
+        { ...item, name: name || item.name, player_id: playerId },
+        rosterPlayer
+      );
     }
 
     const points = firstDefined(item.points, item.pts);
@@ -1499,7 +1620,14 @@ function buildCandidateCards(award, franchiseState) {
       teamName,
       teamLogoSrc: isTeamAward
         ? getTeamLogoSrc(
-            { team_id: item.team_id, full_name: teamName || name, name: teamName || name },
+            resolveWinnerTeam(
+              {
+                winner_team_id: item.team_id || item.entity_id,
+                winner_name: teamName || name,
+                winner_stats: item,
+              },
+              franchiseState
+            ) || { team_id: item.team_id, full_name: teamName || name, name: teamName || name },
             franchiseState
           )
         : getTeamLogoSrc({ team_id: item.team_id, full_name: teamName }, franchiseState),
@@ -1526,9 +1654,10 @@ function getTopStatCard(award) {
 
 function getTopStatText(award) {
   const top = getTopStatCard(award);
-  if (!top) return "the numbers";
+  if (!top) return "season stat line";
 
-  return `${top.value}${top.suffix || ""} ${top.label}`.trim();
+  const line = `${top.value}${top.suffix || ""} ${top.label}`.trim();
+  return line.replace(/^(the\s+)/i, "");
 }
 
 function getRunnerUpText(award) {
@@ -1692,6 +1821,52 @@ export async function fetchAwardFanProfiles(options = {}) {
   }
 }
 
+const AWARD_FAN_ANTICIPATION_TEMPLATES = {
+  generic: [
+    "The {award} race is the debate I want tonight. No picks yet.",
+    "Whoever takes {award} is going to hear about it all summer.",
+    "Finalists for {award} all have a case. This one feels tight.",
+    "I am not calling {award} early — too many good seasons in the mix.",
+    "The {award} ballot is going to split the fan bases.",
+    "If you have a take on {award}, now is the time to post it.",
+  ],
+  hart: [
+    "MVP chatter is loud but nobody has sealed the Hart yet.",
+    "The Hart race feels wide open until they read the name.",
+  ],
+  calder: [
+    "Rookie of the Year is always the hardest call on the show.",
+    "The Calder pool this year has real star power.",
+  ],
+  vezina: [
+    "Goalie twitter is going to melt down over the Vezina.",
+    "Creased arguments only — who had the best season in net?",
+  ],
+  stanley: [
+    "Cup night energy even before they hand out the big one.",
+    "Every fan base is watching who gets called first.",
+  ],
+};
+
+function buildAwardAnticipationText(award, fan, index, seed) {
+  const templates = [
+    ...safeArray(AWARD_FAN_ANTICIPATION_TEMPLATES[award?.awardKey]),
+    ...safeArray(AWARD_FAN_ANTICIPATION_TEMPLATES.generic),
+  ];
+  const template = seededPick(
+    templates,
+    `${seed}:${award?.awardKey}:anticipation:${fan?.handle}:${index}`,
+    "The {award} race is going to be loud tonight."
+  );
+  const values = {
+    award: award?.awardLabel || "this award",
+    awardShort: award?.awardShort || "AWD",
+    runnerUp: getRunnerUpText(award),
+    stageLine: award?.stageLine || "Season hardware on the line.",
+  };
+  return trimTweet(replaceTemplate(template, values), 190);
+}
+
 function buildAwardReactionText(award, fan, index, seed) {
   const templates = [
     ...safeArray(AWARD_FAN_REACTION_TEMPLATES[award?.awardKey]),
@@ -1729,6 +1904,7 @@ export function buildAwardsFanTweets(awards, options = {}) {
     tweetsPerAward = 2,
     seed = "awards-night",
     includeSummaryTweets = true,
+    spoilerFree = false,
   } = options || {};
 
   const awardList = safeArray(awards).filter(Boolean);
@@ -1766,7 +1942,7 @@ export function buildAwardsFanTweets(awards, options = {}) {
   const tweets = [];
   const perAward = Math.max(1, Number(tweetsPerAward) || 2);
 
-  if (includeSummaryTweets) {
+  if (includeSummaryTweets && !spoilerFree) {
     const hart = awardList.find((a) => a.awardKey === "hart");
     const stanley = awardList.find((a) => a.awardKey === "stanley");
     const lead = stanley || hart || awardList[0];
@@ -1802,7 +1978,11 @@ export function buildAwardsFanTweets(awards, options = {}) {
       const fanIndex = (awardIndex * perAward + i + 1) % fanPool.length;
       const fan = fanPool[fanIndex] || fanPool[0] || normalizeFanProfile({}, fanIndex, seed);
       const metricSeed = `${seed}:${award.awardKey}:${award.winnerLabel}:${fan.handle}:${i}`;
-      const text = buildAwardReactionText(award, fan, i, seed);
+      const text = spoilerFree
+        ? buildAwardAnticipationText(award, fan, i, seed)
+        : buildAwardReactionText(award, fan, i, seed);
+
+      if (spoilerFree && tweetSpoilsAward(text, award)) continue;
 
       tweets.push({
         id: `tweet-${hashString(metricSeed)}`,
@@ -1834,9 +2014,16 @@ export function buildAwardsFanTweets(awards, options = {}) {
     }
   });
 
-  return tweets
-    .filter((tweet) => tweet?.text)
-    .slice(0, Math.max(1, Number(maxTweets) || 18));
+  const filtered = tweets.filter((tweet) => tweet?.text);
+  if (spoilerFree) {
+    return filtered
+      .filter((tweet) => {
+        const award = awardList.find((row) => row.awardKey === tweet.awardKey);
+        return award ? !tweetSpoilsAward(tweet.text, award) : true;
+      })
+      .slice(0, Math.max(1, Number(maxTweets) || 18));
+  }
+  return filtered.slice(0, Math.max(1, Number(maxTweets) || 18));
 }
 
 export function buildAwardSocialPulse(awards, options = {}) {
@@ -1975,9 +2162,9 @@ export function normalizeAwardsPayload(franchiseState, eventData) {
         calculationQuality: row.calculation_quality || "full",
         voting: row.voting || null,
         includeInReveal:
-          (catalogFromBackend?.ceremony_enabled !== false) &&
-          (row.ceremony_enabled !== false) &&
-          (!revealOrder?.length || revealOrder.includes(awardKey)),
+          (CEREMONY_ADDITIONAL_HONOR_KEYS.includes(awardKey) ||
+            ((catalogFromBackend?.ceremony_enabled !== false) && row.ceremony_enabled !== false)) &&
+          (!revealOrder?.length || revealOrder.includes(awardKey) || CEREMONY_ADDITIONAL_HONOR_KEYS.includes(awardKey)),
       };
 
       const parsedStats =
@@ -1990,10 +2177,13 @@ export function normalizeAwardsPayload(franchiseState, eventData) {
           ? { ...resolveWinnerTeam({ ...base, winner_stats: base.winner_stats || parsedStats }, franchiseState) }
           : resolveWinnerPlayer(base, franchiseState);
 
-      const statCards =
-        meta.kind === "team" || row.recipient_type === "team"
-          ? buildTeamStatCards(base, entity)
-          : buildPlayerStatCards(base, entity);
+      const evidence = row.evidence || row.result?.evidence || null;
+      const legacyEvidence = Boolean(evidence?.winner?.stat_line?.length);
+      const statCards = legacyEvidence
+        ? evidenceToStatCards(evidence)
+        : meta.kind === "team" || row.recipient_type === "team"
+          ? buildTeamStatCards(base, entity).filter((c) => c.value !== null && c.value !== "?")
+          : buildPlayerStatCards(base, entity).filter((c) => c.value !== null && c.value !== "?");
 
       const normalizedAward = {
         ...base,
@@ -2014,10 +2204,14 @@ export function normalizeAwardsPayload(franchiseState, eventData) {
           franchiseState
         ),
         statCards,
-        rationale: buildAwardRationale(base, entity, franchiseState),
+        evidence,
+        legacyEvidenceMissing: !legacyEvidence && row.status !== "unavailable",
+        rationale: sanitizePlayerFacingCopy(buildAwardRationale(base, entity, franchiseState)),
         legacyLine: buildLegacyLine(base, entity),
         heroBadges: buildHeroBadges(base, entity, franchiseState),
-        whyTheyWon: buildWhyTheyWon(base, entity, franchiseState),
+        whyTheyWon: legacyEvidence
+          ? safeArray(evidence?.why).map((line) => sanitizePlayerFacingCopy(line)).filter(Boolean)
+          : buildWhyTheyWon(base, entity, franchiseState),
         seasonSnapshot: buildSeasonSnapshot(base, entity, franchiseState),
         previousWinners: buildPreviousWinners(base, franchiseState),
         votingDetail: null,
@@ -2118,49 +2312,71 @@ export function pickFeaturedAward(awards) {
   );
 }
 
-export function buildAwardsCeremonySlides(awards) {
+export function buildAwardsCeremonySlides(awards, franchiseState = null) {
   const ordered = [...safeArray(awards)]
     .filter((a) => !a?.unavailable && a?.status !== "unavailable" && a?.status !== "pending" && a?.includeInReveal !== false)
-    .sort((a, b) => (a.ceremonyOrder ?? a.awardOrder) - (b.ceremonyOrder ?? b.awardOrder));
+    .sort(
+      (a, b) =>
+        ceremonyBucketForAwardKey(a.awardKey) - ceremonyBucketForAwardKey(b.awardKey) ||
+        (a.ceremonyOrder ?? a.awardOrder) - (b.ceremonyOrder ?? b.awardOrder) ||
+        String(a.awardLabel).localeCompare(String(b.awardLabel))
+    );
 
-  return ordered.map((award, index) => ({
-    id: `${award.awardKey}-${index}`,
-    awardKey: award.awardKey,
-    title: award.ceremonyTitle || award.awardLabel,
-    awardLabel: award.awardLabel,
-    awardShort: award.awardShort,
-    winnerLabel: award.winnerLabel,
-    winnerTeamName: award.winnerTeamName || "",
-    accent: award.awardAccent,
-    glow: award.awardGlow,
-    trophyTone: award.trophyTone,
-    stageLine: award.stageLine,
-    rationale: award.rationale,
-    legacyLine: award.legacyLine,
-    heroBadges: award.heroBadges || [],
-    whyTheyWon: award.whyTheyWon || [],
-    seasonSnapshot: award.seasonSnapshot || [],
-    previousWinners: award.previousWinners || [],
-    votingDetail: award.votingDetail || null,
-    statCards: award.statCards || [],
-    candidateCards: award.candidateCards || [],
-    finalistCards: award.finalistCards || [],
-    winnerPlayer: award.winnerPlayer || null,
-    winnerTeam: award.winnerTeam || null,
-    winnerLogoSrc: award.winnerLogoSrc || "",
-    winnerTeamLogoSrc: award.winnerTeamLogoSrc || "",
-    awardKind: award.awardKind,
-    displayMetric: award.displayMetric || "",
-    calculationQuality: award.calculationQuality || "full",
-    socialContext: award.socialContext || getAwardContextValues(award),
-    revealDelayMs: 450 + index * 90,
-    cinematicWeight:
-      award.awardKey === "stanley"
-        ? "championship"
-        : award.awardKey === "hart"
-          ? "main-event"
-          : "standard",
-  }));
+  const stanleyIndex = ordered.findIndex((row) => row.awardKey === "stanley");
+  if (stanleyIndex >= 0 && stanleyIndex !== ordered.length - 1) {
+    const [stanleyRow] = ordered.splice(stanleyIndex, 1);
+    ordered.push(stanleyRow);
+  }
+
+  return ordered.map((award, index) => {
+    const isRoster = String(award.awardKey || "").startsWith("all_star");
+    const slideKind = isRoster ? "roster" : award.awardKind || "player";
+    const whyTheyWon = safeArray(award.whyTheyWon)
+      .map((line) => sanitizePlayerFacingCopy(line))
+      .filter(Boolean)
+      .slice(0, 2);
+
+    return {
+      id: `${award.awardKey}-${index}`,
+      awardKey: award.awardKey,
+      title: award.ceremonyTitle || award.awardLabel,
+      awardLabel: award.awardLabel,
+      awardShort: award.awardShort,
+      winnerLabel: award.winnerLabel,
+      winnerTeamName: award.winnerTeamName || "",
+      accent: award.awardAccent,
+      glow: award.awardGlow,
+      trophyTone: award.trophyTone,
+      stageLine: sanitizePlayerFacingCopy(award.stageLine),
+      rationale: sanitizePlayerFacingCopy(award.rationale),
+      legacyLine: award.legacyLine,
+      heroBadges: award.heroBadges || [],
+      whyTheyWon,
+      seasonSnapshot: award.seasonSnapshot || [],
+      previousWinners: award.previousWinners || [],
+      votingDetail: award.votingDetail || null,
+      statCards: award.statCards || [],
+      candidateCards: award.candidateCards || [],
+      finalistCards: award.finalistCards || [],
+      rosterSlots: isRoster ? buildAllStarRosterSlots(award, franchiseState) : [],
+      winnerPlayer: award.winnerPlayer || null,
+      winnerTeam: award.winnerTeam || null,
+      winnerLogoSrc: award.winnerLogoSrc || "",
+      winnerTeamLogoSrc: award.winnerTeamLogoSrc || "",
+      awardKind: award.awardKind,
+      slideKind,
+      displayMetric: award.displayMetric || "",
+      calculationQuality: award.calculationQuality || "full",
+      socialContext: award.socialContext || getAwardContextValues(award),
+      revealDelayMs: 450 + index * 90,
+      cinematicWeight:
+        award.awardKey === "stanley"
+          ? "championship"
+          : award.awardKey === "hart"
+            ? "main-event"
+            : "standard",
+    };
+  });
 }
 
 export function buildAwardsNightSummary(awards) {

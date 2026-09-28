@@ -12,6 +12,55 @@ sys.path.insert(0, str(ROOT / "backend"))
 sys.path.insert(0, str(ROOT / "SimEngine" / "app"))
 
 
+def test_continue_offseason_from_post_cup_stops_on_awards():
+    """Cup hub continue must not jump straight to retirements when awards are precomputed."""
+    from services.franchise_offseason import continue_offseason
+    import services.franchise_offseason as fo
+
+    session = SimpleNamespace(
+        phase="post_cup",
+        season_phase="post_cup",
+        offseason_stage=None,
+        awards_generated=True,
+        awards_payload={"awards": [{"id": "hart"}], "version": 1},
+        retirements_processed=False,
+        next_important_event="awards",
+        draft_completed=False,
+        next_season_generated=False,
+        resign_payload={},
+        offseason_completed_stages=[],
+        offseason_stage_entered_at={},
+        offseason_stage_completed_at={},
+        salary_cap_payload={},
+        development_report_done=False,
+        draft_lottery_done=False,
+        draft_combine_done=False,
+        draft_payload={},
+        draft_state={},
+        draft_review_payload={},
+        prospect_rights_payload={},
+        free_agency_market_payload={},
+        roster_cleanup_payload={},
+        next_season_payload={},
+        champion_id="T1",
+        stanley_cup_winner="T1",
+        playoffs_simulated=True,
+        sim=SimpleNamespace(league=SimpleNamespace(teams=[])),
+        team_by_id={},
+        pending_decisions=[],
+    )
+
+    with patch.object(fo, "_enter_awards_stage", lambda s: {"awards": s.awards_payload}), patch.object(
+        fo, "_sync_phase_fields", lambda s: None
+    ), patch.object(fo, "_franchise_awards_are_complete", lambda s: True):
+        out = continue_offseason(session, from_stage="post_cup")
+
+    assert session.phase == "offseason"
+    assert session.offseason_stage == "awards"
+    assert out.get("offseason_stage") == "awards"
+    assert not session.retirements_processed
+
+
 def test_continue_offseason_advances_past_retirements_without_from_stage():
     """Empty from_stage must not replay retirements forever (soak STAGE_STALL)."""
     from services.franchise_offseason import continue_offseason

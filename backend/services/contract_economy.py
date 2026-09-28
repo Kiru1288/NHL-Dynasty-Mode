@@ -3113,6 +3113,66 @@ def _logistic(x: float) -> float:
     return z / (1.0 + z)
 
 
+def _smoothstep(x: float) -> float:
+    t = max(0.0, min(1.0, float(x)))
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _offer_protection_tier(ntc_mode: str, nmc: bool) -> int:
+    """Monotonic protection value: None < M-NTC < NTC < NMC."""
+    if nmc:
+        return 3
+    mode = str(ntc_mode or "NONE").upper()
+    if mode == "FULL":
+        return 2
+    if mode == "MODIFIED":
+        return 1
+    return 0
+
+
+def _preferred_protection_tier(preferred_clause: str) -> int:
+    pref = str(preferred_clause or "None").upper().replace("_", "-")
+    if pref in ("NMC",):
+        return 3
+    if pref in ("NTC", "FULL NTC"):
+        return 2
+    if pref in ("M-NTC", "MNTC", "MODIFIED", "MODIFIED NTC"):
+        return 1
+    return 0
+
+
+def _clause_interest_component(
+    preferred_clause: str,
+    ntc_mode: str,
+    nmc: bool,
+    security: float,
+) -> Tuple[float, str]:
+    """Interest from trade protection — always NMC > NTC > M-NTC > none."""
+    offer_tier = _offer_protection_tier(ntc_mode, nmc)
+    want_tier = _preferred_protection_tier(preferred_clause)
+    sec = max(0.0, min(1.0, float(security or 0.5)))
+
+    if want_tier <= 0:
+        if offer_tier <= 0:
+            return 0.0, "Clauses not a priority"
+        # Sweetener ladder: NMC > full NTC > M-NTC (never invert NTC vs M-NTC).
+        sweet = (0.0, 1.6, 2.8, 4.2)[offer_tier]
+        return sweet + sec * (0.4 * offer_tier), (
+            "NMC is a sweetener"
+            if offer_tier == 3
+            else ("NTC is a sweetener" if offer_tier == 2 else "M-NTC is a sweetener")
+        )
+
+    delta = offer_tier - want_tier
+    if delta > 0:
+        return 9.0 + delta * (3.5 + 2.5 * sec), "Protection exceeds ask"
+    if delta == 0:
+        labels = {1: "M-NTC matches demand", 2: "NTC matches demand", 3: "NMC matches demand"}
+        return 10.0 + 4.0 * sec, labels.get(offer_tier, "Protection matches demand")
+    gap = abs(delta)
+    return -gap * (5.5 + 4.0 * sec), "Missing expected protection"
+
+
 def _demand_context_multiplier(context: str) -> float:
     c = str(context or "").lower()
     if c == "ufa":
@@ -3292,7 +3352,9 @@ def evaluate_contract_offer(
 
     # --- Continuous interest (0..100) ---
     r = aav_m / max(0.25, want_aav)
-    salary_component = 80.0 * (_logistic((r - 0.90) * 9.0) - 0.5)
+    pct_from_ask = (aav_m - want_aav) / max(want_aav, 0.5)
+    # Gradual AAV curve (~3–4 interest pts per $100k near market), not a step cliff.
+    salary_component = 36.0 * math.tanh(pct_from_ask / 0.07)
     term_gap = years - want_years
     term_component = 10.0 * math.tanh(term_gap * (0.5 + 0.5 * security))
     fit_component = 0.0
@@ -3344,55 +3406,12 @@ def evaluate_contract_offer(
     else:
         stay_label = "Medium"
 
-    # NTC / NMC — heavy weight when the player cares about protection.
-    clause_component = 0.0
-    clause_note = "Clauses not a priority"
-    if preferred_clause == "NMC":
-        if nmc:
-            clause_component += 16.0 + 8.0 * security
-            clause_note = "NMC matches demand"
-        elif ntc:
-            clause_component += 5.0
-            clause_note = "NTC helps, still wants NMC"
-        else:
-            clause_component -= 12.0 * (0.55 + security)
-            clause_note = "Missing expected NMC"
-    elif preferred_clause == "NTC":
-        if nmc:
-            clause_component += 14.0 + 4.0 * security
-            clause_note = "NMC exceeds ask"
-        elif ntc_mode == "FULL":
-            clause_component += 11.0 + 5.0 * security
-            clause_note = "NTC matches demand"
-        elif ntc_mode == "MODIFIED":
-            clause_component += 7.0 + 4.0 * security
-            clause_note = "M-NTC partial match"
-        else:
-            clause_component -= 8.0 * (0.45 + security)
-            clause_note = "Missing expected NTC"
-    elif preferred_clause == "M-NTC":
-        if nmc:
-            clause_component += 14.0 + 4.0 * security
-            clause_note = "NMC exceeds ask"
-        elif ntc_mode == "FULL":
-            clause_component += 12.0 + 4.0 * security
-            clause_note = "Full NTC exceeds M-NTC ask"
-        elif ntc_mode == "MODIFIED":
-            clause_component += 8.0 + 6.0 * security
-            clause_note = "M-NTC matches demand"
-        else:
-            clause_component -= 6.0 * (0.40 + security)
-            clause_note = "Missing expected M-NTC"
-    else:
-        if nmc:
-            clause_component += 4.0 + 2.0 * security
-            clause_note = "NMC is a sweetener"
-        elif ntc_mode == "FULL":
-            clause_component += 2.5
-            clause_note = "NTC is a sweetener"
-        elif ntc_mode == "MODIFIED":
-            clause_component += 3.5 + 1.5 * security
-            clause_note = "M-NTC is a sweetener"
+    clause_component, clause_note = _clause_interest_component(
+        preferred_clause,
+        ntc_mode,
+        nmc,
+        security,
+    )
 
     # Signing bonus — cash-upfront lever; high revenue clubs can buy down AAV.
     bonus_component = 0.0
@@ -3450,11 +3469,13 @@ def evaluate_contract_offer(
         )
 
     meets_floor = aav_m >= effective_min
-    # Solid NHL players take slightly-under-ask cash if interest is otherwise good.
-    if ovr < 84 and r >= 0.85:
-        interest = min(100.0, interest + 14.0)
-    if (not meets_floor) and ovr < 84 and r >= 0.85 and interest >= 52.0:
-        meets_floor = True
+    # Depth players soften on near-market offers — ramp smoothly (no 85% ratio cliff).
+    if ovr < 84:
+        interest = min(100.0, interest + 11.0 * _smoothstep((r - 0.78) / 0.14))
+    if ovr < 84 and r >= 0.82 and interest >= 50.0:
+        near_market = _smoothstep((r - 0.80) / 0.10)
+        if not meets_floor and near_market >= 0.35:
+            meets_floor = True
     if ovr < 76:
         accept_cut = 52.0
     elif ovr < 83:
@@ -3507,11 +3528,37 @@ def evaluate_contract_offer(
         counter_bonus = round(min(want_aav * 0.35, want_aav * years * 0.08), 3)
 
     projected: Optional[float] = None
+    projected_next_season: Optional[float] = None
+    cap_delta_m: Optional[float] = None
     try:
         snap = get_team_cap_snapshot_full(team, league)
-        projected = round(float(snap["usable_cap_space_m"]) - cap_hit_m, 3)
+        usable = float(snap["usable_cap_space_m"])
+        ctx_l = str(context or "").lower()
+        old_hit = max(0.0, float(player_cap_hit_millions(player)))
+        if ctx_l in ("re_sign", "extension", "rfa") and old_hit > 0:
+            yrs_left = max(0, int(_contract_years_remaining(player)))
+            cap_delta_m = 0.0 if yrs_left > 1 else max(0.0, cap_hit_m - old_hit)
+            projected = round(usable - cap_delta_m, 3)
+            total_hit = float(snap.get("total_cap_hit_m") or 0)
+            upper_next = float(
+                snap.get("projected_next_year_upper_limit_m")
+                or snap.get("upper_limit_m")
+                or 0
+            )
+            if upper_next <= 0:
+                upper_next = float(snap.get("upper_limit_m") or 88.0) * 1.03
+            if yrs_left <= 1:
+                next_total = total_hit - old_hit + cap_hit_m
+            else:
+                next_total = total_hit
+            projected_next_season = round(upper_next - next_total, 3)
+        else:
+            cap_delta_m = cap_hit_m
+            projected = round(usable - cap_hit_m, 3)
     except Exception:
         projected = None
+        projected_next_season = None
+        cap_delta_m = None
 
     variance_raw = float(prof.get("variance") or 0.0)
     if variance_raw >= 0.025:
@@ -3560,6 +3607,8 @@ def evaluate_contract_offer(
         },
         "risk_tags": risk_tags,
         "projected_cap_after_m": projected,
+        "projected_cap_space_next_season_m": projected_next_season,
+        "cap_delta_m": cap_delta_m,
         "market_value_m": demand["market_value_m"],
         "want_aav_m": want_aav,
         "min_acceptable_aav_m": effective_min,
@@ -4008,8 +4057,24 @@ def validate_post_fa_roster_shape(team: Any, league: Any, sim: Any = None) -> Li
 # Contract actions
 # ---------------------------------------------------------------------------
 
-def _validate_sign_cap(team: Any, aav_m: float, league: Any, *, player: Any = None) -> Dict[str, Any]:
-    return can_sign_player(team, aav_m, league=league, player=player)
+def _validate_sign_cap(
+    team: Any,
+    aav_m: float,
+    league: Any,
+    *,
+    player: Any = None,
+    context: Optional[str] = None,
+) -> Dict[str, Any]:
+    needed = max(0.0, float(aav_m))
+    ctx = str(context or "").lower()
+    if player is not None and ctx in ("re_sign", "extension", "rfa"):
+        pid = _player_id(player)
+        on_team = pid and pid in {_player_id(p) for p in _all_rostered(team)}
+        if on_team:
+            old_hit = max(0.0, float(player_cap_hit_millions(player)))
+            if old_hit > 0:
+                needed = max(0.0, needed - old_hit)
+    return can_sign_player(team, needed, league=league, player=player)
 
 
 def _find_player_in_league(league: Any, player_id: str) -> Tuple[Optional[Any], Optional[Any]]:
@@ -4349,7 +4414,13 @@ def sign_player_to_team(
             "reason": slot_check.get("reason"),
             "contract_slots": slot_check,
         }
-    check = _validate_sign_cap(team, compute_prorated_cap_hit_m(aav_m, years, bonus_m), league, player=player)
+    check = _validate_sign_cap(
+        team,
+        compute_prorated_cap_hit_m(aav_m, years, bonus_m),
+        league,
+        player=player,
+        context=str(offer.get("context") or ""),
+    )
     if not check.get("ok"):
         return {
             "ok": False,
@@ -4369,6 +4440,7 @@ def sign_player_to_team(
             "player_response": {
                 "status": "evaluated",
                 "interest": evaluation.get("interest"),
+                "accept_cut": evaluation.get("accept_cut"),
                 "stay_interest": evaluation.get("stay_interest"),
                 "stay_label": evaluation.get("stay_label"),
                 "want_aav_m": evaluation.get("want_aav_m"),
@@ -4376,11 +4448,14 @@ def sign_player_to_team(
                 "preferred_clause": evaluation.get("preferred_clause"),
                 "clause_note": evaluation.get("clause_note"),
                 "feedback": _offer_feedback_label(evaluation, aav_m, years),
+                "agent_mood": evaluation.get("agent_mood"),
                 "counter_cap_hit": (evaluation.get("counter_offer") or {}).get("aav_m"),
                 "counter_term": (evaluation.get("counter_offer") or {}).get("years"),
                 "instant_accept": evaluation.get("instant_accept"),
                 "pending_decision": evaluation.get("pending_decision"),
                 "resolve_days": evaluation.get("resolve_days"),
+                "projected_cap_after_m": evaluation.get("projected_cap_after_m"),
+                "projected_cap_space_next_season_m": evaluation.get("projected_cap_space_next_season_m"),
             },
         }
 
@@ -4467,6 +4542,14 @@ def sign_player_to_team(
                 )
             except Exception:
                 pass
+        counter_feedback = _offer_feedback_label(eval_result, aav_m, years)
+        if status == "countered":
+            caav = counter.get("aav_m")
+            cy = counter.get("years")
+            if caav is not None and cy is not None:
+                counter_feedback = (
+                    f"{counter_feedback} — countering at ${float(caav):.2f}M × {int(cy)} years"
+                )
         return {
             "ok": False,
             "status": status,
@@ -4482,6 +4565,7 @@ def sign_player_to_team(
                 "counter_term": counter.get("years"),
                 "counter_ntc": counter.get("ntc"),
                 "counter_nmc": counter.get("nmc"),
+                "ntc_mode": counter.get("ntc_mode"),
                 "counter_signing_bonus_m": counter.get("signing_bonus_m"),
                 "want_aav_m": eval_result.get("want_aav_m"),
                 "want_years": eval_result.get("want_years"),
@@ -4491,7 +4575,7 @@ def sign_player_to_team(
                 "agent_mood": eval_result.get("agent_mood"),
                 "cap_hit_m": eval_result.get("cap_hit_m"),
                 "aav_m": eval_result.get("aav_m"),
-                "feedback": _offer_feedback_label(eval_result, aav_m, years),
+                "feedback": counter_feedback,
             },
             "negotiation": (getattr(session, "resign_negotiations", {}) or {}).get(pid) if session else None,
         }
@@ -7531,7 +7615,7 @@ def build_contract_row(player: Any, team: Any, season_year: int, league: Any = N
         value_label = "Bad"
 
     ext_aav = round(fair * 1.02, 3)
-    ext_years = max(1, min(5, yrs))
+    ext_years = max(3, min(8, 34 - int(age or 27)))
 
     pending_july1 = bool(
         c.get("pending_july1_expiry") or getattr(player, "pending_july1_expiry", False)
@@ -7809,7 +7893,14 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
         for p in _all_rostered(user_team):
             if _get(p, "is_buried", False):
                 continue
-            contracts.append(build_contract_row(p, user_team, season_year, league))
+            row = build_contract_row(p, user_team, season_year, league)
+            try:
+                from app.sim_engine.franchise.player_agent_engine import agent_public_view
+
+                row["agent"] = agent_public_view(p, session)
+            except Exception:
+                pass
+            contracts.append(row)
 
     contracts.sort(key=lambda r: (
         -(r.get("bad_contract_score") or 0),
@@ -7996,6 +8087,14 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
 
     legacy_team = team_cap_snapshot_legacy_compat(cap_snapshot) if cap_snapshot else {}
 
+    signing_bonus_meta: Dict[str, Any] = {}
+    try:
+        from services.franchise_offseason import team_signing_bonus_eligibility
+
+        signing_bonus_meta = team_signing_bonus_eligibility(session)
+    except Exception:
+        signing_bonus_meta = {"eligible": False, "max_bonus_pct": 0.0}
+
     pending_sheets = []
     offer_sheet_targets: List[Dict[str, Any]] = []
     try:
@@ -8070,6 +8169,7 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
         "offer_sheet_compensation_grid": [
             {k: v for k, v in row.items()} for row in _active_offer_sheet_tiers(league)
         ],
+        "signing_bonus": signing_bonus_meta,
         "warnings": cap_snapshot.get("warnings", []),
         "summary": {
             "expiringDeals": len(expiring),

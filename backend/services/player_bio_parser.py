@@ -243,10 +243,12 @@ class PlayerBioRegistry:
             return hits[-1]
         parts = key.split()
         if len(parts) >= 2:
-            last = normalize_player_name(parts[-1])
-            hits = self.by_name.get(last) or []
-            if len(hits) == 1:
-                return hits[0]
+            first, last = parts[0], parts[-1]
+            last_hits = self.by_name.get(last) or []
+            for entry in last_hits:
+                entry_parts = normalize_player_name(entry.raw_name).split()
+                if entry_parts and entry_parts[0] == first:
+                    return entry
         return None
 
 
@@ -498,11 +500,7 @@ def resolve_wjc_country_code(
 
 def _lookup_keys(name: str) -> List[str]:
     primary = str(name or "").strip()
-    keys = {normalize_player_name(primary)}
-    parts = primary.split()
-    if len(parts) >= 2:
-        keys.add(normalize_player_name(parts[-1]))
-    return sorted(keys)
+    return [normalize_player_name(primary)]
 
 
 def _index_entry(registry: PlayerBioRegistry, entry: PlayerBioEntry) -> None:

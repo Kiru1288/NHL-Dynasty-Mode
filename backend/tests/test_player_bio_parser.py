@@ -37,6 +37,19 @@ def test_wjc_dual_citizen():
     assert code in ("USA", "CAN")
 
 
+def test_bio_lookup_does_not_cross_siblings_with_same_last_name():
+    sample = (
+        "Victor Eklund (RW): 75 ovr | Age: 19 | DOB: 2006-10-03 | Height: 5'11\" | Weight: 161 lbs | Nationality: Sweden\n"
+        "William Eklund (LW): 87 ovr | Age: 24 | DOB: 2002-02-12 | Height: 5'11\" | Weight: 185 lbs | Nationality: Sweden\n"
+    )
+    reg = parse_player_bios(sample, as_of=date(2026, 9, 15))
+    victor = reg.lookup("Victor Eklund")
+    william = reg.lookup("William Eklund")
+    assert victor is not None and victor.age == 19
+    assert william is not None and william.age == 24
+    assert reg.lookup("William Eklund").raw_name.startswith("William")
+
+
 def test_parse_sample_lines():
     sample = (
         "Carter Bear (LW/C): 78 ovr, 84 cha, 84 off, 78 def, 82 tra, 82 men, 78 phy, 88 pot"

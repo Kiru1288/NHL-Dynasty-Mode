@@ -616,6 +616,7 @@ Danai Shaiikov (G): 70 ovr, 75 glove, 73 blocker, 73 stick, 80 pot | Age: 18 | D
 
 Cole Eiserman (LW): 76 ovr, 78 cha, 86 off, 68 def, 80 tra, 74 men, 76 phy, 88 pot | Age: 19 | DOB: 2006-08-29 | Height: 6'0" | Weight: 196 lbs | Nationality: USA
 Victor Eklund (RW): 75 ovr, 79 cha, 82 off, 71 def, 82 tra, 76 men, 70 phy, 86 pot | Age: 19 | DOB: 2006-10-03 | Height: 5'11" | Weight: 161 lbs | Nationality: Sweden
+William Eklund (LW): 87 ovr, 85 cha, 89 off, 81 def, 87 tra, 83 men, 77 phy, 89 pot | Age: 24 | DOB: 2002-02-12 | Height: 5'11" | Weight: 185 lbs | Nationality: Sweden
 Kashawn Aitcheson (D): 74 ovr, 81 cha, 74 off, 80 def, 76 tra, 79 men, 88 phy, 84 pot | Age: 19 | DOB: 2006-09-21 | Height: 6'2" | Weight: 200 lbs | Nationality: Canada
 Isaiah George (D): 73 ovr, 78 cha, 72 off, 78 def, 78 tra, 77 men, 78 phy, 79 pot | Age: 22 | DOB: 2004-02-15 | Height: 6'1" | Weight: 196 lbs | Nationality: Canada
 Calle Odelius (D): 73 ovr, 78 cha, 76 off, 74 def, 82 tra, 76 men, 68 phy, 82 pot | Age: 22 | DOB: 2004-05-30 | Height: 6'0" | Weight: 185 lbs | Nationality: Sweden
@@ -751,7 +752,7 @@ Matthew DiMarsico (F): 72 ovr, 78 cha, 78 off, 70 def, 78 tra, 74 men, 74 phy, 7
 Cooper Gay (RW/LW): 71 ovr, 78 cha, 76 off, 70 def, 78 tra, 74 men, 74 phy, 77 pot | Age: 24 | DOB: 2002-01-01 | Height: 6'4" | Weight: 205 lbs | Nationality: USA
 Tristen Nielsen (W/C): 71 ovr, 79 cha, 74 off, 72 def, 78 tra, 76 men, 76 phy, 74 pot | Age: 26 | DOB: 2000-02-36 | Height: 5'10" | Weight: 185 lbs | Nationality: Canada
 Nikita Prishchepov (C/LW): 70 ovr, 77 cha, 74 off, 70 def, 78 tra, 73 men, 72 phy, 76 pot | Age: 22 | DOB: 2004-02-20 | Height: 6'1" | Weight: 194 lbs | Nationality: Russia
-Taylor Makar (LW/C): 70 ovr, 78 cha, 74 off, 70 def, 78 tra, 74 men, 74 phy, 74 pot | Age: 25 | DOB: 2001-03-13 | Height: 6'3" | Weight: 205 lbs | Nationality: Canada
+Taylor Makar (LW/C): 77 ovr, 76 cha, 74 off, 70 def, 76 tra, 74 men, 74 phy, 78 pot | Age: 25 | DOB: 2001-03-13 | Height: 6'3" | Weight: 205 lbs | Nationality: Canada
 
 Sean Behrens (D): 73 ovr, 79 cha, 76 off, 76 def, 80 tra, 77 men, 68 phy, 80 pot | Age: 23 | DOB: 2003-03-31 | Height: 5'10" | Weight: 177 lbs | Nationality: USA
 Domenick Fensore (D): 72 ovr, 78 cha, 78 off, 70 def, 84 tra, 75 men, 60 phy, 78 pot | Age: 25 | DOB: 2001-09-07 | Height: 5'9" | Weight: 175 lbs | Nationality: USA
