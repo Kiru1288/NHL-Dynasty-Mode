@@ -2011,7 +2011,13 @@ def start_franchise(
         raise ValueError('player_universe must be "generated" or "real_nhl".')
 
     _franchise_startup_stage("SimEngine import complete; constructing engine")
-    master = seed if seed is not None else random.randrange(1, 10**9)
+    # OS entropy, not the module-level ``random`` stream: if anything seeds that stream at
+    # import time, every new save would get the same master seed and replay the same season
+    # (same injuries → same needs → the same CPU trades, save after save).
+    import secrets as _secrets
+
+    master = seed if seed is not None else _secrets.randbelow(10**9 - 1) + 1
+    logging.getLogger(__name__).info("franchise start: master seed %s", master)
     sim = SimEngine(
         seed=master,
         debug=False,
@@ -2285,7 +2291,9 @@ def start_franchise(
                 )
             if cap_fix.get("still_over"):
                 session.notifications.append(
-                    f"Cap notes: {len(cap_fix['still_over'])} clubs still over (NMC / LTIR-style pressure)."
+                    f"Cap notes: {len(cap_fix['still_over'])} clubs opened over the cap and were given "
+                    f"real-world LTIR relief for this season: "
+                    + ", ".join(f"{r['team']} ${r['over_by_m']:.1f}M" for r in cap_fix["still_over"][:8])
                 )
         from services.contract_economy import validate_franchise_cap_at_start
         cap_issues = validate_franchise_cap_at_start(league, season_y)
@@ -9556,6 +9564,29 @@ def _storyline_is_expired(ev: Dict[str, Any], session: FranchiseSession, calenda
     return False
 
 
+#: Trades get their own slots in the feed. With one shared cap, playoff/offseason stories
+#: pushed every deal out after the deadline and the Trades desk went empty at season end.
+STORYLINE_STORE_GENERAL_MAX = 400
+STORYLINE_STORE_TRADE_MAX = 150
+STORYLINE_PAYLOAD_GENERAL_MAX = 120
+STORYLINE_PAYLOAD_TRADE_MAX = 60
+
+
+def _is_trade_storyline(ev: Any) -> bool:
+    if not isinstance(ev, dict):
+        return False
+    t = str(ev.get("type") or "").lower()
+    c = str(ev.get("category") or "").lower()
+    return t in ("trade", "trade_rumor") or c in ("trade", "trade_rumor")
+
+
+def _recent_storylines_keep_trades(rows: List[Any], *, general: int, trades: int) -> List[Any]:
+    """Newest ``general`` non-trade events + newest ``trades`` trade events, in original order."""
+    trade_idx = [i for i, ev in enumerate(rows) if _is_trade_storyline(ev)][-trades:]
+    other_idx = [i for i, ev in enumerate(rows) if not _is_trade_storyline(ev)][-general:]
+    return [rows[i] for i in sorted(set(trade_idx) | set(other_idx))]
+
+
 def _prune_expired_storylines(session: FranchiseSession, calendar_idx: int) -> int:
     """Remove expired ephemeral storylines from the active feed."""
     rows = list(getattr(session, "storyline_events", None) or [])
@@ -9571,7 +9602,9 @@ def _prune_expired_storylines(session: FranchiseSession, calendar_idx: int) -> i
             continue
         kept.append(ev)
     if removed:
-        session.storyline_events = kept[-400:]
+        session.storyline_events = _recent_storylines_keep_trades(
+            kept, general=STORYLINE_STORE_GENERAL_MAX, trades=STORYLINE_STORE_TRADE_MAX
+        )
         session._cached_narrative_universe_payload = None
     return removed
 
@@ -9637,8 +9670,10 @@ def _record_storyline(session: FranchiseSession, event: Dict[str, Any]) -> None:
     if getattr(session, "storyline_events", None) is None:
         session.storyline_events = []
     session.storyline_events.append(ev)
-    if len(session.storyline_events) > 400:
-        session.storyline_events = session.storyline_events[-400:]
+    if len(session.storyline_events) > STORYLINE_STORE_GENERAL_MAX + 25:
+        session.storyline_events = _recent_storylines_keep_trades(
+            session.storyline_events, general=STORYLINE_STORE_GENERAL_MAX, trades=STORYLINE_STORE_TRADE_MAX
+        )
 
 
 def _team_record_snapshot_for_direction(session: FranchiseSession, team_id: str) -> Dict[str, float]:
@@ -20983,7 +21018,9 @@ def _build_lean_narrative_section(session: FranchiseSession, *, crisis_tick: boo
     ]
     storylines_norm = [
         _normalize_storyline_payload(ev if isinstance(ev, dict) else {"headline": str(ev or "")})
-        for ev in storylines_active[-120:]
+        for ev in _recent_storylines_keep_trades(
+            storylines_active, general=STORYLINE_PAYLOAD_GENERAL_MAX, trades=STORYLINE_PAYLOAD_TRADE_MAX
+        )
     ]
     try:
         from services.trade_demand_engine import (  # noqa: WPS433
@@ -21226,7 +21263,9 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
     ]
     storylines_norm = [
         _normalize_storyline_payload(ev if isinstance(ev, dict) else {"headline": str(ev or "")})
-        for ev in storylines_active[-120:]
+        for ev in _recent_storylines_keep_trades(
+            storylines_active, general=STORYLINE_PAYLOAD_GENERAL_MAX, trades=STORYLINE_PAYLOAD_TRADE_MAX
+        )
     ]
     storyline_choices = _storyline_choices_payload(session)
     narrative_summary = _build_narrative_summary(session)

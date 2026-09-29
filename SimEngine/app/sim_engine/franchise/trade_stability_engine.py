@@ -22,6 +22,10 @@ STABILITY_ANGER_MIN = 20
 CRISIS_DEADLINE_MAX = 360
 #: Longest gap replayed from saved state (offseason gaps shouldn't swing a whole season).
 STABILITY_MAX_CATCHUP_DAYS = 30
+#: Stability floor for a player with no personal grievance (just above the 70 'stable' line).
+STABLE_NO_GRIEVANCE_FLOOR = 76.0
+#: Daily recovery cap once the cause is gone (was 1.35/day, so old flags lingered for weeks).
+RECOVERY_RISE_NO_GRIEVANCE = 4.0
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -1297,9 +1301,44 @@ def compute_component_pressures(snap: PlayerConcernSnapshot) -> Dict[str, float]
     return pressures
 
 
+#: Weight of the 1st, 2nd, 3rd… biggest grievance. Players fixate on their top one or two
+#: complaints; a dozen small niggles do not add up to a trade request.
+_PRESSURE_STACK_WEIGHTS = (1.0, 0.75, 0.55, 0.40, 0.30)
+_PRESSURE_STACK_TAIL = 0.20
+#: Share of a pressure that still counts when it sits under the player's own tolerance.
+_BELOW_TOLERANCE_SHARE = 0.30
+
+
+def personal_pressure_tolerance(snap: PlayerConcernSnapshot) -> float:
+    """How big a single grievance must be before this player actually dwells on it.
+
+    High character / mental / loyalty shrug off more; volatile personalities react to less.
+    Roughly 2 (thin-skinned) to 9 (unflappable pro).
+    """
+    t = 3.0
+    t += max(0.0, float(snap.character) - 60.0) * 0.08
+    t += max(0.0, float(snap.mental) - 60.0) * 0.05
+    t += max(0.0, float(snap.loyalty) - 60.0) * 0.03
+    t -= max(0.0, float(snap.ego) - 70.0) * 0.04
+    return _clamp(t, 2.0, 9.0)
+
+
+def aggregate_pressures(pressures: Dict[str, float], tolerance: float) -> float:
+    """Personality-aware total: tolerated niggles count ~30%, and grievances stack with
+    diminishing weight (was a flat sum of 12+ components, which put nearly every player
+    league-wide under the 70 'frustrated' line)."""
+    vals = sorted((max(0.0, float(v or 0.0)) for v in pressures.values()), reverse=True)
+    total = 0.0
+    for i, v in enumerate(vals):
+        eff = v if v >= tolerance else v * _BELOW_TOLERANCE_SHARE
+        w = _PRESSURE_STACK_WEIGHTS[i] if i < len(_PRESSURE_STACK_WEIGHTS) else _PRESSURE_STACK_TAIL
+        total += eff * w
+    return total
+
+
 def compute_trade_stability(snap: PlayerConcernSnapshot) -> Tuple[float, Dict[str, float]]:
     pressures = compute_component_pressures(snap)
-    cumulative = sum(pressures.values()) + snap.agent_pressure * 0.35
+    cumulative = aggregate_pressures(pressures, personal_pressure_tolerance(snap)) + snap.agent_pressure * 0.35
 
     loyalty_buffer = (snap.loyalty / 100.0) * 6.0
     if snap.loyalty >= 75 and snap.gm_trust >= 58:
@@ -1458,6 +1497,11 @@ def compute_instant_stability(session: Any, player: Any, team: Any) -> Dict[str,
     """Snapshot stability from current concerns — no day drift applied."""
     snap = gather_player_concerns(session, player, team)
     score, pressures = compute_trade_stability(snap)
+    # Frustration needs a cause that is about HIM (role, contract, trust, temperament,
+    # family, trade talk…). Background noise every player carries — agent nagging, default
+    # media stress, a losing record the whole room shares — can't flag him on its own.
+    if count_personal_significant_pressures(pressures) == 0:
+        score = max(score, STABLE_NO_GRIEVANCE_FLOOR)
     escalation = stability_to_escalation_level(score)
     penalties = readiness_penalties(score, snap.character, snap.mental, escalation)
     return {
@@ -1502,7 +1546,7 @@ def apply_daily_stability_update(session: Any, player: Any, team: Any, calendar_
     concerned = sig_count >= 1
     concern_days = int(pst.get("stability_concern_days") or 0)
     max_drop = 1.15 * drift_mult
-    max_rise = 1.35
+    max_rise = 1.35 if count_personal_significant_pressures(instant["pressures"]) else RECOVERY_RISE_NO_GRIEVANCE
     score = prev_score
     level = prev_level
     for day in range(first_day, int(calendar_idx) + 1):

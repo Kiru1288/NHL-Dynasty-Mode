@@ -42,40 +42,125 @@ from app.sim_engine.trades.team_assessment import (
 from app.sim_engine.trades.trade_asset import team_id_of
 
 MIN_PLAN_SCORE = 0.32
-MIN_NEED_FILL = 0.12
+MIN_NEED_FILL = 0.18  # a deal must meaningfully fill the buyer's hole (was 0.12 — sideways churn)
 MAX_PLANS_PER_BUYER = 4
 #: Deals sellers time for the deadline.
 SELLOFF_MOTIVES = frozenset({"rental_purchase", "tank_selloff", "seller_futures", "late_selloff"})
 #: Each GM's own read of each player (per save, stable within it). Without this every save
 #: that starts from the same Real NHL rosters ranked the same deals first and moved the
 #: same players.
-GM_TASTE_SPREAD = 0.22
+GM_TASTE_SPREAD = 0.35
 #: Plans kept per target player (his best two destinations), so one player can't crowd the list.
 MAX_PLANS_PER_TARGET = 2
+#: Share of a club's surplus it actually shops in a given season (per save). The roster math
+#: flags the same spare players in every save that starts from Real NHL rosters, so without
+#: this the same four or five names moved in every sim.
+ON_THE_BLOCK_SHARE = 0.55
+
+
+def save_entropy_salt(league: Any) -> int:
+    """True per-save randomness for CPU market identity.
+
+    Deliberately NOT drawn from the sim RNG — that stream starts from the same seed in every
+    new franchise, which made every save pick the same deals.
+    """
+    salt = getattr(league, "_cpu_gm_taste_salt", None)
+    if salt:
+        return int(salt)
+    import secrets
+
+    salt = secrets.randbelow(2_000_000_000) + 1
+    try:
+        setattr(league, "_cpu_gm_taste_salt", int(salt))
+    except Exception:
+        pass
+    return int(salt)
+
+
+def on_the_block(league: Any, team_id: str, player: Any, season: int) -> bool:
+    """Whether club ``team_id`` is shopping ``player`` this season (stable per save + season)."""
+    import zlib
+
+    key = f"block|{save_entropy_salt(league)}|{season}|{team_id}|{player_pid(player)}".encode("utf-8")
+    return (zlib.crc32(key) & 0xFFFFFFFF) / 0xFFFFFFFF < ON_THE_BLOCK_SHARE
 
 
 def gm_taste(league: Any, team_id: str, player: Any) -> float:
     """Stable per-save preference of club ``team_id`` for ``player`` in [-spread, +spread]."""
     import zlib
 
-    salt = getattr(league, "_cpu_gm_taste_salt", None)
-    if salt is None:
-        rng = getattr(league, "rng", None)
-        try:
-            salt = int(rng.randint(1, 2_000_000_000)) if hasattr(rng, "randint") else 0
-        except Exception:
-            salt = 0
-        if not salt:
-            import random as _random
-
-            salt = _random.randrange(1, 2_000_000_000)
-        try:
-            setattr(league, "_cpu_gm_taste_salt", int(salt))
-        except Exception:
-            pass
+    salt = save_entropy_salt(league)
     key = f"{salt}|{team_id}|{player_pid(player)}".encode("utf-8")
     u = (zlib.crc32(key) & 0xFFFFFFFF) / 0xFFFFFFFF
     return (u * 2.0 - 1.0) * GM_TASTE_SPREAD
+
+
+#: Lopsided deals: one front office reads the market worse than the other. Base odds per
+#: plan, raised by the sharpness gap between the two GMs, deadline heat and desperation.
+LOPSIDED_BASE_CHANCE = 0.12
+LOPSIDED_MAX_CHANCE = 0.32
+LOPSIDED_MIN_SWING = 0.12  # below this a "lopsided" swap is just noise — treat as balanced
+
+
+def gm_acumen(league: Any, team_id: str) -> float:
+    """Stable per-save front-office sharpness in [-1, 1] (shares the gm_taste salt)."""
+    import zlib
+
+    salt = getattr(league, "_cpu_gm_taste_salt", None) or 0
+    u = (zlib.crc32(f"acumen|{salt}|{team_id}".encode("utf-8")) & 0xFFFFFFFF) / 0xFFFFFFFF
+    return u * 2.0 - 1.0
+
+
+def _lopsided_roll(
+    league: Any,
+    plan: "DealPlan",
+    ctx: Dict[str, Any],
+    ba: TeamAssessment,
+    sa: TeamAssessment,
+) -> Optional[Tuple[str, float, str]]:
+    """Decide whether this deal goes lopsided. Returns (loser 'buyer'|'seller', swing, cause) or None.
+
+    Deterministic per (save, day, pair, player) so a re-evaluated plan rolls the same way.
+    """
+    import random as _random
+    import zlib
+
+    bid, sid = team_id_of(plan.buyer), team_id_of(plan.seller)
+    salt = getattr(league, "_cpu_gm_taste_salt", None) or 0
+    day = int(ctx.get("calendar_cursor", 0) or 0)
+    seed = zlib.crc32(f"lop|{salt}|{day}|{bid}|{sid}|{player_pid(plan.target)}".encode("utf-8"))
+    r = _random.Random(seed)
+    b_ac, s_ac = gm_acumen(league, bid), gm_acumen(league, sid)
+    deadline_phase = float(ctx.get("deadline_phase") or 0.0)
+    chance = LOPSIDED_BASE_CHANCE + 0.08 * abs(b_ac - s_ac) + 0.06 * deadline_phase
+    if ba.panic_buyer:
+        chance += 0.08
+    if sa.status == STATUS_TANK or sa.late_seller or plan.motivated_seller:
+        chance += 0.05
+    if r.random() >= min(LOPSIDED_MAX_CHANCE, chance):
+        return None
+    # The weaker GM usually loses; desperation on either side tilts it.
+    lean = s_ac - b_ac  # > 0 → buyer is the weaker GM
+    if ba.panic_buyer:
+        lean += 0.5
+    if plan.motivated_seller:
+        lean -= 0.5
+    p_buyer_loses = max(0.1, min(0.9, 0.5 + 0.35 * lean))
+    loser = "buyer" if r.random() < p_buyer_loses else "seller"
+    swing = r.uniform(0.45, 0.65) if r.random() < 0.15 else r.uniform(0.20, 0.42)
+    if loser == "buyer":
+        cause = "panic_overpay" if ba.panic_buyer else "gm_overpay"
+    else:
+        cause = "fire_sale" if plan.motivated_seller else "gm_fleeced"
+    return loser, round(swing, 3), cause
+
+
+_LOPSIDED_REASON = {
+    "panic_overpay": "DESPERATION_OVERPAY",
+    "gm_overpay": "GM_OVERPAY",
+    "fire_sale": "DESPERATION_FIRE_SALE",
+    "gm_fleeced": "GM_FLEECED",
+}
 
 
 def _daily_jitter(rng: Any) -> float:
@@ -102,6 +187,10 @@ class DealPlan:
     reason_text: str = ""
     trade_category: str = ""
     fail_reason: str = ""
+    # Lopsided deal: which side loses value, by how much (share of target value), and why.
+    lopsided_loser: str = ""
+    lopsided_swing: float = 0.0
+    lopsided_cause: str = ""
 
 
 @dataclass
@@ -342,8 +431,8 @@ def _best_return_player(
     return best
 
 
-HOCKEY_MIN_FILL = 0.10
-HOCKEY_NEED_FLOOR = 0.20
+HOCKEY_MIN_FILL = 0.20  # both sides of a swap must fill a real hole (was 0.10)
+HOCKEY_NEED_FLOOR = 0.30
 DEPTH_SLOTS = ("F_BOTTOM6", "D_BOTTOM", "G_START")
 
 
@@ -506,6 +595,21 @@ def generate_plans(
     def taste(tid: str, player: Any) -> float:
         return gm_taste(league, tid, player)
 
+    # Which spare players each club is actually shopping this season (varies per save).
+    # Problem players and cap dumps are always available — those clubs need them gone.
+    season = int(ctx.get("season_year") or 0)
+    held: set = set()
+    for tid, tm in team_by_tid.items():
+        a = assessments.get(tid)
+        if a is None:
+            continue
+        pool = [i.player for i in a.surplus if i.reason not in ("locker_room", "bad_contract")]
+        pool += [p for p, _ in _spare_roster_players(tm, a)]
+        for p in pool:
+            if not on_the_block(league, tid, p, season):
+                held.add(player_pid(p))
+    excluded = set(used_players) | held
+
     # Everyone's surplus, indexed once.
     market: List[Tuple[Any, TeamAssessment, SurplusItem]] = []
     for tid, tm in team_by_tid.items():
@@ -513,7 +617,7 @@ def generate_plans(
         if a is None:
             continue
         for item in a.surplus:
-            if player_pid(item.player) in used_players or item.reason == "bad_contract":
+            if player_pid(item.player) in excluded or item.reason == "bad_contract":
                 continue
             market.append((tm, a, item))
 
@@ -601,10 +705,10 @@ def generate_plans(
             )
 
     # 3) Hockey trades between clubs with mismatched depth (all season).
-    plans.extend(_hockey_swap_plans(team_by_tid, assessments, rng=rng, used_players=used_players, taste=taste))
+    plans.extend(_hockey_swap_plans(team_by_tid, assessments, rng=rng, used_players=excluded, taste=taste))
     # 4) Deadline-week depth/insurance adds.
     if 0 <= days_left <= 7:
-        plans.extend(_depth_market_plans(team_by_tid, assessments, rng=rng, used_players=used_players, taste=taste))
+        plans.extend(_depth_market_plans(team_by_tid, assessments, rng=rng, used_players=excluded, taste=taste))
 
     # Seller patience: rentals and sell-offs fetch the most at the deadline, so sellers
     # mostly hold their veterans until then (a few sell early).
@@ -644,6 +748,10 @@ def build_package_for_plan(
         return False
     value = tools.player_value(plan.target, plan.seller, plan.buyer)
     plan.target_value = value
+    plan.lopsided_loser, plan.lopsided_swing, plan.lopsided_cause = "", 0.0, ""
+    lop = None
+    if plan.motive not in ("cap_dump", "depth_add") and value > 0.0:
+        lop = _lopsided_roll(league, plan, ctx, ba, sa)
 
     if plan.motive == "hockey_swap" and plan.return_player is not None:
         # Player-for-player; the light side tops up with a pick so values line up.
@@ -654,7 +762,13 @@ def build_package_for_plan(
             plan.fail_reason = "values_too_far_apart"
             return False
         diff = value - rv
-        if diff >= 5.0:
+        swing = abs(diff) / value
+        if lop is not None and swing >= LOPSIDED_MIN_SWING:
+            # One GM misreads the swap: no pick top-up, the gap stands.
+            plan.lopsided_loser = "seller" if diff > 0 else "buyer"
+            plan.lopsided_swing = round(min(0.65, swing), 3)
+            plan.lopsided_cause = "gm_fleeced" if diff > 0 else "gm_overpay"
+        elif diff >= 5.0:
             # Light side tops up — up to two picks, no firsts for a depth-level gap.
             picks, _ = _pick_bundle(
                 tools, league, plan.buyer, ctx, target=diff, protect_first=True, max_picks=2,
@@ -690,6 +804,12 @@ def build_package_for_plan(
         pay = max(0.0, value) * (1.0 + plan.premium)
         if plan.motive == "locker_room":
             pay *= 0.85  # moving a problem — the club takes a little less
+        if lop is not None:
+            plan.lopsided_loser, plan.lopsided_swing, plan.lopsided_cause = lop
+            if plan.lopsided_loser == "buyer":
+                pay *= 1.0 + plan.lopsided_swing  # buyer's GM overpays
+            else:
+                pay *= 1.0 - plan.lopsided_swing  # seller's GM takes a thin return
         # Only contender-window clubs (or a panicking one) will move a near-term 1st;
         # everyone else pays in 2nds/3rds/prospects (the value engine refuses otherwise).
         buyer_window = str(getattr(plan.buyer, "gm_window", "") or "").lower()
@@ -773,6 +893,21 @@ def build_package_for_plan(
         plan.reason_codes.append("DEADLINE_OVERPAY")
     plan.trade_category = _CATEGORY_BY_MOTIVE.get(plan.motive, "hockey_trade")
     plan.reason_text = _reason_text(plan, tools, ba, sa)
+    if plan.lopsided_loser:
+        plan.reason_codes = ["LOPSIDED_DEAL", _LOPSIDED_REASON.get(plan.lopsided_cause, "GM_OVERPAY")] + plan.reason_codes
+        loser = plan.buyer if plan.lopsided_loser == "buyer" else plan.seller
+        winner = plan.seller if plan.lopsided_loser == "buyer" else plan.buyer
+        la, wa = tools.team_abbr(loser), tools.team_abbr(winner)
+        pct = int(round(plan.lopsided_swing * 100))
+        tail = {
+            "panic_overpay": f" {la} panicked and paid roughly {pct}% over value — {wa} cashed in.",
+            "gm_overpay": f" Scouts around the league think {la} overpaid by about {pct}%; {wa} won this one.",
+            "fire_sale": f" {la} wanted out badly and took a return about {pct}% under value.",
+            "gm_fleeced": f" {wa} fleeced {la} — the return is roughly {pct}% light.",
+        }.get(plan.lopsided_cause, "")
+        plan.reason_text = (plan.reason_text + tail).strip()
+        if plan.lopsided_swing >= 0.3:
+            plan.trade_category = "lopsided_trade"
     return True
 
 

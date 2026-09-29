@@ -33,12 +33,22 @@ MAX_POOL = 22  # per side, by value — keeps combo enumeration cheap
 MAX_COMBO_SIZE = 4
 MAX_EVALS = 48  # full evaluator runs per request
 SELL_MARGIN = 0.94  # return <= 94% of what the partner receives (they need a win)
+SELL_VALUE_FLOOR = 0.62  # and >= 62% — anything lighter is a lowball the user wouldn't take
 BUY_PREMIUM = 1.04  # offer >= 104% of the target's price
 NHL_ROSTER_MAX = 23
 
 
-def _nhl_room(team: Any) -> int:
-    return NHL_ROSTER_MAX - len(list(getattr(team, "roster", None) or []))
+def _nhl_room(team: Any, league: Any = None) -> int:
+    """Open active-roster spots, counted the way trade validation counts them (IR/LTIR
+    excluded). len(roster) disagreed with the rules, so packages that 'fit' here were
+    rejected with 'Trade would exceed active roster maximum'."""
+    try:
+        from app.sim_engine.economy.cap_engine import calculate_team_cap_snapshot
+
+        active = int(calculate_team_cap_snapshot(team, league=league).get("activeRosterCount"))
+        return NHL_ROSTER_MAX - active
+    except Exception:
+        return NHL_ROSTER_MAX - len(list(getattr(team, "roster", None) or []))
 
 
 def _nhl_count(assets) -> int:
@@ -258,15 +268,23 @@ def _sell_candidates(
     *,
     anchor_type: str = "player",
 ) -> List[List[Dict[str, Any]]]:
-    """Diverse return packages under the partner budget — not only pick-for-pick."""
+    """Diverse return packages under the partner budget — not only pick-for-pick.
+
+    Packages must carry real value (>= SELL_VALUE_FLOOR of the asset). Ranking used to be
+    shape-first, so a star drew four-piece piles of depth worth a fraction of him; the
+    partner's evaluator rejected every one and only cheap assets ever got offers.
+    """
     budget = offered_value * SELL_MARGIN
-    ranked: List[Tuple[int, float, List[Dict[str, Any]]]] = []
+    floor = offered_value * SELL_VALUE_FLOOR
+    ranked: List[Tuple[float, float, List[Dict[str, Any]]]] = []
     for combo in _combos(pool, MAX_COMBO_SIZE):
         total = sum(a["value"] for a in combo)
-        if total > budget or not fits(combo):
+        if total > budget or total < floor or not fits(combo):
             continue
         shape = _combo_shape_score(combo, anchor_type=anchor_type)
-        ranked.append((shape, total, list(combo)))
+        # Value closeness dominates; shape only breaks ties between similar totals.
+        key = 100.0 * (total / max(1.0, budget)) + shape * 0.25
+        ranked.append((key, total, list(combo)))
     ranked.sort(key=lambda t: (t[0], t[1]), reverse=True)
     out: List[List[Dict[str, Any]]] = []
     seen: set = set()
@@ -401,7 +419,7 @@ def find_trade_offers(
             if offered <= 2.0:
                 continue
             pool = _pool(partner, tid, user_team, league, ctx, exclude=exclude, max_value=offered * SELL_MARGIN)
-            user_room, partner_room = _nhl_room(user_team), _nhl_room(partner)
+            user_room, partner_room = _nhl_room(user_team, league), _nhl_room(partner, league)
             cands = _sell_candidates(
                 offered,
                 pool,
@@ -432,7 +450,7 @@ def find_trade_offers(
     else:
         partner_tid, partner = partners[0]
         price = anchor_value(user_team)
-        user_room, partner_room = _nhl_room(user_team), _nhl_room(partner)
+        user_room, partner_room = _nhl_room(user_team, league), _nhl_room(partner, league)
 
         def fits(combo):
             return _roster_fits(user_room, partner_room, combo, [anchor_base])

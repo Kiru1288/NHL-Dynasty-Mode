@@ -423,8 +423,12 @@ def _ai_interest_for_team(
                 reasons = [r for r in reasons if "first" not in r.lower() and "premium" not in r.lower()]
             if premium > 0.0 and net >= -(premium + 3.0):
                 interest = max(interest, 0.52)
-        elif str(team_id) == str(intent.get("seller_team_id") or "") and intent.get("motivated_seller"):
-            if net >= -8.0:
+        elif str(team_id) == str(intent.get("seller_team_id") or ""):
+            # Lopsided deal: this GM misreads the market and takes a thin return.
+            discount = float(intent.get("seller_discount_value") or 0.0)
+            if discount > 0.0 and net >= -(discount + 4.0):
+                interest = max(interest, 0.52)
+            elif intent.get("motivated_seller") and net >= -8.0:
                 interest = max(interest, 0.46)
 
     interest = max(0.0, min(1.0, interest))
@@ -778,6 +782,8 @@ def evaluate_trade_package(
                         threshold = min(threshold, 0.50)
                     if str(tid) == str(intent.get("seller_team_id") or "") and intent.get("motivated_seller"):
                         threshold = min(threshold, 0.46)
+                    if str(tid) == str(intent.get("seller_team_id") or "") and float(intent.get("seller_discount_value") or 0.0) > 0.0:
+                        threshold = min(threshold, 0.50)
             if interest_level.get(tid, 0.0) < threshold:
                 accepted = False
                 tname = _team_display(team_obj, tid)
@@ -801,6 +807,7 @@ def evaluate_trade_package(
                     draft_gap_max,
                     CPU_AMBIENT_FAIRNESS_GAP_MAX
                     + 2.0 * float(intent.get("premium_value") or 0.0)
+                    + 2.0 * float(intent.get("seller_discount_value") or 0.0)
                     + (8.0 if intent.get("motivated_seller") else 0.0),
                 )
             if fairness_gap > draft_gap_max:

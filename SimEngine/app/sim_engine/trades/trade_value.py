@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the talent curve / depth-star spread changes so Trade Hub caches rebuild
 # without requiring a new franchise save.
-TRADE_VALUE_FORMULA_VERSION = 12
+TRADE_VALUE_FORMULA_VERSION = 13
 # Soft ceiling used only for UI-relative clamps / legacy helpers — player totals are uncapped.
 TRADE_VALUE_SOFT_CEIL = 220.0
 LEAGUE_MINIMUM_AAV_M = 0.775
@@ -500,7 +500,10 @@ def _trade_valuation_ovr(
         val = prospect_valuation_ovr(player, ovr_display=ovr, pot_display=pot)
         upside = max(0.0, pot - ovr)
         if upside >= 5.0:
-            val = max(val, ovr + min(9.0, upside * 0.50), pot * 0.88)
+            # Younger = more of the ceiling priced in (an 18-year-old #1 pick is bought
+            # for who he becomes). Was a flat 0.50 capped at +9.
+            lift = 0.64 if age <= 19 else 0.56 if age <= 21 else 0.48
+            val = max(val, ovr + min(13.0, upside * lift), pot * 0.88)
         return min(val, pot * 0.95)
 
     upside = max(0.0, pot - ovr)
@@ -1371,6 +1374,10 @@ def _evaluate_player_asset_value_impl(
         ctx_lo, ctx_hi = -12.0, 8.0
     else:
         ctx_lo, ctx_hi = -14.0, 8.0
+    # Replacement-level veterans: a stack of small bonuses (age, position, need, window,
+    # cheap deal) added up to +8 on a ~10 base — AHL depth priced like real assets.
+    if not is_prospect_val and val_ovr < 74.0:
+        ctx_hi = 2.0 if age >= 24 else 4.0
     context_mod = _clamp(sum(v for v in context_parts if v > 0), 0.0, ctx_hi) + _clamp(
         sum(v for v in context_parts if v < 0), ctx_lo, 0.0
     )
@@ -1413,16 +1420,22 @@ def _evaluate_player_asset_value_impl(
         elif val_ovr >= 84.0:
             total += 2.5
         elif val_ovr < 73.0:
-            total -= (73.0 - val_ovr) * 1.15
+            total -= (73.0 - val_ovr) * 1.5
         elif val_ovr < 77.0:
             total -= (77.0 - val_ovr) * 0.65
         elif val_ovr < 80.0:
             total -= (80.0 - val_ovr) * 0.30
     # Pipeline assets stay below lottery picks and proven NHL stars.
     if is_prospect_val:
+        # Elite-ceiling premium: blue-chip prospects are the scarcest currency in the
+        # league. Without it a 90+ potential #1 pick priced like a starting goalie.
+        if pot >= 84.0:
+            total += (pot - 84.0) * 5.0 * (0.75 + 0.5 * _scouting_confidence(player))
         signed = str(getattr(player, "signed_status", "") or "").lower()
         unsigned = signed in ("unsigned", "rights", "rights_only", "") and cap_hit <= 0.05
-        prospect_cap = slot_curve_value(1) - (2.0 if unsigned else 0.0)
+        # Cap was "never above a #1 pick" (~93); a developing elite prospect is worth more
+        # than the pick that bought him, so the cap rises with his ceiling.
+        prospect_cap = slot_curve_value(1) + max(0.0, pot - 86.0) * 6.0 - (2.0 if unsigned else 0.0)
         total = min(total, max(prospect_cap, 55.0))
     # Hockey value floor: a near-minimum deal can be waived/buried for almost
     # nothing, so it should never cost a sweetener to move.
@@ -1532,8 +1545,34 @@ def evaluate_pick_asset_value(
     # Once the board is set, the exact slot is known and replaces the
     # round-average base plus the standings guesswork that estimates it.
     known_slot = _known_pick_slot(pick_row, ctx) if years_out == 0 else None
+    team_by_id = ctx.get("team_by_id") or {}
+    orig_tid = str(pick_row.get("original_team_id") or "")
+    original_team = team_by_id.get(orig_tid) if isinstance(team_by_id, dict) else None
+    proj = _projected_finish_risk(original_team, team_by_id=team_by_id if isinstance(team_by_id, dict) else None)
+    expected_slot: Optional[float] = None
     if known_slot is not None:
         base = slot_curve_value(known_slot)
+        age_discount = 0.0
+    else:
+        # Price the pick where it is expected to land on the real slot curve. Team strength
+        # enters ONCE, through the projected slot, weighted by how settled the standings are.
+        # (It used to be applied four times — finish risk, two lottery nudges and a quality
+        # penalty — which sank most 1sts to their floor, level with an average 2nd.)
+        n_teams = len(team_by_id) if isinstance(team_by_id, dict) and len(team_by_id) >= 2 else 32
+        mid = (n_teams + 1) / 2.0
+        rank = proj.get("league_rank")
+        if rank is None and proj.get("points_pct") is not None:
+            rank = _clamp(n_teams - (float(proj["points_pct"]) - 0.35) * 48.0 * (n_teams / 32.0), 1, n_teams)
+        gp = _safe_float(getattr(original_team, "gp", getattr(original_team, "games_played", 0)), 0.0) if original_team is not None else 0.0
+        if years_out == 0:
+            certainty = min(1.0, gp / 60.0)
+        elif years_out == 1:
+            certainty = 0.2
+        else:
+            certainty = 0.0
+        in_round = mid if rank is None else certainty * float(rank) + (1.0 - certainty) * mid
+        expected_slot = (rnd - 1) * n_teams + in_round
+        base = slot_curve_value(int(round(expected_slot))) * (1.0 - min(0.30, 0.10 * years_out))
         age_discount = 0.0
 
     window = _team_window(acquiring_team)
@@ -1547,18 +1586,15 @@ def evaluate_pick_asset_value(
     if ctx.get("deadline_phase", 0.0) > 0.4 and window == "contender" and rnd <= 2:
         market_mod -= 3.0
 
-    team_by_id = ctx.get("team_by_id") or {}
-    orig_tid = str(pick_row.get("original_team_id") or "")
-    original_team = team_by_id.get(orig_tid) if isinstance(team_by_id, dict) else None
-    proj = _projected_finish_risk(original_team, team_by_id=team_by_id if isinstance(team_by_id, dict) else None)
-    original_team_mod = proj["projected_risk_score"] * (1.25 if rnd == 1 else 0.65)
+    # Team strength is already inside the projected slot — no separate finish-risk term.
+    original_team_mod = 0.0
 
     points_pct = proj.get("points_pct")
     lottery_mod = 0.0
     league_rank = proj.get("league_rank")
-    if known_slot is not None:
-        # Slot is settled: no finish risk or lottery upside left to price in.
-        original_team_mod = 0.0
+    if True:
+        # Slot-curve base already carries lottery upside / finish risk.
+        pass
     elif rnd == 1:
         if league_rank is not None:
             n_teams = len(team_by_id) if isinstance(team_by_id, dict) and team_by_id else 32
@@ -1581,7 +1617,7 @@ def evaluate_pick_asset_value(
                 lottery_mod -= 3.0
 
     future_mod = 0.0
-    if years_out >= 1:
+    if False and years_out >= 1:  # future discount now lives in the slot-curve base
         future_mod -= min(5.0, years_out * 2.2)
         orig_window = str(proj.get("window") or "")
         if orig_window in ("rebuild", "declining"):
@@ -1627,7 +1663,7 @@ def evaluate_pick_asset_value(
     total = max(0.5, float(sum(components.values())), 0.45 * float(components["base"]))
 
     # Crown-jewel spectrum: lottery/rebuild clubs' 1sts vs contender late 1sts.
-    if rnd == 1 and known_slot is None and original_team is not None:
+    if False and rnd == 1 and known_slot is None and original_team is not None:  # folded into projected slot
         risk = float(proj.get("projected_risk_score") or 0.0)
         league_rank = proj.get("league_rank")
         n_teams = len(team_by_id) if isinstance(team_by_id, dict) and team_by_id else 32
@@ -1646,7 +1682,7 @@ def evaluate_pick_asset_value(
             quality_mod -= 4.0
         components["original_team_quality"] = round(quality_mod, 2)
         total = max(0.5, total + quality_mod)
-    elif rnd == 2 and known_slot is None and original_team is not None:
+    elif False and rnd == 2 and known_slot is None and original_team is not None:  # folded into projected slot
         risk = float(proj.get("projected_risk_score") or 0.0)
         quality_mod = _clamp(risk * 0.35, -4.0, 8.0)
         components["original_team_quality"] = round(quality_mod, 2)

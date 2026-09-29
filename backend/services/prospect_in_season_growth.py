@@ -276,6 +276,14 @@ def prospect_in_season_tick(session: Any) -> Dict[str, int]:
     if moved or pot_moved:
         try:
             session._cached_roster_browser_payload = None
+            # The draft board / prospect pages are cached on _prospect_revision, which
+            # growth never bumped — prospects grew but the draft screens kept showing
+            # October ratings all season.
+            session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
+            session._cached_draft_class_rankings = None
+            session._cached_draft_class_hud_payload = None
+            session._draft_class_detail_cache = None
+            session._prospect_profile_by_id_cache = None
         except Exception:
             pass
     return {"moved": moved, "potential": pot_moved}

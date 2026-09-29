@@ -556,6 +556,14 @@ def calculate_team_cap_snapshot(
     bonus_overage_m = team_bonus_overage_millions(team, season_label=season_label)
     bonus_reserve_m = team_performance_bonus_reserve_millions(team)
     ltir_pool_m = team_ltir_pool_millions(team)
+    # Season-scoped pools (e.g. the opening-day allowance) expire when the season rolls.
+    pool_season = _get(team, "ltir_pool_season", None)
+    if ltir_pool_m > 0 and pool_season is not None and season_y is not None:
+        try:
+            if int(pool_season) != int(season_y):
+                ltir_pool_m = 0.0
+        except (TypeError, ValueError):
+            pass
 
     other_dead_m = max(0.0, normalize_money_to_millions(_get(team, "other_dead_cap_m", _get(team, "other_dead_cap", 0.0))))
     effective_limit_m = upper_limit_m + ltir_pool_m

@@ -922,6 +922,7 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
     opened: List[Dict[str, Any]] = []
     warnings: List[Dict[str, Any]] = []
     demand_candidates: List[Tuple[float, Any, Any, Dict[str, Any], str]] = []
+    seen_pids: set = set()
 
     # One league-wide storyline sync for the whole pass (per-player syncs were O(N^2)).
     try:
@@ -959,6 +960,10 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
                     _maybe_enqueue_stability_concern_hint(
                         session, player, team, stability_row, calendar_idx, iso, rng
                     )
+                # Roster chip + dossier label follow the player's CURRENT state (they
+                # used to stick forever once set, so every player ended up "Frustrated").
+                _sync_stability_surface(session, player, team, stability_row)
+                seen_pids.add(pid)
 
                 if (
                     escalation >= 3
@@ -978,6 +983,14 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
 
     finally:
         session._stability_entities_pass_cache = None
+
+    # Drop flags for players no longer evaluated (traded away, below the OVR floor, retired)
+    # unless they carry an open formal demand.
+    flags = getattr(session, "trade_stability_roster_flags", None)
+    if isinstance(flags, dict) and flags:
+        session.trade_stability_roster_flags = {
+            k: v for k, v in flags.items() if k in seen_pids or active_demand_for_player(session, k)
+        }
 
     demand_candidates.sort(key=lambda t: t[0])
     team_open, team_recent = _team_demand_load(session, int(calendar_idx))
@@ -1061,6 +1074,61 @@ def build_trade_demand_crisis_payload(session: Any, *, tick_timers: bool = False
             "disruptor": bool(row.get("disruptor")),
         }
     return None
+
+
+_STABILITY_TAGS = {
+    0: "Monitor — early concern",
+    1: "Growing frustration",
+    2: "Disconnecting from organization",
+    3: "Unhappy — trade demand risk",
+    4: "Locker-room crisis",
+}
+
+
+def _sync_stability_surface(session: Any, player: Any, team: Any, stability_row: Dict[str, Any]) -> None:
+    """Make the roster flag and dossier label match today's stability — set, update or clear."""
+    from app.sim_engine.franchise.trade_stability_engine import count_significant_pressures
+
+    pid = _player_id(player)
+    level = int(stability_row.get("escalation_level") or 0)
+    score = float(stability_row.get("trade_stability_score") or 100.0)
+    pressures = dict(stability_row.get("pressures") or {})
+    character = int(stability_row.get("character") or 74)
+    if level >= 1:
+        tag: Optional[str] = _STABILITY_TAGS.get(level, _STABILITY_TAGS[4])
+    elif character >= 58 and 45.0 < score < 72.0 and count_significant_pressures(pressures) >= 1:
+        tag = _STABILITY_TAGS[0]
+    else:
+        tag = None
+
+    old_labels = list(getattr(player, "dossier_labels", None) or [])
+    stale = set(_STABILITY_TAGS.values())
+    new_labels = [lb for lb in old_labels if lb not in stale]
+    if tag:
+        new_labels.append(tag)
+    if new_labels != old_labels:
+        try:
+            setattr(player, "dossier_labels", new_labels[-8:])
+        except Exception:
+            pass
+
+    flags = getattr(session, "trade_stability_roster_flags", None)
+    if not isinstance(flags, dict):
+        flags = {}
+        session.trade_stability_roster_flags = flags
+    tid = str(_get(team, "team_id", "") or _get(team, "id", "") or "")
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    if tag is None or tid != user_tid:
+        flags.pop(pid, None)
+        return
+    flags[pid] = {
+        "player_id": pid,
+        "player_name": _player_name(player),
+        "escalation_level": level,
+        "score": score,
+        "label": tag,
+        "top_pressure": max(pressures.items(), key=lambda kv: kv[1], default=("role", 0))[0],
+    }
 
 
 def _maybe_enqueue_stability_warning(

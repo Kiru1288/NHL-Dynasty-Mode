@@ -21,6 +21,7 @@ import BurnerPanel from "../components/franchise/social/BurnerPanel";
 import { collectLockerPulse, buildHubStoryTicker, isRoutineLeagueTrade } from "../utils/lockerRoomPulse";
 import { resolveChapterMap, chapterNumericValue } from "../utils/chapterAttributes";
 import "../styles/storylinesTokens.css";
+import "../styles/meetingsDesk.css";
 
 /*
   StorylinesScreen — franchise narrative command center.
@@ -635,8 +636,68 @@ function MeetingEffectCards({ receipts }) {
   );
 }
 
+function MeetingResultOverlay({ outcome, onDismiss }) {
+  const impact = asObject(outcome?.impact);
+  const tone = str(impact.tone) || "mixed";
+  const pid = str(outcome?.player_id || "");
+  const name = str(impact.player_name || outcome?.player_name || "Player");
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape" || e.key === "Enter") onDismiss?.();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onDismiss]);
+  return (
+    <div className="md-result" role="dialog" aria-modal="true" aria-label="Meeting result" onClick={onDismiss}>
+      <div className={`md-result__card is-${tone}`} onClick={(e) => e.stopPropagation()}>
+        <p className="md-result__verdict">{str(impact.verdict || "Meeting resolved")}</p>
+        <div className="md-result__who">
+          {pid ? <PlayerHeadshot player={outcome?.portrait || { id: pid, player_id: pid }} size={84} /> : null}
+          <div>
+            <strong>{name}</strong>
+            {impact.choice_label ? <span>You: “{str(impact.choice_label)}”</span> : null}
+          </div>
+        </div>
+        <blockquote className="md-result__quote">“{str(impact.quote)}”</blockquote>
+        {asArray(impact.impacts).length ? (
+          <ul className="md-result__impacts">
+            {asArray(impact.impacts).map((row, i) => {
+              const d = Number(row.delta) || 0;
+              return (
+                <li key={i} className={row.good ? "is-good" : "is-bad"}>
+                  <span>{str(row.label)}</span>
+                  <strong>
+                    {d > 0 ? "▲ +" : "▼ "}
+                    {Math.abs(d) < 1 ? d.toFixed(2).replace("-", "") : Math.abs(d).toFixed(1)}
+                    {row.unit ? ` ${str(row.unit)}` : ""}
+                  </strong>
+                  {row.after != null && row.before != null ? (
+                    <em>
+                      {Math.round(Number(row.before))} → {Math.round(Number(row.after))}
+                    </em>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="sl-muted">No measurable change — he heard you, but nothing moved.</p>
+        )}
+        {asArray(impact.notes).map((n, i) => (
+          <p key={i} className="md-result__note">{str(n)}</p>
+        ))}
+        <button type="button" className="md-result__close" onClick={onDismiss}>
+          Back to the desk
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MeetingOutcomePanel({ outcome, onDismiss, kicker = "Meeting resolved" }) {
   if (!outcome) return null;
+  if (outcome.impact) return <MeetingResultOverlay outcome={outcome} onDismiss={onDismiss} />;
   const rel = outcome.relationship || outcome.history?.relationship_snapshot;
   const cards = parseMeetingReceipts(outcome.receipts);
   const hasEffects = cards.length > 0;
@@ -1940,11 +2001,22 @@ function TradeValueMeter({ leftValue = 0, rightValue = 0, leftAbbr = "", rightAb
   const rightPct = 100 - leftPct;
   const delta = Math.abs(lv - rv);
   const fair = delta <= Math.max(4, total * 0.08);
+  // Gap as a share of the bigger side: edge < 20% < wins < 35% < fleece.
+  const gapPct = delta / Math.max(lv, rv, 1);
+  const winAbbr = lv > rv ? leftAbbr || "Left" : rightAbbr || "Right";
+  const loseAbbr = lv > rv ? rightAbbr || "Right" : leftAbbr || "Left";
+  const verdict = fair
+    ? "Balanced deal"
+    : gapPct < 0.2
+      ? `Edge ${winAbbr}`
+      : gapPct < 0.35
+        ? `${winAbbr} wins trade`
+        : `${winAbbr} fleeces ${loseAbbr}`;
   return (
     <div className="sl-trade-meter" aria-label="Trade value comparison">
       <div className="sl-trade-meter__labels">
         <span>{leftAbbr || "A"} · {lv ? lv.toFixed(1) : "—"}</span>
-        <em>{fair ? "Balanced deal" : lv > rv ? `${leftAbbr || "Left"} wins value` : `${rightAbbr || "Right"} wins value`}</em>
+        <em>{verdict}</em>
         <span>{rightAbbr || "B"} · {rv ? rv.toFixed(1) : "—"}</span>
       </div>
       <div className="sl-trade-meter__track">
@@ -2197,6 +2269,18 @@ function PlayerMeetingsPanel({
   }, [view, selectedPlayerId, loadPlayerDetail]);
 
   const roster = asArray(meetingsPayload?.roster);
+  const portraitById = useMemo(() => {
+    const m = new Map();
+    asArray(meetingsPayload?.roster).forEach((r) => {
+      if (r?.portrait_row) m.set(str(r.player_id), r.portrait_row);
+    });
+    asArray(meetingsPayload?.player_requests).forEach((r) => {
+      const id = str(r.player_id || r.actor_id);
+      if (r?.portrait_row && !m.has(id)) m.set(id, r.portrait_row);
+    });
+    return m;
+  }, [meetingsPayload]);
+  const portraitOf = (pid) => portraitById.get(str(pid)) || { id: str(pid), player_id: str(pid) };
   const needs = asArray(meetingsPayload?.needs_attention).filter(
     (row) => !addressedPlayerIds.has(str(row.player_id))
   );
@@ -2242,6 +2326,10 @@ function PlayerMeetingsPanel({
           receipts: res?.receipts,
           relationship: res?.relationship,
           choice_label: res?.choice_label,
+          impact: res?.impact,
+          player_id: res?.player_id || res?.interaction?.player_id || res?.interaction?.actor_id,
+          player_name: res?.player_name,
+          portrait: portraitOf(res?.player_id || res?.interaction?.player_id || res?.interaction?.actor_id),
         });
         markPlayerAddressed(res?.interaction?.player_id || res?.interaction?.actor_id);
         setActiveMeeting(null);
@@ -2268,6 +2356,10 @@ function PlayerMeetingsPanel({
           relationship: res?.relationship,
           history: res?.history,
           choice_label: res?.choice_label || res?.history?.choice_label,
+          impact: res?.impact,
+          player_id: res?.player_id || activeMeeting?.player_id,
+          player_name: res?.player_name || activeMeeting?.player_name,
+          portrait: portraitOf(res?.player_id || activeMeeting?.player_id),
         });
         markPlayerAddressed(activeMeeting?.player_id);
         setActiveMeeting(null);
@@ -2301,7 +2393,7 @@ function PlayerMeetingsPanel({
           </button>
           <div className="sl-pm-hero">
             <PlayerHeadshot
-              player={{ id: str(activeMeeting.player_id), player_id: str(activeMeeting.player_id) }}
+              player={portraitOf(str(activeMeeting.player_id))}
               size={88}
             />
             <div>
@@ -2365,7 +2457,7 @@ function PlayerMeetingsPanel({
             ← Roster
           </button>
           <div className="sl-pm-hero">
-            <PlayerHeadshot player={{ id: str(selected.player_id), player_id: str(selected.player_id) }} size={88} />
+            <PlayerHeadshot player={portraitOf(str(selected.player_id))} size={88} />
             <div>
               <p className="sl-room__kicker">Player file · private office</p>
               <h2>{str(selected.player_name)}</h2>
@@ -2380,9 +2472,44 @@ function PlayerMeetingsPanel({
         </header>
 
         <MeetingRelationshipPanel relationship={rel} />
-        {attentionReasons.length ? (
+        {asArray(selected.issues).length || asArray(selected.openings).length ? (
+          <section className="md-desk md-player-issues">
+            {asArray(selected.issues).length ? (
+              <>
+                <h3 className="md-section__title md-section__title--bad">What needs addressing</h3>
+                <ul className="md-issues">
+                  {asArray(selected.issues).map((iss, i) => (
+                    <MeetingIssueRow
+                      key={`${str(iss.code)}-${i}`}
+                      item={iss}
+                      busy={busy}
+                      onFix={(iid) => handleStart(str(selected.player_id), iid)}
+                    />
+                  ))}
+                </ul>
+              </>
+            ) : null}
+            {asArray(selected.openings).length ? (
+              <>
+                <h3 className="md-section__title md-section__title--good">Positive openings</h3>
+                <ul className="md-issues">
+                  {asArray(selected.openings).map((op, i) => (
+                    <MeetingIssueRow
+                      key={`${str(op.code)}-${i}`}
+                      item={{ ...op, severity: "good" }}
+                      busy={busy}
+                      onFix={(iid) => handleStart(str(selected.player_id), iid)}
+                    />
+                  ))}
+                </ul>
+              </>
+            ) : null}
+          </section>
+        ) : attentionReasons.length ? (
           <MeetingCausePanel reasons={attentionReasons} title="Why he needs attention" />
-        ) : null}
+        ) : (
+          <p className="sl-muted">No grievances on file — he's content.</p>
+        )}
 
         {openRequests.map((req) => (
           <article key={str(req.id)} className="sl-request sl-request--cinematic">
@@ -2512,87 +2639,197 @@ function PlayerMeetingsPanel({
     );
   }
 
+  const summary = asObject(meetingsPayload?.summary);
+  const goodNews = asArray(meetingsPayload?.good_news).filter((row) => !addressedPlayerIds.has(str(row.player_id)));
+  const openPlayer = (pid) => {
+    setSelectedPlayerId(str(pid));
+    setView("player");
+  };
+
   return (
-    <div className="sl-room sl-room--cinematic">
-      <div className="sl-room__vignette" aria-hidden />
-      <header className="sl-room__head">
-        <p className="sl-room__kicker">GM office · relationship desk</p>
-        <h2>Player meetings</h2>
-        <span className="sl-room__sub">
-          Private conversations behind closed doors. Resolve requests and strained relationships before they become headlines.
-        </span>
+    <div className="sl-room sl-room--cinematic md-desk">
+      <header className="md-head">
+        <div>
+          <p className="md-kicker">GM office · relationship desk</p>
+          <h2>Player meetings</h2>
+          <p className="md-sub">Who needs a conversation, why, and which talk fixes it.</p>
+        </div>
+        <div className="md-tally" role="list">
+          <MeetingTally tone="critical" label="Urgent" value={summary.critical} />
+          <MeetingTally tone="warning" label="Needs a talk" value={summary.warning} />
+          <MeetingTally tone="request" label="Asked to see you" value={requests.length} />
+          <MeetingTally tone="good" label="Good news" value={goodNews.length} />
+          <MeetingTally tone="calm" label="Content" value={summary.content} />
+        </div>
       </header>
+
       <MeetingOutcomePanel outcome={lastOutcome} onDismiss={() => setLastOutcome(null)} />
       {notice ? <p className="sl-notice">{notice}</p> : null}
 
       {requests.length ? (
-        <section className="sl-block">
-          <h3 className="sl-block__title sl-block__title--alert">
-            Requests waiting <em>{requests.length}</em>
+        <section className="md-section">
+          <h3 className="md-section__title">
+            He asked to see you <em>{requests.length}</em>
           </h3>
-          {requests.map((req) => (
-            <article key={str(req.id)} className="sl-request sl-request--cinematic">
-              <div className="sl-request__head">
-                <strong>{str(req.player_name || "Player")}</strong>
-                <span>{meetingKindLabel(req.kind)}</span>
-              </div>
-              <h3>{str(req.title)}</h3>
-              <p>{str(req.summary)}</p>
-              <div className="sl-choices sl-choices--cinematic sl-choices--row">
-                {asArray(req.choices).map((c) => (
-                  <ResponseChoiceButton
-                    key={str(c.id)}
-                    choice={c}
-                    className="sl-choice sl-choice--cinematic sl-choice--compact"
-                    disabled={busy}
-                    onClick={() => handleResolveRequest(str(req.id), str(c.id))}
-                  />
-                ))}
-              </div>
-            </article>
-          ))}
-        </section>
-      ) : null}
-
-      {needs.length ? (
-        <section className="sl-block">
-          <h3 className="sl-block__title">
-            Needs attention <em>{needs.length}</em>
-          </h3>
-          <div className="sl-roster sl-roster--attention">
-            {needs.map((row) => (
-              <button
-                key={str(row.player_id)}
-                type="button"
-                className="sl-rosterrow is-flagged sl-rosterrow--cinematic"
-                onClick={() => {
-                  setSelectedPlayerId(str(row.player_id));
-                  setView("player");
-                }}
-                onMouseEnter={() => loadPlayerDetail(str(row.player_id), { background: true })}
-              >
-                <PlayerHeadshot player={{ id: str(row.player_id), player_id: str(row.player_id) }} size={52} />
-                <div className="sl-rosterrow__main">
-                  <strong>{str(row.player_name)}</strong>
-                  <span>
-                    {str(row.position)} · OVR {row.overall} · Morale {formatMeetingStat(row.relationship?.morale)}
-                  </span>
-                  <div className="sl-pm-cause-chips">
-                    {asArray(row.attention_reasons).slice(0, 2).map((reason, i) => (
-                      <em key={i}>{str(reason.label)}</em>
+          <div className="md-requests">
+            {requests.map((req) => {
+              const tone = str(req.tone) || "neutral";
+              const pid = str(req.player_id || req.actor_id);
+              return (
+                <article key={str(req.id)} className={`md-request is-${tone}`}>
+                  <div className="md-request__who">
+                    <PlayerHeadshot player={portraitOf(pid)} size={44} />
+                    <div>
+                      <strong>{str(req.player_name || "Player")}</strong>
+                      <span className={`md-tone md-tone--${tone}`}>
+                        {tone === "positive" ? "Positive" : tone === "negative" ? "Complaint" : "Request"} ·{" "}
+                        {meetingKindLabel(req.kind)}
+                      </span>
+                    </div>
+                  </div>
+                  <h4>{str(req.title)}</h4>
+                  <p>{str(req.summary)}</p>
+                  <div className="md-request__choices">
+                    {asArray(req.choices).map((c) => (
+                      <button
+                        key={str(c.id)}
+                        type="button"
+                        className="md-choice"
+                        disabled={busy}
+                        onClick={() => handleResolveRequest(str(req.id), str(c.id))}
+                      >
+                        <strong>{str(c.label)}</strong>
+                        {c.detail || c.description ? <span>{str(c.detail || c.description)}</span> : null}
+                      </button>
                     ))}
                   </div>
-                </div>
-                {row.requested_meeting ? <span className="sl-tagbadge">Requested</span> : null}
-              </button>
-            ))}
+                </article>
+              );
+            })}
           </div>
         </section>
       ) : null}
 
-      <section className="sl-block">
-        <div className="sl-block__bar">
-          <h3 className="sl-block__title">Full roster <em>{roster.length}</em></h3>
+      <div className="md-columns">
+        <section className="md-section">
+          <h3 className="md-section__title md-section__title--bad">
+            Problems to fix <em>{needs.length}</em>
+          </h3>
+          {needs.length ? (
+            <div className="md-cards">
+              {needs.map((row) => (
+                <article key={str(row.player_id)} className={`md-card is-${str(row.top_severity) || "watch"}`}>
+                  <header className="md-card__head">
+                    <PlayerHeadshot player={portraitOf(str(row.player_id))} size={48} />
+                    <div className="md-card__id">
+                      <button type="button" className="md-link" onClick={() => openPlayer(row.player_id)}>
+                        {str(row.player_name)}
+                      </button>
+                      <span>
+                        {str(row.position)} · {row.age} · OVR {row.overall}
+                      </span>
+                    </div>
+                    <SeverityPill severity={row.top_severity} />
+                  </header>
+                  <MeetingMeters rel={row.relationship} />
+                  <ul className="md-issues">
+                    {asArray(row.issues).map((iss, i) => (
+                      <MeetingIssueRow
+                        key={`${str(iss.code)}-${i}`}
+                        item={iss}
+                        busy={busy}
+                        onFix={(iid) => handleStart(str(row.player_id), iid)}
+                      />
+                    ))}
+                    {row.requested_meeting && !asArray(row.issues).length ? (
+                      <li className="md-issue is-watch">
+                        <div>
+                          <strong>Asked for a meeting</strong>
+                          <p>Answer his request above.</p>
+                        </div>
+                      </li>
+                    ) : null}
+                  </ul>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="md-empty">
+              <strong>No problems on the desk</strong>
+              <span>Nobody on the roster has a grievance that needs a meeting right now.</span>
+            </div>
+          )}
+        </section>
+
+        <section className="md-section">
+          <h3 className="md-section__title md-section__title--good">
+            Good news · positive meetings <em>{goodNews.length}</em>
+          </h3>
+          {goodNews.length ? (
+            <div className="md-cards">
+              {goodNews.map((row) => (
+                <article key={str(row.player_id)} className="md-card is-good">
+                  <header className="md-card__head">
+                    <PlayerHeadshot player={portraitOf(str(row.player_id))} size={48} />
+                    <div className="md-card__id">
+                      <button type="button" className="md-link" onClick={() => openPlayer(row.player_id)}>
+                        {str(row.player_name)}
+                      </button>
+                      <span>
+                        {str(row.position)} · {row.age} · OVR {row.overall}
+                        {row.ovr_trend === "up" ? " ↑" : ""}
+                      </span>
+                    </div>
+                    <span className="md-pill md-pill--good">Opportunity</span>
+                  </header>
+                  <ul className="md-issues">
+                    {asArray(row.openings).map((op, i) => (
+                      <MeetingIssueRow
+                        key={`${str(op.code)}-${i}`}
+                        item={{ ...op, severity: "good" }}
+                        busy={busy}
+                        onFix={(iid) => handleStart(str(row.player_id), iid)}
+                      />
+                    ))}
+                  </ul>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="md-empty">
+              <strong>Nothing to celebrate yet</strong>
+              <span>Hot streaks, extension windows and room leaders show up here.</span>
+            </div>
+          )}
+        </section>
+      </div>
+
+      {asArray(promises.active).length ? (
+        <section className="md-section">
+          <h3 className="md-section__title">
+            Promises you owe <em>{asArray(promises.active).length}</em>
+          </h3>
+          <div className="md-promises">
+            {promises.active.map((p) => {
+              const left = p.games_remaining != null ? Number(p.games_remaining) : null;
+              const who = roster.find((r) => str(r.player_id) === str(p.player_id));
+              return (
+                <div key={str(p.id || `${p.player_id}-${p.type}`)} className={`md-promise ${left != null && left <= 3 ? "is-due" : ""}`}>
+                  <strong>{str(who?.player_name || p.player_name || "Player")}</strong>
+                  <span>{str(p.description || p.type)}</span>
+                  <em>{left != null ? `${left} game${left === 1 ? "" : "s"} left` : "Open"}</em>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="md-section">
+        <div className="md-section__bar">
+          <h3 className="md-section__title">
+            Full roster <em>{roster.length}</em>
+          </h3>
           <input
             type="search"
             className="sl-input"
@@ -2601,49 +2838,130 @@ function PlayerMeetingsPanel({
             onChange={(e) => setRosterQuery(e.target.value)}
           />
         </div>
-        <div className="sl-roster">
-          {visibleRoster.map((row) => (
-            <button
-              key={str(row.player_id)}
-              type="button"
-              className="sl-rosterrow"
-              onClick={() => {
-                setSelectedPlayerId(str(row.player_id));
-                setView("player");
-              }}
-              onMouseEnter={() => loadPlayerDetail(str(row.player_id), { background: true })}
-            >
-              <PlayerHeadshot player={{ id: str(row.player_id), player_id: str(row.player_id) }} size={44} />
-              <div className="sl-rosterrow__main">
-                <strong>{str(row.player_name)}</strong>
+        <div className="md-table" role="table">
+          <div className="md-table__row md-table__row--head" role="row">
+            <span>Player</span>
+            <span>OVR</span>
+            <span>Morale</span>
+            <span>Trust</span>
+            <span>Role</span>
+            <span>Status</span>
+          </div>
+          {visibleRoster.map((row) => {
+            const rel = asObject(row.relationship);
+            const top = asArray(row.issues)[0] || asArray(row.openings)[0];
+            return (
+              <button
+                key={str(row.player_id)}
+                type="button"
+                role="row"
+                className={`md-table__row mood-${str(row.mood) || "neutral"}`}
+                onClick={() => openPlayer(row.player_id)}
+                onMouseEnter={() => loadPlayerDetail(str(row.player_id), { background: true })}
+              >
+                <span className="md-table__who">
+                  <i className="md-dot" aria-hidden />
+                  <strong>{str(row.player_name)}</strong>
+                  <em>
+                    {str(row.position)} · {row.age}
+                  </em>
+                </span>
                 <span>
-                  {str(row.position)} · {row.age} · OVR {row.overall}
+                  {row.overall}
                   {row.ovr_trend === "up" ? " ↑" : row.ovr_trend === "down" ? " ↓" : ""}
                 </span>
-                <em>
-                  {str(row.relationship?.label)} · {str(row.agent?.name || "Agent TBD")}
-                </em>
-              </div>
-            </button>
-          ))}
+                <MiniMeter value={rel.morale} />
+                <MiniMeter value={rel.gm_trust} />
+                <MiniMeter value={rel.role_satisfaction} />
+                <span className="md-table__status">{top ? str(top.headline) : "Content"}</span>
+              </button>
+            );
+          })}
           {!visibleRoster.length ? <p className="sl-muted">No players match that search.</p> : null}
         </div>
       </section>
-
-      {asArray(promises.active).length ? (
-        <section className="sl-block">
-          <h3 className="sl-block__title">Active promises <em>{asArray(promises.active).length}</em></h3>
-          <div className="sl-stack">
-            {promises.active.map((p) => (
-              <div key={str(p.id)} className="sl-promise">
-                <strong>{str(p.description || p.type)}</strong>
-                <span>{p.games_remaining != null ? `${p.games_remaining}g remaining` : "Open"}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
     </div>
+  );
+}
+
+function meterTone(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "calm";
+  if (n < 35) return "critical";
+  if (n < 55) return "warning";
+  return "good";
+}
+
+function MeetingTally({ tone, label, value }) {
+  const n = Number(value) || 0;
+  return (
+    <div role="listitem" className={`md-tally__item is-${tone} ${n ? "" : "is-zero"}`}>
+      <strong>{n}</strong>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function SeverityPill({ severity }) {
+  const s = str(severity) || "watch";
+  const label = s === "critical" ? "Urgent" : s === "warning" ? "Needs a talk" : s === "good" ? "Opportunity" : "Keep an eye";
+  return <span className={`md-pill md-pill--${s}`}>{label}</span>;
+}
+
+function MiniMeter({ value }) {
+  const n = Number(value);
+  const ok = Number.isFinite(n);
+  return (
+    <span className={`md-mini is-${meterTone(value)}`} title={ok ? `${Math.round(n)}/100` : "—"}>
+      <span className="md-mini__track">
+        <i style={{ width: `${ok ? Math.max(4, Math.min(100, n)) : 0}%` }} />
+      </span>
+      <b>{ok ? Math.round(n) : "—"}</b>
+    </span>
+  );
+}
+
+function MeetingMeters({ rel }) {
+  const r = asObject(rel);
+  return (
+    <div className="md-meters">
+      {[
+        ["Morale", r.morale],
+        ["Trust in GM", r.gm_trust],
+        ["Role", r.role_satisfaction],
+      ].map(([label, v]) => (
+        <div key={label} className="md-meter">
+          <span>{label}</span>
+          <MiniMeter value={v} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MeetingIssueRow({ item, busy, onFix }) {
+  const sev = str(item?.severity) || "watch";
+  const fix = item?.fix;
+  return (
+    <li className={`md-issue is-${sev}`}>
+      <div>
+        <strong>{str(item?.headline)}</strong>
+        {item?.detail ? <p>{str(item.detail)}</p> : null}
+      </div>
+      {fix?.interaction_id ? (
+        <button
+          type="button"
+          className={`md-fix ${sev === "good" ? "is-good" : ""}`}
+          disabled={busy}
+          onClick={() => onFix(str(fix.interaction_id))}
+        >
+          {sev === "good" ? "Meet: " : "Fix: "}
+          {str(fix.label)} →
+        </button>
+      ) : sev !== "good" ? (
+        <span className="md-fix md-fix--none">{str(item?.code) === "promise_due" ? "Deliver it in the lineup" : "No meeting available today"}</span>
+      ) : null}
+    </li>
   );
 }
 

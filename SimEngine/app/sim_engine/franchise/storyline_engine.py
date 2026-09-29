@@ -162,6 +162,134 @@ def _effect_summary(effects: Dict[str, Any]) -> str:
     return " · ".join(parts) if parts else "Minor narrative ripple"
 
 
+#: Field → (label, higher_is_good) for the post-meeting impact card.
+_MEETING_IMPACT_FIELDS: Dict[str, Tuple[str, bool]] = {
+    "state.morale": ("Morale", True),
+    "state.gm_trust": ("Trust in you", True),
+    "state.confidence": ("Confidence", True),
+    "state.focus": ("Focus", True),
+    "state.belonging": ("Belonging", True),
+    "state.coach_trust": ("Trust in coach", True),
+    "state.energy": ("Energy", True),
+    "state.ambition": ("Drive", True),
+    "state.personal_stress": ("Stress", False),
+    "state.media_stress": ("Media stress", False),
+    "grievance": ("Grievance", False),
+    "negotiation goodwill": ("Contract goodwill", True),
+    "negotiation_goodwill": ("Contract goodwill", True),
+    "respect": ("Respect", True),
+    "loyalty": ("Loyalty", True),
+    "honesty": ("Honesty", True),
+    "communication": ("Communication", True),
+}
+
+_REACTION_LINES = {
+    "positive": (
+        "That's what I needed to hear. I won't let you down.",
+        "Appreciate you being straight with me. Let's go to work.",
+        "Good. Honestly, that means a lot.",
+    ),
+    "mixed": (
+        "Okay. I hear you. Let's see where it goes.",
+        "Not exactly what I wanted, but I get it.",
+        "Fair enough. I'll hold you to that.",
+    ),
+    "negative": (
+        "That's it? …Fine. I'll remember this.",
+        "I thought this place valued me. Guess not.",
+        "Don't expect me to be happy about that.",
+    ),
+}
+
+
+def build_meeting_impact(
+    receipts: Optional[Dict[str, Any]],
+    *,
+    player_name: str,
+    choice_label: str = "",
+    promise_made: bool = False,
+) -> Dict[str, Any]:
+    """Post-meeting card: how he took it (tone + quote) and exactly what moved."""
+    import zlib
+
+    raw = dict(receipts or {})
+    agg: Dict[str, Dict[str, Any]] = {}
+    for r in list(raw.get("profiles") or []):
+        key = str(r.get("field") or "").strip()
+        norm = key.lower()
+        spec = _MEETING_IMPACT_FIELDS.get(key) or _MEETING_IMPACT_FIELDS.get(norm)
+        if spec is None:
+            continue
+        try:
+            d = float(r.get("delta") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        label, up_good = spec
+        row = agg.setdefault(label, {"label": label, "delta": 0.0, "before": r.get("before"), "after": r.get("after"), "up_good": up_good})
+        row["delta"] += d
+        row["after"] = r.get("after")
+    impacts: List[Dict[str, Any]] = []
+    score = 0.0
+    for row in agg.values():
+        d = round(float(row["delta"]), 1)
+        if abs(d) < 0.1:
+            continue
+        good = (d > 0) == bool(row["up_good"])
+        score += abs(d) if good else -abs(d)
+        impacts.append({
+            "label": row["label"],
+            "delta": d,
+            "before": round(float(row["before"]), 1) if row.get("before") is not None else None,
+            "after": round(float(row["after"]), 1) if row.get("after") is not None else None,
+            "good": good,
+        })
+    for r in list(raw.get("readiness") or []):
+        try:
+            d = float(r.get("ovr_delta") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if abs(d) < 0.05:
+            continue
+        days = r.get("days")
+        impacts.append({
+            "label": f"Game readiness{f' ({int(days)} days)' if days else ''}",
+            "delta": round(d, 2),
+            "unit": "OVR",
+            "good": d > 0,
+        })
+        score += d * 4.0
+    for r in list(raw.get("potential") or []):
+        try:
+            d = float(r.get("delta") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if abs(d) >= 0.05:
+            impacts.append({"label": "Potential", "delta": round(d, 2), "good": d > 0})
+            score += d * 6.0
+    impacts.sort(key=lambda i: -abs(float(i["delta"])))
+    tone = "positive" if score >= 3.0 else "negative" if score <= -3.0 else "mixed"
+    lines = _REACTION_LINES[tone]
+    quote = lines[zlib.crc32(f"{player_name}|{choice_label}".encode("utf-8")) % len(lines)]
+    verdict = {
+        "positive": "The meeting landed well",
+        "mixed": "He took it in stride",
+        "negative": "The meeting backfired",
+    }[tone]
+    notes: List[str] = []
+    if promise_made or raw.get("promise_id"):
+        notes.append("You made a promise — deliver it in the lineup or it turns into a broken promise.")
+    return {
+        "tone": tone,
+        "verdict": verdict,
+        "player_name": player_name,
+        "choice_label": choice_label,
+        "quote": quote,
+        "impacts": impacts[:8],
+        "notes": notes,
+        "score": round(score, 1),
+    }
+
+
 def _summarize_meeting_receipts(receipts: Optional[Dict[str, Any]], choice_label: str = "") -> Dict[str, str]:
     """Build human-readable meeting outcome copy from applied receipts."""
     raw = dict(receipts or {})
@@ -9003,6 +9131,34 @@ def _u_pick_weighted_meeting_candidate(
     return rng.choices(pool, weights=weights, k=1)[0]
 
 
+def _u_deployment_role_sat(session: Any, player_id: str, team_id: str, fallback: float) -> float:
+    """Role satisfaction from what actually happens on the ice (real TOI vs the minutes his
+    depth-chart standing has earned). The stored universe value drifted on its own, so a
+    22-minute first-line centre could still 'ask for more ice time'."""
+    try:
+        from app.sim_engine.franchise.trade_stability_engine import infer_role_satisfaction_from_deployment
+
+        player = _player_from_roster(session, player_id)
+        team = (getattr(session, "team_by_id", None) or {}).get(str(team_id))
+        if player is None or team is None:
+            return float(fallback)
+        if not any(p is player for p in list(getattr(team, "roster", None) or [])):
+            return float(fallback)  # minors / not on the NHL roster — no NHL deployment to read
+        val = infer_role_satisfaction_from_deployment(player, team, session)
+        return float(val) if val is not None else float(fallback)
+    except Exception:
+        return float(fallback)
+
+
+def _u_sync_role_from_deployment(session: Any, player_id: str, team_id: str, entity: Dict[str, Any]) -> float:
+    """Write the deployment-based role satisfaction back into the entity so every screen agrees."""
+    state = entity.setdefault("state", {}) if isinstance(entity, dict) else {}
+    real = _u_deployment_role_sat(session, player_id, team_id, float(state.get("role_satisfaction", 60) or 60))
+    if isinstance(state, dict):
+        state["role_satisfaction"] = round(real, 1)
+    return real
+
+
 def _u_interaction_candidates(session: Any, team_id: str, rng: random.Random) -> List[Tuple[float, str, str, str]]:
     """V3 candidate list with specific role/contract/development meeting families."""
     day, _, _ = _u_current_meta(session)
@@ -9023,7 +9179,7 @@ def _u_interaction_candidates(session: Any, team_id: str, rng: random.Random) ->
         personality = entity.get("personality") or {}
         concerns = entity.get("concerns") or {}
         niches = _u_niche_ids(entity)
-        role_sat = float(state.get("role_satisfaction", 60))
+        role_sat = _u_sync_role_from_deployment(session, player_id, team_id, entity) if entity else float(state.get("role_satisfaction", 60))
         pos = str(entity.get("position") or "F").upper()
         offense_signal = max(
             _u_read_numeric(_player_from_roster(session, player_id) or object(), ("offensive_awareness", "passing"), 50),
@@ -10658,6 +10814,8 @@ def build_ovr_trend_explanation(session: Any, player_id: str) -> Dict[str, Any]:
 def _gm_build_context(session: Any, player_id: str) -> Dict[str, Any]:
     entity = _gm_entity(session, player_id)
     player = _player_from_roster(session, player_id)
+    if entity:
+        _u_sync_role_from_deployment(session, player_id, str(getattr(session, "user_team_id", "") or ""), entity)
     day, iso, season = _u_current_meta(session)
     state = dict(entity.get("state") or {})
     personality = dict(entity.get("personality") or {})
@@ -10958,6 +11116,14 @@ def _gm_apply_meeting_outcome(session: Any, ctx: Dict[str, Any], interaction_typ
         "message": summary["message"],
         "effect_summary": summary["effect_summary"],
         "choice_label": choice.get("label"),
+        "impact": build_meeting_impact(
+            receipts,
+            player_name=str(entity.get("player_name") or "Player"),
+            choice_label=str(choice.get("label") or ""),
+            promise_made=bool(outcome.get("promise")),
+        ),
+        "player_id": player_id,
+        "player_name": entity.get("player_name"),
     }
 
 
@@ -11368,6 +11534,7 @@ def resolve_player_meeting_interaction(session: Any, interaction_id: str, choice
     session.gm_meeting_history = hist[-GM_MEETING_HISTORY_MAX:]
     if player_id:
         _gm_mark_attention_addressed(session, player_id)
+    pname = str(interaction.get("player_name") or entity.get("player_name") or "Player")
     return {
         "ok": True,
         **result,
@@ -11375,7 +11542,290 @@ def resolve_player_meeting_interaction(session: Any, interaction_id: str, choice
         "effect_summary": summary["effect_summary"],
         "choice_label": choice_label,
         "relationship": _gm_relationship_summary(entity, session, player_id) if player_id else {},
+        "impact": build_meeting_impact(
+            receipts,
+            player_name=pname,
+            choice_label=choice_label,
+            promise_made=bool(((choice_pre or {}).get("outcome") or {}).get("promise")),
+        ),
+        "player_id": player_id,
+        "player_name": pname,
     }
+
+
+# ---------------------------------------------------------------------------
+# Meetings office: explicit issues (what's wrong + which meeting fixes it) and
+# positive openings, so the GM can see at a glance what needs doing.
+# ---------------------------------------------------------------------------
+
+#: Trade-stability pressure → meetings that address it, best first.
+_MEETING_FIX_BY_PRESSURE: Dict[str, Tuple[str, ...]] = {
+    "role": ("offer_increased_ice_time", "discuss_ice_time", "explain_reduced_ice_time", "discuss_goalie_workload", "discuss_healthy_scratch"),
+    "performance": ("discuss_ice_time", "offer_increased_ice_time", "discuss_promotion"),
+    "contract": ("contract_expectations", "ask_extension_interest", "discuss_upcoming_fa"),
+    "management": ("repair_relationship", "ask_locker_room_concerns"),
+    "coach": ("ask_coaching_relationship", "repair_relationship"),
+    "trade_exposure": ("reassure_not_shopped", "address_trade_rumors"),
+    "personal": ("personal_wellbeing_check",),
+    "human_life": ("personal_wellbeing_check",),
+    "belonging": ("ask_locker_room_concerns", "repair_relationship"),
+    "winning": ("ask_locker_room_concerns", "long_term_plans"),
+    "organizational": ("long_term_plans", "ask_locker_room_concerns"),
+    "development": ("discuss_development_plan", "discuss_stalled_development"),
+    "temperament": ("ask_struggles", "repair_relationship"),
+    "broken_promise": ("repair_relationship",),
+    "demand_history": ("repair_relationship", "long_term_plans"),
+}
+
+_MEETING_SEVERITY_RANK = {"critical": 3, "warning": 2, "watch": 1}
+
+_POSITIVE_REQUEST_TOKENS = ("mentor", "leader", "praise", "thank", "celebrat", "milestone", "bond", "captain", "community")
+_NEGATIVE_REQUEST_KINDS = frozenset({
+    "request_more_ice", "request_pp_time", "request_starting_role", "contract_clarity", "winning_concern_meeting",
+})
+
+
+def _gm_portrait_row(player: Any, pid: str, name: str = "", position: str = "", age: Any = None) -> Dict[str, Any]:
+    """Headshot identity for the Meetings UI — same seam the roster uses (NHL photo + flag)."""
+    row: Dict[str, Any] = {"id": str(pid), "player_id": str(pid)}
+    if name:
+        row["name"] = name
+    if position:
+        row["position"] = position
+    if age is not None:
+        row["age"] = age
+    if player is None:
+        return row
+    ident = getattr(player, "identity", None)
+    for src in (ident, player):
+        if src is None:
+            continue
+        for key in ("nationality", "country", "birth_country"):
+            val = getattr(src, key, None)
+            if val:
+                row.setdefault("nationality", str(getattr(val, "value", val)))
+    try:
+        from app.sim_engine.generation.player_headshots import merge_headshot_into_row
+
+        row = merge_headshot_into_row(row, player)
+    except Exception:
+        pass
+    return row
+
+
+def _gm_request_tone(kind: str) -> str:
+    k = str(kind or "").lower()
+    if k in _NEGATIVE_REQUEST_KINDS or "complain" in k or "demand" in k or "concern" in k:
+        return "negative"
+    if any(tok in k for tok in _POSITIVE_REQUEST_TOKENS):
+        return "positive"
+    return "neutral"
+
+
+def _gm_stability_row(session: Any, player_id: str) -> Dict[str, Any]:
+    try:
+        from app.sim_engine.franchise.trade_stability_engine import ensure_trade_stability_state
+
+        book = ensure_trade_stability_state(session)
+        row = book.get(str(player_id))
+        return dict(row) if isinstance(row, dict) else {}
+    except Exception:
+        return {}
+
+
+def _gm_player_issues_and_openings(
+    session: Any,
+    *,
+    player_id: str,
+    entity: Dict[str, Any],
+    rel: Dict[str, Any],
+    contract: Dict[str, Any],
+    ovr_trend: Dict[str, Any],
+    trade_rumor_heat: int,
+    player_promises: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """(issues, openings) for one player. Each carries the numbers behind it and a
+    suggested meeting (only one the player can actually be offered today)."""
+    state = dict(entity.get("state") or {})
+    personality = dict(entity.get("personality") or {})
+    try:
+        avail = get_available_gm_interactions(session, player_id)
+    except Exception:
+        avail = []
+    titles = {str(a.get("id")): str(a.get("title") or a.get("id")) for a in avail}
+
+    def fix_for(candidates: Tuple[str, ...]) -> Optional[Dict[str, str]]:
+        for iid in candidates:
+            if iid in titles:
+                return {"interaction_id": iid, "label": titles[iid]}
+        return None
+
+    issues: List[Dict[str, Any]] = []
+    openings: List[Dict[str, Any]] = []
+
+    def issue(code: str, severity: str, category: str, headline: str, detail: str, fixes: Tuple[str, ...] = ()) -> None:
+        issues.append({
+            "code": code,
+            "severity": severity,
+            "category": category,
+            "headline": headline,
+            "detail": detail,
+            "fix": fix_for(fixes) if fixes else None,
+        })
+
+    def opening(code: str, category: str, headline: str, detail: str, fixes: Tuple[str, ...]) -> None:
+        fx = fix_for(fixes)
+        if fx is None:
+            return  # nothing to act on today — don't clutter the good-news column
+        openings.append({"code": code, "category": category, "headline": headline, "detail": detail, "fix": fx})
+
+    morale = float(state.get("morale") if state.get("morale") is not None else 55)
+    gm_trust = float(rel.get("gm_trust") or 55)
+    role_sat = float(rel.get("role_satisfaction") or 55)
+    stress = float(state.get("personal_stress") if state.get("personal_stress") is not None else 30)
+    broken = int(rel.get("broken_promises") or 0)
+
+    stab = _gm_stability_row(session, player_id)
+    pressures = dict(stab.get("pressures") or {})
+    top_key = max(pressures.items(), key=lambda kv: float(kv[1] or 0), default=("", 0))[0] if pressures else ""
+    try:
+        from app.sim_engine.franchise.trade_stability_engine import primary_complaint_from_pressures
+
+        complaint = primary_complaint_from_pressures(pressures) if pressures else ""
+    except Exception:
+        complaint = str(top_key).replace("_", " ")
+    top_fixes = _MEETING_FIX_BY_PRESSURE.get(top_key, ())
+
+    # --- problems -----------------------------------------------------------
+    level = int(stab.get("escalation_level") or 0)
+    if level >= 1:
+        score = stab.get("trade_stability_score")
+        head = {1: "Growing frustration", 2: "Disconnecting from the club"}.get(level, "At risk of demanding a trade")
+        issue(
+            "stability",
+            "warning" if level == 1 else "critical",
+            "trade",
+            head,
+            f"Main complaint: {complaint or 'general unhappiness'}"
+            + (f" · stability {float(score):.0f}/100" if score is not None else ""),
+            top_fixes + ("repair_relationship",),
+        )
+    if broken:
+        issue(
+            "broken_promise",
+            "critical" if broken >= 2 else "warning",
+            "team",
+            f"You broke {broken} promise{'s' if broken != 1 else ''} to him",
+            "Every broken promise cuts his trust in management. Clear the air before it hardens.",
+            ("repair_relationship",),
+        )
+    if gm_trust < 40:
+        issue(
+            "low_trust",
+            "critical" if gm_trust < 28 else "warning",
+            "team",
+            "Doesn't trust management",
+            f"GM trust {gm_trust:.0f}/100 · relationship {str(rel.get('label') or '').lower()}",
+            ("repair_relationship", "ask_locker_room_concerns"),
+        )
+    if morale <= 45:
+        why = f" · likely cause: {complaint}" if complaint else ""
+        issue(
+            "low_morale",
+            "critical" if morale <= 25 else "warning",
+            "personal",
+            "Morale is low" if morale > 25 else "Morale has collapsed",
+            f"Morale {morale:.0f}/100{why}",
+            top_fixes + ("ask_struggles", "personal_wellbeing_check"),
+        )
+    if role_sat <= 40:
+        issue(
+            "role",
+            "warning",
+            "role",
+            "Unhappy with his role",
+            f"Role satisfaction {role_sat:.0f}/100 — he wants more minutes or a bigger job.",
+            _MEETING_FIX_BY_PRESSURE["role"],
+        )
+    if trade_rumor_heat >= 15:
+        issue(
+            "trade_rumors",
+            "warning" if trade_rumor_heat >= 30 else "watch",
+            "trade",
+            "Trade rumours are getting to him",
+            f"Rumour heat {trade_rumor_heat}",
+            _MEETING_FIX_BY_PRESSURE["trade_exposure"],
+        )
+    if stress >= 55:
+        issue(
+            "personal_stress",
+            "warning" if stress >= 68 else "watch",
+            "personal",
+            "Dealing with off-ice stress",
+            f"Personal stress {stress:.0f}/100",
+            ("personal_wellbeing_check",),
+        )
+    expiring = bool(contract.get("expiring")) or int(contract.get("years_remaining") or 9) <= 1
+    if expiring and str(rel.get("label") or "") in ("Strained", "Broken"):
+        issue(
+            "walk_risk",
+            "warning",
+            "contract",
+            "Expiring contract and unhappy — could walk",
+            "Deal ends this season and the relationship is strained.",
+            ("discuss_upcoming_fa", "contract_expectations", "long_term_plans"),
+        )
+    for p in player_promises:
+        left = p.get("games_remaining")
+        try:
+            left_i = int(left) if left is not None else None
+        except (TypeError, ValueError):
+            left_i = None
+        if left_i is not None and left_i <= 3:
+            issue(
+                "promise_due",
+                "watch",
+                "role",
+                "A promise is coming due",
+                f"{str(p.get('description') or p.get('type') or 'Promise')} — {left_i} game{'s' if left_i != 1 else ''} left to deliver.",
+            )
+
+    # --- good news ----------------------------------------------------------
+    if ovr_trend.get("direction") == "up":
+        opening(
+            "hot",
+            "performance",
+            "Playing his best hockey",
+            "His overall is trending up — recognition now boosts confidence and trust.",
+            ("praise_performance", "explain_ovr_rising", "discuss_improvement"),
+        )
+    if expiring and str(rel.get("label") or "") in ("Strong", "Good"):
+        opening(
+            "extension_window",
+            "contract",
+            "Extension window is open",
+            "He's happy here and his deal is ending — goodwill now makes the negotiation easier.",
+            ("ask_extension_interest", "long_term_plans", "discuss_upcoming_fa"),
+        )
+    if float(personality.get("leadership", 50) or 50) >= 65 and morale >= 60 and gm_trust >= 55:
+        opening(
+            "leader",
+            "team",
+            "A leader in the room",
+            "Give him a bigger voice — mentoring or leadership recognition strengthens the room.",
+            ("ask_mentor_younger", "discuss_leadership"),
+        )
+    if int(entity.get("age") or 30) <= 23 and ovr_trend.get("direction") != "down" and morale >= 55:
+        opening(
+            "development",
+            "development",
+            "Young and ready to grow",
+            "A clear development plan now pays off in his growth curve.",
+            ("discuss_development_plan", "set_development_priority"),
+        )
+
+    issues.sort(key=lambda i: -_MEETING_SEVERITY_RANK.get(i["severity"], 0))
+    return issues, openings
 
 
 def build_player_meetings_payload(session: Any) -> Dict[str, Any]:
@@ -11388,12 +11838,28 @@ def build_player_meetings_payload(session: Any) -> Dict[str, Any]:
     day, iso, _ = _u_current_meta(session)
     roster_rows: List[Dict[str, Any]] = []
     needs_attention: List[Dict[str, Any]] = []
+    good_news: List[Dict[str, Any]] = []
     pending_player = list(getattr(session, "universe_interaction_queue", None) or [])
-    pending_player = [r for r in pending_player if str(r.get("status") or "") == "pending" and str(r.get("team_id") or "") == utid]
+    # Logic check on role requests: a player already getting (or beating) the minutes his
+    # standing earns doesn't get to complain about ice time — withdraw stale asks.
+    for r in pending_player:
+        if str(r.get("status") or "") != "pending" or str(r.get("team_id") or "") != utid:
+            continue
+        if str(r.get("kind") or "") not in ("request_more_ice", "request_pp_time", "request_starting_role"):
+            continue
+        rpid = str(r.get("player_id") or r.get("actor_id") or "")
+        ent = _gm_entity(session, rpid) if rpid else {}
+        real_role = _u_sync_role_from_deployment(session, rpid, utid, ent) if ent else 50.0
+        if real_role >= 60.0:
+            r["status"] = "withdrawn"
+            r["withdrawn_reason"] = "deployment_matches_role"
+    pending_player = [dict(r) for r in pending_player if str(r.get("status") or "") == "pending" and str(r.get("team_id") or "") == utid]
     active_promises = [p for p in (getattr(session, "universe_promises", None) or []) if str(p.get("status") or "") == "active"]
     broken_promises = [p for p in (getattr(session, "universe_promises", None) or []) if str(p.get("status") or "") == "broken"]
     for pid, player, bucket in _gm_user_org_players(session):
         entity = _gm_entity(session, pid)
+        if entity:
+            _u_sync_role_from_deployment(session, pid, utid, entity)
         rel = _gm_relationship_summary(entity, session, pid)
         contract = _gm_contract_info(player)
         ovr_trend = build_ovr_trend_explanation(session, pid)
@@ -11427,17 +11893,65 @@ def build_player_meetings_payload(session: Any) -> Dict[str, Any]:
             "concern_label": rel.get("detail"),
         }
         row["attention_reasons"] = _gm_attention_reasons(requested, rel, row)
+        issues, openings = _gm_player_issues_and_openings(
+            session,
+            player_id=pid,
+            entity=entity,
+            rel=rel,
+            contract=contract,
+            ovr_trend=ovr_trend,
+            trade_rumor_heat=int(pst.get("trade_rumor_heat") or 0),
+            player_promises=[p for p in active_promises if str(p.get("player_id") or "") == pid],
+        )
+        top_sev = issues[0]["severity"] if issues else ""
+        row["portrait_row"] = _gm_portrait_row(player, pid, row["player_name"], row["position"], row["age"])
+        row["issues"] = issues
+        row["openings"] = openings
+        row["top_severity"] = top_sev
+        row["severity_rank"] = _MEETING_SEVERITY_RANK.get(top_sev, 0)
+        row["mood"] = (
+            "negative" if top_sev in ("critical", "warning")
+            else "positive" if openings
+            else "neutral"
+        )
         roster_rows.append(row)
         cleared = _gm_attention_cleared(entity, day)
-        if _gm_should_flag_attention(requested=requested, cleared=cleared, rel=rel, row=row):
+        # A real problem (warning/critical) or a pending request puts him on the desk. A
+        # meeting that just addressed him hides him until something new comes up — unless
+        # it's critical.
+        if requested or top_sev == "critical" or (top_sev == "warning" and not cleared):
             needs_attention.append(row)
+        elif openings and not cleared:
+            good_news.append(row)
+    needs_attention.sort(key=lambda r: (-r["severity_rank"], -len(r["issues"]), -float(r.get("overall") or 0)))
+    good_news.sort(key=lambda r: (-len(r["openings"]), -float(r.get("overall") or 0)))
+    # Player-initiated requests: real name (the actor), tone, and whether he's upset.
+    for req in pending_player:
+        rpid = str(req.get("player_id") or req.get("actor_id") or "")
+        nm = str(req.get("player_name") or "").strip()
+        if (not nm or nm.lower() == "player") and rpid:
+            ent = _gm_entity(session, rpid)
+            nm = str((ent or {}).get("player_name") or nm or "Player")
+        req["player_name"] = nm or "Player"
+        req["tone"] = _gm_request_tone(str(req.get("kind") or ""))
+        if rpid:
+            req["portrait_row"] = _gm_portrait_row(_player_from_roster(session, rpid), rpid, req["player_name"])
     hist = list(getattr(session, "gm_meeting_history", None) or [])[-40:]
     active_gm = list((getattr(session, "gm_active_meetings", None) or {}).values())
     return {
         "calendar_day": day,
         "calendar_iso": iso,
+        "summary": {
+            "critical": sum(1 for r in roster_rows if r["top_severity"] == "critical"),
+            "warning": sum(1 for r in roster_rows if r["top_severity"] == "warning"),
+            "watch": sum(1 for r in roster_rows if r["top_severity"] == "watch"),
+            "good_news": len(good_news),
+            "requests": len(pending_player),
+            "content": sum(1 for r in roster_rows if not r["issues"]),
+        },
         "needs_attention": needs_attention,
-        "roster": sorted(roster_rows, key=lambda r: (-int(r.get("requested_meeting") or 0), r.get("relationship", {}).get("label") == "Broken", r.get("relationship", {}).get("label") == "Strained", -float(r.get("overall") or 0))),
+        "good_news": good_news,
+        "roster": sorted(roster_rows, key=lambda r: (-r["severity_rank"], -int(r.get("requested_meeting") or 0), -float(r.get("overall") or 0))),
         "player_requests": pending_player,
         "active_gm_meetings": active_gm,
         "promises": {

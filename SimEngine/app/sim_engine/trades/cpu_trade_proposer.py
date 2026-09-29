@@ -33,6 +33,13 @@ CPU_YOUNG_CORE_MAX_AGE = 23
 CPU_PROSPECT_MAX_AGE = 22
 CPU_DESPERATION_GAP_MAX = 28.0
 CPU_PANIC_BUYS_PER_SEASON = 2  # a sliding contender goes all-in once or twice, not every day
+# Team fatigue: a club that just made a deal steps back before the next one (the same
+# surplus-heavy club was the seller in most ambient trades).
+CPU_TEAM_COOLDOWN_DAYS = 10
+CPU_TEAM_COOLDOWN_DEADLINE_WEEK = 2
+CPU_TEAM_FATIGUE_SCORE_PER_TRADE = 0.07  # plan-score penalty per trade the club made this season
+CPU_TEAM_FATIGUE_EXEMPT = ("panic_buy", "locker_room", "cap_dump")
+CPU_PLAYER_TRADES_2_SEASONS = 2  # a player moved twice in two seasons is off the CPU market
 
 # Motives produced by the needs matcher (+ demand path).
 PACKAGE_MOTIVES = (
@@ -269,6 +276,19 @@ def _tradeable_player(player: Any, acquiring_team_id: str, *, ctx: Optional[Dict
                 return False
         except (TypeError, ValueError):
             pass
+    # Anti-churn: a CPU club doesn't flip a player another CPU club just traded for.
+    # Once per season, and no more than CPU_PLAYER_TRADES_2_SEASONS moves across two seasons —
+    # the same names were being passed around the league as trade currency.
+    if ctx is not None and ctx.get("cpu_ambient_trade") and not ctx.get("cpu_demand_trade"):
+        log = ctx.get("_cpu_player_trade_log")
+        if isinstance(log, dict):
+            seasons = list(log.get(_player_id(player)) or [])
+            if seasons:
+                sy = int(ctx.get("season_year") or 0)
+                if sy in seasons:
+                    return False
+                if sum(1 for s in seasons if sy - int(s) <= 1) >= CPU_PLAYER_TRADES_2_SEASONS:
+                    return False
     return True
 
 
@@ -1022,10 +1042,31 @@ def propose_and_execute_cpu_trades(
     if not isinstance(recent_pairs, dict):
         recent_pairs = {}
         partner_memory["recent_pair_days"] = recent_pairs
+    # Per-season counters reset when the season rolls (they used to accumulate forever,
+    # so pair caps blocked more partners every year and trades piled onto fewer clubs).
+    _season_key = int(ctx.get("season_year") or 0)
+    if int(partner_memory.get("counts_season", -1) or -1) != _season_key:
+        partner_memory["season_pair_counts"] = {}
+        partner_memory["season_team_trades"] = {}
+        partner_memory["counts_season"] = _season_key
     season_pair_counts = partner_memory.get("season_pair_counts")
     if not isinstance(season_pair_counts, dict):
         season_pair_counts = {}
         partner_memory["season_pair_counts"] = season_pair_counts
+    season_team_trades = partner_memory.get("season_team_trades")
+    if not isinstance(season_team_trades, dict):
+        season_team_trades = {}
+        partner_memory["season_team_trades"] = season_team_trades
+    team_last_trade_day = partner_memory.get("team_last_trade_day")
+    if not isinstance(team_last_trade_day, dict):
+        team_last_trade_day = {}
+        partner_memory["team_last_trade_day"] = team_last_trade_day
+    # {player_id: [season, ...]} — survives season rollover (unlike the per-season counters).
+    player_trade_log = partner_memory.get("player_trade_log")
+    if not isinstance(player_trade_log, dict):
+        player_trade_log = {}
+        partner_memory["player_trade_log"] = player_trade_log
+    ctx["_cpu_player_trade_log"] = player_trade_log
     telemetry = partner_memory.get("telemetry")
     if not isinstance(telemetry, dict):
         telemetry = {
@@ -1067,7 +1108,11 @@ def propose_and_execute_cpu_trades(
 
     import random as _random
 
-    day_seed = int(calendar_cursor) * 1009 + int(max_executions) * 17 + len(teams)
+    from app.sim_engine.trades.needs_matcher import save_entropy_salt
+
+    # Mix in true per-save entropy: the sim RNG replays the same stream in every new
+    # franchise, so daily jitter/plan order was identical save to save.
+    day_seed = (int(calendar_cursor) * 1009 + int(max_executions) * 17 + len(teams)) ^ save_entropy_salt(league)
     base_rng = getattr(league, "rng", None)
     try:
         pair_rng = _random.Random(int(base_rng.randint(1, 2_000_000_000)) ^ day_seed) if hasattr(base_rng, "randint") else _random.Random(day_seed)
@@ -1294,6 +1339,16 @@ def propose_and_execute_cpu_trades(
         season_pair_counts[pair_mem_key] = season_count + 1
         team_trade_counts[sid] = int(team_trade_counts.get(sid, 0)) + 1
         team_trade_counts[bid] = int(team_trade_counts.get(bid, 0)) + 1
+        for _t in (sid, bid):
+            season_team_trades[_t] = int(season_team_trades.get(_t, 0) or 0) + 1
+            team_last_trade_day[_t] = int(calendar_cursor)
+        _sy = int(ctx.get("season_year") or 0)
+        for _moved in (s_offer, b_return, filler):
+            if _moved is None:
+                continue
+            _mid = _player_id(_moved)
+            if _mid:
+                player_trade_log[_mid] = (list(player_trade_log.get(_mid) or []) + [_sy])[-4:]
 
         # Telemetry for season tuning.
         telemetry["trades"] = int(telemetry.get("trades", 0) or 0) + 1
@@ -1530,10 +1585,25 @@ def propose_and_execute_cpu_trades(
             league, teams=teams, assessments=assessments, ctx=ctx, tools=tools, rng=pair_rng, used_players=used_players,
         )
         telemetry["last_plan_count"] = len(plans)
+        # Fatigue: clubs that already traded a lot this season drop down the list, so one
+        # surplus-heavy club isn't the first call for every buyer.
+        if season_team_trades:
+            for _p in plans:
+                _n = int(season_team_trades.get(team_id_of(_p.seller), 0) or 0) + int(
+                    season_team_trades.get(team_id_of(_p.buyer), 0) or 0
+                )
+                if _n and _p.motive not in CPU_TEAM_FATIGUE_EXEMPT:
+                    _p.score = round(_p.score - CPU_TEAM_FATIGUE_SCORE_PER_TRADE * _n, 3)
+            plans.sort(key=lambda _p: -_p.score)
         attempt_budget = 8 + 4 * max(1, int(max_executions))
         buyer_deals: Dict[str, int] = {}
+        seller_deals: Dict[str, int] = {}
         days_left_ctx = int(ctx.get("days_to_deadline", 99) if ctx.get("days_to_deadline") is not None else 99)
         per_buyer_cap = 4 if days_left_ctx == 0 else (2 if 0 <= days_left_ctx <= 7 else 1)
+        per_seller_cap = per_buyer_cap
+        team_cooldown = 0 if days_left_ctx == 0 else (
+            CPU_TEAM_COOLDOWN_DEADLINE_WEEK if 0 <= days_left_ctx <= 7 else CPU_TEAM_COOLDOWN_DAYS
+        )
         # Sellers wait ~20 games to judge the season, then mostly hold vets for the deadline.
         from statistics import median as _median
 
@@ -1565,6 +1635,17 @@ def propose_and_execute_cpu_trades(
             if buyer_deals.get(bid, 0) >= per_buyer_cap:
                 _funnel(plan.motive, "buyer_already_dealt")
                 continue
+            if seller_deals.get(sid, 0) >= per_seller_cap:
+                _funnel(plan.motive, "seller_already_dealt")
+                continue
+            if team_cooldown > 0 and plan.motive not in CPU_TEAM_FATIGUE_EXEMPT:
+                _last = max(
+                    int(team_last_trade_day.get(sid, -999) or -999),
+                    int(team_last_trade_day.get(bid, -999) or -999),
+                )
+                if 0 <= int(calendar_cursor) - _last < team_cooldown:
+                    _funnel(plan.motive, "team_cooldown")
+                    continue
             if plan.motive in SELLOFF_MOTIVES and selloffs_done >= selloff_cap:
                 _funnel(plan.motive, "seller_waiting_for_deadline")
                 continue
@@ -1592,14 +1673,18 @@ def propose_and_execute_cpu_trades(
             attempt_budget -= 1
             if plan.return_player is not None and _player_id(plan.return_player) in used_players:
                 continue
-            premium_value = round(plan.premium * max(0.0, plan.target_value), 2)
+            tv = max(0.0, plan.target_value)
+            buyer_over = plan.lopsided_swing if plan.lopsided_loser == "buyer" else 0.0
+            premium_value = round((plan.premium + buyer_over) * tv, 2)
+            seller_discount_value = round(plan.lopsided_swing * tv, 2) if plan.lopsided_loser == "seller" else 0.0
             ctx["cpu_package_motive"] = plan.motive
             ctx["cpu_intent"] = {
                 "buyer_team_id": bid,
                 "seller_team_id": sid,
                 "premium_value": premium_value,
+                "seller_discount_value": seller_discount_value,
                 "motivated_seller": bool(plan.motivated_seller),
-                "spend_first_ok": plan.motive == "panic_buy" or plan.premium >= 0.2,
+                "spend_first_ok": plan.motive == "panic_buy" or plan.premium >= 0.2 or buyer_over >= 0.2,
             }
             picks = list(plan.buyer_picks)
             try:
@@ -1613,8 +1698,13 @@ def propose_and_execute_cpu_trades(
                     buyer_pick=picks[0] if picks else None,
                     buyer_pick_2=picks[1] if len(picks) > 1 else None,
                     motive=plan.motive,
-                    attempt_gap_max=CPU_AMBIENT_FAIRNESS_GAP_MAX + 2.0 * premium_value + (8.0 if plan.motivated_seller else 0.0),
-                    min_interest=0.30 if (plan.motivated_seller or plan.premium > 0.0) else CPU_AMBIENT_MIN_INTEREST,
+                    attempt_gap_max=CPU_AMBIENT_FAIRNESS_GAP_MAX
+                    + 2.0 * premium_value
+                    + 2.0 * seller_discount_value
+                    + (8.0 if plan.motivated_seller else 0.0),
+                    min_interest=0.30
+                    if (plan.motivated_seller or plan.premium > 0.0 or plan.lopsided_loser)
+                    else CPU_AMBIENT_MIN_INTEREST,
                     extra={
                         "reason_codes": plan.reason_codes,
                         "reason_text": plan.reason_text,
@@ -1622,6 +1712,11 @@ def propose_and_execute_cpu_trades(
                         "need_slot": plan.need_slot,
                         "premium": plan.premium,
                         "plan_score": plan.score,
+                        "lopsided_loser_team_id": (bid if plan.lopsided_loser == "buyer" else sid)
+                        if plan.lopsided_loser
+                        else "",
+                        "lopsided_swing": plan.lopsided_swing,
+                        "lopsided_cause": plan.lopsided_cause,
                     },
                 )
             finally:
@@ -1629,6 +1724,9 @@ def propose_and_execute_cpu_trades(
                 ctx.pop("cpu_package_motive", None)
             if ok:
                 buyer_deals[bid] = buyer_deals.get(bid, 0) + 1
+                seller_deals[sid] = seller_deals.get(sid, 0) + 1
+                if plan.lopsided_loser:
+                    telemetry["lopsided"] = int(telemetry.get("lopsided", 0) or 0) + 1
                 if plan.motive in SELLOFF_MOTIVES:
                     selloffs_done += 1
                 if plan.motive == "panic_buy":

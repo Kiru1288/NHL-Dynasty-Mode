@@ -1913,14 +1913,38 @@ def enforce_opening_night_cap_compliance(
             report["teams_fixed"] += 1
         if float(snap.get("usableCapSpace") or 0.0) < -0.01:
             abbr = str(getattr(team, "abbreviation", None) or getattr(team, "abbr", "") or "?")
+            over_by = round(-float(snap.get("usableCapSpace") or 0.0), 3)
             report["still_over"].append(
                 {
                     "team": abbr,
-                    "over_by_m": round(-float(snap.get("usableCapSpace") or 0.0), 3),
+                    "over_by_m": over_by,
                     "total_m": snap.get("totalCapHit"),
                     "upper_m": snap.get("upperLimit"),
                 }
             )
+            # Every real club opens the season cap-compliant, mostly via LTIR. The NHL.com
+            # import carries no injury data, so that relief was missing and these clubs were
+            # forced into cap-dump trades on day one. Grant a season-scoped, team-level
+            # LTIR allowance equal to the unresolved overage (no invented player injuries).
+            existing = float(getattr(team, "ltir_pool_m", 0.0) or 0.0)
+            try:
+                team.ltir_pool_m = round(existing + over_by + 0.05, 3)
+                team.ltir_pool_season = int(season_year)
+                team.ltir_pool_source = "opening_day_real_nhl_ltir_allowance"
+            except Exception:
+                pass
+            report.setdefault("ltir_allowances", []).append({"team": abbr, "allowance_m": round(over_by + 0.05, 3)})
+    try:
+        import logging as _logging
+
+        _log = _logging.getLogger(__name__)
+        for row in report.get("still_over") or []:
+            _log.info(
+                "opening-night cap: %s over by $%.2fM (total $%sM vs upper $%sM) → LTIR allowance granted",
+                row["team"], row["over_by_m"], row["total_m"], row["upper_m"],
+            )
+    except Exception:
+        pass
     return report
 
 

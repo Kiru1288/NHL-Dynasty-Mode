@@ -7445,6 +7445,20 @@ def execute_cap_casualty_trade(
     return {"ok": True, "record": record, "execution": exec_result}
 
 
+def _weighted_order(items: List[Any], rng: Any, *, decay: float = 0.55, head: int = 5) -> List[Any]:
+    """Re-order a best-first list so the best option is still most likely first, but the
+    next few get real chances. The top ``head`` are shuffled by weight; the rest keep order."""
+    top = list(items[:head])
+    rest = list(items[head:])
+    out: List[Any] = []
+    weights = [decay ** i for i in range(len(top))]
+    while top:
+        idx = rng.choices(range(len(top)), weights=weights, k=1)[0]
+        out.append(top.pop(idx))
+        weights.pop(idx)
+    return out + rest
+
+
 def run_cpu_cap_casualty_trade_pass(session: Any, *, max_trades: int = 12) -> Dict[str, Any]:
     league = getattr(session.sim, "league", None)
     if league is None:
@@ -7455,6 +7469,21 @@ def run_cpu_cap_casualty_trade_pass(session: Any, *, max_trades: int = 12) -> Di
     team_by_id = dict(getattr(session, "team_by_id", None) or _team_by_id_from_league(league))
     executed: List[Dict[str, Any]] = []
 
+    # Real NHL saves start from identical rosters and contracts, so a best-first pick of
+    # "which player to dump" and "who takes him" produced the exact same preseason trades in
+    # every save. Pick among the sensible options with per-save randomness instead.
+    import random as _random
+
+    try:
+        from app.sim_engine.trades.needs_matcher import save_entropy_salt
+
+        salt = int(save_entropy_salt(league))
+    except Exception:
+        import secrets as _secrets
+
+        salt = _secrets.randbelow(2_000_000_000) + 1
+    rng = _random.Random(salt ^ (int(season_year) * 7919))
+
     pressured = identify_cap_casualty_teams(
         league, sim, season_year=season_year, user_team_id=user_tid,
     )
@@ -7464,11 +7493,18 @@ def run_cpu_cap_casualty_trade_pass(session: Any, *, max_trades: int = 12) -> Di
         seller = team_by_id.get(str(team_ctx.get("team_id", "")))
         if seller is None:
             continue
-        for cand in identify_cap_casualty_candidates(seller, league, sim, season_year=season_year):
-            if not cand.get("tradeable"):
-                continue
-            partners = find_cap_casualty_trade_partners(
-                league, seller, cand, sim, season_year=season_year, user_team_id=user_tid,
+        cands = [
+            c for c in identify_cap_casualty_candidates(seller, league, sim, season_year=season_year)
+            if c.get("tradeable")
+        ]
+        for cand in _weighted_order(cands, rng, decay=0.6, head=4):
+            partners = _weighted_order(
+                list(find_cap_casualty_trade_partners(
+                    league, seller, cand, sim, season_year=season_year, user_team_id=user_tid,
+                ) or []),
+                rng,
+                decay=0.7,
+                head=6,
             )
             traded = False
             for partner in partners:
