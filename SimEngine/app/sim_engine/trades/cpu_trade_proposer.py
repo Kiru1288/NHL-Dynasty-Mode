@@ -18,10 +18,6 @@ from app.sim_engine.trades.trade_value import (
     evaluate_pick_asset_value,
     reduced_trade_value_fallback,
 )
-from app.sim_engine.trades.trade_market_adaptive import (
-    build_pool_sampling_weights,
-    compute_proposer_adaptive_knobs,
-)
 from app.sim_engine.economy.team_needs import TeamNeeds
 
 logger = logging.getLogger(__name__)
@@ -30,33 +26,27 @@ CPU_AMBIENT_FAIRNESS_GAP_MAX = 14.0
 CPU_AMBIENT_MIN_INTEREST = 0.40
 CPU_PAIR_COOLDOWN_DAYS = 18
 CPU_REACQUIRE_SOFT_DAYS = 35
-CPU_REVERSE_TRADE_PENALTY = 0.22  # retained as soft demote only; hard ban is season reverse block
 CPU_SEASON_PAIR_SOFT_CAP = 2
-CPU_PEER_ATTEMPT_MODULO = 9  # peer depth swaps — less often so futures/pick packages get volume
 CPU_ONE_FOR_ONE_OVR_GAP_MAX = 7.0  # allow more talent asymmetry without futures
 CPU_SELLER_CORE_OVR = 86.0
 CPU_YOUNG_CORE_MAX_AGE = 23
 CPU_PROSPECT_MAX_AGE = 22
 CPU_DESPERATION_GAP_MAX = 28.0
-CPU_DESPERATION_CHANCE = 0.26  # controlled unfairness when pressure is high
-CPU_DUMB_GM_CHANCE = 0.13  # occasional overpay / underpay regardless of window
-CPU_DIVERSITY_TARGETS = {
-    "max_pair_repetitions_per_season": 2,
-    "min_median_unique_partners_per_trading_team": 3.0,
-    "max_pct_trades_reuse_prior_pair": 0.35,
-    "max_reverse_trade_rate": 0.0,  # hard season reverse block target
-    "max_fairness_gap_mean": CPU_AMBIENT_FAIRNESS_GAP_MAX,
-    "min_pct_trades_with_pick": 0.34,
-    "min_pct_rebuild_sales_with_futures": 0.55,
-}
+CPU_PANIC_BUYS_PER_SEASON = 2  # a sliding contender goes all-in once or twice, not every day
 
-# Motive → construction rules for ambient packages (not one closest-TV factory).
+# Motives produced by the needs matcher (+ demand path).
 PACKAGE_MOTIVES = (
-    "depth_swap",
-    "rental_sale",
-    "futures_package",
-    "star_acquisition",
-    "desperation",
+    "demand_resolution",
+    "panic_buy",
+    "tank_selloff",
+    "late_selloff",
+    "rental_purchase",
+    "seller_futures",
+    "hockey_swap",
+    "depth_add",
+    "surplus_sale",
+    "locker_room",
+    "cap_dump",
 )
 
 
@@ -204,28 +194,6 @@ def _is_reverse_to_prior(player: Any, acquiring_team_id: str, ctx: Optional[Dict
     return _player_returning_to_prior_club(player, acquiring_team_id, ctx)
 
 
-def _desperation_score(team: Any, *, deadline: float, direction: str = "") -> float:
-    """0–1 score for rare asymmetric ambient deals."""
-    window = _team_window(team)
-    odds = _playoff_odds(team)
-    score = 0.0
-    cap_p = _safe_float(getattr(team, "cap_pressure", 0.0), 0.0)
-    if isinstance(getattr(team, "cap_pressure", None), str):
-        tier = str(getattr(team, "cap_pressure")).lower()
-        cap_p = 0.95 if tier in ("cap_hell", "critical") else 0.7 if tier == "tight" else cap_p
-    if window in ("rebuild", "declining") and odds < 0.28:
-        score += 0.35
-    if deadline >= 0.55 and window == "contender" and odds < 0.42:
-        score += 0.40  # collapsing contender overpay
-    if deadline >= 0.55 and window in ("rebuild", "declining") and odds < 0.22:
-        score += 0.30  # fire-sale seller
-    if cap_p >= 0.85:
-        score += 0.25
-    if direction in ("DEEP_REBUILD", "CAP_CORRECTION", "ALL_IN_CONTENDER"):
-        score += 0.15
-    return max(0.0, min(1.0, score))
-
-
 def _team_window(team: Any) -> str:
     for key in ("gm_window", "window"):
         w = str(getattr(team, key, "") or "").lower()
@@ -330,9 +298,16 @@ def build_league_trade_context(
         draft_year = int(getattr(league, "draft_year", 0) or 0) or upcoming_draft_year(season_year)
     else:
         draft_year = int(draft_year)
+    from app.sim_engine.trades.trade_deadline import (
+        days_to_deadline,
+        deadline_phase as _deadline_phase_for,
+        freeze_applies_to_phase,
+    )
+
     max_d = max(40, int(regular_season_last_index or 192))
-    md = max(40, int(max(120, max_d) * 0.56))
-    deadline_phase = max(0.0, min(1.0, (float(calendar_cursor) - float(md)) / max(20.0, float(max_d) * 0.2)))
+    deadline_phase = _deadline_phase_for(league, int(calendar_cursor or 0), max_d)
+    days_left = days_to_deadline(league, int(calendar_cursor or 0), max_d)
+    phase = str(getattr(league, "_franchise_phase", "") or "regular")
     team_by_id = build_team_by_id(league)
     return {
         "league": league,
@@ -344,6 +319,8 @@ def build_league_trade_context(
         "calendar_cursor": int(calendar_cursor or 0),
         "regular_season_last_index": max_d,
         "deadline_phase": deadline_phase,
+        "days_to_deadline": int(days_left),
+        "trade_deadline_passed": bool(days_left < 0 and freeze_applies_to_phase(phase)),
         "player_season_stats": getattr(league, "player_season_stats", None),
     }
 
@@ -464,34 +441,6 @@ def _pick_trade_candidates(
     return [p for _, _, p in scored]
 
 
-def _talent_gap_ok(
-    sold: Any,
-    ret: Any,
-    *,
-    buyer_pick: Optional[Dict[str, Any]] = None,
-    seller_pick: Optional[Dict[str, Any]] = None,
-    motive: str = "depth_swap",
-) -> bool:
-    """One-for-one talent-gap veto unless futures compensate or motive allows asymmetry."""
-    if ret is None:
-        # Straight pick-for-player packages (rebuild sells NHL talent for draft capital).
-        return bool(buyer_pick) and motive in (
-            "futures_package",
-            "rental_sale",
-            "desperation",
-            "star_acquisition",
-        )
-    if motive in ("desperation", "star_acquisition"):
-        return True
-    gap = abs(_player_ovr(sold) - _player_ovr(ret))
-    if gap <= CPU_ONE_FOR_ONE_OVR_GAP_MAX:
-        return True
-    # Futures / second asset compensates a larger talent gap.
-    if buyer_pick is not None or seller_pick is not None:
-        return gap <= CPU_ONE_FOR_ONE_OVR_GAP_MAX + 6.0
-    return False
-
-
 def _match_return_player(
     *,
     seller_asset: Any,
@@ -540,110 +489,139 @@ def _match_return_player(
     return ranked[0][1]
 
 
-def _select_tradeable_pick(
-    league: Any,
-    team: Any,
-    *,
-    ctx: Dict[str, Any],
-    max_round: int = 3,
-    protect_own_first: bool = False,
-    prefer_quality: str = "cheapest",
-    pair_rng: Any = None,
-    exclude_pick_ids: Optional[set] = None,
-) -> Optional[Dict[str, Any]]:
-    """Pick selection — futures packages prefer mid/high quality, not always cheapest."""
-    tid = team_id_of(team)
-    picks = get_team_owned_picks(league, tid)
-    excluded = {str(x) for x in (exclude_pick_ids or set()) if x}
-    candidates: List[Tuple[float, Dict[str, Any]]] = []
-    for row in picks:
-        if bool(row.get("resolved")):
-            continue
-        pick_id = str(row.get("pick_id") or "")
-        if pick_id and pick_id in excluded:
-            continue
-        rnd = _safe_int(row.get("round"), 7)
-        if rnd > max_round:
-            continue
-        orig = str(row.get("original_team_id") or "")
-        if protect_own_first and rnd == 1 and orig == tid:
-            proj = evaluate_pick_asset_value(row, team, team, league, context=ctx)
-            if _safe_float(proj.get("total"), 0.0) >= 55.0:
-                continue
-        try:
-            val = float(evaluate_pick_asset_value(row, team, team, league, context=ctx).get("total", 0.0))
-        except Exception:
-            val = 20.0 - rnd * 3.0
-        candidates.append((val, row))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda x: x[0])
-    if prefer_quality == "cheapest":
-        return candidates[0][1]
-    if prefer_quality == "best":
-        return candidates[-1][1]
-    # mid / sample: bias toward middle-upper value for real futures returns
-    if pair_rng is not None and len(candidates) >= 2:
-        start = max(0, len(candidates) // 3)
-        pool = candidates[start:]
-        return pair_rng.choice(pool)[1]
-    return candidates[min(len(candidates) - 1, max(0, len(candidates) // 2))][1]
-
-
-def _choose_package_motive(
-    *,
+def _roster_filler(
     seller: Any,
     buyer: Any,
-    deadline: float,
-    peer_path: bool,
-    pair_rng: Any,
-    direction_seller: str,
-    direction_buyer: str,
-) -> str:
-    """Pick a construction motive so ambient is not only closest-TV matching."""
-    sw = _team_window(seller)
-    bw = _team_window(buyer)
-    rebuild_dirs = frozenset({"SELLER", "REBUILDING", "DEEP_REBUILD", "CAP_CORRECTION"})
-    buyer_dirs = frozenset({"CONTENDER", "PLAYOFF_BUYER", "ALL_IN_CONTENDER"})
-    s_desp = _desperation_score(seller, deadline=deadline, direction=direction_seller)
-    b_desp = _desperation_score(buyer, deadline=deadline, direction=direction_buyer)
-    if max(s_desp, b_desp) >= 0.55 and pair_rng.random() < CPU_DESPERATION_CHANCE + 0.18 * max(s_desp, b_desp):
-        return "desperation"
-    if peer_path:
-        return "depth_swap"
-    if direction_seller in rebuild_dirs and direction_buyer in buyer_dirs:
-        if deadline >= 0.20 and pair_rng.random() < 0.62:
-            return "rental_sale"
-        return "futures_package"
-    if sw in ("rebuild", "declining") and bw in ("contender", "emerging"):
-        if deadline >= 0.25 and pair_rng.random() < 0.62:
-            return "rental_sale"
-        return "futures_package"
-    if direction_buyer in buyer_dirs and pair_rng.random() < 0.42:
-        return "star_acquisition"
-    if bw == "contender" and deadline >= 0.35 and pair_rng.random() < 0.45:
-        return "star_acquisition"
-    if sw == bw:
-        roll = pair_rng.random()
-        if roll < 0.58:
-            return "depth_swap"
-        if roll < 0.72:
-            return "futures_package"
-        if roll < 0.84:
-            return "rental_sale"
-        return "star_acquisition"
-    if sw == "emerging" and bw == "emerging":
-        return "depth_swap" if pair_rng.random() < 0.72 else "futures_package"
-    roll = pair_rng.random()
-    if roll < 0.22:
-        return "depth_swap"
-    if roll < 0.58:
-        return "futures_package"
-    if roll < 0.76:
-        return "rental_sale"
-    if roll < 0.86:
-        return "star_acquisition"
-    return "depth_swap"
+    incoming: Any,
+    outgoing_return: Any,
+    *,
+    ctx: Dict[str, Any],
+    exclude: set,
+) -> Optional[Any]:
+    """Roster player going back when a full club adds a body (keeps both rosters legal).
+
+    Real GMs send a depth player the other way (or down) — without this every
+    pick-for-player deal failed the 23-man check, so only 1-for-1 swaps ever cleared.
+    """
+    from app.sim_engine.trades.trade_rules import ROSTER_MAX
+
+    roster = list(getattr(buyer, "roster", None) or [])
+    seller_nhl = {_player_id(p) for p in list(getattr(seller, "roster", None) or [])}
+    adds = 1 if _player_id(incoming) in seller_nhl else 0
+    sends = 1 if outgoing_return is not None and any(p is outgoing_return for p in roster) else 0
+    # Same active count trade validation uses (IR/LTIR excluded) — len(roster) was off.
+    try:
+        from app.sim_engine.economy.cap_engine import calculate_team_cap_snapshot
+
+        active = int(calculate_team_cap_snapshot(buyer, league=ctx.get("league")).get("activeRosterCount", len(roster)))
+    except Exception:
+        active = len(roster)
+    if active + adds - sends <= ROSTER_MAX:
+        return None
+    # (callers add one body; a second over-max case is handled by salary ballast / validation)
+    sid = team_id_of(seller)
+    cands = [
+        p
+        for p in roster
+        if p is not outgoing_return
+        and _player_pos_bucket(p) != "goalie"
+        and _player_id(p) not in exclude
+        and not bool(getattr(p, "_trade_demand_active", False))
+        and _tradeable_player(p, sid, ctx=ctx)
+    ]
+    if not cands:
+        return None
+    return min(cands, key=lambda p: (_player_ovr(p), -_player_age(p)))
+
+
+def _retention_to_fit_cap(
+    buyer: Any,
+    incoming: Any,
+    outgoing: List[Any],
+    *,
+    league: Any,
+    ctx: Dict[str, Any],
+) -> Optional[float]:
+    """Smallest seller retention (0–50%) that fits ``incoming`` under the buyer's cap; None if nothing fits."""
+    try:
+        from app.sim_engine.economy.cap_engine import can_trade_cap_fit
+    except Exception:
+        return 0.0
+    pid = _player_id(incoming)
+    for pct in (0.0, 15.0, 25.0, 35.0, 50.0):
+        try:
+            chk = can_trade_cap_fit(
+                buyer,
+                outgoing,
+                [incoming],
+                league=league,
+                incoming_retained_pct={pid: pct} if pct else None,
+                calendar_cursor=int(ctx.get("calendar_cursor", 0) or 0),
+                regular_season_last_index=int(ctx.get("regular_season_last_index", 192) or 192),
+                deadline_phase=float(ctx.get("deadline_phase", 0.0) or 0.0),
+            )
+        except Exception:
+            return 0.0
+        if chk.get("ok") or chk.get("reason") in ("ok_with_ltir", "ok_with_accrual"):
+            return pct
+    return None
+
+
+def _salary_ballast(buyer: Any, exclude: set, *, ctx: Dict[str, Any], seller_id: str) -> List[Any]:
+    """Buyer depth players (never top guys / tandem G) ordered by cap hit — salary going back."""
+    roster = list(getattr(buyer, "roster", None) or [])
+    by_pos: Dict[str, List[Any]] = {}
+    for p in roster:
+        by_pos.setdefault(_player_pos_bucket(p), []).append(p)
+    core: set = set()
+    for pos, plist in by_pos.items():
+        plist.sort(key=_player_ovr, reverse=True)
+        keep = {"forward": 6, "defense": 4, "goalie": 2}.get(pos, 4)
+        core.update(_player_id(p) for p in plist[:keep])
+    cands = [
+        p for p in roster
+        if _player_id(p) not in core
+        and _player_id(p) not in exclude
+        and not bool(getattr(p, "_trade_demand_active", False))
+        and _tradeable_player(p, seller_id, ctx=ctx)
+    ]
+    cands.sort(key=lambda p: -_cap_hit(p))
+    return cands[:4]
+
+
+def _cap_hit(player: Any) -> float:
+    try:
+        from app.sim_engine.economy.cap_engine import player_cap_hit_millions
+
+        return float(player_cap_hit_millions(player))
+    except Exception:
+        return 0.0
+
+
+def _active_count(team: Any, league: Any) -> int:
+    try:
+        from app.sim_engine.economy.cap_engine import calculate_team_cap_snapshot
+
+        return int(calculate_team_cap_snapshot(team, league=league).get("activeRosterCount", 0))
+    except Exception:
+        return len(list(getattr(team, "roster", None) or []))
+
+
+def _paper_send_down(team: Any, player: Any) -> None:
+    """Assign a player to the club's AHL roster (restored if the trade falls through)."""
+    roster = [p for p in list(getattr(team, "roster", None) or []) if p is not player]
+    team.roster = roster
+    ahl = list(getattr(team, "ahl_roster", None) or [])
+    ahl.append(player)
+    team.ahl_roster = ahl
+
+
+def _paper_recall(team: Any, player: Any) -> None:
+    team.ahl_roster = [p for p in list(getattr(team, "ahl_roster", None) or []) if p is not player]
+    roster = list(getattr(team, "roster", None) or [])
+    if not any(p is player for p in roster):
+        roster.append(player)
+    team.roster = roster
 
 
 def _build_package(
@@ -655,13 +633,18 @@ def _build_package(
     seller_pick: Optional[Dict[str, Any]] = None,
     buyer_pick: Optional[Dict[str, Any]] = None,
     buyer_pick_2: Optional[Dict[str, Any]] = None,
+    retained_pct: float = 0.0,
+    return_retained: Optional[Dict[str, float]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     sid = team_id_of(seller)
     bid = team_id_of(buyer)
     spid = _player_id(seller_asset)
     if not spid:
         return {}
-    buyer_payload: List[Dict[str, Any]] = [{"type": "player", "id": spid, "team": sid}]
+    asset: Dict[str, Any] = {"type": "player", "id": spid, "team": sid}
+    if retained_pct > 0:
+        asset["retained"] = float(retained_pct)
+    buyer_payload: List[Dict[str, Any]] = [asset]
     seller_payload: List[Dict[str, Any]] = []
     for asset in buyer_assets:
         if isinstance(asset, dict):
@@ -669,7 +652,10 @@ def _build_package(
         else:
             bpid = _player_id(asset)
             if bpid:
-                seller_payload.append({"type": "player", "id": bpid, "team": bid})
+                row: Dict[str, Any] = {"type": "player", "id": bpid, "team": bid}
+                if (return_retained or {}).get(bpid):
+                    row["retained"] = float(return_retained[bpid])
+                seller_payload.append(row)
     if seller_pick:
         buyer_payload.append(
             {
@@ -740,6 +726,8 @@ _REASON_COPY = {
     "PICK_VALUE_REALLOCATION": "Reallocated draft capital.",
     "DESPERATION_OVERPAY": "Paid a premium in a desperate push.",
     "DESPERATION_FIRE_SALE": "Accepted a thin return under heavy pressure.",
+    "TRADE_DEMAND_RESOLVED": "Granted a player's trade request.",
+    "LOCKER_ROOM_DISRUPTOR_MOVED": "Moved a disruptive presence out of the room.",
 }
 
 
@@ -851,6 +839,114 @@ def _classify_trade_reasons(
     return category, reasons, reason_text, importance
 
 
+CPU_DEMAND_BASE_CHANCE = 0.22  # per market call, day the demand opens
+CPU_DEMAND_DAILY_RAMP = 0.022  # GM patience erodes the longer it drags
+CPU_DEMAND_BUYER_TRIES = 6
+CPU_DEMAND_FAIRNESS_GAP_BASE = 20.0  # + 3 per crisis stage — sellers eat a discount
+CPU_DEMAND_MIN_INTEREST = 0.30
+
+
+def _team_abbr_upper(team: Any) -> str:
+    return str(
+        getattr(team, "abbr", None) or getattr(team, "abbreviation", None) or team_id_of(team) or ""
+    ).strip().upper()
+
+
+def collect_cpu_trade_demands(teams: List[Any], *, calendar_cursor: int) -> List[Tuple[Any, Any, int]]:
+    """(team, player, days_open) for every open demand on these clubs, oldest first."""
+    rows: List[Tuple[Any, Any, int]] = []
+    for tm in teams:
+        tid = team_id_of(tm)
+        for p in list(getattr(tm, "roster", None) or []):
+            if not bool(getattr(p, "_trade_demand_active", False)):
+                continue
+            opened = getattr(p, "_trade_demand_opened_day", None)
+            if opened is None:
+                continue
+            owner = str(getattr(p, "_trade_demand_team_id", "") or "")
+            if owner and owner != tid:
+                continue  # stale flag from before a move; cleared on the next demand tick
+            rows.append((tm, p, max(0, int(calendar_cursor) - _safe_int(opened, int(calendar_cursor)))))
+    rows.sort(key=lambda r: -r[2])
+    return rows
+
+
+def demand_trade_chance(days_open: int, deadline: float, *, disruptor: bool) -> float:
+    return min(
+        0.92,
+        CPU_DEMAND_BASE_CHANCE
+        + CPU_DEMAND_DAILY_RAMP * max(0, int(days_open))
+        + 0.45 * max(0.0, float(deadline))
+        + (0.12 if disruptor else 0.0),
+    )
+
+
+def _demand_buyer_weight(buyer: Any, player: Any, dests: set) -> float:
+    w = 1.0
+    if _team_abbr_upper(buyer) in dests:
+        w += 3.0
+    window = _team_window(buyer)
+    ovr = _player_ovr(player)
+    if window == "contender":
+        w += 1.2 if ovr >= 80 else 0.5
+    elif window in ("rebuild", "declining") and _player_age(player) <= 26:
+        w += 0.8
+    elif window == "emerging":
+        w += 0.4
+    return w
+
+
+def _pick_for_value(
+    league: Any,
+    team: Any,
+    *,
+    ctx: Dict[str, Any],
+    target: float,
+    exclude_pick_ids: Optional[set] = None,
+    protect_first: bool = False,
+    no_first: bool = False,
+    value_cache: Optional[Dict[Tuple[str, str], float]] = None,
+    acquirer: Any = None,
+) -> Tuple[Optional[Dict[str, Any]], float]:
+    """Owned pick whose value best matches ``target`` (slightly under preferred).
+
+    Sizes futures to the player instead of reaching for "a mid 1st/2nd" every time.
+    """
+    if target <= 0:
+        return None, 0.0
+    tid = team_id_of(team)
+    excluded = {str(x) for x in (exclude_pick_ids or set()) if x}
+    best: Optional[Dict[str, Any]] = None
+    best_val = 0.0
+    best_score = float("inf")
+    for row in get_team_owned_picks(league, tid):
+        if bool(row.get("resolved")):
+            continue
+        if str(row.get("pick_id") or "") in excluded:
+            continue
+        if protect_first and _safe_int(row.get("round"), 7) == 1 and str(row.get("original_team_id") or "") == tid:
+            continue
+        if no_first and _safe_int(row.get("round"), 7) == 1:
+            continue
+        # Price it the way the RECEIVING club will (rebuilders value picks higher).
+        acq = acquirer if acquirer is not None else team
+        ck = (str(row.get("pick_id") or ""), team_id_of(acq))
+        if value_cache is not None and ck in value_cache:
+            val = value_cache[ck]
+        else:
+            try:
+                val = float(evaluate_pick_asset_value(row, acq, team, league, context=ctx).get("total", 0.0))
+            except Exception:
+                val = max(1.0, 20.0 - _safe_int(row.get("round"), 7) * 3.0)
+            if value_cache is not None:
+                value_cache[ck] = val
+        over = val - target
+        score = abs(over) + (0.35 * over if over > 0 else 0.0)
+        if score < best_score:
+            best, best_val, best_score = row, val, score
+    return best, best_val
+
+
 def propose_and_execute_cpu_trades(
     league: Any,
     *,
@@ -887,6 +983,8 @@ def propose_and_execute_cpu_trades(
         draft_year=draft_year,
     )
     ctx["cpu_ambient_trade"] = True
+    if ctx.get("trade_deadline_passed"):
+        return []  # hard deadline — only propose_ahl_depth_trades runs after it
     try:
         setattr(league, "season_year", int(ctx["season_year"]))
         setattr(league, "current_season", int(ctx["season_year"]))
@@ -909,122 +1007,14 @@ def propose_and_execute_cpu_trades(
             pass
     needs_model = TeamNeeds()
     deadline = _safe_float(ctx.get("deadline_phase"), 0.0)
-    adaptive = compute_proposer_adaptive_knobs(
-        league,
-        calendar_cursor=int(calendar_cursor),
-        regular_season_last_index=int(regular_season_last_index),
-        deadline_phase=deadline,
-        max_executions=int(max_executions),
-        base_fairness_gap=float(fairness_gap_max),
-    )
-    fairness_gap_max = float(adaptive.get("fairness_gap_max") or fairness_gap_max)
-    pick_only_boost = float(adaptive.get("prefer_pick_only_boost") or 0.0)
-    peer_modulo_dynamic = int(adaptive.get("peer_modulo") or CPU_PEER_ATTEMPT_MODULO)
-    value_delta_pick_threshold = float(adaptive.get("value_delta_pick_threshold") or 2.5)
-    rebuild_depth_pick_chance = float(adaptive.get("rebuild_depth_pick_chance") or 0.38)
-    max_executions = max(0, int(max_executions) + int(adaptive.get("max_exec_boost") or 0))
 
     def _direction_of(tm: Any) -> str:
         tid = team_id_of(tm)
         return str((profiles.get(tid) or {}).get("team_direction") or getattr(tm, "_cpu_direction_state", "") or "").upper()
 
-    def _ideo(tm: Any, key: str, default: float = 0.5) -> float:
-        tid = team_id_of(tm)
-        ideo = (profiles.get(tid) or {}).get("ideology") or {}
-        try:
-            return float(ideo.get(key, default))
-        except Exception:
-            return default
-
-    sellers = [
-        t
-        for t in teams
-        if _team_window(t) in ("rebuild", "declining")
-        or _direction_of(t) in ("SELLER", "REBUILDING", "DEEP_REBUILD", "CAP_CORRECTION")
-    ]
-    buyers = [
-        t
-        for t in teams
-        if _team_window(t) in ("contender", "emerging")
-        or _direction_of(t) in ("CONTENDER", "PLAYOFF_BUYER", "ALL_IN_CONTENDER")
-    ]
-    # Include same-window partners for depth / hockey swaps (volume without unfair packages).
-    peers = [t for t in teams if _team_window(t) in ("emerging", "contender", "rebuild")]
-    # Ideology: future-asset preference boosts seller activity; aggression boosts buyer activity.
-    sellers = sorted(sellers, key=lambda t: -_ideo(t, "future_asset_preference", 0.5)) or sellers
-    buyers = sorted(buyers, key=lambda t: -_ideo(t, "aggression", 0.5)) or buyers
-    if deadline > 0.5:
-        buyers = sorted(
-            buyers,
-            key=lambda t: (_team_window(t) != "contender", -_playoff_odds(t)),
-        )
-    if not sellers:
-        sellers = teams[:]
-    if not buyers:
-        buyers = teams[:]
-
-    seller_weights: List[float] = []
-    buyer_weights: List[float] = []
-    peer_weights: List[float] = []
-    buyer_weight_by_id: Dict[str, float] = {}
-    peer_weight_by_id: Dict[str, float] = {}
-    pair_candidate_cache: Dict[Tuple[str, str, str], Tuple[List[Any], List[Any]]] = {}
-
-    def _refresh_pool_weights() -> None:
-        nonlocal seller_weights, buyer_weights, peer_weights, buyer_weight_by_id, peer_weight_by_id
-        seller_weights = build_pool_sampling_weights(
-            sellers,
-            team_trade_counts,
-            team_id_fn=team_id_of,
-            ideology_fn=lambda tm, buyer_side=False: _ideo(tm, "future_asset_preference", 0.5),
-            buyer_side=False,
-        )
-        buyer_weights = build_pool_sampling_weights(
-            buyers,
-            team_trade_counts,
-            team_id_fn=team_id_of,
-            ideology_fn=lambda tm, buyer_side=True: _ideo(tm, "aggression", 0.5),
-            buyer_side=True,
-        )
-        peer_weights = build_pool_sampling_weights(
-            peers,
-            team_trade_counts,
-            team_id_fn=team_id_of,
-            ideology_fn=lambda tm, buyer_side=False: _ideo(tm, "future_asset_preference", 0.5),
-            buyer_side=False,
-        )
-        buyer_weight_by_id = {team_id_of(t): buyer_weights[i] for i, t in enumerate(buyers)}
-        peer_weight_by_id = {team_id_of(t): peer_weights[i] for i, t in enumerate(peers)}
-
-    def _reclassify_pools() -> None:
-        nonlocal sellers, buyers, peers
-        sellers = [
-            t
-            for t in teams
-            if _team_window(t) in ("rebuild", "declining")
-            or _direction_of(t) in ("SELLER", "REBUILDING", "DEEP_REBUILD", "CAP_CORRECTION")
-        ]
-        buyers = [
-            t
-            for t in teams
-            if _team_window(t) in ("contender", "emerging")
-            or _direction_of(t) in ("CONTENDER", "PLAYOFF_BUYER", "ALL_IN_CONTENDER")
-        ]
-        peers = [t for t in teams if _team_window(t) in ("emerging", "contender", "rebuild")]
-        sellers = sorted(sellers, key=lambda t: -_ideo(t, "future_asset_preference", 0.5)) or list(teams)
-        buyers = sorted(buyers, key=lambda t: -_ideo(t, "aggression", 0.5)) or list(teams)
-        if deadline > 0.5:
-            buyers = sorted(
-                buyers,
-                key=lambda t: (_team_window(t) != "contender", -_playoff_odds(t)),
-            )
-        _refresh_pool_weights()
-        pair_candidate_cache.clear()
-
     executed: List[Dict[str, Any]] = []
     used_pairs: set = set()
     used_players: set = set()
-    attempts = int(adaptive.get("attempt_budget") or max(12, int(max_executions) * (22 if deadline > 0.45 else 16)))
     partner_memory = getattr(league, "cpu_market_runtime", None)
     if not isinstance(partner_memory, dict):
         partner_memory = {}
@@ -1052,6 +1042,29 @@ def propose_and_execute_cpu_trades(
         partner_memory["telemetry"] = telemetry
     setattr(league, "cpu_market_runtime", partner_memory)
 
+    # Per-motive funnel: where each plan type dies (attempt → executed).
+    funnel = telemetry.get("funnel")
+    if not isinstance(funnel, dict):
+        funnel = {}
+        telemetry["funnel"] = funnel
+    funnel_reasons = telemetry.get("funnel_reasons")
+    if not isinstance(funnel_reasons, dict):
+        funnel_reasons = {}
+        telemetry["funnel_reasons"] = funnel_reasons
+
+    def _funnel(motive_key: str, stage: str) -> None:
+        row = funnel.setdefault(str(motive_key), {})
+        row[stage] = int(row.get(stage, 0) or 0) + 1
+
+    def _funnel_reason(motive_key: str, reasons: Any) -> None:
+        # Collapse team names/numbers so the same rejection buckets together.
+        import re as _re
+
+        row = funnel_reasons.setdefault(str(motive_key), {})
+        for r in list(reasons or [])[:2]:
+            key = _re.sub(r"[-\d.]+", "#", str(r).split(": ", 1)[-1])[:90]
+            row[key] = int(row.get(key, 0) or 0) + 1
+
     import random as _random
 
     day_seed = int(calendar_cursor) * 1009 + int(max_executions) * 17 + len(teams)
@@ -1061,377 +1074,160 @@ def propose_and_execute_cpu_trades(
     except Exception:
         pair_rng = _random.Random(day_seed)
     team_trade_counts: Dict[str, int] = {}
-    _reclassify_pools()
 
-    for i in range(attempts):
-        if len(executed) >= max(0, int(max_executions)):
-            break
-        peer_path = bool(i % peer_modulo_dynamic == (peer_modulo_dynamic - 1) and peers)
-        if peer_path:
-            if not peers or not peer_weights:
-                continue
-            seller = pair_rng.choices(peers, weights=peer_weights, k=1)[0]
-            buyer_pool = [t for t in peers if team_id_of(t) != team_id_of(seller)]
-            if not buyer_pool:
-                continue
-            sub_w = [peer_weight_by_id.get(team_id_of(t), 0.05) for t in buyer_pool]
-            buyer = pair_rng.choices(buyer_pool, weights=sub_w, k=1)[0]
-        else:
-            if not sellers or not buyers or not seller_weights or not buyer_weights:
-                continue
-            seller = pair_rng.choices(sellers, weights=seller_weights, k=1)[0]
-            buyer_pool = [t for t in buyers if team_id_of(t) != team_id_of(seller)]
-            if not buyer_pool:
-                continue
-            sub_w = [buyer_weight_by_id.get(team_id_of(t), 0.05) for t in buyer_pool]
-            buyer = pair_rng.choices(buyer_pool, weights=sub_w, k=1)[0]
-        try:
-            s_div = str(getattr(seller, "division", None) or getattr(seller, "div", "") or "")
-            b_div = str(getattr(buyer, "division", None) or getattr(buyer, "div", "") or "")
-            if s_div and s_div == b_div and pair_rng.random() < 0.35:
-                continue
-        except Exception:
-            pass
+    def _finalize_trade(
+        *,
+        seller: Any,
+        buyer: Any,
+        s_offer: Any,
+        b_return: Any,
+        pick_only: bool,
+        seller_pick: Optional[Dict[str, Any]],
+        buyer_pick: Optional[Dict[str, Any]],
+        buyer_pick_2: Optional[Dict[str, Any]],
+        motive: str,
+        attempt_gap_max: float,
+        min_interest: float,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Evaluate → execute → classify → record. Returns True when the trade executed."""
         sid = team_id_of(seller)
         bid = team_id_of(buyer)
-        if user_tid and (sid == user_tid or bid == user_tid):
-            continue
         pair_key = tuple(sorted((sid, bid)))
         pair_mem_key = f"{pair_key[0]}|{pair_key[1]}"
         season_count = int(season_pair_counts.get(pair_mem_key, 0) or 0)
-        if season_count >= CPU_SEASON_PAIR_SOFT_CAP:
-            continue
-        last_pair_day = int(recent_pairs.get(pair_mem_key, -999) or -999)
-        if (int(calendar_cursor) - last_pair_day) < CPU_PAIR_COOLDOWN_DAYS:
-            continue
-        if (sid, bid) in used_pairs:
-            continue
-        used_pairs.add((sid, bid))
-        if _ideo(seller, "prospect_protection", 0.5) >= 0.72 and _ideo(buyer, "aggression", 0.5) < 0.45:
-            if deadline < 0.35 and pair_rng.random() < 0.55:
-                continue
-
-        direction_seller = _direction_of(seller)
-        direction_buyer = _direction_of(buyer)
-        motive = _choose_package_motive(
-            seller=seller,
-            buyer=buyer,
-            deadline=deadline,
-            peer_path=peer_path,
-            pair_rng=pair_rng,
-            direction_seller=direction_seller,
-            direction_buyer=direction_buyer,
-        )
-        attempt_gap_max = fairness_gap_max
-        if motive == "desperation":
-            attempt_gap_max = max(fairness_gap_max, CPU_DESPERATION_GAP_MAX)
-            ctx["cpu_desperation_trade"] = True
-        else:
-            ctx.pop("cpu_desperation_trade", None)
-        if motive in ("futures_package", "rental_sale"):
-            ctx["cpu_futures_trade"] = True
-        else:
-            ctx.pop("cpu_futures_trade", None)
-        ctx["cpu_package_motive"] = motive
-
-        from app.sim_engine.trades.trade_asset import player_holds_nhl_spc
-
-        s_roster = list(getattr(seller, "roster", None) or [])
-        b_roster = list(getattr(buyer, "roster", None) or [])
-        for attr in ("ahl_roster", "echl_roster"):
-            for p in list(getattr(seller, attr, None) or []):
-                if player_holds_nhl_spc(p):
-                    s_roster.append(p)
-            for p in list(getattr(buyer, attr, None) or []):
-                if player_holds_nhl_spc(p):
-                    b_roster.append(p)
-        if not s_roster or not b_roster:
-            continue
-
-        seller.needs = needs_model.evaluate(seller, context=ctx)
-        buyer.needs = needs_model.evaluate(buyer, context=ctx)
-        cache_key = (sid, bid, motive)
-        cached = pair_candidate_cache.get(cache_key)
-        if cached is None:
-            ctx["_acquiring_team"] = buyer
-            s_candidates = _pick_trade_candidates(
-                s_roster, seller, seller=True, league=league, ctx=ctx, acquiring_team_id=bid, motive=motive,
-            )
-            ctx["_acquiring_team"] = seller
-            b_candidates = _pick_trade_candidates(
-                b_roster, buyer, seller=False, league=league, ctx=ctx, acquiring_team_id=sid, motive=motive,
-            )
-            ctx.pop("_acquiring_team", None)
-            pair_candidate_cache[cache_key] = (s_candidates, b_candidates)
-        else:
-            s_candidates, b_candidates = cached
-        if not s_candidates or not b_candidates:
-            continue
-
-        top_n = 5 if motive in ("rental_sale", "futures_package") else 8
-        s_offer = s_candidates[pair_rng.randrange(0, min(len(s_candidates), top_n))]
-        if _player_id(s_offer) in used_players:
-            continue
-        if _needs_fit_score(seller, s_offer, selling=True) < -2.0 and not _is_rental(s_offer):
-            continue
-        if _is_reverse_to_prior(s_offer, bid, ctx):
-            telemetry["reverse_blocked"] = int(telemetry.get("reverse_blocked", 0) or 0) + 1
-            continue
-
-        value_band = max(10.0, attempt_gap_max + 3.0)
-        if motive == "desperation":
-            value_band = max(value_band, 24.0)
-        elif motive == "star_acquisition":
-            value_band = max(value_band, 16.0)
-        elif motive in ("rental_sale", "futures_package"):
-            value_band = max(value_band, 18.0)
-        if pair_rng.random() < CPU_DUMB_GM_CHANCE:
-            value_band = max(value_band, 30.0)
-            telemetry["dumb_gm_rolls"] = int(telemetry.get("dumb_gm_rolls", 0) or 0) + 1
-
         seller_window = _team_window(seller)
         buyer_window = _team_window(buyer)
-        pick_only = False
-        prefer_pick_only = (
-            motive in ("futures_package", "rental_sale")
-            and (
-                seller_window in ("rebuild", "declining")
-                or direction_seller in ("SELLER", "REBUILDING", "DEEP_REBUILD", "CAP_CORRECTION")
-            )
-            and (
-                buyer_window in ("contender", "emerging")
-                or direction_buyer in ("CONTENDER", "PLAYOFF_BUYER", "ALL_IN_CONTENDER")
-            )
-            and pair_rng.random()
-            < min(
-                0.92,
-                (0.82 if motive == "futures_package" else 0.55) + pick_only_boost,
-            )
-        )
-        b_return = None
-        if not prefer_pick_only:
-            b_return = _match_return_player(
-                seller_asset=s_offer,
-                seller=seller,
-                buyer=buyer,
-                buyer_candidates=b_candidates,
-                league=league,
-                ctx=ctx,
-                used_players=used_players,
-                value_band=value_band,
-                motive=motive,
-            )
-        if b_return is None:
-            allow_pick_only = (
-                motive in ("futures_package", "rental_sale", "desperation", "star_acquisition")
-                and seller_window in ("rebuild", "declining")
-                and (
-                    buyer_window in ("contender", "emerging")
-                    or motive in ("futures_package", "rental_sale")
-                )
-            )
-            if not allow_pick_only and motive == "depth_swap":
-                b_return = _match_return_player(
-                    seller_asset=s_offer,
-                    seller=seller,
-                    buyer=buyer,
-                    buyer_candidates=b_candidates,
-                    league=league,
-                    ctx=ctx,
-                    used_players=used_players,
-                    value_band=value_band * 1.75,
-                    motive=motive,
-                )
-            if b_return is None and not allow_pick_only:
-                continue
-            pick_only = b_return is None
-        elif _is_reverse_to_prior(b_return, sid, ctx):
-            telemetry["reverse_blocked"] = int(telemetry.get("reverse_blocked", 0) or 0) + 1
-            continue
-
-        buyer_pick = None
-        seller_pick = None
-        protect_first = _ideo(buyer, "draft_pick_protection", 0.5) >= 0.62
-        offer_val = _player_trade_value(s_offer, seller, league, ctx, acquiring_team=buyer)
         sold_ovr = _player_ovr(s_offer)
-        valuable_sale = sold_ovr >= 78.0 or (_is_rental(s_offer) and sold_ovr >= 76.0)
+        buyer_assets: List[Any] = [] if pick_only else [b_return]
+        filler = _roster_filler(
+            seller, buyer, s_offer, None if pick_only else b_return, ctx=ctx, exclude=used_players,
+        )
+        if filler is not None:
+            buyer_assets.append(filler)
+        # Deadline deals routinely need the seller to retain salary to fit the buyer's cap,
+        # and when that's not enough, salary goes back the other way.
+        buyer_nhl_ids = {_player_id(p) for p in list(getattr(buyer, "roster", None) or [])}
+        outgoing_nhl = [a for a in buyer_assets if a is not None and _player_id(a) in buyer_nhl_ids]
+        retain = _retention_to_fit_cap(buyer, s_offer, outgoing_nhl, league=league, ctx=ctx)
+        if retain is None:
+            taken = {_player_id(a) for a in buyer_assets if a is not None} | set(used_players)
+            for ballast in _salary_ballast(buyer, taken, ctx=ctx, seller_id=team_id_of(seller)):
+                retain = _retention_to_fit_cap(buyer, s_offer, outgoing_nhl + [ballast], league=league, ctx=ctx)
+                if retain is not None:
+                    buyer_assets.append(ballast)
+                    if filler is None:
+                        filler = ballast  # counted/labelled with the deal
+                    break
+        if retain is None:
+            _funnel(motive, "cap_no_fit")
+            return False
+        if retain > 0 and _player_id(s_offer) not in {_player_id(p) for p in list(getattr(seller, "roster", None) or [])}:
+            retain = 0.0  # only NHL contracts carry retention
+        # Seller already at the roster max → the buyer sends its extra body to the AHL
+        # instead of shipping it to the seller.
+        from app.sim_engine.trades.trade_rules import ROSTER_MAX as _RMAX
 
-        if pick_only:
-            max_r = 2 if sold_ovr >= 82 else (3 if sold_ovr >= 78 else 4)
-            quality = "best" if sold_ovr >= 84 else ("mid" if sold_ovr >= 78 else "cheapest")
-            buyer_pick = _select_tradeable_pick(
-                league,
-                buyer,
-                ctx=ctx,
-                max_round=max_r,
-                protect_own_first=False,
-                prefer_quality=quality,
-                pair_rng=pair_rng,
+        send_down = None
+        seller_nhl_ids = {_player_id(p) for p in list(getattr(seller, "roster", None) or [])}
+        to_seller = sum(1 for a in buyer_assets if a is not None and _player_id(a) in buyer_nhl_ids)
+        from_seller = 1 if _player_id(s_offer) in seller_nhl_ids else 0
+        if filler is not None and _active_count(seller, league) + to_seller - from_seller > _RMAX:
+            buyer_assets = [a for a in buyer_assets if a is not filler]
+            send_down, filler = filler, None
+        # Player coming back in a swap may not fit the SELLER's cap — the buyer retains.
+        return_retained: Dict[str, float] = {}
+        if b_return is not None and _player_id(b_return) in buyer_nhl_ids:
+            r2 = _retention_to_fit_cap(
+                seller, b_return, [s_offer] if from_seller else [], league=league, ctx=ctx,
             )
-            if buyer_pick is None:
-                continue
-            return_val = 0.0
-            value_delta = offer_val
-        else:
-            return_val = _player_trade_value(b_return, buyer, league, ctx, acquiring_team=seller)
-            value_delta = offer_val - return_val
-
-            # Motive-driven futures / sweeteners (not "cheapest only when uneven").
-            if motive == "futures_package" or (
-                seller_window in ("rebuild", "declining") and valuable_sale and motive != "depth_swap"
-            ):
-                buyer_pick = _select_tradeable_pick(
-                    league,
-                    buyer,
-                    ctx=ctx,
-                    max_round=3 if protect_first else 2,
-                    protect_own_first=protect_first and motive != "desperation",
-                    prefer_quality="mid",
-                    pair_rng=pair_rng,
-                )
-                if buyer_pick is None and motive == "futures_package":
-                    buyer_pick = _select_tradeable_pick(
-                        league, buyer, ctx=ctx, max_round=4, protect_own_first=False,
-                        prefer_quality="mid", pair_rng=pair_rng,
-                    )
-                # Require futures on rebuild valuable sales — skip if no pick available.
-                if buyer_pick is None and seller_window in ("rebuild", "declining") and valuable_sale:
-                    continue
-            elif motive == "rental_sale":
-                if buyer_window == "contender" and deadline > 0.3:
-                    buyer_pick = _select_tradeable_pick(
-                        league, buyer, ctx=ctx, max_round=4 if deadline > 0.65 else 3,
-                        protect_own_first=protect_first,
-                        prefer_quality="mid" if deadline > 0.55 else "cheapest",
-                        pair_rng=pair_rng,
-                    )
-                if buyer_pick is None and value_delta > 2.0:
-                    buyer_pick = _select_tradeable_pick(
-                        league, buyer, ctx=ctx, max_round=4, protect_own_first=False,
-                        prefer_quality="cheapest", pair_rng=pair_rng,
-                    )
-            elif motive == "star_acquisition":
-                if value_delta > 1.5 or sold_ovr >= 84:
-                    buyer_pick = _select_tradeable_pick(
-                        league, buyer, ctx=ctx, max_round=2 if sold_ovr >= 86 else 3,
-                        protect_own_first=False,
-                        prefer_quality="best" if sold_ovr >= 86 else "mid",
-                        pair_rng=pair_rng,
-                    )
-            elif motive == "desperation":
-                # Contender overpay OR seller accepts thin return + futures.
-                if buyer_window == "contender":
-                    buyer_pick = _select_tradeable_pick(
-                        league, buyer, ctx=ctx, max_round=2, protect_own_first=False,
-                        prefer_quality="best", pair_rng=pair_rng,
-                    )
-                elif seller_window in ("rebuild", "declining"):
-                    buyer_pick = _select_tradeable_pick(
-                        league, buyer, ctx=ctx, max_round=3, protect_own_first=False,
-                        prefer_quality="cheapest", pair_rng=pair_rng,
-                    )
-            else:
-                if seller_window in ("rebuild", "declining") and pair_rng.random() < rebuild_depth_pick_chance:
-                    buyer_pick = _select_tradeable_pick(
-                        league, buyer, ctx=ctx, max_round=3, protect_own_first=False,
-                        prefer_quality="mid", pair_rng=pair_rng,
-                    )
-                # Depth swap: attach picks when uneven (lower bar than before).
-                if value_delta > value_delta_pick_threshold:
-                    buyer_pick = buyer_pick or _select_tradeable_pick(
-                        league, buyer, ctx=ctx, max_round=4, protect_own_first=True,
-                        prefer_quality="cheapest", pair_rng=pair_rng,
-                    )
-                elif value_delta < -value_delta_pick_threshold:
-                    seller_pick = _select_tradeable_pick(
-                        league, seller, ctx=ctx, max_round=4, protect_own_first=True,
-                        prefer_quality="cheapest", pair_rng=pair_rng,
-                    )
-
-        buyer_pick_2 = None
-        if buyer_pick is not None and sold_ovr >= 78 and motive in (
-            "futures_package",
-            "rental_sale",
-            "desperation",
-            "star_acquisition",
-        ):
-            mult_chance = 0.58 if motive == "futures_package" else (0.44 if motive == "desperation" else 0.32)
-            if pair_rng.random() < mult_chance:
-                buyer_pick_2 = _select_tradeable_pick(
-                    league,
-                    buyer,
-                    ctx=ctx,
-                    max_round=4 if sold_ovr >= 84 else 3,
-                    protect_own_first=False,
-                    prefer_quality="mid" if sold_ovr >= 82 else "cheapest",
-                    pair_rng=pair_rng,
-                    exclude_pick_ids={str(buyer_pick.get("pick_id") or "")},
-                )
-
-        if not _talent_gap_ok(
-            s_offer, b_return, buyer_pick=buyer_pick, seller_pick=seller_pick, motive=motive,
-        ):
-            # Try one compensatory pick before veto.
-            if buyer_pick is None and motive != "depth_swap":
-                buyer_pick = _select_tradeable_pick(
-                    league, buyer, ctx=ctx, max_round=3, protect_own_first=False,
-                    prefer_quality="mid", pair_rng=pair_rng,
-                )
-            if not _talent_gap_ok(
-                s_offer, b_return, buyer_pick=buyer_pick, seller_pick=seller_pick, motive=motive,
-            ):
-                continue
-
+            if r2 is None:
+                _funnel(motive, "seller_cap_no_fit")
+                return False
+            if r2 > 0:
+                return_retained[_player_id(b_return)] = float(r2)
         package = _build_package(
             seller,
             buyer,
             s_offer,
-            [] if pick_only else [b_return],
+            buyer_assets,
+            return_retained=return_retained,
+            retained_pct=float(retain),
             seller_pick=seller_pick,
             buyer_pick=buyer_pick,
             buyer_pick_2=buyer_pick_2,
         )
         if not package:
-            continue
+            _funnel(motive, "empty_package")
+            return False
 
-        try:
-            from app.sim_engine.trades.trade_evaluator import evaluate_trade_package
+        def _eval_exec() -> Optional[Tuple[Dict[str, Any], float]]:
+            try:
+                from app.sim_engine.trades.trade_evaluator import evaluate_trade_package
 
-            evaluation = evaluate_trade_package(
-                package,
-                league=league,
-                team_by_id=team_by_id,
-                context=ctx,
-                user_team_id=None,
-            )
-        except Exception:
-            continue
+                evaluation = evaluate_trade_package(
+                    package,
+                    league=league,
+                    team_by_id=team_by_id,
+                    context=ctx,
+                    user_team_id=None,
+                )
+            except Exception:
+                _funnel(motive, "evaluator_error")
+                return None
 
-        if not evaluation.get("can_execute"):
-            continue
-        gap = _safe_float(evaluation.get("fairness_gap"), 99.0)
-        if gap > attempt_gap_max:
-            continue
-        if not evaluation.get("accepted"):
-            continue
-        interest = evaluation.get("interest_level") or {}
-        min_interest = 0.28 if motive == "desperation" else CPU_AMBIENT_MIN_INTEREST
-        if any(_safe_float(interest.get(t), 0.0) < min_interest for t in package.keys()):
-            continue
+            if not evaluation.get("can_execute"):
+                _funnel(motive, "rules_blocked")
+                tagged = []
+                for r in list(evaluation.get("rejection_reasons") or [])[:2]:
+                    side = "buyer" if str(r).startswith(team_id_of(buyer)) else ("seller" if str(r).startswith(team_id_of(seller)) else "?")
+                    tagged.append(f"[{side}] {r}")
+                _funnel_reason(motive, tagged)
+                return None
+            gap = _safe_float(evaluation.get("fairness_gap"), 99.0)
+            if gap > attempt_gap_max:
+                _funnel(motive, "fairness_gap")
+                vb = evaluation.get("value_breakdown") or {}
+                nets = {t: round(float((vb.get(t) or {}).get("net", 0.0))) for t in package.keys()}
+                side = "buyer_overpays" if nets.get(team_id_of(buyer), 0) < 0 else "seller_overpays"
+                gkey = f"gap_{int(gap // 10) * 10}s_{side}"
+                row = funnel_reasons.setdefault(str(motive), {})
+                row[gkey] = int(row.get(gkey, 0) or 0) + 1
+                return None
+            if not evaluation.get("accepted"):
+                _funnel(motive, "not_accepted")
+                _funnel_reason(motive, evaluation.get("rejection_reasons"))
+                return None
+            interest = evaluation.get("interest_level") or {}
+            if any(_safe_float(interest.get(t), 0.0) < min_interest for t in package.keys()):
+                _funnel(motive, "low_interest")
+                return None
 
-        try:
-            from app.sim_engine.trades.trade_executor import execute_validated_trade
+            try:
+                from app.sim_engine.trades.trade_executor import execute_validated_trade
 
-            result = execute_validated_trade(
-                evaluation,
-                league=league,
-                team_by_id=team_by_id,
-                context=ctx,
-                user_team_id=None,
-            )
-        except Exception:
-            continue
+                result = execute_validated_trade(
+                    evaluation,
+                    league=league,
+                    team_by_id=team_by_id,
+                    context=ctx,
+                    user_team_id=None,
+                )
+            except Exception:
+                _funnel(motive, "execute_error")
+                return None
+            return result, gap
 
+        if send_down is not None:
+            _paper_send_down(buyer, send_down)
+        outcome = _eval_exec()
+        if outcome is None:
+            if send_down is not None:
+                _paper_recall(buyer, send_down)
+            return False
+        result, gap = outcome
+
+        _funnel(motive, "executed")
         category, reason_codes, reason_text, importance = _classify_trade_reasons(
             seller=seller,
             buyer=buyer,
@@ -1450,9 +1246,35 @@ def propose_and_execute_cpu_trades(
             category = "futures_trade"
         elif motive == "rental_sale":
             category = "deadline_rental" if deadline >= 0.4 else category
+        elif motive == "demand_resolution":
+            disruptor = bool(getattr(s_offer, "locker_room_disruptor", False))
+            lead = "LOCKER_ROOM_DISRUPTOR_MOVED" if disruptor else "TRADE_DEMAND_RESOLVED"
+            category = "trade_demand"
+            reason_codes = ([lead] + [c for c in reason_codes if c != lead])[:4]
+            pname = str(getattr(s_offer, "name", None) or "The player")
+            days = _safe_int((extra or {}).get("demand_days_open"), 0)
+            s_abbr = _team_abbr_upper(seller)
+            if disruptor:
+                reason_text = f"{s_abbr} ships out {pname} after he fractured the room."
+            elif days >= 1:
+                reason_text = f"{pname} gets his wish — moved {days} days after demanding a trade."
+            else:
+                reason_text = f"{pname} gets his wish — moved right after demanding a trade."
+            importance = "major" if (sold_ovr >= 82 or disruptor) else "standard"
+        if extra:
+            if extra.get("trade_category"):
+                category = str(extra["trade_category"])
+            if extra.get("reason_codes"):
+                reason_codes = (list(extra["reason_codes"]) + [c for c in reason_codes if c not in extra["reason_codes"]])[:5]
+            if extra.get("reason_text"):
+                reason_text = str(extra["reason_text"])
+            if motive in ("panic_buy", "tank_selloff") or float(extra.get("premium") or 0.0) >= 0.2:
+                importance = "major"
         used_players.add(_player_id(s_offer))
         if b_return is not None:
             used_players.add(_player_id(b_return))
+        if filler is not None:
+            used_players.add(_player_id(filler))
         try:
             hist = list(getattr(league, "trade_history", None) or [])
             for row in reversed(hist):
@@ -1462,6 +1284,8 @@ def propose_and_execute_cpu_trades(
                     row.setdefault("reason_codes", list(reason_codes))
                     row.setdefault("reason_text", reason_text)
                     row.setdefault("package_motive", motive)
+                    for k, v in (extra or {}).items():
+                        row.setdefault(k, v)
                     break
             setattr(league, "trade_history", hist)
         except Exception:
@@ -1492,12 +1316,12 @@ def propose_and_execute_cpu_trades(
             telemetry["ovr_gap_sum"] = float(telemetry.get("ovr_gap_sum", 0) or 0) + abs(sold_ovr - _player_ovr(b_return))
             telemetry["ovr_gap_n"] = int(telemetry.get("ovr_gap_n", 0) or 0) + 1
 
-        _reclassify_pools()
-        pair_candidate_cache.clear()
         outgoing_labels = [str(getattr(s_offer, "name", None) or "Player")]
         incoming_labels: List[str] = []
         if b_return is not None:
             incoming_labels.append(str(getattr(b_return, "name", None) or "Asset"))
+        if filler is not None:
+            incoming_labels.append(str(getattr(filler, "name", None) or "Player"))
         if seller_pick:
             yr = seller_pick.get("year")
             rnd = seller_pick.get("round")
@@ -1523,24 +1347,387 @@ def propose_and_execute_cpu_trades(
             or sid
         )
         headline = f"{buyer_abbr} acquires {to_bits} from {seller_abbr} for {from_bits}"
-        executed.append(
-            {
-                "from_team_id": sid,
-                "to_team_id": bid,
-                "outgoing": outgoing_labels,
-                "incoming": incoming_labels,
-                "headline": headline,
-                "trade_id": result.get("trade_id"),
-                "execution": result,
-                "trade_category": category,
-                "importance": importance,
-                "reason_codes": reason_codes,
-                "reason_text": reason_text,
-                "fairness_gap": gap,
-                "package_motive": motive,
-            }
+        row_out = {
+            "from_team_id": sid,
+            "to_team_id": bid,
+            "outgoing": outgoing_labels,
+            "incoming": incoming_labels,
+            "headline": headline,
+            "trade_id": result.get("trade_id"),
+            "execution": result,
+            "trade_category": category,
+            "importance": importance,
+            "reason_codes": reason_codes,
+            "reason_text": reason_text,
+            "fairness_gap": gap,
+            "package_motive": motive,
+        }
+        for k, v in (extra or {}).items():
+            row_out.setdefault(k, v)
+        executed.append(row_out)
+        return True
+
+    def _attempt_demand_trade(seller: Any, player: Any, days_open: int) -> bool:
+        """Move a player who has formally demanded out. Seller is motivated and eats a discount."""
+        from app.sim_engine.trades.trade_asset import player_holds_nhl_spc
+        from app.sim_engine.trades.trade_rules import _clause_summary, _player_recently_acquired
+
+        sid = team_id_of(seller)
+        pid = _player_id(player)
+        clause = _clause_summary(player)
+        if clause.get("nmc") or _player_recently_acquired(player, ctx):
+            return False
+        dests = {str(x).upper() for x in (getattr(player, "_trade_demand_destinations", None) or []) if x}
+        clause_limited = bool(clause.get("ntc") or clause.get("mntc", 0) > 0)
+        pool = [t for t in teams if team_id_of(t) != sid]
+        if clause_limited:
+            # He waives only for clubs on his own list.
+            pool = [t for t in pool if _team_abbr_upper(t) in dests]
+        if not pool:
+            return False
+        stage = max(1, min(3, _safe_int(getattr(player, "_crisis_trade_stage", 1), 1)))
+        disruptor = bool(getattr(player, "locker_room_disruptor", False))
+
+        weighted = [(t, _demand_buyer_weight(t, player, dests)) for t in pool]
+        tries: List[Any] = []
+        while weighted and len(tries) < CPU_DEMAND_BUYER_TRIES:
+            idx = pair_rng.choices(range(len(weighted)), weights=[w for _, w in weighted], k=1)[0]
+            tries.append(weighted.pop(idx)[0])
+
+        seller_rebuilding = _team_window(seller) in ("rebuild", "declining") or _direction_of(seller) in (
+            "SELLER",
+            "REBUILDING",
+            "DEEP_REBUILD",
+            "CAP_CORRECTION",
         )
+        gap_max = CPU_DEMAND_FAIRNESS_GAP_BASE + 3.0 * stage
+        ctx.pop("cpu_desperation_trade", None)
+        ctx.pop("cpu_futures_trade", None)
+        ctx["cpu_package_motive"] = "demand_resolution"
+        ctx["cpu_demand_trade"] = {"seller_team_id": sid, "player_id": pid, "stage": stage}
+        seller.needs = needs_model.evaluate(seller, context=ctx)
+        try:
+            for buyer in tries:
+                bid = team_id_of(buyer)
+                pair_key = tuple(sorted((sid, bid)))
+                if int(season_pair_counts.get(f"{pair_key[0]}|{pair_key[1]}", 0) or 0) >= CPU_SEASON_PAIR_SOFT_CAP:
+                    continue
+                if _is_reverse_to_prior(player, bid, ctx):
+                    continue
+                ctx["ntc_waivers"] = (
+                    {pid: {"accepted": True, "destination_team_id": bid}} if clause_limited else {}
+                )
+                buyer.needs = needs_model.evaluate(buyer, context=ctx)
+                offer_val = _player_trade_value(player, seller, league, ctx, acquiring_team=buyer)
+
+                b_return = None
+                if not seller_rebuilding or pair_rng.random() < 0.35:
+                    b_roster = list(getattr(buyer, "roster", None) or [])
+                    for attr in ("ahl_roster", "echl_roster"):
+                        b_roster.extend(p for p in list(getattr(buyer, attr, None) or []) if player_holds_nhl_spc(p))
+                    ctx["_acquiring_team"] = seller
+                    b_cands = _pick_trade_candidates(
+                        b_roster, buyer, seller=False, league=league, ctx=ctx,
+                        acquiring_team_id=sid, motive="demand_resolution",
+                    )
+                    ctx.pop("_acquiring_team", None)
+                    b_return = _match_return_player(
+                        seller_asset=player, seller=seller, buyer=buyer, buyer_candidates=b_cands,
+                        league=league, ctx=ctx, used_players=used_players,
+                        value_band=gap_max, motive="demand_resolution",
+                    )
+                return_val = (
+                    _player_trade_value(b_return, buyer, league, ctx, acquiring_team=seller) if b_return is not None else 0.0
+                )
+                shortfall = offer_val - return_val
+                buyer_pick = None
+                buyer_pick_2 = None
+                if b_return is None or shortfall > 6.0:
+                    target = shortfall * (0.85 if b_return is None else 0.9)
+                    buyer_pick, v1 = _pick_for_value(league, buyer, ctx=ctx, target=target)
+                    if buyer_pick is not None and b_return is None and target - v1 > 12.0:
+                        buyer_pick_2, _ = _pick_for_value(
+                            league, buyer, ctx=ctx, target=target - v1,
+                            exclude_pick_ids={str(buyer_pick.get("pick_id") or "")},
+                        )
+                _funnel("demand_resolution", "attempt")
+                if b_return is None and buyer_pick is None:
+                    _funnel("demand_resolution", "no_return_or_pick")
+                    continue
+                if _finalize_trade(
+                    seller=seller,
+                    buyer=buyer,
+                    s_offer=player,
+                    b_return=b_return,
+                    pick_only=b_return is None,
+                    seller_pick=None,
+                    buyer_pick=buyer_pick,
+                    buyer_pick_2=buyer_pick_2,
+                    motive="demand_resolution",
+                    attempt_gap_max=gap_max,
+                    min_interest=CPU_DEMAND_MIN_INTEREST,
+                    extra={
+                        "demand_player_id": pid,
+                        "demand_days_open": int(days_open),
+                        "demand_stage": stage,
+                        "demand_disruptor": disruptor,
+                    },
+                ):
+                    used_pairs.add((sid, bid))
+                    return True
+        finally:
+            ctx.pop("cpu_demand_trade", None)
+            ctx.pop("ntc_waivers", None)
+            ctx.pop("cpu_package_motive", None)
+        return False
+
+    filled_needs: set = set()
+
+    def _run_needs_market() -> None:
+        from collections import Counter
+
+        from app.sim_engine.trades.needs_matcher import MatcherTools, build_package_for_plan, generate_plans
+        from app.sim_engine.trades.team_assessment import assess_league
+
+        assessments = assess_league(
+            league,
+            calendar_cursor=int(calendar_cursor),
+            deadline_phase=deadline,
+            days_to_deadline=int(ctx.get("days_to_deadline", 99) if ctx.get("days_to_deadline") is not None else 99),
+        )
+        telemetry["last_status_counts"] = dict(Counter(a.status for a in assessments.values()))
+        telemetry["last_flags"] = {
+            "panic_buyers": sum(1 for a in assessments.values() if a.panic_buyer),
+            "chasers": sum(1 for a in assessments.values() if a.chaser),
+            "late_sellers": sum(1 for a in assessments.values() if a.late_seller),
+        }
+        # Values are stable within one market pass — cache them (was ~25 s/pass uncached).
+        pv_cache: Dict[Tuple[str, str, str], float] = {}
+        pick_cache: Dict[Tuple[str, str], float] = {}
+
+        def _pv(p: Any, frm: Any, to: Any) -> float:
+            k = (_player_id(p), team_id_of(frm), team_id_of(to))
+            if k not in pv_cache:
+                pv_cache[k] = _player_trade_value(p, frm, league, ctx, acquiring_team=to)
+            return pv_cache[k]
+
+        def _pfv(lg: Any, team: Any, **kw: Any) -> Tuple[Optional[Dict[str, Any]], float]:
+            return _pick_for_value(lg, team, value_cache=pick_cache, **kw)
+
+        def _filler_value(seller: Any, buyer: Any, target: Any, ret: Any) -> float:
+            # The roster player going back is part of what the seller receives.
+            f = _roster_filler(seller, buyer, target, ret, ctx=ctx, exclude=used_players)
+            return _pv(f, buyer, seller) if f is not None else 0.0
+
+        tools = MatcherTools(
+            player_value=_pv,
+            pick_for_value=_pfv,
+            tradeable=lambda p, acq: _tradeable_player(p, acq, ctx=ctx),
+            team_abbr=_team_abbr_upper,
+            filler_value=_filler_value,
+        )
+        plans = generate_plans(
+            league, teams=teams, assessments=assessments, ctx=ctx, tools=tools, rng=pair_rng, used_players=used_players,
+        )
+        telemetry["last_plan_count"] = len(plans)
+        attempt_budget = 8 + 4 * max(1, int(max_executions))
+        buyer_deals: Dict[str, int] = {}
+        days_left_ctx = int(ctx.get("days_to_deadline", 99) if ctx.get("days_to_deadline") is not None else 99)
+        per_buyer_cap = 4 if days_left_ctx == 0 else (2 if 0 <= days_left_ctx <= 7 else 1)
+        # Sellers wait ~20 games to judge the season, then mostly hold vets for the deadline.
+        from statistics import median as _median
+
+        from app.sim_engine.trades.needs_matcher import SELLOFF_MOTIVES
+
+        league_gp = _median([a.games_played for a in assessments.values()] or [0])
+        if league_gp < 20:
+            selloff_cap = 0
+        elif deadline < 0.3:
+            selloff_cap = 1
+        elif days_left_ctx == 0:
+            selloff_cap = 99  # deadline day: everything left is for sale
+        elif days_left_ctx <= 2:
+            selloff_cap = 2
+        else:
+            selloff_cap = 1  # sellers hold inventory for deadline day
+        selloffs_done = 0
+        panic_counts = partner_memory.setdefault("season_panic_buys", {})
+        # GMs who just dealt with each other talk again quickly in the deadline crunch.
+        pair_cooldown = 0 if days_left_ctx == 0 else (3 if 0 <= days_left_ctx <= 7 else CPU_PAIR_COOLDOWN_DAYS)
+        for plan in plans:
+            if len(executed) >= max(0, int(max_executions)) or attempt_budget <= 0:
+                break
+            sid, bid = team_id_of(plan.seller), team_id_of(plan.buyer)
+            if _player_id(plan.target) in used_players or (bid, plan.need_slot) in filled_needs:
+                continue
+            if (sid, bid) in used_pairs or (bid, sid) in used_pairs:
+                continue
+            if buyer_deals.get(bid, 0) >= per_buyer_cap:
+                _funnel(plan.motive, "buyer_already_dealt")
+                continue
+            if plan.motive in SELLOFF_MOTIVES and selloffs_done >= selloff_cap:
+                _funnel(plan.motive, "seller_waiting_for_deadline")
+                continue
+            if plan.motive == "panic_buy" and int(panic_counts.get(bid, 0) or 0) >= CPU_PANIC_BUYS_PER_SEASON:
+                _funnel(plan.motive, "panic_budget_spent")
+                continue
+            pk = tuple(sorted((sid, bid)))
+            pair_mem_key = f"{pk[0]}|{pk[1]}"
+            if int(season_pair_counts.get(pair_mem_key, 0) or 0) >= CPU_SEASON_PAIR_SOFT_CAP + (1 if days_left_ctx == 0 else 0):
+                _funnel(plan.motive, "pair_season_cap")
+                continue
+            if (
+                int(calendar_cursor) - int(recent_pairs.get(pair_mem_key, -999) or -999) < pair_cooldown
+                and plan.motive != "panic_buy"
+            ):
+                _funnel(plan.motive, "pair_cooldown")
+                continue
+            if not build_package_for_plan(
+                plan, league, assessments=assessments, ctx=ctx, tools=tools, used_players=used_players,
+            ):
+                _funnel(plan.motive, plan.fail_reason or "no_package")
+                continue
+            # Only packages that reach the other GM's desk count against the pass budget.
+            _funnel(plan.motive, "attempt")
+            attempt_budget -= 1
+            if plan.return_player is not None and _player_id(plan.return_player) in used_players:
+                continue
+            premium_value = round(plan.premium * max(0.0, plan.target_value), 2)
+            ctx["cpu_package_motive"] = plan.motive
+            ctx["cpu_intent"] = {
+                "buyer_team_id": bid,
+                "seller_team_id": sid,
+                "premium_value": premium_value,
+                "motivated_seller": bool(plan.motivated_seller),
+                "spend_first_ok": plan.motive == "panic_buy" or plan.premium >= 0.2,
+            }
+            picks = list(plan.buyer_picks)
+            try:
+                ok = _finalize_trade(
+                    seller=plan.seller,
+                    buyer=plan.buyer,
+                    s_offer=plan.target,
+                    b_return=plan.return_player,
+                    pick_only=plan.return_player is None,
+                    seller_pick=plan.seller_pick,
+                    buyer_pick=picks[0] if picks else None,
+                    buyer_pick_2=picks[1] if len(picks) > 1 else None,
+                    motive=plan.motive,
+                    attempt_gap_max=CPU_AMBIENT_FAIRNESS_GAP_MAX + 2.0 * premium_value + (8.0 if plan.motivated_seller else 0.0),
+                    min_interest=0.30 if (plan.motivated_seller or plan.premium > 0.0) else CPU_AMBIENT_MIN_INTEREST,
+                    extra={
+                        "reason_codes": plan.reason_codes,
+                        "reason_text": plan.reason_text,
+                        "trade_category": plan.trade_category,
+                        "need_slot": plan.need_slot,
+                        "premium": plan.premium,
+                        "plan_score": plan.score,
+                    },
+                )
+            finally:
+                ctx.pop("cpu_intent", None)
+                ctx.pop("cpu_package_motive", None)
+            if ok:
+                buyer_deals[bid] = buyer_deals.get(bid, 0) + 1
+                if plan.motive in SELLOFF_MOTIVES:
+                    selloffs_done += 1
+                if plan.motive == "panic_buy":
+                    panic_counts[bid] = int(panic_counts.get(bid, 0) or 0) + 1
+                used_pairs.add((sid, bid))
+                if plan.need_slot:
+                    filled_needs.add((bid, plan.need_slot))
+
+    # Formal trade demands first — these are the storylines, not ambient filler.
+    for d_seller, d_player, d_days in collect_cpu_trade_demands(teams, calendar_cursor=int(calendar_cursor)):
+        if len(executed) >= max(0, int(max_executions)):
+            break
+        if _player_id(d_player) in used_players:
+            continue
+        disruptor = bool(getattr(d_player, "locker_room_disruptor", False))
+        if pair_rng.random() >= demand_trade_chance(d_days, deadline, disruptor=disruptor):
+            continue
+        telemetry["demand_attempts"] = int(telemetry.get("demand_attempts", 0) or 0) + 1
+        if _attempt_demand_trade(d_seller, d_player, d_days):
+            telemetry["demand_trades"] = int(telemetry.get("demand_trades", 0) or 0) + 1
+
+    # Needs-and-surplus market: only deals a GM has a reason to make.
+    if len(executed) < max(0, int(max_executions)):
+        _run_needs_market()
 
     ctx.pop("cpu_desperation_trade", None)
     ctx.pop("cpu_package_motive", None)
     return executed
+
+
+def propose_ahl_depth_trades(
+    league: Any,
+    *,
+    calendar_cursor: int = 0,
+    regular_season_last_index: int = 192,
+) -> List[Dict[str, Any]]:
+    """Post-deadline minor-league swaps: AHL player for AHL player, each club fixing a shortage."""
+    from app.sim_engine.trades.needs_matcher import plan_ahl_depth_swap
+    from app.sim_engine.trades.trade_evaluator import evaluate_trade_package
+    from app.sim_engine.trades.trade_executor import execute_validated_trade
+
+    teams = list(getattr(league, "teams", None) or [])
+    user_tid = str(getattr(league, "_franchise_user_team_id", None) or getattr(league, "user_team_id", None) or "")
+    teams = [t for t in teams if team_id_of(t) != user_tid]
+    if len(teams) < 2:
+        return []
+    ctx = build_league_trade_context(
+        league, calendar_cursor=calendar_cursor, regular_season_last_index=regular_season_last_index,
+    )
+    ctx["cpu_ambient_trade"] = True
+    ctx["cpu_package_motive"] = "ahl_depth_swap"
+    import random as _random
+
+    base_rng = getattr(league, "rng", None)
+    rng = _random.Random(int(base_rng.randint(1, 2_000_000_000)) if hasattr(base_rng, "randint") else calendar_cursor)
+    plan = plan_ahl_depth_swap(teams, rng=rng, used_players=set())
+    if plan is None:
+        return []
+    team_a, pa, team_b, pb = plan
+    aid, bid = team_id_of(team_a), team_id_of(team_b)
+    package = {
+        bid: [{"type": "player", "id": _player_id(pa), "team": aid}],
+        aid: [{"type": "player", "id": _player_id(pb), "team": bid}],
+    }
+    try:
+        evaluation = evaluate_trade_package(package, league=league, team_by_id=ctx["team_by_id"], context=ctx, user_team_id=None)
+        if not evaluation.get("can_execute") or not evaluation.get("accepted"):
+            return []
+        result = execute_validated_trade(evaluation, league=league, team_by_id=ctx["team_by_id"], context=ctx, user_team_id=None)
+    except Exception:
+        return []
+    a_abbr, b_abbr = _team_abbr_upper(team_a), _team_abbr_upper(team_b)
+    name_a = str(getattr(pa, "name", None) or "Player")
+    name_b = str(getattr(pb, "name", None) or "Player")
+    reason_text = f"Minor-league swap: {a_abbr} and {b_abbr} balance their AHL depth after the deadline."
+    try:
+        for row in reversed(list(getattr(league, "trade_history", None) or [])):
+            if isinstance(row, dict) and str(row.get("trade_id") or "") == str(result.get("trade_id") or ""):
+                row.setdefault("trade_category", "minor_league_trade")
+                row.setdefault("importance", "minor")
+                row.setdefault("reason_codes", ["AHL_DEPTH_SWAP"])
+                row.setdefault("reason_text", reason_text)
+                row.setdefault("package_motive", "ahl_depth_swap")
+                break
+    except Exception:
+        pass
+    return [
+        {
+            "from_team_id": aid,
+            "to_team_id": bid,
+            "outgoing": [name_a],
+            "incoming": [name_b],
+            "headline": f"{b_abbr} acquires {name_a} (AHL) from {a_abbr} for {name_b} (AHL)",
+            "trade_id": result.get("trade_id"),
+            "execution": result,
+            "trade_category": "minor_league_trade",
+            "importance": "minor",
+            "reason_codes": ["AHL_DEPTH_SWAP"],
+            "reason_text": reason_text,
+            "package_motive": "ahl_depth_swap",
+        }
+    ]

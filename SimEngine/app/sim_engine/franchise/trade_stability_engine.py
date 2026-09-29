@@ -20,6 +20,8 @@ STABILITY_APATHY_MIN = 40
 STABILITY_ANGER_MIN = 20
 
 CRISIS_DEADLINE_MAX = 360
+#: Longest gap replayed from saved state (offseason gaps shouldn't swing a whole season).
+STABILITY_MAX_CATCHUP_DAYS = 30
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -101,7 +103,8 @@ def _player_character_0_100(player: Any) -> int:
     try:
         chapters = player.get_chapter_ratings() if hasattr(player, "get_chapter_ratings") else {}
         if isinstance(chapters, dict) and chapters.get("Character"):
-            return int(_clamp(float(chapters["Character"]), 55.0, 99.0))
+            # Floor at 40 (not 55) so genuinely low-character players stay distinguishable.
+            return int(_clamp(float(chapters["Character"]), 40.0, 99.0))
     except Exception:
         pass
     c = getattr(player, "character", None)
@@ -223,6 +226,16 @@ class PlayerConcernSnapshot:
     agent_pressure: float = 0.0
     human_life_pressure: float = 0.0
     pressures: Dict[str, float] = field(default_factory=dict)
+
+
+def winning_satisfaction_from_points_pct(points_pct: float) -> float:
+    """Map points% onto 0–100 satisfaction across the real NHL spread (.350–.700).
+
+    .500 → 60 (just under the 62 dissatisfaction floor), .400 → 40, .350 → 30,
+    .600 → 80. The old ``35 + pct*65`` curve bottomed out near 58 for a last-place
+    club, so losing never registered as real pressure.
+    """
+    return _clamp(60.0 + (float(points_pct) - 0.5) * 200.0, 0.0, 100.0)
 
 
 def _team_win_pct(session: Any, team: Any) -> float:
@@ -881,7 +894,7 @@ def gather_player_concerns(session: Any, player: Any, team: Any) -> PlayerConcer
         coach_trust = _to_0_100(coach_trust_raw)
 
     win_pct = _team_win_pct(session, team)
-    winning_sat = _clamp(35.0 + win_pct * 65.0, 0.0, 100.0)
+    winning_sat = winning_satisfaction_from_points_pct(win_pct)
 
     character = float(_player_character_0_100(player))
     mental = float(_player_mental_0_100(player))
@@ -946,7 +959,11 @@ def gather_player_concerns(session: Any, player: Any, team: Any) -> PlayerConcer
 
         pid = str(getattr(player, "id", "") or getattr(player, "player_id", "") or "")
         if pid:
-            entities = _u_sync_player_entities(session)
+            # League-wide passes (process_trade_demand_day) sync once and share the result;
+            # a full re-sync per player was O(players²) and dominated sim time.
+            entities = getattr(session, "_stability_entities_pass_cache", None)
+            if not isinstance(entities, dict):
+                entities = _u_sync_player_entities(session)
             entity = entities.get(pid) or {}
             life = entity.get("life") or {}
             est = entity.get("state") or {}
@@ -1079,7 +1096,30 @@ def _winning_pressure(snap: PlayerConcernSnapshot) -> float:
     weight = 0.12 + (snap.competitiveness / 100.0) * 0.18
     if snap.competitiveness >= 78 and snap.winning_satisfaction < 45:
         dissat *= 1.55
+    # Low-character players handle losing worse than professionals do.
+    if snap.character < 65:
+        dissat *= 1.20
+    elif snap.character >= 85:
+        dissat *= 0.85
     return dissat * weight
+
+
+def _temperament_pressure(snap: PlayerConcernSnapshot) -> float:
+    """Friction a low-character player generates on his own, amplified by losing and role.
+
+    Character used to only soften other pressures, so a low-character player on a club
+    with nothing else wrong could never become a problem. This is the self-generated
+    piece: small on its own, significant (7.5+) once the team is losing or he's unhappy
+    with his role.
+    """
+    c = float(snap.character)
+    if c >= 68.0:
+        return 0.0
+    base = (68.0 - c) * 0.45
+    losing_amp = max(0.0, 55.0 - snap.winning_satisfaction) / 40.0
+    role_amp = _dissatisfaction(snap.role_satisfaction) / 60.0
+    mental_amp = 0.25 if snap.mental < 62 else 0.0
+    return base * (1.0 + losing_amp + role_amp + mental_amp)
 
 
 def _contract_pressure(snap: PlayerConcernSnapshot) -> float:
@@ -1163,6 +1203,7 @@ def compute_component_pressures(snap: PlayerConcernSnapshot) -> Dict[str, float]
         "coach": _coach_pressure(snap),
         "organizational": _organizational_pressure(snap),
         "performance": _performance_pressure(snap),
+        "temperament": _temperament_pressure(snap),
     }
     if snap.broken_promises > 0:
         pressures["broken_promise"] = min(28.0, snap.broken_promises * 1.1)
@@ -1296,6 +1337,9 @@ def clear_demand_temporary_modifiers(player: Any) -> None:
         "_crisis_trade_value_mult",
         "_crisis_distressed_asset",
         "_crisis_trade_stage",
+        "_trade_demand_opened_day",
+        "_trade_demand_destinations",
+        "_trade_demand_team_id",
         "locker_room_disruptor",
     ):
         try:
@@ -1346,38 +1390,47 @@ def apply_daily_stability_update(session: Any, player: Any, team: Any, calendar_
     if prev_day == int(calendar_idx):
         return prev if prev else instant
 
-    delta = (target_score - prev_score) * 0.18
+    # Catch up from the saved state: batch sims check every few days, so replay the
+    # elapsed days of drift against today's target (pure arithmetic — concerns are
+    # gathered once above, not per day).
+    elapsed = int(calendar_idx) - prev_day if prev_day >= 0 else 1
+    elapsed = max(1, min(STABILITY_MAX_CATCHUP_DAYS, elapsed))
+    first_day = int(calendar_idx) - elapsed + 1
+    sig_count = count_significant_pressures(instant["pressures"])
+    concerned = sig_count >= 1
+    concern_days = int(pst.get("stability_concern_days") or 0)
     max_drop = 1.15 * drift_mult
     max_rise = 1.35
-    if target_score < prev_score:
-        drift = _clamp(delta, -max_drop, 0.0)
-    else:
-        drift = _clamp(delta, 0.0, max_rise)
-    score = round(_clamp(prev_score + drift, 0.0, 100.0), 2)
-
-    target_level = stability_to_escalation_level(score)
-    days_since_level_change = int(calendar_idx) - last_level_change_day
-    level_change_cooldown = 10 if target_level > prev_level else 14
-    if target_level > prev_level + 1:
-        if days_since_level_change >= level_change_cooldown:
-            level = prev_level + 1
-            last_level_change_day = int(calendar_idx)
+    score = prev_score
+    level = prev_level
+    for day in range(first_day, int(calendar_idx) + 1):
+        delta = (target_score - score) * 0.18
+        if target_score < score:
+            score += _clamp(delta, -max_drop, 0.0)
         else:
-            level = prev_level
-    elif target_level < prev_level - 1:
-        if days_since_level_change >= level_change_cooldown:
-            level = prev_level - 1
-            last_level_change_day = int(calendar_idx)
-        else:
-            level = prev_level
-    else:
-        level = target_level
+            score += _clamp(delta, 0.0, max_rise)
+        score = _clamp(score, 0.0, 100.0)
 
-    sig_count = count_significant_pressures(instant["pressures"])
-    if score < 70.0 or sig_count >= 1:
-        pst["stability_concern_days"] = int(pst.get("stability_concern_days") or 0) + 1
-    else:
-        pst["stability_concern_days"] = max(0, int(pst.get("stability_concern_days") or 0) - 1)
+        target_level = stability_to_escalation_level(score)
+        days_since_level_change = day - last_level_change_day
+        level_change_cooldown = 10 if target_level > level else 14
+        if target_level > level + 1:
+            if days_since_level_change >= level_change_cooldown:
+                level += 1
+                last_level_change_day = day
+        elif target_level < level - 1:
+            if days_since_level_change >= level_change_cooldown:
+                level -= 1
+                last_level_change_day = day
+        else:
+            level = target_level
+
+        if score < 70.0 or concerned:
+            concern_days += 1
+        else:
+            concern_days = max(0, concern_days - 1)
+    score = round(score, 2)
+    pst["stability_concern_days"] = concern_days
 
     penalties = readiness_penalties(score, character, mental, level)
     apply_readiness_to_player(player, penalties)
@@ -1525,5 +1578,6 @@ def primary_complaint_from_pressures(pressures: Dict[str, float]) -> str:
         "broken_promise": "broken organizational promises",
         "performance": "role relative to production",
         "organizational": "organizational direction",
+        "temperament": "friction in the room",
     }
     return labels.get(top[0], top[0].replace("_", " "))

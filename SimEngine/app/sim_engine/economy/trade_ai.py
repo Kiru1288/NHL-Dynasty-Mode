@@ -43,7 +43,9 @@ class TradeAI:
         target = self.base_trades + int(round(chaos * 4.0))
         target = max(self.base_trades, min(self.max_trades, target))
         if max_executions is not None:
-            target = max(0, min(int(max_executions), target))
+            # The engine owns cadence (deadline day asks for far more than max_trades);
+            # the proposer only executes deals with a reason, so this is a ceiling, not a quota.
+            target = max(0, int(max_executions))
 
         return propose_and_execute_cpu_trades(
             league,

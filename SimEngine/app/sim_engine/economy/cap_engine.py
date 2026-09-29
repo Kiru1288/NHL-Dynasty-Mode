@@ -154,11 +154,27 @@ def _iter_org_contracted_players(team: Any) -> List[Any]:
     return out
 
 
+_ACTIVE_ROSTER_FN: Any = None  # resolved once; a failed import is retried on every call otherwise
+
+
+def _resolve_active_roster_fn() -> Any:
+    global _ACTIVE_ROSTER_FN
+    if _ACTIVE_ROSTER_FN is None:
+        try:
+            from services.roster_compliance import is_active_nhl_roster_player
+
+            _ACTIVE_ROSTER_FN = is_active_nhl_roster_player
+        except Exception:
+            _ACTIVE_ROSTER_FN = False
+    return _ACTIVE_ROSTER_FN
+
+
 def _is_active_roster_player(player: Any) -> bool:
     try:
-        from services.roster_compliance import is_active_nhl_roster_player
-
-        return is_active_nhl_roster_player(player)
+        fn = _resolve_active_roster_fn()
+        if not fn:
+            raise LookupError("roster_compliance unavailable")
+        return fn(player)
     except Exception:
         return (
             not bool(_get(player, "retired", False))

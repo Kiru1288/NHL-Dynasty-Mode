@@ -1124,7 +1124,7 @@ def test_reverse_return_hard_blocked_same_season():
     assert "same season" in joined.lower() or "cannot be traded back" in joined.lower()
 
 
-def test_seller_protects_young_core_and_talent_gap():
+def test_seller_protects_young_core():
     from app.sim_engine.trades import cpu_trade_proposer as ctp
 
     young = _player("kid", cap_hit=0.95)
@@ -1142,41 +1142,6 @@ def test_seller_protects_young_core_and_talent_gap():
     assert ctp._is_young_core(young) is True
     assert ctp._seller_must_protect(young, window="rebuild", deadline=0.2) is True
     assert abs(ctp._player_ovr(young) - ctp._player_ovr(vet)) > ctp.CPU_ONE_FOR_ONE_OVR_GAP_MAX
-    assert ctp._talent_gap_ok(young, vet, motive="depth_swap") is False
-    assert ctp._talent_gap_ok(young, vet, buyer_pick={"pick_id": "x"}, motive="futures_package") is True
-
-
-def test_package_motive_chooser_prefers_futures_for_rebuild_to_contender():
-    from app.sim_engine.trades import cpu_trade_proposer as ctp
-    import random
-
-    seller = _team("AAA")
-    seller.gm_window = "rebuild"
-    buyer = _team("BBB")
-    buyer.gm_window = "contender"
-    rng = random.Random(1)
-    motives = {
-        ctp._choose_package_motive(
-            seller=seller,
-            buyer=buyer,
-            deadline=0.6,
-            peer_path=False,
-            pair_rng=random.Random(i),
-            direction_seller="REBUILDING",
-            direction_buyer="CONTENDER",
-        )
-        for i in range(40)
-    }
-    assert "futures_package" in motives or "rental_sale" in motives
-    assert ctp._choose_package_motive(
-        seller=seller,
-        buyer=buyer,
-        deadline=0.1,
-        peer_path=True,
-        pair_rng=rng,
-        direction_seller="REBUILDING",
-        direction_buyer="CONTENDER",
-    ) == "depth_swap"
 
 
 def test_upcoming_draft_year_and_calendar_pick_migration():
@@ -1232,18 +1197,6 @@ def test_trade_rules_use_draft_year_anchor():
     )
     assert not rules["ok"]
     assert any("out of allowed range" in r.lower() for r in rules["blocking_reasons"])
-
-
-def test_talent_gap_allows_pick_only_return():
-    from app.sim_engine.trades import cpu_trade_proposer as ctp
-
-    sold = _player("star", cap_hit=7.0)
-    sold.ovr = lambda: 0.86
-    assert ctp._talent_gap_ok(sold, None, motive="futures_package") is False
-    assert ctp._talent_gap_ok(
-        sold, None, buyer_pick={"pick_id": "2026-round1-BBB"}, motive="futures_package"
-    ) is True
-    assert ctp._talent_gap_ok(sold, None, buyer_pick={"pick_id": "x"}, motive="depth_swap") is False
 
 
 def test_build_package_pick_only_return():

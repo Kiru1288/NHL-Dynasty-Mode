@@ -13,6 +13,7 @@ import os
 import random
 import threading
 import time
+import types
 import uuid
 from dataclasses import is_dataclass, replace
 from collections import Counter, defaultdict
@@ -9787,8 +9788,7 @@ def _refresh_cpu_franchise_profiles(session: FranchiseSession, *, calendar_idx: 
         return
 
     max_d = max(40, int(getattr(session, "nhl_regular_season_last_index", 0) or 0))
-    md = max(40, int(max(120, max_d) * 0.56))
-    deadline_phase = max(0.0, min(1.0, (float(calendar_idx) - float(md)) / max(20.0, float(max_d) * 0.2)))
+    deadline_phase = float(publish_trade_deadline_state(session)["deadline_phase"])
     league = getattr(getattr(session, "sim", None), "league", None)
     hist = list(getattr(league, "trade_history", None) or [])
     season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
@@ -11058,6 +11058,10 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
     bulk = bool(getattr(session, "_bulk_calendar_advance", False))
     light_bulk = bulk and bool(getattr(session, "_light_game_stat_accumulation", False))
     socio_gap = 4 if light_bulk else 8
+    # Never throttle the deadline week — the trade market must run every one of those days.
+    _dl_idx = _calendar_trade_deadline_index(session)
+    if _dl_idx is not None and 0 <= int(_dl_idx) - int(calendar_idx) <= 7:
+        socio_gap = 1
     if bulk and not bool(getattr(session, "_bulk_run_socio_economics", False)):
         last_run = int(getattr(session, "_bulk_socio_last_idx", -99) or -99)
         if (int(calendar_idx) - last_run) < socio_gap:
@@ -11080,6 +11084,7 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
         return
     _refresh_cpu_franchise_profiles(session, calendar_idx=int(calendar_idx), force=False)
     try:
+        publish_trade_deadline_state(session)
         setattr(league, "cpu_franchise_profiles", dict(getattr(session, "cpu_franchise_profiles", None) or {}))
         setattr(league, "cpu_scheduler_state", dict(getattr(session, "cpu_scheduler_state", None) or {}))
         # So CPU trade execution can retarget season-stat team_id for traded players.
@@ -12333,9 +12338,92 @@ def _bulk_finalize_should_run_full(
     return False
 
 
+def _calendar_trade_deadline_index(session: FranchiseSession) -> Optional[int]:
+    """Calendar index of deadline day (last day tagged ``trade_deadline``, else Mar 10)."""
+    cal = list(getattr(session, "nhl_calendar", None) or [])
+    cached = getattr(session, "_trade_deadline_idx_cache", None)
+    if isinstance(cached, tuple) and cached[0] == len(cal) and cal and cached[2] == str(cal[0].get("iso") or ""):
+        return cached[1]
+    tagged = [i for i, d in enumerate(cal) if isinstance(d, dict) and "trade_deadline" in tuple(d.get("tags") or ())]
+    idx: Optional[int] = tagged[-1] if tagged else None
+    if idx is None:
+        for i, d in enumerate(cal):
+            if isinstance(d, dict) and str(d.get("iso") or "")[5:10] == "03-10":
+                idx = i
+                break
+    session._trade_deadline_idx_cache = (len(cal), idx, str(cal[0].get("iso") or "") if cal else "")
+    return idx
+
+
+def publish_trade_deadline_state(session: FranchiseSession) -> Dict[str, Any]:
+    """Publish the real deadline day + phase on the league; return the current deadline state.
+
+    Engine, CPU proposer and trade rules all read these so the deadline is one real
+    calendar day, not a fraction-of-season estimate.
+    """
+    from app.sim_engine.trades.trade_deadline import (
+        days_to_deadline,
+        deadline_phase,
+        freeze_applies_to_phase,
+    )
+
+    league = getattr(getattr(session, "sim", None), "league", None)
+    max_d = max(40, int(getattr(session, "nhl_regular_season_last_index", 192) or 192))
+    cursor = int(getattr(session, "calendar_cursor", 0) or 0)
+    phase = str(getattr(session, "phase", "") or "")
+    idx = _calendar_trade_deadline_index(session)
+    holder = league if league is not None else types.SimpleNamespace()
+    try:
+        if idx is not None:
+            setattr(holder, "_trade_deadline_day_idx", int(idx))
+        setattr(holder, "_franchise_phase", phase)
+    except Exception:
+        pass
+    left = days_to_deadline(holder, cursor, max_d)
+    freeze = (left < 0 and freeze_applies_to_phase(phase)) or phase.lower() in ("playoffs", "postseason")
+    try:
+        setattr(holder, "_trade_deadline_passed", bool(freeze))
+    except Exception:
+        pass
+    return {
+        "deadline_day_idx": idx,
+        "days_to_deadline": int(left),
+        "deadline_phase": deadline_phase(holder, cursor, max_d),
+        "freeze_active": bool(freeze),
+    }
+
+
+BULK_TRADE_DEMAND_CHECK_EVERY_DAYS = 7
+
+
+def _bulk_trade_demand_catchup(session: FranchiseSession) -> None:
+    """Player stability + trade demands during light bulk sims.
+
+    The per-day pass is skipped in light bulk, which meant demands never opened while
+    simming ahead. Stability now replays elapsed days from its saved score/day, so one
+    check per week is equivalent to daily checks at a fraction of the cost.
+    """
+    idx = max(0, int(getattr(session, "calendar_cursor", 0) or 0) - 1)
+    last = int(getattr(session, "_bulk_demand_last_check_idx", -999) or -999)
+    if 0 <= idx - last < BULK_TRADE_DEMAND_CHECK_EVERY_DAYS:
+        return
+    cal = list(getattr(session, "nhl_calendar", None) or [])
+    day_meta: Dict[str, Any] = dict(cal[idx]) if 0 <= idx < len(cal) and isinstance(cal[idx], dict) else {}
+    if not day_meta.get("iso"):
+        day_meta["iso"] = _calendar_iso_for_day(session, idx)
+    from services.trade_demand_engine import process_trade_demand_day
+
+    process_trade_demand_day(session, idx, day_meta)
+    session._bulk_demand_last_check_idx = idx
+
+
 def _run_bulk_incremental_catchup(session: FranchiseSession, *, steps_n: int) -> None:
     """Spread narrative/prospect/dev catch-up across bulk steps (delta per chunk)."""
     steps_n = max(1, int(steps_n))
+    try:
+        _bulk_trade_demand_catchup(session)
+    except Exception:
+        pass
     try:
         for _ in range(max(1, steps_n // 8)):
             try:
@@ -22155,13 +22243,14 @@ def _serialize_player_trade_block(
     ctx = dict(trade_context or {})
     if session is not None and not ctx:
         max_d = max(40, int(getattr(session, "nhl_regular_season_last_index", 192) or 192))
-        md = max(40, int(max(120, max_d) * 0.56))
         cursor = int(getattr(session, "calendar_cursor", 0) or 0)
+        deadline = publish_trade_deadline_state(session)
         ctx = {
             "season_year": int(getattr(session, "season_calendar_year", 2025) or 2025),
             "calendar_cursor": cursor,
             "regular_season_last_index": max_d,
-            "deadline_phase": max(0.0, min(1.0, (float(cursor) - float(md)) / max(20.0, float(max_d) * 0.2))),
+            "deadline_phase": float(deadline["deadline_phase"]),
+            "trade_deadline_passed": deadline["freeze_active"],
             "team_by_id": dict(getattr(session, "team_by_id", None) or {}),
         }
     tradeable = True

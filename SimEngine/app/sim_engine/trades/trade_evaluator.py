@@ -22,6 +22,28 @@ CPU_AMBIENT_FAIRNESS_GAP_MAX = 14.0
 CPU_AMBIENT_MIN_INTEREST = 0.50
 CPU_DESPERATION_FAIRNESS_GAP_MAX = 28.0
 CPU_DESPERATION_MIN_INTEREST = 0.28
+CPU_DEMAND_FAIRNESS_GAP_BASE = 20.0
+CPU_DEMAND_SELLER_INTEREST = 0.46
+
+
+def _cpu_demand_ctx(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """CPU-CPU trade resolving a formal player trade demand (set by the proposer)."""
+    raw = (context or {}).get("cpu_demand_trade")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _cpu_intent_ctx(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Needs-matcher plan context: who is buying, the deadline premium, motivated seller."""
+    raw = (context or {}).get("cpu_intent")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _cpu_demand_stage(demand: Dict[str, Any]) -> int:
+    try:
+        return max(1, min(3, int(demand.get("stage") or 1)))
+    except (TypeError, ValueError):
+        return 1
+
 from app.sim_engine.trades.trade_value import (
     evaluate_asset_value,
     evaluate_package_value,
@@ -380,6 +402,31 @@ def _ai_interest_for_team(
         elif net >= -20:
             interest = max(interest, 0.28)
 
+    demand = _cpu_demand_ctx(context)
+    if demand and str(team_id) == str(demand.get("seller_team_id") or ""):
+        # The player has forced the issue — the club sells at a discount rather than
+        # carry the distraction. Discount widens as the crisis drags on.
+        floor = -(16.0 + 4.0 * _cpu_demand_stage(demand))
+        if net >= floor:
+            interest = max(interest, CPU_DEMAND_SELLER_INTEREST)
+            reasons = [
+                r for r in reasons
+                if "reluctant to move elite young" not in r.lower() and "too unfavorable" not in r.lower()
+            ]
+
+    intent = _cpu_intent_ctx(context)
+    if intent:
+        if str(team_id) == str(intent.get("buyer_team_id") or ""):
+            premium = float(intent.get("premium_value") or 0.0)
+            if intent.get("spend_first_ok"):
+                # Deadline push / panic: the GM will spend the pick he'd normally protect.
+                reasons = [r for r in reasons if "first" not in r.lower() and "premium" not in r.lower()]
+            if premium > 0.0 and net >= -(premium + 3.0):
+                interest = max(interest, 0.52)
+        elif str(team_id) == str(intent.get("seller_team_id") or "") and intent.get("motivated_seller"):
+            if net >= -8.0:
+                interest = max(interest, 0.46)
+
     interest = max(0.0, min(1.0, interest))
     # Draft-floor same-class pick swaps: allow slot moves without premium futures tax.
     if (context or {}).get("draft_day_trade"):
@@ -722,6 +769,15 @@ def evaluate_trade_package(
                         threshold = min(threshold, 0.46)
                     if fairness_gap <= CPU_AMBIENT_FAIRNESS_GAP_MAX and interest_level.get(tid, 0.0) >= 0.50:
                         threshold = min(threshold, 0.50)
+                demand = _cpu_demand_ctx(ctx)
+                if demand and str(tid) == str(demand.get("seller_team_id") or ""):
+                    threshold = min(threshold, CPU_DEMAND_SELLER_INTEREST)
+                intent = _cpu_intent_ctx(ctx)
+                if intent:
+                    if str(tid) == str(intent.get("buyer_team_id") or "") and float(intent.get("premium_value") or 0.0) > 0.0:
+                        threshold = min(threshold, 0.50)
+                    if str(tid) == str(intent.get("seller_team_id") or "") and intent.get("motivated_seller"):
+                        threshold = min(threshold, 0.46)
             if interest_level.get(tid, 0.0) < threshold:
                 accepted = False
                 tname = _team_display(team_obj, tid)
@@ -736,6 +792,17 @@ def evaluate_trade_package(
             draft_gap_max = 10.0 if (ctx or {}).get("draft_day_trade") else CPU_AMBIENT_FAIRNESS_GAP_MAX
             if (ctx or {}).get("cpu_desperation_trade"):
                 draft_gap_max = max(draft_gap_max, CPU_DESPERATION_FAIRNESS_GAP_MAX)
+            demand = _cpu_demand_ctx(ctx)
+            if demand:
+                draft_gap_max = max(draft_gap_max, CPU_DEMAND_FAIRNESS_GAP_BASE + 3.0 * _cpu_demand_stage(demand))
+            intent = _cpu_intent_ctx(ctx)
+            if intent:
+                draft_gap_max = max(
+                    draft_gap_max,
+                    CPU_AMBIENT_FAIRNESS_GAP_MAX
+                    + 2.0 * float(intent.get("premium_value") or 0.0)
+                    + (8.0 if intent.get("motivated_seller") else 0.0),
+                )
             if fairness_gap > draft_gap_max:
                 accepted = False
                 msg = f"Ambient CPU trade fairness gap too wide ({fairness_gap} > {draft_gap_max})"

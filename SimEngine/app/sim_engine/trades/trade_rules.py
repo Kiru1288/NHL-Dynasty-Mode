@@ -24,6 +24,7 @@ from app.sim_engine.trades.trade_asset import (
     resolve_pick_id,
 )
 from app.sim_engine.trades.trade_pick_registry import get_pick_by_id, validate_pick_ownership
+from app.sim_engine.trades.trade_deadline import POST_DEADLINE_BLOCK_REASON, post_deadline_freeze_active
 
 
 ROSTER_MIN = 20
@@ -511,6 +512,9 @@ def validate_trade_rules(
             if player is None:
                 blocking.append(f"Player {asset.player_id} not found on source roster {asset.source_team_id}")
                 continue
+            if post_deadline_freeze_active(ctx) and loc != "ahl":
+                blocking.append(f"{player_display_name(player)} ({loc.upper() or 'NHL'}): {POST_DEADLINE_BLOCK_REASON}")
+                continue
             if bool(getattr(player, "_conduct_trade_restricted", False)):
                 warnings.append(
                     f"{player_display_name(player)} is under a restricted trade market after a conduct matter."
@@ -581,6 +585,16 @@ def validate_trade_rules(
                         f"{asset.source_team_id} already uses the maximum of 3 retained-salary slots"
                     )
                 p_years = _contract_years_for_retention(player)
+                # An expiring contract is still running before the deadline — retaining on a
+                # rental is the most common deadline structure.
+                in_season_expiring = (
+                    p_years <= 0
+                    and ctx.get("days_to_deadline") is not None
+                    and int(ctx.get("days_to_deadline") or 0) >= 0
+                    and player_cap_hit_millions(player) > 0
+                )
+                if in_season_expiring:
+                    p_years = 1
                 if p_years <= 0:
                     blocking.append(
                         f"{pname} has no contract years remaining — cannot retain salary on this trade"
@@ -593,6 +607,9 @@ def validate_trade_rules(
             if pid in seen_picks:
                 blocking.append(f"Duplicate pick in trade package: {pid}")
             seen_picks.add(pid)
+            if post_deadline_freeze_active(ctx):
+                blocking.append(f"Draft pick {pid}: {POST_DEADLINE_BLOCK_REASON}")
+                continue
 
             row = get_pick_by_id(league, pid)
             if not row:
@@ -696,8 +713,13 @@ def validate_trade_rules(
             "incoming_players": len(incoming),
         }
 
-        if proj_count > ROSTER_MAX:
+        before_count = int(snap_before.get("activeRosterCount", 0))
+        # Only block trades that push a club over (or further over) the max — a club
+        # already carrying 24+ must still be able to make a trade that shrinks its roster.
+        if proj_count > ROSTER_MAX and proj_count > before_count:
             blocking.append(f"{tid} would exceed maximum roster size ({proj_count} > {ROSTER_MAX})")
+        elif proj_count > ROSTER_MAX:
+            warnings.append(f"{tid} remains over the roster maximum ({proj_count} > {ROSTER_MAX}) after this trade")
         if proj_count < ROSTER_MIN:
             warnings.append(f"{tid} would drop below recommended roster minimum ({proj_count} < {ROSTER_MIN})")
 

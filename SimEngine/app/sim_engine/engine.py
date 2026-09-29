@@ -201,7 +201,6 @@ from app.sim_engine.league import (
     compute_awards,
 )
 from app.sim_engine.economy.trade_ai import evaluate_trade_market
-from app.sim_engine.trades.trade_market_adaptive import compute_engine_trade_day_scale
 from app.sim_engine.economy.waiver_ai import process_waivers
 from app.sim_engine.economy.roster_manager import RosterManager
 
@@ -15988,12 +15987,19 @@ class SimEngine:
                 }
             )
 
-        md = max(40, int(max(120, max_day) * 0.56))
-        deadline_window = max(20.0, float(max_day) * 0.2)
-        deadline_day = int(md + deadline_window)
-        deadline_phase = max(0.0, min(1.0, (float(day) - float(md)) / deadline_window))
-        # Hard stop: no standard NHL trades after the trade deadline calendar day.
-        post_deadline = int(day) > int(deadline_day)
+        from app.sim_engine.trades.trade_deadline import (
+            DEADLINE_WEEK_DAYS,
+            deadline_day_index,
+            deadline_phase as _deadline_phase_for,
+            days_to_deadline as _days_to_deadline,
+        )
+
+        # Real deadline day (franchise publishes the calendar index); hard stop after it —
+        # post-deadline only AHL-only minor-league swaps run.
+        deadline_day = deadline_day_index(self.league, int(max_day))
+        deadline_phase = _deadline_phase_for(self.league, int(day), int(max_day))
+        days_left = _days_to_deadline(self.league, int(day), int(max_day))
+        post_deadline = days_left < 0
         market_state = getattr(self.league, "cpu_market_runtime", None)
         if not isinstance(market_state, dict):
             market_state = {}
@@ -16027,18 +16033,21 @@ class SimEngine:
         market_state["trade_history_scan_idx"] = len(history)
         market_state["season_cpu_trades"] = int(season_cpu_trades)
 
-        scale = compute_engine_trade_day_scale(
-            self.league,
-            day=int(day),
-            max_day=int(max_day),
-            deadline_phase=float(deadline_phase),
-            rng=rng,
-        )
-        trade_prob = float(scale.get("trade_prob") or 0.03)
-        max_exec = int(scale.get("max_executions") or 1)
-        forced_market_check = bool(scale.get("forced_market_check"))
-        trade_deficit = int(scale.get("trade_deficit") or 0)
-        # League-mean trade-frequency preference slightly modulates market cadence.
+        # Market cadence: GMs look at the market every so often; urgency climbs into the
+        # real deadline and deadline day is a frenzy. No seasonal trade quota — the
+        # proposer only executes deals that fill a need, so a quiet market stays quiet.
+        trade_prob = 0.20 + 0.40 * float(deadline_phase)
+        max_exec = 2 + (1 if deadline_phase > 0.35 else 0) + (1 if deadline_phase > 0.7 else 0)
+        forced_market_check = False
+        if 0 <= days_left <= DEADLINE_WEEK_DAYS:
+            # Most deadline business lands in the final 48 hours.
+            trade_prob = max(trade_prob, 0.80)
+            max_exec = 4 if days_left <= 2 else 2
+        if days_left == 0:
+            # Deadline day frenzy — every GM is on the phone.
+            trade_prob = 1.0
+            max_exec = 45
+            forced_market_check = True
         try:
             profiles = dict(getattr(self.league, "cpu_franchise_profiles", None) or {})
             freqs = [
@@ -16050,19 +16059,46 @@ class SimEngine:
                 trade_prob += (sum(freqs) / len(freqs) - 0.5) * 0.04
         except Exception:
             pass
-        trade_prob = max(0.022, min(0.72, trade_prob))
         bulk_comp = int(getattr(self.league, "_franchise_bulk_trade_day_multiplier", 1) or 1)
-        if bulk_comp > 1:
-            trade_prob = min(0.72, float(trade_prob) + min(0.32, 0.042 * float(bulk_comp)))
-            max_exec = min(4, int(max_exec) + max(1, bulk_comp // 2))
-            if trade_deficit >= 2:
+        if bulk_comp > 1 and days_left > DEADLINE_WEEK_DAYS:
+            # Bulk sims tick the market every few days — compensate the skipped looks.
+            trade_prob = 1.0 - (1.0 - min(0.95, trade_prob)) ** bulk_comp
+            max_exec = min(4, int(max_exec) + max(0, bulk_comp // 3))
+        # Open CPU trade demands pull GMs to the phone.
+        try:
+            from app.sim_engine.trades.cpu_trade_proposer import collect_cpu_trade_demands
+
+            user_tid = str(getattr(self.league, "_franchise_user_team_id", "") or "")
+            cpu_teams = [tm for tm in teams if str(getattr(tm, "team_id", getattr(tm, "id", ""))) != user_tid]
+            open_demands = collect_cpu_trade_demands(cpu_teams, calendar_cursor=int(day))
+        except Exception:
+            open_demands = []
+        if open_demands:
+            oldest = max(d for _, _, d in open_demands)
+            trade_prob = trade_prob + 0.10 + 0.04 * len(open_demands) + 0.006 * oldest
+            if oldest >= 10 and int(day) % 2 == 0:
                 forced_market_check = True
-        trade_prob = max(0.022, min(0.72, trade_prob))
+            max_exec = min(6, max(int(max_exec), 1 + (1 if len(open_demands) >= 2 else 0)))
         if getattr(self.league, "transcendent_active", False):
             tank_sellers = sum(1 for tm in teams if int(getattr(tm, "_franchise_tank_pressure", 0) or 0) >= 50)
             if tank_sellers:
                 trade_prob += min(0.06, 0.010 * tank_sellers)
-                trade_prob = max(0.022, min(0.72, trade_prob))
+        trade_prob = max(0.0, min(1.0, trade_prob))
+        market_state["last_trade_prob"] = round(trade_prob, 3)
+        market_state["days_to_deadline"] = int(days_left)
+        # Standings snapshot for the team assessment (status / playoff-line gap).
+        try:
+            snap: Dict[str, Dict[str, float]] = {}
+            for tid_s, rec in (getattr(standings, "records", None) or {}).items():
+                w = int(getattr(rec, "wins", 0) or 0)
+                l_ = int(getattr(rec, "losses", 0) or 0)
+                otl = int(getattr(rec, "ot_losses", 0) or getattr(rec, "otl", 0) or 0)
+                gp = w + l_ + otl
+                snap[str(tid_s)] = {"gp": gp, "pts": 2 * w + otl, "pts_pct": (2 * w + otl) / max(1, 2 * gp)}
+            setattr(self.league, "_cpu_standings_snapshot", snap)
+            setattr(self.league, "_cpu_regular_season_games", int(getattr(self.league, "games_per_team", 82) or 82))
+        except Exception:
+            pass
         if (not post_deadline) and (rng.random() < trade_prob or forced_market_check):
             tr = evaluate_trade_market(
                 self.league,
@@ -16087,10 +16123,45 @@ class SimEngine:
                         "reason_codes": list(t.get("reason_codes") or []),
                         "reason_text": str(t.get("reason_text") or ""),
                         "priority": "HIGH",
+                        **(
+                            {
+                                "demand_player_id": str(t.get("demand_player_id") or ""),
+                                "demand_days_open": int(t.get("demand_days_open") or 0),
+                                "demand_disruptor": bool(t.get("demand_disruptor")),
+                            }
+                            if t.get("demand_player_id")
+                            else {}
+                        ),
                     }
                 )
         elif post_deadline:
             counters["post_deadline_blocked"] = int(counters.get("post_deadline_blocked", 0)) + 1
+            # After the deadline only AHL-only minor-league swaps are legal.
+            if rng.random() < 0.05:
+                try:
+                    from app.sim_engine.trades.cpu_trade_proposer import propose_ahl_depth_trades
+
+                    for t in propose_ahl_depth_trades(self.league, calendar_cursor=int(day), regular_season_last_index=int(max_day)):
+                        counters["trade_executions"] = int(counters.get("trade_executions", 0)) + 1
+                        news_out.append(
+                            {
+                                "type": "trade",
+                                "date": int(day),
+                                "headline": str(t.get("headline") or "Minor-league trade"),
+                                "team": str(t.get("to_team_id") or ""),
+                                "from_team_id": str(t.get("from_team_id") or ""),
+                                "players": list(t.get("outgoing") or []) + list(t.get("incoming") or []),
+                                "trade_id": str(t.get("trade_id") or ""),
+                                "execution": dict(t.get("execution") or {}),
+                                "trade_category": "minor_league_trade",
+                                "importance": "minor",
+                                "reason_codes": list(t.get("reason_codes") or []),
+                                "reason_text": str(t.get("reason_text") or ""),
+                                "priority": "LOW",
+                            }
+                        )
+                except Exception:
+                    pass
 
         rm = RosterManager()
         tbl = standings.league_table()

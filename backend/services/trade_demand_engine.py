@@ -32,6 +32,12 @@ from app.sim_engine.franchise.trade_stability_engine import (
     update_player_stability,
 )
 
+#: Depth players (70+) can now sour too — was 74, which excluded most bottom-six.
+DEMAND_MIN_OVR = 70
+#: CPU demands age in sim days (the real-time crisis clock only runs for the user's club).
+CPU_DEMAND_STAGE2_DAYS = 12
+CPU_DEMAND_STAGE3_DAYS = 26
+
 CANADA_ABBRS = frozenset({"TOR", "MTL", "OTT", "VAN", "CGY", "EDM", "WPG", "SEA"})
 SMALL_MARKET_ABBRS = frozenset(
     {"BUF", "OTT", "CBJ", "CGY", "WPG", "ARI", "UTA", "SEA", "NSH", "MIN", "CAR", "FLA"}
@@ -61,8 +67,12 @@ def get_trade_deadline_context(session: Any) -> Dict[str, Any]:
     elif iso and len(iso) >= 10:
         try:
             y, m, d = int(iso[0:4]), int(iso[5:7]), int(iso[8:10])
-            deadline_iso = f"{y}-03-10"
-            if (m == 3 and d > 10) or m >= 4:
+            # Season spans two calendar years: Oct–Dec dates face NEXT year's Mar 10
+            # deadline. (Previously ``m >= 4`` flagged Oct–Dec as post-deadline, which
+            # blocked every new demand for the first three months of the season.)
+            deadline_year = y + 1 if m >= 7 else y
+            deadline_iso = f"{deadline_year}-03-10"
+            if (m == 3 and d > 10) or 4 <= m <= 9:
                 past = True
             elif m == 2 and d >= 25:
                 in_window = True
@@ -357,6 +367,8 @@ def _reason_from_pressures(pressures: Dict[str, float], *, character: int) -> st
         return "management"
     if top == "winning":
         return "losing"
+    if top == "temperament":
+        return "locker_room_disruptor" if character < 62 else "general"
     if character < 62 and pressures.get("role", 0) + pressures.get("management", 0) < 8:
         return "locker_room_disruptor"
     return "general"
@@ -402,8 +414,12 @@ def sync_trade_demand_crises(
 
     book = ensure_trade_demands(session)
     now = time.time()
+    user_tid = str(getattr(session, "user_team_id", "") or "")
     for pid, row in list(book.items()):
         if not isinstance(row, dict) or str(row.get("status")) != "open":
+            continue
+        # CPU-club demands age in sim days (process_trade_demand_day), not wall-clock.
+        if user_tid and str(row.get("team_id") or "") != user_tid:
             continue
         crisis = row.get("crisis")
         if not isinstance(crisis, dict):
@@ -750,6 +766,13 @@ def open_trade_demand(
     row["ntc_waiver_snapshot"] = _build_ntc_waiver_snapshot(session, row, player, team, league)
     book = ensure_trade_demands(session)
     book[pid] = row
+    # League-side tags so the CPU proposer (which only sees the league) can act on it.
+    try:
+        setattr(player, "_trade_demand_opened_day", int(calendar_idx))
+        setattr(player, "_trade_demand_destinations", list(dests))
+        setattr(player, "_trade_demand_team_id", tid)
+    except Exception:
+        pass
     try:
         _enqueue_demand_surfaces(session, row, team)
     except Exception:
@@ -771,6 +794,78 @@ def clear_trade_demand(session: Any, player_id: str, *, resolution: str = "clear
         clear_demand_temporary_modifiers(player)
 
 
+def _team_key(team: Any) -> str:
+    return str(_get(team, "team_id", "") or _get(team, "id", "") or "")
+
+
+def _age_cpu_demands(session: Any, calendar_idx: int) -> Dict[str, int]:
+    """Advance CPU-club demands by sim days and close ones already resolved by a trade.
+
+    The user's crisis runs on a real-time clock; CPU clubs have nobody watching that
+    clock, so their demands used to sit at stage 1 until the deadline froze them.
+    """
+    book = ensure_trade_demands(session)
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    league = getattr(getattr(session, "sim", None), "league", None)
+    out = {"aged": 0, "resolved": 0}
+    for pid, row in list(book.items()):
+        if not isinstance(row, dict) or str(row.get("status")) != "open":
+            continue
+        tid = str(row.get("team_id") or "")
+        if user_tid and tid == user_tid:
+            continue
+        player = _find_player(session, pid)
+        cur_team = _find_team_for_player(session, pid)
+        if player is None or cur_team is None:
+            row["status"] = "lapsed"
+            row["resolved"] = True
+            row["resolution"] = "left_nhl_roster"
+            out["resolved"] += 1
+            continue
+        if _team_key(cur_team) != tid:
+            # Moved by a CPU-CPU trade (those bypass trade_service's clear hook).
+            clear_trade_demand(session, pid, resolution="traded")
+            out["resolved"] += 1
+            continue
+
+        opened = int(row.get("opened_day") or calendar_idx)
+        days_open = max(0, int(calendar_idx) - opened)
+        row["days_open"] = days_open
+        if getattr(player, "_trade_demand_opened_day", None) is None:
+            try:
+                setattr(player, "_trade_demand_opened_day", opened)
+                setattr(player, "_trade_demand_destinations", list(row.get("preferred_destinations") or []))
+                setattr(player, "_trade_demand_team_id", tid)
+            except Exception:
+                pass
+
+        if days_open >= CPU_DEMAND_STAGE3_DAYS:
+            stage = 3
+        elif days_open >= CPU_DEMAND_STAGE2_DAYS:
+            stage = 2
+        else:
+            stage = 1
+        prev_stage = int(row.get("crisis_stage") or 1)
+        if stage == prev_stage:
+            continue
+        base_before = float(row.get("value_before") or _snapshot_value(player, cur_team, league, crisis_stage=1))
+        _, after = _apply_crisis_value_state(player, crisis_stage=stage, base_before=base_before)
+        row["crisis_stage"] = stage
+        row["value_after"] = round(after, 1)
+        row["value_delta"] = round(after - base_before, 1)
+        crisis = row.get("crisis")
+        if isinstance(crisis, dict):
+            crisis["crisis_stage"] = stage
+        if stage > prev_stage:
+            _apply_crisis_stage_effects(session, row, player, cur_team, league, stage)
+            try:
+                setattr(player, "_trade_demand_destinations", list(row.get("preferred_destinations") or []))
+            except Exception:
+                pass
+        out["aged"] += 1
+    return out
+
+
 def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Update stability for all players; open formal demands when warranted — no daily cap."""
     import random
@@ -783,6 +878,7 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
     assign_league_agents(session)
     _close_crises_for_trade_deadline(session)
     sync_trade_demand_crises(session, tick_timers=False)
+    cpu_aging = _age_cpu_demands(session, int(calendar_idx))
     deadline_ctx = get_trade_deadline_context(session)
     book = ensure_trade_demands(session)
 
@@ -795,57 +891,74 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
     opened: List[Dict[str, Any]] = []
     warnings: List[Dict[str, Any]] = []
 
-    teams = list(_get(league, "teams", None) or [])
-    for team in teams:
-        for player in list(_get(team, "roster", None) or []):
-            if _get(player, "retired", False):
-                continue
-            pid = _player_id(player)
-            if not pid:
-                continue
-            if active_demand_for_player(session, pid):
-                continue
-            ovr = _player_ovr(player)
-            if ovr < 74:
-                continue
+    # One league-wide storyline sync for the whole pass (per-player syncs were O(N^2)).
+    try:
+        from app.sim_engine.franchise.storyline_engine import _u_sync_player_entities
 
-            stability_row = apply_daily_stability_update(session, player, team, int(calendar_idx))
-            escalation = int(stability_row.get("escalation_level") or 0)
-            score = float(stability_row.get("trade_stability_score") or 100.0)
+        session._stability_entities_pass_cache = _u_sync_player_entities(session)
+    except Exception:
+        session._stability_entities_pass_cache = None
+    try:
+        teams = list(_get(league, "teams", None) or [])
+        for team in teams:
+            for player in list(_get(team, "roster", None) or []):
+                if _get(player, "retired", False):
+                    continue
+                pid = _player_id(player)
+                if not pid:
+                    continue
+                if active_demand_for_player(session, pid):
+                    continue
+                ovr = _player_ovr(player)
+                if ovr < DEMAND_MIN_OVR:
+                    continue
 
-            if escalation in (1, 2):
-                _maybe_enqueue_stability_warning(session, player, team, stability_row, calendar_idx, iso, rng)
-            elif escalation == 0:
-                _maybe_enqueue_stability_concern_hint(
-                    session, player, team, stability_row, calendar_idx, iso, rng
-                )
+                stability_row = apply_daily_stability_update(session, player, team, int(calendar_idx))
+                escalation = int(stability_row.get("escalation_level") or 0)
+                score = float(stability_row.get("trade_stability_score") or 100.0)
 
-            if (
-                escalation >= 3
-                and formal_demand_eligible(stability_row)
-                and deadline_ctx.get("new_demands_allowed")
-            ):
-                reason = _reason_from_pressures(
-                    dict(stability_row.get("pressures") or {}),
-                    character=int(stability_row.get("character") or 74),
-                )
-                row = open_trade_demand(
-                    session,
-                    player,
-                    team,
-                    reason=reason,
-                    calendar_idx=int(calendar_idx),
-                    iso_date=iso,
-                    rng=rng,
-                    stability_row=stability_row,
-                    force_formal=False,
-                )
-                if row.get("status") == "open":
-                    opened.append(row)
-            elif escalation >= 1 and score < 68:
-                warnings.append({"player_id": pid, "escalation_level": escalation, "score": score})
+                if escalation in (1, 2):
+                    _maybe_enqueue_stability_warning(session, player, team, stability_row, calendar_idx, iso, rng)
+                elif escalation == 0:
+                    _maybe_enqueue_stability_concern_hint(
+                        session, player, team, stability_row, calendar_idx, iso, rng
+                    )
 
-    return {"opened": len(opened), "demands": opened, "warnings": len(warnings)}
+                if (
+                    escalation >= 3
+                    and formal_demand_eligible(stability_row)
+                    and deadline_ctx.get("new_demands_allowed")
+                ):
+                    reason = _reason_from_pressures(
+                        dict(stability_row.get("pressures") or {}),
+                        character=int(stability_row.get("character") or 74),
+                    )
+                    row = open_trade_demand(
+                        session,
+                        player,
+                        team,
+                        reason=reason,
+                        calendar_idx=int(calendar_idx),
+                        iso_date=iso,
+                        rng=rng,
+                        stability_row=stability_row,
+                        force_formal=False,
+                    )
+                    if row.get("status") == "open":
+                        opened.append(row)
+                elif escalation >= 1 and score < 68:
+                    warnings.append({"player_id": pid, "escalation_level": escalation, "score": score})
+
+    finally:
+        session._stability_entities_pass_cache = None
+
+    return {
+        "opened": len(opened),
+        "demands": opened,
+        "warnings": len(warnings),
+        "cpu_demands_aged": cpu_aging["aged"],
+        "cpu_demands_resolved": cpu_aging["resolved"],
+    }
 
 
 def build_trade_demand_crisis_payload(session: Any, *, tick_timers: bool = False) -> Optional[Dict[str, Any]]:

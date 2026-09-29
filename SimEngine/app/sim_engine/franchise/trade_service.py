@@ -100,8 +100,16 @@ def _trade_context(session: Any) -> Dict[str, Any]:
     cal = getattr(session, "nhl_calendar", None) or []
     cursor = int(getattr(session, "calendar_cursor", 0) or 0)
     max_d = max(40, int(getattr(session, "nhl_regular_season_last_index", 192) or 192))
-    md = max(40, int(max(120, max_d) * 0.56))
-    deadline_phase = max(0.0, min(1.0, (float(cursor) - float(md)) / max(20.0, float(max_d) * 0.2)))
+    from app.sim_engine.trades.trade_deadline import (
+        days_to_deadline,
+        deadline_phase as _deadline_phase_for,
+        freeze_applies_to_phase,
+    )
+
+    phase = str(getattr(session, "phase", "") or "")
+    deadline_phase = _deadline_phase_for(league, cursor, max_d)
+    days_left = days_to_deadline(league, cursor, max_d)
+    deadline_passed = (days_left < 0 and freeze_applies_to_phase(phase)) or phase.lower() in ("playoffs", "postseason")
     calendar_iso = ""
     if 0 <= cursor < len(cal):
         calendar_iso = str(cal[cursor].get("iso") or "")
@@ -125,6 +133,8 @@ def _trade_context(session: Any) -> Dict[str, Any]:
         "calendar_iso": calendar_iso,
         "regular_season_last_index": max_d,
         "deadline_phase": deadline_phase,
+        "days_to_deadline": int(days_left),
+        "trade_deadline_passed": bool(deadline_passed),
     }
 
 
