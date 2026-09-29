@@ -3,6 +3,7 @@ import { useGameUI } from "../game/GameUIContext";
 import { SCREENS, normalizeNhlAbbr } from "../game/constants";
 import {
   evaluateTradePackage,
+  findTradeOffers,
   getTradeAssets,
   getTradeHistory,
   getTradeMarket,
@@ -141,7 +142,10 @@ const VALUE_TIER_CLASS = {
   Depth: "tier-depth",
   DEPTH: "tier-depth",
   LOW: "tier-depth",
+  Replacement: "tier-depth",
+  REPLACEMENT: "tier-depth",
   "Negative Value": "tier-negative",
+  "NEGATIVE VALUE": "tier-negative",
   UNKNOWN: "tier-unknown",
 };
 
@@ -181,7 +185,8 @@ function valueTierFromScore(score) {
   if (raw >= 60) return "TOP ASSET";
   if (raw >= 38) return "USEFUL";
   if (raw >= 18) return "DEPTH";
-  return "LOW";
+  if (raw >= 0) return "REPLACEMENT";
+  return "NEGATIVE VALUE";
 }
 
 function roundTradeValue(raw) {
@@ -226,6 +231,8 @@ function talentValueAnchor(ovr) {
 /** Pool sort/bar — prefer backend TV; fall back to steep OVR anchor. */
 function poolPlayerValueScore(item) {
   const backend = roundTradeValue(item?.tradeValue ?? item?.value_hint);
+  // Backend TV can legitimately be <= 0 (albatross contracts) — never mask it with the OVR curve.
+  if (backend != null && item?.tradeValueSource !== "ovr-anchor") return backend;
   if (backend != null && backend > 0) return backend;
   return talentValueAnchor(roundOverall(item?.ovr)) || 12;
 }
@@ -264,31 +271,6 @@ function tradeFlagUrl(player, size = 64) {
   const iso2 = resolveFlagIso2(player);
   if (!iso2) return null;
   return `https://flagsapi.com/${iso2}/flat/${nearestFlagApiSize(size)}.png`;
-}
-
-function qualitativeBreakdownTags(breakdown) {
-  const b = breakdown || {};
-  const tags = [];
-  const add = (label, val) => {
-    if (val == null || Number(val) === 0) return;
-    const n = Number(val);
-    if (n >= 8) tags.push(`Strong ${label}`);
-    else if (n > 0) tags.push(`${label} Plus`);
-    else if (n <= -8) tags.push(`${label} Concern`);
-    else tags.push(`${label} Drag`);
-  };
-  add("Talent", b.talent ?? b.base);
-  add("Age", b.age);
-  add("Contract", b.contract);
-  add("Need Fit", b.team_need);
-  add("Potential", b.potential);
-  add("Upside", b.prospect_upside);
-  add("Rental", b.rental);
-  add("ELC", b.elc);
-  add("Cap", b.cap_dump);
-  add("Injury", b.injury);
-  add("Risk", b.risk);
-  return tags;
 }
 
 function sanitizeTradeExplain(lines) {
@@ -2226,7 +2208,7 @@ function resolveReviewAssetValueItem(asset, evaluation, side, direction) {
   const bdRow = lookupBreakdownAsset(asset, evaluation, side, direction);
   if (bdRow) {
     const tv = Number(bdRow.trade_value ?? bdRow.total ?? bdRow.value);
-    if (Number.isFinite(tv) && tv > 0) {
+    if (Number.isFinite(tv)) {
       return {
         tradeValue: tv,
         valueTier: bdRow.value_tier || valueTierFromScore(tv),
@@ -2751,10 +2733,10 @@ function PlayerValueFocus({ item, peakValue = null }) {
     item?.type === "pick"
       ? poolPickValueScore(item)
       : poolPlayerValueScore(item);
-  const tv = Number.isFinite(Number(tvRaw)) && Number(tvRaw) > 0 ? Number(tvRaw) : null;
+  const tv = Number.isFinite(Number(tvRaw)) ? Number(tvRaw) : null;
   const pct = tradeValueBarPct(tv || 0, peakValue);
 
-  const tier = valueTierFromScore(tv || 0).toLowerCase().replace(/\s+/g, "-");
+  const tier = valueTierFromScore(tv ?? 0).toLowerCase().replace(/\s+/g, "-");
   const isPick = item?.type === "pick";
 
   return (
@@ -3873,6 +3855,111 @@ function AssetContextMenu({
   );
 }
 
+// Breakdown keys shown as value drivers. `talent` is the baseline, `rental` is
+// folded into `market`, and `prospect_upside` / `ntc_waive` are sub-parts.
+const VALUE_DRIVER_LABELS = [
+  ["age", "Age"],
+  ["potential", "Potential"],
+  ["production", "Production"],
+  ["contract", "Contract"],
+  ["cap_dump", "Contract burden"],
+  ["team_need", "Team need"],
+  ["team_window", "Team window"],
+  ["market", "Market / rental"],
+  ["position", "Position"],
+  ["elc", "ELC"],
+  ["injury", "Injury"],
+  ["risk", "Risk"],
+];
+
+function valueDriverStrength(abs) {
+  if (abs >= 8) return "Major";
+  if (abs >= 3) return "Moderate";
+  return "Minor";
+}
+
+function ValueDriversPanel({ breakdown }) {
+  const b = breakdown || {};
+  const rows = VALUE_DRIVER_LABELS
+    .map(([key, label]) => ({ key, label, v: Number(b[key]) }))
+    .filter((r) => Number.isFinite(r.v) && Math.abs(r.v) >= 0.5)
+    .sort((a, c) => Math.abs(c.v) - Math.abs(a.v));
+  if (!rows.length) {
+    return <p className="tv-empty">No value drivers reported for this asset.</p>;
+  }
+  const peak = Math.max(8, ...rows.map((r) => Math.abs(r.v)));
+  return (
+    <div className="tv-drivers">
+      {rows.map((r) => {
+        const pct = Math.max(6, Math.round((Math.abs(r.v) / peak) * 100));
+        const up = r.v > 0;
+        return (
+          <div key={r.key} className={`tv-driver ${up ? "is-up" : "is-down"}`}>
+            <span className="tv-driver-label">{r.label}</span>
+            <div className="tv-driver-track" aria-hidden="true">
+              <div className="tv-driver-half neg">{!up && <i style={{ width: `${pct}%` }} />}</div>
+              <div className="tv-driver-half pos">{up && <i style={{ width: `${pct}%` }} />}</div>
+            </div>
+            <span className="tv-driver-tag">{valueDriverStrength(Math.abs(r.v))} {up ? "boost" : "drag"}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ContractMarketCard({ asset }) {
+  const cap = asset.tradeCapImpact || {};
+  const incoming = Number(cap.incoming_cap_m ?? asset.capHit);
+  const full = Number(cap.full_cap_m);
+  const fair = Number(cap.expected_cap_m);
+  const retained = Number(cap.retained_pct || asset.retained_pct || 0);
+  const years = Number(cap.years_remaining ?? asset.years) || 0;
+  const hasFair = Number.isFinite(fair) && fair > 0 && Number.isFinite(incoming) && incoming > 0;
+  const delta = hasFair ? incoming - fair : 0;
+  const tone = !hasFair ? "neutral" : delta > 0.75 ? "bad" : delta < -0.75 ? "good" : "neutral";
+  const verdict = !hasFair
+    ? "No market comp"
+    : tone === "bad"
+      ? `Overpaid ${formatMoneyShort(delta)}/yr`
+      : tone === "good"
+        ? `Bargain ${formatMoneyShort(-delta)}/yr`
+        : "Market rate";
+  const scale = hasFair ? Math.max(incoming, fair) * 1.1 : 1;
+  const flags = safeArray(asset.tradeContractFlags);
+  return (
+    <div className={`tv-card tv-contract tone-${tone}`}>
+      <div className="tv-card-head">
+        <span>Contract vs market</span>
+        <strong>{verdict}</strong>
+      </div>
+      <div className="tv-contract-grid">
+        <div><span>Cap hit</span><strong>{incoming > 0 ? formatMoneyShort(incoming) : formatPlayerCapLabel(asset)}</strong></div>
+        <div><span>Fair AAV</span><strong>{hasFair ? formatMoneyShort(fair) : "—"}</strong></div>
+        <div><span>Term</span><strong>{years > 0 ? `${years} yr${years === 1 ? "" : "s"}` : "—"}</strong></div>
+        <div>
+          <span>Total gap</span>
+          <strong>{hasFair && years > 0 ? `${delta > 0 ? "+" : "−"}${formatMoneyShort(Math.abs(delta) * years)}` : "—"}</strong>
+        </div>
+      </div>
+      {hasFair && (
+        <div className="tv-contract-bars" aria-hidden="true">
+          <div className="tv-contract-bar"><em>Paid</em><div><i className="paid" style={{ width: `${(incoming / scale) * 100}%` }} /></div></div>
+          <div className="tv-contract-bar"><em>Fair</em><div><i className="fair" style={{ width: `${(fair / scale) * 100}%` }} /></div></div>
+        </div>
+      )}
+      {retained > 0 && Number.isFinite(full) && full > 0 && (
+        <p className="tv-note">{retained}% retained — full hit {formatMoneyShort(full)}</p>
+      )}
+      {flags.length > 0 && (
+        <div className="tv-chips">
+          {flags.map((f) => <span key={f} className="tv-chip">{f}</span>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AssetDetailDrawer({
   asset,
   tab,
@@ -3891,10 +3978,13 @@ function AssetDetailDrawer({
   if (!asset) return null;
   const isPick = asset.type === "pick";
   const valueItem = { tradeValue: asset.tradeValue ?? asset.value_hint, valueTier: asset.valueTier };
-  const qualTags = qualitativeBreakdownTags(asset.tradeBreakdown);
+  const breakdown = asset.tradeBreakdown || {};
   const explainLines = sanitizeTradeExplain(asset.tradeExplain);
+  const riskFlags = safeArray(asset.tradeRiskFlags);
   const fanScore = resolveFanReaction({ userTeam, userOutgoing, evaluation, franchiseState, hasProposed: Boolean(evaluation) });
   const partnerImpact = evaluation?.team_needs_impact?.[partnerTeamId];
+  const needFit = partnerImpact?.strengthens?.length ? "Strong" : partnerImpact?.weakens?.length ? "Weak" : "—";
+  const valueNum = roundTradeValue(valueItem.tradeValue);
   const userSlots = evaluation?.contract_slot_impact?.[userTeamId];
   const roster = evaluation?.roster_impact?.[userTeamId];
   const interest = evaluation?.interest_level?.[partnerTeamId];
@@ -3953,13 +4043,22 @@ function AssetDetailDrawer({
                     : formatPlayerCapLabel(asset)}
                 </strong>
               </div>
+              {!isPick && (
+                <div className="trade-asset-hero-tile tile-term">
+                  <span>TERM</span>
+                  <strong>{asset.years > 0 ? `${asset.years}Y` : "—"}</strong>
+                </div>
+              )}
               <div className={`trade-asset-hero-tile tile-value ${valueTierClass}`}>
-                <span>VALUE</span>
+                <span>TRADE VALUE</span>
                 {isPick ? (
                   <PickValueMeter item={asset} showLabel={false} className="trade-asset-hero-pick-meter" />
                 ) : (
                   <>
-                    <strong>{assetValueLabel(valueItem)}</strong>
+                    <div className="tv-hero-value">
+                      <strong>{valueNum != null ? valueNum.toFixed(1) : "—"}</strong>
+                      <em>{assetValueLabel(valueItem)}</em>
+                    </div>
                     <div className="trade-value-chip-track hero">
                       <div className="trade-value-chip-fill" style={{ width: `${assetValuePct(valueItem)}%` }} />
                     </div>
@@ -3995,41 +4094,45 @@ function AssetDetailDrawer({
                     </div>
                   </>
                 ) : (
-                  <>
-                    <TradeValueChip item={valueItem} className="trade-asset-value-panel-chip" />
-                    <div className="trade-drawer-kv">
-                      <span>Value Tier</span><strong>{assetValueLabel(valueItem)}</strong>
-                      <span>Role</span><strong>{asset.role || roleFromOverall(asset.ovr, asset.pos)}</strong>
-                      <span>Contract Fit</span><strong>{asset.contractType || "—"}</strong>
-                      <span>Need Fit</span><strong>{partnerImpact?.strengthens?.length ? "Strong" : partnerImpact?.weakens?.length ? "Weak" : "—"}</strong>
-                    </div>
-                    {qualTags.length > 0 && (
-                      <div className="trade-hub-chip-row">
-                        {qualTags.map((tag) => (
-                          <span key={tag} className="trade-hub-chip">{tag}</span>
-                        ))}
+                  <div className="tv-layout">
+                    <div className="tv-col">
+                      <div className="tv-card">
+                        <div className="tv-card-head">
+                          <span>Value drivers</span>
+                          <strong>{breakdown.valued_on === "potential" ? "Valued on ceiling" : "Adjusts talent baseline"}</strong>
+                        </div>
+                        <ValueDriversPanel breakdown={breakdown} />
                       </div>
-                    )}
-                    {safeArray(asset.tradeRiskFlags).length > 0 && (
-                      <>
-                        <div className="trade-hub-panel-title">Risks</div>
-                        {safeArray(asset.tradeRiskFlags).map((f, i) => (
-                          <p key={i} className="trade-drawer-line warn">{f}</p>
-                        ))}
-                      </>
-                    )}
-                    {explainLines.length > 0 && (
-                      <>
-                        <div className="trade-hub-panel-title">Scouting Notes</div>
-                        {explainLines.map((line, i) => (
-                          <p key={i} className="trade-drawer-line">{line}</p>
-                        ))}
-                      </>
-                    )}
-                    {!qualTags.length && !explainLines.length && (
-                      <p className="trade-drawer-muted">Qualitative value profile — exact scores hidden.</p>
-                    )}
-                  </>
+                      {explainLines.length > 0 && (
+                        <div className="tv-card">
+                          <div className="tv-card-head"><span>Scouting notes</span></div>
+                          <ul className="tv-list">
+                            {explainLines.map((line, i) => <li key={i}>{line}</li>)}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                    <div className="tv-col">
+                      <ContractMarketCard asset={asset} />
+                      <div className="tv-card">
+                        <div className="tv-card-head"><span>Profile</span></div>
+                        <div className="tv-kv">
+                          <span>Role</span><strong>{asset.role || roleFromOverall(asset.ovr, asset.pos)}</strong>
+                          <span>Need fit</span><strong>{needFit}</strong>
+                          <span>Contract</span><strong>{asset.contractType || "—"}</strong>
+                          <span>Clause</span><strong>{asset.clauseLabel || "None"}</strong>
+                        </div>
+                      </div>
+                      {riskFlags.length > 0 && (
+                        <div className="tv-card tone-bad">
+                          <div className="tv-card-head"><span>Risks</span></div>
+                          <ul className="tv-list warn">
+                            {riskFlags.map((f, i) => <li key={i}>{f}</li>)}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             </>
@@ -5933,6 +6036,819 @@ function TradeReviewDrawer({
   );
 }
 
+/* ── Market desk: league read, partner GM read, market board ─────────── */
+
+function marketSideOf(team) {
+  const label = String(team?.tradeDirectionLabel || team?.direction || "").toUpperCase();
+  if (/SELL|REBUILD|RETOOL|TANK|DECLIN/.test(label)) return "seller";
+  if (/CONTEND|BUYER|WIN/.test(label)) return "buyer";
+  return "neutral";
+}
+
+const MARKET_APPETITE = {
+  seller: {
+    wants: "Picks, prospects & cap relief",
+    avoids: "Aging or expensive veterans",
+    tip: "Lead with futures. Taking back salary buys a discount.",
+  },
+  buyer: {
+    wants: "NHL-ready talent & rentals",
+    avoids: "Long-term projects",
+    tip: "They pay a premium for help now, especially near the deadline.",
+  },
+  neutral: {
+    wants: "Hockey trades that fill a need",
+    avoids: "Overpaying in value",
+    tip: "Match their need list and keep the value gap close.",
+  },
+};
+
+const TRADE_JUDGING_STEPS = [
+  ["Value", "Their GM compares incoming vs outgoing trade value."],
+  ["Cap", "Both sides must stay cap- and roster-legal after the deal."],
+  ["Fit", "Filling a team need raises a player's value to them."],
+  ["Mood", "GM style, leverage, and fan heat decide close calls."],
+];
+
+function marketTempTone(temp) {
+  const t = String(temp || "").toLowerCase();
+  if (t === "hot") return "hot";
+  if (t === "warm") return "warm";
+  return "cool";
+}
+
+function tradeRecordHeadline(t) {
+  if (t?.headline) return String(t.headline);
+  const teams = safeArray(t?.participating_teams).map((id) => inferLogoAbbr(id, id));
+  return teams.length ? `${teams.join(" ↔ ")} complete a trade` : "Trade completed";
+}
+
+function MarketPulseStrip({ tradeMarket, teams, userTeamId }) {
+  const temp = tradeMarket?.market_temperature || "Cool";
+  const tone = marketTempTone(temp);
+  const phase = clamp(Number(tradeMarket?.deadline_phase) || 0, 0, 1);
+  const others = safeArray(teams).filter((t) => String(t.id) !== String(userTeamId));
+  const buyers = others.filter((t) => marketSideOf(t) === "buyer").length;
+  const sellers = others.filter((t) => marketSideOf(t) === "seller").length;
+  const recent = safeArray(tradeMarket?.recent_trades).slice(0, 6);
+  return (
+    <div className="th-pulse">
+      <span className={`th-pulse-temp tone-${tone}`}>
+        <i aria-hidden="true" />
+        Market {temp}
+      </span>
+      <div className="th-pulse-deadline" title="Progress toward the trade deadline">
+        <span>Deadline</span>
+        <div className="th-pulse-track"><div style={{ width: `${Math.round(phase * 100)}%` }} /></div>
+        <strong className="th-num">{Math.round(phase * 100)}%</strong>
+      </div>
+      <span className="th-pulse-count"><strong className="th-num">{buyers}</strong> buyers</span>
+      <span className="th-pulse-count"><strong className="th-num">{sellers}</strong> sellers</span>
+      <div className="th-pulse-wire">
+        <span className="th-pulse-wire-tag">Wire</span>
+        <div className="th-pulse-wire-feed">
+          {recent.length ? (
+            recent.map((t, i) => (
+              <span key={t.trade_id || i} className={t.user_involved ? "is-user" : ""}>
+                {tradeRecordHeadline(t)}
+              </span>
+            ))
+          ) : (
+            <span className="is-quiet">No trades yet this season. The market is waiting on a first mover.</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PartnerReadCard({ team, interest, info }) {
+  if (!team) return null;
+  const side = marketSideOf(team);
+  const appetite = MARKET_APPETITE[side];
+  const needs = safeArray(info?.needs).slice(0, 3);
+  const surplus = safeArray(info?.surplus).slice(0, 2);
+  const leverage = team.marketPressure?.tradeLeverageHint;
+  return (
+    <div className={`th-read side-${side}`}>
+      <div className="th-read-main">
+        <div className="th-read-head">
+          <span className="th-kicker">Partner GM read</span>
+          <strong>{team.gmPersonality || "Pragmatic Dealer"}</strong>
+          <em className={`th-side-pill side-${side}`}>{team.tradeDirectionLabel || team.direction || "—"}</em>
+        </div>
+        <div className="th-read-grid">
+          <div><span>Wants</span><strong>{appetite.wants}</strong></div>
+          <div><span>Avoids</span><strong>{appetite.avoids}</strong></div>
+          <div><span>Cap room</span><strong className="th-num">{team.capSpace != null ? formatMoneyM(team.capSpace) : "—"}</strong></div>
+          <div>
+            <span>{interest != null ? "Interest" : "Leverage"}</span>
+            <strong>{interest != null ? `${Math.round(interest * 100)}%` : leverage || team.marketPressure?.label || "—"}</strong>
+          </div>
+        </div>
+        {(needs.length > 0 || surplus.length > 0) && (
+          <div className="th-read-needs">
+            {needs.length > 0 && <span>Needs</span>}
+            {needs.map((n) => <em key={n} className="is-need">{n}</em>)}
+            {surplus.length > 0 && <span>Has extra</span>}
+            {surplus.map((n) => <em key={n} className="is-surplus">{n}</em>)}
+          </div>
+        )}
+        <p className="th-read-tip">{appetite.tip}</p>
+      </div>
+      <ol className="th-read-steps" aria-label="How the partner judges a deal">
+        {TRADE_JUDGING_STEPS.map(([k, v]) => (
+          <li key={k}><strong>{k}</strong><span>{v}</span></li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function MarketTeamRow({ team, onOpenTalks, isPartner, info }) {
+  const side = marketSideOf(team);
+  return (
+    <button
+      type="button"
+      className={`th-mrow side-${side} ${isPartner ? "is-partner" : ""}`}
+      onClick={() => onOpenTalks(team.id)}
+      title={`Open talks with ${team.name}`}
+    >
+      <TradeLogo team={team} size={28} />
+      <div className="th-mrow-main">
+        <div className="th-mrow-top">
+          <strong>{team.name}</strong>
+          <em className={`th-side-pill side-${side}`}>{team.tradeDirectionLabel || team.direction || "—"}</em>
+        </div>
+        <div className="th-mrow-meta">
+          <span>{team.gmPersonality || "—"}</span>
+          <NeedChips info={info} limit={2} />
+        </div>
+      </div>
+      <div className="th-mrow-stats">
+        <span><em>Cap</em><strong className="th-num">{team.capSpace != null ? formatMoneyM(team.capSpace) : "—"}</strong></span>
+        <span><em>PO%</em><strong className="th-num">{team.playoffOdds != null ? `${team.playoffOdds}%` : "—"}</strong></span>
+      </div>
+    </button>
+  );
+}
+
+function MarketBoard({ teams, userTeamId, partnerId, tradeMarket, onOpenTalks, needsIndex = {} }) {
+  const [sort, setSort] = useState("cap");
+  const others = safeArray(teams).filter((t) => String(t.id) !== String(userTeamId));
+  const sorter = (a, b) =>
+    sort === "cap"
+      ? (Number(b.capSpace) || 0) - (Number(a.capSpace) || 0)
+      : (Number(b.playoffOdds) || 0) - (Number(a.playoffOdds) || 0);
+  const buyers = others.filter((t) => marketSideOf(t) === "buyer").sort(sorter);
+  const sellers = others.filter((t) => marketSideOf(t) === "seller").sort(sorter);
+  const neutral = others.filter((t) => marketSideOf(t) === "neutral").sort(sorter);
+  const recent = safeArray(tradeMarket?.recent_trades).slice(0, 10);
+  const column = (title, meta, list, side) => (
+    <section className={`th-board-col side-${side}`}>
+      <div className="th-section-head">
+        <h3>{title}</h3>
+        <span className="th-num">{list.length}</span>
+      </div>
+      <p className="th-section-meta">{meta}</p>
+      <div className="th-board-list">
+        {list.length ? (
+          list.map((t) => (
+            <MarketTeamRow key={t.id} team={t} info={needsIndex[t.id]} onOpenTalks={onOpenTalks} isPartner={String(t.id) === String(partnerId)} />
+          ))
+        ) : (
+          <p className="th-empty">No clubs in this bucket right now.</p>
+        )}
+      </div>
+    </section>
+  );
+  return (
+    <div className="th-board">
+      <div className="th-board-bar">
+        <span className="th-kicker">League market</span>
+        <span className="th-board-hint">Click a club to open talks.</span>
+        <div className="th-seg" role="group" aria-label="Sort clubs">
+          <button type="button" className={sort === "cap" ? "is-active" : ""} onClick={() => setSort("cap")}>Cap room</button>
+          <button type="button" className={sort === "odds" ? "is-active" : ""} onClick={() => setSort("odds")}>Playoff odds</button>
+        </div>
+      </div>
+      <div className="th-board-floor">
+        {column("Buyers", "Pushing for a run: they want NHL help and will pay in futures.", buyers, "buyer")}
+        {column("Sellers", "Retooling: they'll move veterans for picks, prospects, and cap relief.", sellers, "seller")}
+        <section className="th-board-col th-board-side">
+          <div className="th-section-head"><h3>On the fence</h3><span className="th-num">{neutral.length}</span></div>
+          <p className="th-section-meta">Bubble clubs. They trade for fit, not direction.</p>
+          <div className="th-board-list th-board-list-short">
+            {neutral.map((t) => (
+              <MarketTeamRow key={t.id} team={t} info={needsIndex[t.id]} onOpenTalks={onOpenTalks} isPartner={String(t.id) === String(partnerId)} />
+            ))}
+          </div>
+          <div className="th-section-head th-wire-head"><h3>League wire</h3><span className="th-num">{recent.length}</span></div>
+          <ul className="th-wire">
+            {recent.length ? (
+              recent.map((t, i) => (
+                <li key={t.trade_id || i} className={t.user_involved ? "is-user" : ""}>
+                  <span className="th-num">{t.calendar_iso ? String(t.calendar_iso).slice(5, 10) : "—"}</span>
+                  <p>{tradeRecordHeadline(t)}</p>
+                </li>
+              ))
+            ) : (
+              <li className="is-quiet"><p>No completed trades yet.</p></li>
+            )}
+          </ul>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+/* ── Needs index: league-relative lineup ranks per team ──────────────── */
+
+// The backend needs model compares against a fixed ~74 OVR target, which the
+// dynasty rating pool almost always clears. Ranking each lineup slot against
+// the rest of the league gives a usable "who is thin where" signal.
+const NEED_BUCKETS = [
+  { key: "top6F", label: "Top-6 F", short: "T6 F", pos: "F", from: 0, to: 6 },
+  { key: "bot6F", label: "Bottom-6 F", short: "B6 F", pos: "F", from: 6, to: 12 },
+  { key: "top4D", label: "Top-4 D", short: "T4 D", pos: "D", from: 0, to: 4 },
+  { key: "pair3D", label: "3rd-pair D", short: "3P D", pos: "D", from: 4, to: 6 },
+  { key: "g1", label: "Starting G", short: "G1", pos: "G", from: 0, to: 1 },
+];
+
+const BACKEND_NEED_TO_BUCKET = { "Top-line F": "top6F", "Depth F": "bot6F", "Top-4 D": "top4D", G: "g1" };
+
+const WANT_TAGS = ["Picks", "Prospects", "Cap relief", "NHL talent", "Rentals"];
+
+function posGroupOf(pos) {
+  const p = String(pos || "").toUpperCase();
+  if (p === "G") return "G";
+  if (p === "D" || p === "LD" || p === "RD") return "D";
+  return "F";
+}
+
+function sliceAvg(values, from, to) {
+  const s = values.slice(from, to);
+  return s.length ? s.reduce((a, b) => a + b, 0) / s.length : null;
+}
+
+function teamWants(team, side) {
+  const wants =
+    side === "seller" ? ["Picks", "Prospects", "Cap relief"] : side === "buyer" ? ["NHL talent", "Rentals"] : ["NHL talent", "Picks"];
+  if (Number(team?.capSpace) < 2 && !wants.includes("Cap relief")) wants.push("Cap relief");
+  return wants;
+}
+
+function buildNeedsIndex(meta) {
+  const teams = safeArray(meta?.teams);
+  if (!teams.length) return {};
+  const depth = {};
+  teams.forEach((t) => {
+    const groups = { F: [], D: [], G: [] };
+    safeArray(meta.players?.[t.id]).forEach((p) => {
+      const ovr = Number(p.ovr);
+      if (Number.isFinite(ovr) && ovr > 0) groups[posGroupOf(p.pos)].push(ovr);
+    });
+    Object.values(groups).forEach((arr) => arr.sort((a, b) => b - a));
+    depth[t.id] = groups;
+  });
+  const n = teams.length;
+  const ranks = {};
+  NEED_BUCKETS.forEach((b) => {
+    const scored = teams
+      .map((t) => ({ id: t.id, v: sliceAvg(depth[t.id][b.pos], b.from, b.to) }))
+      .sort((x, y) => (y.v ?? -1) - (x.v ?? -1));
+    scored.forEach((row, i) => {
+      ranks[row.id] = ranks[row.id] || {};
+      ranks[row.id][b.key] = { rank: i + 1, value: row.v };
+    });
+  });
+  const needCut = Math.ceil(n * 0.72);
+  const surplusCut = Math.floor(n * 0.25);
+  const index = {};
+  teams.forEach((t) => {
+    const side = marketSideOf(t);
+    const buckets = {};
+    NEED_BUCKETS.forEach((b) => {
+      const r = ranks[t.id][b.key];
+      buckets[b.key] = { ...r, tier: r.rank > needCut ? "need" : r.rank <= surplusCut ? "surplus" : "ok" };
+    });
+    safeArray(t.needsSummary?.needs_short).forEach((label) => {
+      const key = BACKEND_NEED_TO_BUCKET[label];
+      if (key) buckets[key].tier = "need";
+    });
+    const byRank = (a, c) => buckets[c.key].rank - buckets[a.key].rank;
+    index[t.id] = {
+      side,
+      buckets,
+      depth: depth[t.id],
+      needs: NEED_BUCKETS.filter((b) => buckets[b.key].tier === "need").sort(byRank).map((b) => b.label),
+      surplus: NEED_BUCKETS.filter((b) => buckets[b.key].tier === "surplus")
+        .sort((a, c) => buckets[a.key].rank - buckets[c.key].rank)
+        .map((b) => b.label),
+      wants: teamWants(t, side),
+    };
+  });
+  return index;
+}
+
+/** Which lineup slot a player would fill on `teamDepth`, and by how much he upgrades it. */
+function playerUpgradeFor(player, teamDepth) {
+  const group = posGroupOf(player?.pos);
+  const ovr = Number(player?.ovr) || 0;
+  const list = safeArray(teamDepth?.[group]);
+  const slots = NEED_BUCKETS.filter((b) => b.pos === group);
+  for (const b of slots) {
+    const incumbent = list[b.to - 1];
+    if (incumbent == null) return { bucket: b, delta: ovr };
+    if (ovr > incumbent) return { bucket: b, delta: ovr - incumbent };
+  }
+  return null;
+}
+
+function rankOrdinal(rank) {
+  return `#${rank}`;
+}
+
+function NeedChips({ info, limit = 3, showSurplus = false }) {
+  if (!info) return null;
+  const needs = info.needs.slice(0, limit);
+  const extra = showSurplus ? info.surplus.slice(0, 2) : [];
+  if (!needs.length && !extra.length) return <span className="th-chip is-quiet">Set lineup</span>;
+  return (
+    <>
+      {needs.map((n) => <span key={n} className="th-chip is-need">{n}</span>)}
+      {extra.map((n) => <span key={n} className="th-chip is-surplus">+{n}</span>)}
+    </>
+  );
+}
+
+function ShopPlayerPanel({ meta, index, onShop }) {
+  const roster = useMemo(
+    () =>
+      safeArray(meta?.players?.[meta?.userTeamId])
+        .filter((p) => p.tradeable !== false)
+        .slice()
+        .sort((a, b) => (Number(b.tradeValue) || 0) - (Number(a.tradeValue) || 0)),
+    [meta],
+  );
+  const [pid, setPid] = useState("");
+  const player = roster.find((p) => String(p.id) === String(pid)) || null;
+  const matches = useMemo(() => {
+    if (!player) return [];
+    const cap = Number(player.capHit) || 0;
+    return safeArray(meta.teams)
+      .filter((t) => String(t.id) !== String(meta.userTeamId))
+      .map((t) => {
+        const info = index[t.id];
+        const up = info ? playerUpgradeFor(player, info.depth) : null;
+        if (!up) return null;
+        const bucket = info.buckets[up.bucket.key];
+        const capFits = !Number.isFinite(Number(t.capSpace)) || Number(t.capSpace) >= cap;
+        const age = Number(player.age) || 26;
+        const sideFit =
+          (info.side === "buyer" && age >= 25) || (info.side === "seller" && age <= 24) || info.side === "neutral";
+        const score =
+          up.delta * 2 + (bucket.tier === "need" ? 10 : bucket.tier === "ok" ? 4 : 0) + (capFits ? 6 : -12) + (sideFit ? 5 : 0);
+        return { team: t, info, up, bucket, capFits, sideFit, score };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+  }, [player, meta, index]);
+
+  return (
+    <section className="th-shop">
+      <div className="th-section-head"><h3>Shop a player</h3></div>
+      <p className="th-section-meta">Pick one of your players to see which clubs he'd actually upgrade.</p>
+      <select className="th-input" value={pid} onChange={(e) => setPid(e.target.value)} aria-label="Player to shop">
+        <option value="">Choose a player…</option>
+        {roster.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name} · {p.pos} · {p.ovr} OVR{p.capHit ? ` · ${formatMoneyShort(p.capHit)}` : ""}
+          </option>
+        ))}
+      </select>
+      <div className="th-shop-list">
+        {!player ? (
+          <p className="th-empty">No player selected.</p>
+        ) : !matches.length ? (
+          <p className="th-empty">No club would slot him above their current depth at that spot.</p>
+        ) : (
+          matches.map((m) => (
+            <div key={m.team.id} className="th-shop-row">
+              <TradeLogo team={m.team} size={26} />
+              <div className="th-shop-main">
+                <strong>{m.team.name}</strong>
+                <div className="th-shop-why">
+                  <span className={`th-chip ${m.bucket.tier === "need" ? "is-need" : ""}`}>
+                    {m.up.bucket.label} {rankOrdinal(m.bucket.rank)}
+                  </span>
+                  <span className="th-chip">+{Math.round(m.up.delta)} OVR</span>
+                  <span className={`th-chip ${m.capFits ? "is-surplus" : "is-need"}`}>{m.capFits ? "Cap fits" : "Cap short"}</span>
+                  {m.sideFit && <span className={`th-side-pill side-${m.info.side}`}>{m.info.side === "neutral" ? "Fit" : m.info.side}</span>}
+                </div>
+              </div>
+              <button type="button" className="th-ghost-btn" onClick={() => onShop(m.team.id, player)}>
+                Shop
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function NeedsFinder({ meta, index, partnerId, onOpenTalks, onShop }) {
+  const [mode, setMode] = useState("need");
+  const [bucket, setBucket] = useState("");
+  const [wants, setWants] = useState([]);
+  const [side, setSide] = useState("any");
+  const [minCap, setMinCap] = useState(0);
+  const [query, setQuery] = useState("");
+  const [sortKey, setSortKey] = useState("");
+
+  const toggleWant = (w) => setWants((prev) => (prev.includes(w) ? prev.filter((x) => x !== w) : [...prev, w]));
+  const q = query.trim().toLowerCase();
+  const effectiveSort = sortKey || bucket;
+  const rows = safeArray(meta?.teams)
+    .filter((t) => String(t.id) !== String(meta.userTeamId))
+    .map((t) => ({ team: t, info: index[t.id] }))
+    .filter(({ team, info }) => {
+      if (!info) return false;
+      if (q && !`${team.name} ${team.abbr}`.toLowerCase().includes(q)) return false;
+      if (side !== "any" && info.side !== side) return false;
+      if (minCap && !(Number(team.capSpace) >= minCap)) return false;
+      if (bucket && info.buckets[bucket].tier !== (mode === "need" ? "need" : "surplus")) return false;
+      if (wants.length && !wants.every((w) => info.wants.includes(w))) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      if (effectiveSort) {
+        const ra = a.info.buckets[effectiveSort].rank;
+        const rb = b.info.buckets[effectiveSort].rank;
+        return mode === "need" ? rb - ra : ra - rb;
+      }
+      return b.info.needs.length - a.info.needs.length;
+    });
+
+  return (
+    <div className="th-finder">
+      <aside className="th-finder-filters">
+        <input
+          className="th-input"
+          type="search"
+          placeholder="Search clubs"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          aria-label="Search clubs"
+        />
+        <div className="th-filter-group">
+          <span className="th-kicker">Show clubs that</span>
+          <div className="th-seg th-seg-full">
+            <button type="button" className={mode === "need" ? "is-active" : ""} onClick={() => setMode("need")}>Need</button>
+            <button type="button" className={mode === "surplus" ? "is-active" : ""} onClick={() => setMode("surplus")}>Have extra</button>
+          </div>
+        </div>
+        <div className="th-filter-group">
+          <span className="th-kicker">Position</span>
+          <div className="th-chip-row">
+            <button type="button" className={`th-chip-btn ${!bucket ? "is-on" : ""}`} onClick={() => setBucket("")}>Any</button>
+            {NEED_BUCKETS.map((b) => (
+              <button
+                key={b.key}
+                type="button"
+                className={`th-chip-btn ${bucket === b.key ? "is-on" : ""}`}
+                onClick={() => setBucket(bucket === b.key ? "" : b.key)}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="th-filter-group">
+          <span className="th-kicker">They want</span>
+          <div className="th-chip-row">
+            {WANT_TAGS.map((w) => (
+              <button key={w} type="button" className={`th-chip-btn ${wants.includes(w) ? "is-on" : ""}`} onClick={() => toggleWant(w)}>
+                {w}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="th-filter-group">
+          <span className="th-kicker">Direction</span>
+          <div className="th-seg th-seg-full">
+            {[["any", "Any"], ["buyer", "Buyers"], ["seller", "Sellers"]].map(([k, l]) => (
+              <button key={k} type="button" className={side === k ? "is-active" : ""} onClick={() => setSide(k)}>{l}</button>
+            ))}
+          </div>
+        </div>
+        <div className="th-filter-group">
+          <span className="th-kicker">Cap room at least</span>
+          <div className="th-seg th-seg-full">
+            {[0, 2, 5, 10].map((v) => (
+              <button key={v} type="button" className={minCap === v ? "is-active" : ""} onClick={() => setMinCap(v)}>
+                {v ? `$${v}M` : "Any"}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="th-finder-legend">
+          Ranks compare each lineup slot against all 32 clubs. <span className="is-need">Red</span> = bottom of the league (a need),{" "}
+          <span className="is-surplus">green</span> = top 8 (depth to spare).
+        </p>
+      </aside>
+
+      <section className="th-finder-table-wrap">
+        <div className="th-section-head">
+          <h3>Needs &amp; wants</h3>
+          <span className="th-num">{rows.length} clubs</span>
+        </div>
+        <div className="th-finder-table" role="table" aria-label="Team needs and wants">
+          <div className="th-ft-row th-ft-head" role="row">
+            <span role="columnheader">Club</span>
+            {NEED_BUCKETS.map((b) => (
+              <button
+                key={b.key}
+                type="button"
+                role="columnheader"
+                className={`th-ft-sort ${effectiveSort === b.key ? "is-sorted" : ""}`}
+                onClick={() => setSortKey(sortKey === b.key ? "" : b.key)}
+                title={`Sort by ${b.label}`}
+              >
+                {b.short}
+              </button>
+            ))}
+            <span role="columnheader">Wants</span>
+            <span role="columnheader" className="th-ft-num">Cap</span>
+          </div>
+          {rows.length ? (
+            rows.map(({ team, info }) => (
+              <button
+                key={team.id}
+                type="button"
+                role="row"
+                className={`th-ft-row ${String(team.id) === String(partnerId) ? "is-partner" : ""}`}
+                onClick={() => onOpenTalks(team.id)}
+                title={`Open talks with ${team.name}`}
+              >
+                <span className="th-ft-club">
+                  <TradeLogo team={team} size={22} />
+                  <strong>{team.abbr}</strong>
+                  <em className={`th-side-pill side-${info.side}`}>{team.tradeDirectionLabel || team.direction || "—"}</em>
+                </span>
+                {NEED_BUCKETS.map((b) => {
+                  const c = info.buckets[b.key];
+                  return (
+                    <span key={b.key} className={`th-ft-cell tier-${c.tier} ${bucket === b.key ? "is-focus" : ""}`}>
+                      {rankOrdinal(c.rank)}
+                    </span>
+                  );
+                })}
+                <span className="th-ft-wants">
+                  {info.wants.map((w) => <i key={w} className={wants.includes(w) ? "is-on" : ""}>{w}</i>)}
+                </span>
+                <span className="th-ft-num th-num">{team.capSpace != null ? formatMoneyM(team.capSpace) : "—"}</span>
+              </button>
+            ))
+          ) : (
+            <p className="th-empty">No clubs match these filters.</p>
+          )}
+        </div>
+      </section>
+
+      <ShopPlayerPanel meta={meta} index={index} onShop={onShop} />
+    </div>
+  );
+}
+
+/* ── Trade finder: accepted offers built around one asset ────────────── */
+
+function finderAssetLabel(a) {
+  if (!a) return "—";
+  if (a.type === "pick") {
+    const orig = a.original_team_id ? ` (${inferLogoAbbr(a.original_team_id, a.original_team_id)})` : "";
+    return `${a.year || ""} ${roundLabel(a.round)}${orig}`.trim();
+  }
+  return a.name || "?";
+}
+
+function finderAssetMeta(a) {
+  if (a.type === "pick") return "Pick";
+  return [a.pos, a.age ? `${a.age}y` : null, a.level === "AHL" ? "AHL" : null].filter(Boolean).join(" · ");
+}
+
+function orgAssetsFor(meta, teamId) {
+  const tid = String(teamId || "");
+  const players = [...safeArray(meta?.players?.[tid]), ...safeArray(meta?.affiliates?.[tid])]
+    .filter((p) => p && p.type !== "prospect")
+    .sort((a, b) => (Number(b.tradeValue) || 0) - (Number(a.tradeValue) || 0));
+  const picks = safeArray(meta?.picks?.[tid])
+    .slice()
+    .sort((a, b) => (Number(a.year) || 0) - (Number(b.year) || 0) || (Number(a.round) || 0) - (Number(b.round) || 0));
+  return { players, picks };
+}
+
+function FinderOfferCard({ offer, team, onLoad }) {
+  const net = Number(offer.user_gets_value) - Number(offer.user_gives_value);
+  const interest = offer.interest != null ? Math.round(offer.interest * 100) : null;
+  const side = (list) => (
+    <ul className="th-offer-assets">
+      {list.map((a) => (
+        <li key={`${a.type}-${a.id}`}>
+          <span className={`th-offer-type type-${a.type}`}>{a.type === "pick" ? "PK" : a.pos || "P"}</span>
+          <strong>{finderAssetLabel(a)}</strong>
+          <em>{finderAssetMeta(a)}</em>
+          <b className="th-num">{Number(a.value).toFixed(1)}</b>
+        </li>
+      ))}
+    </ul>
+  );
+  return (
+    <article className="th-offer">
+      <header className="th-offer-head">
+        {team ? <TradeLogo team={team} size={26} /> : null}
+        <strong>{offer.partner_name}</strong>
+        {team ? <em className={`th-side-pill side-${marketSideOf(team)}`}>{team.tradeDirectionLabel || team.direction}</em> : null}
+        <span className="th-offer-accept">GM accepts{interest != null ? ` · ${interest}% interest` : ""}</span>
+      </header>
+      <div className="th-offer-body">
+        <div>
+          <span className="th-kicker">You give</span>
+          {side(offer.user_gives)}
+        </div>
+        <div>
+          <span className="th-kicker">You get</span>
+          {side(offer.user_gets)}
+        </div>
+      </div>
+      <footer className="th-offer-foot">
+        <span>
+          Value <span className="th-num">{Number(offer.user_gives_value).toFixed(1)}</span> →{" "}
+          <span className="th-num">{Number(offer.user_gets_value).toFixed(1)}</span>
+          <em className={net >= 0 ? "is-up" : "is-down"}> ({net >= 0 ? "+" : ""}{net.toFixed(1)})</em>
+        </span>
+        <button type="button" className="th-cta-btn" onClick={() => onLoad(offer)}>Load into desk</button>
+      </footer>
+    </article>
+  );
+}
+
+function TradeFinder({ meta, partnerId, onLoadOffer }) {
+  const [mode, setMode] = useState("sell");
+  const [kind, setKind] = useState("player");
+  const [targetTeam, setTargetTeam] = useState(partnerId || "");
+  const [assetId, setAssetId] = useState("");
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("idle");
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+
+  const teamById = useMemo(() => {
+    const m = {};
+    safeArray(meta?.teams).forEach((t) => { m[String(t.id)] = t; });
+    return m;
+  }, [meta]);
+  const others = safeArray(meta?.teams).filter((t) => String(t.id) !== String(meta?.userTeamId));
+  const sourceTid = mode === "sell" ? meta?.userTeamId : targetTeam;
+  const { players, picks } = orgAssetsFor(meta, sourceTid);
+  const q = query.trim().toLowerCase();
+  const list = (kind === "player" ? players : picks).filter((a) => {
+    if (!q) return true;
+    const text = kind === "player" ? `${a.name} ${a.pos}` : `${a.year} ${roundLabel(a.round)} ${a.originalTeamAbbr || ""}`;
+    return text.toLowerCase().includes(q);
+  });
+
+  const reset = () => {
+    setAssetId("");
+    setResult(null);
+    setError("");
+    setStatus("idle");
+  };
+
+  const run = async () => {
+    if (!assetId) return;
+    setStatus("loading");
+    setError("");
+    setResult(null);
+    try {
+      const data = await findTradeOffers({
+        asset_type: kind,
+        asset_id: assetId,
+        mode,
+        target_team_id: mode === "buy" ? targetTeam : undefined,
+        limit: 8,
+      });
+      setResult(data);
+      setStatus("done");
+    } catch (e) {
+      setError(e?.response?.data?.detail || e?.message || "Trade finder failed");
+      setStatus("error");
+    }
+  };
+
+  const offers = safeArray(result?.offers);
+  const near = safeArray(result?.near_misses);
+
+  return (
+    <div className="th-tfinder">
+      <aside className="th-finder-filters">
+        <div className="th-filter-group">
+          <span className="th-kicker">I want to</span>
+          <div className="th-seg th-seg-full">
+            <button type="button" className={mode === "sell" ? "is-active" : ""} onClick={() => { setMode("sell"); reset(); }}>Sell an asset</button>
+            <button type="button" className={mode === "buy" ? "is-active" : ""} onClick={() => { setMode("buy"); reset(); }}>Acquire one</button>
+          </div>
+        </div>
+        {mode === "buy" && (
+          <div className="th-filter-group">
+            <span className="th-kicker">From</span>
+            <select className="th-input" value={targetTeam} onChange={(e) => { setTargetTeam(e.target.value); reset(); }} aria-label="Team to acquire from">
+              <option value="">Choose a club…</option>
+              {others.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+        )}
+        <div className="th-filter-group">
+          <span className="th-kicker">Asset</span>
+          <div className="th-seg th-seg-full">
+            <button type="button" className={kind === "player" ? "is-active" : ""} onClick={() => { setKind("player"); reset(); }}>Players</button>
+            <button type="button" className={kind === "pick" ? "is-active" : ""} onClick={() => { setKind("pick"); reset(); }}>Picks</button>
+          </div>
+          <input className="th-input" type="search" placeholder={kind === "player" ? "Search players" : "Search picks"} value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search assets" />
+        </div>
+        <div className="th-asset-list" role="listbox" aria-label="Choose an asset">
+          {mode === "buy" && !targetTeam ? (
+            <p className="th-empty">Choose a club first.</p>
+          ) : list.length ? (
+            list.map((a) => {
+              const id = String(a.id || a.pick_id);
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="option"
+                  aria-selected={assetId === id}
+                  className={`th-asset-opt ${assetId === id ? "is-on" : ""}`}
+                  onClick={() => { setAssetId(id); setResult(null); setStatus("idle"); }}
+                >
+                  <strong>{kind === "player" ? a.name : `${a.year} ${roundLabel(a.round)}`}</strong>
+                  <em>{kind === "player" ? `${a.pos} · ${a.ovr} OVR` : `via ${a.originalTeamAbbr || "—"}`}</em>
+                  <b className="th-num">{a.tradeValue != null ? Number(a.tradeValue).toFixed(1) : a.value_hint != null ? Number(a.value_hint).toFixed(1) : "—"}</b>
+                </button>
+              );
+            })
+          ) : (
+            <p className="th-empty">No matching assets.</p>
+          )}
+        </div>
+        <button type="button" className="th-cta-btn th-cta-wide" disabled={!assetId || status === "loading"} onClick={run}>
+          {status === "loading" ? "Canvassing GMs…" : mode === "sell" ? "Find buyers" : "Build offers"}
+        </button>
+      </aside>
+
+      <section className="th-tfinder-results">
+        <div className="th-section-head">
+          <h3>{mode === "sell" ? "Offers for your asset" : "Packages they'd accept"}</h3>
+          {result ? <span className="th-num">{offers.length} accepted · {result.evaluated} checked</span> : null}
+        </div>
+        <p className="th-section-meta">
+          Every offer below was run through the partner GM's real trade evaluation. They accept it as-is right now.
+        </p>
+        {status === "idle" && !result && (
+          <div className="th-tfinder-empty">
+            <strong>{mode === "sell" ? "Shop a player or pick to the whole league." : "Pick a target and we'll price it from your organization."}</strong>
+            <span>Offers respect cap room, roster limits, clauses, and each GM's needs and direction.</span>
+          </div>
+        )}
+        {status === "loading" && <div className="th-tfinder-empty"><strong>Calling around the league…</strong></div>}
+        {status === "error" && <div className="th-tfinder-empty is-error"><strong>{error}</strong></div>}
+        {result?.note && <div className="th-tfinder-empty"><strong>{result.note}</strong></div>}
+        {status === "done" && !offers.length && !result?.note && (
+          <div className="th-tfinder-empty">
+            <strong>No GM accepts a deal built around this asset right now.</strong>
+            {near.length > 0 && (
+              <ul className="th-near">
+                {near.map((o, i) => (
+                  <li key={i}>
+                    <b>{o.partner_name}</b> — {safeArray(o.reasons)[0] || "declined on value"}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+        <div className="th-offer-grid">
+          {offers.map((o) => (
+            <FinderOfferCard key={`${o.partner_team_id}-${o.user_gets.map((a) => a.id).join(".")}-${o.user_gives.map((a) => a.id).join(".")}`} offer={o} team={teamById[String(o.partner_team_id)]} onLoad={onLoadOffer} />
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function TeamDetailDrawer({ team, meta, partnerId, onClose }) {
   if (!team) return null;
   const st = team.standings || {};
@@ -6192,6 +7108,8 @@ function TeamIntelDashboard({
       : null,
     { label: "STATUS", value: status },
     playoff ? { label: "PLAYOFF", value: playoff } : null,
+    team.gmPersonality ? { label: "GM STYLE", value: team.gmPersonality, tone: "neutral" } : null,
+    team.pickCount ? { label: "PICKS", value: `${team.pickCount} owned` } : null,
     topNeed ? { label: "NEED", value: String(topNeed).toUpperCase() } : null,
   ].filter(Boolean);
 
@@ -6691,6 +7609,7 @@ export default function TradeHub() {
   const [assetsError, setAssetsError] = useState(false);
 
   const [partnerId, setPartnerId] = useState("");
+  const [hubView, setHubView] = useState("negotiate");
   const [leftAssets, setLeftAssets] = useState(emptySlots());
   const [rightAssets, setRightAssets] = useState(emptySlots());
 
@@ -6739,6 +7658,8 @@ export default function TradeHub() {
     () => meta?.teams?.find((t) => String(t.id) === String(partnerId)) || null,
     [meta, partnerId],
   );
+
+  const needsIndex = useMemo(() => buildNeedsIndex(meta), [meta]);
 
   const partnerOptions = useMemo(() => {
     if (!meta?.teams) return [];
@@ -6807,6 +7728,15 @@ export default function TradeHub() {
     setSubmitStatus("idle");
     setHasProposed(false);
     setSelectedTradeReview(false);
+  }, [partnerId]);
+
+  // Trade finder "Load into desk": re-apply the partner side after the reset above.
+  const pendingRightRef = useRef(null);
+  useEffect(() => {
+    if (pendingRightRef.current) {
+      setRightAssets(pendingRightRef.current);
+      pendingRightRef.current = null;
+    }
   }, [partnerId]);
 
   const packageSignature = useMemo(
@@ -7535,6 +8465,42 @@ export default function TradeHub() {
     );
   }
 
+  const openTalks = (teamId) => {
+    setPartnerId(String(teamId));
+    setHubView("negotiate");
+  };
+
+  const loadFinderOffer = (offer) => {
+    const targetTid = String(offer.partner_team_id);
+    const userTid = String(meta.userTeamId);
+    const toSlots = (list) => [...list, ...emptySlots(SLOTS)].slice(0, SLOTS);
+    const resolve = (list, tid, side) =>
+      safeArray(list)
+        .map((a) => {
+          const { players, picks } = orgAssetsFor(meta, tid);
+          const pool = a.type === "pick" ? picks : players;
+          const item = pool.find((x) => String(x.id || x.pick_id) === String(a.id));
+          if (!item) return null;
+          return prepareAssetForSide(item, side, tid) || { ...item, type: a.type, teamId: tid };
+        })
+        .filter(Boolean);
+    const left = resolve(offer.user_gives, userTid, "left");
+    const right = resolve(offer.user_gets, targetTid, "right");
+    setLeftAssets(toSlots(left));
+    setEvaluation(null);
+    setHasProposed(false);
+    setSubmitStatus("idle");
+    if (String(partnerId) === targetTid) {
+      setRightAssets(toSlots(right));
+    } else {
+      pendingRightRef.current = toSlots(right);
+      setPartnerId(targetTid);
+    }
+    setHubView("negotiate");
+    setToast("OFFER LOADED — PROPOSE TO SEND");
+    setTimeout(() => setToast(""), 1800);
+  };
+
   const leftPadded = padSlots(leftAssets);
   const rightPadded = padSlots(rightAssets);
 
@@ -7553,20 +8519,42 @@ export default function TradeHub() {
   return (
     <div className="nhlcal-root trade-hub-root">
       <div className="trade-hub-shell">
-      <header className="trade-hub-topbar">
+      <header className="trade-hub-topbar th-topbar">
         <button type="button" className="trade-hub-back-btn" onClick={() => setScreen(SCREENS.HUB)}>
-          ← HUB
+          ← Hub
         </button>
-        <div className="trade-hub-top-center">
-          <div className="trade-hub-screen-title">GM NEGOTIATION TABLE</div>
+        <div className="th-insignia" aria-hidden="true">TRADE<span>DESK</span></div>
+        <div className="th-title-block">
+          <h1 className="trade-hub-screen-title">Trade Desk</h1>
+          <span className="th-title-meta">
+            {userTeam?.name} · {userTeam?.tradeDirectionLabel || userTeam?.direction || "—"} ·{" "}
+            <span className="th-num">{userTeam?.capSpace != null ? formatMoneyM(userTeam.capSpace) : "—"}</span> cap room
+          </span>
+        </div>
+        <div className="th-seg th-view-seg" role="tablist" aria-label="Trade desk view">
+          {[["negotiate", "Negotiate"], ["market", "Market"], ["needs", "Needs finder"], ["finder", "Trade finder"]].map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={hubView === key}
+              className={hubView === key ? "is-active" : ""}
+              onClick={() => setHubView(key)}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         <div className="trade-hub-top-right">
           <select
             className="trade-hub-partner-select"
             value={partnerId}
-            onChange={(e) => setPartnerId(e.target.value)}
+            onChange={(e) => {
+              setPartnerId(e.target.value);
+              setHubView("negotiate");
+            }}
           >
-            {!partnerId && <option value="">SELECT TRADE PARTNER</option>}
+            {!partnerId && <option value="">Select trade partner</option>}
             {partnerOptions.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
@@ -7576,10 +8564,36 @@ export default function TradeHub() {
         </div>
       </header>
 
-      {!partnerId ? (
-        <div className="trade-hub-main">
-          <div className="trade-hub-loading trade-hub-empty-card">SELECT TRADE PARTNER</div>
-        </div>
+      <MarketPulseStrip tradeMarket={tradeMarket} teams={meta.teams} userTeamId={meta.userTeamId} />
+
+      {hubView === "finder" ? (
+        <main className="trade-hub-main th-market-main">
+          <TradeFinder meta={meta} partnerId={partnerId} onLoadOffer={loadFinderOffer} />
+        </main>
+      ) : hubView === "needs" ? (
+        <main className="trade-hub-main th-market-main">
+          <NeedsFinder
+            meta={meta}
+            index={needsIndex}
+            partnerId={partnerId}
+            onOpenTalks={openTalks}
+            onShop={(teamId, player) => {
+              openTalks(teamId);
+              handleQuickAdd("left", meta.userTeamId, player);
+            }}
+          />
+        </main>
+      ) : hubView === "market" || !partnerId ? (
+        <main className="trade-hub-main th-market-main">
+          <MarketBoard
+            teams={meta.teams}
+            userTeamId={meta.userTeamId}
+            partnerId={partnerId}
+            tradeMarket={tradeMarket}
+            needsIndex={needsIndex}
+            onOpenTalks={openTalks}
+          />
+        </main>
       ) : (
         <main className="trade-hub-main trade-hub-war-room-layout">
           <TeamBrowserPanel
@@ -7603,6 +8617,11 @@ export default function TradeHub() {
           />
 
           <section className="trade-hub-centre trade-hub-centre-focus">
+            <PartnerReadCard
+              team={partnerTeam}
+              info={needsIndex[partnerId]}
+              interest={hasProposed && evaluation ? evaluation.interest_level?.[partnerId] ?? null : null}
+            />
             <div className="trade-construction-grid">
               <div className="trade-package-col">
                 <div className="trade-package-header">
@@ -14706,7 +15725,14 @@ const TRADE_HUB_CSS = `
 .trade-players-full-body .trade-player-value-focus.value-useful .trade-player-value-fill {
   background: var(--ops-success, #4aaa72);
 }
+.trade-players-full-body .trade-player-value-focus.value-negative-value .trade-player-value-fill {
+  background: var(--ops-injury, #ff606d);
+}
+.trade-players-full-body .trade-player-value-focus.value-negative-value .trade-player-value-head strong {
+  color: var(--ops-injury, #ff606d);
+}
 .trade-players-full-body .trade-player-value-focus.value-depth .trade-player-value-fill,
+.trade-players-full-body .trade-player-value-focus.value-replacement .trade-player-value-fill,
 .trade-players-full-body .trade-player-value-focus.value-low .trade-player-value-fill,
 .trade-players-full-body .trade-player-value-focus.value-unknown .trade-player-value-fill {
   background: #4d5a68;
@@ -15011,5 +16037,1002 @@ const TRADE_HUB_CSS = `
   .trade-clear-value-body {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── Asset detail: compact hero + Value dashboard ─────────────────────── */
+.trade-asset-detail-hero {
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 24px;
+  min-height: 0;
+  padding: 20px clamp(20px, 3vw, 40px) 18px;
+  align-items: center;
+}
+.trade-asset-hero-visual {
+  min-height: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+.trade-asset-hero-visual .ps1-portrait[data-size="xl"] {
+  width: 168px;
+  height: 200px;
+  border-radius: 10px;
+}
+.trade-asset-hero-pick .trade-pick-icon {
+  width: 168px;
+  height: 200px;
+}
+.trade-asset-hero-pick .trade-pick-icon-round { font-size: 56px; }
+.trade-asset-hero-pick .trade-pick-icon-year { font-size: 18px; }
+.trade-asset-hero-main { gap: 16px; }
+.trade-asset-hero-identity {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 14px;
+  padding-right: 64px;
+}
+.trade-asset-hero-identity strong {
+  font-size: clamp(22px, 2.6vw, 32px);
+  letter-spacing: 0.04em;
+  text-shadow: none;
+}
+.trade-asset-hero-identity span {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+.trade-asset-hero-tiles {
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+}
+.trade-asset-hero-tile {
+  padding: 10px 12px;
+  border-radius: 6px;
+  border-color: var(--line);
+  background: rgba(0, 0, 0, 0.28);
+  text-align: left;
+}
+.trade-asset-hero-tile span {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  margin-bottom: 4px;
+  color: var(--muted);
+}
+.trade-asset-hero-tile strong {
+  font-size: 22px;
+  text-shadow: none;
+  font-variant-numeric: tabular-nums;
+}
+.trade-asset-hero-tile.tile-cap strong { font-size: 22px; }
+.trade-asset-hero-tile.tile-term strong { color: var(--text); }
+.trade-asset-hero-tile.tile-value { grid-column: span 2; }
+.tv-hero-value { display: flex; align-items: baseline; gap: 10px; }
+.trade-asset-hero-tile.tile-value .tv-hero-value strong { font-size: 22px; letter-spacing: 0; }
+.tv-hero-value em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+.trade-asset-hero-tile .trade-value-chip-track.hero { height: 5px; margin-top: 8px; }
+.trade-asset-hero-tile.tier-franchise .tv-hero-value strong,
+.trade-asset-hero-tile.tier-franchise .tv-hero-value em { color: #ffd700; }
+.trade-asset-hero-tile.tier-franchise .trade-value-chip-fill { background: linear-gradient(90deg, #c9a227, #ffd700); }
+.trade-asset-hero-tile.tier-elite .tv-hero-value strong,
+.trade-asset-hero-tile.tier-elite .tv-hero-value em { color: #ff9f43; }
+.trade-asset-hero-tile.tier-elite .trade-value-chip-fill { background: linear-gradient(90deg, #e67e22, #ff9f43); }
+.trade-asset-hero-tile.tier-top .tv-hero-value strong,
+.trade-asset-hero-tile.tier-top .tv-hero-value em { color: #54a0ff; }
+.trade-asset-hero-tile.tier-top .trade-value-chip-fill { background: linear-gradient(90deg, #2e86de, #54a0ff); }
+.trade-asset-hero-tile.tier-useful .tv-hero-value strong,
+.trade-asset-hero-tile.tier-useful .tv-hero-value em { color: var(--green); }
+.trade-asset-hero-tile.tier-useful .trade-value-chip-fill { background: linear-gradient(90deg, #1e8449, var(--green)); }
+.trade-asset-hero-tile.tier-depth .trade-value-chip-fill { background: linear-gradient(90deg, #4a5568, #718096); }
+.trade-asset-hero-tile.tier-negative { border-color: rgba(255, 96, 109, 0.45); background: var(--red-soft); }
+.trade-asset-hero-tile.tier-negative .tv-hero-value strong,
+.trade-asset-hero-tile.tier-negative .tv-hero-value em { color: var(--red); }
+.trade-asset-hero-tile.tier-negative .trade-value-chip-fill { background: var(--red); }
+.trade-asset-detail-close { width: 38px; height: 38px; font-size: 22px; border-radius: 10px; top: 16px; right: 18px; }
+.trade-drawer.trade-drawer-asset .trade-drawer-tabs { padding: 8px clamp(20px, 3vw, 40px); }
+.trade-drawer.trade-drawer-asset .trade-drawer-tabs button { flex: 0 0 auto; padding: 7px 16px; }
+.trade-drawer.trade-drawer-asset .trade-drawer-body { padding: 16px clamp(20px, 3vw, 40px) 28px; }
+
+.tv-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  max-width: 1180px;
+}
+.tv-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.tv-card {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.22);
+}
+.tv-card.tone-bad { border-color: rgba(255, 96, 109, 0.35); }
+.tv-card.tone-good { border-color: rgba(82, 223, 148, 0.35); }
+.tv-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.tv-card-head span {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tv-card-head strong { font-size: 12px; font-weight: 800; color: var(--text); }
+.tv-contract.tone-bad .tv-card-head strong { color: var(--red); }
+.tv-contract.tone-good .tv-card-head strong { color: var(--green); }
+
+.tv-drivers { display: flex; flex-direction: column; gap: 6px; }
+.tv-driver {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) 104px;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.tv-driver-label { color: var(--text); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tv-driver-track {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+.tv-driver-half { position: relative; }
+.tv-driver-half.neg { border-right: 1px solid var(--line-2); }
+.tv-driver-half i { position: absolute; top: 0; bottom: 0; }
+.tv-driver-half.neg i { right: 0; background: var(--red); border-radius: 4px 0 0 4px; }
+.tv-driver-half.pos i { left: 0; background: var(--green); border-radius: 0 4px 4px 0; }
+.tv-driver-tag { font-size: 11px; color: var(--muted); text-align: right; white-space: nowrap; }
+.tv-driver.is-up .tv-driver-tag { color: var(--green); }
+.tv-driver.is-down .tv-driver-tag { color: var(--red); }
+
+.tv-contract-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.tv-contract-grid span,
+.tv-kv span {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tv-contract-grid strong { display: block; font-size: 15px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tv-contract-bars { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.tv-contract-bar { display: grid; grid-template-columns: 34px 1fr; align-items: center; gap: 8px; }
+.tv-contract-bar em { font-style: normal; font-size: 10px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+.tv-contract-bar div { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.05); overflow: hidden; }
+.tv-contract-bar i { display: block; height: 100%; border-radius: 3px; }
+.tv-contract-bar i.fair { background: var(--muted-2); }
+.tv-contract-bar i.paid { background: var(--cyan); }
+.tv-contract.tone-bad .tv-contract-bar i.paid { background: var(--red); }
+.tv-contract.tone-good .tv-contract-bar i.paid { background: var(--green); }
+.tv-kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  align-items: baseline;
+}
+.tv-kv strong { font-size: 13px; font-weight: 700; text-align: right; }
+.tv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.tv-chip {
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+.tv-note { margin: 8px 0 0; font-size: 11px; color: var(--gold); }
+.tv-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 4px; }
+.tv-list li { font-size: 12px; line-height: 1.4; color: var(--text); }
+.tv-list.warn li { color: var(--gold); }
+.tv-empty { margin: 0; font-size: 12px; color: var(--muted-2); }
+
+@media (max-width: 760px) {
+  .trade-asset-detail-hero { grid-template-columns: 1fr; justify-items: start; }
+  .trade-asset-hero-visual .ps1-portrait[data-size="xl"],
+  .trade-asset-hero-pick .trade-pick-icon { width: 120px; height: 144px; }
+  .trade-asset-hero-tile.tile-value { grid-column: 1 / -1; }
+  .tv-layout { grid-template-columns: 1fr; }
+  .tv-driver { grid-template-columns: 88px minmax(0, 1fr) 84px; }
+  .tv-contract-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ══ Trade Desk — Entry Draft broadcast-floor skin ═════════════════════ */
+.nhlcal-root.trade-hub-root {
+  --th-head: var(--font-ops-head, "Barlow Condensed", "Archivo Black", "Arial Narrow", sans-serif);
+  --th-display: var(--font-broadcast-display, "Archivo Black", "Barlow Condensed", sans-serif);
+  --th-mono: var(--font-mono-data, "IBM Plex Mono", Consolas, monospace);
+  --th-radius: var(--radius-ops, 2px);
+  font-family: var(--font-ops-ui, Inter, ui-sans-serif, system-ui, sans-serif);
+  background:
+    radial-gradient(circle at 20% 0%, rgba(19, 216, 231, 0.1), transparent 32%),
+    radial-gradient(circle at 88% 12%, rgba(233, 168, 60, 0.07), transparent 28%),
+    linear-gradient(180deg, var(--ops-black, #061522) 0%, var(--ops-navy-deep, #020a11) 100%);
+}
+.nhlcal-root.trade-hub-root h1,
+.nhlcal-root.trade-hub-root h2,
+.nhlcal-root.trade-hub-root h3,
+.nhlcal-root.trade-hub-root h4 {
+  font-family: var(--th-head);
+  letter-spacing: 0.04em;
+}
+.nhlcal-root.trade-hub-root .th-num {
+  font-family: var(--th-mono);
+  font-variant-numeric: tabular-nums;
+}
+.nhlcal-root.trade-hub-root .th-kicker {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Top bar */
+.nhlcal-root.trade-hub-root .trade-hub-topbar.th-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 6px 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+}
+.nhlcal-root.trade-hub-root .trade-hub-back-btn {
+  border: 1px solid var(--line);
+  background: rgba(12, 31, 47, 0.85);
+  color: var(--text);
+  border-radius: var(--th-radius);
+  padding: 7px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.nhlcal-root.trade-hub-root .trade-hub-back-btn:hover {
+  border-color: rgba(156, 178, 196, 0.35);
+  background: rgba(18, 40, 58, 0.95);
+}
+.nhlcal-root.trade-hub-root .th-insignia {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-hud, 4px);
+  background: linear-gradient(145deg, rgba(19, 216, 231, 0.16), rgba(233, 168, 60, 0.12)), var(--panel);
+  font-family: var(--th-display);
+  font-size: 9px;
+  line-height: 1.05;
+  letter-spacing: 0.06em;
+  color: var(--gold);
+  text-align: center;
+}
+.nhlcal-root.trade-hub-root .th-insignia span { display: block; color: var(--cyan); letter-spacing: 0.1em; }
+.nhlcal-root.trade-hub-root .th-title-block { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.nhlcal-root.trade-hub-root .trade-hub-screen-title {
+  margin: 0;
+  font-family: var(--th-display);
+  font-size: var(--type-broadcast-display-size, 1.2rem);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.nhlcal-root.trade-hub-root .th-title-meta {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nhlcal-root.trade-hub-root .trade-hub-top-right { flex: 0 0 auto; }
+.nhlcal-root.trade-hub-root .trade-hub-partner-select {
+  width: 220px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  border-radius: var(--th-radius);
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.nhlcal-root.trade-hub-root .th-seg {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--th-radius);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.nhlcal-root.trade-hub-root .th-seg button {
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.nhlcal-root.trade-hub-root .th-seg button:last-child { border-right: 0; }
+.nhlcal-root.trade-hub-root .th-seg button:hover { color: var(--text); }
+.nhlcal-root.trade-hub-root .th-seg button.is-active { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+.nhlcal-root.trade-hub-root .th-seg button:focus-visible,
+.nhlcal-root.trade-hub-root .th-mrow:focus-visible,
+.nhlcal-root.trade-hub-root .trade-hub-back-btn:focus-visible,
+.nhlcal-root.trade-hub-root .trade-hub-partner-select:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 1px;
+}
+
+/* Market pulse strip (draft-ticker register) */
+.nhlcal-root.trade-hub-root .th-pulse {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(2, 10, 17, 0.72);
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+}
+.nhlcal-root.trade-hub-root .th-pulse-temp {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.nhlcal-root.trade-hub-root .th-pulse-temp i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.nhlcal-root.trade-hub-root .th-pulse-temp.tone-hot { color: var(--red); }
+.nhlcal-root.trade-hub-root .th-pulse-temp.tone-hot i { box-shadow: 0 0 8px var(--red); }
+.nhlcal-root.trade-hub-root .th-pulse-temp.tone-warm { color: var(--gold); }
+.nhlcal-root.trade-hub-root .th-pulse-temp.tone-cool { color: var(--cyan); }
+.nhlcal-root.trade-hub-root .th-pulse-deadline { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.nhlcal-root.trade-hub-root .th-pulse-deadline > span { font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; }
+.nhlcal-root.trade-hub-root .th-pulse-track { width: 96px; height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 2px; overflow: hidden; }
+.nhlcal-root.trade-hub-root .th-pulse-track div { height: 100%; background: linear-gradient(90deg, var(--cyan), var(--gold)); }
+.nhlcal-root.trade-hub-root .th-pulse-deadline strong,
+.nhlcal-root.trade-hub-root .th-pulse-count strong { color: var(--text); font-weight: 600; }
+.nhlcal-root.trade-hub-root .th-pulse-count { white-space: nowrap; }
+.nhlcal-root.trade-hub-root .th-pulse-wire { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.nhlcal-root.trade-hub-root .th-pulse-wire-tag {
+  padding: 2px 6px;
+  border-radius: var(--th-radius);
+  background: var(--gold);
+  color: #1b1002;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.nhlcal-root.trade-hub-root .th-pulse-wire-feed {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 24px;
+  white-space: nowrap;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, #000 85%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent);
+  color: rgba(232, 240, 244, 0.82);
+}
+.nhlcal-root.trade-hub-root .th-pulse-wire-feed .is-user { color: var(--gold); }
+.nhlcal-root.trade-hub-root .th-pulse-wire-feed .is-quiet { color: var(--muted-2); font-style: italic; }
+
+/* Negotiation floor: hairline grid like the draft floor */
+.nhlcal-root.trade-hub-root .trade-hub-main { padding: 8px 10px 6px; }
+.nhlcal-root.trade-hub-root .trade-hub-war-room-layout {
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.nhlcal-root.trade-hub-root .trade-hub-war-room-layout > * + * { border-left: 1px solid var(--line); }
+.nhlcal-root.trade-hub-root .trade-team-panel {
+  border: 0;
+  border-radius: 0;
+  background: var(--panel-2);
+  box-shadow: none;
+}
+.nhlcal-root.trade-hub-root .trade-hub-centre {
+  padding: 10px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.nhlcal-root.trade-hub-root .trade-package-header span,
+.nhlcal-root.trade-hub-root .trade-analysis-headline,
+.nhlcal-root.trade-hub-root .trade-hub-panel-title {
+  font-family: var(--th-head);
+  letter-spacing: 0.06em;
+}
+.nhlcal-root.trade-hub-root .trade-slot,
+.nhlcal-root.trade-hub-root .trade-analysis-panel,
+.nhlcal-root.trade-hub-root .trade-package-col {
+  border-radius: var(--th-radius);
+}
+.nhlcal-root.trade-hub-root .trade-hub-propose-btn {
+  width: min(560px, 100%);
+  min-height: 42px;
+  padding: 10px 18px;
+  border-radius: var(--th-radius);
+  clip-path: none;
+  font-family: var(--th-head);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+/* Partner GM read */
+.nhlcal-root.trade-hub-root .th-read {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  border: 1px solid var(--line);
+  border-radius: var(--th-radius);
+  background: rgba(0, 0, 0, 0.18);
+}
+.nhlcal-root.trade-hub-root .th-read.side-buyer { box-shadow: inset 2px 0 0 var(--cyan); }
+.nhlcal-root.trade-hub-root .th-read.side-seller { box-shadow: inset 2px 0 0 var(--gold); }
+.nhlcal-root.trade-hub-root .th-read-main { padding: 10px 12px; min-width: 0; }
+.nhlcal-root.trade-hub-root .th-read-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.nhlcal-root.trade-hub-root .th-read-head strong { font-family: var(--th-head); font-size: 18px; font-weight: 700; letter-spacing: 0.03em; color: var(--text); }
+.nhlcal-root.trade-hub-root .th-side-pill {
+  font-style: normal;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.nhlcal-root.trade-hub-root .th-side-pill.side-buyer { color: var(--cyan); border-color: rgba(19, 216, 231, 0.4); background: var(--cyan-soft); }
+.nhlcal-root.trade-hub-root .th-side-pill.side-seller { color: var(--gold); border-color: rgba(233, 168, 60, 0.4); background: var(--gold-soft); }
+.nhlcal-root.trade-hub-root .th-read-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.nhlcal-root.trade-hub-root .th-read-grid span,
+.nhlcal-root.trade-hub-root .th-read-needs > span {
+  display: block;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.nhlcal-root.trade-hub-root .th-read-grid strong { display: block; margin-top: 2px; font-size: 12px; font-weight: 600; color: var(--text); line-height: 1.3; }
+.nhlcal-root.trade-hub-root .th-read-needs { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 8px; }
+.nhlcal-root.trade-hub-root .th-read-needs em {
+  font-style: normal;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+.nhlcal-root.trade-hub-root .th-read-tip { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+.nhlcal-root.trade-hub-root .th-read-steps {
+  list-style: none;
+  counter-reset: th-step;
+  margin: 0;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-left: 1px solid var(--line);
+  background: rgba(2, 10, 17, 0.35);
+}
+.nhlcal-root.trade-hub-root .th-read-steps li { counter-increment: th-step; display: grid; grid-template-columns: 18px 44px 1fr; gap: 6px; align-items: baseline; font-size: 11px; color: var(--muted); }
+.nhlcal-root.trade-hub-root .th-read-steps li::before { content: counter(th-step); font-family: var(--th-mono); color: var(--gold); font-size: 11px; }
+.nhlcal-root.trade-hub-root .th-read-steps strong { color: var(--text); font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+
+/* Market board */
+.nhlcal-root.trade-hub-root .th-market-main { display: flex; flex-direction: column; }
+.nhlcal-root.trade-hub-root .th-board { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.nhlcal-root.trade-hub-root .th-board-bar { display: flex; align-items: center; gap: 12px; }
+.nhlcal-root.trade-hub-root .th-board-hint { flex: 1; font-size: 12px; color: var(--muted); }
+.nhlcal-root.trade-hub-root .th-board-floor {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.nhlcal-root.trade-hub-root .th-board-col { min-height: 0; display: flex; flex-direction: column; padding: 10px; }
+.nhlcal-root.trade-hub-root .th-board-col + .th-board-col { border-left: 1px solid var(--line); }
+.nhlcal-root.trade-hub-root .th-board-col.side-buyer { box-shadow: inset 0 2px 0 var(--cyan); }
+.nhlcal-root.trade-hub-root .th-board-col.side-seller { box-shadow: inset 0 2px 0 var(--gold); }
+.nhlcal-root.trade-hub-root .th-board-side { background: var(--panel-2); }
+.nhlcal-root.trade-hub-root .th-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.nhlcal-root.trade-hub-root .th-section-head h3 { margin: 0; font-size: 18px; font-weight: 700; color: var(--text); text-transform: uppercase; }
+.nhlcal-root.trade-hub-root .th-section-head .th-num { font-size: 12px; color: var(--muted); }
+.nhlcal-root.trade-hub-root .th-section-meta { margin: 2px 0 8px; font-size: 11px; color: var(--muted); }
+.nhlcal-root.trade-hub-root .th-board-list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.nhlcal-root.trade-hub-root .th-board-list-short { flex: 0 1 auto; max-height: 42%; }
+.nhlcal-root.trade-hub-root .th-mrow {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 4px;
+  border: 0;
+  border-bottom: 1px solid rgba(156, 178, 196, 0.08);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+.nhlcal-root.trade-hub-root .th-mrow:hover { background: rgba(255, 255, 255, 0.04); }
+.nhlcal-root.trade-hub-root .th-mrow.is-partner { background: rgba(126, 184, 212, 0.12); }
+.nhlcal-root.trade-hub-root .th-mrow-main { min-width: 0; }
+.nhlcal-root.trade-hub-root .th-mrow-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.nhlcal-root.trade-hub-root .th-mrow-top strong { font-size: 13px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nhlcal-root.trade-hub-root .th-mrow-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 2px; font-size: 11px; color: var(--muted); }
+.nhlcal-root.trade-hub-root .th-mrow-meta i { font-style: normal; padding: 0 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.06); color: rgba(232, 240, 244, 0.82); }
+.nhlcal-root.trade-hub-root .th-mrow-stats { display: flex; gap: 12px; }
+.nhlcal-root.trade-hub-root .th-mrow-stats span { display: flex; flex-direction: column; align-items: flex-end; }
+.nhlcal-root.trade-hub-root .th-mrow-stats em { font-style: normal; font-size: 9px; font-weight: 900; letter-spacing: 0.12em; color: var(--muted-2); }
+.nhlcal-root.trade-hub-root .th-mrow-stats strong { font-size: 12px; color: var(--text); font-weight: 500; }
+.nhlcal-root.trade-hub-root .th-wire-head { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.nhlcal-root.trade-hub-root .th-wire { list-style: none; margin: 6px 0 0; padding: 0; overflow-y: auto; flex: 1; min-height: 0; }
+.nhlcal-root.trade-hub-root .th-wire li { display: grid; grid-template-columns: 40px 1fr; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(156, 178, 196, 0.08); }
+.nhlcal-root.trade-hub-root .th-wire li .th-num { font-size: 11px; color: var(--muted); }
+.nhlcal-root.trade-hub-root .th-wire li p { margin: 0; font-size: 12px; line-height: 1.35; color: rgba(232, 240, 244, 0.86); }
+.nhlcal-root.trade-hub-root .th-wire li.is-user p { color: var(--gold); }
+.nhlcal-root.trade-hub-root .th-wire li.is-quiet { grid-template-columns: 1fr; }
+.nhlcal-root.trade-hub-root .th-wire li.is-quiet p,
+.nhlcal-root.trade-hub-root .th-empty { font-size: 12px; color: var(--muted-2); margin: 6px 0; }
+
+/* Team rails — concise draft-floor register */
+.nhlcal-root.trade-hub-root .trade-intel-hero { padding: 12px; gap: 10px; background: transparent; }
+.nhlcal-root.trade-hub-root .trade-package-header .trade-team-logo-img { width: 44px !important; height: 44px !important; }
+.nhlcal-root.trade-hub-root .trade-package-header-main > span { font-family: var(--th-head); font-size: 15px; font-weight: 700; letter-spacing: 0.06em; color: var(--text); }
+.nhlcal-root.trade-hub-root .trade-intel-hero .trade-logo,
+.nhlcal-root.trade-hub-root .trade-intel-hero img { max-width: 48px; max-height: 48px; }
+.nhlcal-root.trade-hub-root .trade-intel-hero-text { gap: 4px; }
+.nhlcal-root.trade-hub-root .trade-intel-hero-text strong {
+  font-family: var(--th-head);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-shadow: none;
+}
+.nhlcal-root.trade-hub-root .trade-intel-status-badge {
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  text-shadow: none;
+  color: var(--gold);
+  border-color: rgba(233, 168, 60, 0.4);
+  background: var(--gold-soft);
+}
+.nhlcal-root.trade-hub-root .trade-intel-row {
+  min-height: 0;
+  padding: 6px 12px;
+  border-bottom-color: rgba(156, 178, 196, 0.08);
+}
+.nhlcal-root.trade-hub-root .trade-intel-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  text-shadow: none;
+}
+.nhlcal-root.trade-hub-root .trade-intel-value {
+  font-family: var(--th-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-shadow: none !important;
+}
+.nhlcal-root.trade-hub-root .trade-intel-foot { border-color: var(--line); background: transparent; padding: 8px 12px; gap: 6px; }
+.nhlcal-root.trade-hub-root .trade-intel-view-players {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--th-radius);
+  background: var(--cyan);
+  color: var(--bg);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-shadow: none;
+}
+.nhlcal-root.trade-hub-root .trade-intel-view-players:hover { background: #38bdf8; box-shadow: none; }
+.nhlcal-root.trade-hub-root .trade-intel-detail-link {
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--th-radius);
+  background: rgba(12, 31, 47, 0.85);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* Needs finder */
+.nhlcal-root.trade-hub-root .th-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  font-weight: 600;
+  font-style: normal;
+  color: rgba(232, 240, 244, 0.86);
+  white-space: nowrap;
+}
+.nhlcal-root.trade-hub-root .th-chip.is-need,
+.nhlcal-root.trade-hub-root .th-read-needs em.is-need { background: var(--red-soft); color: var(--red); }
+.nhlcal-root.trade-hub-root .th-chip.is-surplus,
+.nhlcal-root.trade-hub-root .th-read-needs em.is-surplus { background: var(--green-soft); color: var(--green); }
+.nhlcal-root.trade-hub-root .th-chip.is-quiet { color: var(--muted-2); background: transparent; padding-left: 0; }
+.nhlcal-root.trade-hub-root .th-ghost-btn {
+  border: 1px solid var(--line);
+  background: rgba(12, 31, 47, 0.85);
+  color: var(--text);
+  border-radius: var(--th-radius);
+  padding: 5px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.nhlcal-root.trade-hub-root .th-ghost-btn:hover { border-color: rgba(156, 178, 196, 0.35); background: rgba(18, 40, 58, 0.95); }
+.nhlcal-root.trade-hub-root .th-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  border-radius: var(--th-radius);
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 12px;
+}
+.nhlcal-root.trade-hub-root .th-input:focus-visible,
+.nhlcal-root.trade-hub-root .th-chip-btn:focus-visible,
+.nhlcal-root.trade-hub-root .th-ft-row:focus-visible,
+.nhlcal-root.trade-hub-root .th-ft-sort:focus-visible,
+.nhlcal-root.trade-hub-root .th-ghost-btn:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+
+.nhlcal-root.trade-hub-root .th-finder {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr) minmax(280px, 340px);
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.nhlcal-root.trade-hub-root .th-finder > * { min-height: 0; padding: 10px; }
+.nhlcal-root.trade-hub-root .th-finder > * + * { border-left: 1px solid var(--line); }
+.nhlcal-root.trade-hub-root .th-finder-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  background: var(--panel-2);
+}
+.nhlcal-root.trade-hub-root .th-filter-group { display: flex; flex-direction: column; gap: 6px; }
+.nhlcal-root.trade-hub-root .th-seg-full { display: flex; }
+.nhlcal-root.trade-hub-root .th-seg-full button { flex: 1; padding: 5px 6px; }
+.nhlcal-root.trade-hub-root .th-chip-row { display: flex; flex-wrap: wrap; gap: 5px; }
+.nhlcal-root.trade-hub-root .th-chip-btn {
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.nhlcal-root.trade-hub-root .th-chip-btn:hover { color: var(--text); }
+.nhlcal-root.trade-hub-root .th-chip-btn.is-on { border-color: rgba(19, 216, 231, 0.5); background: var(--cyan-soft); color: var(--cyan); }
+.nhlcal-root.trade-hub-root .th-finder-legend { margin: auto 0 0; font-size: 11px; line-height: 1.45; color: var(--muted); }
+.nhlcal-root.trade-hub-root .th-finder-legend .is-need { color: var(--red); }
+.nhlcal-root.trade-hub-root .th-finder-legend .is-surplus { color: var(--green); }
+
+.nhlcal-root.trade-hub-root .th-finder-table-wrap { display: flex; flex-direction: column; }
+.nhlcal-root.trade-hub-root .th-finder-table { flex: 1; min-height: 0; overflow-y: auto; margin-top: 6px; scrollbar-width: thin; }
+.nhlcal-root.trade-hub-root .th-ft-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.3fr) repeat(5, 52px) minmax(120px, 1.4fr) 64px;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 5px 4px;
+  border: 0;
+  border-bottom: 1px solid rgba(156, 178, 196, 0.08);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.nhlcal-root.trade-hub-root .th-ft-row:not(.th-ft-head):hover { background: rgba(255, 255, 255, 0.04); }
+.nhlcal-root.trade-hub-root .th-ft-row.is-partner { background: rgba(126, 184, 212, 0.12); }
+.nhlcal-root.trade-hub-root .th-ft-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  cursor: default;
+  background: var(--panel);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom-color: var(--line);
+}
+.nhlcal-root.trade-hub-root .th-ft-sort {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: center;
+  cursor: pointer;
+  padding: 2px 0;
+}
+.nhlcal-root.trade-hub-root .th-ft-sort:hover,
+.nhlcal-root.trade-hub-root .th-ft-sort.is-sorted { color: var(--cyan); }
+.nhlcal-root.trade-hub-root .th-ft-sort.is-sorted::after { content: " ▾"; }
+.nhlcal-root.trade-hub-root .th-ft-club { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.nhlcal-root.trade-hub-root .th-ft-club strong { font-weight: 700; color: var(--text); }
+.nhlcal-root.trade-hub-root .th-ft-cell {
+  text-align: center;
+  padding: 3px 0;
+  border-radius: var(--th-radius);
+  font-family: var(--th-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--muted);
+}
+.nhlcal-root.trade-hub-root .th-ft-cell.tier-need { background: var(--red-soft); color: var(--red); font-weight: 600; }
+.nhlcal-root.trade-hub-root .th-ft-cell.tier-surplus { background: var(--green-soft); color: var(--green); font-weight: 600; }
+.nhlcal-root.trade-hub-root .th-ft-cell.is-focus { box-shadow: inset 0 0 0 1px var(--line-strong); }
+.nhlcal-root.trade-hub-root .th-ft-wants { display: flex; flex-wrap: wrap; gap: 3px; min-width: 0; }
+.nhlcal-root.trade-hub-root .th-ft-wants i {
+  font-style: normal;
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(232, 240, 244, 0.78);
+  white-space: nowrap;
+}
+.nhlcal-root.trade-hub-root .th-ft-wants i.is-on { background: var(--cyan-soft); color: var(--cyan); }
+.nhlcal-root.trade-hub-root .th-ft-num { text-align: right; }
+
+.nhlcal-root.trade-hub-root .th-shop { display: flex; flex-direction: column; gap: 6px; background: var(--panel-2); }
+.nhlcal-root.trade-hub-root .th-shop .th-section-meta { margin-bottom: 4px; }
+.nhlcal-root.trade-hub-root .th-shop-list { flex: 1; min-height: 0; overflow-y: auto; margin-top: 4px; }
+.nhlcal-root.trade-hub-root .th-shop-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(156, 178, 196, 0.08);
+}
+.nhlcal-root.trade-hub-root .th-shop-main strong { display: block; font-size: 13px; font-weight: 700; color: var(--text); }
+.nhlcal-root.trade-hub-root .th-shop-why { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+
+@media (max-width: 1280px) {
+  .nhlcal-root.trade-hub-root .th-finder { grid-template-columns: 210px minmax(0, 1fr); }
+  .nhlcal-root.trade-hub-root .th-shop { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); max-height: 320px; }
+}
+@media (max-width: 760px) {
+  .nhlcal-root.trade-hub-root .th-finder { grid-template-columns: 1fr; overflow-y: auto; }
+  .nhlcal-root.trade-hub-root .th-finder > * + * { border-left: 0; border-top: 1px solid var(--line); }
+  .nhlcal-root.trade-hub-root .th-finder-table { overflow-x: auto; max-height: 420px; }
+  .nhlcal-root.trade-hub-root .th-ft-row { min-width: 560px; grid-template-columns: 110px repeat(5, 44px) 1fr 56px; }
+}
+
+/* Trade finder */
+.nhlcal-root.trade-hub-root .th-cta-btn {
+  border: 0;
+  border-radius: var(--th-radius);
+  padding: 7px 14px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1b1002;
+  background: var(--gold);
+  cursor: pointer;
+}
+.nhlcal-root.trade-hub-root .th-cta-btn:hover:not(:disabled) { filter: brightness(1.06); }
+.nhlcal-root.trade-hub-root .th-cta-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.nhlcal-root.trade-hub-root .th-cta-btn:focus-visible,
+.nhlcal-root.trade-hub-root .th-asset-opt:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+.nhlcal-root.trade-hub-root .th-cta-wide { width: 100%; padding: 9px 14px; font-size: 13px; }
+
+.nhlcal-root.trade-hub-root .th-tfinder {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.nhlcal-root.trade-hub-root .th-tfinder > * { min-height: 0; padding: 10px; }
+.nhlcal-root.trade-hub-root .th-tfinder > * + * { border-left: 1px solid var(--line); }
+.nhlcal-root.trade-hub-root .th-tfinder .th-finder-filters { gap: 10px; }
+.nhlcal-root.trade-hub-root .th-asset-list {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--th-radius);
+  background: rgba(0, 0, 0, 0.18);
+  scrollbar-width: thin;
+}
+.nhlcal-root.trade-hub-root .th-asset-list .th-empty { padding: 8px; }
+.nhlcal-root.trade-hub-root .th-asset-opt {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "name val" "meta val";
+  gap: 0 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-bottom: 1px solid rgba(156, 178, 196, 0.08);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.nhlcal-root.trade-hub-root .th-asset-opt:hover { background: rgba(255, 255, 255, 0.04); }
+.nhlcal-root.trade-hub-root .th-asset-opt.is-on { background: var(--cyan-soft); box-shadow: inset 2px 0 0 var(--cyan); }
+.nhlcal-root.trade-hub-root .th-asset-opt strong { grid-area: name; font-size: 12px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nhlcal-root.trade-hub-root .th-asset-opt em { grid-area: meta; font-style: normal; font-size: 11px; color: var(--muted); }
+.nhlcal-root.trade-hub-root .th-asset-opt b { grid-area: val; align-self: center; font-size: 12px; font-weight: 500; color: var(--text); }
+
+.nhlcal-root.trade-hub-root .th-tfinder-results { display: flex; flex-direction: column; overflow-y: auto; scrollbar-width: thin; }
+.nhlcal-root.trade-hub-root .th-tfinder-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px;
+  border: 1px dashed var(--line);
+  border-radius: var(--th-radius);
+  font-size: 12px;
+  color: var(--muted);
+}
+.nhlcal-root.trade-hub-root .th-tfinder-empty strong { font-size: 13px; color: var(--text); font-weight: 700; }
+.nhlcal-root.trade-hub-root .th-tfinder-empty.is-error strong { color: var(--red); }
+.nhlcal-root.trade-hub-root .th-near { margin: 4px 0 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
+.nhlcal-root.trade-hub-root .th-near b { color: var(--text); }
+.nhlcal-root.trade-hub-root .th-offer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+}
+.nhlcal-root.trade-hub-root .th-offer {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--th-radius);
+  background: rgba(0, 0, 0, 0.2);
+}
+.nhlcal-root.trade-hub-root .th-offer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.nhlcal-root.trade-hub-root .th-offer-head strong { font-family: var(--th-head); font-size: 16px; font-weight: 700; color: var(--text); }
+.nhlcal-root.trade-hub-root .th-offer-accept {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--green);
+  white-space: nowrap;
+}
+.nhlcal-root.trade-hub-root .th-offer-body { display: grid; grid-template-columns: 1fr 1fr; }
+.nhlcal-root.trade-hub-root .th-offer-body > div { padding: 8px 10px; min-width: 0; }
+.nhlcal-root.trade-hub-root .th-offer-body > div + div { border-left: 1px solid var(--line); }
+.nhlcal-root.trade-hub-root .th-offer-assets { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.nhlcal-root.trade-hub-root .th-offer-assets li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  grid-template-areas: "type name val" "type meta val";
+  gap: 0 6px;
+  align-items: center;
+}
+.nhlcal-root.trade-hub-root .th-offer-type {
+  grid-area: type;
+  display: grid;
+  place-items: center;
+  height: 22px;
+  border-radius: var(--th-radius);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 9px;
+  font-weight: 900;
+  color: var(--muted);
+}
+.nhlcal-root.trade-hub-root .th-offer-type.type-pick { color: var(--gold); background: var(--gold-soft); }
+.nhlcal-root.trade-hub-root .th-offer-assets strong { grid-area: name; font-size: 12px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nhlcal-root.trade-hub-root .th-offer-assets em { grid-area: meta; font-style: normal; font-size: 10px; color: var(--muted); }
+.nhlcal-root.trade-hub-root .th-offer-assets b { grid-area: val; font-size: 11px; font-weight: 500; color: var(--muted); }
+.nhlcal-root.trade-hub-root .th-offer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
+}
+.nhlcal-root.trade-hub-root .th-offer-foot em { font-style: normal; }
+.nhlcal-root.trade-hub-root .th-offer-foot em.is-up { color: var(--green); }
+.nhlcal-root.trade-hub-root .th-offer-foot em.is-down { color: var(--gold); }
+
+@media (max-width: 760px) {
+  .nhlcal-root.trade-hub-root .th-tfinder { grid-template-columns: 1fr; overflow-y: auto; }
+  .nhlcal-root.trade-hub-root .th-tfinder > * + * { border-left: 0; border-top: 1px solid var(--line); }
+  .nhlcal-root.trade-hub-root .th-asset-list { max-height: 260px; }
+  .nhlcal-root.trade-hub-root .th-offer-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 1100px) {
+  .nhlcal-root.trade-hub-root .th-pulse-count { display: none; }
+  .nhlcal-root.trade-hub-root .th-read { grid-template-columns: 1fr; }
+  .nhlcal-root.trade-hub-root .th-read-steps { border-left: 0; border-top: 1px solid var(--line); }
+}
+@media (max-width: 760px) {
+  .nhlcal-root.trade-hub-root .trade-hub-topbar.th-topbar { flex-wrap: wrap; }
+  .nhlcal-root.trade-hub-root .th-insignia { display: none; }
+  .nhlcal-root.trade-hub-root .trade-hub-partner-select { width: 100%; }
+  .nhlcal-root.trade-hub-root .trade-hub-top-right { flex: 1 1 100%; }
+  .nhlcal-root.trade-hub-root .th-pulse-deadline { display: none; }
+  .nhlcal-root.trade-hub-root .th-read-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nhlcal-root.trade-hub-root .th-board-floor { grid-template-columns: 1fr; overflow-y: auto; }
+  .nhlcal-root.trade-hub-root .th-board-col + .th-board-col { border-left: 0; border-top: 1px solid var(--line); }
+  .nhlcal-root.trade-hub-root .th-board-list { max-height: 360px; }
 }
 `;

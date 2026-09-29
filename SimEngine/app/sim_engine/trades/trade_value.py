@@ -30,9 +30,15 @@ logger = logging.getLogger(__name__)
 
 # Bump when the talent curve / depth-star spread changes so Trade Hub caches rebuild
 # without requiring a new franchise save.
-TRADE_VALUE_FORMULA_VERSION = 9
+TRADE_VALUE_FORMULA_VERSION = 10
 # Soft ceiling used only for UI-relative clamps / legacy helpers — player totals are uncapped.
 TRADE_VALUE_SOFT_CEIL = 220.0
+LEAGUE_MINIMUM_AAV_M = 0.775
+# Contract burden: value lost per $1M of overpay per remaining season.
+CONTRACT_BURDEN_PER_M_YEAR = 2.0
+CONTRACT_BURDEN_MAX = 90.0
+# Hard floor for a player's final trade value (albatross contracts).
+PLAYER_VALUE_FLOOR = -60.0
 # Reduced fallback when enrichment fails — never return raw OVR (82 ≈ elite TV).
 TRADE_VALUE_FALLBACK_SCALE = 0.55
 TRADE_VALUE_FALLBACK_FLOOR = 3.0
@@ -56,6 +62,8 @@ def player_value_tier(total: float) -> str:
         return "Useful"
     if v >= 18:
         return "Depth"
+    if v >= 0:
+        return "Replacement"
     return "Negative Value"
 
 
@@ -521,23 +529,21 @@ def _talent_base(ovr: float) -> float:
 def _expected_cap_m(ovr: float) -> float:
     """Fair-market AAV expectation (millions) for contract surplus/deficit math.
 
-    Piecewise curve recognizes that the dynasty rating pool clusters more talent
-    in the 80–87 band than the legacy stats-derived importer did, while keeping
-    elite expectations steep enough to avoid cheap-deal inflation on stars.
+    Mirrors the rating baseline of the franchise FA market
+    (backend contract_economy.compute_market_value) so a contract the league
+    itself would sign is not priced as a cap dump. Production / age multipliers
+    are left out — age and term risk are handled by the trade-value mods.
     """
     o = float(ovr or 0.0)
-    if o < 72.0:
-        return 0.85
-    if o < 80.0:
-        return 0.75 + (o - 72.0) * 0.18
-    if o < 85.0:
-        return 2.19 + (o - 80.0) * 0.26
-    if o < 90.0:
-        return 3.49 + (o - 85.0) * 0.34
-    if o < 94.0:
-        return 5.19 + (o - 90.0) * 0.52
-    out = 7.27 + (o - 94.0) * 0.65
-    return _clamp(out, 0.85, 14.0)
+    if o < 70.0:
+        out = LEAGUE_MINIMUM_AAV_M + max(0.0, o - 55.0) * 0.035
+    elif o < 78.0:
+        out = 1.15 + (o - 70.0) * 0.18
+        if o < 75.0:
+            out = min(out, LEAGUE_MINIMUM_AAV_M + 0.85 + max(0.0, o - 65.0) * 0.10)
+    else:
+        out = LEAGUE_MINIMUM_AAV_M + (o - 58.0) * 0.12 + max(0.0, o - 82.0) * 0.42
+    return _clamp(out, LEAGUE_MINIMUM_AAV_M, 16.0)
 
 
 def reduced_trade_value_fallback(player: Any, *, reason: str = "") -> float:
@@ -830,32 +836,38 @@ def _bad_contract_score(player: Any, ovr: float, cap_hit: float, years: int, age
     return min(2.0, score)
 
 
-def _cap_dump_value_mod(
-    player: Any,
+def _contract_burden(
     *,
-    ovr: float,
     cap_hit: float,
     years: int,
     age: int,
     expected_cap: float,
-    source_window: str,
     acquiring_window: str,
     cap_pressure: str,
 ) -> float:
-    bad = _bad_contract_score(player, ovr, cap_hit, years, age)
-    overpay = cap_hit - expected_cap
-    if bad < 0.22 and overpay <= 1.25:
+    """Dead-money cost of an overpaid contract (<= 0), applied outside the context clamp.
+
+    Scales with overpay dollars x remaining seasons so long albatross deals can
+    push a mid-tier player below zero. `cap_hit` must already be net of retention.
+    """
+    tolerance = max(0.75, expected_cap * 0.20)
+    overpay = cap_hit - expected_cap - tolerance
+    if overpay <= 0:
         return 0.0
-    mod = -min(14.0, overpay * 2.4 + bad * 6.5)
-    if years >= 4:
-        mod -= min(3.0, (years - 3) * 0.9)
-    if source_window in ("rebuild", "declining") and bad >= 0.35:
-        mod -= 1.5
-    if acquiring_window == "rebuild" and cap_pressure not in ("cap_hell", "critical") and bad >= 0.4:
-        mod += min(4.0, bad * 5.0)
-    if acquiring_window == "contender" and bad >= 0.35:
-        mod -= 2.0
-    return mod
+    term = max(1, int(years or 0))
+    term_risk = 1.0
+    if age >= 34:
+        term_risk = 1.35
+    elif age >= 31 and term >= 4:
+        term_risk = 1.2
+    burden = overpay * term * term_risk * CONTRACT_BURDEN_PER_M_YEAR
+    if acquiring_window == "rebuild" and cap_pressure not in ("cap_hell", "critical"):
+        burden *= 0.85  # rebuilders with room absorb dumps for assets
+    elif acquiring_window == "contender":
+        burden *= 1.1
+    if cap_pressure in ("cap_hell", "critical"):
+        burden *= 1.25
+    return -min(CONTRACT_BURDEN_MAX, burden)
 
 
 def _production_score(player: Any) -> float:
@@ -1031,7 +1043,10 @@ def _evaluate_player_asset_value_impl(
     ovr = _player_ovr(player)
     age = _player_age(player)
     pos = _player_pos(player)
-    cap_hit = player_cap_hit_millions(player)
+    full_cap_hit = player_cap_hit_millions(player)
+    retained_frac = _clamp(float(retained_pct or 0.0), 0.0, 50.0) / 100.0
+    # Acquiring club only carries the non-retained share — price the contract on that.
+    cap_hit = full_cap_hit * (1.0 - retained_frac)
     years = _contract_years(player)
     expiry = _expiry_status(player)
     pot = _player_potential_ovr(player, ovr)
@@ -1085,7 +1100,10 @@ def _evaluate_player_asset_value_impl(
         pos_mod = 1.0
 
     expected_cap = _expected_cap_m(contract_ref if is_prospect_val else ovr)
-    contract_mod = _clamp((expected_cap - cap_hit) * 1.4, -8.0, 6.0)
+    # Surplus plus mild overpay only — overpay beyond the market tolerance is
+    # priced by _contract_burden outside the context clamp.
+    overpay_tolerance = max(0.75, expected_cap * 0.20)
+    contract_mod = _clamp((expected_cap - cap_hit) * 1.4, -overpay_tolerance * 1.4, 6.0)
     if is_prospect_val and cap_hit <= 0.05:
         contract_mod = min(contract_mod, 1.25)
     # Cheap replacement / depth AAV is not franchise surplus — clamp positive
@@ -1112,10 +1130,6 @@ def _evaluate_player_asset_value_impl(
             contract_mod -= 3.0
     elif years >= 4 and cap_hit < expected_cap and contract_ref >= 78:
         contract_mod += 2.0
-    elif years >= 5 and age >= 30 and cap_hit > expected_cap + 1.5:
-        contract_mod -= 4.0
-    if age >= 32 and cap_hit > expected_cap + 2.0:
-        contract_mod -= 3.0
 
     needs = _NEEDS_MODEL.evaluate(acquiring_team, context=ctx)
     # Needs can nudge price but must not flatten OVR gaps (roster-spot dumps vs stars).
@@ -1136,7 +1150,6 @@ def _evaluate_player_asset_value_impl(
         need_mod = _clamp(need_mod, 0.0, 4.5)
 
     window = _team_window(acquiring_team)
-    source_window = _team_window(source_team)
     cap_pressure = _team_cap_pressure(acquiring_team)
     deadline_phase = _safe_float(ctx.get("deadline_phase"), 0.0)
 
@@ -1152,14 +1165,11 @@ def _evaluate_player_asset_value_impl(
         is_prospect_val=is_prospect_val,
     )
 
-    cap_dump_mod = _cap_dump_value_mod(
-        player,
-        ovr=ovr,
+    cap_dump_mod = _contract_burden(
         cap_hit=cap_hit,
         years=years,
         age=age,
         expected_cap=expected_cap,
-        source_window=source_window,
         acquiring_window=window,
         cap_pressure=cap_pressure,
     )
@@ -1203,9 +1213,6 @@ def _evaluate_player_asset_value_impl(
             window_mod = -2.5
         elif age >= 33 and cap_hit > expected_cap:
             window_mod -= 4.0
-
-    if cap_pressure in ("cap_hell", "critical") and cap_hit > expected_cap + 1.0:
-        contract_mod -= 3.0
 
     market_mod = rental_mod
     if not is_prospect_val and ovr >= 88:
@@ -1275,30 +1282,34 @@ def _evaluate_player_asset_value_impl(
     if pos == "G" and age <= 27:
         risk_flags.append("Goalie volatility")
 
-    if retained_pct > 0:
-        contract_mod += min(5.0, retained_pct * 0.08)
-
-    context_raw = (
-        age_mod
-        + potential_mod
-        + production_mod
-        + contract_mod
-        + need_mod
-        + window_mod
-        + market_mod
-        + risk_mod
-        + pos_mod
-        + elc_mod
-        + cap_dump_mod
-        + injury_mod
+    context_parts = (
+        age_mod,
+        potential_mod,
+        production_mod,
+        contract_mod,
+        need_mod,
+        window_mod,
+        risk_mod,
+        pos_mod,
+        elc_mod,
+        injury_mod,
     )
-    # Context can nudge but must not erase star vs depth gaps.
+    context_raw = sum(context_parts)
+    # Context can nudge but must not erase star vs depth gaps. Bonuses and
+    # penalties are bounded separately so a stack of bonuses cannot silently
+    # absorb an injury / risk discount (and vice versa).
     if base_core >= 75.0:
-        context_mod = _clamp(context_raw, -10.0, 6.0)
+        ctx_lo, ctx_hi = -10.0, 6.0
     elif base_core >= 45.0:
-        context_mod = _clamp(context_raw, -12.0, 8.0)
+        ctx_lo, ctx_hi = -12.0, 8.0
     else:
-        context_mod = _clamp(context_raw, -14.0, 8.0)
+        ctx_lo, ctx_hi = -14.0, 8.0
+    context_mod = _clamp(sum(v for v in context_parts if v > 0), 0.0, ctx_hi) + _clamp(
+        sum(v for v in context_parts if v < 0), ctx_lo, 0.0
+    )
+    # Deadline / rental market premium is time-limited and self-bounded — keep it
+    # outside the clamp so contenders visibly pay up at the deadline.
+    market_applied = _clamp(market_mod, -15.0, 15.0)
 
     components = {
         "talent": base_core,
@@ -1322,7 +1333,7 @@ def _evaluate_player_asset_value_impl(
         "injury": round(injury_mod, 2),
         "context_cap": round(context_mod - context_raw, 2),
     }
-    total = base_core + context_mod
+    total = base_core + context_mod + market_applied
     # Extra star premium / depth tax on top of the uncapped talent curve.
     # Pipeline assets skip star-premium — ceiling is already discounted in val_ovr.
     if not is_prospect_val:
@@ -1346,8 +1357,12 @@ def _evaluate_player_asset_value_impl(
         unsigned = signed in ("unsigned", "rights", "rights_only", "") and cap_hit <= 0.05
         prospect_cap = slot_curve_value(1) - (2.0 if unsigned else 0.0)
         total = min(total, max(prospect_cap, 55.0))
-    # Uncapped — only soft-floor junk assets so negative contracts can still dump.
-    total = max(-15.0, float(total))
+    # Hockey value floor: a near-minimum deal can be waived/buried for almost
+    # nothing, so it should never cost a sweetener to move.
+    hockey_floor = 0.0 if cap_hit <= LEAGUE_MINIMUM_AAV_M + 0.25 else -15.0
+    total = max(hockey_floor, float(total))
+    # Contract burden sits outside the context clamp so albatross deals go negative.
+    total = max(PLAYER_VALUE_FLOOR, total + cap_dump_mod)
     tier = player_value_tier(total)
 
     explain: List[str] = []
@@ -1361,7 +1376,9 @@ def _evaluate_player_asset_value_impl(
         explain.append("Elite prospect upside")
     if contract_mod >= 4:
         explain.append("Favorable contract relative to performance")
-    if contract_mod <= -6:
+    if cap_dump_mod < 0 and total < 0:
+        explain.append("Contract cost outweighs on-ice value")
+    elif cap_dump_mod <= -3.0 or contract_mod <= -1.5:
         explain.append("Expensive contract for current production")
     if need_mod >= 8:
         explain.append("Fills a positional need for acquiring team")
@@ -1385,6 +1402,8 @@ def _evaluate_player_asset_value_impl(
 
     cap_impact = {
         "incoming_cap_m": round(cap_hit, 3),
+        "full_cap_m": round(full_cap_hit, 3),
+        "retained_pct": round(retained_frac * 100.0, 1),
         "expected_cap_m": round(expected_cap, 3),
         "years_remaining": years,
         "retained_pct_supported": True,
@@ -1438,8 +1457,10 @@ def evaluate_pick_asset_value(
     }.get(rnd, 3.0)
 
     years_out = max(0, year - anchor)
-    age_discount = years_out * 4.0
-    base = max(2.0, round_base - age_discount)
+    # Proportional (not flat -4/yr): a flat discount erased every late-round pick
+    # two drafts out while barely touching a first.
+    age_discount = round_base * min(0.45, years_out * 0.12)
+    base = max(1.0, round_base - age_discount)
 
     # Once the board is set, the exact slot is known and replaces the
     # round-average base plus the standings guesswork that estimates it.
@@ -1530,7 +1551,13 @@ def evaluate_pick_asset_value(
         "risk": round(risk_mod, 2),
         "injury": round(injury_factor, 2),
     }
-    total = max(0.5, float(sum(components.values())))
+    # Team/market modifiers are sized for a first-round pick. Scale them to the round
+    # so a strong original club trims a 3rd a little instead of zeroing it.
+    if rnd >= 2 and known_slot is None:
+        scale = max(0.2, min(1.0, round_base / 28.0))
+        for key in ("original_team_projection", "future_risk", "team_window", "market"):
+            components[key] = round(components[key] * scale, 2)
+    total = max(0.5, float(sum(components.values())), 0.45 * float(components["base"]))
 
     explain = [f"Round {rnd} pick in {year}"]
     if original_team is not None:

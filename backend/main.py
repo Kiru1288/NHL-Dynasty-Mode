@@ -44,6 +44,7 @@ from services.trade_service import (
     get_franchise_trade_history,
     request_ntc_waiver,
 )
+from services.trade_finder import find_trade_offers
 from services.franchise_store import (
     active_session_count,
     api_instance_id,
@@ -182,6 +183,15 @@ class FranchisePopupDismissBody(BaseModel):
 
 class FranchiseTradeBody(BaseModel):
     assets_by_team: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+
+
+class FranchiseTradeFindBody(BaseModel):
+    asset_type: str = Field(..., pattern="^(player|pick)$")
+    asset_id: str = Field(..., min_length=1)
+    mode: str = Field(default="sell", pattern="^(sell|buy)$")
+    target_team_id: Optional[str] = None
+    exclude_ids: list[str] = Field(default_factory=list)
+    limit: int = Field(default=8, ge=1, le=16)
 
 
 class FranchiseNtcWaiveBody(BaseModel):
@@ -1053,6 +1063,26 @@ def post_franchise_trade_evaluate(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"evaluation": evaluation}
+
+
+@app.post("/api/franchise/trade/find")
+def post_franchise_trade_find(
+    body: FranchiseTradeFindBody,
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    s = _session_or_404(x_franchise_session)
+    try:
+        return find_trade_offers(
+            s,
+            asset_type=body.asset_type,
+            asset_id=body.asset_id,
+            mode=body.mode,
+            target_team_id=body.target_team_id,
+            exclude_ids=list(body.exclude_ids or []),
+            limit=int(body.limit),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.post("/api/franchise/trade/ntc-waive")

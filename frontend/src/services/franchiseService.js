@@ -495,6 +495,15 @@ export async function evaluateTradePackage(payload) {
   return data;
 }
 
+/**
+ * Find accepted offers built around one asset.
+ * mode "sell": shop your player/pick league-wide; mode "buy": price a partner's asset.
+ */
+export async function findTradeOffers(payload) {
+  const { data } = await api.post("/api/franchise/trade/find", payload || {});
+  return data;
+}
+
 /** Ask an NTC/M-NTC player to waive for a destination team. */
 export async function requestNtcWaive(payload) {
   const { data } = await api.post("/api/franchise/trade/ntc-waive", payload || {});
