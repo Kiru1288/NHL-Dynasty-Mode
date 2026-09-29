@@ -46,6 +46,41 @@ MIN_NEED_FILL = 0.12
 MAX_PLANS_PER_BUYER = 4
 #: Deals sellers time for the deadline.
 SELLOFF_MOTIVES = frozenset({"rental_purchase", "tank_selloff", "seller_futures", "late_selloff"})
+#: Each GM's own read of each player (per save, stable within it). Without this every save
+#: that starts from the same Real NHL rosters ranked the same deals first and moved the
+#: same players.
+GM_TASTE_SPREAD = 0.22
+#: Plans kept per target player (his best two destinations), so one player can't crowd the list.
+MAX_PLANS_PER_TARGET = 2
+
+
+def gm_taste(league: Any, team_id: str, player: Any) -> float:
+    """Stable per-save preference of club ``team_id`` for ``player`` in [-spread, +spread]."""
+    import zlib
+
+    salt = getattr(league, "_cpu_gm_taste_salt", None)
+    if salt is None:
+        rng = getattr(league, "rng", None)
+        try:
+            salt = int(rng.randint(1, 2_000_000_000)) if hasattr(rng, "randint") else 0
+        except Exception:
+            salt = 0
+        if not salt:
+            import random as _random
+
+            salt = _random.randrange(1, 2_000_000_000)
+        try:
+            setattr(league, "_cpu_gm_taste_salt", int(salt))
+        except Exception:
+            pass
+    key = f"{salt}|{team_id}|{player_pid(player)}".encode("utf-8")
+    u = (zlib.crc32(key) & 0xFFFFFFFF) / 0xFFFFFFFF
+    return (u * 2.0 - 1.0) * GM_TASTE_SPREAD
+
+
+def _daily_jitter(rng: Any) -> float:
+    """Day-to-day noise (mean ≈ the old +0..0.12 so plan volume is unchanged)."""
+    return rng.random() * 0.20 - 0.04
 
 
 @dataclass
@@ -337,6 +372,7 @@ def _hockey_swap_plans(
     *,
     rng: Any,
     used_players: set,
+    taste: Callable[[str, Any], float] = lambda _t, _p: 0.0,
 ) -> List[DealPlan]:
     """Mismatched depth: A's spare fills B's hole AND B's spare fills A's hole."""
     tids = [t for t in team_by_tid if t in assessments and assessments[t].status != STATUS_TANK]
@@ -346,23 +382,37 @@ def _hockey_swap_plans(
         aa = assessments[a_id]
         for b_id in tids[i + 1:]:
             ba = assessments[b_id]
+            # The buyer's own read of the player breaks near-ties (was always the argmax).
             best_x: Tuple[Any, float, str] = (None, 0.0, "")  # A -> B
+            best_x_key = float("-inf")
             for x in pools[a_id]:
                 fill, slot = need_fill_score(x, ba)
-                if fill > best_x[1] and ba.needs.get(slot, 0.0) >= HOCKEY_NEED_FLOOR:
-                    best_x = (x, fill, slot)
+                if fill < HOCKEY_MIN_FILL or ba.needs.get(slot, 0.0) < HOCKEY_NEED_FLOOR:
+                    continue
+                key = fill + taste(b_id, x)
+                if key > best_x_key:
+                    best_x, best_x_key = (x, fill, slot), key
             if best_x[0] is None or best_x[1] < HOCKEY_MIN_FILL:
                 continue
             best_y: Tuple[Any, float, str] = (None, 0.0, "")  # B -> A
+            best_y_key = float("-inf")
             for y in pools[b_id]:
                 if position_group(y) == position_group(best_x[0]):
                     continue  # a swap moves depth between positions, not like-for-like
                 fill, slot = need_fill_score(y, aa)
-                if fill > best_y[1] and aa.needs.get(slot, 0.0) >= HOCKEY_NEED_FLOOR:
-                    best_y = (y, fill, slot)
+                if fill < HOCKEY_MIN_FILL or aa.needs.get(slot, 0.0) < HOCKEY_NEED_FLOOR:
+                    continue
+                key = fill + taste(a_id, y)
+                if key > best_y_key:
+                    best_y, best_y_key = (y, fill, slot), key
             if best_y[0] is None or best_y[1] < HOCKEY_MIN_FILL:
                 continue
-            score = 0.2 + 0.45 * (best_x[1] + best_y[1]) + rng.random() * 0.12
+            score = (
+                0.2
+                + 0.45 * (best_x[1] + best_y[1])
+                + 0.5 * (taste(b_id, best_x[0]) + taste(a_id, best_y[0]))
+                + _daily_jitter(rng)
+            )
             plans.append(
                 DealPlan(
                     motive="hockey_swap",
@@ -384,6 +434,7 @@ def _depth_market_plans(
     *,
     rng: Any,
     used_players: set,
+    taste: Callable[[str, Any], float] = lambda _t, _p: 0.0,
 ) -> List[DealPlan]:
     """Deadline-week insurance: contenders/bubble clubs add depth from other clubs' spare depth."""
     buyers = [
@@ -420,7 +471,7 @@ def _depth_market_plans(
             if gain < -1.5:
                 continue
             fit = min(1.0, (gain + 2.0) / 6.0) * (0.5 + ba.needs.get(slot, 0.0))
-            ranked.append((fit, sid, p, slot))
+            ranked.append((fit + taste(bid, p), sid, p, slot))
         ranked.sort(key=lambda r: -r[0])
         for fit, sid, p, slot in ranked[:3]:
             plans.append(
@@ -429,7 +480,7 @@ def _depth_market_plans(
                     buyer=team_by_tid[bid],
                     seller=team_by_tid[sid],
                     target=p,
-                    score=round(0.34 + 0.3 * fit + rng.random() * 0.1, 3),
+                    score=round(0.34 + 0.3 * fit + _daily_jitter(rng), 3),
                     need_slot=slot,
                     need_fill=round(fit, 3),
                 )
@@ -451,6 +502,9 @@ def generate_plans(
     days_left = int(ctx.get("days_to_deadline", 99) or 99)
     team_by_tid = {team_id_of(t): t for t in teams}
     plans: List[DealPlan] = []
+
+    def taste(tid: str, player: Any) -> float:
+        return gm_taste(league, tid, player)
 
     # Everyone's surplus, indexed once.
     market: List[Tuple[Any, TeamAssessment, SurplusItem]] = []
@@ -491,7 +545,14 @@ def generate_plans(
                 urgency += 0.25 * deadline_phase
             if ba.panic_buyer:
                 urgency += 0.2
-            score = fill * 0.9 + status_fit * 0.35 + item.priority * 0.25 + urgency + rng.random() * 0.12
+            score = (
+                fill * 0.9
+                + status_fit * 0.35
+                + item.priority * 0.25
+                + urgency
+                + taste(bid, item.player)
+                + _daily_jitter(rng)
+            )
             cands.append(
                 DealPlan(
                     motive=motive,
@@ -540,10 +601,10 @@ def generate_plans(
             )
 
     # 3) Hockey trades between clubs with mismatched depth (all season).
-    plans.extend(_hockey_swap_plans(team_by_tid, assessments, rng=rng, used_players=used_players))
+    plans.extend(_hockey_swap_plans(team_by_tid, assessments, rng=rng, used_players=used_players, taste=taste))
     # 4) Deadline-week depth/insurance adds.
     if 0 <= days_left <= 7:
-        plans.extend(_depth_market_plans(team_by_tid, assessments, rng=rng, used_players=used_players))
+        plans.extend(_depth_market_plans(team_by_tid, assessments, rng=rng, used_players=used_players, taste=taste))
 
     # Seller patience: rentals and sell-offs fetch the most at the deadline, so sellers
     # mostly hold their veterans until then (a few sell early).
@@ -554,7 +615,17 @@ def generate_plans(
         and (p.motive not in SELLOFF_MOTIVES or rng.random() < timing)
     ]
     plans.sort(key=lambda p: -p.score)
-    return plans
+    # One surplus player who fits many clubs' holes (a spare goalie, say) used to fill the
+    # top of the list with a plan per buyer, so he was the first deal tried in every save.
+    per_target: Dict[str, int] = {}
+    diverse: List[DealPlan] = []
+    for p in plans:
+        pid = player_pid(p.target)
+        if per_target.get(pid, 0) >= MAX_PLANS_PER_TARGET:
+            continue
+        per_target[pid] = per_target.get(pid, 0) + 1
+        diverse.append(p)
+    return diverse
 
 
 def build_package_for_plan(

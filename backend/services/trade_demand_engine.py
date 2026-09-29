@@ -40,7 +40,12 @@ CPU_DEMAND_STAGE3_DAYS = 26
 #: Same player cannot open another formal demand until this many sim days after the last closed.
 DEMAND_REOPEN_COOLDOWN_DAYS = 50
 #: Cap new formal demands per league pass (bulk catch-up used to open dozens at once).
-MAX_NEW_FORMAL_DEMANDS_PER_PASS = 8
+MAX_NEW_FORMAL_DEMANDS_PER_PASS = 3
+#: A club carries at most this many open formal demands at once — real rooms rarely have two.
+MAX_OPEN_DEMANDS_PER_TEAM = 1
+#: …and opens at most this many over a rolling season window.
+MAX_DEMANDS_PER_TEAM_WINDOW = 2
+DEMAND_TEAM_WINDOW_DAYS = 200
 
 CANADA_ABBRS = frozenset({"TOR", "MTL", "OTT", "VAN", "CGY", "EDM", "WPG", "SEA"})
 SMALL_MARKET_ABBRS = frozenset(
@@ -806,6 +811,24 @@ def _team_key(team: Any) -> str:
     return str(_get(team, "team_id", "") or _get(team, "id", "") or "")
 
 
+def _team_demand_load(session: Any, calendar_idx: int) -> Tuple[Dict[str, int], Dict[str, int]]:
+    """Per-club (open demands now, demands opened in the recent window)."""
+    open_by: Dict[str, int] = {}
+    recent_by: Dict[str, int] = {}
+    for row in ensure_trade_demands(session).values():
+        if not isinstance(row, dict):
+            continue
+        tid = str(row.get("team_id") or "")
+        if not tid:
+            continue
+        if str(row.get("status") or "") == "open":
+            open_by[tid] = open_by.get(tid, 0) + 1
+        age = int(calendar_idx) - int(row.get("opened_day") or -10**6)
+        if 0 <= age < DEMAND_TEAM_WINDOW_DAYS:
+            recent_by[tid] = recent_by.get(tid, 0) + 1
+    return open_by, recent_by
+
+
 def _age_cpu_demands(session: Any, calendar_idx: int) -> Dict[str, int]:
     """Advance CPU-club demands by sim days and close ones already resolved by a trade.
 
@@ -957,7 +980,16 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
         session._stability_entities_pass_cache = None
 
     demand_candidates.sort(key=lambda t: t[0])
-    for _prio, player, team, stability_row, reason in demand_candidates[:MAX_NEW_FORMAL_DEMANDS_PER_PASS]:
+    team_open, team_recent = _team_demand_load(session, int(calendar_idx))
+    opened_this_pass = 0
+    for _prio, player, team, stability_row, reason in demand_candidates:
+        if opened_this_pass >= MAX_NEW_FORMAL_DEMANDS_PER_PASS:
+            break
+        tkey = _team_key(team)
+        if team_open.get(tkey, 0) >= MAX_OPEN_DEMANDS_PER_TEAM:
+            continue
+        if team_recent.get(tkey, 0) >= MAX_DEMANDS_PER_TEAM_WINDOW:
+            continue
         row = open_trade_demand(
             session,
             player,
@@ -971,6 +1003,9 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
         )
         if row.get("status") == "open":
             opened.append(row)
+            opened_this_pass += 1
+            team_open[tkey] = team_open.get(tkey, 0) + 1
+            team_recent[tkey] = team_recent.get(tkey, 0) + 1
 
     return {
         "opened": len(opened),
@@ -1087,10 +1122,14 @@ def _maybe_enqueue_stability_warning(
         },
         "priority": "HIGH" if is_user else "MID",
     }
-    if is_user:
-        pending = list(getattr(session, "pending_ui_popups", None) or [])
-        pending.append(popup)
-        session.pending_ui_popups = pending[-80:]
+    if not is_user:
+        # Other clubs' simmering players stay off the feed (the dossier label above still
+        # shows it); only a formal demand is league news.
+        return
+
+    pending = list(getattr(session, "pending_ui_popups", None) or [])
+    pending.append(popup)
+    session.pending_ui_popups = pending[-80:]
 
     notes = list(getattr(session, "notifications", None) or [])
     notes.insert(
@@ -1106,21 +1145,20 @@ def _maybe_enqueue_stability_warning(
     )
     session.notifications = notes[:120]
 
-    if is_user:
-        roster_flags = dict(getattr(session, "trade_stability_roster_flags", None) or {})
-        roster_flags[pid] = {
-            "player_id": pid,
-            "player_name": name,
-            "escalation_level": level,
-            "score": float(stability_row.get("trade_stability_score") or 0),
-            "label": tag,
-            "top_pressure": max(
-                (stability_row.get("pressures") or {}).items(),
-                key=lambda kv: kv[1],
-                default=("role", 0),
-            )[0],
-        }
-        session.trade_stability_roster_flags = roster_flags
+    roster_flags = dict(getattr(session, "trade_stability_roster_flags", None) or {})
+    roster_flags[pid] = {
+        "player_id": pid,
+        "player_name": name,
+        "escalation_level": level,
+        "score": float(stability_row.get("trade_stability_score") or 0),
+        "label": tag,
+        "top_pressure": max(
+            (stability_row.get("pressures") or {}).items(),
+            key=lambda kv: kv[1],
+            default=("role", 0),
+        )[0],
+    }
+    session.trade_stability_roster_flags = roster_flags
 
 
 def _maybe_enqueue_stability_concern_hint(

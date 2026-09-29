@@ -6,7 +6,7 @@ No single variable should independently trigger a formal trade demand.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.sim_engine.franchise.player_agent_engine import (
@@ -97,6 +97,17 @@ def _player_ovr(player: Any) -> float:
     if o <= 1.5:
         o *= 99.0
     return o
+
+
+def _pos_code(player: Any) -> str:
+    """Plain position code ("C", "LW", "D", "G"…).
+
+    Roster players carry a ``Position(str, Enum)`` whose ``str()`` is "Position.D", so a
+    bare ``str(player.position)`` never matched "D"/"G" and every defenceman and goalie
+    was judged as a forward.
+    """
+    pos = getattr(player, "position", None) or getattr(getattr(player, "identity", None), "position", None) or "C"
+    return str(getattr(pos, "value", pos) or "C").upper()
 
 
 def _player_character_0_100(player: Any) -> int:
@@ -431,16 +442,12 @@ def _project_ev_line_rank(player: Any, team: Any) -> int:
     if not roster:
         return 2
     pid = _player_id(player)
-    pos = str(
-        getattr(player, "position", "")
-        or getattr(getattr(player, "identity", None), "position", "")
-        or "C"
-    ).upper()
+    pos = _pos_code(player)
     if pos == "G":
         return 1
     if pos in {"D", "LD", "RD", "DEF", "DEFENSE"}:
         defs = sorted(
-            [p for p in roster if str(getattr(p, "position", "") or "").upper() in {"D", "LD", "RD", "DEF", "DEFENSE"}],
+            [p for p in roster if _pos_code(p) in {"D", "LD", "RD", "DEF", "DEFENSE"}],
             key=lambda p: -_player_ovr(p),
         )
         for idx, p in enumerate(defs[:6], start=1):
@@ -451,7 +458,7 @@ def _project_ev_line_rank(player: Any, team: Any) -> int:
         [
             p
             for p in roster
-            if str(getattr(p, "position", "") or "").upper() not in {"D", "LD", "RD", "DEF", "DEFENSE", "G", "GOALIE"}
+            if _pos_code(p) not in {"D", "LD", "RD", "DEF", "DEFENSE", "G", "GOALIE"}
         ],
         key=lambda p: -_player_ovr(p),
     )
@@ -501,7 +508,7 @@ def resolve_player_deployment(session: Any, player: Any, team: Any) -> PlayerDep
         ev_rank = _project_ev_line_rank(player, team)
         line_source = "roster_projection"
 
-    pos = str(getattr(player, "position", "") or "").upper()
+    pos = _pos_code(player)
     is_goalie = pos in {"G", "GOALIE", "GOALTENDER"}
     roster_ids = {_player_id(p) for p in (getattr(team, "roster", None) or []) if _player_id(p)}
     scratched = (
@@ -567,11 +574,7 @@ def audit_lineup_toi_consistency(
 
     out: List[Dict[str, Any]] = []
     for player in list(getattr(team, "roster", None) or []):
-        pos = str(
-            getattr(player, "position", "")
-            or getattr(getattr(player, "identity", None), "position", "")
-            or "C"
-        ).upper()
+        pos = _pos_code(player)
         if pos in {"G", "GOALIE", "GOALTENDER"}:
             continue
         deploy = resolve_player_deployment(session, player, team)
@@ -665,6 +668,71 @@ def _expected_toi_from_deployment(
     return base
 
 
+#: An extra skater within this many OVR of the last regular still feels he should play.
+DEPTH_BUBBLE_OVR_GAP = 1.5
+
+
+def _pos_group_of(player: Any) -> str:
+    pos = _pos_code(player)
+    if pos in {"G", "GOALIE", "GOALTENDER"}:
+        return "G"
+    if pos in {"D", "LD", "RD", "DEF", "DEFENSE"}:
+        return "D"
+    return "F"
+
+
+def deserved_depth_standing(player: Any, team: Any) -> Dict[str, Any]:
+    """Where a skater ranks on his own club by OVR — what he can fairly expect to play.
+
+    A player knows who is ahead of him. The 13th forward (or 7th defenceman) sees the
+    regulars are better and does not expect their minutes; only a player close to the
+    last regular ("bubble") has a real gripe about sitting.
+
+    Returns ``rank`` (EV line he deserves: F 1–4 / D 1–3), ``extra`` (outside the
+    dressed group), and ``bubble`` (extra, but within DEPTH_BUBBLE_OVR_GAP of the last
+    regular).
+    """
+    grp = _pos_group_of(player)
+    if grp == "G":
+        return {"rank": 1, "extra": False, "bubble": False, "group": grp}
+    per_line, regulars, max_rank = (2, 6, 3) if grp == "D" else (3, 12, 4)
+    mates = sorted(
+        (p for p in (getattr(team, "roster", None) or []) if _pos_group_of(p) == grp),
+        key=lambda p: -_player_ovr(p),
+    )
+    pid = _player_id(player)
+    idx = next((i for i, p in enumerate(mates) if _player_id(p) == pid), None)
+    if idx is None:
+        return {"rank": max_rank, "extra": False, "bubble": False, "group": grp}
+    if idx < regulars:
+        return {"rank": min(max_rank, idx // per_line + 1), "extra": False, "bubble": False, "group": grp}
+    last_regular_ovr = _player_ovr(mates[regulars - 1]) if len(mates) >= regulars else 0.0
+    bubble = _player_ovr(player) >= last_regular_ovr - DEPTH_BUBBLE_OVR_GAP
+    return {"rank": max_rank, "extra": True, "bubble": bool(bubble), "group": grp}
+
+
+def _fair_expected_toi(
+    deploy: PlayerDeploymentSnapshot,
+    *,
+    ovr: float,
+    is_defense: bool,
+    standing: Dict[str, Any],
+) -> float:
+    """Minutes a player can fairly expect: his current slot, capped by the slot he has earned.
+
+    A 4th-liner dressed on the 2nd line doesn't feel owed 2nd-line minutes, and an
+    extra skater expects spot duty, not a regular shift.
+    """
+    expected = _expected_toi_from_deployment(deploy, ovr=ovr, is_defense=is_defense)
+    earned_rank = int(standing.get("rank") or 0)
+    if earned_rank > int(deploy.ev_line_rank or 0) and not deploy.scratched:
+        earned = replace(deploy, ev_line_rank=earned_rank)
+        expected = min(expected, _expected_toi_from_deployment(earned, ovr=ovr, is_defense=is_defense))
+    if standing.get("extra") and not standing.get("bubble"):
+        expected = min(expected, 12.5 if is_defense else 9.0)
+    return expected
+
+
 def infer_role_satisfaction_from_deployment(
     player: Any,
     team: Any,
@@ -679,24 +747,29 @@ def infer_role_satisfaction_from_deployment(
         avg_toi = _player_avg_toi_minutes(player, session)
 
     ovr = _player_ovr(player)
-    pos = str(
-        getattr(player, "position", "")
-        or getattr(getattr(player, "identity", None), "position", "")
-        or "C"
-    ).upper()
+    pos = _pos_code(player)
     is_defense = pos in {"D", "LD", "RD", "DEF", "DEFENSE"}
+    standing = deserved_depth_standing(player, team)
+    knows_his_place = bool(standing.get("extra") and not standing.get("bubble"))
 
     if deploy.scratched:
+        if knows_his_place:
+            # The regulars are better than him and he knows it — sitting is expected.
+            return 66.0
+        if standing.get("bubble"):
+            return 46.0
         if ovr >= 80:
             return 22.0
         return 30.0
 
-    expected = _expected_toi_from_deployment(deploy, ovr=ovr, is_defense=is_defense)
+    expected = _fair_expected_toi(deploy, ovr=ovr, is_defense=is_defense, standing=standing)
 
     if avg_toi is None:
         if expected > 0:
             rank = max(1, deploy.ev_line_rank or _project_ev_line_rank(player, team))
-            if rank >= 4 and ovr >= 82:
+            if knows_his_place:
+                return 60.0
+            if rank >= 4 and ovr >= 82 and int(standing.get("rank") or 4) <= 2:
                 return 36.0
             if rank <= 2 and ovr >= 86:
                 return 74.0
@@ -719,13 +792,18 @@ def infer_role_satisfaction_from_deployment(
     else:
         satisfaction = max(8.0, ratio / 0.62 * 32.0)
 
-    if deploy.gp < 5 and int(getattr(session, "calendar_cursor", 40) or 40) > 20:
+    if deploy.gp < 5 and int(getattr(session, "calendar_cursor", 40) or 40) > 20 and not knows_his_place:
         satisfaction = min(satisfaction, 35.0)
 
-    if deploy.ev_line_rank >= 4 and ovr >= 80:
+    # "Buried" only stings when he has out-rated the players ahead of him.
+    if deploy.ev_line_rank >= 4 and ovr >= 80 and int(standing.get("rank") or 4) <= 2:
         satisfaction = min(satisfaction, 38.0)
     elif deploy.ev_line_rank <= 2 and ovr >= 84 and ratio >= 0.9:
         satisfaction = max(satisfaction, 70.0)
+
+    if knows_his_place:
+        # Spare parts are rarely thrilled, but they don't agitate over depth minutes.
+        satisfaction = max(satisfaction, 58.0)
 
     if (
         deploy.pp_unit == 0
@@ -769,9 +847,13 @@ def infer_performance_vs_deployment(
     expected_pts60 = 1.85 if ovr >= 88 else 1.45 if ovr >= 82 else 1.05 if ovr >= 76 else 0.70
     prod_ratio = pts60 / max(0.25, expected_pts60)
 
-    pos = str(getattr(player, "position", "") or "").upper()
+    pos = _pos_code(player)
     is_defense = pos in {"D", "LD", "RD", "DEF", "DEFENSE"}
-    expected = _expected_toi_from_deployment(deploy, ovr=ovr, is_defense=is_defense)
+    standing = deserved_depth_standing(player, team)
+    if standing.get("extra") and not standing.get("bubble"):
+        # A hot streak in spot duty doesn't make the 13th forward feel owed a regular shift.
+        return role_satisfaction
+    expected = _fair_expected_toi(deploy, ovr=ovr, is_defense=is_defense, standing=standing)
 
     if prod_ratio >= 1.08 and avg_toi + 1.5 < expected:
         return min(role_satisfaction, 28.0)
@@ -1274,8 +1356,26 @@ def count_significant_pressures(pressures: Dict[str, float], threshold: float = 
     return sum(1 for v in (pressures or {}).values() if float(v or 0) >= threshold)
 
 
+#: Pressures every player on a club feels at once (a losing season, a rebuild). They
+#: can push a player over the edge, but on their own they are not a personal grievance —
+#: otherwise one bad team produces a demand from half its roster.
+TEAM_WIDE_PRESSURES = frozenset({"winning", "organizational"})
+
+
+def count_personal_significant_pressures(pressures: Dict[str, float], threshold: float = 7.5) -> int:
+    return sum(
+        1
+        for k, v in (pressures or {}).items()
+        if k not in TEAM_WIDE_PRESSURES and float(v or 0) >= threshold
+    )
+
+
 def formal_demand_eligible(stability_row: Dict[str, Any]) -> bool:
-    """Require meaningful multi-signal breakdown before a formal L3+ demand."""
+    """Require meaningful multi-signal breakdown before a formal L3+ demand.
+
+    At least one of the signals must be about the player himself (role, contract,
+    management, trade talk, personal life…), not just the team's record.
+    """
     score = float(stability_row.get("trade_stability_score") or 100.0)
     level = stability_to_escalation_level(score)
     if level < 3:
@@ -1285,11 +1385,13 @@ def formal_demand_eligible(stability_row: Dict[str, Any]) -> bool:
         return False
     pressures = dict(stability_row.get("pressures") or {})
     sig = count_significant_pressures(pressures)
+    personal = count_personal_significant_pressures(pressures)
     if score <= 22:
         return True
-    if sig >= 2:
+    if sig >= 2 and personal >= 1:
         return True
-    top = max(pressures.values()) if pressures else 0.0
+    personal_vals = [float(v or 0) for k, v in pressures.items() if k not in TEAM_WIDE_PRESSURES]
+    top = max(personal_vals) if personal_vals else 0.0
     return top >= 14.0 and score <= 32
 
 
