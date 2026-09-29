@@ -325,7 +325,7 @@ function TradeValueChip({ item, compact = false, className = "" }) {
   );
 }
 
-const TRADE_VALUE_FORMULA_VERSION = 4;
+const TRADE_VALUE_FORMULA_VERSION = 12;
 
 function resolveBackendTradeValue(row, tradeAssets, teamId) {
   const pid = String(row?.player_id || row?.id || "");
@@ -6794,7 +6794,7 @@ function TradeFinder({ meta, partnerId, onLoadOffer }) {
                   onClick={() => { setAssetId(id); setResult(null); setStatus("idle"); }}
                 >
                   <strong>{kind === "player" ? a.name : `${a.year} ${roundLabel(a.round)}`}</strong>
-                  <em>{kind === "player" ? `${a.pos} · ${a.ovr} OVR` : `via ${a.originalTeamAbbr || "—"}`}</em>
+                  <em>{kind === "player" ? `${a.pos} · ${a.age ? `${a.age}y · ` : ""}${a.ovr} OVR` : `via ${a.originalTeamAbbr || "—"} · ${roundLabel(a.round)}`}</em>
                   <b className="th-num">{a.tradeValue != null ? Number(a.tradeValue).toFixed(1) : a.value_hint != null ? Number(a.value_hint).toFixed(1) : "—"}</b>
                 </button>
               );
@@ -6839,7 +6839,7 @@ function TradeFinder({ meta, partnerId, onLoadOffer }) {
             )}
           </div>
         )}
-        <div className="th-offer-grid">
+        <div className={`th-offer-grid ${offers.length ? "has-offers" : ""}`}>
           {offers.map((o) => (
             <FinderOfferCard key={`${o.partner_team_id}-${o.user_gets.map((a) => a.id).join(".")}-${o.user_gives.map((a) => a.id).join(".")}`} offer={o} team={teamById[String(o.partner_team_id)]} onLoad={onLoadOffer} />
           ))}
@@ -16926,7 +16926,14 @@ const TRADE_HUB_CSS = `
 .nhlcal-root.trade-hub-root .th-asset-opt em { grid-area: meta; font-style: normal; font-size: 11px; color: var(--muted); }
 .nhlcal-root.trade-hub-root .th-asset-opt b { grid-area: val; align-self: center; font-size: 12px; font-weight: 500; color: var(--text); }
 
-.nhlcal-root.trade-hub-root .th-tfinder-results { display: flex; flex-direction: column; overflow-y: auto; scrollbar-width: thin; }
+.nhlcal-root.trade-hub-root .th-tfinder-results {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
 .nhlcal-root.trade-hub-root .th-tfinder-empty {
   display: flex;
   flex-direction: column;
@@ -16943,13 +16950,22 @@ const TRADE_HUB_CSS = `
 .nhlcal-root.trade-hub-root .th-near b { color: var(--text); }
 .nhlcal-root.trade-hub-root .th-offer-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 10px;
   margin-top: 4px;
+  align-content: start;
+}
+.nhlcal-root.trade-hub-root .th-offer-grid.has-offers {
+  flex: 1;
+  min-height: 280px;
+  align-content: stretch;
+  grid-auto-rows: 1fr;
 }
 .nhlcal-root.trade-hub-root .th-offer {
   display: flex;
   flex-direction: column;
+  min-height: 220px;
+  height: 100%;
   border: 1px solid var(--line);
   border-radius: var(--th-radius);
   background: rgba(0, 0, 0, 0.2);

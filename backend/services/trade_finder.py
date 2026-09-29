@@ -29,8 +29,9 @@ from app.sim_engine.trades.trade_value import (  # noqa: E402
     evaluate_player_asset_value,
 )
 
-MAX_POOL = 18  # per side, by value — keeps pair/triple enumeration cheap
-MAX_EVALS = 36  # full evaluator runs per request
+MAX_POOL = 22  # per side, by value — keeps combo enumeration cheap
+MAX_COMBO_SIZE = 4
+MAX_EVALS = 48  # full evaluator runs per request
 SELL_MARGIN = 0.94  # return <= 94% of what the partner receives (they need a win)
 BUY_PREMIUM = 1.04  # offer >= 104% of the target's price
 NHL_ROSTER_MAX = 23
@@ -166,9 +167,31 @@ def _pool(
 
 
 def _combos(pool: List[Dict[str, Any]], max_size: int):
-    for size in range(1, max_size + 1):
+    cap = min(max_size, MAX_COMBO_SIZE)
+    for size in range(1, cap + 1):
         for combo in combinations(pool, size):
             yield combo
+
+
+def _combo_shape_score(combo: List[Dict[str, Any]], *, anchor_type: str) -> int:
+    """Prefer mixed packages (players + picks) over repetitive pick-only swaps."""
+    n_players = sum(1 for a in combo if a.get("type") == "player")
+    n_picks = sum(1 for a in combo if a.get("type") == "pick")
+    score = n_players * 12 + n_picks * 5 + len(combo) * 2
+    if n_players >= 1 and n_picks >= 1:
+        score += 28
+    if n_players >= 2:
+        score += 16
+    if n_picks >= 2:
+        score += 8
+    if anchor_type == "pick":
+        if n_players >= 1:
+            score += 40
+        else:
+            score -= 35
+    if anchor_type == "player" and n_players == 0 and n_picks >= 2:
+        score -= 12
+    return score
 
 
 def _payload_asset(a: Dict[str, Any]) -> Dict[str, Any]:
@@ -228,19 +251,42 @@ def _offer_row(
     }
 
 
-def _sell_candidates(offered_value: float, pool: List[Dict[str, Any]], fits) -> List[List[Dict[str, Any]]]:
-    """Best returns under the partner's budget: top single, top pair, top triple."""
+def _sell_candidates(
+    offered_value: float,
+    pool: List[Dict[str, Any]],
+    fits,
+    *,
+    anchor_type: str = "player",
+) -> List[List[Dict[str, Any]]]:
+    """Diverse return packages under the partner budget — not only pick-for-pick."""
     budget = offered_value * SELL_MARGIN
-    best: Dict[int, Tuple[float, List[Dict[str, Any]]]] = {}
-    for combo in _combos(pool, 3):
+    ranked: List[Tuple[int, float, List[Dict[str, Any]]]] = []
+    for combo in _combos(pool, MAX_COMBO_SIZE):
         total = sum(a["value"] for a in combo)
         if total > budget or not fits(combo):
             continue
-        size = len(combo)
-        if size not in best or total > best[size][0]:
-            best[size] = (total, list(combo))
-    ranked = sorted(best.values(), key=lambda t: t[0], reverse=True)
-    return [c for _, c in ranked[:2]]
+        shape = _combo_shape_score(combo, anchor_type=anchor_type)
+        ranked.append((shape, total, list(combo)))
+    ranked.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    out: List[List[Dict[str, Any]]] = []
+    seen: set = set()
+    for shape, _total, combo in ranked:
+        if anchor_type == "pick" and not any(a.get("type") == "player" for a in combo):
+            continue
+        key = tuple(sorted((a.get("type"), a.get("id")) for a in combo))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(combo)
+        if len(out) >= 5:
+            break
+    if not out and anchor_type != "pick":
+        for _shape, _total, combo in ranked[:3]:
+            key = tuple(sorted((a.get("type"), a.get("id")) for a in combo))
+            if key not in seen:
+                out.append(combo)
+                seen.add(key)
+    return out
 
 
 def _buy_candidates(price: float, pool: List[Dict[str, Any]], fits) -> List[List[Dict[str, Any]]]:
@@ -249,7 +295,7 @@ def _buy_candidates(price: float, pool: List[Dict[str, Any]], fits) -> List[List
     cheapest: Optional[Tuple[float, List[Dict[str, Any]]]] = None
     picks_only: Optional[Tuple[float, List[Dict[str, Any]]]] = None
     player_led: Optional[Tuple[float, List[Dict[str, Any]]]] = None
-    for combo in _combos(pool, 3):
+    for combo in _combos(pool, MAX_COMBO_SIZE):
         total = sum(a["value"] for a in combo)
         if total < need or not fits(combo):
             continue
@@ -360,6 +406,7 @@ def find_trade_offers(
                 offered,
                 pool,
                 lambda combo, ur=user_room, pr=partner_room: _roster_fits(ur, pr, [anchor_base], combo),
+                anchor_type=asset_type,
             )
             if not cands:
                 continue
@@ -370,14 +417,18 @@ def find_trade_offers(
             if evals >= MAX_EVALS or len(offers) >= limit:
                 break
             give = [{**anchor_base, "value": round(offered, 2)}]
+            accepted_for_partner = 0
             for cand in cands:
+                if evals >= MAX_EVALS or len(offers) >= limit or accepted_for_partner >= 2:
+                    break
                 evals += 1
                 result = _evaluate(user_tid, tid, give, cand, ctx)
                 row = _offer_row(partner, tid, give, cand, result)
                 if result.get("accepted"):
                     offers.append(row)
-                    break
-                near.append({**row, "reasons": [str(r) for r in (result.get("rejection_reasons") or [])][:2]})
+                    accepted_for_partner += 1
+                else:
+                    near.append({**row, "reasons": [str(r) for r in (result.get("rejection_reasons") or [])][:2]})
     else:
         partner_tid, partner = partners[0]
         price = anchor_value(user_team)

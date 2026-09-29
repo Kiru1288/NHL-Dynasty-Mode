@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the talent curve / depth-star spread changes so Trade Hub caches rebuild
 # without requiring a new franchise save.
-TRADE_VALUE_FORMULA_VERSION = 10
+TRADE_VALUE_FORMULA_VERSION = 12
 # Soft ceiling used only for UI-relative clamps / legacy helpers — player totals are uncapped.
 TRADE_VALUE_SOFT_CEIL = 220.0
 LEAGUE_MINIMUM_AAV_M = 0.775
@@ -485,6 +485,57 @@ def _player_potential_ovr(player: Any, current_ovr: float) -> float:
     if pot > 1.5:
         return pot
     return current_ovr
+
+
+def _trade_valuation_ovr(
+    player: Any,
+    *,
+    ovr: float,
+    pot: float,
+    age: int,
+    is_prospect_val: bool,
+) -> float:
+    """Ability anchor for trade value — blends ceiling for pipeline and young pros."""
+    if is_prospect_val:
+        val = prospect_valuation_ovr(player, ovr_display=ovr, pot_display=pot)
+        upside = max(0.0, pot - ovr)
+        if upside >= 5.0:
+            val = max(val, ovr + min(9.0, upside * 0.50), pot * 0.88)
+        return min(val, pot * 0.95)
+
+    upside = max(0.0, pot - ovr)
+    if upside < 2.5:
+        return ovr
+    if age >= 27:
+        return ovr
+    if age == 26:
+        return min(max(ovr, ovr + min(2.0, upside * 0.28)), pot * 0.94)
+
+    if ovr < 74:
+        ceiling = max(ovr, pot * 0.88)
+    elif ovr < 80:
+        ceiling = max(ovr, pot * 0.93)
+    else:
+        ceiling = max(ovr, pot * 0.96)
+
+    if age <= 21:
+        weight = min(0.62, 0.30 + upside * 0.032)
+        max_lift = min(upside * 0.72, 12.0)
+    elif age <= 23:
+        weight = min(0.52, 0.24 + upside * 0.026)
+        max_lift = min(upside * 0.60, 10.0)
+    elif age <= 25:
+        weight = min(0.40, 0.16 + upside * 0.020)
+        max_lift = min(upside * 0.48, 7.5)
+    else:
+        weight = 0.22
+        max_lift = min(upside * 0.35, 4.0)
+
+    blended = ovr * (1.0 - weight) + ceiling * weight
+    val = min(max(ovr, blended), ovr + max_lift, pot * 0.97)
+    if age <= 23 and ovr >= 76 and upside >= 5.0:
+        val = max(val, ovr + min(8.0, upside * 0.58))
+    return val
 
 
 def _talent_base(ovr: float) -> float:
@@ -1051,8 +1102,14 @@ def _evaluate_player_asset_value_impl(
     expiry = _expiry_status(player)
     pot = _player_potential_ovr(player, ovr)
     is_prospect_val = is_prospect_for_valuation(player, age=age, ovr_display=ovr)
-    val_ovr = prospect_valuation_ovr(player, ovr_display=ovr, pot_display=pot) if is_prospect_val else ovr
-    contract_ref = val_ovr if is_prospect_val else ovr
+    val_ovr = _trade_valuation_ovr(
+        player,
+        ovr=ovr,
+        pot=pot,
+        age=age,
+        is_prospect_val=is_prospect_val,
+    )
+    contract_ref = val_ovr
     talent_fit = min(1.0, max(0.35, val_ovr / 84.0))
 
     base_core = round(_talent_base(val_ovr), 2)
@@ -1062,6 +1119,8 @@ def _evaluate_player_asset_value_impl(
         age_mod = 3.0 if val_ovr >= 76 else 1.5 if val_ovr >= 70 else 0.5
     elif age <= 26:
         age_mod = 2.0 if val_ovr >= 74 else 0.5
+        if age >= 25 and val_ovr < 88 and pot <= ovr + 3.0:
+            age_mod -= 1.25
     elif age <= 30:
         age_mod = 1.0
     elif age <= 33:
@@ -1075,21 +1134,29 @@ def _evaluate_player_asset_value_impl(
             age_mod = max(age_mod, -5.5)
 
     upside = max(0.0, pot - ovr)
+    residual_upside = max(0.0, pot - val_ovr)
     prospect_upside = _prospect_upside_score(player, ovr, age, pot)
     if is_prospect_val:
         # Ceiling is already in base_core — keep only a small scout-tier nudge.
         prospect_upside *= 0.35
         potential_mod = _clamp(prospect_upside, 0.0, 4.0) if age <= 25 else 0.0
     elif age <= 25:
-        potential_mod = _clamp(upside * 0.14, 0.0, 5.0) + prospect_upside
-        if ovr < 76:
-            potential_mod = min(potential_mod, 2.5 + prospect_upside * 0.85)
-        # Soft cap: youth bag cannot rival a full tier of talent by itself.
-        potential_mod = min(potential_mod, 9.0 if ovr >= 78 else 7.0)
+        potential_mod = _clamp(residual_upside * 0.12, 0.0, 4.0) + prospect_upside * 0.65
+        if val_ovr < 76:
+            potential_mod = min(potential_mod, 2.0 + prospect_upside * 0.75)
+        # Soft cap: residual upside nudges only — talent anchor carries most of the ceiling.
+        potential_mod = min(potential_mod, 8.0 if val_ovr >= 78 else 6.5)
     else:
-        potential_mod = _clamp(upside * 0.06, 0.0, 2.0)
+        potential_mod = _clamp(residual_upside * 0.06, 0.0, 2.0)
 
     production_mod = min(_production_score(player), 8.0) * talent_fit
+    # Young high-upside assets are priced on projection until production proves otherwise.
+    if age <= 23 and upside >= 6.0:
+        production_mod *= 0.50
+    elif age <= 25 and upside >= 4.0:
+        production_mod *= 0.68
+    elif age >= 28 and ovr >= 78 and val_ovr == ovr:
+        production_mod = min(production_mod, 5.5)
 
     pos_mod = 0.0
     if pos == "C":
@@ -1099,7 +1166,7 @@ def _evaluate_player_asset_value_impl(
     elif pos == "G":
         pos_mod = 1.0
 
-    expected_cap = _expected_cap_m(contract_ref if is_prospect_val else ovr)
+    expected_cap = _expected_cap_m(contract_ref)
     # Surplus plus mild overpay only — overpay beyond the market tolerance is
     # priced by _contract_burden outside the context clamp.
     overpay_tolerance = max(0.75, expected_cap * 0.20)
@@ -1558,6 +1625,32 @@ def evaluate_pick_asset_value(
         for key in ("original_team_projection", "future_risk", "team_window", "market"):
             components[key] = round(components[key] * scale, 2)
     total = max(0.5, float(sum(components.values())), 0.45 * float(components["base"]))
+
+    # Crown-jewel spectrum: lottery/rebuild clubs' 1sts vs contender late 1sts.
+    if rnd == 1 and known_slot is None and original_team is not None:
+        risk = float(proj.get("projected_risk_score") or 0.0)
+        league_rank = proj.get("league_rank")
+        n_teams = len(team_by_id) if isinstance(team_by_id, dict) and team_by_id else 32
+        quality_mod = 0.0
+        if risk >= 14.0 or (league_rank is not None and league_rank >= max(1, n_teams - 5)):
+            quality_mod += 22.0 + min(18.0, max(0.0, risk - 10.0) * 1.1)
+        elif risk >= 8.0 or (league_rank is not None and league_rank >= max(1, n_teams - 10)):
+            quality_mod += 10.0 + min(8.0, max(0.0, risk - 6.0) * 0.9)
+        elif risk <= -2.0 or (league_rank is not None and league_rank <= 8):
+            quality_mod -= 14.0 + (min(6.0, abs(min(0.0, risk))) if risk < 0 else 0.0)
+        elif risk <= 2.0 or (league_rank is not None and league_rank <= 14):
+            quality_mod -= 6.0
+        if str(proj.get("window") or "") == "rebuild" and quality_mod > 0:
+            quality_mod += 4.0
+        elif str(proj.get("window") or "") == "contender" and quality_mod < 0:
+            quality_mod -= 4.0
+        components["original_team_quality"] = round(quality_mod, 2)
+        total = max(0.5, total + quality_mod)
+    elif rnd == 2 and known_slot is None and original_team is not None:
+        risk = float(proj.get("projected_risk_score") or 0.0)
+        quality_mod = _clamp(risk * 0.35, -4.0, 8.0)
+        components["original_team_quality"] = round(quality_mod, 2)
+        total = max(0.5, total + quality_mod)
 
     explain = [f"Round {rnd} pick in {year}"]
     if original_team is not None:

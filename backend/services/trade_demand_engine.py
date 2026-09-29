@@ -37,6 +37,10 @@ DEMAND_MIN_OVR = 70
 #: CPU demands age in sim days (the real-time crisis clock only runs for the user's club).
 CPU_DEMAND_STAGE2_DAYS = 12
 CPU_DEMAND_STAGE3_DAYS = 26
+#: Same player cannot open another formal demand until this many sim days after the last closed.
+DEMAND_REOPEN_COOLDOWN_DAYS = 50
+#: Cap new formal demands per league pass (bulk catch-up used to open dozens at once).
+MAX_NEW_FORMAL_DEMANDS_PER_PASS = 8
 
 CANADA_ABBRS = frozenset({"TOR", "MTL", "OTT", "VAN", "CGY", "EDM", "WPG", "SEA"})
 SMALL_MARKET_ABBRS = frozenset(
@@ -784,14 +788,18 @@ def clear_trade_demand(session: Any, player_id: str, *, resolution: str = "clear
     book = ensure_trade_demands(session)
     pid = str(player_id)
     row = book.get(pid)
+    closed_day = int(getattr(session, "calendar_cursor", 0) or 0)
     if isinstance(row, dict):
         row["status"] = resolution
         row["resolved"] = True
+        row["closed_day"] = closed_day
         if resolution == "traded":
             row["crisis"] = None
     player = _find_player(session, pid)
     if player is not None:
         clear_demand_temporary_modifiers(player)
+        pst = ensure_player_storyline_state(player)
+        pst["last_trade_demand_closed_day"] = closed_day
 
 
 def _team_key(team: Any) -> str:
@@ -890,6 +898,7 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
 
     opened: List[Dict[str, Any]] = []
     warnings: List[Dict[str, Any]] = []
+    demand_candidates: List[Tuple[float, Any, Any, Dict[str, Any], str]] = []
 
     # One league-wide storyline sync for the whole pass (per-player syncs were O(N^2)).
     try:
@@ -912,6 +921,10 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
                 ovr = _player_ovr(player)
                 if ovr < DEMAND_MIN_OVR:
                     continue
+                pst = ensure_player_storyline_state(player)
+                last_closed = int(pst.get("last_trade_demand_closed_day") or 0)
+                if last_closed and (int(calendar_idx) - last_closed) < DEMAND_REOPEN_COOLDOWN_DAYS:
+                    continue
 
                 stability_row = apply_daily_stability_update(session, player, team, int(calendar_idx))
                 escalation = int(stability_row.get("escalation_level") or 0)
@@ -933,24 +946,31 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
                         dict(stability_row.get("pressures") or {}),
                         character=int(stability_row.get("character") or 74),
                     )
-                    row = open_trade_demand(
-                        session,
-                        player,
-                        team,
-                        reason=reason,
-                        calendar_idx=int(calendar_idx),
-                        iso_date=iso,
-                        rng=rng,
-                        stability_row=stability_row,
-                        force_formal=False,
-                    )
-                    if row.get("status") == "open":
-                        opened.append(row)
+                    tid = str(_get(team, "team_id", "") or _get(team, "id", "") or "")
+                    user_tid = str(getattr(session, "user_team_id", "") or "")
+                    priority = float(score) - (25.0 if tid == user_tid else 0.0)
+                    demand_candidates.append((priority, player, team, stability_row, reason))
                 elif escalation >= 1 and score < 68:
                     warnings.append({"player_id": pid, "escalation_level": escalation, "score": score})
 
     finally:
         session._stability_entities_pass_cache = None
+
+    demand_candidates.sort(key=lambda t: t[0])
+    for _prio, player, team, stability_row, reason in demand_candidates[:MAX_NEW_FORMAL_DEMANDS_PER_PASS]:
+        row = open_trade_demand(
+            session,
+            player,
+            team,
+            reason=reason,
+            calendar_idx=int(calendar_idx),
+            iso_date=iso,
+            rng=rng,
+            stability_row=stability_row,
+            force_formal=False,
+        )
+        if row.get("status") == "open":
+            opened.append(row)
 
     return {
         "opened": len(opened),
@@ -1067,9 +1087,10 @@ def _maybe_enqueue_stability_warning(
         },
         "priority": "HIGH" if is_user else "MID",
     }
-    pending = list(getattr(session, "pending_ui_popups", None) or [])
-    pending.append(popup)
-    session.pending_ui_popups = pending[-80:]
+    if is_user:
+        pending = list(getattr(session, "pending_ui_popups", None) or [])
+        pending.append(popup)
+        session.pending_ui_popups = pending[-80:]
 
     notes = list(getattr(session, "notifications", None) or [])
     notes.insert(
@@ -1259,9 +1280,10 @@ def _enqueue_demand_surfaces(session: Any, row: Dict[str, Any], team: Any) -> No
         },
         "priority": "CRITICAL" if is_user else "HIGH",
     }
-    pending = list(getattr(session, "pending_ui_popups", None) or [])
-    pending.append(popup)
-    session.pending_ui_popups = pending[-80:]
+    if is_user:
+        pending = list(getattr(session, "pending_ui_popups", None) or [])
+        pending.append(popup)
+        session.pending_ui_popups = pending[-80:]
 
     try:
         from app.sim_engine.franchise.state import _record_storyline  # noqa: WPS433
