@@ -626,6 +626,35 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
   );
 }
 
+function FaDecisionBody({ pop, onDismiss, onAction, queueCount = 0 }) {
+  const accepted = pop.decision === "accepted";
+  const decisionLabel = accepted
+    ? "Signed"
+    : pop.decision === "signed_elsewhere"
+      ? "Signed elsewhere"
+      : "Declined";
+  const actions = accepted
+    ? [
+        { id: "lines", label: "Edit Lines" },
+        { id: "roster", label: "View Roster", primary: true },
+      ]
+    : [{ id: "freeagency", label: "Free Agents", primary: true }];
+  return (
+    <MediaAlertShell pop={pop} onDismiss={onDismiss} onAction={onAction} actions={actions} queueCount={queueCount}>
+      <FactList
+        facts={[
+          { label: "Decision", value: decisionLabel },
+          { label: "Contract", value: accepted ? pop.terms || null : null },
+        ]}
+      />
+      <section className="media-alert__section">
+        <h4 className="media-alert__section-title">Player Response</h4>
+        <p className="media-alert__story">{pop.body}</p>
+      </section>
+    </MediaAlertShell>
+  );
+}
+
 function InjuryBody({ pop, onDismiss, onAction, queueCount = 0 }) {
   const tier = String(pop.tier || "").toLowerCase();
   const inj = pop.injury_type ? String(pop.injury_type) : "";
@@ -1288,6 +1317,7 @@ export function ShowcasePopupLayer() {
     else if (act.id === "calendar") setScreen?.(SCREENS.CALENDAR);
     else if (act.id === "tradehub") setScreen?.(SCREENS.TRADE);
     else if (act.id === "lines") setScreen?.(SCREENS.EDIT_LINES);
+    else if (act.id === "freeagency") setScreen?.(SCREENS.FREE_AGENCY);
   };
 
   const isMediaAlert =
@@ -1295,7 +1325,8 @@ export function ShowcasePopupLayer() {
     kind === "legal_trouble" ||
     kind === "injury" ||
     kind === "player_meeting" ||
-    kind === "breaking_news";
+    kind === "breaking_news" ||
+    kind === "fa_decision";
   const isTradeAlert = isMediaAlert && isTradePopup(first);
 
   return (
@@ -1344,7 +1375,10 @@ export function ShowcasePopupLayer() {
               queueCount={visiblePopups.length}
             />
           ) : null}
-          {!["wjc_tournament", "showcase_game", "allstar_game", "injury", "storyline", "legal_trouble", "player_meeting", "breaking_news"].includes(
+          {kind === "fa_decision" ? (
+            <FaDecisionBody pop={first} onDismiss={dismiss} onAction={handleAction} queueCount={visiblePopups.length} />
+          ) : null}
+          {!["wjc_tournament", "showcase_game", "allstar_game", "injury", "storyline", "legal_trouble", "player_meeting", "breaking_news", "fa_decision"].includes(
             kind
           ) ? (
             <LeagueNoticeBody pop={first} />

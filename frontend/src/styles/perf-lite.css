@@ -1,0 +1,23 @@
+/* Lite rendering: set on <html> by the office hub's low-power mode (manual, auto-detected,
+   or tripped by a sagging frame rate). Drops the effects that cost integrated GPUs most
+   without hiding content — only decorative loops and live blurs are removed. */
+
+html.perf-lite *,
+html.perf-lite *::before,
+html.perf-lite *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html.perf-lite .game-canvas::before,
+html.perf-lite .game-canvas::after,
+html.perf-lite .player-headshot .ph-eyes::before,
+html.perf-lite .player-headshot .ph-eyes::after,
+html.perf-lite .player-headshot.animate-idle,
+html.perf-lite .player-headshot.animate-broadcast,
+html.perf-lite .player-headshot.animate-selected,
+html.perf-lite .player-headshot.animate-injured,
+html.perf-lite .player-headshot.animate-hot,
+html.perf-lite .player-headshot.animate-cold {
+  animation: none !important;
+}

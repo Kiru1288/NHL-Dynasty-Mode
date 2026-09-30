@@ -5,7 +5,7 @@ import { SCREENS } from "../game/constants";
 import { getTeamLogoSrc as getSharedTeamLogoSrc } from "../utils/teamLogos";
 import { formatFranchiseApiError } from "../services/api";
 import WorldJuniorsEvent from "../events/worldJuniors/WorldJuniorsEvent";
-import { resolveWorldJuniorsPayload } from "../events/worldJuniors/WorldJuniorsMenu";
+import { resolveWorldJuniorsPayload } from "../events/worldJuniors/wjcPayload";
 
 /**
  * CalendarScreen.js

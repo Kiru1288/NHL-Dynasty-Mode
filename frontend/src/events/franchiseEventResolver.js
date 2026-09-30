@@ -1,25 +1,30 @@
 /**
  * Central resolver for franchise phase → cinematic event UI.
  */
-import { PlayoffStartEvent } from "./playoffs";
+import React from "react";
 import { userMadePlayoffs } from "./playoffs/playoffUtils";
-import { AwardsNightEvent } from "./awardsNight";
-import { EntryDraftMenu } from "./entryDraft";
-import { DraftCombineEvent } from "./draftCombine";
-import { OpeningNightMenu } from "./openingNight";
-import { TradeDeadlineMenu } from "./tradeDeadline";
-import {
-  RetirementsEventMenu,
-  DraftLotteryEventMenu,
-  DraftReviewEventMenu,
-  ProspectRightsEventMenu,
-  ReSignEventMenu,
-  FreeAgencyEventMenu,
-  SalaryCapEventMenu,
-  DevelopmentReportEventMenu,
-  RosterCleanupEventMenu,
-  NextSeasonRevealEventMenu,
-} from "./offseasonEventMenus";
+
+// Menus load on demand: statically importing them put every offseason/draft/playoff
+// screen (tens of thousands of lines) into the boot bundle the hub waits on.
+const lazyNamed = (loader, name) => React.lazy(() => loader().then((m) => ({ default: m[name] })));
+const loadOffseason = () => import("./offseasonEventMenus");
+
+const PlayoffStartEvent = React.lazy(() => import("./playoffs/PlayoffStartEvent"));
+const AwardsNightEvent = React.lazy(() => import("./awardsNight/AwardsNightEvent"));
+const EntryDraftMenu = React.lazy(() => import("./entryDraft/EntryDraftMenu"));
+const DraftCombineEvent = React.lazy(() => import("./draftCombine/DraftCombine"));
+const OpeningNightMenu = React.lazy(() => import("./openingNight/OpeningNightMenu"));
+const TradeDeadlineMenu = React.lazy(() => import("./tradeDeadline/TradeDeadlineMenu"));
+const RetirementsEventMenu = lazyNamed(loadOffseason, "RetirementsEventMenu");
+const DraftLotteryEventMenu = lazyNamed(loadOffseason, "DraftLotteryEventMenu");
+const DraftReviewEventMenu = lazyNamed(loadOffseason, "DraftReviewEventMenu");
+const ProspectRightsEventMenu = lazyNamed(loadOffseason, "ProspectRightsEventMenu");
+const ReSignEventMenu = lazyNamed(loadOffseason, "ReSignEventMenu");
+const FreeAgencyEventMenu = lazyNamed(loadOffseason, "FreeAgencyEventMenu");
+const SalaryCapEventMenu = lazyNamed(loadOffseason, "SalaryCapEventMenu");
+const DevelopmentReportEventMenu = lazyNamed(loadOffseason, "DevelopmentReportEventMenu");
+const RosterCleanupEventMenu = lazyNamed(loadOffseason, "RosterCleanupEventMenu");
+const NextSeasonRevealEventMenu = lazyNamed(loadOffseason, "NextSeasonRevealEventMenu");
 
 const EVENT_MAP = {
   playoffs_start: {

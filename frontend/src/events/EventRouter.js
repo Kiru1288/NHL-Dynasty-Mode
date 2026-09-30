@@ -1,10 +1,30 @@
-import React from "react";
+import React, { Suspense } from "react";
 import { getEventRegistration } from "./EventRegistry";
+
+const loadingStyle = {
+  minHeight: "100vh",
+  display: "grid",
+  placeItems: "center",
+  background: "#050a12",
+  color: "rgba(201,168,106,0.85)",
+  letterSpacing: "0.12em",
+  textTransform: "uppercase",
+  fontSize: 12,
+  fontWeight: 800,
+};
+
+export default function EventRouter(props) {
+  return (
+    <Suspense fallback={<div style={loadingStyle}>Loading…</div>}>
+      <EventRouterInner {...props} />
+    </Suspense>
+  );
+}
 
 /**
  * Chooses which event UI subtree to mount from EventRegistry.
  */
-export default function EventRouter({
+function EventRouterInner({
   typeKey,
   franchiseState,
   eventData,

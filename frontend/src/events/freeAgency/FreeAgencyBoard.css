@@ -1,0 +1,319 @@
+/* Free Agency board — Entry Draft broadcast-floor register (flat ops panels, grid lines, gold CTA).
+   Double-class scope outweighs the injected cinematic base stylesheet. */
+
+.fa-root.fa-root--market {
+  --panel: var(--ops-panel);
+  --panel-2: var(--ops-panel-2);
+  --line: var(--ops-grid);
+  --text: var(--ops-text);
+  --muted: var(--ops-text-secondary);
+  --gold: var(--ops-gold);
+  --cyan: var(--ops-cyan);
+  --fa-radius: var(--radius-ops);
+  font-family: var(--font-ops-ui);
+  background:
+    radial-gradient(circle at 20% 0%, rgba(19, 216, 231, 0.1), transparent 32%),
+    radial-gradient(circle at 88% 12%, rgba(233, 168, 60, 0.07), transparent 28%),
+    linear-gradient(180deg, var(--ops-black) 0%, var(--ops-navy-deep) 100%);
+}
+
+.fa-root.fa-root--market .fa-bg-noise,
+.fa-root.fa-root--market .fa-spotlight {
+  display: none;
+}
+
+/* Top bar */
+.fa-root.fa-root--market .fa-topbar {
+  min-height: 48px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--ops-panel-2);
+}
+.fa-root.fa-root--market .fa-phase-text {
+  font-family: var(--font-broadcast-display);
+  font-size: var(--type-broadcast-display-size);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
+.fa-root.fa-root--market .fa-season {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* Shared controls */
+.fa-root.fa-root--market .fa-ghost-btn,
+.fa-root.fa-root--market .fa-sim-btn {
+  border: 1px solid var(--line);
+  background: rgba(12, 31, 47, 0.85);
+  color: var(--text);
+  border-radius: var(--fa-radius);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.fa-root.fa-root--market .fa-ghost-btn:hover:not(:disabled),
+.fa-root.fa-root--market .fa-sim-btn:hover:not(:disabled) {
+  border-color: rgba(156, 178, 196, 0.35);
+  background: rgba(18, 40, 58, 0.95);
+}
+.fa-root.fa-root--market .fa-cta-btn {
+  border: 0;
+  border-radius: var(--fa-radius);
+  clip-path: none;
+  padding: 8px 18px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #1b1002;
+  background: var(--gold);
+  box-shadow: none;
+}
+.fa-root.fa-root--market .fa-cta-btn:hover:not(:disabled) {
+  filter: brightness(1.05);
+  transform: none;
+}
+.fa-root.fa-root--market .fa-ghost-btn:focus-visible,
+.fa-root.fa-root--market .fa-sim-btn:focus-visible,
+.fa-root.fa-root--market .fa-cta-btn:focus-visible,
+.fa-root.fa-root--market .fa-fa-chip:focus-visible,
+.fa-root.fa-root--market .fa-fa-row:focus-visible,
+.fa-root.fa-root--market .fa-fa-search:focus-visible,
+.fa-root.fa-root--market .fa-fa-sort:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 1px;
+}
+
+/* Floor: one bordered grid, panels separated by rules (not floating cards) */
+.fa-root.fa-root--market .fa-stage {
+  gap: 0;
+  padding: 8px 10px 4.1rem;
+}
+.fa-root.fa-root--market .fa-reveal {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-right: 0;
+  background: var(--ops-panel);
+}
+.fa-root.fa-root--market .fa-panel {
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--ops-panel-2);
+  box-shadow: none;
+  backdrop-filter: none;
+  padding: 10px;
+}
+.fa-root.fa-root--market .fa-panel h2,
+.fa-root.fa-root--market .fa-panel h3 {
+  margin: 0 0 6px;
+  font-family: var(--font-ops-ui);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+
+/* Status bar */
+.fa-root.fa-root--market .fa-fa-bar {
+  gap: 4px 14px;
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 500;
+}
+.fa-root.fa-root--market .fa-fa-bar strong {
+  font-family: var(--font-broadcast-display);
+  font-size: 18px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+}
+.fa-root.fa-root--market .fa-fa-bar span,
+.fa-root.fa-root--market .fa-fa-ask,
+.fa-root.fa-root--market .fa-fa-count {
+  font-family: var(--font-mono-data);
+  font-variant-numeric: tabular-nums;
+}
+.fa-root.fa-root--market .fa-fa-cap {
+  font-weight: 700;
+}
+
+/* Toolbar: search + segmented filter control */
+.fa-root.fa-root--market .fa-fa-tools {
+  gap: 6px;
+}
+.fa-root.fa-root--market .fa-fa-search,
+.fa-root.fa-root--market .fa-fa-sort {
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: var(--fa-radius);
+  padding: 5px 8px;
+  font-size: 12px;
+}
+.fa-root.fa-root--market .fa-fa-filters {
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--fa-radius);
+  overflow: hidden;
+}
+.fa-root.fa-root--market .fa-fa-chip {
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.fa-root.fa-root--market .fa-fa-chip:last-child {
+  border-right: 0;
+}
+.fa-root.fa-root--market .fa-fa-chip.is-active {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+
+/* Board list: flat table rows */
+.fa-root.fa-root--market .fa-fa-layout {
+  gap: 0;
+  border: 1px solid var(--line);
+}
+.fa-root.fa-root--market .fa-fa-list {
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--ops-panel);
+  padding: 0;
+  scrollbar-color: rgba(156, 178, 196, 0.35) transparent;
+}
+.fa-root.fa-root--market .fa-fa-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.fa-root.fa-root--market .fa-fa-list::-webkit-scrollbar-thumb {
+  background: rgba(156, 178, 196, 0.3);
+  border: 0;
+  border-radius: 0;
+}
+.fa-root.fa-root--market .fa-fa-count {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--ops-panel);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.fa-root.fa-root--market .fa-fa-row {
+  /* 500+ rows: let the browser skip layout/paint for rows scrolled out of view */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 52px;
+  margin: 0;
+  padding: 7px 8px;
+  border: 0;
+  border-bottom: 1px solid rgba(156, 178, 196, 0.08);
+  border-radius: 0;
+}
+.fa-root.fa-root--market .fa-fa-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.fa-root.fa-root--market .fa-fa-row.is-selected {
+  background: rgba(126, 184, 212, 0.16);
+  box-shadow: inset 3px 0 0 var(--cyan);
+}
+.fa-root.fa-root--market .fa-fa-row-body strong {
+  font-size: 13px;
+  font-weight: 700;
+}
+.fa-root.fa-root--market .fa-fa-row-body em,
+.fa-root.fa-root--market .fa-fa-row-meta {
+  font-size: 11px;
+}
+.fa-root.fa-root--market .fa-fa-ask {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* Signing desk */
+.fa-root.fa-root--market .fa-fa-desk {
+  border: 0;
+  border-radius: 0;
+  padding: 10px;
+  background: var(--ops-panel);
+  box-shadow: none;
+}
+.fa-root.fa-root--market .fa-fa-desk:has(.fa-cta-btn) {
+  box-shadow: inset 0 2px 0 var(--gold);
+}
+.fa-root.fa-root--market .fa-fa-identity h3 {
+  font-family: var(--font-broadcast-display);
+  font-size: 22px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+}
+.fa-root.fa-root--market .fa-fa-shot {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--ops-grid-strong);
+  box-shadow: none;
+}
+.fa-root.fa-root--market .fa-fa-ovr {
+  font-family: var(--font-mono-data);
+  font-weight: 700;
+  color: var(--gold);
+}
+.fa-root.fa-root--market .fa-fa-capbar,
+.fa-root.fa-root--market .fa-nego-meter,
+.fa-root.fa-root--market .fa-fa-stats > div,
+.fa-root.fa-root--market .fa-fa-history-row,
+.fa-root.fa-root--market .fa-fa-offer,
+.fa-root.fa-root--market .fa-select-wrap,
+.fa-root.fa-root--market .fa-wire-item {
+  border: 1px solid var(--line);
+  border-radius: var(--fa-radius);
+  background: rgba(0, 0, 0, 0.18);
+}
+.fa-root.fa-root--market .fa-fa-capbar strong,
+.fa-root.fa-root--market .fa-nego-meter-head strong,
+.fa-root.fa-root--market .fa-fa-stats strong,
+.fa-root.fa-root--market .fa-slider-head strong,
+.fa-root.fa-root--market .fa-fa-pctile strong {
+  font-family: var(--font-mono-data);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.fa-root.fa-root--market .fa-mini-label,
+.fa-root.fa-root--market .fa-field,
+.fa-root.fa-root--market .fa-slider-head span,
+.fa-root.fa-root--market .fa-nego-meter-head span,
+.fa-root.fa-root--market .fa-fa-capbar span,
+.fa-root.fa-root--market .fa-fa-stats span {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+.fa-root.fa-root--market .fa-submit-btn,
+.fa-root.fa-root--market .fa-negotiate-actions .fa-cta-btn {
+  border-radius: var(--fa-radius);
+  padding: 10px 14px;
+  font-size: 12px;
+}
+
+/* Footer */
+.fa-root.fa-root--market .fa-footer {
+  border-top: 1px solid var(--line);
+  background: var(--ops-panel-2);
+}

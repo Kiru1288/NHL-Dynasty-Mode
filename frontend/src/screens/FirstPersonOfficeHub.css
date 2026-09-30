@@ -1114,11 +1114,11 @@
     border-radius: 6px;
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 28%),
-      var(--office-panel);
+      var(--office-panel-strong);
     box-shadow:
       0 24px 60px rgba(0, 0, 0, 0.58),
       inset 0 1px 0 rgba(255, 255, 255, 0.04);
-    backdrop-filter: blur(22px);
+    /* No backdrop blur: behind a ~0.9-opaque panel it was invisible yet re-blurred the live canvas every frame. */
     isolation: isolate;
   }
 

@@ -5852,17 +5852,19 @@ def _u_create_player_entity(session: Any, team_id: str, player: Any) -> Dict[str
     rel_weights[2] += max(0, family_pull - 48) * 0.35
     relationship_status = rng.choices(["single", "partnered", "family_household"], weights=rel_weights)[0]
     dependents = 0 if relationship_status != "family_household" else rng.choice([1, 1, 2, 2, 3, 4])
+    # Seeds sit above the meeting-issue thresholds (trust < 40, role <= 40, morale <= 45):
+    # a player's grievances should come from what happens in the save, not the dice at creation.
     state = {
-        "morale": _u_psych_value(player, ("morale",), 42.0 + rng.uniform(-10, 22)),
+        "morale": _u_psych_value(player, ("morale",), 55.0 + rng.uniform(-8, 15)),
         "confidence": _u_psych_value(player, ("confidence_level", "confidence"), 40.0 + float(personality.get("competitiveness", 50)) * 0.22 + rng.uniform(-12, 12)),
         "coach_trust": _u_psych_value(player, ("coach_trust",), 38.0 + float(personality.get("coachability", 50)) * 0.35 + rng.uniform(-10, 10)),
-        "gm_trust": _u_clip(48.0 + rng.uniform(-18, 18)),
+        "gm_trust": _u_clip(54.0 + rng.uniform(-8, 12)),
         "belonging": _u_clip(38.0 + soc * 0.28 + rng.uniform(-14, 16)),
         "energy": _u_clip(58.0 + rng.uniform(-16, 18)),
         "focus": _u_clip(50.0 + float(personality.get("professionalism", 50)) * 0.18 + rng.uniform(-14, 14)),
         "media_stress": _u_psych_value(player, ("media_stress",), 12.0 + (100.0 - float(personality.get("media_savvy", 50))) * 0.28 + vol * 0.08),
         "personal_stress": _u_clip(12.0 + vol * 0.22 + rng.uniform(-8, 18)),
-        "role_satisfaction": _u_clip(42.0 + rng.uniform(-16, 22)),
+        "role_satisfaction": _u_clip(58.0 + rng.uniform(-8, 14)),
     }
     return {
         "player_id": player_id,
@@ -7027,7 +7029,10 @@ def _u_infer_role_satisfaction(session: Any, team_id: str, entity: Dict[str, Any
     expected = 78 if rank <= 3 else 68 if rank <= 8 else 58 if rank <= 14 else 50
     ambition = float((entity.get("personality") or {}).get("ambition", 50))
     ego = float((entity.get("personality") or {}).get("ego", 50))
-    return _u_clip(expected - max(0, ambition - 65) * 0.16 - max(0, ego - 70) * 0.18)
+    fallback = _u_clip(expected - max(0, ambition - 65) * 0.16 - max(0, ego - 70) * 0.18)
+    if str(team_id) == str(getattr(session, "user_team_id", "") or "") and player_id:
+        return _u_deployment_role_sat(session, player_id, team_id, fallback)
+    return fallback
 
 
 def _u_tick_player_life(session: Any, team_id: str, entity: Dict[str, Any], rng: random.Random) -> None:

@@ -4281,6 +4281,8 @@ export default function StorylinesScreen() {
         /* ------------- meetings room ------------- */
         .sl-room { position: relative; border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px;
           background: linear-gradient(180deg, rgba(10,27,41,.86), rgba(5,14,23,.9)); }
+        /* overflow:hidden lets a flex item shrink to the viewport, clipping instead of scrolling */
+        .sl-app > .sl-room { flex-shrink: 0; }
         .sl-room--cinematic {
           overflow: hidden;
           border-color: rgba(201,162,39,.28);

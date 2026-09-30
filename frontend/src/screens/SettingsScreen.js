@@ -4,10 +4,31 @@ import {
   writeUiScalePreference,
   UI_SCALE_PRESETS,
 } from "../utils/fluidUiScale";
+import {
+  GRAPHICS_QUALITY_PRESETS,
+  readGraphicsQuality,
+  writeGraphicsQuality,
+} from "../utils/graphicsQuality";
 import { useGameUI } from "../game/GameUIContext";
 import { SETTINGS_ROWS, SCREENS } from "../game/constants";
 import { GameFooter } from "../components/game/GameFooter";
 import { GameHeader } from "../components/game/GameHeader";
+
+const AUTO_REASON_TEXT = {
+  initial: "starting from your hardware profile",
+  "frame-rate": "frame rate dropped",
+  "cpu-load": "CPU was under heavy load",
+  battery: "battery is low and unplugged",
+  headroom: "your device has spare capacity",
+};
+
+function readLiveQuality() {
+  try {
+    return JSON.parse(window.sessionStorage.getItem("nhl.graphicsQuality.live") || "null");
+  } catch {
+    return null;
+  }
+}
 
 const SETTINGS_CATEGORIES = [
   {
@@ -28,6 +49,8 @@ export function SettingsScreen() {
     setScreen,
   } = useGameUI();
   const [uiScalePref, setUiScalePref] = useState(() => readUiScalePreference());
+  const [qualityPref, setQualityPref] = useState(() => readGraphicsQuality());
+  const liveQuality = readLiveQuality();
 
   useEffect(() => {
     function onKey(e) {
@@ -91,6 +114,38 @@ export function SettingsScreen() {
           </div>
           <p className="settings-note">
             Match display picks spacing and type from the real window (laptop / 1080p / 1440p / 4K). It does not zoom the page.
+          </p>
+        </section>
+
+        <section className="settings-category">
+          <div className="settings-category__head">
+            <span className="settings-category__label">Graphics Quality</span>
+            <span className="settings-category__status fcn-stamp">Live</span>
+          </div>
+          <div className="settings-scale-row">
+            {GRAPHICS_QUALITY_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className={`settings-scale-btn ${qualityPref === preset.id ? "is-active" : ""}`}
+                onClick={() => {
+                  setQualityPref(preset.id);
+                  writeGraphicsQuality(preset.id);
+                }}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <p className="settings-note">
+            Auto watches frame rate, CPU load and battery while you play and switches the office
+            between High and Low on its own. Low caps the office at 30 fps, drops shadows and
+            accent lights, and turns off background blur and decorative animation across the game.
+            {qualityPref === "auto" && liveQuality?.mode === "auto"
+              ? ` Currently ${liveQuality.tier === "low" ? "Low" : "High"}${
+                  AUTO_REASON_TEXT[liveQuality.reason] ? ` — ${AUTO_REASON_TEXT[liveQuality.reason]}` : ""
+                }.`
+              : ""}
           </p>
         </section>
 

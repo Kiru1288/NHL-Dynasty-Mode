@@ -9,6 +9,7 @@ import PlayerHeadshot from "../components/PlayerHeadshot";
 import TeamLogoBadge from "../components/ui/TeamLogoBadge";
 import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
+import "./freeAgency/FreeAgencyBoard.css";
 import {
   getContractOffice,
   reSignContract,
@@ -2408,7 +2409,7 @@ export function FreeAgencyEventMenu({
                           age: deskPlayer.age,
                           nationality: deskPlayer.nationality,
                         })}
-                        size="lg"
+                        size="xs"
                       />
                     </div>
                     <div>

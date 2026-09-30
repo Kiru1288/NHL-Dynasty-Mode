@@ -16,7 +16,7 @@ import React, {
     RoundedBox,
     ContactShadows,
     Environment,
-    SoftShadows,
+    Lightformer,
     AccumulativeShadows,
     RandomizedLight,
     useGLTF,
@@ -31,6 +31,15 @@ import React, {
   import { motion, AnimatePresence } from "framer-motion";
   import * as THREE from "three";
   import TeamLogoBadge from "../components/ui/TeamLogoBadge";
+  import { StaticBatch } from "./officeStaticBatch";
+  import { useAdaptiveQualityTier } from "../hooks/useAdaptiveQualityTier";
+  import {
+    GRAPHICS_QUALITY_CHANGE_EVENT,
+    GRAPHICS_QUALITY_PRESETS,
+    isLikelyLowEndDevice,
+    readGraphicsQuality,
+    writeGraphicsQuality,
+  } from "../utils/graphicsQuality";
   import PlayerHeadshot from "../components/PlayerHeadshot";
   import { resolveFranchiseTeamLogo, toLogoUrl } from "../utils/teamLogos";
   import { collectLockerPulse, buildHubStoryTicker } from "../utils/lockerRoomPulse";
@@ -38,7 +47,7 @@ import React, {
   import { SCREENS } from "../game/constants";
   import "./FirstPersonOfficeHub.css";
   import officeFontBold from "../styles/ArchivoBlack-Regular.ttf";
-  import officeWallTextureSrc from "../pictures/gray-abstract-texture-background.jpg";
+  import officeWallTextureSrc from "../pictures/office-wall-tile-1024.jpg";
 
   /**
    * One standardized landmark footprint for every menu destination.
@@ -494,27 +503,6 @@ import React, {
     scale: 0.82,
   };
 
-  const pictureContext = (() => {
-    try {
-      return require.context("../pictures", false, /\.(png|jpe?g|webp|svg)$/i);
-    } catch (err) {
-      return null;
-    }
-  })();
-  
-  function getOfficePictures() {
-    if (!pictureContext) return [];
-  
-    return pictureContext.keys().map((key) => {
-      const asset = pictureContext(key);
-  
-      return {
-        key,
-        src: asset?.default || asset,
-        name: key.replace("./", "").replace(/\.[^/.]+$/, ""),
-      };
-    });
-  }
 
   /* Backend labels can arrive with UTF-8 punctuation that was decoded through a
      legacy code page (season labels show up as "2025<mojibake>2026"). Escapes
@@ -994,6 +982,36 @@ import React, {
 
   const LOW_POWER_STORAGE_KEY = "nhlOfficeLowPowerMode";
 
+  // three.js shades every light for every lit pixel, so the small prop glows cost the
+  // whole frame. Low power keeps only the room's key lights.
+  const HubLowPowerContext = React.createContext(false);
+
+  function AccentLight(props) {
+    const lowPower = React.useContext(HubLowPowerContext);
+    return lowPower ? null : <pointLight {...props} />;
+  }
+
+  /** Drives a frameloop="demand" canvas at a fixed rate; pointer events still invalidate instantly. */
+  function FrameLimiter({ fps }) {
+    const invalidate = useThree((s) => s.invalidate);
+    useEffect(() => {
+      let raf = 0;
+      let last = 0;
+      const interval = 1000 / fps;
+      const loop = (t) => {
+        raf = requestAnimationFrame(loop);
+        if (t - last >= interval - 1) {
+          last = t;
+          invalidate();
+        }
+      };
+      raf = requestAnimationFrame(loop);
+      return () => cancelAnimationFrame(raf);
+    }, [fps, invalidate]);
+    return null;
+  }
+
+
   function detectWebGLSupport() {
     try {
       const canvas = document.createElement("canvas");
@@ -1403,6 +1421,17 @@ import React, {
       target: "league-central",
       type: "navigate",
       screen: SCREENS.LEAGUE_OPERATIONS,
+      enabled: true,
+    },
+    {
+      id: "settings",
+      label: "Settings",
+      eyebrow: "Display & Graphics",
+      description: "Display scale and graphics quality (Auto / High / Low).",
+      group: "frontOffice",
+      target: "settings",
+      type: "navigate",
+      screen: SCREENS.SETTINGS,
       enabled: true,
     },
     {
@@ -2305,6 +2334,13 @@ import React, {
     const clickBlendRef = useRef(0);
     const clickStartRef = useRef(0);
     const leagueFocusRef = useRef(new THREE.Vector3(...LEAGUE_OPS_FOCUS));
+    // Per-frame scratch vectors (allocating these every frame fed the garbage collector).
+    const scratchRef = useRef({
+      basePos: new THREE.Vector3(),
+      baseTarget: new THREE.Vector3(),
+      blendPos: new THREE.Vector3(),
+      blendTarget: new THREE.Vector3(),
+    });
     const [camX, camY, camZ] = OFFICE_CAMERA.position;
     const [tgtX, tgtY, tgtZ] = OFFICE_CAMERA.target;
 
@@ -2368,8 +2404,9 @@ import React, {
       const lerpFactor = snap ? 1 : 0.085;
 
       const panelTarget = activePanel ? PANEL_CAMERA_TARGETS[activePanel] : null;
-      const basePos = new THREE.Vector3(...(panelTarget?.position || OFFICE_CAMERA.position));
-      const baseTarget = new THREE.Vector3(...(panelTarget?.target || OFFICE_CAMERA.target));
+      const scratch = scratchRef.current;
+      const basePos = scratch.basePos.set(...(panelTarget?.position || OFFICE_CAMERA.position));
+      const baseTarget = scratch.baseTarget.set(...(panelTarget?.target || OFFICE_CAMERA.target));
       const baseFov = panelTarget?.fov || officeFovForWindow();
 
       let destPos = basePos;
@@ -2391,8 +2428,8 @@ import React, {
 
         const blend = hoverBlendRef.current * 0.032 + clickBlendRef.current * 0.06;
         if (blend > 0.0005) {
-          destPos = basePos.clone().lerp(leagueFocusRef.current, blend);
-          destTarget = baseTarget.clone().lerp(leagueFocusRef.current, blend * 0.92);
+          destPos = scratch.blendPos.copy(basePos).lerp(leagueFocusRef.current, blend);
+          destTarget = scratch.blendTarget.copy(baseTarget).lerp(leagueFocusRef.current, blend * 0.92);
         }
       } else if (activePanel) {
         hoverBlendRef.current *= 0.85;
@@ -3204,7 +3241,7 @@ import React, {
                 roughness={0.4}
               />
             </mesh>
-            <pointLight
+            <AccentLight
               position={[0, -0.05, 0.15]}
               intensity={0.24}
               color="#e8c898"
@@ -3267,7 +3304,7 @@ import React, {
             roughness={0.55}
           />
         </mesh>
-        <pointLight position={[0, 0.16, 0.08]} intensity={0.42} color="#e8c898" distance={1.6} />
+        <AccentLight position={[0, 0.16, 0.08]} intensity={0.42} color="#e8c898" distance={1.6} />
       </group>
     );
   }
@@ -3699,7 +3736,7 @@ import React, {
           </group>
         ))}
 
-        <pointLight
+        <AccentLight
           position={[0, 0.35, 0.1]}
           intensity={hovered ? 0.32 : 0.16}
           color="#6a7a88"
@@ -3707,7 +3744,7 @@ import React, {
         />
 
         {/* Desk pool light — the command station warms up when addressed */}
-        <pointLight
+        <AccentLight
           position={[0, 0.22, 0.42]}
           intensity={hovered ? 0.42 : 0.1}
           color="#e8c898"
@@ -3777,7 +3814,7 @@ import React, {
           </WallText>
         ) : null}
         <BlinkingNotificationLight active={notify} position={[0.28, 0.08, 0.35]} color={OFFICE_PALETTE.gold} />
-        <pointLight position={[0, 0.25, 0.1]} intensity={hovered ? 0.22 : 0.08} color="#e8c898" distance={0.9} />
+        <AccentLight position={[0, 0.25, 0.1]} intensity={hovered ? 0.22 : 0.08} color="#e8c898" distance={0.9} />
       </group>
     );
   }
@@ -4270,6 +4307,7 @@ import React, {
   function Desk({ children, teamName, teamLogo }) {
     return (
       <group>
+        <StaticBatch>
         {[[-1.62, 0.28, 1.12], [1.62, 0.28, 1.12], [-1.62, 0.28, 0.38], [1.62, 0.28, 0.38]].map(
           ([x, y, z], i) => (
             <RoundedBox
@@ -4347,6 +4385,8 @@ import React, {
         >
           <meshStandardMaterial color="#0e1218" roughness={0.7} metalness={0.12} />
         </RoundedBox>
+        <DeskLamp position={[-2.08, 0.89, 0.08]} />
+        </StaticBatch>
 
         <TeamLogoDecal
           teamLogo={teamLogo}
@@ -4358,7 +4398,6 @@ import React, {
           opacity={0.22}
         />
 
-        <DeskLamp position={[-2.08, 0.89, 0.08]} />
         {children}
       </group>
     );
@@ -4443,15 +4482,15 @@ import React, {
           <WoodMaterial color="#4a3222" roughness={0.5} />
         </mesh>
         {/* Warm shrine light for the trophy */}
-        <pointLight position={[-2.08, 1.0, -2.75]} intensity={0.4} color="#e8c07a" distance={2.4} />
+        <AccentLight position={[-2.08, 1.0, -2.75]} intensity={0.4} color="#e8c07a" distance={2.4} />
         {/* Draft table tucked near the war-room entrance */}
         <RoundedBox position={[-3.55, 0.52, 0.45]} args={[0.95, 0.07, 0.55]} radius={0.03} smoothness={3} castShadow>
           <WoodMaterial color="#2a1c14" />
         </RoundedBox>
-        <pointLight position={[-4.1, 1.9, 0.45]} intensity={mood.isDraftWeek ? 0.45 : 0.16} color="#c4a46a" distance={2.8} />
-        <pointLight position={[-4.05, 2.0, -1.55]} intensity={0.14} color="#e8d8b8" distance={2.2} />
+        <AccentLight position={[-4.1, 1.9, 0.45]} intensity={mood.isDraftWeek ? 0.45 : 0.16} color="#c4a46a" distance={2.8} />
+        <AccentLight position={[-4.05, 2.0, -1.55]} intensity={0.14} color="#e8d8b8" distance={2.2} />
         {mood.isTradeDeadline ? (
-          <pointLight position={[-1.5, 1.2, 0.7]} intensity={0.32} color="#c47848" distance={2.0} />
+          <AccentLight position={[-1.5, 1.2, 0.7]} intensity={0.32} color="#c47848" distance={2.0} />
         ) : null}
         {championshipCount > 0 ? (
           <group position={[-2.62, 0.55, -3.04]}>
@@ -4582,7 +4621,7 @@ import React, {
         <WallText position={[0, -0.72, 0.08]} size={0.028} color="#c4a46a">
           {safeText(wx.label, "Outside")}
         </WallText>
-        <pointLight position={[-0.2, 0.2, 0.35]} intensity={0.35} color={wx.light} distance={2.2} />
+        <AccentLight position={[-0.2, 0.2, 0.35]} intensity={0.35} color={wx.light} distance={2.2} />
       </group>
     );
   }
@@ -4801,7 +4840,7 @@ import React, {
           opacity={hovered ? 0.92 : 0.74}
         />
 
-        <pointLight
+        <AccentLight
           position={[0, 0, 0.28]}
           intensity={hovered ? 0.38 : 0.18}
           color="#c9a86a"
@@ -4872,7 +4911,7 @@ import React, {
         <WallText position={[0, 0.52, 0.04]} size={0.048} color="#c4a46a">
           SCOUTING
         </WallText>
-        <pointLight position={[0.2, 0.3, 0.5]} intensity={hovered ? 0.28 : 0.14} color="#e8d8b8" distance={1.4} />
+        <AccentLight position={[0.2, 0.3, 0.5]} intensity={hovered ? 0.28 : 0.14} color="#e8d8b8" distance={1.4} />
       </group>
     );
   }
@@ -4931,7 +4970,7 @@ import React, {
         <WallText position={[0, 1.28, 0.08]} size={0.065} color="#f0e4c8">
           DRAFT WAR ROOM
         </WallText>
-        <pointLight position={[0, 0.6, 0.2]} intensity={hovered || draftWeek ? 0.55 : 0.28} color="#e8c898" distance={2.4} />
+        <AccentLight position={[0, 0.6, 0.2]} intensity={hovered || draftWeek ? 0.55 : 0.28} color="#e8c898" distance={2.4} />
       </group>
     );
   }
@@ -6532,7 +6571,7 @@ import React, {
         <WallText position={[0, -0.18, 0.04]} size={0.022} color="#6a8898">
           {Number(seasonYear) > 0 ? String(seasonYear) : "PREVIEW"}
         </WallText>
-        <pointLight position={[0, 0.1, 0.35]} intensity={hovered ? 0.25 : 0.1} color="#6a9aba" distance={1.2} />
+        <AccentLight position={[0, 0.1, 0.35]} intensity={hovered ? 0.25 : 0.1} color="#6a9aba" distance={1.2} />
       </group>
     );
   }
@@ -6643,7 +6682,6 @@ import React, {
     setHoveredId,
     handleOpenPanel,
     resetToken,
-    officePictures,
     bestPlayer,
     officeMood,
     activePanel,
@@ -6669,7 +6707,7 @@ import React, {
     const weather = officeWeather || deriveSeasonalWeather(currentDate);
 
     return (
-      <>
+      <HubLowPowerContext.Provider value={lowPowerMode}>
         <color attach="background" args={[OFFICE_PALETTE.void]} />
         <fog attach="fog" args={[OFFICE_PALETTE.void, 16, 34]} />
   
@@ -6681,8 +6719,15 @@ import React, {
           hoveredId={hoveredId}
           leagueOpsClickToken={leagueOpsClickToken}
         />
-        {!lowPowerMode ? <SoftShadows size={18} samples={10} focus={0.55} /> : null}
-        <Environment preset="city" environmentIntensity={0.34} />
+        {/* drei <SoftShadows> (PCSS) calls unpackRGBAToDepth, which three r184 no longer
+            provides — every lit material failed to compile in full quality. */}
+        {/* Built in-scene: preset="city" blocked the whole hub on a 1.6 MB HDR from a public CDN. */}
+        <Environment resolution={64} environmentIntensity={0.34}>
+          <Lightformer intensity={2.2} position={[0, 6, 0]} rotation-x={Math.PI / 2} scale={[12, 12, 1]} color="#e4ecf1" />
+          <Lightformer intensity={1.1} position={[-6, 2, 0]} rotation-y={Math.PI / 2} scale={[12, 3, 1]} color="#c9d6de" />
+          <Lightformer intensity={1.1} position={[6, 2, 0]} rotation-y={-Math.PI / 2} scale={[12, 3, 1]} color="#ead9bf" />
+          <Lightformer intensity={0.6} position={[0, 2, -6]} scale={[12, 3, 1]} color="#b8c6d0" />
+        </Environment>
   
         <hemisphereLight intensity={0.55} color="#b8dce8" groundColor="#1a3840" />
         <ambientLight intensity={0.4} color="#88a8b0" />
@@ -6716,13 +6761,15 @@ import React, {
 
         {USE_RETRO_OFFICE_PACK ? <RetroOfficeModel lowPowerMode={lowPowerMode} /> : null}
 
-        <RoomShell />
-        <OfficeFurniture
-          teamLogo={teamLogo}
-          teamName={teamName}
-          mood={mood}
-          championshipCount={championshipCount}
-        />
+        <StaticBatch rebuildKey={championshipCount > 0 ? "cup" : "no-cup"} includeTransparent>
+          <RoomShell />
+          <OfficeFurniture
+            teamLogo={teamLogo}
+            teamName={teamName}
+            mood={mood}
+            championshipCount={championshipCount}
+          />
+        </StaticBatch>
 
         <CityWeatherWindow currentDate={currentDate} weather={weather} />
 
@@ -7158,6 +7205,7 @@ import React, {
         </InteractiveGroup>
   
         <ContactShadows
+          frames={1}
           position={[0, 0.012, 0]}
           opacity={0.48}
           scale={8}
@@ -7165,7 +7213,7 @@ import React, {
           far={4.2}
           color="#1a1612"
         />
-      </>
+      </HubLowPowerContext.Provider>
     );
   }
   
@@ -7783,13 +7831,8 @@ import React, {
     const [briefingNote, setBriefingNote] = useState("");
     const canvasHostRef = useRef(null);
     const [canvasReady, setCanvasReady] = useState(false);
-    const [lowPowerMode, setLowPowerMode] = useState(() => {
-      try {
-        return localStorage.getItem(LOW_POWER_STORAGE_KEY) === "1";
-      } catch (err) {
-        return false;
-      }
-    });
+    const [qualityMode, setQualityMode] = useState(() => readGraphicsQuality());
+    const [initialAutoTier] = useState(() => (isLikelyLowEndDevice() ? "low" : "high"));
     const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
     const [officeWeather, setOfficeWeather] = useState(() =>
       deriveSeasonalWeather(currentDate)
@@ -7797,7 +7840,6 @@ import React, {
 
     const bestPlayer = useMemo(() => getBestPlayer(players), [players]);
   
-    const officePictures = useMemo(() => getOfficePictures(), []);
     const normalizedRecord = useMemo(() => formatRecord(record), [record]);
 
     useEffect(() => {
@@ -7986,15 +8028,14 @@ import React, {
     );
 
     const handleToggleLowPower = useCallback(() => {
-      setLowPowerMode((prev) => {
-        const next = !prev;
-        try {
-          localStorage.setItem(LOW_POWER_STORAGE_KEY, next ? "1" : "0");
-        } catch (err) {
-          /* ignore storage failures */
-        }
-        return next;
-      });
+      const order = GRAPHICS_QUALITY_PRESETS.map((preset) => preset.id);
+      writeGraphicsQuality(order[(order.indexOf(qualityMode) + 1) % order.length]);
+    }, [qualityMode]);
+
+    useEffect(() => {
+      const onChange = () => setQualityMode(readGraphicsQuality());
+      window.addEventListener(GRAPHICS_QUALITY_CHANGE_EVENT, onChange);
+      return () => window.removeEventListener(GRAPHICS_QUALITY_CHANGE_EVENT, onChange);
     }, []);
 
     useEffect(() => {
@@ -8069,7 +8110,38 @@ import React, {
     }, [showQuickMenu]);
   
     const showFallback = !webglSupported;
-    const effectiveLowPower = lowPowerMode || prefersReducedMotion;
+    const autoQuality = useAdaptiveQualityTier({
+      enabled: qualityMode === "auto" && !prefersReducedMotion && webglSupported,
+      initialTier: initialAutoTier,
+    });
+    const effectiveLowPower =
+      prefersReducedMotion ||
+      qualityMode === "low" ||
+      (qualityMode === "auto" && autoQuality.tier === "low");
+
+    useEffect(() => {
+      try {
+        window.sessionStorage.setItem(
+          "nhl.graphicsQuality.live",
+          JSON.stringify({ mode: qualityMode, tier: effectiveLowPower ? "low" : "high", reason: autoQuality.reason })
+        );
+      } catch {
+        /* ignore */
+      }
+    }, [qualityMode, effectiveLowPower, autoQuality.reason]);
+
+    useEffect(() => {
+      document.documentElement.classList.toggle("perf-lite", effectiveLowPower);
+    }, [effectiveLowPower]);
+
+    // Once the camera has settled on an open station panel the room is effectively static.
+    const [panelSettled, setPanelSettled] = useState(false);
+    useEffect(() => {
+      setPanelSettled(false);
+      if (!activePanel) return undefined;
+      const t = window.setTimeout(() => setPanelSettled(true), 1400);
+      return () => window.clearTimeout(t);
+    }, [activePanel]);
     const phaseLabelText = officePhaseText(franchiseState) || seasonYear;
 
     if (showFallback) {
@@ -8148,7 +8220,8 @@ import React, {
             {canvasReady ? (
             <Canvas
               shadows={!effectiveLowPower}
-              dpr={effectiveLowPower ? [1, 1] : [1, 2]}
+              frameloop={effectiveLowPower || panelSettled ? "demand" : "always"}
+              dpr={effectiveLowPower ? [1, 1] : [1, 1.5]}
               eventSource={canvasHostRef}
               camera={{
                 position: OFFICE_CAMERA.position,
@@ -8168,6 +8241,7 @@ import React, {
                 gl.outputColorSpace = THREE.SRGBColorSpace;
               }}
             >
+              {effectiveLowPower && !panelSettled ? <FrameLimiter fps={30} /> : null}
               <Suspense fallback={null}>
                 <OfficeScene
                   teamName={teamName}
@@ -8185,7 +8259,6 @@ import React, {
                   setHoveredId={setHoveredId}
                   handleOpenPanel={handleOpenPanel}
                   resetToken={resetToken}
-                  officePictures={officePictures}
                   bestPlayer={bestPlayer}
                   officeMood={officeMood}
                   activePanel={activePanel}

@@ -12736,6 +12736,69 @@ def _maybe_backfill_sparse_storylines(session: FranchiseSession) -> None:
     _franchise_bulk_narrative_catchup(session, days_advanced=days_advanced)
 
 
+def _resolve_in_season_fa_offers(session: FranchiseSession, iso: str) -> None:
+    """Age pending user FA offers on the season calendar and pop the player's answer.
+
+    The offseason wire has its own Sim Day clock; in-season offers otherwise sat pending forever.
+    """
+    if str(getattr(session, "phase", "") or "").lower() == "offseason":
+        return
+    neg_map = getattr(session, "resign_negotiations", None)
+    if not isinstance(neg_map, dict) or not any(
+        isinstance(e, dict) and isinstance(e.get("pending_offer"), dict) for e in neg_map.values()
+    ):
+        return
+    from services.franchise_offseason import resolve_user_fa_pending_offers
+
+    result = resolve_user_fa_pending_offers(session, days=1)
+    _ensure_session_event_lists(session)
+    for row in result.get("signed") or []:
+        name = str(row.get("name") or row.get("player_id") or "Player")
+        aav = row.get("aav_m")
+        years = row.get("years")
+        terms = f"${float(aav):.2f}M × {int(years)} yr" if aav is not None and years is not None else ""
+        _append_showcase_popup(
+            session,
+            f"fa_decision:{row.get('player_id')}:{iso}",
+            {
+                "kind": "fa_decision",
+                "decision": "accepted",
+                "theme": "positive",
+                "source_label": "Free Agency",
+                "headline": f"{name} accepts your offer",
+                "player_name": name,
+                "player_id": str(row.get("player_id") or ""),
+                "terms": terms,
+                "body": f"{name} has signed with your club{f' ({terms})' if terms else ''}. He joins the roster now.",
+                "calendar_iso": iso,
+                "is_user_team": True,
+            },
+        )
+        session.timeline.append(f"FA: {name} accepted your offer{f' ({terms})' if terms else ''}.")
+    for row in result.get("rejected") or []:
+        if not row.get("name"):
+            continue
+        name = str(row.get("name"))
+        signed_elsewhere = str(row.get("reason") or "") == "signed_elsewhere"
+        _append_showcase_popup(
+            session,
+            f"fa_decision:{row.get('player_id')}:{iso}",
+            {
+                "kind": "fa_decision",
+                "decision": "signed_elsewhere" if signed_elsewhere else "declined",
+                "theme": "warning",
+                "source_label": "Free Agency",
+                "headline": f"{name} signs elsewhere" if signed_elsewhere else f"{name} declines your offer",
+                "player_name": name,
+                "player_id": str(row.get("player_id") or ""),
+                "body": str(row.get("feedback") or f"{name} turned down your offer."),
+                "calendar_iso": iso,
+                "is_user_team": True,
+            },
+        )
+        session.timeline.append(f"FA: {name} {'signed elsewhere' if signed_elsewhere else 'declined your offer'}.")
+
+
 def _finalize_regular_calendar_day(
     session: FranchiseSession,
     day_meta: Dict[str, Any],
@@ -12784,6 +12847,10 @@ def _finalize_regular_calendar_day(
 
     just_idx = int(session.calendar_cursor) - 1
     bulk = bool(getattr(session, "_bulk_calendar_advance", False))
+    try:
+        _resolve_in_season_fa_offers(session, iso)
+    except Exception:
+        pass
     if _franchise_narrative_should_run(session, just_idx=just_idx, light_bulk=light_bulk, bulk=bulk):
         _run_franchise_narrative_passes(
             session,

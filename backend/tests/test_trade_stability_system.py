@@ -237,6 +237,31 @@ class TradeStabilityTests(unittest.TestCase):
         snap = gather_player_concerns(session, player, team)
         self.assertLess(snap.role_satisfaction, 50)
 
+    def test_team_toi_leader_is_not_short_on_ice_time(self):
+        from app.sim_engine.franchise.trade_stability_engine import infer_role_satisfaction_from_deployment
+
+        forwards = []
+        for i in range(12):
+            p = _player(f"f{i}", ovr=90 - i)
+            mins = 19.5 - i * 0.8
+            p.season_stats = {"gp": 30, "pts": 20, "toi_sec": int(30 * mins * 60)}
+            forwards.append(p)
+        team = _team("OTT", forwards)
+        session = _session(_league([team]), "OTT")
+        session.lines = {
+            "even_strength": {"forwards": [
+                {"id": f"f{n + 1}", "slots": {s: f"f{n * 3 + k}" for k, s in enumerate(("lw", "c", "rw"))}}
+                for n in range(4)
+            ]},
+            "power_play": {"units": [{"id": "pp1", "slots": {"a": "f0"}}]},
+            "penalty_kill": {"units": [{"id": "pk1", "slots": {"a": "f0"}}]},
+        }
+
+        top = infer_role_satisfaction_from_deployment(forwards[0], team, session)
+        self.assertGreaterEqual(top, 70)
+        second_liner = infer_role_satisfaction_from_deployment(forwards[4], team, session)
+        self.assertGreaterEqual(second_liner, 45)
+
     def test_trade_deadline_freezes_crisis_and_blocks_expiry(self):
         from services.trade_demand_engine import (
             ensure_trade_demands,

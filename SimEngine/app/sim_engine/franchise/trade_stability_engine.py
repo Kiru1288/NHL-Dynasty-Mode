@@ -715,12 +715,44 @@ def deserved_depth_standing(player: Any, team: Any) -> Dict[str, Any]:
     return {"rank": max_rank, "extra": True, "bubble": bool(bubble), "group": grp}
 
 
+#: Top-of-table minutes the expected-TOI tables assume (1st unit + PP1 + PK1). The sim
+#: hands out fewer, so expectations are rescaled to the team's actual minutes leader.
+_NOMINAL_GROUP_TOP_TOI = {"F": 22.9, "D": 25.4}
+
+
+def _team_group_toi_leader(session: Any, team: Any, grp: str) -> Optional[float]:
+    samples: List[float] = []
+    for mate in getattr(team, "roster", None) or []:
+        if _pos_group_of(mate) != grp:
+            continue
+        row = _season_stat_row(mate, session)
+        if int(row.get("gp") or row.get("games") or 0) < 5:
+            continue
+        avg = _avg_toi_minutes_from_row(row)
+        if avg is not None:
+            samples.append(avg)
+    if len(samples) < (4 if grp == "D" else 6):
+        return None
+    return max(samples)
+
+
+def _team_toi_scale(session: Any, team: Any, player: Any) -> Tuple[float, Optional[float]]:
+    grp = _pos_group_of(player)
+    if grp == "G":
+        return 1.0, None
+    team_top = _team_group_toi_leader(session, team, grp)
+    if not team_top:
+        return 1.0, None
+    return _clamp(team_top / _NOMINAL_GROUP_TOP_TOI[grp], 0.7, 1.0), team_top
+
+
 def _fair_expected_toi(
     deploy: PlayerDeploymentSnapshot,
     *,
     ovr: float,
     is_defense: bool,
     standing: Dict[str, Any],
+    scale: float = 1.0,
 ) -> float:
     """Minutes a player can fairly expect: his current slot, capped by the slot he has earned.
 
@@ -734,7 +766,7 @@ def _fair_expected_toi(
         expected = min(expected, _expected_toi_from_deployment(earned, ovr=ovr, is_defense=is_defense))
     if standing.get("extra") and not standing.get("bubble"):
         expected = min(expected, 12.5 if is_defense else 9.0)
-    return expected
+    return expected * scale
 
 
 def infer_role_satisfaction_from_deployment(
@@ -766,7 +798,9 @@ def infer_role_satisfaction_from_deployment(
             return 22.0
         return 30.0
 
-    expected = _fair_expected_toi(deploy, ovr=ovr, is_defense=is_defense, standing=standing)
+    scale, team_top = _team_toi_scale(session, team, player)
+    expected = _fair_expected_toi(deploy, ovr=ovr, is_defense=is_defense, standing=standing, scale=scale)
+    in_user_lineup = deploy.line_source == "session.lines.even_strength"
 
     if avg_toi is None:
         if expected > 0:
@@ -796,7 +830,14 @@ def infer_role_satisfaction_from_deployment(
     else:
         satisfaction = max(8.0, ratio / 0.62 * 32.0)
 
-    if deploy.gp < 5 and int(getattr(session, "calendar_cursor", 40) or 40) > 20 and not knows_his_place:
+    # Few games only means "not playing" when he isn't dressed now — injury returns and
+    # mid-season signings in the lineup shouldn't gripe.
+    if (
+        deploy.gp < 5
+        and int(getattr(session, "calendar_cursor", 40) or 40) > 20
+        and not knows_his_place
+        and not in_user_lineup
+    ):
         satisfaction = min(satisfaction, 35.0)
 
     # "Buried" only stings when he has out-rated the players ahead of him.
@@ -808,6 +849,9 @@ def infer_role_satisfaction_from_deployment(
     if knows_his_place:
         # Spare parts are rarely thrilled, but they don't agitate over depth minutes.
         satisfaction = max(satisfaction, 58.0)
+
+    if team_top is not None and avg_toi >= team_top - 0.5:
+        satisfaction = max(satisfaction, 78.0)
 
     if (
         deploy.pp_unit == 0
@@ -857,7 +901,10 @@ def infer_performance_vs_deployment(
     if standing.get("extra") and not standing.get("bubble"):
         # A hot streak in spot duty doesn't make the 13th forward feel owed a regular shift.
         return role_satisfaction
-    expected = _fair_expected_toi(deploy, ovr=ovr, is_defense=is_defense, standing=standing)
+    scale, team_top = _team_toi_scale(session, team, player)
+    if team_top is not None and avg_toi >= team_top - 0.5:
+        return role_satisfaction
+    expected = _fair_expected_toi(deploy, ovr=ovr, is_defense=is_defense, standing=standing, scale=scale)
 
     if prod_ratio >= 1.08 and avg_toi + 1.5 < expected:
         return min(role_satisfaction, 28.0)

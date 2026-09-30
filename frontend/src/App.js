@@ -6,7 +6,7 @@ import setupTheme from "./soundtrack/JJ's Energy - Felix Weber (FIFA 2014 World 
 import { GameCanvas } from "./components/game/GameCanvas";
 
 /** TEMP: remove with frontend/src/dev/EventMenuReplay.js after menu QA */
-import EventMenuReplay from "./dev/EventMenuReplay";
+const EventMenuReplay = React.lazy(() => import("./dev/EventMenuReplay"));
 
 const SetupScreen = React.lazy(() =>
   import("./screens/SetupScreen").then((m) => ({ default: m.SetupScreen }))
@@ -360,7 +360,9 @@ export default function App() {
   if (isEventMenuReplay) {
     return (
       <FluidUiApp>
-        <EventMenuReplay />
+        <Suspense fallback={<ScreenLoadingFallback />}>
+          <EventMenuReplay />
+        </Suspense>
       </FluidUiApp>
     );
   }

@@ -40,13 +40,14 @@ import {
   readDismissedBreakingKeys,
   writeDismissedBreakingKeys,
 } from "../utils/breakingAlerts";
-import hubWallTextureSrc from "../pictures/gray-abstract-texture-background.jpg";
+import hubWallTextureSrc from "../pictures/office-wall-tile-1024.jpg";
 import officeFontBold from "../styles/ArchivoBlack-Regular.ttf";
 import { ShowcasePopupLayer } from "../components/game/ShowcasePopupLayer";
 import { TradeDemandCrisisOverlay } from "../components/game/TradeDemandCrisisOverlay";
 import { FranchiseEventLayer } from "../components/game/FranchiseEventLayer";
-import WorldJuniorsEvent from "../events/worldJuniors/WorldJuniorsEvent";
-import { resolveWorldJuniorsPayload } from "../events/worldJuniors/WorldJuniorsMenu";
+import { resolveWorldJuniorsPayload } from "../events/worldJuniors/wjcPayload";
+
+const WorldJuniorsEvent = React.lazy(() => import("../events/worldJuniors/WorldJuniorsEvent"));
 
 const GameUIContext = createContext(null);
 export const FranchiseStateContext = createContext(null);
@@ -865,14 +866,23 @@ export function GameUIProvider({ children }) {
       setScreen(SCREENS.HUB);
       try {
         await refreshFranchise();
-        await hydrateFranchiseHeavyState({
-          includeRosterBrowser: true,
-          includeDraftClassRankings: false,
-          includeDraftClassHud: false,
-        });
       } finally {
         if (!cancelled) setSessionBootstrapping(false);
       }
+      // The hub only needs the lean state; the roster browser (seconds of backend work on a
+      // single-threaded API) loads once the hub has settled so it doesn't queue the hub's calls.
+      const whenIdle = window.requestIdleCallback || ((cb) => window.setTimeout(cb, 1500));
+      whenIdle(
+        () => {
+          if (cancelled) return;
+          hydrateFranchiseHeavyState({
+            includeRosterBrowser: true,
+            includeDraftClassRankings: false,
+            includeDraftClassHud: false,
+          });
+        },
+        { timeout: 5000 }
+      );
     })();
 
     const onBackendChanged = () => {
@@ -1624,14 +1634,16 @@ export function GameUIProvider({ children }) {
       <FranchiseEventLayer />
       {worldJuniorsOpen ? (
         <div className="wjc-event-shell wjc-event-shell--global" role="presentation">
-          <WorldJuniorsEvent
-            franchiseState={franchiseState}
-            eventData={wjcEventSnapshot}
-            onClose={closeWorldJuniors}
-            onBackToHub={closeWorldJuniors}
-            onSimNextTournamentDay={onAdvanceDay}
-            onOpenDraftBoard={openDraftClassFromWjc}
-          />
+          <React.Suspense fallback={null}>
+            <WorldJuniorsEvent
+              franchiseState={franchiseState}
+              eventData={wjcEventSnapshot}
+              onClose={closeWorldJuniors}
+              onBackToHub={closeWorldJuniors}
+              onSimNextTournamentDay={onAdvanceDay}
+              onOpenDraftBoard={openDraftClassFromWjc}
+            />
+          </React.Suspense>
         </div>
       ) : null}
       </GameUIContext.Provider>
