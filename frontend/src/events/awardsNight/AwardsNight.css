@@ -1360,3 +1360,53 @@
     height: 96px;
   }
 }
+/* Voting results table (ballot breakdown) */
+.an-broadcast .an-votes__fmt {
+  margin: 0 0 4px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.an-broadcast .an-votes__row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 40px 56px;
+  gap: 8px;
+  align-items: center;
+  font-size: 12.5px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.an-broadcast .an-votes__head {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  border-bottom-color: rgba(255, 255, 255, 0.14);
+}
+.an-broadcast .an-votes__row em {
+  font-style: normal;
+  text-align: right;
+}
+.an-broadcast .an-votes__who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.an-broadcast .an-votes__name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.an-broadcast .an-votes__name strong,
+.an-broadcast .an-votes__name small {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.an-broadcast .an-votes__name small {
+  font-size: 11px;
+  opacity: 0.65;
+}
+.an-broadcast .an-votes__row.is-winner strong {
+  color: var(--ops-gold, #f5b942);
+}

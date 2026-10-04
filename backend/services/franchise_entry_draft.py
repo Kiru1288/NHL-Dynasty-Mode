@@ -786,6 +786,29 @@ def build_team_draft_board(
 
     from services.draft_board_engine import enrich_board_entry_with_team_scouting
 
+    # CPU clubs rank from their own whole-class board (private scouting read,
+    # organizational identity, per-club noise, "our guy" conviction). The user's
+    # board keeps the scouting-department view below.
+    identity_rows: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+    if cache is not None and str(team_id) != str(getattr(session, "user_team_id", "") or ""):
+        try:
+            from services.draft_team_identity import score_available_for_team
+
+            st_now = getattr(session, "draft_state", None) or {}
+            class_entries = list((cache.get("entry_by_key") or {}).values()) or list(available)
+            for sc, ent, row in score_available_for_team(
+                session,
+                str(team_id),
+                int(st_now.get("overall_pick") or 1),
+                list(available),
+                cache,
+                entries=class_entries,
+                needs=list(needs or []),
+            ):
+                identity_rows[str(ent.get("key") or ent.get("prospect_id") or "")] = (sc, row)
+        except Exception:
+            identity_rows = {}
+
     scout_dept_quality = float(profile.get("scouting_quality") or 60)
     for p in available:
         pid = str(p.get("key") or p.get("prospect_id") or "")
@@ -863,12 +886,25 @@ def build_team_draft_board(
         if phil["philosophy"] in ("off_board_scout", "boom_bust_gambler") or float(profile.get("off_board_tendency") or 0) > 0.35:
             noise += (_rng_float(session, team_id, pid, "off") - 0.3) * 10.0
 
+        board_score = score + noise + (float(enriched.get("scouting_confidence") or 50) - 50) * 0.03
+        extra: Dict[str, Any] = {}
+        ident = identity_rows.get(pid)
+        if ident is not None:
+            ident_score, ident_row = ident
+            # Same log-rank value the club selects with, rescaled to a points-like range.
+            board_score = 200.0 + 30.0 * float(ident_score)
+            extra = {
+                "private_rank": ident_row.get("private_rank"),
+                "board_story": ident_row.get("story"),
+                "conviction": ident_row.get("conviction") or 0.0,
+            }
         board.append({
             **enriched,
-            "team_board_score": score + noise + (float(enriched.get("scouting_confidence") or 50) - 50) * 0.03,
+            "team_board_score": board_score,
             "team_board_rank": 0,
             "public_rank": pub_rank,
             **scout_meta,
+            **extra,
             "scouting_notes": scout_notes,
         })
 
@@ -1227,37 +1263,14 @@ def _cpu_select_prospect(
     available: List[Dict[str, Any]],
     cache: Dict[str, Any],
 ) -> Dict[str, Any]:
-    from services.draft_selection_engine import cpu_select_from_board
+    from services.draft_team_identity import select_cpu_prospect
 
-    phil = cache["team_philosophies"].get(owner, get_team_draft_philosophy(session, owner))
     needs = cache["team_needs"].get(owner, [])
-    base_pool = 80 if overall <= 10 else 50 if overall <= 64 else 28
-    # Off-board scouting must be able to reach beyond the public slice, otherwise
-    # the philosophy can never actually go off the board.
-    phil_name = phil.get("philosophy") if isinstance(phil, dict) else str(phil)
-    profile = _team_scouting_profile(session, owner)
-    off_board = phil_name in ("off_board_scout", "boom_bust_gambler") or float(profile.get("off_board_tendency") or 0) > 0.35
-    pool_size = max(base_pool, 150) if off_board else base_pool
-    candidates = available[:pool_size]
+    # The whole live board is scored: the club's own board (consensus anchor +
+    # private read + identity) decides how far off the public list it will go.
+    candidates = sorted(available, key=lambda e: int(e.get("rank") or 999))
     if not candidates:
         raise ValueError("No draft-eligible prospects available for CPU selection")
-    team_board = build_team_draft_board(session, owner, candidates, cache=cache)
-
-    def _noise(e: Dict[str, Any]) -> float:
-        return _rng_float(session, owner, overall, e.get("key")) - 0.5
-
-    # Ideology nudges philosophy weights without replacing board logic.
-    profiles = dict(getattr(session, "cpu_franchise_profiles", None) or {})
-    ideo = dict((profiles.get(str(owner)) or {}).get("ideology") or {})
-    phil_override = phil
-    if isinstance(phil, dict) and ideo:
-        phil_override = dict(phil)
-        bpa = float(ideo.get("best_player_available_bias", 0.55) or 0.55)
-        need_bias = float(ideo.get("positional_need_draft_bias", 0.45) or 0.45)
-        if bpa >= 0.62:
-            phil_override["philosophy"] = phil_override.get("philosophy") or "best_player_available"
-        elif need_bias >= 0.62 and needs:
-            phil_override["philosophy"] = "positional_need"
 
     # After climbing via a draft-floor deal, honour the hidden true target if still up.
     try:
@@ -1278,12 +1291,15 @@ def _cpu_select_prospect(
     except Exception:
         pass
 
-    return cpu_select_from_board(
-        team_board,
-        overall_pick=overall,
-        philosophy=phil_override.get("philosophy") if isinstance(phil_override, dict) else str(phil_override),
-        needs=needs,
-        noise_fn=_noise,
+    class_entries = list((cache.get("entry_by_key") or {}).values()) or candidates
+    return select_cpu_prospect(
+        session,
+        str(owner),
+        int(overall),
+        candidates,
+        cache,
+        entries=class_entries,
+        needs=list(needs or []),
     )
 
 
@@ -3235,6 +3251,10 @@ def accept_draft_day_trade_offer(session: FranchiseSession, offer: Dict[str, Any
         pid = str(sid or "").strip()
         if pid and pid not in (pick_a, pick_b):
             package[user_id].append({"type": "pick", "id": pid, "team": partner_id})
+    for plid in list(offer.get("sweetener_player_ids") or []):
+        plid = str(plid or "").strip()
+        if plid:
+            package[user_id].append({"type": "player", "id": plid, "team": partner_id})
     ctx = build_league_trade_context(
         league,
         calendar_cursor=int(getattr(session, "calendar_cursor", 0) or 0),

@@ -20,6 +20,7 @@ const REPLAY_KEYS = [
   "playoffs_start",
   "awards",
   "retirements",
+  "board_of_governors",
   "salary_cap",
   "development_report",
   "draft_lottery",

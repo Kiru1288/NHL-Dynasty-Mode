@@ -125,15 +125,22 @@ def _player_potential_ovr(player: Any) -> float:
     return _player_ovr(player)
 
 
+def _cfield(obj: Any, key: str, default: Any = None) -> Any:
+    """Read a contract field from a dict contract or an object (contracts are dicts)."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def _is_elc_player(player: Any) -> bool:
     c = getattr(player, "contract", None)
     for obj in (c, player):
         if obj is None:
             continue
         for key in ("is_entry_level", "is_elc", "elc"):
-            if bool(getattr(obj, key, False)):
+            if bool(_cfield(obj, key, False)):
                 return True
-        ctype = str(getattr(obj, "contract_type", None) or getattr(obj, "type", "") or "").upper()
+        ctype = str(_cfield(obj, "contract_type", None) or _cfield(obj, "type", "") or "").upper()
         if ctype == "ELC":
             return True
     return False
@@ -164,14 +171,14 @@ def _is_rental(player: Any) -> bool:
         if obj is None:
             continue
         for key in ("years_remaining", "term_remaining", "remaining_years", "term"):
-            years = max(years, _safe_int(getattr(obj, key, 0), 0))
+            years = max(years, _safe_int(_cfield(obj, key, 0), 0))
     if years > 1:
         return False
     for obj in (player, c):
         if obj is None:
             continue
         for key in ("expiry_status", "ufa_rfa_status", "rights_status", "rights"):
-            val = str(getattr(obj, key, "") or "").strip().upper()
+            val = str(_cfield(obj, key, "") or "").strip().upper()
             if val == "UFA":
                 return True
     age = _player_age(player)
@@ -1003,6 +1010,16 @@ def propose_and_execute_cpu_trades(
         draft_year=draft_year,
     )
     ctx["cpu_ambient_trade"] = True
+    # Board of Governors trade-volume rules (e.g. trade-call windows, holiday freezes).
+    mods = getattr(league, "governance_modifiers", None)
+    tv = float((mods or {}).get("trade_volume", 0.0) or 0.0) if isinstance(mods, dict) else 0.0
+    if abs(tv) > 1e-6 and int(max_executions) > 0:
+        import zlib as _zlib
+
+        u = (_zlib.crc32(f"tv|{calendar_cursor}|{len(teams)}".encode()) & 0xFFFFFFFF) / 0xFFFFFFFF
+        scaled = float(max_executions) * (1.0 + tv / 100.0)
+        whole = int(scaled)
+        max_executions = whole + (1 if u < (scaled - whole) else 0)
     if ctx.get("trade_deadline_passed"):
         return []  # hard deadline — only propose_ahl_depth_trades runs after it
     try:

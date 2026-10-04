@@ -9,6 +9,7 @@ import {
   revealPaceMs,
 } from "./draftLotteryHelpers";
 import "./DraftLottery.css";
+import "../shared/edraftSkin.css";
 
 function seasonLabel(franchiseState) {
   const y = franchiseState?.season_year || franchiseState?.seasonYear;
@@ -221,7 +222,7 @@ export default function DraftLotteryNight({
   ];
 
   return (
-    <section className="dlot-root">
+    <section className="dlot-root edraft-skin">
       <div className="dlot-bg" aria-hidden="true">
         <div className="dlot-bg-scrim" />
         <div className="dlot-bg-noise" />

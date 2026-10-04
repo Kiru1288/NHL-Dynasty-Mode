@@ -233,17 +233,24 @@
   box-shadow: inset 3px 0 0 var(--cyan);
 }
 .fa-root.fa-root--market .fa-fa-row-body strong {
-  font-size: 13px;
+  font-size: 15.5px;
   font-weight: 700;
 }
 .fa-root.fa-root--market .fa-fa-row-body em,
 .fa-root.fa-root--market .fa-fa-row-meta {
-  font-size: 11px;
+  font-size: 12.5px;
 }
 .fa-root.fa-root--market .fa-fa-ask {
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 800;
+  min-width: 70px;
+  text-align: right;
 }
+.fa-root.fa-root--market .fa-fa-row { padding: 9px 10px; contain-intrinsic-size: auto 62px; }
+.fa-root.fa-root--market .fa-fa-count { font-size: 12.5px; padding: 8px 10px; }
+.fa-root.fa-root--market .fa-fa-chip { font-size: 12.5px; padding: 6px 11px; }
+.fa-root.fa-root--market .fa-fa-search,
+.fa-root.fa-root--market .fa-fa-sort { font-size: 13.5px; padding: 7px 10px; }
 
 /* Signing desk */
 .fa-root.fa-root--market .fa-fa-desk {
@@ -317,3 +324,17 @@
   border-top: 1px solid var(--line);
   background: var(--ops-panel-2);
 }
+
+/* Readability pass */
+.fa-root.fa-root--market .fa-fa-bar { font-size: 14px; gap: 14px; }
+.fa-root.fa-root--market .fa-fa-bar strong { font-size: 15px; }
+.fa-root.fa-root--market .fa-mini-label,
+.fa-root.fa-root--market .fa-field,
+.fa-root.fa-root--market .fa-slider-head span,
+.fa-root.fa-root--market .fa-nego-meter-head span,
+.fa-root.fa-root--market .fa-fa-capbar span,
+.fa-root.fa-root--market .fa-fa-stats span { font-size: 12.5px; }
+.fa-root.fa-root--market .fa-fa-capbar strong,
+.fa-root.fa-root--market .fa-nego-meter-head strong,
+.fa-root.fa-root--market .fa-fa-stats strong,
+.fa-root.fa-root--market .fa-slider-head strong { font-size: 18px; }

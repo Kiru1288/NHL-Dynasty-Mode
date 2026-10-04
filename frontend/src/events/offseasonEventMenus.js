@@ -10,6 +10,7 @@ import TeamLogoBadge from "../components/ui/TeamLogoBadge";
 import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import "./freeAgency/FreeAgencyBoard.css";
+import NegotiationMeetingPanel from "../components/contracts/NegotiationMeetingPanel";
 import {
   getContractOffice,
   reSignContract,
@@ -265,6 +266,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
   const [sortDir, setSortDir] = React.useState("desc");
   const [selectedId, setSelectedId] = React.useState(null);
   const [panelMode, setPanelMode] = React.useState("detail"); // detail | negotiate
+  const [meetingRev, setMeetingRev] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
   const [response, setResponse] = React.useState(null);
@@ -392,7 +394,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
       window.clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [panelMode, selectedId, offerAav, offerYears, offerNtc, offerNtcMode, offerNmc, offerBonus, offerContractType]);
+  }, [panelMode, selectedId, offerAav, offerYears, offerNtc, offerNtcMode, offerNmc, offerBonus, offerContractType, meetingRev]);
 
   const contracts = safeArray(payload?.contracts);
   const expiring = safeArray(payload?.expiring_contracts || payload?.expiring);
@@ -547,8 +549,14 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
     cap.usable_cap_space_m ?? cap.cap_space ?? franchiseState?.team?.cap_space ?? 0
   );
   const offerAavNum = Number(offerAav) || 0;
-  const offerYearsNum = Math.max(1, parseInt(offerYears, 10) || 1);
-  const offerBonusNum = Number(offerBonus) || 0;
+  const resignBonusRules = payload?.signing_bonus || {};
+  const maxTermOwn = Math.max(1, Number(resignBonusRules.max_term_own || 7));
+  const termOptionsOwn = Array.from({ length: maxTermOwn }, (_, i) => i + 1);
+  const offerYearsNum = Math.min(maxTermOwn, Math.max(1, parseInt(offerYears, 10) || 1));
+  const bonusCapM = resignBonusRules.eligible
+    ? Math.floor(offerAavNum * offerYearsNum * Number(resignBonusRules.max_bonus_pct || 0) * 40) / 40
+    : 0;
+  const offerBonusNum = Math.min(bonusCapM, Math.max(0, Number(offerBonus) || 0));
   const offerCapHitNum = computeOfferCapHitM(offerAavNum, offerYearsNum, offerBonusNum);
   const projectedSpace = Number.isFinite(capSpace) ? capSpace - offerCapHitNum : null;
   const askAav = Number(
@@ -746,12 +754,14 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
         : offerDiff > 0
           ? `+${formatMoney(offerDiff)} above ask`
           : `${formatMoney(offerDiff)} below ask`;
-  const sliderMax = Math.max(
+  const sliderMax = Math.min(
+    Number(resignBonusRules.max_salary_m || 99),
+    Math.max(
     12,
     askAav * 1.4 || 0,
     offerAavNum || 0,
     Number(selected?.aav_m || 0) * 1.8 || 0
-  );
+  ));
   const sliderMin = 0.775;
   const agentBits = resignAgentBits(selected, askAav, askYears);
   const decisionCount = summary.pendingDecisions ?? pending.length;
@@ -760,7 +770,6 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
   const ownWindow = payload?.own_fa_window || {};
   const bonusElig = payload?.signing_bonus || {};
   const bonusAllowed = Boolean(bonusElig.eligible);
-  const bonusMaxPct = Number(bonusElig.max_bonus_pct || 0);
   const negoInterest =
     Number(
       response?.evaluation?.interest ??
@@ -878,11 +887,9 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                       const id = String(row.player_id || "");
                       const active = id === String(selectedId);
                       const headshotPlayer = ensurePlayerHeadshotFields({
+                        ...row,
                         id,
                         player_id: id,
-                        name: row.name,
-                        position: row.position,
-                        age: row.age,
                       });
                       const phase = String(row.phase_status || row.negotiation_status || "").toLowerCase();
                       const status =
@@ -1007,6 +1014,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                     <div className={`${prefix}-identity-shot`}>
                       <PlayerHeadshot
                         player={ensurePlayerHeadshotFields({
+                          ...selected,
                           id: selected.player_id,
                           player_id: selected.player_id,
                           name: selected.name,
@@ -1202,6 +1210,12 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                           {offerDiffLabel}
                         </p>
 
+                        <NegotiationMeetingPanel
+                          playerId={selected?.player_id}
+                          compact
+                          onChanged={() => setMeetingRev((v) => v + 1)}
+                        />
+
                         <div className={`${prefix}-nego-meter`} aria-label="Negotiation interest">
                           <div className={`${prefix}-nego-meter-head`}>
                             <span>Deal interest</span>
@@ -1377,7 +1391,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                               role="group"
                               aria-label="Contract term"
                             >
-                              {[1, 2, 3, 4, 5, 6, 7, 8].map((y) => (
+                              {termOptionsOwn.map((y) => (
                                 <button
                                   key={y}
                                   type="button"
@@ -1472,15 +1486,9 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                                 type="range"
                                 className={`${prefix}-salary-slider`}
                                 min={0}
-                                max={Math.max(
-                                  0.25,
-                                  offerAavNum * offerYearsNum * (bonusMaxPct || 0.08)
-                                )}
+                                max={bonusCapM}
                                 step="0.025"
-                                value={Math.min(
-                                  offerAavNum * offerYearsNum * (bonusMaxPct || 0.08),
-                                  Math.max(0, offerBonusNum)
-                                )}
+                                value={offerBonusNum}
                                 disabled={busy}
                                 onChange={(e) => setOfferBonus(Number(e.target.value).toFixed(3))}
                               />
@@ -1596,6 +1604,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                 onClick={() => selectPlayer(id, { openNegotiate: true })}
               >
                 <article className={`${prefix}-queue-card${active ? " is-active" : ""}`}>
+                  <PlayerHeadshot player={ensurePlayerHeadshotFields({ ...p, id, player_id: id })} size="xs" />
                   <span className={`${prefix}-ovr tone-${resignOvrTone(ovr)}`}>{ovr ?? "—"}</span>
                   <div className={`${prefix}-queue-body`}>
                     <strong>{p.name || getPlayerName(p)}</strong>
@@ -1794,6 +1803,7 @@ export function FreeAgencyEventMenu({
   const [offerNmc, setOfferNmc] = React.useState(false);
   const [offerBonus, setOfferBonus] = React.useState("0");
   const [contractCategory, setContractCategory] = React.useState("nhl_one_way");
+  const [faMeetingRev, setFaMeetingRev] = React.useState(0);
 
   // Stale empty market payloads (version stamped, 0 agents) left the Wire blank.
   // Always refresh from the desk so overseas / July 1 pools appear.
@@ -1875,8 +1885,13 @@ export function FreeAgencyEventMenu({
   }, [selected?.player_id || selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const offerAavNum = Number(offerAav) || 0;
-  const offerYearsNum = Math.max(1, parseInt(offerYears, 10) || 1);
-  const offerBonusNum = Number(offerBonus) || 0;
+  const maxTermUfa = Math.max(1, Number(bonus.max_term_ufa || 6));
+  const termOptionsUfa = Array.from({ length: maxTermUfa }, (_, i) => i + 1);
+  const offerYearsNum = Math.min(maxTermUfa, Math.max(1, parseInt(offerYears, 10) || 1));
+  const bonusCapM = bonusAllowed
+    ? Math.floor(offerAavNum * offerYearsNum * Number(bonus.max_bonus_pct || 0) * 40) / 40
+    : 0;
+  const offerBonusNum = Math.min(bonusCapM, Math.max(0, Number(offerBonus) || 0));
   const offerCapHitNum = computeOfferCapHitM(offerAavNum, offerYearsNum, offerBonusNum);
   const projectedSpace = Number.isFinite(capSpace) ? capSpace - offerCapHitNum : null;
   const negoInterest = Number(response?.evaluation?.interest ?? response?.player_response?.interest ?? 0) || 0;
@@ -1914,7 +1929,7 @@ export function FreeAgencyEventMenu({
       window.clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, offerAav, offerYears, offerNtcMode, offerNmc, offerBonus, contractCategory]);
+  }, [selectedId, offerAav, offerYears, offerNtcMode, offerNmc, offerBonus, contractCategory, faMeetingRev]);
 
   const filtered = React.useMemo(() => {
     let list = [...rows];
@@ -2324,25 +2339,13 @@ export function FreeAgencyEventMenu({
                       className={`${prefix}-fa-row${active ? " is-selected" : ""}`}
                       onClick={() => setSelectedId(id)}
                     >
-                      <span className={`${prefix}-fa-prev`}>
-                        <TeamLogoBadge
-                          teamLogo={resolveFranchiseTeamLogo(
-                            { abbrev: prevAbbr, team_abbrev: prevAbbr, name: prevName },
-                            prevName
-                          )}
-                          teamName={prevName}
-                          size={28}
-                          variant="circle"
-                        />
+                      <span className={`${prefix}-fa-prev`} title={prevName || undefined}>
+                        <PlayerHeadshot player={ensurePlayerHeadshotFields({ ...p, id, player_id: id })} size="xs" />
                       </span>
                       <span className={`${prefix}-fa-row-body`}>
                         <strong>{getPlayerName(p)}</strong>
                         <em>
-                          {[
-                            getPlayerPosition(p),
-                            getPlayerOverall(p) != null ? `${getPlayerOverall(p)} OVR` : null,
-                            p.age != null ? `Age ${p.age}` : null,
-                          ]
+                          {[getPlayerPosition(p), p.age != null ? `Age ${p.age}` : null, prevAbbr || null]
                             .filter(Boolean)
                             .join(" · ")}
                         </em>
@@ -2350,6 +2353,16 @@ export function FreeAgencyEventMenu({
                           {String(p.decision_state || "awaiting").replace(/_/g, " ")}
                           {" · "}
                           Interest {String(interest)}
+                        </span>
+                      </span>
+                      <span className={`${prefix}-fa-rating`}>
+                        <span>
+                          <b>{getPlayerOverall(p) ?? "—"}</b>
+                          <i>OVR</i>
+                        </span>
+                        <span className="is-pot">
+                          <b>{p.potential ?? p.pot ?? "—"}</b>
+                          <i>POT</i>
                         </span>
                       </span>
                       <span className={`${prefix}-fa-logos`}>
@@ -2402,6 +2415,7 @@ export function FreeAgencyEventMenu({
                     <div className={`${prefix}-fa-shot`}>
                       <PlayerHeadshot
                         player={ensurePlayerHeadshotFields({
+                          ...deskPlayer,
                           id: deskPlayer.player_id || deskPlayer.id,
                           player_id: deskPlayer.player_id || deskPlayer.id,
                           name: getPlayerName(deskPlayer),
@@ -2598,6 +2612,11 @@ export function FreeAgencyEventMenu({
                     </div>
                   ) : null}
 
+                  <NegotiationMeetingPanel
+                    playerId={selected.player_id || selected.id}
+                    onChanged={() => setFaMeetingRev((v) => v + 1)}
+                  />
+
                   <div className={`${prefix}-fa-controls`}>
                     <label className={`${prefix}-field`}>
                       Type
@@ -2623,10 +2642,10 @@ export function FreeAgencyEventMenu({
                         type="range"
                         className={`${prefix}-salary-slider`}
                         min={0.775}
-                        max={Math.max(12, offerAavNum * 1.35, Number(selected.ask_aav_m || selected.askingAav || 4) * 1.4)}
+                        max={Math.min(Number(bonus.max_salary_m || 99), Math.max(12, offerAavNum * 1.35, Number(selected.ask_aav_m || selected.askingAav || 4) * 1.4))}
                         step="0.025"
                         value={Math.min(
-                          Math.max(12, offerAavNum * 1.35, Number(selected.ask_aav_m || selected.askingAav || 4) * 1.4),
+                          Math.min(Number(bonus.max_salary_m || 99), Math.max(12, offerAavNum * 1.35, Number(selected.ask_aav_m || selected.askingAav || 4) * 1.4)),
                           Math.max(0.775, offerAavNum || 0.775)
                         )}
                         disabled={busy}
@@ -2636,7 +2655,7 @@ export function FreeAgencyEventMenu({
                     <div className={`${prefix}-term-block`}>
                       <span className={`${prefix}-mini-label`}>Term</span>
                       <div className={`${prefix}-term-seg`}>
-                        {[1, 2, 3, 4, 5, 6, 7, 8].map((y) => (
+                        {termOptionsUfa.map((y) => (
                           <button
                             key={y}
                             type="button"
@@ -2682,9 +2701,9 @@ export function FreeAgencyEventMenu({
                           type="range"
                           className={`${prefix}-salary-slider`}
                           min={0}
-                          max={Math.max(0.25, offerAavNum * offerYearsNum * Number(bonus.max_bonus_pct || 0.08))}
+                          max={bonusCapM}
                           step="0.025"
-                          value={Math.max(0, Math.min(offerBonusNum, offerAavNum * offerYearsNum * Number(bonus.max_bonus_pct || 0.08)))}
+                          value={offerBonusNum}
                           disabled={busy}
                           onChange={(e) => setOfferBonus(Number(e.target.value).toFixed(3))}
                         />
@@ -4221,14 +4240,6 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
                 </strong>
               </div>
               <div className={`${prefix}-impact-card`}>
-                <span>Reserve</span>
-                <strong>{payload?.reserve_rights ?? prospects.length}</strong>
-              </div>
-              <div className={`${prefix}-impact-card`}>
-                <span>Urgent</span>
-                <strong>{urgentCount}</strong>
-              </div>
-              <div className={`${prefix}-impact-card`}>
                 <span>Acceptance</span>
                 <strong>
                   {isSigning && acceptance?.acceptance_pct != null
@@ -4244,6 +4255,7 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
               <div className={`${prefix}-nego-col`}>
                 <article className={`${prefix}-player-card`}>
                   <div className={`${prefix}-player-card-top`}>
+                    <PlayerHeadshot player={{ ...focus, id: focus.player_id }} size="md" />
                     <div className={`${prefix}-pos-badge`}>
                       <strong>{focus.position || getPlayerPosition(focus) || "—"}</strong>
                       <span>{ovr != null ? ovr : "OVR"}</span>
@@ -4283,12 +4295,6 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
                         <strong>{pot}</strong>
                       </div>
                     ) : null}
-                    {focus.expected_role ? (
-                      <div className={`${prefix}-stat-cell`}>
-                        <span>Role</span>
-                        <strong title={focus.expected_role}>{focus.expected_role}</strong>
-                      </div>
-                    ) : null}
                     {focus.eta != null ? (
                       <div className={`${prefix}-stat-cell`}>
                         <span>ETA</span>
@@ -4305,12 +4311,6 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
                         </strong>
                       </div>
                     )}
-                    {env.grade ? (
-                      <div className={`${prefix}-stat-cell`}>
-                        <span>Env</span>
-                        <strong>{humanizeLabel(env.grade)}</strong>
-                      </div>
-                    ) : null}
                     <div className={`${prefix}-stat-cell`}>
                       <span>Slide</span>
                       <strong>
@@ -4320,9 +4320,37 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
                       </strong>
                     </div>
                   </div>
+                  {[focus.shoots ? `Shoots ${focus.shoots}` : null, focus.height ? `${focus.height}` : null, focus.weight ? `${focus.weight} lb` : null, focus.nationality || null, focus.draft_year ? `Drafted ${focus.draft_year}${focus.draft_overall_pick ? ` · #${focus.draft_overall_pick}` : ""}` : null]
+                    .filter(Boolean).length ? (
+                    <p className={`${prefix}-context`}>
+                      {[focus.shoots ? `Shoots ${focus.shoots}` : null, focus.height ? `${focus.height}` : null, focus.weight ? `${focus.weight} lb` : null, focus.nationality || null, focus.draft_year ? `Drafted ${focus.draft_year}${focus.draft_overall_pick ? ` · #${focus.draft_overall_pick}` : ""}` : null]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                  ) : null}
+                  {focus.season_stats ? (
+                    <div className={`${prefix}-contract-rows`}>
+                      <div className={`${prefix}-contract-row`}>
+                        <span>This season{focus.season_stats.league ? ` · ${String(focus.season_stats.league).replace(/^CHL_/, "")}` : ""}</span>
+                        <strong>
+                          {focus.season_stats.save_pct != null && focus.position === "G"
+                            ? `${focus.season_stats.gp} GP · ${focus.season_stats.wins ?? 0}W · ${Number(focus.season_stats.save_pct).toFixed(3)} SV% · ${focus.season_stats.gaa ?? "—"} GAA`
+                            : `${focus.season_stats.gp} GP · ${focus.season_stats.goals ?? 0}G ${focus.season_stats.assists ?? 0}A ${focus.season_stats.points ?? 0}P${focus.season_stats.ppg != null ? ` · ${Number(focus.season_stats.ppg).toFixed(2)} P/GP` : ""}`}
+                        </strong>
+                      </div>
+                      {focus.season_stats.stock_label ? (
+                        <div className={`${prefix}-contract-row`}>
+                          <span>Stock</span>
+                          <strong>{focus.season_stats.stock_label}</strong>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className={`${prefix}-context`}>No games logged this season yet.</p>
+                  )}
                 </article>
 
-                <div className={`${prefix}-reasons`}>
+                <div className={`${prefix}-reasons`} style={{ display: "none" }}>
                   <div className={`${prefix}-reason-col is-sign`}>
                     <h4>Sign</h4>
                     <ul>
@@ -4454,7 +4482,7 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
                   return (
                     <React.Fragment key={section}>
                       <p className={`${prefix}-offer-label`}>{label}</p>
-                      <div className={`${prefix}-offer-scroll`} style={{ flex: "0 0 auto", maxHeight: section === "sign" ? "9.5rem" : "6.5rem" }}>
+                      <div className={`${prefix}-offer-list`} style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
                         {rows.map((pkg) => {
                           const selected =
                             selectedPackage && pkg.packageId === selectedPackage.packageId;

@@ -12294,20 +12294,17 @@ class SimEngine:
             trio: List[Any] = []
             for slot in ("LW", "C", "RW"):
                 raw_pid = str(slots.get(slot) or "")
-                if not raw_pid:
-                    continue
-                p = _healthy(raw_pid)
-                if p is not None:
-                    pid = _id_str(p, "id")
-                    if not pid or pid in assigned_ids:
-                        continue
+                p = _healthy(raw_pid) if raw_pid else None
+                pid = _id_str(p, "id") if p is not None else ""
+                if pid and pid not in assigned_ids:
                     assigned_ids.add(pid)
                     trio.append(p)
                     continue
-                if self._gm_lookup_roster_player(by_id, raw_pid) is not None:
-                    cover = _take_from_scratch_pool(is_d=False)
-                    if cover is not None:
-                        trio.append(cover)
+                # Injured, empty, or no longer on the roster (sent down / traded):
+                # dress a healthy scratch instead of playing the line a man short.
+                cover = _take_from_scratch_pool(is_d=False)
+                if cover is not None:
+                    trio.append(cover)
             forward_lines[i] = trio
 
         defense_pairs: List[List[Any]] = [[], [], []]
@@ -12318,20 +12315,15 @@ class SimEngine:
             duo: List[Any] = []
             for slot in ("LD", "RD"):
                 raw_pid = str(slots.get(slot) or "")
-                if not raw_pid:
-                    continue
-                p = _healthy(raw_pid)
-                if p is not None:
-                    pid = _id_str(p, "id")
-                    if not pid or pid in assigned_ids:
-                        continue
+                p = _healthy(raw_pid) if raw_pid else None
+                pid = _id_str(p, "id") if p is not None else ""
+                if pid and pid not in assigned_ids:
                     assigned_ids.add(pid)
                     duo.append(p)
                     continue
-                if self._gm_lookup_roster_player(by_id, raw_pid) is not None:
-                    cover = _take_from_scratch_pool(is_d=True)
-                    if cover is not None:
-                        duo.append(cover)
+                cover = _take_from_scratch_pool(is_d=True)
+                if cover is not None:
+                    duo.append(cover)
             defense_pairs[i] = duo
 
         starter_id = backup_id = third_id = ""
@@ -15216,6 +15208,19 @@ class SimEngine:
         """
         from app.sim_engine.gameplay.game_analytics_ledger import estimate_pp_opportunities
 
+        # ``ledger`` is the SEASON ledger. Snapshot every rostered player's line before the
+        # game so the box score carries this game's numbers, not season totals (season
+        # totals in boxes made every 3+ goal scorer "record a hat trick" every night).
+        _box_keys = ("g", "a", "sog", "pim", "hit", "blk", "toi_sec")
+        _pre_game: Dict[str, Tuple[int, ...]] = {}
+        if build_game_payload:
+            for _team in (home, away):
+                for _p in list(getattr(_team, "roster", None) or []):
+                    _pid = _id_str(_p, "id")
+                    if _pid:
+                        _row = ledger.get(_pid) or {}
+                        _pre_game[_pid] = tuple(int(_row.get(k, 0) or 0) for k in _box_keys)
+
         if light_mode:
             setattr(self, "_pending_event_game", None)
             result = self._accumulate_light_strength_game_stats(
@@ -15271,6 +15276,9 @@ class SimEngine:
         else:
             cache = getattr(self, "_pending_event_game", None)
             cache_key = (str(hid), str(aid), int(hg), int(ag), bool(ot), False)
+            _pend = getattr(self, "_pending_event_games", None)
+            if isinstance(_pend, dict) and cache_key in _pend:
+                cache = _pend.pop(cache_key)
             if isinstance(cache, dict) and cache.get("_key") == cache_key:
                 result = cache["result"]
                 self._merge_game_ledger(ledger, cache.get("scratch") or {})
@@ -15342,17 +15350,22 @@ class SimEngine:
                 if not pid:
                     continue
                 row = ledger.get(pid, {})
+                pre = _pre_game.get(pid) or (0,) * len(_box_keys)
+
+                def _game_val(key: str, idx: int) -> int:
+                    return max(0, int(row.get(key, 0) or 0) - int(pre[idx]))
+
                 out.append({
                     "player_id": pid,
                     "name": row.get("name", "?"),
                     "position": row.get("position", "?"),
-                    "g": int(row.get("g", 0) or 0),
-                    "a": int(row.get("a", 0) or 0),
-                    "sog": int(row.get("sog", 0) or 0),
-                    "pim": int(row.get("pim", 0) or 0),
-                    "hit": int(row.get("hit", 0) or 0),
-                    "blk": int(row.get("blk", 0) or 0),
-                    "toi_sec": int(row.get("toi_sec", 0) or 0),
+                    "g": _game_val("g", 0),
+                    "a": _game_val("a", 1),
+                    "sog": _game_val("sog", 2),
+                    "pim": _game_val("pim", 3),
+                    "hit": _game_val("hit", 4),
+                    "blk": _game_val("blk", 5),
+                    "toi_sec": _game_val("toi_sec", 6),
                 })
             return sorted(out, key=lambda x: (-int(x.get("g", 0)), -int(x.get("a", 0)), str(x.get("name", ""))))
 
@@ -15893,7 +15906,7 @@ class SimEngine:
         """
         if light_mode:
             setattr(self, "_pending_event_game", None)
-            return self._simulate_game_strength(
+            out = self._simulate_game_strength(
                 rng,
                 home,
                 away,
@@ -15902,6 +15915,21 @@ class SimEngine:
                 away_strength_scale=away_strength_scale,
                 noise_scale=noise_scale,
             )
+            # Remember fast-path finals so stat accumulation uses the same (light) model
+            # instead of re-simulating a different event game for the box score.
+            try:
+                lk = getattr(self, "_light_scored_games", None)
+                if not isinstance(lk, set) or len(lk) > 256:
+                    lk = set()
+                lk.add((
+                    str(getattr(home, "team_id", getattr(home, "id", "H"))),
+                    str(getattr(away, "team_id", getattr(away, "id", "A"))),
+                    int(out[0]), int(out[1]), bool(out[2]),
+                ))
+                setattr(self, "_light_scored_games", lk)
+            except Exception:
+                pass
+            return out
 
         hid = str(getattr(home, "team_id", getattr(home, "id", "H")))
         aid = str(getattr(away, "team_id", getattr(away, "id", "A")))
@@ -15921,11 +15949,22 @@ class SimEngine:
         hg = int(result.get("home_goals", 0))
         ag = int(result.get("away_goals", 0))
         ot = bool(result.get("overtime", False))
-        setattr(self, "_pending_event_game", {
+        entry = {
             "_key": (hid, aid, hg, ag, ot, False),
             "result": result,
             "scratch": scratch,
-        })
+        }
+        setattr(self, "_pending_event_game", entry)
+        # A game day simulates every score first and accumulates stats afterwards; a
+        # single-slot cache meant all but the last game re-simulated (different goals ->
+        # player stats that didn't add up to the official score). Keep one per matchup.
+        pend = getattr(self, "_pending_event_games", None)
+        if not isinstance(pend, dict):
+            pend = {}
+        if len(pend) > 64:
+            pend.clear()
+        pend[entry["_key"]] = entry
+        setattr(self, "_pending_event_games", pend)
         return hg, ag, ot
 
     def _standings_sync_team_metrics(self, standings: StandingsTable, teams: List[Any]) -> None:

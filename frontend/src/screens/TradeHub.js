@@ -2512,7 +2512,7 @@ function partnerProtectionLists(meta, partnerTeamId) {
       !needsNtcWaive && // waived path flips tradeable later; NTC without waive is hard via needsNtcWaive
       Boolean(p.tradeBlockReason || isNmc);
 
-    const hardHit = isNmc || needsNtcWaive || unavailable;
+    const hardHit = (isNmc && !p.ntcWaived) || needsNtcWaive || unavailable;
     const softHit =
       !hardHit &&
       (ovr >= 88 ||
@@ -2772,7 +2772,8 @@ function AssetPoolRow({
   const blocked = item.tradeable === false;
   const affiliateLevel = String(item.orgLevel || item.assignment_level || "").toLowerCase();
   const isAffiliate = affiliateLevel === "ahl" || affiliateLevel === "echl";
-  const ntcLocked = blocked && (item.requiresNtcWaive || String(item.protection || item.clauseLabel || "").toUpperCase().includes("NTC")) && !item.ntcWaived;
+  const clauseUpper = String(item.protection || item.clauseLabel || "").toUpperCase();
+  const ntcLocked = blocked && (item.requiresNtcWaive || /NTC|NMC/.test(clauseUpper)) && !item.ntcWaived;
   const draggable = !used && !blocked;
   const originalTeamId = String(item?.original_team_id || "");
   const originalTeamById = teamLookup?.[originalTeamId] || null;
@@ -2793,7 +2794,7 @@ function AssetPoolRow({
   );
   const blockTitle =
     item.ntcWaived
-      ? "NTC waived — slightly reduced trade value"
+      ? "Clause waived — slightly reduced trade value"
       : item.tradeBlockReason ||
         (isAhlProspect || (isAffiliate && blocked)
           ? "Affiliate without NHL SPC"
@@ -2817,8 +2818,8 @@ function AssetPoolRow({
       WAIVED
     </span>
   ) : ntcLocked ? (
-    <span className="trade-pool-status-pill locked" title={blockTitle || "Ask to waive NTC"}>
-      NTC
+    <span className="trade-pool-status-pill locked" title={`${blockTitle ? `${blockTitle} — ` : ""}Click to ask him to waive`}>
+      {/NMC/.test(clauseUpper) ? "NMC" : /M-NTC/.test(clauseUpper) ? "M-NTC" : "NTC"} · ASK
     </span>
   ) : item.conductTradeRestricted ? (
     <span className="trade-pool-status-pill locked" title={blockTitle || "Restricted trade market after conduct matter"}>
@@ -3602,7 +3603,13 @@ function CapManagementPanel({ team, capImpact, evaluation, teamId, label }) {
     { label: "Cap Space", value: formatMoneyM(team.capSpace), tone: team.capSpace >= 0 ? "good" : "bad" },
     { label: "After Trade", value: capAfter != null ? formatMoneyM(capAfter) : "—", tone: capAfter == null ? "" : capAfter >= 0 ? "good" : "bad" },
     { label: "Delta", value: capDelta != null ? `${capDelta >= 0 ? "+" : ""}${formatMoneyShort(capDelta)}` : "—", tone: capDelta == null ? "" : capDelta <= 0 ? "good" : "bad" },
-    { label: "Roster", value: roster ? `${roster.after}` : `${team.rosterCount}`, tone: roster?.after > 23 ? "bad" : "good" },
+    {
+      label: "NHL Roster",
+      value: roster
+        ? `${roster.after}/23${Number(roster.send_downs) > 0 ? ` · ${roster.send_downs} to AHL` : ""}`
+        : `${team.rosterCount}/23`,
+      tone: roster?.after > 23 ? "bad" : Number(roster?.send_downs) > 0 ? "" : "good",
+    },
   ];
   if (capDetail.projected_deadline_space != null) {
     rows.push({
@@ -3770,7 +3777,8 @@ function AssetContextMenu({
     Boolean(onAskNtcWaive) &&
     !asset.ntcWaived &&
     (asset.requiresNtcWaive ||
-      String(asset.protection || asset.clauseLabel || "").toUpperCase().includes("NTC"));
+      /NTC|NMC/.test(String(asset.protection || asset.clauseLabel || "").toUpperCase()));
+  const clauseWord = /NMC/.test(String(asset.protection || asset.clauseLabel || "").toUpperCase()) ? "NMC" : "NTC";
 
   return (
     <div className="trade-ctx-overlay" onClick={onClose}>
@@ -3822,7 +3830,7 @@ function AssetContextMenu({
         </div>
         {asset.ntcWaived ? (
           <div className="trade-ctx-block trade-ctx-waive-ok">
-            NTC waived{asset.ntcWaiverReason ? ` — ${asset.ntcWaiverReason}` : ""}. Value slightly reduced.
+            {clauseWord} waived{asset.ntcWaiverReason ? ` — ${asset.ntcWaiverReason}` : ""}. Value slightly reduced.
           </div>
         ) : asset.tradeable === false ? (
           <div className="trade-ctx-block">{asset.tradeBlockReason || "Not tradeable"}</div>
@@ -3836,7 +3844,7 @@ function AssetContextMenu({
           )}
           {canAskWaive && (
             <button type="button" className="primary" disabled={waiveBusy} onClick={onAskNtcWaive}>
-              {waiveBusy ? "Asking…" : "Ask to Waive NTC"}
+              {waiveBusy ? "Asking…" : `Ask him to waive his ${clauseWord}`}
             </button>
           )}
           <button type="button" onClick={onCompare}>Compare</button>
@@ -3870,6 +3878,9 @@ const VALUE_DRIVER_LABELS = [
   ["elc", "ELC"],
   ["injury", "Injury"],
   ["risk", "Risk"],
+  ["prospect_premium", "Prospect ceiling"],
+  ["role_adjust", "Role / org level"],
+  ["role_contract", "Pay vs role"],
 ];
 
 function valueDriverStrength(abs) {
@@ -6636,7 +6647,13 @@ function finderAssetLabel(a) {
 
 function finderAssetMeta(a) {
   if (a.type === "pick") return "Pick";
-  return [a.pos, a.age ? `${a.age}y` : null, a.level === "AHL" ? "AHL" : null].filter(Boolean).join(" · ");
+  return [
+    a.pos,
+    a.age ? `${a.age}y` : null,
+    a.level === "AHL" ? "AHL" : null,
+    (a.cap_full_m ?? a.cap_m) ? `$${Number(a.cap_full_m ?? a.cap_m).toFixed(2)}M` : null,
+    Number(a.retained) > 0 ? `${a.retained}% retained` : null,
+  ].filter(Boolean).join(" · ");
 }
 
 function orgAssetsFor(meta, teamId) {
@@ -6656,22 +6673,53 @@ function FinderOfferCard({ offer, team, onLoad }) {
   const side = (list) => (
     <ul className="th-offer-assets">
       {list.map((a) => (
-        <li key={`${a.type}-${a.id}`}>
-          <span className={`th-offer-type type-${a.type}`}>{a.type === "pick" ? "PK" : a.pos || "P"}</span>
-          <strong>{finderAssetLabel(a)}</strong>
+        <li key={`${a.type}-${a.id}`} className={a.type === "pick" ? "is-pick" : ""}>
+          {a.type === "pick" ? (
+            <span className="th-offer-type type-pick">PK</span>
+          ) : (
+            <PlayerHeadshot
+              player={ensurePlayerHeadshotFields({ ...a, position: a.pos })}
+              size="sm"
+              className="th-offer-face"
+              flag={null}
+              number={null}
+            />
+          )}
+          <strong title={finderAssetLabel(a)}>{finderAssetLabel(a)}</strong>
           <em>{finderAssetMeta(a)}</em>
-          <b className="th-num">{Number(a.value).toFixed(1)}</b>
+          {a.type === "player" && a.ovr != null ? (
+            <span className="th-offer-rating">
+              <b className="th-num">{a.ovr}</b>
+              <i>{a.pot != null && a.pot > a.ovr ? `POT ${a.pot}` : "OVR"}</i>
+            </span>
+          ) : (
+            <span className="th-offer-rating is-val">
+              <b className="th-num">{Number(a.value).toFixed(0)}</b>
+              <i>VAL</i>
+            </span>
+          )}
         </li>
       ))}
     </ul>
   );
   return (
-    <article className="th-offer">
+    <article className={`th-offer${offer.desperate ? " is-desperate" : ""}`}>
+      {offer.desperate ? (
+        <div className="th-offer-desperate">
+          <b>Offer you can't refuse</b>
+          <span>{offer.desperate_note || "A desperate club is overpaying — it won't last."}</span>
+        </div>
+      ) : null}
       <header className="th-offer-head">
-        {team ? <TradeLogo team={team} size={26} /> : null}
-        <strong>{offer.partner_name}</strong>
-        {team ? <em className={`th-side-pill side-${marketSideOf(team)}`}>{team.tradeDirectionLabel || team.direction}</em> : null}
-        <span className="th-offer-accept">GM accepts{interest != null ? ` · ${interest}% interest` : ""}</span>
+        <div className="th-offer-team">
+          {team ? <TradeLogo team={team} size={28} /> : null}
+          <strong>{offer.partner_name}</strong>
+          {team ? <em className={`th-side-pill side-${marketSideOf(team)}`}>{team.tradeDirectionLabel || team.direction}</em> : null}
+        </div>
+        <div className="th-offer-tags">
+          {offer.archetype ? <span className="th-offer-arch">{offer.archetype}</span> : null}
+          <span className="th-offer-accept">GM accepts{interest != null ? ` · ${interest}%` : ""}</span>
+        </div>
       </header>
       <div className="th-offer-body">
         <div>
@@ -6683,6 +6731,9 @@ function FinderOfferCard({ offer, team, onLoad }) {
           {side(offer.user_gets)}
         </div>
       </div>
+      {safeArray(offer.send_downs).length ? (
+        <p className="th-offer-note">Roster move: {safeArray(offer.send_downs).join(", ")} assigned to the AHL to make room.</p>
+      ) : null}
       <footer className="th-offer-foot">
         <span>
           Value <span className="th-num">{Number(offer.user_gives_value).toFixed(1)}</span> →{" "}
@@ -8104,20 +8155,6 @@ export default function TradeHub() {
 
   const partnerAfterCap = projectedTeamCapSpace(partnerTeam, partnerOutgoing, userOutgoing);
   const userAfterCap = projectedTeamCapSpace(userTeam, userOutgoing, partnerOutgoing);
-  const partnerRosterAfter = (() => {
-    const base = Number(partnerTeam?.rosterCount ?? partnerTeam?.rosterCapacity?.nhl_count);
-    if (!Number.isFinite(base)) return null;
-    const out = partnerOutgoing.filter((a) => a && a.type === "player").length;
-    const inn = userOutgoing.filter((a) => a && a.type === "player").length;
-    return base - out + inn;
-  })();
-  const userRosterAfter = (() => {
-    const base = Number(userTeam?.rosterCount ?? userTeam?.rosterCapacity?.nhl_count);
-    if (!Number.isFinite(base)) return null;
-    const out = userOutgoing.filter((a) => a && a.type === "player").length;
-    const inn = partnerOutgoing.filter((a) => a && a.type === "player").length;
-    return base - out + inn;
-  })();
   const partnerSlotsAfter = (() => {
     const used = Number(partnerTeam?.contractSlots?.used);
     const limit = Number(partnerTeam?.contractSlots?.limit ?? 50);
@@ -8150,12 +8187,8 @@ export default function TradeHub() {
     if (!pickOnly && Number.isFinite(userAfterCap) && userAfterCap < -0.05) {
       return `You would be −${formatMoneyShort(Math.abs(userAfterCap))} under the cap.`;
     }
-    if (!pickOnly && Number.isFinite(partnerRosterAfter) && partnerRosterAfter > 23) {
-      return `${partnerTeam?.abbr || "Partner"} would exceed the 23-man roster (${partnerRosterAfter}/23).`;
-    }
-    if (!pickOnly && Number.isFinite(userRosterAfter) && userRosterAfter > 23) {
-      return `You would exceed the 23-man roster (${userRosterAfter}/23).`;
-    }
+    // The NHL 23-man limit is not a trade blocker: overflow is assigned to the AHL as
+    // part of the deal. The organizational limit that matters is 50 contracts (below).
     if (!pickOnly && partnerSlotsAfter && partnerSlotsAfter.used > partnerSlotsAfter.limit) {
       return `${partnerTeam?.abbr || "Partner"} would exceed 50 SPCs (${partnerSlotsAfter.used}/50).`;
     }
@@ -8481,7 +8514,9 @@ export default function TradeHub() {
           const pool = a.type === "pick" ? picks : players;
           const item = pool.find((x) => String(x.id || x.pick_id) === String(a.id));
           if (!item) return null;
-          return prepareAssetForSide(item, side, tid) || { ...item, type: a.type, teamId: tid };
+          const prepared = prepareAssetForSide(item, side, tid) || { ...item, type: a.type, teamId: tid };
+          const ret = Number(a.retained || 0);
+          return ret > 0 ? { ...prepared, retained_pct: ret } : prepared;
         })
         .filter(Boolean);
     const left = resolve(offer.user_gives, userTid, "left");
@@ -16950,34 +16985,41 @@ const TRADE_HUB_CSS = `
 .nhlcal-root.trade-hub-root .th-near b { color: var(--text); }
 .nhlcal-root.trade-hub-root .th-offer-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+  gap: 12px;
   margin-top: 4px;
   align-content: start;
+  align-items: start;
 }
-.nhlcal-root.trade-hub-root .th-offer-grid.has-offers {
-  flex: 1;
-  min-height: 280px;
-  align-content: stretch;
-  grid-auto-rows: 1fr;
-}
+.nhlcal-root.trade-hub-root .th-offer-grid.has-offers { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
 .nhlcal-root.trade-hub-root .th-offer {
   display: flex;
   flex-direction: column;
-  min-height: 220px;
-  height: 100%;
   border: 1px solid var(--line);
   border-radius: var(--th-radius);
-  background: rgba(0, 0, 0, 0.2);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(0, 0, 0, 0.22));
+  transition: border-color 0.15s ease, transform 0.15s ease;
 }
+.nhlcal-root.trade-hub-root .th-offer:hover { border-color: rgba(70, 214, 230, 0.45); transform: translateY(-1px); }
 .nhlcal-root.trade-hub-root .th-offer-head {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--line);
 }
-.nhlcal-root.trade-hub-root .th-offer-head strong { font-family: var(--th-head); font-size: 16px; font-weight: 700; color: var(--text); }
+.nhlcal-root.trade-hub-root .th-offer-team { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.nhlcal-root.trade-hub-root .th-offer-team strong {
+  font-family: var(--th-head); font-size: 17px; font-weight: 700; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.nhlcal-root.trade-hub-root .th-offer-team .th-side-pill { margin-left: auto; flex-shrink: 0; }
+.nhlcal-root.trade-hub-root .th-offer-tags { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.nhlcal-root.trade-hub-root .th-offer-arch {
+  padding: 3px 8px; border-radius: 999px; border: 1px solid rgba(180, 140, 255, 0.45);
+  background: rgba(150, 100, 255, 0.12); color: #cdb6ff;
+  font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+}
 .nhlcal-root.trade-hub-root .th-offer-accept {
   margin-left: auto;
   font-size: 10px;
@@ -16988,31 +17030,66 @@ const TRADE_HUB_CSS = `
   white-space: nowrap;
 }
 .nhlcal-root.trade-hub-root .th-offer-body { display: grid; grid-template-columns: 1fr 1fr; }
-.nhlcal-root.trade-hub-root .th-offer-body > div { padding: 8px 10px; min-width: 0; }
+.nhlcal-root.trade-hub-root .th-offer-body > div { padding: 10px 12px; min-width: 0; }
 .nhlcal-root.trade-hub-root .th-offer-body > div + div { border-left: 1px solid var(--line); }
-.nhlcal-root.trade-hub-root .th-offer-assets { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.nhlcal-root.trade-hub-root .th-offer-assets { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .nhlcal-root.trade-hub-root .th-offer-assets li {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
   grid-template-areas: "type name val" "type meta val";
-  gap: 0 6px;
+  gap: 1px 8px;
   align-items: center;
 }
+.nhlcal-root.trade-hub-root .th-offer-face { grid-area: type; width: 38px !important; height: 38px !important; }
 .nhlcal-root.trade-hub-root .th-offer-type {
   grid-area: type;
   display: grid;
   place-items: center;
-  height: 22px;
+  height: 38px;
   border-radius: var(--th-radius);
   background: rgba(255, 255, 255, 0.06);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 900;
   color: var(--muted);
 }
 .nhlcal-root.trade-hub-root .th-offer-type.type-pick { color: var(--gold); background: var(--gold-soft); }
-.nhlcal-root.trade-hub-root .th-offer-assets strong { grid-area: name; font-size: 12px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.nhlcal-root.trade-hub-root .th-offer-assets em { grid-area: meta; font-style: normal; font-size: 10px; color: var(--muted); }
-.nhlcal-root.trade-hub-root .th-offer-assets b { grid-area: val; font-size: 11px; font-weight: 500; color: var(--muted); }
+.nhlcal-root.trade-hub-root .th-offer-assets strong {
+  grid-area: name; font-size: 14px; font-weight: 700; color: var(--text); line-height: 1.2;
+  overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.nhlcal-root.trade-hub-root .th-offer-assets em { grid-area: meta; font-style: normal; font-size: 11.5px; color: var(--muted); line-height: 1.3; overflow-wrap: anywhere; }
+.nhlcal-root.trade-hub-root .th-offer-rating {
+  grid-area: val; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-width: 44px; padding: 3px 6px; border-radius: 6px;
+  background: rgba(70, 214, 230, 0.1); border: 1px solid rgba(70, 214, 230, 0.3);
+}
+.nhlcal-root.trade-hub-root .th-offer-rating b { font-size: 17px; font-weight: 800; color: var(--text); line-height: 1; }
+.nhlcal-root.trade-hub-root .th-offer-rating i { font-style: normal; font-size: 9px; font-weight: 800; letter-spacing: 0.06em; color: var(--muted); margin-top: 2px; }
+.nhlcal-root.trade-hub-root .th-offer-rating.is-val { background: var(--gold-soft); border-color: rgba(245, 194, 107, 0.35); }
+.nhlcal-root.trade-hub-root .th-offer-note { margin: 0; padding: 8px 12px; font-size: 12.5px; color: #f5c26b; border-top: 1px dashed var(--line); }
+.nhlcal-root.trade-hub-root .th-offer.is-desperate {
+  border-color: rgba(242, 193, 78, 0.65) !important;
+  box-shadow: 0 0 0 1px rgba(242, 193, 78, 0.35), 0 8px 26px rgba(242, 193, 78, 0.12);
+}
+.th-offer-desperate {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: -2px 0 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgba(242, 193, 78, 0.2), rgba(242, 193, 78, 0.05));
+  color: #f2c14e;
+  font-size: 12px;
+}
+.th-offer-desperate b {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.th-offer-desperate span {
+  color: #e9dcb8;
+}
 .nhlcal-root.trade-hub-root .th-offer-foot {
   display: flex;
   align-items: center;
@@ -17021,7 +17098,7 @@ const TRADE_HUB_CSS = `
   margin-top: auto;
   padding: 8px 10px;
   border-top: 1px solid var(--line);
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
 }
 .nhlcal-root.trade-hub-root .th-offer-foot em { font-style: normal; }

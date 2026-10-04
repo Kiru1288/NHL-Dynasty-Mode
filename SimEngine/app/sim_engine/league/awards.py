@@ -22,8 +22,32 @@ logger = logging.getLogger(__name__)
 from .playoffs import PlayoffResult
 from .standings import StandingsTable, TeamStandingRecord
 
-BALLOT_POINTS = [5.0, 3.0, 1.8, 1.0, 0.6]
-VOTER_COUNT = 130
+BALLOT_POINTS = [10.0, 7.0, 5.0, 3.0, 1.0]
+VOTER_COUNT = 190
+
+# Real NHL ballot formats. PHWA trophies use 10-7-5-3-1 five-deep ballots; the
+# Vezina is voted by the 32 GMs (5-3-1); Conn Smythe by an 18-member PHWA panel;
+# Jack Adams by the NHL Broadcasters' Association; GM of the Year by the 32 GMs
+# plus an executive/media panel; Ted Lindsay by NHLPA membership.
+BALLOT_CONFIG: Dict[str, Dict[str, Any]] = {
+    "hart": {"voters": 190, "points": [10.0, 7.0, 5.0, 3.0, 1.0], "body": "PHWA"},
+    "norris": {"voters": 190, "points": [10.0, 7.0, 5.0, 3.0, 1.0], "body": "PHWA"},
+    "calder": {"voters": 190, "points": [10.0, 7.0, 5.0, 3.0, 1.0], "body": "PHWA"},
+    "selke": {"voters": 190, "points": [10.0, 7.0, 5.0, 3.0, 1.0], "body": "PHWA"},
+    "lady_byng": {"voters": 190, "points": [10.0, 7.0, 5.0, 3.0, 1.0], "body": "PHWA"},
+    "vezina": {"voters": 32, "points": [5.0, 3.0, 1.0], "body": "NHL general managers"},
+    "ted_lindsay": {"voters": 640, "points": [5.0, 3.0, 1.0], "body": "NHLPA members"},
+    "conn_smythe": {"voters": 18, "points": [5.0, 3.0, 1.0], "body": "PHWA panel"},
+    "jack_adams": {"voters": 96, "points": [5.0, 3.0, 1.0], "body": "NHL Broadcasters' Association"},
+    "gm_of_the_year": {"voters": 42, "points": [5.0, 3.0, 1.0], "body": "GMs + executive/media panel"},
+}
+
+
+def ballot_config_for(award_id: str) -> Dict[str, Any]:
+    cfg = BALLOT_CONFIG.get(str(award_id or ""))
+    if cfg:
+        return dict(cfg)
+    return {"voters": VOTER_COUNT, "points": list(BALLOT_POINTS), "body": "PHWA"}
 SUBJECTIVE_TROPHY_PUBLIC_CASE = {
     "hart": "Most valuable all-around season.",
     "norris": "Premier defenseman season.",
@@ -33,6 +57,8 @@ SUBJECTIVE_TROPHY_PUBLIC_CASE = {
     "lady_byng": "Production with exceptional discipline.",
     "ted_lindsay": "Players' view of most outstanding player.",
     "conn_smythe": "Most valuable playoff performer.",
+    "jack_adams": "Coach who most outperformed his roster's expectations.",
+    "gm_of_the_year": "Front office that built the season's biggest overachiever.",
 }
 
 VOTER_ARCHETYPES = (
@@ -190,8 +216,11 @@ STAT_ALIASES: Dict[str, Tuple[str, ...]] = {
     "en_ga": ("empty_net_goals", "en_goals"),
     "saves": ("saves",),
     "sv_pct": ("sv_pct", "save_pct"),
-    "gs": ("games_started", "gs"),
+    "gs": ("games_started", "gs", "starts"),
     "so": ("shutouts", "so"),
+    "w": ("w", "wins"),
+    "gaa": ("gaa", "goals_against_average"),
+    "sog": ("sog", "shots"),
     "gsax": ("gsax",),
     "hdsv": ("high_danger_save_pct",),
     "qs_pct": ("quality_start_pct",),
@@ -432,6 +461,8 @@ def _toi_pg_minutes(row: Mapping[str, Any]) -> float:
             return _safe_float(row.get(key))
     gp = max(1, _gp(row))
     total = _safe_float(row.get("toi"), _safe_float(row.get("toi_minutes"), 0.0))
+    if total <= 0 and row.get("toi_sec") is not None:
+        total = _safe_float(row.get("toi_sec")) / 60.0  # franchise ledger stores seconds
     if total > 0:
         return total / float(gp)
     return 0.0
@@ -980,6 +1011,11 @@ def calder_eligibility(
     gp = _gp(row)
     min_gp = _season_games_threshold(season_length, 0.30, minimum=20)
     age = _player_age(row, teams)
+    # NHL age rule is "under 26 on Sept. 15 of the season" — prefer the season-start
+    # age computed from the birth date over the (possibly already aged-up) roster age.
+    if hist.get("age_sept15") is not None:
+        age = _safe_int(hist.get("age_sept15"), 0) or age
+    per_season_facts = hist.get("max_prior_season_gp") is not None
 
     prior_gp = None
     for key in ("previous_nhl_gp", "prior_nhl_gp", "nhl_gp_before", "career_nhl_gp_before_season"):
@@ -1044,12 +1080,17 @@ def calder_eligibility(
     age_ok = True if age is None else age <= 25
     gp_ok = gp >= min_gp
 
-    if flagged_rookie is True:
+    if flagged_rookie is True and per_season_facts:
+        # Flag was derived from per-season NHL GP (>25 GP in any prior season, or 6+ GP
+        # in each of two prior seasons, disqualifies) — career totals do not apply.
+        eligible = gp_ok and age_ok
+        reasons.append(str(hist.get("calder_basis") or "Per-season NHL rookie rule with participation and age checks."))
+    elif flagged_rookie is True:
         eligible = gp_ok and age_ok and prior_gp_ok
         reasons.append("Trusted is_rookie/rookie flag with participation and age checks.")
     elif flagged_rookie is False:
         eligible = False
-        reasons.append("is_rookie/rookie flag is false.")
+        reasons.append(str(hist.get("calder_basis") or "is_rookie/rookie flag is false."))
     else:
         eligible = gp_ok and age_ok and prior_gp_ok and seasons_ok
         reasons.append("History-derived first-year checks.")
@@ -1067,7 +1108,10 @@ def calder_eligibility(
             "age": age,
             "prior_nhl_gp": prior_gp,
             "prior_nhl_seasons": prior_seasons,
+            "max_prior_season_gp": hist.get("max_prior_season_gp"),
             "is_rookie_flag": flagged_rookie,
+            "age_ok": age_ok,
+            "gp_ok": gp_ok,
             "reasons": reasons,
         },
     }
@@ -1304,8 +1348,13 @@ def selke_fallback_formula(row: Mapping[str, Any], *, award_id: str = "selke") -
 
 
 def vezina_fallback_formula(row: Mapping[str, Any]) -> float:
-    sv = goalie_sv_pct(row) * 50.0
-    workload = float(_gp(row))
+    # Save quality must dominate: .033 of SV% is the gap between elite and replacement,
+    # so it is scaled to ~40 points while workload tops out at ~20 (the old sv*50 + GP
+    # mix let a 66-GP .887 starter beat every .915+ goalie).
+    sv_raw = goalie_sv_pct(row)
+    gp = float(_gp(row))
+    sv = max(0.0, (sv_raw - 0.870) * 1200.0)
+    workload = min(gp, 65.0) / 65.0 * 20.0 + _safe_float(row.get("so", row.get("shutouts")), 0.0) * 0.75
     row["_fallback_terms"] = {
         "production_component": sv,
         "goals_saved_above_expected": sv * 0.4,
@@ -1313,7 +1362,7 @@ def vezina_fallback_formula(row: Mapping[str, Any]) -> float:
         "availability_component": workload,
         "individual_value_component": sv * 0.55,
     }
-    return sv + workload
+    return sv + workload + _safe_float(row.get("w", row.get("wins")), 0.0) * 0.15
 
 
 def calder_fallback_formula(
@@ -1577,15 +1626,18 @@ def ted_lindsay_score(row: Mapping[str, Any], team_context_by_tid: Optional[Mapp
 
 
 def calder_position_score(row: Mapping[str, Any], team_context_by_tid: Optional[Mapping[str, Mapping[str, Any]]] = None) -> float:
+    # One scale for every position (the old mix compared Vezina-scale goalie scores
+    # with Hart-scale skater scores, so rookie goalies swept the Calder).
+    gp = max(1, _gp(row))
     if _is_goalie(row):
-        return vezina_ballot_score(row, team_context_by_tid) * 0.85
-    if _is_defense(row):
-        return norris_ballot_score(row, team_context_by_tid) * 0.9
-    return (
-        hart_ballot_score(row, team_context_by_tid) * 0.55
-        + selke_ballot_score(row) * 0.25
-        + (float(_pts(row)) / max(1, _gp(row))) * 10.0
-    )
+        sv = goalie_sv_pct(row)
+        wins = _safe_float(row.get("w", row.get("wins")), 0.0)
+        val = (sv - 0.900) * 1500.0 + wins * 0.9 + _safe_float(row.get("gsax"), 0.0) * 1.5
+        return val * min(1.0, gp / 40.0)
+    pts = float(_pts(row))
+    toi_pg = _toi_pg_minutes(row)
+    val = pts * (1.35 if _is_defense(row) else 1.0) + float(_goals(row)) * 0.25 + max(0.0, toi_pg - 12.0) * 1.5
+    return val + _safe_float(row.get("plus_minus"), 0.0) * 0.15
 
 
 def conn_smythe_score(row: Mapping[str, Any], *, champion_id: Optional[str] = None) -> float:
@@ -1615,6 +1667,7 @@ def simulate_award_ballots(
     award_id: str,
     season_seed: Any,
     voter_count: int = VOTER_COUNT,
+    points: Optional[Sequence[float]] = None,
 ) -> Dict[str, Any]:
     """
     Deterministic individual ballots across voter archetypes.
@@ -1628,6 +1681,7 @@ def simulate_award_ballots(
             "seed": _seed_int(season_seed, award_id),
         }
 
+    curve = [float(x) for x in (points or BALLOT_POINTS)] or list(BALLOT_POINTS)
     ordered = sorted(scored_rows, key=lambda p: p[0], reverse=True)
     rng = _rng(season_seed, "ballot", award_id)
     tallies: Dict[str, Dict[str, Any]] = {}
@@ -1641,6 +1695,7 @@ def simulate_award_ballots(
             "canonical_score": float(score),
             "ballot_points": 0.0,
             "first_place_votes": 0,
+            "placements": [0] * len(curve),
             "component_scores": comps,
         }
 
@@ -1691,9 +1746,10 @@ def simulate_award_ballots(
             adj = float(score) + float(pref) * float(archetype_bias[arch]) + noise * max(0.15, abs(float(score)))
             ranked.append((adj, pid))
         ranked.sort(key=lambda x: x[0], reverse=True)
-        for place, (_adj, pid) in enumerate(ranked[: len(BALLOT_POINTS)]):
-            pts = BALLOT_POINTS[place]
+        for place, (_adj, pid) in enumerate(ranked[: len(curve)]):
+            pts = curve[place]
             tallies[pid]["ballot_points"] += pts
+            tallies[pid]["placements"][place] += 1
             if place == 0:
                 tallies[pid]["first_place_votes"] += 1
 
@@ -1712,6 +1768,7 @@ def simulate_award_ballots(
         "voter_count": int(voter_count),
         "margin": margin,
         "seed": _seed_int(season_seed, award_id),
+        "points": list(curve),
     }
 
 
@@ -1730,6 +1787,12 @@ def _fmt_stat_value(value: Any, fmt: str) -> str:
         return f"{x:.2f}"
     if fmt == "signed":
         return f"{x:+.0f}" if abs(x - int(x)) < 1e-6 else f"{x:+.2f}"
+    if fmt == "toi":
+        m = int(x)
+        sec = int(round((x - m) * 60))
+        if sec == 60:
+            m, sec = m + 1, 0
+        return f"{m}:{sec:02d}"
     return str(int(round(x)))
 
 
@@ -1850,6 +1913,57 @@ def _build_award_evidence(
     }
 
 
+def _award_stat_fields(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """Compact season line carried on every award candidate so the ceremony can
+    explain *why* (stat lines, ranks, "why he won") without the raw stat rows."""
+    gp = _gp(row)
+    out: Dict[str, Any] = {"gp": gp}
+    if row.get("age") is not None:
+        out["age"] = _safe_int(row.get("age"), 0) or None
+    if _is_goalie(row):
+        sa = _safe_int(row.get("shots_against"), _safe_int(row.get("goalie_shots_against"), 0))
+        ga = _safe_int(row.get("ga"), _safe_int(row.get("goalie_ga"), _safe_int(row.get("goals_against"), 0)))
+        toi_min = _safe_float(row.get("toi_sec"), 0.0) / 60.0 or _safe_float(row.get("toi_minutes"), 0.0)
+        out.update(
+            {
+                "w": _safe_int(row.get("w", row.get("wins")), 0),
+                "l": _safe_int(row.get("l", row.get("losses")), 0),
+                "otl": _safe_int(row.get("otl"), 0),
+                "so": _safe_int(row.get("so", row.get("shutouts")), 0),
+                "shots_against": sa,
+                "goals_against": ga,
+                "saves": _safe_int(row.get("saves"), max(0, sa - ga)),
+            }
+        )
+        if sa > 0 or row.get("sv_pct") is not None:
+            out["sv_pct"] = round(goalie_sv_pct(row), 4)
+        if toi_min > 0:
+            out["gaa"] = round(ga * 60.0 / toi_min, 2)
+        return out
+    out.update(
+        {
+            "g": _goals(row),
+            "a": _safe_int(row.get("a", row.get("assists")), 0),
+            "pts": _pts(row),
+            "plus_minus": _safe_int(row.get("plus_minus", row.get("pm")), 0),
+            "pim": _safe_int(row.get("pim"), 0),
+        }
+    )
+    for key, alias in (("sog", ("sog", "shots")), ("blk", ("blk", "blocked_shots", "blocks")), ("hit", ("hit", "hits")),
+                       ("takeaways", ("takeaways", "tk")), ("ppg", ("ppg",)), ("ppa", ("ppa",)), ("shg", ("shg",))):
+        for k in alias:
+            if row.get(k) is not None:
+                out[key] = _safe_int(row.get(k), 0)
+                break
+    toi = _toi_pg_minutes(row)
+    if toi > 0:
+        out["toi_pg"] = round(toi, 2)
+    pk = _safe_float(row.get("pk_toi_sec"), 0.0)
+    if pk > 0 and gp > 0:
+        out["pk_toi_pg"] = round(pk / 60.0 / gp, 2)
+    return out
+
+
 def _candidate_from_tally(
     tally: Mapping[str, Any],
     team_map: Mapping[str, Any],
@@ -1882,6 +1996,8 @@ def _candidate_from_tally(
         "goals": _goals(row),
         "assists": _safe_int(row.get("a")),
         "gp": _gp(row),
+        "placements": list(tally.get("placements") or []) or None,
+        **{k: v for k, v in _award_stat_fields(row).items() if k not in ("gp",)},
     }
 
 
@@ -2134,7 +2250,14 @@ def _run_ballot_award(
     for score, row in scored:
         pid = _pid(row)
         row["component_scores"] = dict(components_by_pid.get(pid, {}))
-    ballot = simulate_award_ballots(scored, award_id=aid, season_seed=season_seed)
+    cfg = ballot_config_for(aid)
+    ballot = simulate_award_ballots(
+        scored,
+        award_id=aid,
+        season_seed=season_seed,
+        voter_count=int(cfg.get("voters") or VOTER_COUNT),
+        points=cfg.get("points") or BALLOT_POINTS,
+    )
     full: List[Dict[str, Any]] = []
     for tally in ballot["candidates"]:
         cand = _candidate_from_tally(tally, team_map, display_metric=str(defn["display_metric"]))
@@ -2152,7 +2275,8 @@ def _run_ballot_award(
             "voter_count": ballot["voter_count"],
             "margin": ballot["margin"],
             "seed": ballot["seed"],
-            "ballot_points_curve": list(BALLOT_POINTS),
+            "ballot_points_curve": list(ballot.get("points") or BALLOT_POINTS),
+            "voting_body": cfg.get("body") or "PHWA",
         },
     )
 
@@ -2201,6 +2325,7 @@ def _run_stat_race(
                 "goals": _goals(row),
                 "assists": _safe_int(row.get("a")),
                 "gp": _gp(row),
+                **{k: v for k, v in _award_stat_fields(row).items() if k not in ("gp",)},
             }
         )
     # Shared winners if exact primary matches after tiebreak equivalence
@@ -2304,6 +2429,9 @@ def eligible_calder(
         rr = dict(r)
         rr["_eligibility"] = elig
         rr["eligibility_confidence"] = elig.get("confidence")
+        det_age = (elig.get("details") or {}).get("age")
+        if det_age is not None:
+            rr["age"] = det_age  # season-start (Sept. 15) age used by the rule
         if elig.get("eligible"):
             out.append(rr)
     return out
@@ -2453,6 +2581,295 @@ def compute_jennings(
 # ---------------------------------------------------------------------------
 # Main compute
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Voting explanations ("why he won" + vote table) for the ceremony
+# ---------------------------------------------------------------------------
+
+_EXPLAIN_POOL_NOUN = {
+    "hart": "skaters",
+    "ted_lindsay": "skaters",
+    "art_ross": "the league",
+    "rocket": "the league",
+    "norris": "defencemen",
+    "selke": "forwards",
+    "calder": "rookies",
+    "vezina": "starting goalies",
+    "lady_byng": "skaters",
+    "conn_smythe": "playoff skaters",
+}
+
+_SKATER_LINE = [("gp", "GP", "int"), ("g", "G", "int"), ("a", "A", "int"), ("pts", "PTS", "int"), ("plus_minus", "+/-", "signed"), ("toi_pg", "TOI/GP", "toi")]
+_GOALIE_LINE = [("gp", "GP", "int"), ("w", "W", "int"), ("sv_pct", "SV%", "sv3"), ("gaa", "GAA", "dec2"), ("so", "SO", "int")]
+_EXPLAIN_LINES: Dict[str, List[Tuple[str, str, str]]] = {
+    "hart": _SKATER_LINE,
+    "ted_lindsay": _SKATER_LINE,
+    "art_ross": [("pts", "PTS", "int"), ("g", "G", "int"), ("a", "A", "int"), ("gp", "GP", "int"), ("plus_minus", "+/-", "signed")],
+    "rocket": [("g", "G", "int"), ("sog", "SOG", "int"), ("pts", "PTS", "int"), ("gp", "GP", "int")],
+    "norris": [("pts", "PTS", "int"), ("g", "G", "int"), ("toi_pg", "TOI/GP", "toi"), ("plus_minus", "+/-", "signed"), ("blk", "BLK", "int"), ("gp", "GP", "int")],
+    "selke": [("plus_minus", "+/-", "signed"), ("pts", "PTS", "int"), ("toi_pg", "TOI/GP", "toi"), ("pk_toi_pg", "PK TOI/GP", "toi"), ("takeaways", "TK", "int"), ("blk", "BLK", "int")],
+    "calder": _SKATER_LINE,
+    "vezina": _GOALIE_LINE,
+    "lady_byng": [("pts", "PTS", "int"), ("pim", "PIM", "int"), ("gp", "GP", "int"), ("g", "G", "int"), ("a", "A", "int")],
+    "conn_smythe": [("gp", "GP", "int"), ("g", "G", "int"), ("a", "A", "int"), ("pts", "PTS", "int"), ("plus_minus", "+/-", "signed")],
+}
+_LOWER_IS_BETTER = frozenset({"gaa", "pim"})
+_RANKED_KEYS = frozenset({"pts", "g", "a", "plus_minus", "toi_pg", "sv_pct", "gaa", "w", "so", "pim", "sog", "blk", "takeaways", "pk_toi_pg"})
+
+
+def _ordinal(n: int) -> str:
+    n = int(n)
+    suf = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suf}"
+
+
+def _xv(row: Mapping[str, Any], key: str) -> Optional[float]:
+    val = row.get(key)
+    if val is None:
+        return None
+    try:
+        x = float(val)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
+
+
+def _pool_rank(pool: Sequence[Mapping[str, Any]], row: Mapping[str, Any], key: str) -> Optional[Tuple[int, int]]:
+    mine = _xv(row, key)
+    if mine is None:
+        return None
+    vals = [v for v in (_xv(r, key) for r in pool) if v is not None]
+    if len(vals) < 2:
+        return None
+    if key in _LOWER_IS_BETTER:
+        better = sum(1 for v in vals if v < mine - 1e-9)
+    else:
+        better = sum(1 for v in vals if v > mine + 1e-9)
+    return better + 1, len(vals)
+
+
+def _explain_line_specs(aid: str, row: Mapping[str, Any]) -> List[Tuple[str, str, str]]:
+    if _is_goalie(row):
+        return _GOALIE_LINE
+    return _EXPLAIN_LINES.get(aid, _SKATER_LINE)
+
+
+def _explain_stat_line(aid: str, row: Mapping[str, Any], pool: Sequence[Mapping[str, Any]], *, limit: int = 6, ranks: bool = True) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    same_kind = [r for r in pool if _is_goalie(r) == _is_goalie(row)]
+    for key, label, fmt in _explain_line_specs(aid, row):
+        val = _xv(row, key)
+        if val is None:
+            continue
+        ent: Dict[str, Any] = {"key": key, "label": label, "value": val, "fmt": fmt, "display": _fmt_stat_value(val, fmt)}
+        if ranks and key in _RANKED_KEYS:
+            rk = _pool_rank(same_kind, row, key)
+            if rk:
+                ent["rank"], ent["of"] = rk
+        out.append(ent)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _short_line(aid: str, row: Mapping[str, Any]) -> str:
+    if _is_goalie(row):
+        bits = []
+        if row.get("sv_pct") is not None:
+            bits.append(f"{_fmt_stat_value(row.get('sv_pct'), 'sv3').lstrip('0')} SV%")
+        if row.get("gaa") is not None:
+            bits.append(f"{float(row['gaa']):.2f} GAA")
+        bits.append(f"{_safe_int(row.get('w'))} W")
+        return ", ".join(bits)
+    if aid == "rocket":
+        return f"{_safe_int(row.get('g'))} G in {_gp(row)} GP"
+    if aid == "lady_byng":
+        return f"{_pts(row)} PTS, {_safe_int(row.get('pim'))} PIM"
+    return f"{_safe_int(row.get('g'))}-{_safe_int(row.get('a'))}-{_pts(row)} in {_gp(row)} GP"
+
+
+def _why_lines(
+    aid: str,
+    winner: Mapping[str, Any],
+    full: Sequence[Mapping[str, Any]],
+    *,
+    team_ctx: Mapping[str, Mapping[str, Any]],
+    voting: Optional[Mapping[str, Any]],
+) -> List[str]:
+    noun = _EXPLAIN_POOL_NOUN.get(aid, "the field")
+    runner = full[1] if len(full) > 1 else None
+    rname = str(runner.get("name") or "") if runner else ""
+    gp = _gp(winner)
+    lines: List[str] = []
+    playoff = aid == "conn_smythe"
+    games = "playoff games" if playoff else "games"
+
+    if _is_goalie(winner):
+        sv = winner.get("sv_pct")
+        gaa = winner.get("gaa")
+        goalies = [r for r in full if _is_goalie(r)]
+        if sv is not None:
+            rk = _pool_rank(goalies, winner, "sv_pct")
+            head = f"Posted a {_fmt_stat_value(sv, 'sv3').lstrip('0')} save percentage"
+            if gaa is not None:
+                head += f" and a {float(gaa):.2f} GAA"
+            head += f" over {gp} {games}"
+            if rk and len(goalies) > 1:
+                head += f" ({_ordinal(rk[0])} in SV% among {noun if not playoff else 'playoff goalies'})"
+            lines.append(head + ".")
+        rec = f"{_safe_int(winner.get('w'))}-{_safe_int(winner.get('l'))}-{_safe_int(winner.get('otl'))}"
+        so = _safe_int(winner.get("so"))
+        lines.append(f"Went {rec} with {so} shutout{'s' if so != 1 else ''}, facing {_safe_int(winner.get('shots_against'))} shots.")
+    else:
+        pts, g, a = _pts(winner), _goals(winner), _safe_int(winner.get("a", winner.get("assists")))
+        skaters = [r for r in full if not _is_goalie(r)]
+        if aid == "rocket":
+            lead = g - _goals(runner) if runner else 0
+            line = f"Scored {g} goals in {gp} {games}"
+            if runner and lead > 0:
+                line += f", {lead} more than {rname}"
+            elif runner and lead == 0:
+                line += f", tied with {rname} and won the tiebreak"
+            lines.append(line + ".")
+        elif aid == "art_ross":
+            lead = pts - _pts(runner) if runner else 0
+            line = f"Won the scoring race with {pts} points ({g} G, {a} A) in {gp} {games}"
+            if runner and lead > 0:
+                line += f", {lead} clear of {rname}"
+            elif runner and lead == 0:
+                line += f" — tied with {rname}, won on goals"
+            lines.append(line + ".")
+        elif aid == "lady_byng":
+            pim = _safe_int(winner.get("pim"))
+            lines.append(f"Produced {pts} points while taking just {pim} penalty minutes in {gp} {games} ({pim / max(1, gp):.2f} PIM per game).")
+        else:
+            rk = _pool_rank(skaters, winner, "pts")
+            line = f"{pts} points ({g} G, {a} A) in {gp} {games}"
+            if rk:
+                line += f" — {_ordinal(rk[0])} among {noun}"
+                if rk[0] == 1 and runner and not _is_goalie(runner):
+                    gap = pts - _pts(runner)
+                    if gap > 0:
+                        line += f", {gap} ahead of {rname}"
+            lines.append(line + ".")
+        toi = winner.get("toi_pg")
+        pm = winner.get("plus_minus")
+        bits: List[str] = []
+        if toi:
+            rk = _pool_rank(skaters, winner, "toi_pg")
+            t = f"averaged {_fmt_stat_value(toi, 'toi')} a night"
+            if rk and rk[0] <= 3 and aid in ("norris", "selke", "calder", "hart"):
+                t += f" ({_ordinal(rk[0])} among {noun})"
+            bits.append(t)
+        if aid == "selke" and winner.get("pk_toi_pg"):
+            bits.append(f"{_fmt_stat_value(winner['pk_toi_pg'], 'toi')} on the PK")
+        if pm is not None:
+            bits.append(f"finished {int(pm):+d}")
+        if aid in ("selke", "norris"):
+            for k, lab in (("takeaways", "takeaways"), ("blk", "blocked shots"), ("hit", "hits")):
+                if winner.get(k):
+                    bits.append(f"{_safe_int(winner[k])} {lab}")
+                    break
+        if bits and aid not in ("art_ross", "rocket", "lady_byng"):
+            s = ", ".join(bits)
+            lines.append(s[0].upper() + s[1:] + ".")
+
+    ctx = dict((team_ctx or {}).get(str(winner.get("team_id") or ""), {}))
+    if ctx and not playoff and aid in ("hart", "ted_lindsay", "vezina", "norris", "selke", "calder"):
+        team = str(winner.get("team_name") or "his team")
+        tl = f"{team} went {ctx.get('record')} ({ctx.get('points')} pts, {_ordinal(int(ctx.get('league_rank') or 0))} overall)"
+        gf = _safe_int(ctx.get("goals_for"))
+        if aid == "hart" and gf > 0 and not _is_goalie(winner):
+            tl += f"; he factored on {_pts(winner) / gf:.0%} of the team's goals"
+        lines.append(tl + ".")
+    if aid == "calder":
+        age = winner.get("age")
+        lines.append(
+            f"Rookie-eligible{f' at age {age}' if age else ''}: never more than 25 NHL games in a prior season, "
+            "never 6+ games in two prior seasons, and under 26 on Sept. 15."
+        )
+
+    if voting and winner.get("ballot_points") is not None:
+        fpv = _safe_int(winner.get("first_place_votes"))
+        vc = _safe_int(voting.get("voter_count"), VOTER_COUNT)
+        margin = float(voting.get("margin") or 0.0)
+        v = f"Voting: {fpv} of {vc} first-place votes and {float(winner.get('ballot_points') or 0):.0f} points"
+        if rname:
+            v += f", {margin:.0f} ahead of {rname}"
+        lines.append(v + ".")
+    return lines
+
+
+def _attach_award_explanations(awards: Mapping[str, Award], team_ctx: Mapping[str, Mapping[str, Any]]) -> None:
+    """Rebuild each player award's evidence with stat-based reasons and a ballot table."""
+    for award in awards.values():
+        try:
+            aid = str(award.award_id or "")
+            if aid not in _EXPLAIN_LINES or award.status != "complete" or not award.full_results:
+                continue
+            full = list(award.full_results)
+            winner = full[0]
+            voting = award.voting or None
+            res = award.result if isinstance(award.result, dict) else {}
+            ev = dict(res.get("evidence") or {})
+            why = _why_lines(aid, winner, full, team_ctx=team_ctx, voting=voting)
+            if not why:
+                continue
+            ev["why"] = why[:5]
+            ev.setdefault("winner", {})
+            ev["winner"] = dict(ev.get("winner") or {})
+            ev["winner"]["stat_line"] = _explain_stat_line(aid, winner, full)
+            fin_ev = []
+            by_id = {str(f.get("entity_id")): f for f in list(ev.get("finalists") or []) if isinstance(f, dict)}
+            for cand in award.finalists or full[:3]:
+                base = dict(by_id.get(str(cand.get("entity_id") or cand.get("player_id")), {}))
+                base.update(
+                    {
+                        "entity_id": cand.get("entity_id") or cand.get("player_id"),
+                        "name": cand.get("name"),
+                        "team_id": cand.get("team_id"),
+                        "team_name": cand.get("team_name"),
+                        "position": cand.get("position"),
+                        "stat_line": _explain_stat_line(aid, cand, full, limit=3, ranks=False),
+                    }
+                )
+                fin_ev.append(base)
+            ev["finalists"] = fin_ev
+            table = []
+            for cand in full[:5]:
+                table.append(
+                    {
+                        "rank": cand.get("finish") or cand.get("rank"),
+                        "entity_id": cand.get("entity_id") or cand.get("player_id"),
+                        "name": cand.get("name"),
+                        "team_id": cand.get("team_id"),
+                        "team_name": cand.get("team_name"),
+                        "position": cand.get("position"),
+                        "points": cand.get("ballot_points"),
+                        "first_place_votes": cand.get("first_place_votes"),
+                        "placements": cand.get("placements"),
+                        "value": cand.get("display_value") if cand.get("ballot_points") is None else None,
+                        "summary": _short_line(aid, cand),
+                        "is_winner": bool(cand.get("is_winner")),
+                    }
+                )
+            ev["voting_table"] = table
+            if voting and winner.get("ballot_points") is not None:
+                cfg = ballot_config_for(aid)
+                ev["ballot_format"] = {
+                    "voters": _safe_int(voting.get("voter_count"), VOTER_COUNT),
+                    "points": list(voting.get("ballot_points_curve") or cfg.get("points") or BALLOT_POINTS),
+                    "body": cfg.get("body") or "PHWA",
+                }
+            res["evidence"] = ev
+            award.result = res
+            award.rationale = award.public_rationale = why[0]
+            res["public_rationale"] = why[0]
+            if award.winner_stats is not None:
+                award.winner_stats = {**dict(award.winner_stats), **{k: winner.get(k) for k in ("assists", "plus_minus", "toi_pg", "sv_pct", "gaa", "w", "so") if winner.get(k) is not None}}
+        except Exception:
+            logger.debug("award explanation failed for %s", getattr(award, "award_id", "?"), exc_info=True)
+
+
 def compute_awards(
     standings: StandingsTable,
     playoff_result: Optional[PlayoffResult],
@@ -2716,9 +3133,11 @@ def compute_awards(
         team_map=team_map,
         season_seed=season_seed,
         season=season,
-        eligibility_summary="Canonical first-year NHL eligibility (not age-only).",
+        eligibility_summary="NHL rookie rule: no more than 25 GP in any prior season, not 6+ GP in each of two prior seasons, under 26 on Sept. 15.",
         required_fields=["gp"],
-        fallback_fn=lambda r: calder_fallback_formula(r, team_ctx),
+        team_ctx=team_ctx,
+        # Same position-neutral scale whether or not analytics fields exist.
+        fallback_fn=lambda r: (calder_fallback_formula(r, team_ctx), calder_position_score(r, team_ctx))[1],
     )
 
     # Vezina
@@ -2833,6 +3252,8 @@ def compute_awards(
     a1, a2 = _try_all_star_teams(skaters, goalies, team_map, season, season_seed, team_ctx)
     awards[AWARD_REGISTRY["all_star_1"]["name"]] = a1
     awards[AWARD_REGISTRY["all_star_2"]["name"]] = a2
+
+    _attach_award_explanations(awards, team_ctx)
 
     if os.environ.get("NHL_FRANCHISE_AUDIT") == "1":
         _log_awards_audit_bundle(awards, skaters=skaters, defense=[r for r in skaters if _is_defense(r)], goalies=goalies, playoff_rows=po_rows)

@@ -8,14 +8,93 @@ import { safeArray } from "../shared/eventHelpers";
 import PlayerHeadshot from "../../components/PlayerHeadshot";
 import "../../styles/nhlcalShell.css";
 import "./DraftCombine.css";
+import "../shared/edraftSkin.css";
 
 const TABS = [
   { id: "overview", label: "Overview" },
   { id: "meetings", label: "Meetings" },
   { id: "prospects", label: "Prospects" },
   { id: "results", label: "Results" },
+  { id: "testing", label: "Testing" },
   { id: "board", label: "Final Board" },
 ];
+
+function fmtTest(cat, v) {
+  if (v === null || v === undefined || v === "") return "—";
+  if (cat?.id === "height" || cat?.id === "wingspan") {
+    const n = Number(v);
+    return `${Math.floor(n / 12)}'${(n % 12).toFixed(n % 1 ? 1 : 0)}"`;
+  }
+  const d = Number(cat?.decimals ?? 1);
+  return Number(v).toFixed(d);
+}
+
+function TestingTable({ combine }) {
+  const catalog = safeArray(combine?.test_catalog);
+  const rows = safeArray(combine?.prospects).filter((p) => p && (p.tests || p.measurements));
+  const [sortKey, setSortKey] = useState("combine");
+  const [desc, setDesc] = useState(true);
+  if (!catalog.length || !rows.length) {
+    return <div className="dcb-empty">Testing results publish when the combine runs.</div>;
+  }
+  const val = (p, id) => {
+    if (id === "combine") return Number(p.athletic_pct ?? -1);
+    const t = p.tests?.[id];
+    if (t) return Number(t.pct ?? -1);
+    const m = p.measurements?.[id];
+    return m != null ? Number(m) : -1;
+  };
+  const sorted = [...rows].sort((a, b) => (val(b, sortKey) - val(a, sortKey)) * (desc ? 1 : -1));
+  const head = (id, label) => (
+    <th key={id} onClick={() => (sortKey === id ? setDesc(!desc) : (setSortKey(id), setDesc(true)))} className={sortKey === id ? "is-sorted" : ""}>
+      {label}
+    </th>
+  );
+  return (
+    <div className="dcb-scroll dcb-testing">
+      <p className="dcb-summary-line">
+        Real NHL combine tests in real units. Small number under each result = percentile in this class. Results come from each prospect's own athletic attributes plus test-day variance.
+      </p>
+      <table className="dcb-test-table">
+        <thead>
+          <tr>
+            <th>Prospect</th>
+            {head("combine", "Athletic")}
+            {catalog.map((c) => head(c.id, c.short || c.label))}
+            <th>Medical</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((p) => (
+            <tr key={p.key || p.prospect_id}>
+              <td className="who">
+                <strong>{p.name}</strong>
+                <span>{[p.position, p.league_display || p.league, p.rank ? `#${p.rank}` : null].filter(Boolean).join(" · ")}</span>
+              </td>
+              <td>
+                {p.athletic_pct != null ? <strong>{p.athletic_pct}</strong> : "—"}
+                {p.athletic_rank ? <span>#{p.athletic_rank}</span> : null}
+              </td>
+              {catalog.map((c) => {
+                const t = p.tests?.[c.id];
+                const m = p.measurements?.[c.id];
+                const v = t ? t.value : m;
+                const pct = t ? t.pct : p.measurements?.[`${c.id}_pct`];
+                return (
+                  <td key={c.id} className={pct >= 85 ? "hi" : pct != null && pct <= 15 ? "lo" : ""}>
+                    {fmtTest(c, v)}
+                    {pct != null ? <span>{pct}</span> : null}
+                  </td>
+                );
+              })}
+              <td className={p.medical_risk_level === "High" ? "lo" : ""}>{p.medical_risk_level || "Low"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 function Chip({ children, tone }) {
   if (children === null || children === undefined || children === "") return null;
@@ -953,6 +1032,7 @@ export default function DraftCombine({ franchiseState = {}, eventData = {}, onCo
     if (activeTab === "meetings") return renderMeetings();
     if (activeTab === "prospects") return renderProspects();
     if (activeTab === "results") return renderResults();
+    if (activeTab === "testing") return <TestingTable combine={combine} />;
     if (activeTab === "board") return renderBoard();
     return renderOverview();
   }
@@ -998,7 +1078,7 @@ export default function DraftCombine({ franchiseState = {}, eventData = {}, onCo
   };
 
   return (
-    <div className="nhlcal-root dcb-root">
+    <div className="nhlcal-root dcb-root edraft-skin">
       <aside className="nhlcal-sidebar">
         <button type="button" className="nhlcal-brand-button" onClick={() => navigate(SCREENS.HUB)} title="Office">
           <span className="nhlcal-shield-icon">⌂</span>

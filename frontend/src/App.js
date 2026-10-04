@@ -34,6 +34,8 @@ const TeamNeeds = React.lazy(() => import("./screens/TeamNeeds"));
 const StorylinesScreen = React.lazy(() => import("./screens/StorylinesScreen"));
 const ChemistryScreen = React.lazy(() => import("./screens/ChemistryScreen"));
 const EditLines = React.lazy(() => import("./screens/editLines"));
+const AhlCenter = React.lazy(() => import("./screens/AhlCenter"));
+const ProspectSigningScreen = React.lazy(() => import("./screens/ProspectSigningScreen"));
 const Scouting = React.lazy(() => import("./screens/Scouting"));
 const CapLedger = React.lazy(() => import("./screens/CapLedger"));
 const FreeAgency = React.lazy(() => import("./screens/FreeAgency"));
@@ -192,6 +194,8 @@ function GameRoot() {
         {screen === SCREENS.STORYLINES && <StorylinesScreen />}
         {screen === SCREENS.CHEMISTRY && <ChemistryScreen />}
         {screen === SCREENS.EDIT_LINES && <EditLines />}
+        {screen === SCREENS.AHL_CENTER && <AhlCenter />}
+        {screen === SCREENS.PROSPECT_SIGNING && <ProspectSigningScreen />}
         {screen === SCREENS.POWER_PLAY && <EditLines />}
         {screen === SCREENS.PENALTY_KILL && <EditLines />}
         {screen === SCREENS.STATS && <StatsCentralScreen />}

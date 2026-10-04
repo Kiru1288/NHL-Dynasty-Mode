@@ -3,7 +3,7 @@ import { useGameUI } from "../game/GameUIContext";
 import { SCREENS, teamNameToNhlAbbr } from "../game/constants";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { CHEMISTRY_HIGH, CHEMISTRY_MID, chemistryLabel } from "../utils/chemistryScale";
-import { getFranchiseChemistry, saveFranchiseLines } from "../services/franchiseService";
+import { getAhlLines, getFranchiseChemistry, saveAhlLines, saveFranchiseLines } from "../services/franchiseService";
 import { getFranchiseSessionId, readSessionLineupCache, writeSessionLineupCache } from "../services/api";
 import PlayerHeadshot from "../components/PlayerHeadshot";
 import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
@@ -661,7 +661,7 @@ function sortPoolPlayers(list, sort, focusSlot) {
     return b.overall - a.overall || a.name.localeCompare(b.name);
   });
 }
-function teamIdentity(franchiseState, props) {
+export function teamIdentity(franchiseState, props) {
   const team = franchiseState?.user_team || franchiseState?.team || franchiseState?.current_team || props.currentTeam || props.team || {};
   const name = team?.name || team?.team_name || franchiseState?.user_team_name || "";
   return {
@@ -670,7 +670,7 @@ function teamIdentity(franchiseState, props) {
   };
 }
 
-function EditLinesStyles() {
+export function EditLinesStyles() {
   return <style>{`
 .linebuilder-root{--nv:var(--ops-navy,#06111d);--nv2:var(--ops-navy-deep,#04101a);--panel:var(--ops-panel,rgba(9,25,38,.97));--panel2:var(--ops-panel-2,rgba(12,35,52,.92));--line:var(--ops-grid,rgba(156,218,236,.16));--line2:var(--ops-grid-2,rgba(115,229,241,.3));--cyan:var(--ops-cyan,#13d8e7);--gold:var(--ops-gold,#e9a83c);--green:var(--ops-success,#52df94);--red:var(--ops-injury,#ff606d);--text:var(--ops-text,#e9f7fb);--muted:var(--ops-text-secondary,#8096a8);--muted2:var(--ops-text-disabled,#607789);width:100%;height:100vh;height:100dvh;overflow:hidden;color:var(--text);background:linear-gradient(180deg,var(--nv),var(--nv2));font-family:var(--font-ops-ui,Inter,system-ui,sans-serif);display:grid;grid-template-columns:88px minmax(0,1fr)}
 .linebuilder-root *{box-sizing:border-box}
@@ -801,6 +801,7 @@ span.lb-mode,.linebuilder-root span.lb-mode:hover{cursor:default}
 .linebuilder-root .fm-unit-score.bad{color:var(--red)}
 .linebuilder-root .fm-unit-warn{margin-top:3px;min-width:22px;height:18px;padding:0 5px;border:1px solid rgba(233,168,60,.45);border-radius:4px;background:rgba(233,168,60,.14);color:var(--gold);font-size:10px;font-weight:900;cursor:pointer}
 .linebuilder-root .fm-unit-menu-btn{margin-top:3px;min-width:22px;height:18px;border:1px solid var(--line);border-radius:4px;background:transparent;color:var(--muted);font-size:10px;font-weight:900;cursor:pointer}
+.linebuilder-root .fm-unit-formation{margin-top:3px;font-size:10px;font-weight:900;letter-spacing:.04em;color:var(--gold)}
 .linebuilder-root .fm-unit-menu-btn:hover{color:var(--cyan);border-color:var(--line2)}
 
 .linebuilder-root .fm-card{position:absolute;z-index:2;border:1px solid var(--line2);border-top:3px solid rgba(128,150,168,.5);border-radius:7px;background:var(--panel2);padding:7px 6px 6px;text-align:center;cursor:pointer;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px}
@@ -822,7 +823,13 @@ span.lb-mode,.linebuilder-root span.lb-mode:hover{cursor:default}
 .linebuilder-root .fm-card.fresh .fm-card-ovr{color:var(--red);font-size:17px}
 .linebuilder-root .fm-card-name{margin-top:3px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:900;letter-spacing:-.01em;line-height:1.05}
 .linebuilder-root .fm-card-meta{margin-top:2px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted2);font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
-.linebuilder-root .fm-card-drop{color:var(--red);font-size:10px;font-weight:900}
+.linebuilder-root .fm-card-drop{position:absolute;bottom:5px;right:8px;color:var(--red);font-size:11px;font-weight:900;line-height:1}
+.linebuilder-root .fm-card{background-color:#0c1a28}
+.linebuilder-root .fm-card.selected,.linebuilder-root .fm-card.valid,.linebuilder-root .fm-card.swap,.linebuilder-root .fm-card.invalid,.linebuilder-root .fm-card:hover{background-color:#0c1a28;background-image:linear-gradient(rgba(19,216,231,.14),rgba(19,216,231,.14))}
+.linebuilder-root .fm-card.swap{background-image:linear-gradient(rgba(233,168,60,.14),rgba(233,168,60,.14))}
+.linebuilder-root .fm-card.invalid{background-image:linear-gradient(rgba(255,96,109,.1),rgba(255,96,109,.1))}
+.linebuilder-root .fm-card.fresh{background-color:#0c1a28}
+.linebuilder-root .fm-card-name{flex-shrink:0;padding:0 4px}
 .linebuilder-root .fm-pips{display:flex;justify-content:center;gap:3px;margin-top:5px}
 .linebuilder-root .fm-pip{width:5px;height:5px;border-radius:50%;background:rgba(128,150,168,.35)}
 .linebuilder-root .fm-pip.strong{background:var(--green)}
@@ -863,6 +870,7 @@ span.lb-mode,.linebuilder-root span.lb-mode:hover{cursor:default}
 .linebuilder-root .lb-inspector-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:900}
 .linebuilder-root .lb-inspector-sub{margin-top:3px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}
 .linebuilder-root .lb-gauge{display:flex;align-items:center;gap:10px}
+.linebuilder-root.lb-ahl .lb-gauge,.linebuilder-root.lb-ahl .lb-linkrow,.linebuilder-root.lb-ahl .lb-chemmeter{display:none!important}
 .linebuilder-root .lb-gauge-score{color:var(--cyan);font-size:34px;line-height:1;font-weight:950;font-variant-numeric:tabular-nums}
 .linebuilder-root .lb-gauge-score.warn{color:var(--gold)}
 .linebuilder-root .lb-gauge-score.bad{color:var(--red)}
@@ -1021,7 +1029,7 @@ function scoreTone(score) {
 
 function Glyph({ text }) { return <span className="lb-glyph" aria-hidden="true">{text}</span>; }
 
-function LineBuilderSidebar({ setScreen, abbreviation, logo, activeScreen = SCREENS.EDIT_LINES }) {
+export function LineBuilderSidebar({ setScreen, abbreviation, logo, activeScreen = SCREENS.EDIT_LINES }) {
   const items = [
     { label: "Office", glyph: "▦", screen: SCREENS.HUB },
     { label: "Roster", glyph: "◉", screen: SCREENS.ROSTER },
@@ -1029,6 +1037,7 @@ function LineBuilderSidebar({ setScreen, abbreviation, logo, activeScreen = SCRE
     { label: "Power Play", glyph: "↯", screen: SCREENS.POWER_PLAY, active: activeScreen === SCREENS.POWER_PLAY },
     { label: "Penalty Kill", glyph: "▣", screen: SCREENS.PENALTY_KILL, active: activeScreen === SCREENS.PENALTY_KILL },
     { label: "Chemistry", glyph: "◍", screen: SCREENS.CHEMISTRY },
+    { label: "AHL", glyph: "▤", screen: SCREENS.AHL_CENTER, active: activeScreen === SCREENS.AHL_CENTER },
   ];
   return <aside className="lb-sidebar" aria-label="Line builder navigation">
     <div className="lb-team-mark">{logo ? <img src={logo} alt={`${abbreviation} logo`} /> : abbreviation}</div>
@@ -1157,7 +1166,7 @@ function FormationCard({ descriptor, geo, player, tier, pips, locked, selected, 
     draggable={Boolean(player) && !locked && player.availability?.placeable}
     onDragStart={(event) => player && onDragStart(event, player.id)}
   >
-    <span className="fm-card-slot">{descriptor.slot}</span>
+    <span className="fm-card-slot">{descriptor.label || descriptor.slot}</span>
     {flag ? <span className="fm-card-flag">{flag}</span> : null}
     {player ? <>
       <span className="fm-card-ovr">{fresh ? "NEW" : player.overall}</span>
@@ -1546,9 +1555,18 @@ function LineBuilderToast({ toast, onDismiss, onDetails }) {
   </div>;
 }
 
-function EvenStrengthLines(props) {
-  const { franchiseState, setScreen, setFranchiseState } = useGameUI();
-  const sessionId = getFranchiseSessionId();
+export function EvenStrengthLines(props) {
+  const { franchiseState, setScreen, setFranchiseState, setNavGuard } = useGameUI();
+  // AHL mode: same Edit Lines screen for the affiliate (no chemistry layer).
+  const ahl = Boolean(props.ahl);
+  const [ahlData, setAhlData] = useState(null);
+  const sessionId = ahl ? `ahl:${getFranchiseSessionId()}` : getFranchiseSessionId();
+  useEffect(() => {
+    if (!ahl) return undefined;
+    let active = true;
+    getAhlLines().then((d) => { if (active) setAhlData(d || null); }).catch(() => { if (active) setAhlData({ roster: [], lines: null }); });
+    return () => { active = false; };
+  }, [ahl]);
   const team = useMemo(() => teamIdentity(franchiseState, props), [franchiseState, props]);
   const [chemReport, setChemReport] = useState(null);
   const [chemLoading, setChemLoading] = useState(true);
@@ -1573,26 +1591,29 @@ function EvenStrengthLines(props) {
   const [announcement, setAnnouncement] = useState("");
   const [autoBuild, setAutoBuild] = useState({ open: false, mode: "position", scope: null });
   const [lineState, setLineState] = useState(() => {
-    const cached = readSessionLineupCache(LINEUP_KIND, sessionId);
+    const cached = ahl ? null : readSessionLineupCache(LINEUP_KIND, sessionId);
     return cached?.forwards && cached?.defense && cached?.goalies ? cloneLines(cached) : emptyLines(false);
   });
   const [savedSnapshot, setSavedSnapshot] = useState(() => snapshot(lineState, {}));
   const hydratedSession = useRef("");
+  const navWarnedAt = useRef(0);
   const staleNotice = useRef("");
   const slotRefs = useRef(new Map());
 
   // Refetch after every save so the report stops describing the previous lineup.
   useEffect(() => {
     let active = true;
+    if (ahl) { setChemReport(null); setChemLoading(false); return () => { active = false; }; }
     setChemLoading(true);
     getFranchiseChemistry()
       .then((data) => { if (active) setChemReport(data || null); })
       .catch(() => { if (active) setChemReport(null); })
       .finally(() => { if (active) setChemLoading(false); });
     return () => { active = false; };
-  }, [franchiseState?.session_id, chemNonce]);
+  }, [franchiseState?.session_id, chemNonce, ahl]);
 
   const players = useMemo(() => {
+    if (ahl) return (Array.isArray(ahlData?.roster) ? ahlData.roster : []).map(normalizePlayer);
     const lean = Array.isArray(franchiseState?.roster) ? franchiseState.roster : [];
     if (lean.length) return lean.map(normalizePlayer);
     const organizations = franchiseState?.roster_browser?.organizations || [];
@@ -1600,15 +1621,15 @@ function EvenStrengthLines(props) {
     const organization = organizations.find((candidate) => String(candidate?.team_id || "") === teamId) || organizations[0];
     const live = Array.isArray(organization?.nhl) ? organization.nhl : [];
     return live.length ? live.map(normalizePlayer) : getRosterPlayers(props);
-  }, [franchiseState, props]);
+  }, [franchiseState, props, ahl, ahlData]);
   const playerMap = useMemo(() => players.reduce((map, player) => { map[player.id] = player; return map; }, {}), [players]);
   const showThird = useMemo(() => players.filter((player) => isGoalie(player.position)).length >= 3 || Boolean(lineState.goalies?.[0]?.slots?.Third), [players, lineState.goalies]);
 
   useEffect(() => {
     if (!players.length || hydratedSession.current === sessionId) return;
-    const backendRaw = franchiseState?.lines?.even_strength?.lines;
+    const backendRaw = ahl ? ahlData?.lines : franchiseState?.lines?.even_strength?.lines;
     const backend = backendRaw ? sanitizeLineup(backendRaw, players, showThird) : null;
-    const cacheRaw = readSessionLineupCache(LINEUP_KIND, sessionId);
+    const cacheRaw = ahl ? null : readSessionLineupCache(LINEUP_KIND, sessionId);
     const cache = cacheRaw ? sanitizeLineup(cacheRaw, players, showThird) : null;
     const hasBackend = Boolean(backend?.retained);
     const hasCache = Boolean(cache?.retained);
@@ -1628,8 +1649,8 @@ function EvenStrengthLines(props) {
       staleNotice.current = sessionId;
       setToast({ type: "warning", message: `${chosen.removed} stale assignments removed.` });
     }
-  }, [players, franchiseState?.lines, sessionId, showThird]);
-  useEffect(() => { if (hydratedSession.current && players.length) writeSessionLineupCache(LINEUP_KIND, lineState, sessionId); }, [lineState, players.length, sessionId]);
+  }, [players, franchiseState?.lines, sessionId, showThird, ahl, ahlData]);
+  useEffect(() => { if (!ahl && hydratedSession.current && players.length) writeSessionLineupCache(LINEUP_KIND, lineState, sessionId); }, [lineState, players.length, sessionId, ahl]);
   useEffect(() => { if (toast?.type !== "success") return undefined; const timer = window.setTimeout(() => setToast(null), 2600); return () => window.clearTimeout(timer); }, [toast]);
 
   const unsaved = useMemo(() => snapshotKey(snapshot(lineState, locks)) !== snapshotKey(savedSnapshot), [lineState, locks, savedSnapshot]);
@@ -1981,6 +2002,29 @@ function EvenStrengthLines(props) {
     commit(autoPreview, locks, "Auto build applied.");
     setAutoBuild((current) => ({ ...current, open: false, scope: null }));
   }, [autoChanges, autoPreview, locks, commit]);
+  // Lineup gate: holes (empty slots or unavailable players) must be filled before leaving.
+  const lineupHoles = useMemo(
+    () => validation.warnings.filter((w) => w.type === "missing").length
+      + validation.errors.filter((e) => e.type === "availability" || e.type === "stale").length,
+    [validation],
+  );
+  const holeFill = useMemo(() => {
+    if (!lineupHoles) return null;
+    const keep = { ...locks };
+    for (const row of descriptors(lineState, showThird)) {
+      if (row.playerId && playerMap[row.playerId]?.availability?.placeable) keep[row.key] = true;
+    }
+    return autoBuildState({ current: lineState, players, locks: keep, mode: autoBuild.mode || "position", scope: null, includeThird: showThird });
+  }, [lineupHoles, lineState, locks, players, playerMap, showThird, autoBuild.mode]);
+  const holesFillable = useMemo(() => {
+    if (!holeFill) return false;
+    const after = validateLineup(holeFill, playerMap);
+    return !after.incomplete && !after.errors.some((e) => e.type === "availability");
+  }, [holeFill, playerMap]);
+  const autoFillHoles = useCallback(() => {
+    if (!holeFill) return;
+    commit(holeFill, locks, "Open slots filled. Save to lock in the lineup.");
+  }, [holeFill, locks, commit]);
   const saveLines = useCallback(async () => {
     if (saving || !players.length) return;
     if (validation.errors.length) {
@@ -1988,9 +2032,23 @@ function EvenStrengthLines(props) {
       setToast({ type: "error", message: validation.errors[0].text, details: validation.errors.length > 1 });
       return;
     }
-    if (validation.incomplete && !window.confirm("Save incomplete lineup?")) { setToast({ type: "warning", message: "Save cancelled." }); return; }
+    if (validation.incomplete && holesFillable) { setToast({ type: "error", message: "Every slot must be filled before saving.", actionLabel: "Auto-fill", onClick: autoFillHoles }); return; }
     setSaving(true);
     setSaveError(false);
+    if (ahl) {
+      try {
+        const response = await saveAhlLines({ lines: lineState });
+        setAhlData(response || null);
+        setSavedSnapshot(snapshot(lineState, locks));
+        setToast({ type: "success", message: "AHL lines saved. Ice time follows these slots." });
+      } catch (e) {
+        setSaveError(true);
+        setToast({ type: "error", message: e?.response?.data?.detail || "Backend save failed." });
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     try {
       const response = await saveFranchiseLines({ unit_type: "even_strength", lines: lineState });
       if (response?.lines) setFranchiseState((previous) => ({ ...(previous || {}), lines: response.lines }));
@@ -2016,21 +2074,47 @@ function EvenStrengthLines(props) {
     } finally {
       setSaving(false);
     }
-  }, [saving, players.length, validation, lineState, locks, sessionId, props, setFranchiseState, setScreen]);
+  }, [saving, players.length, validation, holesFillable, autoFillHoles, lineState, locks, sessionId, props, setFranchiseState, setScreen, ahl]);
+  useEffect(() => {
+    if (!setNavGuard || ahl) return undefined;
+    setNavGuard(() => {
+      if (!players.length) return true;
+      // Never trap the GM on this screen: a second attempt to leave within a few
+      // seconds always goes through (the first one just warns).
+      const now = Date.now();
+      if (navWarnedAt.current && now - navWarnedAt.current < 6000) { navWarnedAt.current = 0; return true; }
+      if ((lineupHoles && holesFillable) || (unsaved && !lineupHoles)) navWarnedAt.current = now;
+      if (lineupHoles && holesFillable) {
+        setToast({
+          type: "error",
+          message: `Lineup incomplete: ${lineupHoles} slot${lineupHoles === 1 ? "" : "s"} still open. Fill and save, or leave again to exit anyway.`,
+          actionLabel: "Auto-fill",
+          onClick: autoFillHoles,
+        });
+        return false;
+      }
+      if (unsaved && !lineupHoles) {
+        setToast({ type: "warning", message: "Unsaved lines — save, or leave again to discard.", actionLabel: "Save", onClick: () => saveLines() });
+        return false;
+      }
+      return true;
+    });
+    return () => setNavGuard(null);
+  }, [setNavGuard, players.length, lineupHoles, holesFillable, autoFillHoles, unsaved, saveLines, ahl]);
   const replaceSelected = useCallback((playerId) => { if (selectedSlot && placePlayer(playerId, selectedSlot)) setComparing(false); }, [selectedSlot, placePlayer]);
   const selectedLocked = selectedSlot ? Boolean(locks[selectedSlot.key]) : false;
   const rosterLoading = !franchiseState && !players.length;
   const live = !unsaved && !teamChemistry.projected;
   const subtitle = `${players.length} players · ${live ? "Live chemistry" : unsaved ? "Unsaved edits — projected scores" : "Projected chemistry"}`;
 
-  return <div className="linebuilder-root">
+  return <div className={`linebuilder-root${ahl ? " lb-ahl" : ""}`}>
     <EditLinesStyles />
-    <LineBuilderSidebar setScreen={setScreen} abbreviation={team.abbreviation} logo={team.logo} activeScreen={SCREENS.EDIT_LINES} />
+    <LineBuilderSidebar setScreen={setScreen} abbreviation={team.abbreviation} logo={team.logo} activeScreen={ahl ? SCREENS.AHL_CENTER : SCREENS.EDIT_LINES} />
     <main className="lb-shell">
       <LineBuilderHeader
         team={team}
-        title="Lines"
-        subtitle={subtitle}
+        title={ahl ? `AHL Lines${ahlData?.team_name ? ` · ${ahlData.team_name}` : ""}` : "Lines"}
+        subtitle={ahl ? `${players.length} players · Line slots set AHL ice time (Line 1 ≈ 18.5 min → Line 4 ≈ 8.5 min)` : subtitle}
         live={live}
         canUndo={history.length > 0}
         canRedo={future.length > 0}
@@ -2045,7 +2129,7 @@ function EvenStrengthLines(props) {
         saveError={saveError}
         disabled={!players.length}
       />
-      <LineStatusStrip metrics={statusMetrics} meter={chemMeter} />
+      <LineStatusStrip metrics={ahl ? statusMetrics.filter((m) => !/chem|new pairs/i.test(m.label)) : statusMetrics} meter={ahl ? null : chemMeter} />
       <div className="lb-workspace">
         {rosterLoading
           ? <section className="lb-region lb-pool-region"><div className="lb-region-head"><h2 className="lb-region-title">Player pool</h2></div><div className="lb-loading"><div className="lb-skeleton" /></div></section>
@@ -2212,7 +2296,8 @@ function specialTeamsSlotAllowed(player, slot, kind) {
     if (String(slot).startsWith("F")) return isForward(player.position);
     return false;
   }
-  if (slot === "LD" || slot === "RD") return isDefense(player.position);
+  // Power play: the points take any skater, so a coach can run 4F/1D (or even 5F).
+  if (slot === "LD" || slot === "RD") return isDefense(player.position) || isForward(player.position);
   return isForward(player.position);
 }
 
@@ -2249,10 +2334,17 @@ function SpecialTeamsUnit({ kind, line, index, playerMap, chemReport, chemistry,
       <span className="fm-unit-kicker">{isPP ? "PP" : "PK"}</span>
       <span className="fm-unit-num">{unitNumber}</span>
       <span className={`fm-unit-score ${scoreTone(chemistry?.score)}`}>{chemistry?.score ?? 0}</span>
+      {isPP ? (() => {
+        const sk = slots.map((sl) => slotPlayers[sl]).filter(Boolean);
+        const f = sk.filter((pl) => isForward(pl.position)).length;
+        return sk.length ? <span className="fm-unit-formation" title="Forwards · defencemen on this unit">{f}F·{sk.length - f}D</span> : null;
+      })() : null}
     </div>
     {slots.map((slot) => {
       const descriptor = { key: `${line.id}:${slot}`, lineId: line.id, slot, playerId: String(line.slots?.[slot] || "") };
       const player = playerMap[descriptor.playerId] || null;
+      // Label only — the real slot id must stay "LD"/"RD" for drag/drop and swaps.
+      if (isPP && player && (slot === "LD" || slot === "RD") && isForward(player.position)) descriptor.label = `${slot === "LD" ? "L" : "R"} PT · F`;
       const slotLinks = badgeLinks.filter((link) => link.slotA === slot || link.slotB === slot);
       const tiers = slotLinks.map((link) => link.tier);
       const worst = tiers.includes("weak") ? "weak" : tiers.includes("forming") ? "forming" : tiers.includes("strong") ? "strong" : "";
@@ -2610,7 +2702,7 @@ function SpecialTeamsLines({ kind, ...props }) {
             </div>
           </div>
           {!players.length && !rosterLoading ? <div className="lb-empty">Roster unavailable</div> : <div className="fm-scroll">
-            <SectionHead title={isPP ? "Power play" : "Penalty kill"} note={isPP ? "Triangle up top, pair on the points" : "Four-sided box"} />
+            <SectionHead title={isPP ? "Power play" : "Penalty kill"} note={isPP ? "Triangle up top, pair on the points — put a forward on a point for a 4F/1D unit" : "Four-sided box"} />
             {lines.map((line, index) => <SpecialTeamsUnit
               key={line.id}
               kind={kind}

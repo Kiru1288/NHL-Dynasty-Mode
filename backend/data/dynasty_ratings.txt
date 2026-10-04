@@ -182,7 +182,7 @@ Axel Sandin-Pellikka: 79 ovr, 79 cha, 85 off, 74 def, 84 tra, 78 men, 73 phy, 90
 Jacob Bryson: 74 ovr, 80 cha, 72 off, 76 def, 76 tra, 77 men, 74 phy, 74 pot
 
 -- NHL GOALIES --
-Gibson: 86 ovr, 89 glove, 83 blocker, 87 stick, 87 pot
+Gibson: 82 ovr, 86 glove, 80 blocker, 83 stick, 83 pot
 Tarasov: 78 ovr, 81 glove, 79 blocker, 87 stick, 81 pot
 
 -- AHL: GRAND RAPIDS GRIFFINS --
@@ -243,7 +243,7 @@ Aleksander Barkov: 94 ovr, 95 cha, 92 off, 95 def, 93 tra, 91 men, 83 phy, 95 po
 Matthew Tkachuk: 90 ovr, 68 cha, 94 off, 81 def, 89 tra, 61 men, 88 phy, 92 pot
 Sam Reinhart: 91 ovr, 86 cha, 94 off, 94 def, 88 tra, 85 men, 80 phy, 93 pot
 Brad Marchand: 87 ovr, 71 cha, 90 off, 90 def, 82 tra, 83 men, 84 phy, 84 pot
-Sam Bennett: 85 ovr, 82 cha, 87 off, 78 def, 84 tra, 85 men, 94 phy, 86 pot
+Sam Bennett: 85 ovr, 82 cha, 87 off, 78 def, 84 tra, 85 men, 94 phy, 87 pot
 Anton Lundell: 85 ovr, 80 cha, 83 off, 89 def, 89 tra, 78 men, 77 phy, 89 pot
 Carter Verhaeghe: 84 ovr, 81 cha, 89 off, 78 def, 85 tra, 86 men, 75 phy, 85 pot
 Eetu Luostarinen: 83 ovr, 83 cha, 84 off, 82 def, 81 tra, 79 men, 77 phy, 85 pot
@@ -498,7 +498,7 @@ Brandon Duhaime: 74 ovr, 82 cha, 71 off, 78 def, 74 tra, 79 men, 84 phy, 74 pot
 -- NHL DEFENCE --
 Morgan Rielly: 84 ovr, 85 cha, 86 off, 78 def, 85 tra, 82 men, 80 phy, 82 pot
 Jake McCabe: 83 ovr, 85 cha, 74 off, 88 def, 78 tra, 84 men, 88 phy, 82 pot
-Darren Raddysh: 80 ovr, 82 cha, 82 off, 77 def, 82 tra, 80 men, 78 phy, 80 pot
+Darren Raddysh: 80 ovr, 82 cha, 82 off, 77 def, 82 tra, 80 men, 78 phy, 81 pot
 Chris Tanev: 82 ovr, 88 cha, 70 off, 88 def, 76 tra, 87 men, 86 phy, 80 pot
 Oliver Ekman-Larsson: 81 ovr, 84 cha, 80 off, 80 def, 82 tra, 83 men, 78 phy, 80 pot
 Philippe Myers: 76 ovr, 80 cha, 72 off, 79 def, 74 tra, 78 men, 88 phy, 76 pot
@@ -859,7 +859,7 @@ Zach Werenski: 95 ovr, 84 cha, 94 off, 86 def, 88 tra, 84 men, 82 phy, 90 pot
 Ivan Provorov: 85 ovr, 84 cha, 78 off, 88 def, 79 tra, 84 men, 86 phy, 83 pot
 Damon Severson: 82 ovr, 80 cha, 80 off, 80 def, 80 tra, 79 men, 80 phy, 79 pot
 Denton Mateychuk: 82 ovr, 80 cha, 84 off, 76 def, 86 tra, 78 men, 74 phy, 90 pot
-Dante Fabbro: 78 ovr, 82 cha, 74 off, 82 def, 78 tra, 81 men, 80 phy, 78 pot
+Dante Fabbro: 78 ovr, 82 cha, 74 off, 82 def, 78 tra, 81 men, 80 phy, 79 pot
 Erik Gudbranson: 76 ovr, 88 cha, 60 off, 82 def, 66 tra, 86 men, 92 phy, 68 pot
 Jake Christiansen: 74 ovr, 78 cha, 76 off, 74 def, 78 tra, 76 men, 72 phy, 76 pot
 
@@ -998,7 +998,7 @@ Danai Shaiikov (G): 70 ovr, 75 glove, 73 blocker, 73 stick, 80 pot
 
 -- NHL FORWARDS --
 Mathew Barzal: 89 ovr, 78 cha, 92 off, 74 def, 95 tra, 76 men, 70 phy, 89 pot
-Bo Horvat: 84 ovr, 86 cha, 84 off, 82 def, 78 tra, 84 men, 84 phy, 82 pot
+Bo Horvat: 84 ovr, 86 cha, 84 off, 82 def, 78 tra, 84 men, 84 phy, 86 pot
 Brayden Schenn: 83 ovr, 82 cha, 84 off, 78 def, 78 tra, 81 men, 86 phy, 80 pot
 Simon Holmström: 79 ovr, 80 cha, 80 off, 76 def, 78 tra, 78 men, 80 phy, 85 pot
 Anthony Duclair: 78 ovr, 76 cha, 84 off, 68 def, 86 tra, 73 men, 74 phy, 78 pot
@@ -1006,7 +1006,7 @@ Jean-Gabriel Pageau: 80 ovr, 86 cha, 76 off, 84 def, 78 tra, 84 men, 78 phy, 76 
 Ondřej Palát: 78 ovr, 82 cha, 78 off, 78 def, 78 tra, 81 men, 74 phy, 74 pot
 Emil Heineman: 76 ovr, 79 cha, 78 off, 74 def, 80 tra, 76 men, 78 phy, 82 pot
 Pierre Engvall: 76 ovr, 79 cha, 76 off, 76 def, 76 tra, 78 men, 86 phy, 74 pot
-Kyle Palmieri: 78 ovr, 80 cha, 82 off, 74 def, 78 tra, 79 men, 74 phy, 74 pot
+Kyle Palmieri: 78 ovr, 80 cha, 82 off, 74 def, 78 tra, 79 men, 74 phy, 79 pot
 Matias Maccelli: 76 ovr, 74 cha, 82 off, 68 def, 80 tra, 73 men, 66 phy, 78 pot
 Calum Ritchie: 76 ovr, 80 cha, 80 off, 74 def, 80 tra, 77 men, 76 phy, 87 pot
 Kyle MacLean: 73 ovr, 80 cha, 70 off, 78 def, 74 tra, 78 men, 82 phy, 76 pot
@@ -1208,8 +1208,8 @@ Martin Psohlavec (G): 68 ovr, 74 glove, 73 blocker, 74 stick, 79 pot
 -- NHL FORWARDS --
 Sidney Crosby: 93 ovr, 96 cha, 92 off, 86 def, 88 tra, 96 men, 76 phy, 88 pot
 Yevgeni Malkin: 86 ovr, 78 cha, 90 off, 74 def, 80 tra, 78 men, 82 phy, 78 pot
-Bryan Rust: 83 ovr, 82 cha, 84 off, 78 def, 84 tra, 80 men, 76 phy, 78 pot
-Rickard Rakell: 83 ovr, 80 cha, 86 off, 76 def, 80 tra, 78 men, 78 phy, 80 pot
+Bryan Rust: 83 ovr, 82 cha, 84 off, 78 def, 84 tra, 80 men, 76 phy, 85 pot
+Rickard Rakell: 83 ovr, 80 cha, 86 off, 76 def, 80 tra, 78 men, 78 phy, 86 pot
 Egor Chinakhov: 82 ovr, 76 cha, 87 off, 72 def, 84 tra, 74 men, 78 phy, 87 pot
 Andrey Kuzmenko: 81 ovr, 76 cha, 87 off, 68 def, 80 tra, 73 men, 68 phy, 80 pot
 Nick Robertson: 79 ovr, 76 cha, 86 off, 68 def, 84 tra, 73 men, 66 phy, 84 pot
@@ -1291,9 +1291,9 @@ Parker Von Richter (D): 66 ovr, 77 cha, 64 off, 74 def, 70 tra, 74 men, 78 phy, 
 Alexander Ovechkin: 87 ovr, 82 cha, 94 off, 66 def, 74 tra, 84 men, 82 phy, 72 pot
 Alex Tuch: 87 ovr, 82 cha, 89 off, 78 def, 84 tra, 80 men, 84 phy, 86 pot
 Jordan Kyrou: 86 ovr, 76 cha, 91 off, 70 def, 90 tra, 74 men, 68 phy, 87 pot
-Dylan Strome: 84 ovr, 80 cha, 87 off, 74 def, 80 tra, 78 men, 74 phy, 82 pot
-Pierre-Luc Dubois: 82 ovr, 78 cha, 82 off, 78 def, 78 tra, 76 men, 88 phy, 80 pot
-Tom Wilson: 81 ovr, 82 cha, 76 off, 78 def, 74 tra, 80 men, 96 phy, 76 pot
+Dylan Strome: 84 ovr, 80 cha, 87 off, 74 def, 80 tra, 78 men, 74 phy, 86 pot
+Pierre-Luc Dubois: 82 ovr, 78 cha, 82 off, 78 def, 78 tra, 76 men, 88 phy, 83 pot
+Tom Wilson: 81 ovr, 82 cha, 76 off, 78 def, 74 tra, 80 men, 96 phy, 85 pot
 Alexei Protas: 82 ovr, 82 cha, 82 off, 78 def, 82 tra, 79 men, 88 phy, 88 pot
 Ryan Leonard: 80 ovr, 80 cha, 85 off, 74 def, 82 tra, 77 men, 82 phy, 90 pot
 Anthony Beauvillier: 76 ovr, 76 cha, 79 off, 70 def, 80 tra, 73 men, 68 phy, 74 pot
@@ -1306,7 +1306,7 @@ Jonny Brodzinski: 72 ovr, 78 cha, 74 off, 70 def, 72 tra, 75 men, 76 phy, 68 pot
 -- NHL DEFENCE --
 Jakob Chychrun: 84 ovr, 80 cha, 84 off, 78 def, 82 tra, 78 men, 82 phy, 84 pot
 Martin Fehérváry: 80 ovr, 82 cha, 68 off, 86 def, 74 tra, 82 men, 86 phy, 82 pot
-Matt Roy: 79 ovr, 82 cha, 68 off, 84 def, 74 tra, 82 men, 82 phy, 78 pot
+Matt Roy: 79 ovr, 82 cha, 68 off, 84 def, 74 tra, 82 men, 82 phy, 79 pot
 Rasmus Sandin: 78 ovr, 78 cha, 78 off, 74 def, 82 tra, 76 men, 68 phy, 80 pot
 Vincent Desharnais: 74 ovr, 80 cha, 58 off, 82 def, 66 tra, 79 men, 92 phy, 72 pot
 Timothy Liljegren: 75 ovr, 78 cha, 74 off, 76 def, 78 tra, 76 men, 72 phy, 78 pot
@@ -1362,8 +1362,8 @@ Nathan MacKinnon: 97 ovr, 88 cha, 98 off, 84 def, 96 tra, 90 men, 82 phy, 96 pot
 Martin Nečas: 88 ovr, 80 cha, 91 off, 76 def, 90 tra, 78 men, 74 phy, 89 pot
 Gabriel Landeskog: 86 ovr, 92 cha, 84 off, 84 def, 80 tra, 90 men, 88 phy, 78 pot
 Artturi Lehkonen: 84 ovr, 86 cha, 82 off, 84 def, 82 tra, 85 men, 78 phy, 80 pot
-Brock Nelson: 83 ovr, 82 cha, 84 off, 78 def, 78 tra, 80 men, 84 phy, 78 pot
-Nazem Kadri: 83 ovr, 76 cha, 86 off, 76 def, 82 tra, 76 men, 78 phy, 78 pot
+Brock Nelson: 83 ovr, 82 cha, 84 off, 78 def, 78 tra, 80 men, 84 phy, 85 pot
+Nazem Kadri: 83 ovr, 76 cha, 86 off, 76 def, 82 tra, 76 men, 78 phy, 84 pot
 Nicolas Roy: 79 ovr, 82 cha, 76 off, 80 def, 78 tra, 80 men, 86 phy, 76 pot
 Jaden Schwartz: 78 ovr, 82 cha, 79 off, 76 def, 78 tra, 80 men, 74 phy, 72 pot
 Logan O'Connor: 78 ovr, 84 cha, 74 off, 80 def, 78 tra, 82 men, 82 phy, 74 pot
@@ -1435,7 +1435,7 @@ Roope Hintz: 90 ovr, 84 cha, 90 off, 82 def, 86 tra, 84 men, 82 phy, 88 pot
 Jason Robertson: 94 ovr, 80 cha, 96 off, 80 def, 84 tra, 78 men, 76 phy, 95 pot
 Wyatt Johnston: 87 ovr, 84 cha, 88 off, 80 def, 84 tra, 82 men, 78 phy, 91 pot
 Tyler Seguin: 84 ovr, 76 cha, 87 off, 74 def, 82 tra, 74 men, 74 phy, 78 pot
-Matt Duchene: 83 ovr, 80 cha, 85 off, 74 def, 84 tra, 78 men, 68 phy, 76 pot
+Matt Duchene: 83 ovr, 80 cha, 85 off, 74 def, 84 tra, 78 men, 68 phy, 84 pot
 Jamie Benn: 82 ovr, 88 cha, 78 off, 80 def, 74 tra, 86 men, 88 phy, 74 pot
 Radek Faksa: 80 ovr, 86 cha, 68 off, 84 def, 74 tra, 84 men, 88 phy, 74 pot
 Joel Kiviranta: 78 ovr, 82 cha, 74 off, 78 def, 76 tra, 80 men, 82 phy, 74 pot
@@ -1642,7 +1642,7 @@ Nick Schmaltz: 86 ovr, 82 cha, 88 off, 76 def, 86 tra, 80 men, 68 phy, 84 pot
 Logan Cooley: 85 ovr, 82 cha, 88 off, 76 def, 88 tra, 79 men, 70 phy, 93 pot
 Lawson Crouse: 79 ovr, 80 cha, 76 off, 78 def, 74 tra, 78 men, 88 phy, 78 pot
 Anders Lee: 78 ovr, 84 cha, 78 off, 78 def, 70 tra, 82 men, 88 phy, 72 pot
-Vincent Trocheck: 82 ovr, 84 cha, 82 off, 80 def, 82 tra, 84 men, 78 phy, 78 pot
+Vincent Trocheck: 82 ovr, 84 cha, 82 off, 80 def, 82 tra, 84 men, 78 phy, 85 pot
 Barrett Hayton: 76 ovr, 80 cha, 76 off, 76 def, 78 tra, 78 men, 78 phy, 82 pot
 Jack McBain: 78 ovr, 82 cha, 76 off, 80 def, 78 tra, 80 men, 88 phy, 82 pot
 Daniil But: 77 ovr, 76 cha, 80 off, 70 def, 78 tra, 74 men, 84 phy, 88 pot
@@ -1730,8 +1730,8 @@ Brandon Saad: 73 ovr, 82 cha, 68 off, 76 def, 76 tra, 80 men, 78 phy, 66 pot
 
 -- NHL DEFENCE --
 Noah Hanifin: 86 ovr, 82 cha, 78 off, 86 def, 82 tra, 82 men, 78 phy, 84 pot
-Shea Theodore: 85 ovr, 80 cha, 86 off, 76 def, 86 tra, 78 men, 66 phy, 82 pot
-Rasmus Andersson: 82 ovr, 82 cha, 74 off, 84 def, 78 tra, 80 men, 82 phy, 80 pot
+Shea Theodore: 85 ovr, 80 cha, 86 off, 76 def, 86 tra, 78 men, 66 phy, 87 pot
+Rasmus Andersson: 82 ovr, 82 cha, 74 off, 84 def, 78 tra, 80 men, 82 phy, 83 pot
 Brayden McNabb: 76 ovr, 84 cha, 56 off, 84 def, 66 tra, 82 men, 88 phy, 68 pot
 Ben Hutton: 73 ovr, 78 cha, 66 off, 76 def, 74 tra, 76 men, 76 phy, 68 pot
 Jeremy Lauzon: 74 ovr, 80 cha, 58 off, 80 def, 68 tra, 79 men, 88 phy, 70 pot
@@ -1795,10 +1795,10 @@ Quinton Byfield: 85 ovr, 80 cha, 84 off, 76 def, 82 tra, 78 men, 82 phy, 90 pot
 Alex Laferriere: 75 ovr, 80 cha, 80 off, 74 def, 78 tra, 78 men, 76 phy, 84 pot
 Trevor Moore: 83 ovr, 82 cha, 78 off, 85 def, 82 tra, 80 men, 74 phy, 76 pot
 Scott Laughton: 76 ovr, 82 cha, 72 off, 78 def, 76 tra, 80 men, 82 phy, 74 pot
-Joel Armia: 75 ovr, 80 cha, 74 off, 76 def, 74 tra, 78 men, 82 phy, 72 pot
+Joel Armia: 75 ovr, 80 cha, 74 off, 76 def, 74 tra, 78 men, 82 phy, 76 pot
 Erik Haula: 74 ovr, 80 cha, 72 off, 76 def, 78 tra, 78 men, 74 phy, 68 pot
 Corey Perry: 76 ovr, 78 cha, 78 off, 70 def, 68 tra, 76 men, 80 phy, 64 pot
-Mats Zuccarello: 76 ovr, 82 cha, 78 off, 70 def, 84 tra, 78 men, 60 phy, 66 pot
+Mats Zuccarello: 76 ovr, 82 cha, 78 off, 70 def, 84 tra, 78 men, 60 phy, 77 pot
 Alex Turcotte: 73 ovr, 78 cha, 74 off, 72 def, 78 tra, 75 men, 72 phy, 80 pot
 Taylor Ward: 71 ovr, 78 cha, 70 off, 72 def, 76 tra, 75 men, 72 phy, 76 pot
 Jared Wright: 70 ovr, 78 cha, 68 off, 72 def, 74 tra, 75 men, 74 phy, 76 pot
@@ -1814,7 +1814,7 @@ Brian Dumoulin: 74 ovr, 80 cha, 60 off, 80 def, 70 tra, 80 men, 82 phy, 70 pot
 Erik Gustafsson: 73 ovr, 76 cha, 78 off, 66 def, 82 tra, 73 men, 62 phy, 72 pot
 
 -- NHL GOALIES --
-Darcy Kuemper: 82 ovr, 84 glove, 80 blocker, 78 stick, 78 pot
+Darcy Kuemper: 82 ovr, 84 glove, 80 blocker, 78 stick, 84 pot
 Anton Forsberg: 76 ovr, 78 glove, 76 blocker, 74 stick, 72 pot
 
 -- AHL: ONTARIO REIGN --
@@ -2202,7 +2202,7 @@ Mason Marchment: 84 ovr, 81 cha, 86 off, 79 def, 81 tra, 80 men, 92 phy, 83 pot
 Igor Chernyshov: 82 ovr, 82 cha, 87 off, 76 def, 84 tra, 80 men, 87 phy, 90 pot
 Collin Graf: 82 ovr, 84 cha, 84 off, 80 def, 84 tra, 82 men, 77 phy, 87 pot
 Kiefer Sherwood: 81 ovr, 86 cha, 78 off, 84 def, 82 tra, 84 men, 95 phy, 80 pot
-Alexander Wennberg: 80 ovr, 85 cha, 78 off, 84 def, 82 tra, 83 men, 75 phy, 78 pot
+Alexander Wennberg: 80 ovr, 85 cha, 78 off, 84 def, 82 tra, 83 men, 75 phy, 80 pot
 Zack Ostapchuk: 79 ovr, 85 cha, 76 off, 83 def, 78 tra, 81 men, 91 phy, 83 pot
 Adam Gaudette: 78 ovr, 79 cha, 83 off, 73 def, 79 tra, 77 men, 76 phy, 78 pot
 Ty Dellandrea: 77 ovr, 84 cha, 74 off, 81 def, 79 tra, 81 men, 84 phy, 78 pot
@@ -2511,9 +2511,9 @@ Patrick Kane: 83 ovr, 88 cha, 90 off, 72 def, 84 tra, 89 men, 68 phy, 78 pot
 Teuvo Teravainen: 82 ovr, 88 cha, 84 off, 81 def, 84 tra, 86 men, 72 phy, 79 pot
 Roman Kantserov: 81 ovr, 81 cha, 87 off, 74 def, 86 tra, 79 men, 76 phy, 89 pot
 Nick Lardis: 80 ovr, 81 cha, 88 off, 72 def, 85 tra, 78 men, 72 phy, 87 pot
-Tyler Bertuzzi: 80 ovr, 82 cha, 82 off, 77 def, 77 tra, 80 men, 88 phy, 78 pot
+Tyler Bertuzzi: 80 ovr, 82 cha, 82 off, 77 def, 77 tra, 80 men, 88 phy, 80 pot
 Oliver Moore: 79 ovr, 86 cha, 80 off, 80 def, 90 tra, 82 men, 73 phy, 88 pot
-Ryan Donato: 79 ovr, 84 cha, 83 off, 77 def, 80 tra, 82 men, 78 phy, 78 pot
+Ryan Donato: 79 ovr, 84 cha, 83 off, 77 def, 80 tra, 82 men, 78 phy, 81 pot
 Ryan Greene: 77 ovr, 87 cha, 76 off, 83 def, 80 tra, 82 men, 82 phy, 83 pot
 Andrew Mangiapane: 77 ovr, 83 cha, 79 off, 77 def, 82 tra, 80 men, 78 phy, 76 pot
 Landon Slaggert: 76 ovr, 86 cha, 74 off, 82 def, 79 tra, 81 men, 85 phy, 80 pot
@@ -2721,7 +2721,7 @@ Jimmy Snuggerud: 84 ovr, 84 cha, 89 off, 77 def, 85 tra, 82 men, 80 phy, 90 pot
 Connor McMichael: 83 ovr, 85 cha, 85 off, 81 def, 85 tra, 83 men, 77 phy, 87 pot
 Dalibor Dvorsky: 82 ovr, 86 cha, 85 off, 82 def, 82 tra, 83 men, 85 phy, 89 pot
 Jake Neighbours: 82 ovr, 88 cha, 83 off, 82 def, 80 tra, 84 men, 91 phy, 84 pot
-Pius Suter: 79 ovr, 87 cha, 76 off, 86 def, 81 tra, 84 men, 75 phy, 78 pot
+Pius Suter: 79 ovr, 87 cha, 76 off, 86 def, 81 tra, 84 men, 75 phy, 80 pot
 Jonatan Berggren: 78 ovr, 80 cha, 83 off, 74 def, 83 tra, 78 men, 70 phy, 81 pot
 Oskar Sundqvist: 77 ovr, 88 cha, 72 off, 84 def, 74 tra, 84 men, 90 phy, 74 pot
 Alexei Toropchenko: 76 ovr, 84 cha, 72 off, 81 def, 79 tra, 80 men, 94 phy, 77 pot
@@ -2733,7 +2733,7 @@ Ross Johnston: 68 ovr, 82 cha, 57 off, 73 def, 63 tra, 77 men, 98 phy, 65 pot
 Philip Broberg: 87 ovr, 88 cha, 85 off, 88 def, 90 tra, 86 men, 87 phy, 91 pot
 Colton Parayko: 86 ovr, 92 cha, 76 off, 93 def, 80 tra, 89 men, 96 phy, 84 pot
 Brandon Carlo: 83 ovr, 90 cha, 64 off, 91 def, 74 tra, 87 men, 94 phy, 81 pot
-Cam Fowler: 81 ovr, 87 cha, 82 off, 80 def, 84 tra, 86 men, 76 phy, 77 pot
+Cam Fowler: 81 ovr, 87 cha, 82 off, 80 def, 84 tra, 86 men, 76 phy, 82 pot
 Logan Mailloux: 80 ovr, 81 cha, 85 off, 76 def, 83 tra, 79 men, 87 phy, 86 pot
 Torey Krug: 77 ovr, 84 cha, 83 off, 72 def, 80 tra, 82 men, 74 phy, 72 pot
 Tyler Tucker: 75 ovr, 85 cha, 66 off, 82 def, 72 tra, 81 men, 93 phy, 76 pot

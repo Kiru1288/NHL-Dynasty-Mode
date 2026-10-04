@@ -182,6 +182,10 @@ REASON_COPY = {
             "move even if it burns bridges and torpedoes his own value."
         ),
     },
+    "relocation": {
+        "headline": "{name} wants out after the relocation",
+        "body": "{name} doesn't want to uproot his family for the move and has asked for a trade through his agent.",
+    },
     "general": {
         "headline": "{name} has formally requested a trade",
         "body": "{name} has delivered a trade request through his agent. The relationship is at a breaking point.",
@@ -922,6 +926,14 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
     opened: List[Dict[str, Any]] = []
     warnings: List[Dict[str, Any]] = []
     demand_candidates: List[Tuple[float, Any, Any, Dict[str, Any], str]] = []
+    import zlib
+
+    try:
+        from services.league_governance import trade_demand_multiplier
+
+        demand_mult = float(trade_demand_multiplier(session))
+    except Exception:
+        demand_mult = 1.0
     seen_pids: set = set()
 
     # One league-wide storyline sync for the whole pass (per-player syncs were O(N^2)).
@@ -965,8 +977,14 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
                 _sync_stability_surface(session, player, team, stability_row)
                 seen_pids.add(pid)
 
+                # Board of Governors trade-request rules: >1 lets some level-2 players
+                # go formal; <1 talks some level-3 players down.
+                gate_u = (zlib.crc32(f"tdgate|{pid}|{calendar_idx}".encode()) & 0xFFFFFFFF) / 0xFFFFFFFF
+                formal_level = escalation >= 3 and gate_u < min(1.0, demand_mult)
+                if not formal_level and escalation == 2 and demand_mult > 1.0:
+                    formal_level = gate_u < (demand_mult - 1.0) * 0.5
                 if (
-                    escalation >= 3
+                    formal_level
                     and formal_demand_eligible(stability_row)
                     and deadline_ctx.get("new_demands_allowed")
                 ):
@@ -996,7 +1014,7 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
     team_open, team_recent = _team_demand_load(session, int(calendar_idx))
     opened_this_pass = 0
     for _prio, player, team, stability_row, reason in demand_candidates:
-        if opened_this_pass >= MAX_NEW_FORMAL_DEMANDS_PER_PASS:
+        if opened_this_pass >= max(1, int(round(MAX_NEW_FORMAL_DEMANDS_PER_PASS * demand_mult))):
             break
         tkey = _team_key(team)
         if team_open.get(tkey, 0) >= MAX_OPEN_DEMANDS_PER_TEAM:

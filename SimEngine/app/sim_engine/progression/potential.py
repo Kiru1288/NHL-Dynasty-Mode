@@ -244,3 +244,89 @@ def update_player_potential(player: Any, rng: Any) -> None:
         {"season": getattr(player, "_active_dev_season", None)},
         rng=rng,
     )
+
+
+def read_player_potential99(player: Any) -> float:
+    """Best available development ceiling on the 0–99 display scale."""
+    try:
+        from app.sim_engine.entities.chapter_attributes import get_player_chapters
+
+        pot = (get_player_chapters(player) or {}).get("potential")
+        if pot is not None and float(pot) > 0:
+            return float(pot)
+    except Exception:
+        pass
+    from app.sim_engine.entities.player import display_rating
+
+    return float(display_rating(_potential(player)))
+
+
+def write_player_potential99(player: Any, pot99: float) -> float:
+    """Write a ceiling to every place the game reads potential from (kept in sync)."""
+    from app.sim_engine.entities.player import clamp01, display_rating
+
+    pot99 = float(max(1.0, min(99.0, pot99)))
+    pot01 = clamp01(pot99 / 99.0)
+    try:
+        ap = getattr(player, "attribute_profile", None)
+        if isinstance(ap, dict) and isinstance(ap.get("chapters"), dict):
+            ap["chapters"]["potential"] = int(round(pot99))
+    except Exception:
+        pass
+    try:
+        setattr(player, "potential", pot01)
+    except Exception:
+        pass
+    ratings = getattr(player, "ratings", None)
+    if isinstance(ratings, dict):
+        ratings["dev_potential"] = float(display_rating(pot01))
+        try:
+            if float(ratings.get("dev_ceiling") or 0) < pot99:
+                ratings["dev_ceiling"] = float(min(99.0, pot99 + 2.0))
+        except (TypeError, ValueError):
+            pass
+    profile = getattr(player, "development_profile", None)
+    if isinstance(profile, dict):
+        profile["expected_ceiling"] = pot01
+        try:
+            if float(profile.get("maximum_ceiling") or 0) < pot01:
+                profile["maximum_ceiling"] = clamp01(min(0.99, pot01 + 0.02))
+        except (TypeError, ValueError):
+            profile["maximum_ceiling"] = clamp01(min(0.99, pot01 + 0.02))
+    return pot99
+
+
+def lift_potential_with_growth(player: Any, ovr_before_01: float, ovr_after_01: float) -> Optional[float]:
+    """When a young player's overall climbs, his ceiling climbs with him.
+
+    Growth isn't only a march toward a fixed POT: a player who keeps improving shows
+    he has more in him. Young players also keep a little headroom above their OVR so a
+    21-year-old who hits his "potential" isn't declared finished.
+    Returns the new POT (display) when it changed.
+    """
+    try:
+        age = _age(player)
+        after99 = float(ovr_after_01) * 99.0
+        gain = (float(ovr_after_01) - float(ovr_before_01)) * 99.0
+        pot = read_player_potential99(player)
+        if age <= 20:
+            headroom, share = 4.0, 0.55
+        elif age <= 23:
+            headroom, share = 3.0, 0.45
+        elif age <= 26:
+            headroom, share = 1.5, 0.30
+        elif age <= 29:
+            headroom, share = 0.0, 0.15
+        else:
+            headroom, share = 0.0, 0.0
+        target = pot
+        if gain > 0:
+            target = pot + gain * share
+        target = max(target, after99 + headroom)
+        target = min(99.0, target)
+        if target > pot + 0.05:
+            write_player_potential99(player, target)
+            return target
+    except Exception:
+        return None
+    return None

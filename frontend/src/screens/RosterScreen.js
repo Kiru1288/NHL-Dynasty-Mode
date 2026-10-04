@@ -18,8 +18,9 @@ import {
   getOverallTooltip,
   getUniversalOverall,
 } from "../utils/playerOverall";
-import { getRosterMoves, moveRosterPlayer, getStatsCentral } from "../services/franchiseService";
+import { getRosterMoves, moveRosterPlayer, getStatsCentral, previewElcOffer, submitElcOffer } from "../services/franchiseService";
 import { resolveWjcDossierBlock } from "./prospectDossierHelpers";
+import "../components/dossier/PlayerDossier.css";
 
 /**
  * RosterScreen.js
@@ -84,10 +85,10 @@ const VIEW_MODE_OPTIONS = [
 
 const PANEL_TABS = [
   { value: "overview", label: "Overview" },
-  { value: "character", label: "Character & Life" },
   { value: "performance", label: "Performance" },
   { value: "development", label: "Development" },
   { value: "contract", label: "Contract" },
+  { value: "character", label: "Character & Life" },
   { value: "media", label: "Media" },
   { value: "career", label: "Career" },
   { value: "moves", label: "Moves" },
@@ -2204,10 +2205,25 @@ function lastCareerSeasonSummary(player) {
   return seasonLabel ? `${seasonLabel}: ${pts} pts` : `${goals}-${assists}-${pts} pts`;
 }
 
+function minorSeasonSummary(player) {
+  const m = player?.minor_season;
+  if (!m || !safeNum(m.gp, 0)) return null;
+  const lg = safeStr(m.league, "Junior");
+  if (isGoaliePosition(player.position)) {
+    const sv = safeNum(m.sv_pct, 0);
+    return `${lg}: ${m.gp} GP · ${safeNum(m.w, 0)}-${safeNum(m.l, 0)}${sv ? ` · ${formatDecimal(sv > 1 ? sv / 100 : sv, 3)}` : ""}`;
+  }
+  return `${lg}: ${m.gp} GP · ${safeNum(m.g, 0)}-${safeNum(m.a, 0)}-${safeNum(m.pts, 0)}`;
+}
+
 function compactBoardStats(player) {
   if (!player) return "—";
 
   const stats = player.season_stats || EMPTY_OBJECT;
+  if (!safeNum(stats.gp, 0) && player.minor_season) {
+    const minor = minorSeasonSummary(player);
+    if (minor) return minor;
+  }
 
   if (isGoaliePosition(player.position)) {
     const gp = safeNum(stats.gp, 0);
@@ -2960,36 +2976,6 @@ function buildDecisionBullets(player) {
   return bullets;
 }
 
-// A single factual status line — role, contract, and (only when real data
-// exists) a development direction from growth or tracked history.
-function buildCommandStatusLine(player) {
-  if (!player) return "No player selected";
-
-  const parts = [];
-  const role = player.roleLabel || player.role;
-  if (role && role !== "—") parts.push(role);
-
-  const contract = player.contract || EMPTY_OBJECT;
-  parts.push(contract.isSigned ? contractSummaryDisplay(player) : "Unsigned");
-
-  const growth = safeNumOrNull(player.growth);
-  const history = Array.isArray(player.development_history) ? player.development_history : EMPTY_ARRAY;
-
-  if (growth !== null && growth !== 0) {
-    parts.push(`Trending ${growth > 0 ? "up" : "down"} ${formatSignedNumber(growth)} OVR this season`);
-  } else if (history.length >= 2) {
-    const ovrs = history
-      .map((entry) => safeNumOrNull(pickFirstDefined(entry?.ovr_after, entry?.ovr)))
-      .filter((value) => value !== null);
-    if (ovrs.length >= 2) {
-      const delta = ovrs[ovrs.length - 1] - ovrs[0];
-      if (delta !== 0) parts.push(`${delta > 0 ? "Up" : "Down"} ${Math.abs(delta)} OVR across tracked seasons`);
-    }
-  }
-
-  return parts.length ? parts.join(" · ") : "No connected status data";
-}
-
 function normalizeLivePlayer(player, franchiseState, index) {
   const enriched = enrichRosterPlayer(player, index);
   const source = {
@@ -3618,20 +3604,6 @@ function InfoPair({ label, value, tone = "neutral" }) {
   );
 }
 
-/** Horizontal metric strip for dossier stats / contract (label over value, tiles in a row). */
-function Metric({ label, value, tone = "neutral" }) {
-  return (
-    <div className={`nhlrost-metric ${toneClass(tone)}`}>
-      <span>{label}</span>
-      <strong>{value ?? "—"}</strong>
-    </div>
-  );
-}
-
-function MetricStrip({ children, className = "" }) {
-  return <div className={`nhlrost-metric-strip ${className}`.trim()}>{children}</div>;
-}
-
 function ToolbarSelect({ id, label, value, onChange, options, disabled = false, compact = false }) {
   return (
     <label className={`nhlrost-control ${compact ? "nhlrost-control--compact" : ""}`} htmlFor={id}>
@@ -3868,18 +3840,6 @@ function PlayerFlagBadge({ player, size = "sm" }) {
   return null;
 }
 
-function PotentialPill({ player, large = false }) {
-  const label = safeStr(player?.potential, "—");
-  const score = safeNum(player?.potentialScore, 0);
-  const tone = potentialToneClass(score);
-
-  return (
-    <span className={`nhlrost-potential-pill ${tone} ${large ? "is-large" : ""}`}>
-      {label}
-    </span>
-  );
-}
-
 function OvrPill({ player, large = false }) {
   const tone = potentialToneClass(safeNum(player?.potentialScore, 0));
   const growth = inferGrowth(player);
@@ -3959,6 +3919,11 @@ function PremiumPlayerRow({ player, selected, onSelect, showTeam = false }) {
 
       <span className="nhlrost-board-row__ovr">
         <OvrPill player={player} />
+        {safeNum(player.potentialScore, 0) > 0 ? (
+          <span className="nhlrost-pot-mini" title="Potential">
+            POT {round0(player.potentialScore)}
+          </span>
+        ) : null}
       </span>
 
       <span className="nhlrost-board-row__age">{player.age ? round0(player.age) : "—"}</span>
@@ -4532,269 +4497,232 @@ function RatingsEngineView({ players, selectedPlayerKey, onSelectPlayer }) {
   );
 }
 
-function PlayerOverviewPanel({ player, franchiseState }) {
-  const [expandedRatings, setExpandedRatings] = useState(false);
+/* ─────────────────────────────────────────────────────────────────────────
+ * Player dossier (modal). Styles live in components/dossier/PlayerDossier.css
+ * under the `pdx-` namespace so the modal renders correctly when imported by
+ * other screens (the roster style block is only mounted by RosterScreen).
+ * ───────────────────────────────────────────────────────────────────────── */
 
-  if (!player) {
-    return <EmptyPanel title="No player selected" body="Choose a player from the roster board." />;
+const DOSSIER_ACRONYMS = new Set([
+  "nhl", "ahl", "echl", "ohl", "whl", "qmjhl", "chl", "ncaa", "ushl", "nahl", "bchl", "ajhl",
+  "ufa", "rfa", "elc", "ntc", "nmc", "khl", "shl", "vhl", "mhl", "nla", "del", "usa", "gm",
+  "ovr", "pot", "wjc", "u18", "u20", "ir", "ltir", "toi", "war", "sog", "pim", "aav",
+]);
+
+const DOSSIER_TOKEN_LABELS = {
+  european_exclusive: "European",
+  european_indefinite: "European (indefinite)",
+  indefinite_european_rights: "European (indefinite)",
+  chl_exclusive: "CHL",
+  ncaa_college: "NCAA",
+  exclusive_rights: "Exclusive",
+  ufa_exclusive: "UFA exclusive",
+  unsigned_drafted: "Unsigned draft pick",
+  signed_nhl: "Signed (NHL)",
+  signed_ahl: "Signed (AHL)",
+  signed_echl: "Signed (ECHL)",
+  prospect_pool: "Prospect pool",
+  two_way: "Two-way",
+  one_way: "One-way",
+  entry_level: "Entry-level",
+  no_trade: "No-trade",
+  no_movement: "No-movement",
+};
+
+const DOSSIER_LOCATION_LABELS = {
+  nhl: "NHL roster",
+  ahl: "AHL",
+  echl: "ECHL",
+  prospect: "Prospect pool",
+  prospects: "Prospect pool",
+  prospect_pool: "Prospect pool",
+  junior: "Junior",
+  juniors: "Junior",
+  minors: "Minors",
+  europe: "Europe",
+  ncaa: "NCAA",
+  free_agent: "Free agent",
+  ufa: "Free agent",
+};
+
+const DOSSIER_DEBUG_BODY = /threshold|profile tags:/i;
+const DOSSIER_DEBUG_FALLBACK = "Off-ice situation being monitored by the team.";
+
+function humanizeDossierToken(token) {
+  const raw = String(token ?? "").trim();
+  if (!raw) return "";
+  const key = raw.toLowerCase().replace(/[\s-]+/g, "_");
+  if (DOSSIER_TOKEN_LABELS[key]) return DOSSIER_TOKEN_LABELS[key];
+
+  return raw
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((word, index) => {
+      const lower = word.toLowerCase();
+      if (DOSSIER_ACRONYMS.has(lower)) return lower.toUpperCase();
+      if (index === 0) return lower.charAt(0).toUpperCase() + lower.slice(1);
+      return lower;
+    })
+    .join(" ");
+}
+
+/** Replace snake_case tokens inside a sentence ("european_exclusive rights expire 2029"). */
+function humanizeDossierText(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw) return "";
+  const replaced = raw.replace(/\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b/g, (match) => humanizeDossierToken(match));
+  return replaced.charAt(0).toUpperCase() + replaced.slice(1);
+}
+
+/** Turn raw enum values ("STANDARD", "nhl", "unsigned_drafted") into display labels. */
+function humanizeDossierValue(value, fallback = "—") {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  const text = String(value).trim();
+  if (!text || text === "—") return fallback;
+  if (!/^[A-Za-z0-9_\- ]+$/.test(text)) return humanizeDossierText(text);
+
+  const hasUnderscore = text.includes("_");
+  const isUpper = text === text.toUpperCase() && /[A-Z]/.test(text);
+  const isLower = text === text.toLowerCase() && /[a-z]/.test(text);
+  if (!hasUnderscore && !isUpper && !isLower) return text;
+  if (!hasUnderscore && !/\s/.test(text) && DOSSIER_ACRONYMS.has(text.toLowerCase())) return text.toUpperCase();
+  return humanizeDossierToken(text);
+}
+
+function humanizeDossierLocation(value, fallback = "—") {
+  const key = safeStr(value, "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!key) return fallback;
+  return DOSSIER_LOCATION_LABELS[key] || humanizeDossierValue(value, fallback);
+}
+
+function dossierMoraleBand(value) {
+  const n = safeNumOrNull(value);
+  if (n === null) return null;
+  if (n >= 82) return { label: "Very high", tone: "good" };
+  if (n >= 70) return { label: "High", tone: "good" };
+  if (n >= 58) return { label: "Good", tone: "neutral" };
+  if (n >= 45) return { label: "Steady", tone: "neutral" };
+  if (n >= 32) return { label: "Uneasy", tone: "warn" };
+  return { label: "Low", tone: "bad" };
+}
+
+function formatDossierClock(minutes) {
+  const m = safeNum(minutes, 0);
+  if (m <= 0) return "—";
+  return formatAverageTOI({ toi: m });
+}
+
+/**
+ * Average TOI for display. `player.minutes` is sometimes a season total, so a
+ * value above 60 is divided by games played, or labelled as a total.
+ */
+function resolveDossierToi(player, gpHint) {
+  const stats = player?.season_stats || EMPTY_OBJECT;
+  const statsGp = safeNum(stats.gp, 0);
+  const statsToi = statsGp > 0 ? safeNum(getAverageTOIMinutes({ toi: stats.toi, gp: statsGp }), 0) : 0;
+  if (statsGp > 0 && statsToi > 0 && statsToi <= 40) return { avg: statsToi };
+
+  const raw = safeNumOrNull(pickFirstDefined(player?.explicitMinutes, player?.minutes));
+  if (raw === null || raw <= 0) return null;
+  if (raw <= 60) return { avg: raw };
+
+  const gp = safeNum(gpHint, 0) || statsGp;
+  if (gp > 0 && raw / gp <= 40) return { avg: raw / gp };
+  return { total: raw };
+}
+
+function formatDossierToi(toi) {
+  if (!toi) return "—";
+  if (toi.avg != null) return formatDossierClock(toi.avg);
+  return `${Math.round(toi.total).toLocaleString()} min total`;
+}
+
+function formatDossierPct(value) {
+  const n = safeNumOrNull(value);
+  if (n === null) return "—";
+  return `${n <= 1.5 ? (n * 100).toFixed(1) : n.toFixed(1)}%`;
+}
+
+function resolveDossierUserTeamKeys(franchiseState) {
+  const team = franchiseState?.team || franchiseState?.user_team || EMPTY_OBJECT;
+  return [
+    team.id,
+    team.team_id,
+    team.abbr,
+    team.abbreviation,
+    franchiseState?.user_team_id,
+    franchiseState?.selected_team_id,
+  ]
+    .map((value) => safeStr(value, "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Whether the dossier player belongs to the user's organization (NHL roster,
+ * minors, or held prospect rights). When the franchise context is missing we
+ * fall back to "owned" so the original roster behaviour is unchanged.
+ */
+function isDossierPlayerOnUserTeam(player, franchiseState) {
+  if (!player) return false;
+  if (
+    player._draft ||
+    player._source === PLAYER_POOLS.DRAFT_CLASS ||
+    player._source === PLAYER_POOLS.FREE_AGENTS ||
+    player._source === PLAYER_POOLS.OVERSEAS
+  ) {
+    return false;
   }
 
-  const stats = player.season_stats || EMPTY_OBJECT;
-  const contract = player.contract || EMPTY_OBJECT;
-  const gp = safeNum(stats.gp, 0);
-  const hasSeasonGames = gp > 0;
-  const healthBand = getHealthBand(player);
-  const teamDisplay = player.teamName && player.teamName !== "—" ? player.teamName : "—";
-  const leagueDisplay = player.league && player.league !== "—" ? player.league : "—";
-  const draftYear = player.draft_year || player.draftYear;
-  const draftRound = player.draft_round || player.draftRound;
-  const draftOverall = player.draft_overall_pick || player.draftOverallPick;
-  const draftTeamId =
-    player.drafted_by_team_id ||
-    player.draft_team_id ||
-    player.drafted_by_team ||
-    player.draftedByTeamId ||
-    "";
-  const draftTeamName =
-    player.drafted_by_team_name ||
-    player.draftedByTeamName ||
-    resolveDraftTeamName(draftTeamId, franchiseState);
-  const hasDraftMeta = Boolean(draftYear || draftOverall || draftTeamId || player.drafted);
-  const isUndrafted = Boolean(player.undrafted) && !hasDraftMeta;
-  const ratingGroups = (player.rating_groups || EMPTY_ARRAY).filter((group) => group?.rows?.length);
-  const chapterRows = chapterAttributeRows(player);
-  const { strengths, concerns } = buildStrengthsConcerns(player);
-  const tradeConcern = player.tradeStabilityConcern || resolvePlayerTradeStabilityConcern(player, franchiseState);
-  const careerAwards = Array.isArray(player.career_awards) ? player.career_awards : EMPTY_ARRAY;
-  const measuredToi = safeNumOrNull(
-    pickFirstDefined(player.explicitMinutes, getAverageTOIMinutes({ ...stats, gp }), stats.toi, stats.average_toi, stats.avg_toi)
-  );
+  const keys = resolveDossierUserTeamKeys(franchiseState);
+  if (!keys.length) return true;
+  if (player._source === PLAYER_POOLS.MY_PROSPECTS) return true;
+  if (player.is_user_prospect || player.isUserProspect || player.owned_by_user || player.ownedByUser) return true;
 
-  return (
-    <section className="nhlrost-player-overview">
-      <article className="nhlrost-profile-zone nhlrost-profile-zone--bio">
-        <header className="nhlrost-profile-zone__head">
-          <p>Player Profile</p>
-          <h3>{getPositionDisplay(player.position)}</h3>
-        </header>
-        <div className="nhlrost-profile-kv-grid">
-          <InfoPair label="Age" value={player.age || "—"} />
-          <InfoPair label="Height" value={formatHeightDisplay(player.hgt)} />
-          <InfoPair label="Weight" value={formatWeightDisplay(player.wgt)} />
-          <InfoPair label="Nationality" value={player.nat && player.nat !== "—" ? player.nat : "—"} />
-          <InfoPair label="Hand" value={formatHandLabel(player)} />
-          <InfoPair label="Status" value={player.status || "Active"} tone={healthBand.tone} />
-          <InfoPair label="Team" value={teamDisplay} />
-          <InfoPair label="League" value={leagueDisplay} />
-        </div>
-      </article>
+  const pid = safeStr(pickFirstDefined(player.id, player.player_id), "");
+  const sameId = (row) => pid && safeStr(pickFirstDefined(row?.id, row?.player_id), "") === pid;
 
-      {hasDraftMeta ? (
-        <article className="nhlrost-profile-zone nhlrost-profile-zone--draft">
-          <header className="nhlrost-profile-zone__head">
-            <p>Draft History</p>
-            <h3>
-              {draftOverall != null && draftYear
-                ? `#${draftOverall} overall · ${draftYear}`
-                : draftYear
-                  ? String(draftYear)
-                  : "Drafted"}
-            </h3>
-          </header>
-          <div className="nhlrost-profile-kv-grid">
-            <InfoPair label="Draft Year" value={draftYear || "—"} />
-            <InfoPair
-              label="Pick"
-              value={
-                draftOverall != null
-                  ? draftRound != null
-                    ? `R${draftRound} · #${draftOverall}`
-                    : `#${draftOverall}`
-                  : "—"
-              }
-            />
-            <InfoPair label="Drafted By" value={draftTeamName || (draftTeamId ? String(draftTeamId) : "—")} />
-          </div>
-        </article>
-      ) : isUndrafted ? (
-        <article className="nhlrost-profile-zone nhlrost-profile-zone--draft">
-          <header className="nhlrost-profile-zone__head">
-            <p>Draft History</p>
-            <h3>Undrafted</h3>
-          </header>
-          <p className="nhlrost-muted-text">No NHL entry draft selection on file for this player.</p>
-        </article>
-      ) : null}
+  if ((Array.isArray(franchiseState?.roster) ? franchiseState.roster : EMPTY_ARRAY).some(sameId)) return true;
 
-      <article className="nhlrost-profile-zone nhlrost-profile-zone--ability">
-        <header className="nhlrost-profile-zone__head">
-          <p>Ability & Role</p>
-          <h3>{player.explicitRole || player.roleLabel || player.role || "—"}</h3>
-        </header>
-        <MetricStrip>
-          <Metric label="OVR" value={<OvrPill player={player} large />} />
-          <Metric label="POT" value={<PotentialPill player={player} large />} />
-          {player.asset?.label ? <Metric label="Asset" value={player.asset.label} /> : null}
-          <Metric label="Archetype" value={player.archetype || "—"} />
-          <Metric label="TOI" value={measuredToi != null ? `${round1(measuredToi)}` : "—"} />
-          <Metric label="Stage" value={player.stage || "—"} />
-        </MetricStrip>
-      </article>
+  const orgs = Array.isArray(franchiseState?.roster_browser?.organizations)
+    ? franchiseState.roster_browser.organizations
+    : EMPTY_ARRAY;
+  const orgIds = new Set(orgs.map((org) => safeStr(org?.team_id || org?.id || org?.abbr, "").toLowerCase()).filter(Boolean));
+  const userOrg = orgs.find((org) => keys.includes(safeStr(org?.team_id || org?.id || org?.abbr, "").toLowerCase()));
+  const poolKeys = ["nhl", "ahl", "echl", "prospects", "players", "reserve", "injured"];
+  if (userOrg && pid && poolKeys.some((key) => Array.isArray(userOrg[key]) && userOrg[key].some(sameId))) return true;
 
-      <article className="nhlrost-profile-zone nhlrost-profile-zone--contract">
-        <header className="nhlrost-profile-zone__head">
-          <p>Contract Snapshot</p>
-          <h3>{capHitDisplay(player)}</h3>
-        </header>
-        <MetricStrip>
-          <Metric label="Status" value={formatContractStatus(contract)} />
-          <Metric label="Term" value={contract.term ? `${contract.term} yr` : "—"} />
-          <Metric label="Expiry" value={formatContractExpiry(contract)} />
-          <Metric label="Type" value={contract.type || "—"} />
-          <Metric label="Clause" value={contract.clause || "—"} />
-          <Metric label="Morale" value={player.morale != null ? round0(player.morale) : "—"} />
-        </MetricStrip>
-      </article>
+  const teamId = getPlayerTeamId(player).toLowerCase();
+  if (teamId && keys.includes(teamId)) return true;
+  const onOtherNhlOrg = Boolean(teamId) && orgIds.has(teamId);
+  if (!onOtherNhlOrg && keys.some((key) => isUserOwnedProspect(player, key))) return true;
+  if (onOtherNhlOrg) return false;
+  if (userOrg && pid) return false;
 
-      {tradeConcern ? (
-        <article className="nhlrost-profile-zone nhlrost-profile-zone--trade-stability">
-          <header className="nhlrost-profile-zone__head">
-            <p>Trade Stability</p>
-            <h3>{tradeConcern.label}</h3>
-          </header>
-          <MetricStrip>
-            <Metric
-              label="Status"
-              value={<TradeStabilityConcernBadge player={player} franchiseState={franchiseState} />}
-            />
-            <Metric label="Score" value={tradeConcern.score != null ? tradeConcern.score : "—"} tone={tradeConcern.tone} />
-            <Metric
-              label="Top pressure"
-              value={tradeConcern.topPressure ? formatPressureLabel(tradeConcern.topPressure) : "—"}
-            />
-            <Metric label="Level" value={`L${tradeConcern.escalationLevel}`} tone={tradeConcern.tone} />
-          </MetricStrip>
-          <p className="nhlrost-muted-text">{tradeConcern.title}</p>
-        </article>
-      ) : null}
+  const userTeamName = safeStr(franchiseState?.team?.name, "").toLowerCase();
+  const teamName = safeStr(player.teamName, "").toLowerCase();
+  if (userTeamName && teamName && teamName !== "—") return teamName === userTeamName;
+  return true;
+}
 
-      <CareerAwardsCard awards={careerAwards} showWhenEmpty zoneLabel="Dossier" />
-
-      <article className="nhlrost-profile-zone nhlrost-profile-zone--performance">
-        <header className="nhlrost-profile-zone__head">
-          <p>Universe Season Stats</p>
-          <h3>
-            {hasSeasonGames
-              ? `${gp} GP · ${player.league && player.league !== "—" ? player.league : "NHL"}`
-              : "No games played"}
-          </h3>
-        </header>
-        {hasSeasonGames ? (
-          <MetricStrip className="nhlrost-metric-strip--stats">
-            {isGoaliePosition(player.position) ? (
-              <>
-                <Metric label="GP" value={displayStatValue(stats.gp)} />
-                <Metric
-                  label="Record"
-                  value={`${displayStatValue(stats.wins)}-${displayStatValue(stats.losses)}-${displayStatValue(stats.otl)}`}
-                />
-                <Metric label="SV%" value={stats.svPct ? formatDecimal(stats.svPct, 3) : "—"} />
-                <Metric label="GAA" value={stats.gaa ? Number(stats.gaa).toFixed(2) : "—"} />
-                <Metric label="Saves" value={displayStatValue(stats.saves)} />
-                <Metric label="SO" value={displayStatValue(stats.shutouts)} />
-              </>
-            ) : (
-              <>
-                <Metric label="GP" value={displayStatValue(stats.gp)} />
-                <Metric label="G" value={displayStatValue(stats.g)} />
-                <Metric label="A" value={displayStatValue(stats.a)} />
-                <Metric label="PTS" value={displayStatValue(stats.pts)} />
-                <Metric label="P/GP" value={stats.ppg ? Number(stats.ppg).toFixed(2) : displayStatValue(0)} />
-                <Metric label="+/-" value={stats.plusMinus != null ? formatSignedNumber(stats.plusMinus, 0) : "—"} />
-                <Metric label="SOG" value={displayStatValue(stats.shots || stats.sog)} />
-                <Metric label="TOI" value={stats.toi ? `${round1(stats.toi)}` : "—"} />
-                {stats.war != null ? <Metric label="WAR" value={Number(stats.war).toFixed(2)} /> : null}
-                {stats.cfPct != null ? (
-                  <Metric
-                    label="CF%"
-                    value={`${Number(stats.cfPct) <= 1.5 ? (Number(stats.cfPct) * 100).toFixed(1) : Number(stats.cfPct).toFixed(1)}%`}
-                  />
-                ) : null}
-                {stats.leagueRank != null ? <Metric label="Lg Rk" value={`#${stats.leagueRank}`} /> : null}
-              </>
-            )}
-          </MetricStrip>
-        ) : (
-          <p className="nhlrost-muted-text">
-            No regular-season games played yet in this franchise universe. Lines fill in as the schedule simulates.
-          </p>
-        )}
-      </article>
-
-      <article className="nhlrost-profile-zone nhlrost-profile-zone--ratings">
-        <header className="nhlrost-profile-zone__head">
-          <p>Attribute Profile</p>
-          <h3>{chapterRows.length ? `${chapterRows.length} core ratings` : "No ratings loaded"}</h3>
-        </header>
-
-        {chapterRows.length ? (
-          <>
-            <ChapterAttributeProfile player={player} />
-
-            <button
-              type="button"
-              className="nhlrost-ratings-expand-toggle"
-              onClick={() => setExpandedRatings((value) => !value)}
-              aria-expanded={expandedRatings}
-            >
-              {expandedRatings ? "Hide granular ratings ↑" : "View granular ratings ↓"}
-            </button>
-
-            {expandedRatings && ratingGroups.length ? (
-              <div className="nhlrost-overview-ratings-expanded">
-                <RatingsPanel player={player} />
-              </div>
-            ) : null}
-          </>
-        ) : (
-          <p className="nhlrost-muted-text">Chapter ratings are not available for this player.</p>
-        )}
-      </article>
-
-      <article className="nhlrost-profile-zone nhlrost-profile-zone--signal">
-        <header className="nhlrost-profile-zone__head">
-          <p>Strengths &amp; Concerns</p>
-          <h3>Evidence Read</h3>
-        </header>
-        <div className="nhlrost-sc-columns">
-          <div className="nhlrost-sc-column">
-            <span className="nhlrost-sc-column__label is-good">Strengths</span>
-            {strengths.length ? (
-              <ul>
-                {strengths.map((line, index) => (
-                  <li key={index}>{line}</li>
-                ))}
-              </ul>
-            ) : (
-              <p className="nhlrost-muted-text">No standout attributes or analytics clear the threshold yet.</p>
-            )}
-          </div>
-          <div className="nhlrost-sc-column">
-            <span className="nhlrost-sc-column__label is-warn">Concerns</span>
-            {concerns.length ? (
-              <ul>
-                {concerns.map((line, index) => (
-                  <li key={index}>{line}</li>
-                ))}
-              </ul>
-            ) : (
-              <p className="nhlrost-muted-text">No flagged risks from current ratings, analytics, or contract data.</p>
-            )}
-          </div>
-        </div>
-      </article>
-    </section>
-  );
+function resolveDossierDraft(player, franchiseState) {
+  const year = player.draft_year || player.draftYear;
+  const round = player.draft_round || player.draftRound;
+  const overall = pickFirstDefined(player.draft_overall_pick, player.draftOverallPick);
+  const teamId =
+    player.drafted_by_team_id || player.draft_team_id || player.drafted_by_team || player.draftedByTeamId || "";
+  const teamName = player.drafted_by_team_name || player.draftedByTeamName || resolveDraftTeamName(teamId, franchiseState);
+  const hasDraft = Boolean(year || overall != null || teamId || player.drafted);
+  const isUndrafted = Boolean(player.undrafted) && !hasDraft;
+  const pickLabel =
+    overall != null ? (round != null ? `Round ${round} · #${overall} overall` : `#${overall} overall`) : round != null ? `Round ${round}` : "";
+  const summary = hasDraft
+    ? [year, pickLabel, teamName].filter(Boolean).join(" · ") || "Drafted"
+    : isUndrafted
+      ? "Undrafted"
+      : "";
+  return { year, round, overall, teamId, teamName, hasDraft, isUndrafted, pickLabel, summary };
 }
 
 function resolveDraftTeamName(teamId, franchiseState) {
@@ -4827,82 +4755,268 @@ function resolveDraftTeamName(teamId, franchiseState) {
   return String(teamId);
 }
 
-function RatingsPanel({ player }) {
+/* ─── Dossier primitives ─────────────────────────────────────────────── */
+
+function DossierCard({ eyebrow, title, aside, className = "", children }) {
+  return (
+    <article className={`pdx-card ${className}`.trim()}>
+      {eyebrow || title || aside ? (
+        <header className="pdx-card__head">
+          <div className="pdx-card__titles">
+            {eyebrow ? <p className="pdx-card__eyebrow">{eyebrow}</p> : null}
+            {title ? <h3 className="pdx-card__title">{title}</h3> : null}
+          </div>
+          {aside ? <div className="pdx-card__aside">{aside}</div> : null}
+        </header>
+      ) : null}
+      {children}
+    </article>
+  );
+}
+
+function DossierTile({ label, value, sub, tone = "neutral", wide = false }) {
+  return (
+    <div className={`pdx-tile ${toneClass(tone)} ${wide ? "is-wide" : ""}`.trim()}>
+      <span className="pdx-tile__label">{label}</span>
+      <strong className="pdx-tile__value">{value === null || value === undefined || value === "" ? "—" : value}</strong>
+      {sub ? <span className="pdx-tile__sub">{sub}</span> : null}
+    </div>
+  );
+}
+
+function DossierTiles({ children, dense = false }) {
+  return <div className={`pdx-tiles ${dense ? "is-dense" : ""}`.trim()}>{children}</div>;
+}
+
+function DossierChip({ children, tone = "neutral", title }) {
+  if (children === null || children === undefined || children === "") return null;
+  return (
+    <span className={`pdx-chip ${tone === "info" ? "is-info" : toneClass(tone)}`} title={title}>
+      {children}
+    </span>
+  );
+}
+
+function DossierMeter({ label, value, band }) {
+  const n = safeNumOrNull(value);
+  const pct = n === null ? 0 : clamp(n, 0, 100);
+  return (
+    <div className={`pdx-meter ${toneClass(band?.tone)}`}>
+      <div className="pdx-meter__top">
+        <span className="pdx-tile__label">{label}</span>
+        <strong>
+          {n === null ? "—" : round0(n)}
+          {band ? <em>{band.label}</em> : null}
+        </strong>
+      </div>
+      <div className="pdx-meter__track" aria-hidden="true">
+        <i style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function DossierEmpty({ title, body }) {
+  return (
+    <div className="pdx-empty">
+      <strong>{title}</strong>
+      {body ? <p>{body}</p> : null}
+    </div>
+  );
+}
+
+function DossierNote({ children }) {
+  return <p className="pdx-note">{children}</p>;
+}
+
+/* ─── Overview ───────────────────────────────────────────────────────── */
+
+function buildDossierSeasonLine(player) {
+  const stats = player.season_stats || EMPTY_OBJECT;
+  const gp = safeNum(stats.gp, 0);
+  if (gp > 0) {
+    if (isGoaliePosition(player.position)) {
+      return `${gp} GP · ${safeNum(stats.wins, 0)}-${safeNum(stats.losses, 0)}-${safeNum(stats.otl, 0)} · ${
+        stats.svPct ? formatDecimal(stats.svPct, 3) : "—"
+      } SV%`;
+    }
+    return `${gp} GP · ${safeNum(stats.g, 0)} G · ${safeNum(stats.a, 0)} A · ${safeNum(stats.pts, 0)} PTS`;
+  }
+  return minorSeasonSummary(player) || lastCareerSeasonSummary(player) || "No games yet";
+}
+
+function PlayerOverviewPanel({ player, franchiseState }) {
+  const [expandedRatings, setExpandedRatings] = useState(false);
+
   if (!player) {
-    return <EmptyPanel title="No ratings selected" body="Select a player to inspect ratings." />;
+    return <DossierEmpty title="No player selected" body="Choose a player from the roster board." />;
   }
 
+  const contract = player.contract || EMPTY_OBJECT;
   const chapterRows = chapterAttributeRows(player);
-  const groups = (player.rating_groups || EMPTY_ARRAY).filter((group) => group?.rows?.length);
-
-  if (!chapterRows.length && !groups.length) {
-    return <EmptyPanel title="No ratings loaded" body="Chapter ratings are not available for this player." />;
-  }
+  const ratingGroups = (player.rating_groups || EMPTY_ARRAY).filter((group) => group?.rows?.length);
+  const { strengths, concerns } = buildStrengthsConcerns(player);
+  const tradeConcern = player.tradeStabilityConcern || resolvePlayerTradeStabilityConcern(player, franchiseState);
+  const moraleBand = dossierMoraleBand(player.morale);
+  const toi = resolveDossierToi(player);
+  const draft = resolveDossierDraft(player, franchiseState);
+  const awards = Array.isArray(player.career_awards) ? player.career_awards : EMPTY_ARRAY;
+  const stats = player.season_stats || EMPTY_OBJECT;
+  const hasSeasonGames = safeNum(stats.gp, 0) > 0;
 
   return (
-    <section className="nhlrost-ratings-layout">
-      {chapterRows.length ? (
-        <div className="nhlrost-ratings-summary">
-          <ChapterAttributeProfile player={player} />
-        </div>
-      ) : null}
+    <section className="pdx-stack">
+      <DossierCard eyebrow="At a glance" title={hasSeasonGames ? "This season" : "Snapshot"}>
+        <DossierTiles>
+          <DossierTile label="Season" value={buildDossierSeasonLine(player)} wide />
+          <DossierTile label="Avg TOI" value={formatDossierToi(toi)} />
+          <DossierTile
+            label="Cap hit"
+            value={capHitDisplay(player)}
+            sub={contract.isSigned ? formatContractExpiry(contract) : null}
+          />
+          <DossierTile label="Term" value={contract.term ? `${contract.term} yr` : "—"} />
+          <DossierTile
+            label="Morale"
+            value={player.morale != null ? round0(player.morale) : "—"}
+            sub={moraleBand?.label}
+            tone={moraleBand?.tone}
+          />
+          <DossierTile
+            label="Stability"
+            value={tradeConcern ? tradeConcern.shortLabel : "Settled"}
+            sub={tradeConcern?.topPressure ? formatPressureLabel(tradeConcern.topPressure) : null}
+            tone={tradeConcern ? tradeConcern.tone : "good"}
+          />
+        </DossierTiles>
+      </DossierCard>
 
-      {groups.length ? (
-        <>
-      <div className="nhlrost-ratings-summary">
-        {groups.map((group) => {
-          const average = averageRows(group.rows);
-          const top = [...(group.rows || [])].sort((a, b) => safeNum(b.value, 0) - safeNum(a.value, 0))[0];
-          const low = [...(group.rows || [])].sort((a, b) => safeNum(a.value, 0) - safeNum(b.value, 0))[0];
+      <div className="pdx-grid-2">
+        <DossierCard eyebrow="Profile" title={getPositionDisplay(player.position)}>
+          <DossierTiles dense>
+            <DossierTile label="Height" value={formatHeightDisplay(player.hgt)} />
+            <DossierTile label="Weight" value={formatWeightDisplay(player.wgt)} />
+            <DossierTile label="Hand" value={formatHandLabel(player)} />
+            <DossierTile label="Nationality" value={player.nat && player.nat !== "—" ? player.nat : "—"} />
+            <DossierTile label="Archetype" value={humanizeDossierValue(player.archetype)} />
+            <DossierTile label="Stage" value={player.stage || "—"} />
+            {draft.summary ? <DossierTile label="Draft" value={draft.summary} wide /> : null}
+          </DossierTiles>
+          {awards.length ? (
+            <div className="pdx-chip-row pdx-chip-row--spaced">
+              {awards.slice(0, 6).map((award, index) => {
+                const label =
+                  typeof award === "string" || typeof award === "number"
+                    ? String(award)
+                    : `${safeStr(pickFirstDefined(award?.name, award?.award, award?.title), "Award")}${
+                        pickFirstDefined(award?.season, award?.year) ? ` · ${pickFirstDefined(award?.season, award?.year)}` : ""
+                      }`;
+                return (
+                  <DossierChip key={index} tone="premium">
+                    {label}
+                  </DossierChip>
+                );
+              })}
+            </div>
+          ) : null}
+        </DossierCard>
 
-          return (
-            <article key={group.key || group.title} className="nhlrost-ratings-summary-card">
-              <span>{group.title}</span>
-              <strong>{average ? round0(average) : "—"}</strong>
-              <em>
-                {top?.label ? `High: ${top.label}` : "—"}
-                {low?.label && low.id !== top?.id ? ` · Low: ${low.label}` : ""}
-              </em>
-            </article>
-          );
-        })}
+        <DossierCard eyebrow="Scouting read" title="Strengths & concerns">
+          <div className="pdx-sc">
+            <div className="pdx-sc__col">
+              <span className="pdx-sc__label is-good">Strengths</span>
+              {strengths.length ? (
+                <ul>
+                  {strengths.map((line, index) => (
+                    <li key={index}>{line}</li>
+                  ))}
+                </ul>
+              ) : (
+                <DossierNote>No standout attributes or analytics clear the threshold yet.</DossierNote>
+              )}
+            </div>
+            <div className="pdx-sc__col">
+              <span className="pdx-sc__label is-warn">Concerns</span>
+              {concerns.length ? (
+                <ul>
+                  {concerns.map((line, index) => (
+                    <li key={index}>{humanizeDossierText(line)}</li>
+                  ))}
+                </ul>
+              ) : (
+                <DossierNote>No flagged risks from ratings, analytics, or contract data.</DossierNote>
+              )}
+            </div>
+          </div>
+        </DossierCard>
       </div>
 
-      <div className="nhlrost-detail-grid nhlrost-detail-grid--ratings">
-        {groups.map((group) => {
-          const average = averageRows(group.rows);
-          const sortedRows = [...(group.rows || [])].sort(
-            (a, b) => safeNum(b.value, 0) - safeNum(a.value, 0) || safeStr(a.label, "").localeCompare(safeStr(b.label, ""))
-          );
-
-          return (
-            <article key={group.key || group.title} className="nhlrost-panel nhlrost-rating-group">
-              <header>
-                <div>
-                  <p>{group.title}</p>
-                  <h3>{average ? round0(average) : "—"}</h3>
-                </div>
-              </header>
-
-              <div className="nhlrost-rating-row-list">
-                {sortedRows.map((row) => (
-                  <ProgressBar
-                    key={row.id}
-                    label={row.label}
-                    value={row.value}
-                    tone={row.value >= 85 ? "good" : row.value >= 72 ? "neutral" : "warn"}
-                  />
-                ))}
-              </div>
-            </article>
-          );
-        })}
-      </div>
-        </>
-      ) : null}
+      <DossierCard
+        eyebrow="Attributes"
+        title={chapterRows.length ? `${chapterRows.length} core ratings` : "No ratings loaded"}
+        aside={
+          chapterRows.length && ratingGroups.length ? (
+            <button
+              type="button"
+              className="pdx-link-btn"
+              onClick={() => setExpandedRatings((value) => !value)}
+              aria-expanded={expandedRatings}
+            >
+              {expandedRatings ? "Hide granular ratings ↑" : "View granular ratings ↓"}
+            </button>
+          ) : null
+        }
+      >
+        {chapterRows.length ? (
+          <div className="pdx-attributes">
+            <ChapterAttributeProfile player={player} />
+          </div>
+        ) : (
+          <DossierNote>Chapter ratings are not available for this player.</DossierNote>
+        )}
+        {expandedRatings && ratingGroups.length ? <DossierGranularRatings groups={ratingGroups} /> : null}
+      </DossierCard>
     </section>
   );
 }
+
+function DossierGranularRatings({ groups }) {
+  return (
+    <div className="pdx-granular">
+      {groups.map((group) => {
+        const average = averageRows(group.rows);
+        const sortedRows = [...(group.rows || [])].sort(
+          (a, b) => safeNum(b.value, 0) - safeNum(a.value, 0) || safeStr(a.label, "").localeCompare(safeStr(b.label, ""))
+        );
+        return (
+          <section key={group.key || group.title} className="pdx-granular__group">
+            <header>
+              <span>{group.title}</span>
+              <strong>{average ? round0(average) : "—"}</strong>
+            </header>
+            {sortedRows.map((row) => {
+              const value = safeNum(row.value, 0);
+              const tone = value >= 85 ? "good" : value >= 72 ? "neutral" : "warn";
+              return (
+                <div key={row.id || row.label} className={`pdx-bar ${toneClass(tone)}`}>
+                  <div className="pdx-bar__top">
+                    <span>{row.label}</span>
+                    <strong>{value ? round0(value) : "—"}</strong>
+                  </div>
+                  <div className="pdx-bar__track" aria-hidden="true">
+                    <i style={{ width: `${clamp(value, 0, 100)}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ─── Performance ────────────────────────────────────────────────────── */
 
 function buildSeasonLabelFromFranchiseState(franchiseState) {
   const y = safeNumOrNull(pickFirstDefined(franchiseState?.season_year, franchiseState?.seasonYear));
@@ -4968,113 +5082,128 @@ function mergeCareerSeasonsWithCurrent(player, stats, options) {
 
 function ProductionPanel({ player, franchiseState }) {
   if (!player) {
-    return <EmptyPanel title="No player selected" body="Select a player to view stats." />;
+    return <DossierEmpty title="No player selected" body="Select a player to view stats." />;
   }
 
   const stats = player.season_stats || EMPTY_OBJECT;
   const isGoalie = isGoaliePosition(player.position);
   const gp = safeNum(stats.gp, 0);
   const hasSeasonGames = gp > 0;
-  const seasonLabel = buildSeasonLabelFromFranchiseState(franchiseState);
-  const careerSeasons = mergeCareerSeasonsWithCurrent(player, stats, { isGoalie, seasonLabel });
-  const hasCareerSeasons = careerSeasons.length > 0;
   const leagueTag = safeStr(stats.league, "").toUpperCase();
   const isAhlLine = leagueTag === "AHL";
-
-  if (!hasSeasonGames && !hasCareerSeasons) {
-    return (
-      <section className="nhlrost-stats-layout">
-        <EmptyPanel
-          compact
-          title="No regular-season games played"
-          body="Roster status, ratings, and contract data remain available in other tabs."
-        />
-      </section>
-    );
-  }
+  const seasonLabel = buildSeasonLabelFromFranchiseState(franchiseState);
+  const minor = player.minor_season && safeNum(player.minor_season.gp, 0) > 0 ? player.minor_season : null;
+  const lastSeason = lastCareerSeasonSummary(player);
 
   return (
-    <section className="nhlrost-stats-layout">
+    <section className="pdx-stack">
       {hasSeasonGames ? (
-        isGoalie ? (
-          <article className="nhlrost-panel nhlrost-stats-band">
-            <header className="nhlrost-panel__head">
-              <div>
-                <p>{isAhlLine ? "AHL Season" : "Universe Season"}</p>
-                <h3>{gp} GP</h3>
-              </div>
-            </header>
-            <MetricStrip className="nhlrost-metric-strip--stats">
-              <Metric label="GP" value={displayStatValue(stats.gp)} />
-              <Metric label="Record" value={`${displayStatValue(stats.wins)}-${displayStatValue(stats.losses)}-${displayStatValue(stats.otl)}`} />
-              <Metric label="SV%" value={stats.svPct ? formatDecimal(stats.svPct, 3) : "—"} />
-              <Metric label="GAA" value={stats.gaa ? Number(stats.gaa).toFixed(2) : "—"} />
-              <Metric label="Saves" value={displayStatValue(stats.saves)} />
-              <Metric label="SA" value={displayStatValue(stats.shotsAgainst)} />
-              <Metric label="SO" value={displayStatValue(stats.shutouts)} />
-              <Metric label="TOI/GP" value={stats.toi ? `${round1(stats.toi)}` : "—"} />
-            </MetricStrip>
-          </article>
-        ) : (
-          <article className="nhlrost-panel nhlrost-stats-band">
-            <header className="nhlrost-panel__head">
-              <div>
-                <p>{isAhlLine ? "AHL Season" : "Universe Season"}</p>
-                <h3>
-                  {gp} GP · {displayStatValue(stats.pts)} PTS
-                  {stats.leagueRank != null ? ` · League #${stats.leagueRank}` : ""}
-                </h3>
-              </div>
-            </header>
-            <MetricStrip className="nhlrost-metric-strip--stats">
-              <Metric label="GP" value={displayStatValue(stats.gp)} />
-              <Metric label="G" value={displayStatValue(stats.g)} />
-              <Metric label="A" value={displayStatValue(stats.a)} />
-              <Metric label="PTS" value={displayStatValue(stats.pts)} />
-              <Metric label="P/GP" value={stats.ppg ? Number(stats.ppg).toFixed(2) : displayStatValue(0)} />
-              <Metric label="SOG" value={displayStatValue(stats.shots)} />
-              <Metric label="SH%" value={stats.shootingPct ? `${(stats.shootingPct * 100).toFixed(1)}%` : "—"} />
-              <Metric label="+/-" value={stats.plusMinus != null ? formatSignedNumber(stats.plusMinus, 0) : "—"} />
-              <Metric label="TOI" value={stats.toi ? `${round1(stats.toi)}` : "—"} />
-              <Metric label="Hits" value={displayStatValue(stats.hits)} />
-              <Metric label="Blocks" value={displayStatValue(stats.blocks)} />
-              <Metric label="PIM" value={displayStatValue(stats.pim)} />
-              <Metric label="WAR" value={stats.war != null ? Number(stats.war).toFixed(2) : "—"} />
-              {!isAhlLine ? (
-                <>
-                  <Metric
-                    label="CF%"
-                    value={
-                      stats.cfPct != null
-                        ? `${Number(stats.cfPct) <= 1.5 ? (Number(stats.cfPct) * 100).toFixed(1) : Number(stats.cfPct).toFixed(1)}%`
-                        : "—"
-                    }
-                  />
-                  <Metric
-                    label="xGF%"
-                    value={
-                      stats.xgfPct != null
-                        ? `${Number(stats.xgfPct) <= 1.5 ? (Number(stats.xgfPct) * 100).toFixed(1) : Number(stats.xgfPct).toFixed(1)}%`
-                        : "—"
-                    }
-                  />
-                </>
-              ) : null}
-            </MetricStrip>
-          </article>
-        )
+        <DossierCard
+          eyebrow={`${isAhlLine ? "AHL season" : "Current season"}${seasonLabel ? ` · ${seasonLabel}` : ""}`}
+          title={
+            isGoalie
+              ? `${gp} GP · ${displayStatValue(stats.wins)}-${displayStatValue(stats.losses)}-${displayStatValue(stats.otl)}`
+              : `${gp} GP · ${displayStatValue(stats.pts)} PTS`
+          }
+          aside={stats.leagueRank != null ? <DossierChip tone="good">League #{stats.leagueRank}</DossierChip> : null}
+        >
+          {isGoalie ? (
+            <DossierTiles dense>
+              <DossierTile label="GP" value={displayStatValue(stats.gp)} />
+              <DossierTile
+                label="Record"
+                value={`${displayStatValue(stats.wins)}-${displayStatValue(stats.losses)}-${displayStatValue(stats.otl)}`}
+              />
+              <DossierTile label="SV%" value={stats.svPct ? formatDecimal(stats.svPct, 3) : "—"} />
+              <DossierTile label="GAA" value={stats.gaa ? Number(stats.gaa).toFixed(2) : "—"} />
+              <DossierTile label="Saves" value={displayStatValue(stats.saves)} />
+              <DossierTile label="Shots against" value={displayStatValue(stats.shotsAgainst)} />
+              <DossierTile label="SO" value={displayStatValue(stats.shutouts)} />
+              <DossierTile label="TOI/GP" value={stats.toi ? formatDossierClock(stats.toi) : "—"} />
+            </DossierTiles>
+          ) : (
+            <DossierTiles dense>
+              <DossierTile label="GP" value={displayStatValue(stats.gp)} />
+              <DossierTile label="G" value={displayStatValue(stats.g)} />
+              <DossierTile label="A" value={displayStatValue(stats.a)} />
+              <DossierTile label="PTS" value={displayStatValue(stats.pts)} />
+              <DossierTile label="P/GP" value={stats.ppg ? Number(stats.ppg).toFixed(2) : "0.00"} />
+              <DossierTile label="SOG" value={displayStatValue(stats.shots)} />
+              <DossierTile label="SH%" value={stats.shootingPct ? `${(stats.shootingPct * 100).toFixed(1)}%` : "—"} />
+              <DossierTile
+                label="+/-"
+                value={stats.plusMinus != null ? formatSignedNumber(stats.plusMinus, 0) : "—"}
+                tone={stats.plusMinus > 0 ? "good" : stats.plusMinus < 0 ? "warn" : "neutral"}
+              />
+              <DossierTile label="TOI/GP" value={stats.toi ? formatDossierClock(stats.toi) : "—"} />
+              <DossierTile label="Hits" value={displayStatValue(stats.hits)} />
+              <DossierTile label="Blocks" value={displayStatValue(stats.blocks)} />
+              <DossierTile label="PIM" value={displayStatValue(stats.pim)} />
+              <DossierTile label="WAR" value={stats.war != null ? Number(stats.war).toFixed(2) : "—"} />
+              {!isAhlLine ? <DossierTile label="CF%" value={formatDossierPct(stats.cfPct)} /> : null}
+              {!isAhlLine ? <DossierTile label="xGF%" value={formatDossierPct(stats.xgfPct)} /> : null}
+            </DossierTiles>
+          )}
+        </DossierCard>
       ) : null}
 
-      {hasCareerSeasons ? (
-        <CareerSeasonsTable seasons={careerSeasons} isGoalie={isGoalie} />
+      {minor ? (
+        <DossierCard
+          eyebrow="Development league"
+          title={`${safeStr(minor.league, "Junior")}${minor.team || minor.team_name ? ` · ${minor.team || minor.team_name}` : ""}`}
+        >
+          {isGoalie ? (
+            <DossierTiles dense>
+              <DossierTile label="GP" value={displayStatValue(minor.gp)} />
+              <DossierTile label="W" value={displayStatValue(minor.w)} />
+              <DossierTile label="L" value={displayStatValue(minor.l)} />
+              <DossierTile
+                label="SV%"
+                value={
+                  safeNum(minor.sv_pct, 0)
+                    ? formatDecimal(safeNum(minor.sv_pct, 0) > 1 ? safeNum(minor.sv_pct, 0) / 100 : minor.sv_pct, 3)
+                    : "—"
+                }
+              />
+              {minor.gaa != null ? <DossierTile label="GAA" value={Number(minor.gaa).toFixed(2)} /> : null}
+            </DossierTiles>
+          ) : (
+            <DossierTiles dense>
+              <DossierTile label="GP" value={displayStatValue(minor.gp)} />
+              <DossierTile label="G" value={displayStatValue(minor.g)} />
+              <DossierTile label="A" value={displayStatValue(minor.a)} />
+              <DossierTile label="PTS" value={displayStatValue(minor.pts)} />
+              <DossierTile
+                label="P/GP"
+                value={safeNum(minor.gp, 0) ? (safeNum(minor.pts, 0) / safeNum(minor.gp, 1)).toFixed(2) : "—"}
+              />
+              {minor.pim != null ? <DossierTile label="PIM" value={displayStatValue(minor.pim)} /> : null}
+              {minor.plus_minus != null ? (
+                <DossierTile label="+/-" value={formatSignedNumber(minor.plus_minus, 0)} />
+              ) : null}
+            </DossierTiles>
+          )}
+        </DossierCard>
+      ) : null}
+
+      {!hasSeasonGames && !minor ? (
+        <DossierCard eyebrow="Current season" title="No games played yet">
+          <DossierNote>
+            {lastSeason
+              ? `Most recent season on file — ${lastSeason}. Full season-by-season history lives in the Career tab.`
+              : "Lines fill in as the schedule simulates. Season-by-season history lives in the Career tab."}
+          </DossierNote>
+        </DossierCard>
       ) : null}
     </section>
   );
 }
 
+/* ─── Contract ───────────────────────────────────────────────────────── */
+
 function ContractPanel({ player }) {
   if (!player) {
-    return <EmptyPanel title="No contract selected" body="Select a player to view contract details." />;
+    return <DossierEmpty title="No contract selected" body="Select a player to view contract details." />;
   }
 
   const contract = player.contract || EMPTY_OBJECT;
@@ -5103,9 +5232,11 @@ function ContractPanel({ player }) {
     if (contract.isSigned && (rightsStatus || contractRights)) {
       const code = rightsStatus || contractRights;
       if (/^[ur]fa$/i.test(code)) return `Expires as ${code.toUpperCase()}`;
-      return code;
+      return humanizeDossierValue(code);
     }
-    return rightsStatus || rightsType || (contract.isSigned ? "Under contract" : "Unsigned");
+    if (rightsStatus) return humanizeDossierValue(rightsStatus);
+    if (rightsType) return `${humanizeDossierValue(rightsType)} rights`;
+    return contract.isSigned ? "Under contract" : "Unsigned";
   })();
 
   const hasRightsInfo = Boolean(
@@ -5123,74 +5254,78 @@ function ContractPanel({ player }) {
   );
 
   return (
-    <section className="nhlrost-contract-layout">
-      <article className="nhlrost-panel nhlrost-contract-panel">
-        <div className="nhlrost-contract-hero">
-          <span>Cap Hit</span>
-          <strong className={toneClass(valueTone)}>{capHitDisplay(player)}</strong>
+    <section className="pdx-stack">
+      <DossierCard eyebrow="Contract" title={formatContractStatus(contract)}>
+        <div className="pdx-contract-hero">
+          <div className="pdx-contract-hero__main">
+            <span className="pdx-tile__label">Cap hit</span>
+            <strong className={`pdx-contract-hero__value ${toneClass(valueTone)}`}>{capHitDisplay(player)}</strong>
+          </div>
+          <div className="pdx-chip-row">
+            {contract.isEntryLevel ? <DossierChip tone="good">Entry-level</DossierChip> : null}
+            {contract.twoWay ? <DossierChip>Two-way</DossierChip> : null}
+            {contract.clause ? <DossierChip tone="premium">{humanizeDossierValue(contract.clause)}</DossierChip> : null}
+          </div>
         </div>
-
-        <MetricStrip className="nhlrost-metric-strip--stats">
-          <Metric label="AAV" value={contract.aav ? formatMoneyMillions(contract.aav) : "—"} />
-          <Metric label="Salary" value={formatMoneyMillions(contract.salary)} />
-          <Metric label="Term" value={contract.term ? `${contract.term} yr` : "—"} />
-          <Metric label="Yrs Left" value={contract.yearsRemaining ? `${contract.yearsRemaining}` : "—"} />
-          <Metric label="Expiry" value={formatContractExpiry(contract)} />
-          <Metric label="Type" value={contract.type || "—"} />
-          <Metric label="Clause" value={contract.clause || "—"} />
-          <Metric label="Status" value={formatContractStatus(contract)} />
-          {contract.twoWay ? <Metric label="Two-Way" value="Yes" /> : null}
-          {contract.isEntryLevel ? <Metric label="ELC" value="Yes" /> : null}
-          {contract.signingBonusM ? <Metric label="Signing" value={formatMoneyMillions(contract.signingBonusM)} /> : null}
+        <DossierTiles dense>
+          <DossierTile label="AAV" value={contract.aav ? formatMoneyMillions(contract.aav) : "—"} />
+          <DossierTile label="Salary" value={formatMoneyMillions(contract.salary)} />
+          <DossierTile label="Term" value={contract.term ? `${contract.term} yr` : "—"} />
+          <DossierTile label="Years left" value={contract.yearsRemaining ? `${contract.yearsRemaining}` : "—"} />
+          <DossierTile label="Expiry" value={formatContractExpiry(contract)} />
+          <DossierTile label="Type" value={humanizeDossierValue(contract.type)} />
+          <DossierTile label="Clause" value={humanizeDossierValue(contract.clause, "None")} />
+          {contract.startYear ? <DossierTile label="Start" value={contract.startYear} /> : null}
+          {contract.signingBonusM ? <DossierTile label="Signing bonus" value={formatMoneyMillions(contract.signingBonusM)} /> : null}
           {contract.performanceBonusM ? (
-            <Metric label="Perf Bonus" value={formatMoneyMillions(contract.performanceBonusM)} />
+            <DossierTile label="Perf. bonus" value={formatMoneyMillions(contract.performanceBonusM)} />
           ) : null}
-          {contract.minorSalaryM ? <Metric label="Minor $" value={formatMoneyMillions(contract.minorSalaryM)} /> : null}
-          {contract.startYear ? <Metric label="Start" value={contract.startYear} /> : null}
-        </MetricStrip>
-        {contract.agent?.name ? (
-          <MetricStrip className="nhlrost-metric-strip--stats nhlrost-metric-strip--agent">
-            <Metric label="Agent" value={contract.agent.name} />
-            <Metric label="Agency" value={contract.agent.agency || "—"} />
-            <Metric label="Style" value={contract.agent.style_label || contract.agent.style || "—"} />
-          </MetricStrip>
-        ) : null}
-      </article>
+          {contract.minorSalaryM ? <DossierTile label="Minor salary" value={formatMoneyMillions(contract.minorSalaryM)} /> : null}
+        </DossierTiles>
+      </DossierCard>
 
-      {hasRightsInfo ? (
-        <article className="nhlrost-panel">
-          <header className="nhlrost-panel__head">
-            <div>
-              <p>Rights &amp; Roster Status</p>
-              <h3>{rightsHeadline}</h3>
-            </div>
-          </header>
-          <MetricStrip className="nhlrost-metric-strip--stats">
-            {rightsType ? <Metric label="Rights" value={rightsType} /> : null}
-            {rightsExpiryYear ? <Metric label="Rights Exp" value={rightsExpiryYear} /> : null}
-            {orgStatus ? <Metric label="Org Status" value={orgStatus} /> : null}
-            {signedStatus ? <Metric label="Signed" value={signedStatus} /> : null}
-            {(rightsStatus || contractRights) ? (
-              <Metric label="Expiry" value={(rightsStatus || contractRights).toUpperCase()} />
-            ) : null}
-            {(rosterLocation || inMinors) ? (
-              <Metric label="Location" value={rosterLocation || "Minors"} />
-            ) : null}
-            {waiverStatus ? <Metric label="Waivers" value={waiverStatus} /> : null}
-            {waiverExempt != null ? (
-              <Metric label="Exempt" value={waiverExempt ? "Yes" : "No"} tone={waiverExempt ? "good" : "warn"} />
-            ) : null}
-            {elcEligible != null ? <Metric label="ELC Elig" value={elcEligible ? "Yes" : "No"} /> : null}
-            {elcSlideEligible != null ? (
-              <Metric label="Slide Elig" value={elcSlideEligible ? "Yes" : "No"} />
-            ) : null}
-            {slideThreshold != null ? <Metric label="Slide GP" value={`<${slideThreshold}`} /> : null}
-          </MetricStrip>
-        </article>
-      ) : null}
+      <div className="pdx-grid-2">
+        {hasRightsInfo ? (
+          <DossierCard eyebrow="Rights & roster status" title={rightsHeadline}>
+            <DossierTiles dense>
+              {rightsType ? <DossierTile label="Rights" value={humanizeDossierValue(rightsType)} /> : null}
+              {rightsExpiryYear ? <DossierTile label="Rights expire" value={rightsExpiryYear} /> : null}
+              {orgStatus ? <DossierTile label="Org status" value={humanizeDossierValue(orgStatus)} /> : null}
+              {signedStatus ? <DossierTile label="Signed" value={humanizeDossierValue(signedStatus)} /> : null}
+              {rightsStatus || contractRights ? (
+                <DossierTile label="Expiry status" value={humanizeDossierValue(rightsStatus || contractRights)} />
+              ) : null}
+              {rosterLocation || inMinors ? (
+                <DossierTile label="Location" value={rosterLocation ? humanizeDossierLocation(rosterLocation) : "Minors"} />
+              ) : null}
+              {waiverStatus ? <DossierTile label="Waivers" value={humanizeDossierValue(waiverStatus)} /> : null}
+              {waiverExempt != null ? (
+                <DossierTile label="Waiver exempt" value={waiverExempt ? "Yes" : "No"} tone={waiverExempt ? "good" : "warn"} />
+              ) : null}
+              {elcEligible != null ? <DossierTile label="ELC eligible" value={elcEligible ? "Yes" : "No"} /> : null}
+              {elcSlideEligible != null ? <DossierTile label="Slide eligible" value={elcSlideEligible ? "Yes" : "No"} /> : null}
+              {slideThreshold != null ? <DossierTile label="Slide GP" value={`< ${slideThreshold}`} /> : null}
+            </DossierTiles>
+          </DossierCard>
+        ) : null}
+
+        {contract.agent?.name ? (
+          <DossierCard eyebrow="Representation" title={contract.agent.name}>
+            <DossierTiles dense>
+              <DossierTile label="Agency" value={contract.agent.agency || "—"} />
+              <DossierTile
+                label="Style"
+                value={contract.agent.style_label || humanizeDossierValue(contract.agent.style)}
+              />
+            </DossierTiles>
+          </DossierCard>
+        ) : null}
+      </div>
     </section>
   );
 }
+
+/* ─── Development ────────────────────────────────────────────────────── */
 
 function DevelopmentTimelineChart({ points }) {
   const width = 560;
@@ -5213,19 +5348,19 @@ function DevelopmentTimelineChart({ points }) {
 
   return (
     <svg
-      className="nhlrost-dev-chart"
+      className="pdx-dev-chart"
       viewBox={`0 0 ${width} ${height}`}
       role="img"
       aria-label="Overall rating development curve across tracked seasons"
     >
-      <path d={path} className="nhlrost-dev-chart__line" fill="none" />
+      <path d={path} className="pdx-dev-chart__line" fill="none" />
       {coords.map((c, index) => (
         <g key={index}>
-          <circle cx={c.x} cy={c.y} r="3.5" className="nhlrost-dev-chart__dot" />
-          <text x={c.x} y={c.y - 10} textAnchor="middle" className="nhlrost-dev-chart__value">
+          <circle cx={c.x} cy={c.y} r="3.5" className="pdx-dev-chart__dot" />
+          <text x={c.x} y={c.y - 10} textAnchor="middle" className="pdx-dev-chart__value">
             {c.ovr}
           </text>
-          <text x={c.x} y={height - 8} textAnchor="middle" className="nhlrost-dev-chart__label">
+          <text x={c.x} y={height - 8} textAnchor="middle" className="pdx-dev-chart__label">
             {c.season}
           </text>
         </g>
@@ -5236,15 +5371,15 @@ function DevelopmentTimelineChart({ points }) {
 
 function DevelopmentPanel({ player }) {
   if (!player) {
-    return <EmptyPanel title="No development data" body="Select a player to view development." />;
+    return <DossierEmpty title="No development data" body="Select a player to view development." />;
   }
 
-  const hasMorale = player.morale != null && Number.isFinite(Number(player.morale));
-  const hasFatigue = player.fatigue != null && Number.isFinite(Number(player.fatigue));
   const hasGrowth = player.growth != null && Number.isFinite(Number(player.growth));
   const seasonStartOvr = safeNumOrNull(player.season_start_ovr);
   const ovrChangeSeason = safeNumOrNull(player.ovr_change_season);
   const potentialChangeSeason = safeNumOrNull(player.potential_change_season);
+  const potScore = safeNum(player.potentialScore, 0);
+  const deltaTone = (n) => (n > 0 ? "good" : n < 0 ? "warn" : "neutral");
 
   const rawHistory = Array.isArray(player.development_history) ? player.development_history : EMPTY_ARRAY;
   const validSnapshots = rawHistory
@@ -5255,7 +5390,6 @@ function DevelopmentPanel({ player }) {
         season: safeStr(pickFirstDefined(entry?.season, entry?.year), `Snapshot ${index + 1}`),
         ovr,
         delta: safeNumOrNull(entry?.delta),
-        sourcePath: entry?.source_path,
       };
     })
     .filter(Boolean);
@@ -5267,99 +5401,84 @@ function DevelopmentPanel({ player }) {
   const wjcBlock = resolveWjcDossierBlock(wjcProfile, String(player.position || "").toUpperCase() === "G");
 
   return (
-    <section className="nhlrost-development-layout">
-      <article className="nhlrost-panel">
-        <header className="nhlrost-panel__head">
-          <div>
-            <p>Development</p>
-            <h3>Current Read</h3>
-          </div>
-        </header>
-        <div className="nhlrost-stat-grid nhlrost-stat-grid--wide">
-          <InfoPair label="Current OVR" value={displayOverallValue(player)} />
-          {seasonStartOvr !== null ? <InfoPair label="Season Start OVR" value={seasonStartOvr} /> : null}
-          <InfoPair label="Age" value={player.age || "—"} />
-          <InfoPair label="Potential" value={player.potential || "—"} />
+    <section className="pdx-stack">
+      <DossierCard eyebrow="Development" title="Current read">
+        <DossierTiles>
+          <DossierTile label="OVR now" value={displayOverallValue(player)} />
+          {seasonStartOvr !== null ? <DossierTile label="Season start" value={seasonStartOvr} /> : null}
           {ovrChangeSeason !== null ? (
-            <InfoPair label="OVR This Season" value={formatSignedNumber(ovrChangeSeason, 0)} tone={ovrChangeSeason > 0 ? "good" : ovrChangeSeason < 0 ? "warn" : "neutral"} />
+            <DossierTile label="OVR this season" value={formatSignedNumber(ovrChangeSeason, 0)} tone={deltaTone(ovrChangeSeason)} />
           ) : null}
-          {potentialChangeSeason !== null ? (
-            <InfoPair label="Potential This Season" value={formatSignedNumber(potentialChangeSeason, 0)} tone={potentialChangeSeason > 0 ? "good" : potentialChangeSeason < 0 ? "warn" : "neutral"} />
-          ) : null}
-          <InfoPair label="Stage" value={player.stage || "—"} />
-          <InfoPair label="Role" value={player.roleLabel || player.role || "—"} />
           {hasGrowth ? (
-            <InfoPair label="Growth" value={formatSignedNumber(player.growth)} tone={player.growth > 0 ? "good" : player.growth < 0 ? "warn" : "neutral"} />
+            <DossierTile label="Growth" value={formatSignedNumber(player.growth)} tone={deltaTone(Number(player.growth))} />
           ) : null}
-          {hasMorale ? <InfoPair label="Morale" value={round0(player.morale)} /> : null}
-          {hasFatigue ? <InfoPair label="Fatigue" value={round0(player.fatigue)} /> : null}
-          <InfoPair label="Confidence" value={player.overallConfidence || "—"} />
-        </div>
-      </article>
+          <DossierTile
+            label="Potential"
+            value={potScore > 0 ? round0(potScore) : player.potential || "—"}
+            sub={potScore > 0 && player.potential ? player.potential : null}
+          />
+          {potentialChangeSeason !== null ? (
+            <DossierTile
+              label="POT this season"
+              value={formatSignedNumber(potentialChangeSeason, 0)}
+              tone={deltaTone(potentialChangeSeason)}
+            />
+          ) : null}
+          <DossierTile label="Stage" value={player.stage || "—"} />
+          <DossierTile label="Age" value={player.age || "—"} />
+          <DossierTile label="Rating confidence" value={humanizeDossierValue(player.overallConfidence)} />
+        </DossierTiles>
+      </DossierCard>
 
-      <article className="nhlrost-panel nhlrost-dev-timeline-panel">
-        <header className="nhlrost-panel__head">
-          <div>
-            <p>Development History</p>
-            <h3>{hasCurve ? `${validSnapshots.length} tracked seasons` : "Overall trend"}</h3>
-          </div>
-        </header>
-
+      <DossierCard
+        eyebrow="Development history"
+        title={hasCurve ? `${validSnapshots.length} tracked seasons` : "Overall trend"}
+      >
         {hasCurve ? (
           <>
             <DevelopmentTimelineChart points={validSnapshots} />
-            <div className="nhlrost-dev-timeline-list">
+            <div className="pdx-dev-list">
               {validSnapshots.map((snap, index) => (
-                <div key={index} className="nhlrost-dev-timeline-row">
+                <div key={index} className="pdx-dev-list__row">
                   <span>{snap.season}</span>
                   <strong>{snap.ovr}</strong>
-                  {snap.delta !== null ? (
-                    <em className={snap.delta > 0 ? "is-up" : snap.delta < 0 ? "is-down" : "is-flat"}>
-                      {formatSignedNumber(snap.delta, 0)}
-                    </em>
-                  ) : (
-                    <em className="is-flat">—</em>
-                  )}
+                  <em className={snap.delta > 0 ? "is-up" : snap.delta < 0 ? "is-down" : "is-flat"}>
+                    {snap.delta !== null ? formatSignedNumber(snap.delta, 0) : "—"}
+                  </em>
                 </div>
               ))}
             </div>
           </>
         ) : (
-          <EmptyPanel
-            compact
-            title="Not enough tracked seasons"
-            body="A development curve appears once at least two overall snapshots are recorded for this player."
-          />
+          <DossierNote>A development curve appears once at least two overall snapshots are recorded for this player.</DossierNote>
         )}
-      </article>
+      </DossierCard>
 
       {wjcBlock ? (
-        <article className="nhlrost-panel">
-          <header className="nhlrost-panel__head">
-            <div>
-              <p>International</p>
-              <h3>World Juniors (U20)</h3>
-            </div>
-          </header>
-          <p className="nhlrost-wjc-headline">{wjcBlock.headline}</p>
-          {wjcBlock.summary ? <p className="nhlrost-wjc-summary">{wjcBlock.summary}</p> : null}
-          <div className="nhlrost-stat-grid nhlrost-stat-grid--wide">
+        <DossierCard eyebrow="International" title="World Juniors (U20)">
+          <p className="pdx-lead">{wjcBlock.headline}</p>
+          {wjcBlock.summary ? <DossierNote>{wjcBlock.summary}</DossierNote> : null}
+          <DossierTiles dense>
             {wjcBlock.tiles.map((tile) => (
-              <InfoPair key={`wjc-${tile.label}`} label={tile.label} value={tile.value} />
+              <DossierTile key={`wjc-${tile.label}`} label={tile.label} value={tile.value} />
             ))}
-          </div>
+          </DossierTiles>
           {wjcBlock.impactLines?.length ? (
-            <ul className="nhlrost-wjc-impact">
-              {wjcBlock.impactLines.map((line) => <li key={line}>{line}</li>)}
+            <ul className="pdx-bullets">
+              {wjcBlock.impactLines.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
             </ul>
           ) : null}
-        </article>
+        </DossierCard>
       ) : null}
     </section>
   );
 }
 
-function UsagePanel({ player, onRefresh }) {
+/* ─── Moves ──────────────────────────────────────────────────────────── */
+
+function UsagePanel({ player, onRefresh, canManage = true }) {
   const [moves, setMoves] = useState(EMPTY_ARRAY);
   const [meta, setMeta] = useState(EMPTY_OBJECT);
   const [busy, setBusy] = useState("");
@@ -5373,7 +5492,8 @@ function UsagePanel({ player, onRefresh }) {
     setError("");
     setNote("");
     setMoves(EMPTY_ARRAY);
-    if (!playerId) return undefined;
+    setMeta(EMPTY_OBJECT);
+    if (!playerId || !canManage) return undefined;
     getRosterMoves(playerId)
       .then((data) => {
         if (cancelled) return;
@@ -5387,13 +5507,61 @@ function UsagePanel({ player, onRefresh }) {
     return () => {
       cancelled = true;
     };
-  }, [playerId]);
+  }, [playerId, canManage]);
+
+  const [pendingMove, setPendingMove] = useState(null);
+  useEffect(() => setPendingMove(null), [playerId]);
+
+  // Entry-level contract: unsigned rights-held prospects can be signed right here.
+  const [elcPreview, setElcPreview] = useState(null);
+  const [elcBusy, setElcBusy] = useState(false);
+  const [elcResult, setElcResult] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setElcPreview(null);
+    setElcResult(null);
+    if (!playerId || !canManage) return undefined;
+    previewElcOffer({ player_id: playerId, template_id: "standard_elc" })
+      .then((res) => {
+        if (!cancelled && res?.ok && res?.validation?.allowed) setElcPreview(res);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [playerId, canManage]);
+  const signElc = async () => {
+    setElcBusy(true);
+    setElcResult(null);
+    try {
+      const res = await submitElcOffer({ player_id: playerId, template_id: "standard_elc" });
+      const d = res?.decision || {};
+      const signed = Boolean(res?.signed || d.accepted);
+      setElcResult({
+        signed,
+        text: signed
+          ? `Signed to a ${elcPreview?.legal_terms?.recommended_term || 3}-year entry-level contract.`
+          : `Declined${d.main_concern ? ` — ${d.main_concern}` : ""}. ${res?.reason || ""}`.trim(),
+      });
+      if (signed) {
+        setElcPreview(null);
+        if (typeof onRefresh === "function") onRefresh();
+      }
+    } catch (err) {
+      setElcResult({ signed: false, text: err?.response?.data?.detail || err?.message || "Signing failed" });
+    } finally {
+      setElcBusy(false);
+    }
+  };
 
   if (!player) {
-    return <EmptyPanel title="No usage selected" body="Select a player to view role and deployment." />;
+    return <DossierEmpty title="No usage selected" body="Select a player to view role and deployment." />;
   }
 
+  const moveDirection = (id) => (String(id || "").startsWith("call_up") ? "up" : "down");
+
   const runMove = async (action, extra = {}) => {
+    setPendingMove(null);
     setBusy(action);
     setError("");
     setNote("");
@@ -5404,26 +5572,9 @@ function UsagePanel({ player, onRefresh }) {
         ...extra,
       });
       if (!result?.ok) {
-        if (result?.requires_waivers) {
-          const ok = window.confirm(
-            `${player.name || "Player"} requires waivers to be assigned to the AHL. Place on waivers and send down?`
-          );
-          if (ok) {
-            const forced = await moveRosterPlayer({
-              player_id: playerId,
-              action,
-              confirm_waivers: true,
-            });
-            if (!forced?.ok) {
-              setError(forced?.reason || "Move failed");
-              return;
-            }
-            setNote(forced.moved || "Move completed");
-            setMoves(Array.isArray(forced.available_moves) ? forced.available_moves : EMPTY_ARRAY);
-            if (typeof onRefresh === "function") onRefresh();
-            return;
-          }
-          setError("Waivers required — move cancelled");
+        if (result?.requires_waivers && !extra.confirm_waivers) {
+          const def = moves.find((m) => m.id === action) || { id: action, label: "Send down" };
+          setPendingMove({ ...def, requires_waivers: true, waiverStep: true });
           return;
         }
         setError(result?.reason || "Move failed");
@@ -5431,7 +5582,7 @@ function UsagePanel({ player, onRefresh }) {
       }
       setNote(
         [
-          result.moved,
+          result.moved === "on_waivers" ? result.message || "Placed on waivers" : result.moved,
           result.slide_preserved === true ? "ELC slide preserved" : null,
           result.slide_preserved === false ? "Slide threshold already passed" : null,
           result.slide_note,
@@ -5448,71 +5599,149 @@ function UsagePanel({ player, onRefresh }) {
     }
   };
 
+  const nhlGp = safeNumOrNull(meta.nhl_gp);
+  const toi = resolveDossierToi(player, nhlGp);
+  const location = pickFirstDefined(meta.location, player.roster_location, player.rosterLocation);
+
   return (
-    <section className="nhlrost-detail-grid">
-      <article className="nhlrost-panel">
-        <header className="nhlrost-panel__head">
-          <div>
-            <p>Usage</p>
-            <h3>Deployment Read</h3>
-          </div>
-          <span>{player.roleLabel || player.role}</span>
-        </header>
+    <section className="pdx-stack">
+      <DossierCard eyebrow="Usage" title="Deployment read" aside={<DossierChip>{player.roleLabel || player.role}</DossierChip>}>
+        <DossierTiles>
+          <DossierTile label="Role" value={player.roleLabel || player.role} />
+          <DossierTile label="Special teams" value={player.specialTeams} />
+          <DossierTile label="Average TOI" value={formatDossierToi(toi)} />
+          <DossierTile label="Status" value={player.status} tone={getHealthBand(player).tone} />
+          <DossierTile label="League" value={humanizeDossierValue(player.league)} />
+          <DossierTile label="Location" value={location ? humanizeDossierLocation(location) : humanizeDossierValue(player.league)} />
+          {canManage ? <DossierTile label="NHL GP" value={nhlGp !== null ? nhlGp : "—"} /> : null}
+          {canManage ? (
+            <DossierTile
+              label="Slide threshold"
+              value={meta.slide_games_threshold != null ? `< ${meta.slide_games_threshold} GP` : "—"}
+            />
+          ) : null}
+        </DossierTiles>
+      </DossierCard>
 
-        <div className="nhlrost-stat-grid">
-          <InfoPair label="Role" value={player.roleLabel || player.role} />
-          <InfoPair label="Special Teams" value={player.specialTeams} />
-          <InfoPair label="Average TOI" value={player.minutes ? `${round1(player.minutes)} min` : "—"} />
-          <InfoPair label="Status" value={player.status} tone={getHealthBand(player).tone} />
-          <InfoPair label="League" value={player.league} />
-          <InfoPair label="Location" value={meta.location || player.league || "—"} />
-          <InfoPair label="NHL GP" value={meta.nhl_gp != null ? meta.nhl_gp : "—"} />
-          <InfoPair
-            label="Slide threshold"
-            value={meta.slide_games_threshold != null ? `<${meta.slide_games_threshold} GP` : "—"}
-          />
-        </div>
-      </article>
-
-      <article className="nhlrost-panel">
-        <header className="nhlrost-panel__head">
-          <div>
-            <p>Roster Moves</p>
-            <h3>Call-ups & Assignments</h3>
-          </div>
-          <span>{moves.length ? `${moves.length} available` : "None"}</span>
-        </header>
-
-        {error ? <p className="nhlrost-muted-text" style={{ color: "#f0a0a0" }}>{error}</p> : null}
-        {note ? <p className="nhlrost-muted-text">{note}</p> : null}
-
-        {moves.length ? (
-          <div className="nhlrost-stat-grid" style={{ gap: "0.75rem" }}>
-            {moves.map((action) => (
-              <button
-                key={action.id}
-                type="button"
-                className="nhlrost-action-btn"
-                disabled={Boolean(busy) || action.enabled === false}
-                title={action.reason || action.slide_note || ""}
-                onClick={() => runMove(action.id)}
-              >
-                {busy === action.id ? "Working…" : action.label}
-                {action.requires_waivers ? " (waivers)" : ""}
-                {action.reason ? ` — ${action.reason}` : ""}
+      {canManage && (elcPreview || elcResult) ? (
+        <DossierCard
+          eyebrow="Entry-level contract"
+          title={elcResult?.signed ? "Signed" : "Sign this prospect"}
+          aside={
+            elcPreview?.acceptance?.acceptance_pct != null ? (
+              <DossierChip>{elcPreview.acceptance.acceptance_pct}% likely to accept</DossierChip>
+            ) : null
+          }
+        >
+          {elcPreview ? (
+            <DossierNote>
+              {elcPreview.legal_terms?.recommended_term || 3}-year ELC at {elcPreview.legal_terms?.aav_display || "$950,000"}
+              {elcPreview.legal_terms?.term_reason ? ` · ${elcPreview.legal_terms.term_reason}` : ""}
+              {elcPreview.legal_terms?.slide_eligible ? " · slides if he plays under 10 NHL games" : ""}
+            </DossierNote>
+          ) : null}
+          {elcResult ? <p className={`pdx-note${elcResult.signed ? "" : " is-bad"}`}>{elcResult.text}</p> : null}
+          {elcPreview ? (
+            <div className="pdx-move-list">
+              <button type="button" className="pdx-move-card is-up" disabled={elcBusy} onClick={signElc}>
+                <span className="pdx-move-card__arrow" aria-hidden="true">✎</span>
+                <span className="pdx-move-card__text">
+                  <strong>{elcBusy ? "Offering…" : "Offer standard ELC"}</strong>
+                  <small>Standard entry-level terms — build custom terms on the Prospect desk</small>
+                </span>
               </button>
-            ))}
-          </div>
-        ) : (
-          <p className="nhlrost-muted-text">
-            No call-up or send-down actions for this player right now. Unsigned juniors need an ELC
-            first; NHL veterans may require waivers to go to the AHL.
-          </p>
-        )}
-      </article>
+            </div>
+          ) : null}
+        </DossierCard>
+      ) : null}
+
+      {canManage ? (
+        <DossierCard
+          eyebrow="Roster moves"
+          title="Call-ups & assignments"
+          aside={<DossierChip>{moves.length ? `${moves.length} available` : "None"}</DossierChip>}
+        >
+          {error ? <p className="pdx-note is-bad">{error}</p> : null}
+          {note ? <DossierNote>{note}</DossierNote> : null}
+
+          {pendingMove ? (
+            <div className={`pdx-move-confirm is-${moveDirection(pendingMove.id)}`}>
+              <p className="pdx-move-confirm__title">
+                {moveDirection(pendingMove.id) === "up" ? "▲" : "▼"} {pendingMove.label}: {player.name || "Player"}?
+              </p>
+              <p className="pdx-move-confirm__body">
+                {pendingMove.waiverStep || pendingMove.requires_waivers
+                  ? "He must clear waivers first. Any team can claim him for free."
+                  : moveDirection(pendingMove.id) === "up"
+                    ? "He joins the NHL roster and drops into an open Edit Lines slot."
+                    : "He leaves the NHL roster. Refill his Edit Lines slot before the next game."}
+                {pendingMove.slide_note ? ` ${pendingMove.slide_note}` : ""}
+              </p>
+              <div className="pdx-move-confirm__actions">
+                <button
+                  type="button"
+                  className="pdx-btn pdx-btn--primary"
+                  disabled={Boolean(busy)}
+                  onClick={() => runMove(pendingMove.id, pendingMove.waiverStep ? { confirm_waivers: true } : {})}
+                >
+                  {busy ? "Working…" : "Confirm"}
+                </button>
+                <button type="button" className="pdx-btn" onClick={() => setPendingMove(null)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {moves.length ? (
+            <div className="pdx-move-list">
+              {moves.map((action) => {
+                const dir = moveDirection(action.id);
+                return (
+                  <button
+                    key={action.id}
+                    type="button"
+                    className={`pdx-move-card is-${dir}`}
+                    disabled={Boolean(busy) || action.enabled === false}
+                    title={action.reason || action.slide_note || ""}
+                    onClick={() => setPendingMove(action)}
+                  >
+                    <span className="pdx-move-card__arrow" aria-hidden="true">
+                      {dir === "up" ? "▲" : "▼"}
+                    </span>
+                    <span className="pdx-move-card__text">
+                      <strong>{busy === action.id ? "Working…" : action.label}</strong>
+                      <small>
+                        {action.enabled === false && action.reason
+                          ? action.reason
+                          : action.requires_waivers
+                            ? "Requires waivers"
+                            : dir === "up"
+                              ? "Joins the NHL roster"
+                              : "Waiver-exempt assignment"}
+                      </small>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <DossierNote>
+              No call-up or send-down actions for this player right now. Unsigned juniors need an ELC first; NHL
+              veterans may require waivers to go to the AHL.
+            </DossierNote>
+          )}
+        </DossierCard>
+      ) : (
+        <DossierCard eyebrow="Roster moves" title="Not in your organization">
+          <DossierNote>Call-ups and assignments are only available for players your organization controls.</DossierNote>
+        </DossierCard>
+      )}
     </section>
   );
 }
+
+/* ─── Career ─────────────────────────────────────────────────────────── */
 
 function CareerTotalsCard({ totals, isGoalie }) {
   if (!totals || typeof totals !== "object") return null;
@@ -5526,22 +5755,16 @@ function CareerTotalsCard({ totals, isGoalie }) {
     if (gp == null && wins == null && losses == null && svPct == null && gaa == null) return null;
 
     return (
-      <article className="nhlrost-panel">
-        <header className="nhlrost-panel__head">
-          <div>
-            <p>Career Totals</p>
-            <h3>NHL</h3>
-          </div>
-        </header>
-        <div className="nhlrost-stat-grid nhlrost-stat-grid--wide">
-          <InfoPair label="GP" value={displayStatValue(gp)} />
-          <InfoPair label="W" value={displayStatValue(wins)} />
-          <InfoPair label="L" value={displayStatValue(losses)} />
-          <InfoPair label="OTL" value={displayStatValue(pickFirstDefined(totals.otl))} />
-          <InfoPair label="SV%" value={svPct != null ? formatDecimal(svPct, 3) : "—"} />
-          <InfoPair label="GAA" value={gaa != null ? Number(gaa).toFixed(2) : "—"} />
-        </div>
-      </article>
+      <DossierCard eyebrow="Career totals" title="NHL">
+        <DossierTiles dense>
+          <DossierTile label="GP" value={displayStatValue(gp)} />
+          <DossierTile label="W" value={displayStatValue(wins)} />
+          <DossierTile label="L" value={displayStatValue(losses)} />
+          <DossierTile label="OTL" value={displayStatValue(pickFirstDefined(totals.otl))} />
+          <DossierTile label="SV%" value={svPct != null ? formatDecimal(svPct, 3) : "—"} />
+          <DossierTile label="GAA" value={gaa != null ? Number(gaa).toFixed(2) : "—"} />
+        </DossierTiles>
+      </DossierCard>
     );
   }
 
@@ -5551,20 +5774,14 @@ function CareerTotalsCard({ totals, isGoalie }) {
   if (gp == null && goals == null && assists == null && pts == null) return null;
 
   return (
-    <article className="nhlrost-panel">
-      <header className="nhlrost-panel__head">
-        <div>
-          <p>Career Totals</p>
-          <h3>NHL</h3>
-        </div>
-      </header>
-      <div className="nhlrost-stat-grid nhlrost-stat-grid--wide">
-        <InfoPair label="GP" value={displayStatValue(gp)} />
-        <InfoPair label="G" value={displayStatValue(goals)} />
-        <InfoPair label="A" value={displayStatValue(assists)} />
-        <InfoPair label="PTS" value={displayStatValue(pts)} />
-      </div>
-    </article>
+    <DossierCard eyebrow="Career totals" title="NHL">
+      <DossierTiles dense>
+        <DossierTile label="GP" value={displayStatValue(gp)} />
+        <DossierTile label="G" value={displayStatValue(goals)} />
+        <DossierTile label="A" value={displayStatValue(assists)} />
+        <DossierTile label="PTS" value={displayStatValue(pts)} />
+      </DossierTiles>
+    </DossierCard>
   );
 }
 
@@ -5572,19 +5789,13 @@ function CareerSeasonsTable({ seasons, isGoalie }) {
   if (!Array.isArray(seasons) || !seasons.length) return null;
 
   return (
-    <article className="nhlrost-panel nhlrost-career-seasons">
-      <header className="nhlrost-panel__head">
-        <div>
-          <p>Career</p>
-          <h3>Season by Season</h3>
-        </div>
-      </header>
-      <div className="nhlrost-table-scroll">
-        <table className="nhlrost-mini-table">
+    <DossierCard eyebrow="Career" title="Season by season">
+      <div className="pdx-table-scroll">
+        <table className="pdx-table">
           <thead>
             <tr>
               <th scope="col">Season</th>
-              <th scope="col">Team</th>
+              <th scope="col" className="is-text">Team</th>
               <th scope="col">Lg</th>
               <th scope="col">GP</th>
               {isGoalie ? (
@@ -5609,10 +5820,10 @@ function CareerSeasonsTable({ seasons, isGoalie }) {
           </thead>
           <tbody>
             {seasons.map((row, index) => (
-              <tr key={index} className={row?.is_current_season ? "is-current-season" : undefined}>
+              <tr key={index} className={row?.is_current_season ? "is-current" : undefined}>
                 <td>{safeStr(pickFirstDefined(row?.season, row?.year), "—")}</td>
-                <td>{safeStr(pickFirstDefined(row?.team, row?.team_name, row?.teamName), "—")}</td>
-                <td>{safeStr(pickFirstDefined(row?.league, row?.league_name), "—")}</td>
+                <td className="is-text">{safeStr(pickFirstDefined(row?.team, row?.team_name, row?.teamName), "—")}</td>
+                <td>{humanizeDossierValue(pickFirstDefined(row?.league, row?.league_name))}</td>
                 <td>{displayStatValue(pickFirstDefined(row?.gp, row?.games_played))}</td>
                 {isGoalie ? (
                   <>
@@ -5645,26 +5856,17 @@ function CareerSeasonsTable({ seasons, isGoalie }) {
           </tbody>
         </table>
       </div>
-    </article>
+    </DossierCard>
   );
 }
 
-function CareerAwardsCard({ awards, showWhenEmpty = false, zoneLabel = "Career" }) {
+function CareerAwardsCard({ awards }) {
   const rows = Array.isArray(awards) ? awards : [];
-  if (!rows.length && !showWhenEmpty) return null;
+  if (!rows.length) return null;
 
   return (
-    <article className="nhlrost-panel">
-      <header className="nhlrost-panel__head">
-        <div>
-          <p>{zoneLabel}</p>
-          <h3>Awards</h3>
-        </div>
-      </header>
-      {!rows.length ? (
-        <p className="nhlrost-muted-text">No NHL trophies or selections recorded yet.</p>
-      ) : null}
-      <ul className="nhlrost-award-list">
+    <DossierCard eyebrow="Career" title="Awards">
+      <ul className="pdx-list">
         {rows.map((award, index) => {
           if (typeof award === "string" || typeof award === "number") {
             return <li key={index}>{award}</li>;
@@ -5673,13 +5875,13 @@ function CareerAwardsCard({ awards, showWhenEmpty = false, zoneLabel = "Career" 
           const year = pickFirstDefined(award?.season, award?.year);
           return (
             <li key={index}>
-              {name}
-              {year ? ` — ${year}` : ""}
+              <strong>{name}</strong>
+              {year ? <span>{year}</span> : null}
             </li>
           );
         })}
       </ul>
-    </article>
+    </DossierCard>
   );
 }
 
@@ -5687,25 +5889,76 @@ function CareerTransactionsCard({ transactions }) {
   if (!Array.isArray(transactions) || !transactions.length) return null;
 
   return (
-    <article className="nhlrost-panel">
-      <header className="nhlrost-panel__head">
-        <div>
-          <p>Career</p>
-          <h3>Transactions</h3>
-        </div>
-      </header>
-      <div className="nhlrost-storyline-list">
+    <DossierCard eyebrow="Career" title="Transactions">
+      <ul className="pdx-feed">
         {transactions.map((tx, index) => (
-          <article key={index} className="nhlrost-storyline-card">
-            <strong>{safeStr(pickFirstDefined(tx?.type, tx?.headline, tx?.title), "Transaction")}</strong>
-            {tx?.date || tx?.season ? <span>{tx.date || tx.season}</span> : null}
-            {tx?.description || tx?.summary ? <p>{tx.description || tx.summary}</p> : null}
-          </article>
+          <li key={index}>
+            <div className="pdx-feed__head">
+              <strong>{humanizeDossierText(safeStr(pickFirstDefined(tx?.type, tx?.headline, tx?.title), "Transaction"))}</strong>
+              {tx?.date || tx?.season ? <time>{tx.date || tx.season}</time> : null}
+            </div>
+            {tx?.description || tx?.summary ? <p>{humanizeDossierText(tx.description || tx.summary)}</p> : null}
+          </li>
         ))}
-      </div>
-    </article>
+      </ul>
+    </DossierCard>
   );
 }
+
+function CareerPanel({ player, franchiseState }) {
+  if (!player) {
+    return <DossierEmpty title="No career selected" body="Select a player to view career history." />;
+  }
+
+  const draft = resolveDossierDraft(player, franchiseState);
+  const isGoalie = isGoaliePosition(player.position);
+  const stats = player.season_stats || EMPTY_OBJECT;
+  const seasonLabel = buildSeasonLabelFromFranchiseState(franchiseState);
+  const seasons = mergeCareerSeasonsWithCurrent(player, stats, { isGoalie, seasonLabel });
+  const awards = Array.isArray(player.career_awards) ? player.career_awards : EMPTY_ARRAY;
+  const transactions = Array.isArray(player.transactions) ? player.transactions : EMPTY_ARRAY;
+
+  return (
+    <section className="pdx-stack">
+      <div className="pdx-grid-2">
+        <DossierCard
+          eyebrow="Draft record"
+          title={draft.hasDraft ? (draft.year ? String(draft.year) : "Drafted") : draft.isUndrafted ? "Undrafted" : "No record"}
+        >
+          {draft.hasDraft ? (
+            <DossierTiles dense>
+              <DossierTile label="Year" value={draft.year || "—"} />
+              <DossierTile label="Round" value={draft.round != null ? draft.round : "—"} />
+              <DossierTile label="Overall" value={draft.overall != null ? `#${draft.overall}` : "—"} />
+              <DossierTile label="Drafted by" value={draft.teamName || "—"} wide />
+            </DossierTiles>
+          ) : (
+            <DossierNote>
+              {draft.isUndrafted
+                ? "Undrafted — entered the organization outside the entry draft."
+                : "No NHL entry draft selection on file for this player."}
+            </DossierNote>
+          )}
+        </DossierCard>
+        <CareerTotalsCard totals={player.career_totals} isGoalie={isGoalie} />
+      </div>
+
+      {seasons.length ? (
+        <CareerSeasonsTable seasons={seasons} isGoalie={isGoalie} />
+      ) : (
+        <DossierCard eyebrow="Career" title="Season by season">
+          <DossierNote>No season history recorded yet. Rows appear as seasons are played in this universe.</DossierNote>
+        </DossierCard>
+      )}
+      <div className="pdx-grid-2">
+        <CareerAwardsCard awards={awards} />
+        <CareerTransactionsCard transactions={transactions} />
+      </div>
+    </section>
+  );
+}
+
+/* ─── Media ──────────────────────────────────────────────────────────── */
 
 function rosterMediaHeatPhrase(heat) {
   const n = Number(heat);
@@ -5732,27 +5985,24 @@ function groupPlayerStoryArcs(events) {
     if (!byArc.has(arcId)) byArc.set(arcId, []);
     byArc.get(arcId).push(ev);
   });
-  return [...byArc.entries()]
-    .map(([arcId, beats]) => {
-      const sorted = [...beats].sort((a, b) =>
-        String(a?.calendar_iso || a?.date || a?.season || "").localeCompare(
-          String(b?.calendar_iso || b?.date || b?.season || "")
-        )
-      );
-      const latest = sorted[sorted.length - 1] || {};
-      return {
-        arcId,
-        beats: sorted,
-        headline: latest.headline || latest.title || "Career storyline",
-        heat: Math.max(...sorted.map((b) => Number(b?.heat) || 0)),
-        stage: String(latest?.arc_status || latest?.status || "active").toLowerCase() === "resolved"
+  return [...byArc.entries()].map(([arcId, beats]) => {
+    const sorted = [...beats].sort((a, b) =>
+      String(a?.calendar_iso || a?.date || a?.season || "").localeCompare(String(b?.calendar_iso || b?.date || b?.season || ""))
+    );
+    const latest = sorted[sorted.length - 1] || {};
+    return {
+      arcId,
+      beats: sorted,
+      headline: latest.headline || latest.title || "Career storyline",
+      heat: Math.max(...sorted.map((b) => Number(b?.heat) || 0)),
+      stage:
+        String(latest?.arc_status || latest?.status || "active").toLowerCase() === "resolved"
           ? "Archived"
           : sorted.length > 2
             ? "Escalating"
             : "Developing",
-      };
-    })
-    .sort((a, b) => b.heat - a.heat || b.beats.length - a.beats.length);
+    };
+  });
 }
 
 function buildPlayerPublicImage(player, storylines) {
@@ -5776,346 +6026,481 @@ function buildPlayerPublicImage(player, storylines) {
   return labels.slice(0, 5);
 }
 
+function dossierKey(...parts) {
+  return parts
+    .map((part) => String(part ?? "").toLowerCase().replace(/\s+/g, " ").trim())
+    .join("|");
+}
+
+function readableDossierBody(text, headline) {
+  const raw = safeStr(text, "").trim();
+  if (!raw) return "";
+  if (DOSSIER_DEBUG_BODY.test(raw)) return DOSSIER_DEBUG_FALLBACK;
+  const clean = humanizeDossierText(raw);
+  if (headline && clean.toLowerCase() === String(headline).toLowerCase().trim()) return "";
+  return clean;
+}
+
+function readableDossierSource(source) {
+  const s = safeStr(source, "").trim();
+  if (!s) return "League wire";
+  if (s.includes("_") || /storyline|universe|engine|\bv\d+\b/i.test(s) || (/^[A-Z0-9 ]+$/.test(s) && s.length > 5)) {
+    return "Team insider";
+  }
+  return s;
+}
+
+function toDossierBeat(beat) {
+  const title = humanizeDossierText(safeStr(beat?.headline || beat?.title || beat?.type, "Update"));
+  const date = safeStr(beat?.calendar_iso || beat?.date || beat?.season, "");
+  const body = readableDossierBody(beat?.summary || beat?.short_summary || beat?.effect_summary, title);
+  return {
+    key: dossierKey(title, date, body),
+    title,
+    date,
+    body,
+    credibility: rosterMediaCredPhrase(beat?.credibility),
+  };
+}
+
+/** One deduplicated storyline list: backend arcs (or grouped events) plus uncovered wire items. */
+function buildDossierStorylines(player, storylines, franchiseState) {
+  const playerId = String(player.id || player.player_id || "");
+  const universe = franchiseState?.narrative_universe || EMPTY_OBJECT;
+  const events = Array.isArray(storylines) ? storylines : EMPTY_ARRAY;
+  const backendArcs = Array.isArray(universe?.story_arcs)
+    ? universe.story_arcs.filter((arc) => String(arc?.player_id || "") === playerId)
+    : EMPTY_ARRAY;
+
+  const rawArcs = backendArcs.length
+    ? backendArcs.map((arc) => ({
+        arcId: arc.arc_id,
+        beats: Array.isArray(arc.beats) ? arc.beats : EMPTY_ARRAY,
+        headline: arc.headline || "Career storyline",
+        heat: Number(arc.heat) || 0,
+        stage: humanizeDossierValue(arc.phase || arc.status || "Developing"),
+      }))
+    : groupPlayerStoryArcs(events);
+
+  if (backendArcs.length) {
+    const known = new Set();
+    rawArcs.forEach((arc) => {
+      known.add(dossierKey(arc.headline));
+      arc.beats.forEach((beat) => known.add(dossierKey(beat?.headline || beat?.title)));
+    });
+    events.forEach((ev, index) => {
+      const key = dossierKey(ev?.headline || ev?.title);
+      if (!key || known.has(key)) return;
+      known.add(key);
+      rawArcs.push({
+        arcId: `wire-${ev?.id || ev?.storyline_id || index}`,
+        beats: [ev],
+        headline: ev?.headline || ev?.title || "Storyline",
+        heat: Number(ev?.heat) || 0,
+        stage: "Developing",
+      });
+    });
+  }
+
+  const merged = new Map();
+  rawArcs.forEach((arc) => {
+    const headline = humanizeDossierText(safeStr(arc.headline, "Storyline"));
+    const key = dossierKey(headline);
+    const entry = merged.get(key) || { arcId: arc.arcId || key, headline, heat: 0, stage: arc.stage, beats: new Map() };
+    entry.heat = Math.max(entry.heat, Number(arc.heat) || 0);
+    (arc.beats || EMPTY_ARRAY).forEach((raw) => {
+      const beat = toDossierBeat(raw);
+      if (!entry.beats.has(beat.key)) entry.beats.set(beat.key, beat);
+    });
+    merged.set(key, entry);
+  });
+
+  return [...merged.values()]
+    .map((arc) => {
+      const beats = [...arc.beats.values()].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      return { ...arc, beats, latestDate: beats[0]?.date || "" };
+    })
+    .sort((a, b) => b.heat - a.heat || String(b.latestDate).localeCompare(String(a.latestDate)));
+}
+
 function MediaPanel({ player, storylines, franchiseState }) {
   if (!player) {
-    return <EmptyPanel title="No player selected" body="Select a player to view media coverage." compact />;
+    return <DossierEmpty title="No player selected" body="Select a player to view media coverage." />;
   }
 
   const playerId = String(player.id || player.player_id || "");
-  const narrativeUniverse = franchiseState?.narrative_universe || {};
-  const playerMem = narrativeUniverse?.player_narrative_memory?.[playerId] || null;
+  const universe = franchiseState?.narrative_universe || EMPTY_OBJECT;
+  const playerMem = universe?.player_narrative_memory?.[playerId] || null;
   const events = Array.isArray(storylines) ? storylines : EMPTY_ARRAY;
-  const backendArcs = Array.isArray(narrativeUniverse?.story_arcs)
-    ? narrativeUniverse.story_arcs.filter((a) => String(a?.player_id || "") === playerId)
-    : [];
-  const arcs = backendArcs.length
-    ? backendArcs.map((arc) => ({
-        arcId: arc.arc_id,
-        beats: (Array.isArray(arc.beats) ? arc.beats : []).map((b, index) => ({
-          id: b.beat_id,
-          storyline_id: b.beat_id,
-          headline: b.headline,
-          summary: b.summary,
-          calendar_iso: b.calendar_iso,
-          date: b.calendar_iso,
-          credibility: b.credibility,
-        })),
-        headline: arc.headline || "Career storyline",
-        heat: Number(arc.heat) || 0,
-        stage: arc.phase || arc.status || "Developing",
-      }))
-    : groupPlayerStoryArcs(events);
+  const lastName = safeStr(player.name, "").toLowerCase().split(/\s+/).pop();
+  const mentions = (blob) => Boolean(lastName) && String(blob || "").toLowerCase().includes(lastName);
+
+  const arcs = buildDossierStorylines(player, events, franchiseState);
   const memTags = Array.isArray(playerMem?.reputation_tags) ? playerMem.reputation_tags : [];
-  const publicImage = memTags.length ? memTags : buildPlayerPublicImage(player, events);
+  const publicImage = [...new Set((memTags.length ? memTags : buildPlayerPublicImage(player, events)).map((tag) => humanizeDossierValue(tag)))];
   const maxHeat = Math.max(
     events.reduce((m, s) => Math.max(m, Number(s?.heat) || 0), 0),
     Number(playerMem?.media_heat) || 0
   );
   const mediaPressure = rosterMediaHeatPhrase(maxHeat);
-  const backendSocial = Array.isArray(narrativeUniverse?.social_posts)
-    ? narrativeUniverse.social_posts.filter((p) => {
-        const blob = `${p?.related_headline || ""} ${p?.text || ""}`.toLowerCase();
-        const name = safeStr(player.name, "").toLowerCase();
-        return name && blob.includes(name.split(/\s+/).pop());
-      }).slice(0, 6)
-    : [];
-  const backendReddit = Array.isArray(narrativeUniverse?.reddit_threads)
-    ? narrativeUniverse.reddit_threads.filter((t) => {
-        const pid = String(t?.player_id || "");
-        if (pid && pid === playerId) return true;
-        const blob = `${t?.title || ""} ${t?.body || ""}`.toLowerCase();
-        const name = safeStr(player.name, "").toLowerCase();
-        return name && blob.includes(name.split(/\s+/).pop());
-      }).slice(0, 4)
-    : [];
-  const agentRel = narrativeUniverse?.agent_relationships?.[playerId] || null;
-  const agents = Array.isArray(narrativeUniverse?.agents) ? narrativeUniverse.agents : [];
-  const agentInfo = agentRel
-    ? agents.find((a) => String(a?.id || "") === String(agentRel.agent_id || "")) || null
-    : null;
-  const privateKnowledge = Array.isArray(narrativeUniverse?.knowledge_graph)
-    ? narrativeUniverse.knowledge_graph.filter(
-        (node) =>
-          String(node?.player_id || "") === playerId ||
-          events.some((ev) => String(ev?.storyline_id || ev?.id || "") === String(node?.storyline_id || ""))
-      ).slice(-4)
-    : [];
+
+  const agentRel = universe?.agent_relationships?.[playerId] || null;
+  const agents = Array.isArray(universe?.agents) ? universe.agents : EMPTY_ARRAY;
+  const agentInfo = agentRel ? agents.find((a) => String(a?.id || "") === String(agentRel.agent_id || "")) || null : null;
+
+  const knowledgeSeen = new Set();
+  const privateKnowledge = (Array.isArray(universe?.knowledge_graph) ? universe.knowledge_graph : EMPTY_ARRAY)
+    .filter(
+      (node) =>
+        String(node?.player_id || "") === playerId ||
+        events.some((ev) => String(ev?.storyline_id || ev?.id || "") === String(node?.storyline_id || ""))
+    )
+    .filter((node) => {
+      const key = dossierKey(node?.public_headline || node?.headline, node?.public_level);
+      if (knowledgeSeen.has(key)) return false;
+      knowledgeSeen.add(key);
+      return true;
+    })
+    .slice(-3);
   const gmKnowsMore = events.some((ev) => ev?.gm_knows_more) || privateKnowledge.some((n) => n.gm_knows_more);
-  const quotes = events
-    .slice(0, 5)
-    .map((ev) => ({
-      source: ev?.source_label || ev?.source || "League Wire",
-      text: ev?.summary || ev?.short_summary || ev?.effect_summary || ev?.headline || ev?.title || "",
-    }))
-    .filter((q) => q.text);
+
+  // "What people are saying" — social posts, forum threads, then quoted wire copy
+  // that isn't already shown in the storyline list. Deduped, max 4.
+  const shownBodies = new Set();
+  arcs.forEach((arc) => {
+    shownBodies.add(dossierKey(arc.headline));
+    arc.beats.forEach((beat) => {
+      shownBodies.add(dossierKey(beat.title));
+      if (beat.body) shownBodies.add(dossierKey(beat.body));
+    });
+  });
+  const voices = [];
+  const voiceSeen = new Set();
+  const pushVoice = (voice) => {
+    const text = readableDossierBody(voice.text);
+    if (!text || text === DOSSIER_DEBUG_FALLBACK) return;
+    const key = dossierKey(text);
+    if (voiceSeen.has(key) || shownBodies.has(key)) return;
+    voiceSeen.add(key);
+    voices.push({ ...voice, text });
+  };
+  (Array.isArray(universe?.social_posts) ? universe.social_posts : EMPTY_ARRAY)
+    .filter((post) => mentions(`${post?.related_headline || ""} ${post?.text || ""}`))
+    .forEach((post) =>
+      pushVoice({
+        source: `${post.author_name || "Fan"}${post.verified ? " ✓" : ""}`,
+        meta: post.author_type === "agent" ? "Agent" : post.handle || "Social",
+        text: post.text,
+      })
+    );
+  (Array.isArray(universe?.reddit_threads) ? universe.reddit_threads : EMPTY_ARRAY)
+    .filter((thread) => String(thread?.player_id || "") === playerId || mentions(`${thread?.title || ""} ${thread?.body || ""}`))
+    .forEach((thread) =>
+      pushVoice({
+        source: thread.subreddit || "IceHole",
+        meta: `${Number(thread.upvotes || 0).toLocaleString()}↑`,
+        text: thread.title,
+      })
+    );
+  events.forEach((ev) =>
+    pushVoice({
+      source: readableDossierSource(ev?.source_label || ev?.source),
+      meta: "",
+      text: ev?.quote || ev?.summary || ev?.short_summary || ev?.effect_summary || "",
+    })
+  );
+  const topVoices = voices.slice(0, 4);
 
   return (
-    <section className="nhlrost-history-layout nhlrost-media-layout">
-      <article className="nhlrost-panel">
-        <header className="nhlrost-panel__head">
-          <div>
-            <p>Media universe</p>
-            <h3>Public image</h3>
-          </div>
-          {mediaPressure ? <span className="nhlrost-media-pressure">{mediaPressure}</span> : null}
-        </header>
-        <div className="nhlrost-media-tags">
+    <section className="pdx-stack">
+      <DossierCard
+        eyebrow="Media universe"
+        title="Public image"
+        aside={mediaPressure ? <DossierChip tone={maxHeat >= 45 ? "warn" : "neutral"}>Media heat: {mediaPressure}</DossierChip> : null}
+      >
+        <div className="pdx-chip-row">
           {publicImage.map((tag) => (
-            <span key={tag} className="nhlrost-media-tag">{tag}</span>
+            <DossierChip key={tag}>{tag}</DossierChip>
           ))}
         </div>
-      </article>
-
-      {agentInfo ? (
-        <article className="nhlrost-panel">
-          <header className="nhlrost-panel__head">
-            <div>
-              <p>Representation</p>
-              <h3>Player agent</h3>
-            </div>
-          </header>
-          <p className="nhlrost-muted-text">
-            <strong>{agentInfo.name}</strong> · {agentInfo.agency}
+        {agentInfo ? (
+          <p className="pdx-note pdx-note--spaced">
+            Represented by <strong>{agentInfo.name}</strong>
+            {agentInfo.agency ? ` (${agentInfo.agency})` : ""}
+            {agentInfo.style ? ` · ${humanizeDossierValue(agentInfo.style)} style` : ""}
             {agentRel?.trust != null ? ` · client trust ${Math.round(Number(agentRel.trust) * 100)}%` : ""}
             {agentRel?.gm_trust != null ? ` · GM trust ${Math.round(Number(agentRel.gm_trust) * 100)}%` : ""}
           </p>
-          <p className="nhlrost-muted-text">
-            Style: {String(agentInfo.style || "").replace(/_/g, " ")}
-            {agentInfo.leak_tendency != null
-              ? ` · leak tendency ${Math.round(Number(agentInfo.leak_tendency) * 100)}%`
-              : ""}
-          </p>
-        </article>
-      ) : null}
+        ) : null}
+        {gmKnowsMore || privateKnowledge.length ? (
+          <div className="pdx-inside">
+            <span className="pdx-tile__label">Inside information</span>
+            {gmKnowsMore ? <p>You know more than the public wire — internal facts may not match headlines.</p> : null}
+            {privateKnowledge.length ? (
+              <ul>
+                {privateKnowledge.map((node, index) => (
+                  <li key={node.storyline_id || index}>
+                    {humanizeDossierText(node.public_headline || node.headline || "Storyline")}
+                    <span> · public level: {humanizeDossierValue(node.public_level || "unknown").toLowerCase()}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+      </DossierCard>
 
-      {gmKnowsMore || privateKnowledge.length ? (
-        <article className="nhlrost-panel">
-          <header className="nhlrost-panel__head">
-            <div>
-              <p>Knowledge layers</p>
-              <h3>Public vs private</h3>
-            </div>
-          </header>
-          {gmKnowsMore ? (
-            <p className="nhlrost-muted-text">
-              You know more than the public wire — internal facts may not match headlines.
-            </p>
-          ) : null}
-          {privateKnowledge.map((node, index) => (
-            <p key={node.storyline_id || index} className="nhlrost-muted-text">
-              {node.public_headline || node.headline || "Storyline"} · public level:{" "}
-              {String(node.public_level || "unknown").replace(/_/g, " ")}
-              {node.gm_knows_more ? " · GM knows more" : ""}
-            </p>
-          ))}
-        </article>
-      ) : null}
-
-      {arcs.length ? (
-        <article className="nhlrost-panel">
-          <header className="nhlrost-panel__head">
-            <div>
-              <p>Story arcs</p>
-              <h3>Career narrative</h3>
-            </div>
-          </header>
-          <div className="nhlrost-media-arcs">
+      <DossierCard eyebrow="Coverage" title="Storylines" aside={arcs.length ? <DossierChip>{arcs.length}</DossierChip> : null}>
+        {arcs.length ? (
+          <ul className="pdx-feed">
             {arcs.map((arc) => (
-              <div key={arc.arcId} className="nhlrost-media-arc">
-                <div className="nhlrost-media-arc__head">
+              <li key={arc.arcId}>
+                <div className="pdx-feed__head">
                   <strong>{arc.headline}</strong>
-                  <span>{arc.stage} · {arc.beats.length} beat{arc.beats.length === 1 ? "" : "s"}</span>
+                  <div className="pdx-chip-row">
+                    {rosterMediaHeatPhrase(arc.heat) ? (
+                      <DossierChip tone={arc.heat >= 45 ? "warn" : "neutral"}>{rosterMediaHeatPhrase(arc.heat)}</DossierChip>
+                    ) : null}
+                    {arc.beats.length > 1 ? <DossierChip>{arc.stage}</DossierChip> : null}
+                  </div>
                 </div>
-                <ol className="nhlrost-media-timeline">
-                  {arc.beats.map((beat, index) => (
-                    <li key={beat.id || beat.storyline_id || index}>
-                      <time>{beat.calendar_iso || beat.date || beat.season || "—"}</time>
-                      <span>{beat.headline || beat.title || beat.type || "Update"}</span>
-                      {beat.summary || beat.short_summary ? <p>{beat.summary || beat.short_summary}</p> : null}
-                      {rosterMediaCredPhrase(beat.credibility) ? (
-                        <em>{rosterMediaCredPhrase(beat.credibility)}</em>
-                      ) : null}
-                    </li>
-                  ))}
-                </ol>
-              </div>
+                {arc.beats
+                  .slice(0, 3)
+                  .filter((beat) => beat.date || beat.body || dossierKey(beat.title) !== dossierKey(arc.headline))
+                  .map((beat) => (
+                  <div key={beat.key} className="pdx-feed__beat">
+                    {beat.date ? <time>{beat.date}</time> : null}
+                    <p>
+                      {beat.title && dossierKey(beat.title) !== dossierKey(arc.headline) ? <strong>{beat.title}. </strong> : null}
+                      {beat.body}
+                      {beat.credibility ? <em> · {beat.credibility}</em> : null}
+                    </p>
+                  </div>
+                ))}
+                {arc.beats.length > 3 ? <span className="pdx-feed__more">+{arc.beats.length - 3} earlier updates</span> : null}
+              </li>
             ))}
-          </div>
-        </article>
-      ) : (
-        <article className="nhlrost-panel">
-          <header className="nhlrost-panel__head">
-            <div>
-              <p>Story arcs</p>
-              <h3>Career narrative</h3>
-            </div>
-          </header>
-          <p className="nhlrost-muted-text">No recorded storyline events yet. Coverage appears as the league reacts to performance, trades, injuries, and off-ice incidents.</p>
-        </article>
-      )}
+          </ul>
+        ) : (
+          <DossierNote>
+            No recorded storyline events yet. Coverage appears as the league reacts to performance, trades, injuries, and
+            off-ice incidents.
+          </DossierNote>
+        )}
+      </DossierCard>
 
-      {backendReddit.length ? (
-        <article className="nhlrost-panel">
-          <header className="nhlrost-panel__head">
-            <div>
-              <p>IceHole</p>
-              <h3>Forum threads</h3>
-            </div>
-          </header>
-          <div className="nhlrost-media-quotes">
-            {backendReddit.map((thread, index) => (
-              <blockquote key={thread.thread_id || index}>
-                <strong>{thread.subreddit} · {thread.flair} · {Number(thread.upvotes || 0).toLocaleString()}↑</strong>
-                <p>{thread.title}</p>
-                {thread.body ? <p className="nhlrost-muted-text">{thread.body}</p> : null}
+      {topVoices.length ? (
+        <DossierCard eyebrow="Reaction" title="What people are saying">
+          <div className="pdx-quotes">
+            {topVoices.map((voice, index) => (
+              <blockquote key={index}>
+                <p>{voice.text}</p>
+                <footer>
+                  <strong>{voice.source}</strong>
+                  {voice.meta ? <span> · {voice.meta}</span> : null}
+                </footer>
               </blockquote>
             ))}
           </div>
-        </article>
-      ) : null}
-
-      {backendSocial.length ? (
-        <article className="nhlrost-panel">
-          <header className="nhlrost-panel__head">
-            <div>
-              <p>Social universe</p>
-              <h3>Recent posts</h3>
-            </div>
-          </header>
-          <div className="nhlrost-media-quotes">
-            {backendSocial.map((post, index) => (
-              <blockquote key={post.id || index}>
-                <strong>{post.author_name}{post.verified ? " ✓" : ""}{post.author_type === "agent" ? " · Agent" : ""} · {post.handle || ""}</strong>
-                <p>{post.text}</p>
-              </blockquote>
-            ))}
-          </div>
-        </article>
-      ) : null}
-
-      {quotes.length ? (
-        <article className="nhlrost-panel">
-          <header className="nhlrost-panel__head">
-            <div>
-              <p>What people are saying</p>
-              <h3>Media conversation</h3>
-            </div>
-          </header>
-          <div className="nhlrost-media-quotes">
-            {quotes.map((q, index) => (
-              <blockquote key={`${q.source}-${index}`}>
-                <strong>{q.source}</strong>
-                <p>{q.text}</p>
-              </blockquote>
-            ))}
-          </div>
-        </article>
-      ) : null}
-
-      {events.length ? (
-        <article className="nhlrost-panel">
-          <header className="nhlrost-panel__head">
-            <div>
-              <p>Wire file</p>
-              <h3>Recent headlines</h3>
-            </div>
-          </header>
-          <div className="nhlrost-storyline-list">
-            {events.map((event, index) => (
-              <article key={event.id || event.storyline_id || index} className="nhlrost-storyline-card">
-                <strong>{event.headline || event.title || event.type || "Storyline"}</strong>
-                {event.calendar_iso || event.date || event.season ? (
-                  <span>{event.calendar_iso || event.date || event.season}</span>
-                ) : null}
-                {event.summary || event.short_summary ? <p>{event.summary || event.short_summary}</p> : null}
-                {event.effect_summary ? <p>{event.effect_summary}</p> : null}
-                {rosterMediaHeatPhrase(event.heat) ? (
-                  <em className="nhlrost-media-heat">{rosterMediaHeatPhrase(event.heat)}</em>
-                ) : null}
-              </article>
-            ))}
-          </div>
-        </article>
+        </DossierCard>
       ) : null}
     </section>
   );
 }
 
-function CareerPanel({ player, storylines, franchiseState }) {
+/* ─── Character & Life ───────────────────────────────────────────────── */
+
+function PlayerCharacterLifePanel({ player, franchiseState, onCallMeeting, canManage = true }) {
   if (!player) {
-    return <EmptyPanel title="No career selected" body="Select a player to view career history." compact />;
+    return <DossierEmpty title="No player selected" body="Choose a player from the roster board." />;
   }
 
-  const draftYear = player.draft_year || player.draftYear;
-  const draftRound = player.draft_round || player.draftRound;
-  const draftOverall = player.draft_overall_pick || player.draftOverallPick;
-  const draftTeamId =
-    player.drafted_by_team_id ||
-    player.draft_team_id ||
-    player.drafted_by_team ||
-    player.draftedByTeamId ||
-    "";
-  const draftTeamName = player.drafted_by_team_name || resolveDraftTeamName(draftTeamId, franchiseState);
-  const isUndrafted = Boolean(player.undrafted) || (!player.drafted && !draftYear && draftOverall == null);
+  const pid = String(player.id || player.player_id || player.key || "");
+  const universe = franchiseState?.narrative_universe || EMPTY_OBJECT;
+  const meetings = universe?.player_meetings || EMPTY_OBJECT;
+  const rosterRow = (meetings.roster || EMPTY_ARRAY).find((r) => String(r?.player_id || "") === pid) || null;
+  const universePlayer =
+    universe?.players?.find?.((row) => String(row?.player_id || "") === pid) || rosterRow || null;
+  const nicheBadges = Array.isArray(universePlayer?.niche_abilities) ? universePlayer.niche_abilities : [];
+  const dossier =
+    universe?.human_dossiers?.[pid] ||
+    universe?.players?.find?.((row) => String(row?.player_id || "") === pid)?.human_dossier ||
+    null;
+  const canMeet = canManage && typeof onCallMeeting === "function";
+  const meetingButton = canMeet ? (
+    <button type="button" className="pdx-btn pdx-btn--primary" onClick={() => onCallMeeting(pid)}>
+      Call meeting
+    </button>
+  ) : null;
 
-  const isGoalie = isGoaliePosition(player.position);
-  const seasons = Array.isArray(player.career_seasons) ? player.career_seasons : EMPTY_ARRAY;
-  const awards = Array.isArray(player.career_awards) ? player.career_awards : EMPTY_ARRAY;
-  const transactions = Array.isArray(player.transactions) ? player.transactions : EMPTY_ARRAY;
-  const events = Array.isArray(storylines) ? storylines : EMPTY_ARRAY;
+  const charBlock = dossier?.character || EMPTY_OBJECT;
+  const stateBlock = dossier?.current_state || EMPTY_OBJECT;
+  const lifeBlock = dossier?.life || EMPTY_OBJECT;
+  const mw = dossier?.mental_wellbeing || EMPTY_OBJECT;
+  const drivers = (Array.isArray(dossier?.pressure_drivers) ? dossier.pressure_drivers : EMPTY_ARRAY)
+    .map((driver) => safeStr(typeof driver === "string" ? driver : driver?.label, "").trim())
+    .filter(Boolean)
+    .filter((label, index, list) => list.indexOf(label) === index);
+  const pressureTier = safeNum(stateBlock.pressure_tier, 0);
+  const pressureTone = pressureTier >= 3 ? "bad" : pressureTier >= 2 ? "warn" : pressureTier >= 1 ? "neutral" : "good";
+  const moraleValue = safeNumOrNull(player.morale);
+  const moraleBand = dossierMoraleBand(moraleValue);
+  const pressureSentence = drivers.length
+    ? `Main pressure: ${drivers[0].toLowerCase()}${drivers.length > 1 ? `. Also weighing on him: ${drivers.slice(1).map((d) => d.toLowerCase()).join(", ")}.` : "."}`
+    : "No significant pressure sources on file.";
+  const lifeTiles = [
+    ["City attachment", lifeBlock.city_attachment_tier],
+    ["Home stability", lifeBlock.home_stability_tier],
+    ["Relocation strain", lifeBlock.relocation_tier],
+  ].filter(([, value]) => value && value !== "Limited information");
 
-  const hasAnyCareerData = Boolean(
-    player.drafted ||
-      draftYear ||
-      draftOverall != null ||
-      isUndrafted ||
-      seasons.length ||
-      awards.length ||
-      transactions.length ||
-      events.length ||
-      player.career_totals
+  return (
+    <section className="pdx-stack">
+      <div className="pdx-grid-2">
+        <DossierCard
+          eyebrow="Mood"
+          title={moraleBand ? `${moraleBand.label} morale` : "Current state"}
+          aside={!rosterRow?.relationship ? meetingButton : null}
+        >
+          <DossierMeter label="Morale" value={moraleValue} band={moraleBand} />
+          {dossier ? (
+            <>
+              <DossierTiles dense>
+                <DossierTile label="Confidence" value={stateBlock.confidence_tier || "—"} />
+                <DossierTile label="Role satisfaction" value={stateBlock.role_satisfaction_tier || "—"} />
+                <DossierTile
+                  label="Pressure"
+                  value={<DossierChip tone={pressureTone}>{stateBlock.pressure_label || "Settled"}</DossierChip>}
+                />
+              </DossierTiles>
+              <p className="pdx-lead">{pressureSentence}</p>
+            </>
+          ) : (
+            <DossierNote>
+              Off-ice profile has not synced for this player yet. Advance the calendar to populate confidence, pressure,
+              and life context.
+            </DossierNote>
+          )}
+        </DossierCard>
+
+        {rosterRow?.relationship ? (
+          <DossierCard eyebrow="GM relationship" title={rosterRow.relationship.label || "—"} aside={meetingButton}>
+            <DossierNote>{rosterRow.relationship.detail || "No major friction on file."}</DossierNote>
+          </DossierCard>
+        ) : dossier ? (
+          <DossierCard eyebrow="Life" title={lifeBlock.summary || "Limited information"}>
+            {lifeTiles.length ? (
+              <DossierTiles dense>
+                {lifeTiles.map(([label, value]) => (
+                  <DossierTile key={label} label={label} value={value} />
+                ))}
+              </DossierTiles>
+            ) : (
+              <DossierNote>Limited information on his life away from the rink.</DossierNote>
+            )}
+          </DossierCard>
+        ) : null}
+      </div>
+
+      {dossier ? (
+        <DossierCard eyebrow="Character" title={charBlock.headline || "—"}>
+          {charBlock.summary_line ? <p className="pdx-lead">{humanizeDossierText(charBlock.summary_line)}</p> : null}
+          {nicheBadges.length ? (
+            <div className="pdx-chip-row pdx-chip-row--spaced">
+              {nicheBadges.map((n) => (
+                <DossierChip key={String(n.id || n.label)} tone="premium">
+                  {humanizeDossierValue(n.label || n.id)}
+                </DossierChip>
+              ))}
+            </div>
+          ) : null}
+          {(charBlock.traits || EMPTY_ARRAY).length ? (
+            <DossierTiles dense>
+              {(charBlock.traits || EMPTY_ARRAY).map((trait) => (
+                <DossierTile key={trait.label} label={trait.label} value={trait.tier || "—"} />
+              ))}
+            </DossierTiles>
+          ) : null}
+        </DossierCard>
+      ) : null}
+
+      {dossier && rosterRow?.relationship ? (
+        <DossierCard eyebrow="Life" title={lifeBlock.summary || "Limited information"}>
+          {lifeTiles.length ? (
+            <DossierTiles dense>
+              {lifeTiles.map(([label, value]) => (
+                <DossierTile key={label} label={label} value={value} />
+              ))}
+            </DossierTiles>
+          ) : (
+            <DossierNote>Limited information on his life away from the rink.</DossierNote>
+          )}
+        </DossierCard>
+      ) : null}
+
+      {mw?.state ? (
+        <DossierCard eyebrow="Wellbeing" title={mw.tier || "—"}>
+          <DossierNote>Private team information — not a character judgment.</DossierNote>
+        </DossierCard>
+      ) : null}
+    </section>
   );
+}
 
-  if (!hasAnyCareerData) {
+/* ─── Modal shell ────────────────────────────────────────────────────── */
+
+function DetailTabs({ activeTab, setActiveTab }) {
+  return (
+    <nav className="pdx-tabs" role="tablist" aria-label="Player detail tabs">
+      {PANEL_TABS.map((tab) => (
+        <button
+          key={tab.value}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === tab.value}
+          className={activeTab === tab.value ? "is-active" : ""}
+          onClick={() => setActiveTab(tab.value)}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function DetailPanelRouter({ activeTab, player, storylines, franchiseState, onRefresh, onCallMeeting, canManage }) {
+  if (activeTab === "overview") return <PlayerOverviewPanel player={player} franchiseState={franchiseState} />;
+  if (activeTab === "character") {
     return (
-      <EmptyPanel
-        compact
-        title="No career record yet"
-        body="Draft, season-by-season, award, and transaction data appear here once connected to franchise history."
+      <PlayerCharacterLifePanel
+        player={player}
+        franchiseState={franchiseState}
+        onCallMeeting={onCallMeeting}
+        canManage={canManage}
       />
     );
   }
+  if (activeTab === "performance") return <ProductionPanel player={player} franchiseState={franchiseState} />;
+  if (activeTab === "development") return <DevelopmentPanel player={player} />;
+  if (activeTab === "contract") return <ContractPanel player={player} />;
+  if (activeTab === "media") return <MediaPanel player={player} storylines={storylines} franchiseState={franchiseState} />;
+  if (activeTab === "career") return <CareerPanel player={player} franchiseState={franchiseState} />;
+  if (activeTab === "moves") return <UsagePanel player={player} onRefresh={onRefresh} canManage={canManage} />;
 
+  return <PlayerOverviewPanel player={player} franchiseState={franchiseState} />;
+}
+
+function DossierRatingBadge({ label, value, sub, subTone, tone }) {
   return (
-    <section className="nhlrost-history-layout">
-      <article className="nhlrost-panel">
-        <header className="nhlrost-panel__head">
-          <div>
-            <p>Draft Record</p>
-            <h3>{isUndrafted ? "Undrafted" : draftYear ? String(draftYear) : "Drafted"}</h3>
-          </div>
-        </header>
-        {isUndrafted ? (
-          <p className="nhlrost-muted-text">Undrafted — entered the organization outside the entry draft.</p>
-        ) : (
-          <div className="nhlrost-stat-grid nhlrost-stat-grid--wide">
-            <InfoPair label="Draft Year" value={draftYear || "—"} />
-            <InfoPair label="Round" value={draftRound != null ? draftRound : "—"} />
-            <InfoPair label="Overall Pick" value={draftOverall != null ? `#${draftOverall}` : "—"} />
-            <InfoPair label="Drafted By" value={draftTeamName || "—"} />
-          </div>
-        )}
-      </article>
-
-      <CareerTotalsCard totals={player.career_totals} isGoalie={isGoalie} />
-      <CareerSeasonsTable seasons={seasons} isGoalie={isGoalie} />
-      <CareerAwardsCard awards={awards} />
-      <CareerTransactionsCard transactions={transactions} />
-    </section>
+    <div className={`pdx-rating ${tone || ""}`.trim()}>
+      <span className="pdx-rating__label">{label}</span>
+      <strong className="pdx-rating__value">{value}</strong>
+      {sub ? <span className={`pdx-rating__sub ${subTone || ""}`.trim()}>{sub}</span> : null}
+    </div>
   );
 }
 
-function PlayerProfileModal({
+export function PlayerProfileModal({
   player,
   players,
   playerIndex,
@@ -6128,12 +6513,27 @@ function PlayerProfileModal({
   onRefresh,
   onCallMeeting,
 }) {
-  const modalBodyRef = React.useRef(null);
+  const scrollRef = React.useRef(null);
+  const tabsAnchorRef = React.useRef(null);
+  const [localTab, setLocalTab] = useState("overview");
+  const isControlled = typeof setActiveTab === "function";
+  const currentTab = (isControlled ? activeTab : localTab) || "overview";
+  const changeTab = useCallback(
+    (value) => {
+      if (isControlled) setActiveTab(value);
+      else setLocalTab(value);
+    },
+    [isControlled, setActiveTab]
+  );
+
   const rosterList = Array.isArray(players) ? players : EMPTY_ARRAY;
   const total = rosterList.length;
   const currentIndex = safeNum(playerIndex, -1);
-  const hasPrev = total > 0 && currentIndex > 0;
-  const hasNext = total > 0 && currentIndex >= 0 && currentIndex < total - 1;
+  const hasPrev = total > 1 && currentIndex > 0;
+  const hasNext = total > 1 && currentIndex >= 0 && currentIndex < total - 1;
+  const handleClose = useCallback(() => {
+    if (typeof onClose === "function") onClose();
+  }, [onClose]);
 
   const goToIndex = useCallback(
     (index) => {
@@ -6147,7 +6547,7 @@ function PlayerProfileModal({
   useEffect(() => {
     function onKey(event) {
       if (event.key === "Escape") {
-        onClose();
+        handleClose();
         return;
       }
 
@@ -6175,75 +6575,61 @@ function PlayerProfileModal({
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", onKey);
     };
-  }, [onClose, goToIndex, currentIndex]);
+  }, [handleClose, goToIndex, currentIndex]);
+
+  // New player → back to the top. New tab → keep the hero if it is visible,
+  // otherwise land on the tab bar so the content starts in view.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [player?.key, player?.id]);
 
   useEffect(() => {
-    if (modalBodyRef.current) {
-      modalBodyRef.current.scrollTop = 0;
-    }
-  }, [player?.key, player?.id, activeTab]);
+    const scroller = scrollRef.current;
+    const anchor = tabsAnchorRef.current;
+    if (!scroller || !anchor) return;
+    const tabTop = anchor.offsetTop;
+    if (scroller.scrollTop > tabTop) scroller.scrollTop = tabTop;
+  }, [currentTab]);
 
   if (!player) return null;
 
-  const teamLeague = [player.teamName, player.league]
-    .filter((value) => value && value !== "—")
-    .filter((value, index, list) => list.indexOf(value) === index)
-    .join(" · ");
+  const canManage = isDossierPlayerOnUserTeam(player, franchiseState);
   const healthBand = getHealthBand(player);
-  const flagCode =
-    player.nationality_code ||
-    nationalityCode(pickFirstDefined(player.nat, player.nationality, player.country) || "") ||
-    resolveRosterFlagLabel(player);
   const jerseyNumber = resolveJerseyNumber(player);
   const hand = formatHandLabel(player);
-  const statusLine = buildCommandStatusLine(player);
-  const decisionBullets = buildDecisionBullets(player);
+  const tradeConcern = player.tradeStabilityConcern || resolvePlayerTradeStabilityConcern(player, franchiseState);
+  const decisionBullets = buildDecisionBullets(player)
+    .filter((bullet) => !/^trade concern/i.test(bullet.text || ""))
+    .map((bullet) => ({ ...bullet, text: humanizeDossierText(bullet.text) }));
+  const teamLabel = player.teamName && player.teamName !== "—" ? player.teamName : "";
+  const leagueLabel = player.league && player.league !== "—" ? humanizeDossierValue(player.league) : "";
+  const metaParts = [
+    getPositionDisplay(player.position),
+    player.age ? `Age ${player.age}` : null,
+    hand !== "—" ? hand : null,
+    teamLabel,
+    leagueLabel && leagueLabel !== teamLabel ? leagueLabel : null,
+  ].filter(Boolean);
+
+  const ovrValue = displayOverallValue(player);
+  const growth = Math.round(inferGrowth(player));
+  const potScore = safeNum(player.potentialScore, 0);
+  const potLabel = safeStr(player.potential, "");
+  const potTone = potentialToneClass(potScore);
+  const potGap = potScore > 0 && Number(ovrValue) > 0 ? Math.round(potScore - Number(ovrValue)) : null;
+  const role = player.explicitRole || player.roleLabel || player.role;
+  const showStatus = player.status && player.status !== "Active" && player.status !== healthBand.label;
 
   return (
-    <div className="nhlrost-profile-modal" role="dialog" aria-modal="true" aria-label={`${player.name} profile`}>
-      <button type="button" className="nhlrost-profile-modal__backdrop" onClick={onClose} aria-label="Close profile" />
+    <div className="pdx-modal" role="dialog" aria-modal="true" aria-labelledby="pdx-modal-title">
+      <button type="button" className="pdx-modal__backdrop" onClick={handleClose} aria-label="Close profile" tabIndex={-1} />
 
-      <div className="nhlrost-profile-modal__panel" tabIndex={-1}>
-        <header className="nhlrost-profile-modal__hero">
-          <div className="nhlrost-profile-modal__visual">
-            <PlayerHeadshot
-              player={ensurePlayerHeadshotFields(player)}
-              size="xl"
-              variant="card"
-              className="nhlrost-profile-modal__headshot"
-              number={jerseyNumber != null ? jerseyNumber : player.num}
-              flag={flagCode || null}
-              preferPhoto
-            />
-          </div>
-
-          <div className="nhlrost-profile-modal__meta">
-            <div className="nhlrost-profile-modal__identity-row">
-              {flagCode ? <PlayerFlagBadge player={player} size="sm" /> : null}
-              <h2 id="nhlrost-profile-title">{player.name}</h2>
-              {jerseyNumber != null ? <span className="nhlrost-profile-modal__jersey">#{jerseyNumber}</span> : null}
-            </div>
-            <p>
-              {getPositionDisplay(player.position)} · {player.age || "—"} · {hand}
-              {teamLeague ? ` · ${teamLeague}` : ""}
-              {player.status && player.status !== "Active" ? ` · ${player.status}` : ""}
-            </p>
-
-            <div className="nhlrost-profile-modal__chips">
-              <OvrPill player={player} large />
-              <PotentialPill player={player} large />
-              {player.roleLabel || player.role ? (
-                <span className="nhlrost-profile-modal__role">{player.roleLabel || player.role}</span>
-              ) : null}
-              <span className={`nhlrost-profile-modal__health ${toneClass(healthBand.tone)}`}>{healthBand.label}</span>
-              <TradeStabilityConcernBadge player={player} franchiseState={franchiseState} />
-              <span className="nhlrost-profile-modal__contract">{contractSummaryDisplay(player)}</span>
-            </div>
-          </div>
-
-          <div className="nhlrost-profile-modal__nav-close">
+      <div className="pdx-panel" tabIndex={-1}>
+        <div className="pdx-topbar">
+          <span className="pdx-topbar__label">Player dossier</span>
+          <div className="pdx-topbar__actions">
             {total > 1 ? (
-              <nav className="nhlrost-profile-modal__nav" aria-label="Browse players">
+              <nav className="pdx-pager" aria-label="Browse players">
                 <button
                   type="button"
                   disabled={!hasPrev}
@@ -6267,186 +6653,102 @@ function PlayerProfileModal({
                 </button>
               </nav>
             ) : null}
-
-            <button type="button" className="nhlrost-profile-modal__close" onClick={onClose} aria-label="Close profile">
+            <button type="button" className="pdx-close" onClick={handleClose} aria-label="Close profile" title="Close (Esc)">
               ×
             </button>
           </div>
-        </header>
+        </div>
 
-        <p className="nhlrost-profile-modal__status-line">{statusLine}</p>
+        <div className="pdx-scroll" ref={scrollRef}>
+          <header className="pdx-hero">
+            <div className="pdx-hero__photo">
+              <PlayerHeadshot
+                player={ensurePlayerHeadshotFields(player)}
+                size="xl"
+                variant="card"
+                className="pdx-hero__headshot"
+                number=""
+                showFlag={false}
+                preferPhoto
+              />
+            </div>
 
-        {decisionBullets.length ? (
-          <ul className="nhlrost-profile-modal__decision-strip" aria-label="Decision factors">
-            {decisionBullets.map((bullet, index) => (
-              <li key={index} className={toneClass(bullet.tone)}>
-                {bullet.text}
-              </li>
-            ))}
-          </ul>
-        ) : null}
+            <div className="pdx-hero__identity">
+              <div className="pdx-hero__name-row">
+                <span className="pdx-flag">
+                  <PlayerFlagBadge player={player} size="sm" />
+                </span>
+                <h2 id="pdx-modal-title">{player.name}</h2>
+                {jerseyNumber != null ? (
+                  <span className="pdx-hero__jersey" title="Jersey number">
+                    #{jerseyNumber}
+                  </span>
+                ) : null}
+              </div>
+              <p className="pdx-hero__meta">{metaParts.join(" · ")}</p>
+              <div className="pdx-chip-row">
+                {role && role !== "—" ? <DossierChip tone="info">{role}</DossierChip> : null}
+                <DossierChip tone={healthBand.tone}>{healthBand.label}</DossierChip>
+                {showStatus ? <DossierChip>{humanizeDossierValue(player.status)}</DossierChip> : null}
+                <DossierChip tone="info">{contractSummaryDisplay(player)}</DossierChip>
+                {tradeConcern ? (
+                  <DossierChip tone={tradeConcern.tone} title={tradeConcern.title}>
+                    {tradeConcern.label}
+                  </DossierChip>
+                ) : null}
+                {!canManage ? <DossierChip>Other organization</DossierChip> : null}
+              </div>
+              {decisionBullets.length ? (
+                <ul className="pdx-flags" aria-label="Decision factors">
+                  {decisionBullets.map((bullet, index) => (
+                    <li key={index} className={toneClass(bullet.tone)}>
+                      {bullet.text}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
 
-        <DetailTabs activeTab={activeTab} setActiveTab={setActiveTab} />
+            <div className="pdx-hero__ratings">
+              <DossierRatingBadge
+                label="OVR"
+                value={ovrValue}
+                tone="is-ovr"
+                sub={growth !== 0 ? `${growth > 0 ? "+" : ""}${growth} this season` : "No change"}
+                subTone={growth > 0 ? "is-up" : growth < 0 ? "is-down" : ""}
+              />
+              <DossierRatingBadge
+                label="POT"
+                value={potScore > 0 ? round0(potScore) : potLabel || "—"}
+                tone={`is-pot ${potTone}`}
+                sub={
+                  potScore > 0
+                    ? [potLabel, potGap != null && potGap > 0 ? `+${potGap} upside` : null].filter(Boolean).join(" · ")
+                    : null
+                }
+              />
+            </div>
+          </header>
 
-        <div className="nhlrost-profile-modal__body" ref={modalBodyRef}>
-          <DetailPanelRouter
-            activeTab={activeTab}
-            player={player}
-            storylines={storylines}
-            franchiseState={franchiseState}
-            onRefresh={onRefresh}
-            onCallMeeting={onCallMeeting}
-          />
+          <div className="pdx-tabs-wrap" ref={tabsAnchorRef}>
+            <DetailTabs activeTab={currentTab} setActiveTab={changeTab} />
+          </div>
+
+          <div className="pdx-content" role="tabpanel">
+            <DetailPanelRouter
+              activeTab={currentTab}
+              player={player}
+              storylines={storylines}
+              franchiseState={franchiseState}
+              onRefresh={onRefresh}
+              onCallMeeting={onCallMeeting}
+              canManage={canManage}
+            />
+          </div>
         </div>
       </div>
     </div>
   );
-}
-
-function DetailTabs({ activeTab, setActiveTab }) {
-  return (
-    <nav className="nhlrost-detail-tabs" aria-label="Player detail tabs">
-      {PANEL_TABS.map((tab) => (
-        <button
-          key={tab.value}
-          type="button"
-          className={activeTab === tab.value ? "is-active" : ""}
-          onClick={() => setActiveTab(tab.value)}
-        >
-          {tab.label}
-        </button>
-      ))}
-    </nav>
-  );
-}
-
-function PlayerCharacterLifePanel({ player, franchiseState, onCallMeeting }) {
-  if (!player) {
-    return <EmptyPanel title="No player selected" body="Choose a player from the roster board." />;
-  }
-
-  const pid = String(player.id || player.player_id || player.key || "");
-  const universe = franchiseState?.narrative_universe || {};
-  const meetings = universe?.player_meetings || {};
-  const rosterRow = (meetings.roster || []).find((r) => String(r?.player_id || "") === pid) || null;
-  const universePlayer =
-    universe?.players?.find?.((row) => String(row?.player_id || "") === pid) || rosterRow || null;
-  const nicheBadges = Array.isArray(universePlayer?.niche_abilities) ? universePlayer.niche_abilities : [];
-  const dossier =
-    universe?.human_dossiers?.[pid] ||
-    universe?.players?.find?.((row) => String(row?.player_id || "") === pid)?.human_dossier ||
-    null;
-
-  if (!dossier) {
-    return (
-      <EmptyPanel
-        title="Character profile unavailable"
-        body="Human universe data has not synced for this player yet. Advance the calendar to populate off-ice context."
-        compact
-      />
-    );
-  }
-
-  const charBlock = dossier.character || {};
-  const stateBlock = dossier.current_state || {};
-  const lifeBlock = dossier.life || {};
-  const mw = dossier.mental_wellbeing || {};
-
-  return (
-    <section className="nhlrost-player-overview nhlrost-character-life">
-      {rosterRow?.relationship ? (
-        <article className="nhlrost-profile-zone nhlrost-profile-zone--relationship">
-          <header className="nhlrost-profile-zone__head">
-            <p>GM Relationship</p>
-            <h3>{rosterRow.relationship.label || "—"}</h3>
-          </header>
-          <p className="nhlrost-muted-text">{rosterRow.relationship.detail || "No major friction on file."}</p>
-          {typeof onCallMeeting === "function" ? (
-            <button type="button" className="nhlrost-call-meeting-btn" onClick={() => onCallMeeting(pid)}>
-              Call Meeting
-            </button>
-          ) : null}
-        </article>
-      ) : null}
-      <article className="nhlrost-profile-zone nhlrost-profile-zone--character">
-        <header className="nhlrost-profile-zone__head">
-          <p>Character</p>
-          <h3>{charBlock.headline || "—"}</h3>
-        </header>
-        {charBlock.summary_line ? <p className="nhlrost-muted-text">{charBlock.summary_line}</p> : null}
-        {nicheBadges.length ? (
-          <div className="nhlrost-media-tags">
-            {nicheBadges.map((n) => (
-              <span key={String(n.id || n.label)} className="nhlrost-media-tag">{String(n.label || n.id)}</span>
-            ))}
-          </div>
-        ) : null}
-        <div className="nhlrost-character-trait-grid">
-          {(charBlock.traits || []).map((trait) => (
-            <InfoPair key={trait.label} label={trait.label} value={trait.tier || "—"} />
-          ))}
-        </div>
-      </article>
-
-      <article className="nhlrost-profile-zone">
-        <header className="nhlrost-profile-zone__head">
-          <p>Current State</p>
-          <h3>
-            Base {stateBlock.base_ovr ?? "—"} · Current {stateBlock.current_ovr ?? "—"}
-            {stateBlock.readiness_delta ? ` (${stateBlock.readiness_delta > 0 ? "+" : ""}${stateBlock.readiness_delta})` : ""}
-          </h3>
-        </header>
-        <MetricStrip>
-          <Metric label="Morale" value={stateBlock.morale_tier || "—"} />
-          <Metric label="Confidence" value={stateBlock.confidence_tier || "—"} />
-          <Metric label="Role satisfaction" value={stateBlock.role_satisfaction_tier || "—"} />
-          <Metric label="Pressure" value={stateBlock.pressure_label || "Settled"} tone={stateBlock.pressure_tier >= 3 ? "bad" : stateBlock.pressure_tier >= 2 ? "warn" : "neutral"} />
-        </MetricStrip>
-        {(dossier.pressure_drivers || []).length ? (
-          <ul className="nhlrost-character-drivers">
-            {dossier.pressure_drivers.map((driver) => (
-              <li key={driver.label}>{driver.label}</li>
-            ))}
-          </ul>
-        ) : null}
-      </article>
-
-      <article className="nhlrost-profile-zone">
-        <header className="nhlrost-profile-zone__head">
-          <p>Life</p>
-          <h3>{lifeBlock.summary || "—"}</h3>
-        </header>
-        <MetricStrip>
-          <Metric label="City attachment" value={lifeBlock.city_attachment_tier || "—"} />
-          <Metric label="Home stability" value={lifeBlock.home_stability_tier || "—"} />
-          <Metric label="Relocation" value={lifeBlock.relocation_tier || "—"} />
-        </MetricStrip>
-      </article>
-
-      {mw?.state ? (
-        <article className="nhlrost-profile-zone">
-          <header className="nhlrost-profile-zone__head">
-            <p>Mental wellbeing</p>
-            <h3>{mw.tier || "—"}</h3>
-          </header>
-          <p className="nhlrost-muted-text">Private team information — not a character judgment.</p>
-        </article>
-      ) : null}
-    </section>
-  );
-}
-
-function DetailPanelRouter({ activeTab, player, storylines, franchiseState, onRefresh, onCallMeeting }) {
-  if (activeTab === "overview") return <PlayerOverviewPanel player={player} franchiseState={franchiseState} />;
-  if (activeTab === "character") return <PlayerCharacterLifePanel player={player} franchiseState={franchiseState} onCallMeeting={onCallMeeting} />;
-  if (activeTab === "performance") return <ProductionPanel player={player} franchiseState={franchiseState} />;
-  if (activeTab === "development") return <DevelopmentPanel player={player} />;
-  if (activeTab === "contract") return <ContractPanel player={player} />;
-  if (activeTab === "media") return <MediaPanel player={player} storylines={storylines} franchiseState={franchiseState} />;
-  if (activeTab === "career") return <CareerPanel player={player} storylines={storylines} franchiseState={franchiseState} />;
-  if (activeTab === "moves") return <UsagePanel player={player} onRefresh={onRefresh} />;
-
-  return <PlayerOverviewPanel player={player} franchiseState={franchiseState} />;
 }
 
 function resolveRosterTeamToken(franchiseState) {
@@ -7669,6 +7971,15 @@ export function RosterScreen() {
                 />
 
                 <LeaguePoolSegmented value={leaguePoolFilter} onChange={handleLeaguePoolChange} />
+                {leaguePoolFilter === "rights" && typeof setScreen === "function" ? (
+                  <button
+                    type="button"
+                    className="nhlrost-sign-prospects-btn"
+                    onClick={() => setScreen(SCREENS.PROSPECT_SIGNING)}
+                  >
+                    Sign prospects (ELC)
+                  </button>
+                ) : null}
               </>
             ) : null}
 
@@ -11477,7 +11788,23 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-profile-readout p,
-      .nhlrost-muted-text {
+.nhlrost-move-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 0.6rem; }
+      .nhlrost-move-card { display: flex; align-items: center; gap: 0.65rem; padding: 0.7rem 0.85rem; text-align: left; border-radius: 8px; border: 1px solid rgba(19, 216, 231, 0.28); background: rgba(8, 22, 34, 0.85); color: #e8f4fa; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+      .nhlrost-move-card:hover:not(:disabled) { border-color: #13d8e7; background: rgba(19, 216, 231, 0.08); }
+      .nhlrost-move-card--down { border-color: rgba(233, 168, 60, 0.32); }
+      .nhlrost-move-card--down:hover:not(:disabled) { border-color: #e9a83c; background: rgba(233, 168, 60, 0.08); }
+      .nhlrost-move-card:disabled { opacity: 0.45; cursor: not-allowed; }
+      .nhlrost-move-card__arrow { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; font-size: 0.8rem; background: rgba(19, 216, 231, 0.14); color: #13d8e7; flex: 0 0 auto; }
+      .nhlrost-move-card--down .nhlrost-move-card__arrow { background: rgba(233, 168, 60, 0.14); color: #e9a83c; }
+      .nhlrost-move-card__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+      .nhlrost-move-card__text strong { font-family: "Barlow Condensed", sans-serif; font-size: 1rem; letter-spacing: 0.04em; text-transform: uppercase; }
+      .nhlrost-move-card__text small { color: #8fb3c4; font-size: 0.72rem; }
+      .nhlrost-move-confirm { margin-bottom: 0.75rem; padding: 0.8rem 0.9rem; border-radius: 8px; border: 1px solid #13d8e7; background: rgba(19, 216, 231, 0.07); }
+      .nhlrost-move-confirm--down { border-color: #e9a83c; background: rgba(233, 168, 60, 0.07); }
+      .nhlrost-move-confirm__title { margin: 0 0 4px; font-family: "Barlow Condensed", sans-serif; font-size: 1.05rem; letter-spacing: 0.04em; text-transform: uppercase; color: #e8f4fa; }
+      .nhlrost-move-confirm__body { margin: 0 0 0.6rem; color: #9fc0cf; font-size: 0.78rem; }
+      .nhlrost-move-confirm__actions { display: flex; gap: 0.5rem; }
+            .nhlrost-muted-text {
         margin: 0;
         color: var(--muted);
         font-size: 0.82rem;
@@ -12107,6 +12434,18 @@ function RosterScreenStyles() {
       .nhlrost-command-bar {
         min-height: 0;
         padding: 8px 12px;
+      }
+
+      .nhlrost-sign-prospects-btn {
+        min-height: 38px; padding: 0 14px; border-radius: 8px; cursor: pointer;
+        border: 1px solid rgba(233, 168, 60, 0.55); background: rgba(233, 168, 60, 0.14);
+        color: #f5c26b; font-weight: 900; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+      }
+      .nhlrost-sign-prospects-btn:hover { background: rgba(233, 168, 60, 0.24); }
+      .nhlrost-board-row__ovr { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+      .nhlrost-pot-mini {
+        font-size: 10px; font-weight: 900; letter-spacing: 0.04em; white-space: nowrap;
+        color: #f5c26b; line-height: 1;
       }
 
       /* CONTRACT was clipped at 72px and AVAIL truncated every value while

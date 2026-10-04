@@ -140,6 +140,21 @@ def _reattach_to_juniors(league: Any, player: Any) -> bool:
     return True
 
 
+def _waiver_block_reason(player: Any, team: Any) -> Optional[str]:
+    """Why this player cannot be exposed to waivers (None when he can)."""
+    from services.contract_economy import can_waive_or_bury, is_compliance_protected
+
+    try:
+        ok, why = can_waive_or_bury(player)
+        if not ok:
+            return str(why)
+        if is_compliance_protected(player, team):
+            return "Core player — the front office won't expose him to waivers"
+    except Exception:
+        return None
+    return None
+
+
 def available_roster_moves(session: Any, player_id: str) -> Dict[str, Any]:
     from services.contract_economy import (
         has_active_contract,
@@ -163,24 +178,30 @@ def available_roster_moves(session: Any, player_id: str) -> Dict[str, Any]:
         or ELC_SLIDE_GAMES_THRESHOLD
     )
     actions: List[Dict[str, Any]] = []
+    nhl_full = len([p for p in (getattr(team, "roster", None) or []) if not getattr(p, "retired", False)]) >= 23
+    full_reason = "NHL roster is full (23) — send a player down first" if nhl_full else None
 
     if loc == "nhl":
+        needs_waivers = bool(is_waiver_required_for_assignment(player, "nhl", "ahl", league))
+        waiver_block = _waiver_block_reason(player, team) if needs_waivers else None
         actions.append({
             "id": "send_down_ahl",
             "label": "Send to AHL",
-            "enabled": True,
-            "requires_waivers": bool(
-                is_waiver_required_for_assignment(player, "nhl", "ahl", league)
-            ),
+            "direction": "down",
+            "destination": "AHL",
+            "enabled": waiver_block is None,
+            "reason": waiver_block,
+            "requires_waivers": needs_waivers,
             "waiver_exempt": bool(is_waiver_exempt(player, team, league)),
         })
         actions.append({
             "id": "send_down_echl",
             "label": "Send to ECHL",
-            "enabled": True,
-            "requires_waivers": bool(
-                is_waiver_required_for_assignment(player, "nhl", "ahl", league)
-            ),
+            "direction": "down",
+            "destination": "ECHL",
+            "enabled": waiver_block is None,
+            "reason": waiver_block,
+            "requires_waivers": needs_waivers,
             "waiver_exempt": bool(is_waiver_exempt(player, team, league)),
             "note": "Waivers apply the same as an AHL assignment when required",
         })
@@ -188,6 +209,8 @@ def available_roster_moves(session: Any, player_id: str) -> Dict[str, Any]:
             actions.append({
                 "id": "return_junior",
                 "label": f"Return to juniors (slide if <{slide_threshold} NHL GP)",
+                "direction": "down",
+                "destination": "Juniors",
                 "enabled": True,
                 "nhl_gp": nhl_gp,
                 "slide_games_threshold": slide_threshold,
@@ -197,11 +220,16 @@ def available_roster_moves(session: Any, player_id: str) -> Dict[str, Any]:
         actions.append({
             "id": "call_up_ahl",
             "label": "Call up to NHL",
-            "enabled": True,
+            "direction": "up",
+            "destination": "NHL",
+            "enabled": not nhl_full,
+            "reason": full_reason,
         })
         actions.append({
             "id": "send_down_echl",
             "label": "Assign to ECHL",
+            "direction": "down",
+            "destination": "ECHL",
             "enabled": True,
             "requires_waivers": False,
         })
@@ -209,12 +237,17 @@ def available_roster_moves(session: Any, player_id: str) -> Dict[str, Any]:
         actions.append({
             "id": "call_up_echl_ahl",
             "label": "Call up to AHL",
+            "direction": "up",
+            "destination": "AHL",
             "enabled": True,
         })
         actions.append({
             "id": "call_up_ahl",
             "label": "Call up to NHL",
-            "enabled": True,
+            "direction": "up",
+            "destination": "NHL",
+            "enabled": not nhl_full,
+            "reason": full_reason,
             "note": "Direct NHL recall from ECHL",
         })
     elif loc.startswith("junior") or loc == "prospect_pool":
@@ -222,21 +255,62 @@ def available_roster_moves(session: Any, player_id: str) -> Dict[str, Any]:
         actions.append({
             "id": "call_up_junior",
             "label": "Call up from juniors (NHL)",
-            "enabled": bool(signed),
-            "reason": None if signed else "Sign ELC before an NHL recall",
+            "direction": "up",
+            "destination": "NHL",
+            "enabled": bool(signed) and not nhl_full,
+            "reason": None if signed and not nhl_full else ("Sign ELC before an NHL recall" if not signed else full_reason),
             "nhl_gp": nhl_gp,
             "slide_games_threshold": slide_threshold,
             "slide_note": f"ELC year slides if sent back before {slide_threshold} NHL games",
         })
 
+    lineup_slot = None
+    lineup_mode = "auto"
+    try:
+        from services.lineup_integrity import saved_even_strength, user_lineup_slot_for
+
+        if saved_even_strength(session) is not None:
+            lineup_mode = "saved"
+            lineup_slot = user_lineup_slot_for(session, player) if loc == "nhl" else None
+    except Exception:
+        pass
+
     return {
         "ok": True,
         "player_id": _pid(player),
+        "player_name": _player_name(player),
         "location": loc,
+        "lineup_slot": lineup_slot,
+        "lineup_mode": lineup_mode,
         "age": age,
         "nhl_gp": nhl_gp,
         "slide_games_threshold": slide_threshold,
         "actions": actions,
+    }
+
+
+def _live_waivers(session: Any) -> bool:
+    try:
+        from services.waivers import _in_season
+
+        return _in_season(session)
+    except Exception:
+        return False
+
+
+def _waive_live(session: Any, team: Any, player: Any, reason: str) -> Dict[str, Any]:
+    from services.waivers import place_on_waivers
+
+    res = place_on_waivers(session, team, player, reason=reason, manual=True)
+    if not res.get("ok"):
+        return res
+    return {
+        "ok": True,
+        "player_id": _pid(player),
+        "moved": "on_waivers",
+        "waivers": True,
+        "message": "Placed on waivers — 24-hour claim window. If he clears he reports to your AHL club.",
+        "waiver_entry": res.get("waiver_entry"),
     }
 
 
@@ -274,6 +348,8 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": False, "reason": "Player is not on the AHL/ECHL list"}
         if loc == "nhl":
             result = unbury_player_contract(team, player, league)
+            if result.get("ok") and not result.get("moved"):
+                result["moved"] = "ahl_to_nhl"
         else:
             roster = list(getattr(team, "roster", None) or [])
             if len(roster) >= 23:
@@ -317,7 +393,10 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
                     "requires_waivers": True,
                     "hint": "Confirm waivers to assign to the ECHL",
                 }
-            if force_waive and is_waiver_required_for_assignment(player, "nhl", "ahl", league):
+            echl_waived = bool(force_waive and is_waiver_required_for_assignment(player, "nhl", "ahl", league))
+            if echl_waived and _live_waivers(session):
+                return _waive_live(session, team, player, "send_down_echl")
+            if echl_waived:
                 w = expose_player_to_waivers(team, player, league)
                 if not w.get("ok"):
                     return w
@@ -326,6 +405,7 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
                 return buried
             _remove_from_list(team, "roster", player)
         else:
+            echl_waived = False
             _remove_from_list(team, "ahl_roster", player)
         try:
             player.roster_location = "echl"
@@ -338,7 +418,7 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
             "ok": True,
             "player_id": _pid(player),
             "moved": f"{loc}_to_echl",
-            "waivers": bool(force_waive and loc == "nhl"),
+            "waivers": echl_waived,
         }
     elif action == "send_down_ahl":
         if loc != "nhl":
@@ -350,7 +430,10 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
                 "requires_waivers": True,
                 "hint": "Confirm waivers to assign to the AHL",
             }
-        if force_waive and is_waiver_required_for_assignment(player, "nhl", "ahl", league):
+        waived = bool(force_waive and is_waiver_required_for_assignment(player, "nhl", "ahl", league))
+        if waived and _live_waivers(session):
+            return _waive_live(session, team, player, "send_down")
+        if waived:
             w = expose_player_to_waivers(team, player, league)
             if not w.get("ok"):
                 return w
@@ -365,7 +448,7 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             pass
         sync_team_cap_fields(team, league)
-        result = {**buried, "moved": "nhl_to_ahl", "waivers": bool(force_waive)}
+        result = {**buried, "moved": "nhl_to_ahl", "waivers": waived}
     elif action == "call_up_junior":
         if not (loc.startswith("junior") or loc == "prospect_pool"):
             return {"ok": False, "reason": "Player is not in juniors / prospect pool"}
@@ -434,6 +517,11 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
     else:
         return {"ok": False, "reason": f"Unknown roster move: {action}"}
 
+    if result.get("ok"):
+        result.update(_move_summary(result.get("moved"), player, bool(result.get("waivers"))))
+        result["player_name"] = _player_name(player)
+        result["lineup"] = _sync_lineup_after_move(session, player, action, str(result.get("moved") or ""))
+
     try:
         from services.franchise_sim import invalidate_session_payload_caches
 
@@ -442,4 +530,90 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
         pass
     avail = available_roster_moves(session, player_id)
     result["available_moves"] = avail.get("actions") or []
+    result["location"] = avail.get("location")
     return result
+
+
+_DESTINATION_LABELS = {
+    "nhl": "NHL",
+    "ahl": "AHL",
+    "echl": "ECHL",
+    "junior": "Juniors",
+}
+
+
+def _player_name(player: Any) -> str:
+    ident = getattr(player, "identity", None)
+    return str(getattr(ident, "name", None) or getattr(player, "name", None) or "Player")
+
+
+def _move_summary(moved: Any, player: Any, waived: bool) -> Dict[str, Any]:
+    """One headline shape for every call-up / send-down so the UI can render them alike."""
+    code = str(moved or "")
+    src, _, dst = code.partition("_to_")
+    src_label = _DESTINATION_LABELS.get(src.split(":")[0], src.upper() or "—")
+    dst_label = _DESTINATION_LABELS.get(dst, dst.upper() or "—")
+    direction = "up" if dst == "nhl" or (src == "echl" and dst == "ahl") else "down"
+    name = _player_name(player)
+    if direction == "up":
+        headline = f"{name} called up to the {dst_label}"
+    elif dst == "junior":
+        headline = f"{name} returned to juniors"
+    else:
+        headline = (
+            f"{name} placed on waivers and assigned to the {dst_label}"
+            if waived
+            else f"{name} assigned to the {dst_label}"
+        )
+    return {
+        "direction": direction,
+        "from_level": src_label,
+        "to_level": dst_label,
+        "headline": headline,
+    }
+
+
+def _sync_lineup_after_move(session: Any, player: Any, action: str, moved: str) -> Dict[str, Any]:
+    """Keep the saved Edit Lines sheet in step with the NHL roster.
+
+    A call-up drops into an open slot of his position when one exists (otherwise
+    he is an extra in the Edit Lines pool). A send-down vacates his slot, which
+    is left open and flagged so the GM picks the replacement.
+    """
+    try:
+        from services.lineup_integrity import player_key, reconcile_user_lineup
+        from services.franchise_sim import _log_lineup_integrity
+
+        pid = player_key(player)
+        to_nhl = moved.endswith("_to_nhl") or (action == "call_up_ahl" and moved == "")
+        report = reconcile_user_lineup(
+            session,
+            auto_fill=False,
+            prefer_ids=[pid] if to_nhl else [],
+            reason=f"roster_move:{action}",
+        )
+        _log_lineup_integrity(session, report, reason="roster move")
+    except Exception as exc:  # pragma: no cover - lineup sync must never undo a legal move
+        return {"ok": False, "error": str(exc)}
+
+    placed = next((row for row in report.get("placed") or [] if row.get("player_id") == pid), None)
+    vacated = [row for row in report.get("vacated") or [] if str(row.get("player_id") or "") in (pid, str(getattr(player, "id", "") or ""))]
+    if not report.get("has_lineup"):
+        status = "auto_lines"
+    elif placed:
+        status = "placed"
+    elif to_nhl:
+        status = "extra"
+    elif vacated:
+        status = "vacated"
+    else:
+        status = "unchanged"
+    return {
+        "ok": True,
+        "status": status,
+        "slot": placed.get("label") if placed else None,
+        "vacated": [row.get("label") for row in vacated],
+        "gaps": list(report.get("gap_labels") or []),
+        "fillable": bool(report.get("fillable", True)),
+        "unfillable": list(report.get("unfillable") or []),
+    }

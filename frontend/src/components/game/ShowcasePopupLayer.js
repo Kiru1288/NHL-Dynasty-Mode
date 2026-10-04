@@ -3,6 +3,7 @@ import { useGameUI } from "../../game/GameUIContext";
 import { SCREENS } from "../../game/constants";
 import { isFranchiseCinematicPopup } from "../../events/franchiseEventKinds";
 import { getTeamLogoSrc, toLogoUrl } from "../../utils/teamLogos";
+import { claimWaiverPlayer } from "../../services/franchiseService";
 
 function resolveAlertTheme(pop) {
   const theme = pop.theme || pop.presentation_type || "";
@@ -392,9 +393,6 @@ function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [], que
         <span className="media-alert__source">{source}</span>
         {showKind ? <span className="media-alert__dateline-part">{kindLabel}</span> : null}
         {pop.calendar_iso ? <span className="media-alert__dateline-part">{pop.calendar_iso}</span> : null}
-        {queueCount > 1 ? (
-          <span className="media-alert__dateline-part media-alert__dateline-queue">{queueCount - 1} more queued</span>
-        ) : null}
         <button type="button" className="media-alert__close" onClick={onDismiss} aria-label="Dismiss alert">
           ×
         </button>
@@ -479,7 +477,9 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
         ? demand.disruptor
           ? "Locker-room disruptor"
           : "Trade demand"
-        : hasGames
+        : pop.kind === "waiver"
+          ? "On waivers"
+          : hasGames
           ? "Away from team"
           : pop.legal_severity === "major"
             ? "Under review"
@@ -532,12 +532,16 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
       (Array.isArray(pop.impact_lines) && pop.impact_lines.length)
   );
 
-  const actions = [
-    { id: "storylines", label: "Open Storylines", primary: !demand },
-    { id: demand ? "tradehub" : "roster", label: demand ? "Open Trade Hub" : "View Player", primary: Boolean(demand) },
-  ];
-  if (pop.is_user_team) {
-    actions.unshift({ id: "calendar", label: "View Calendar" });
+  let actions;
+  if (Array.isArray(pop.actions)) {
+    actions = pop.actions.filter((a) => a && a.id);
+  } else if (pop.kind === "breaking_news" || pop.kind === "waiver") {
+    actions = [];
+  } else {
+    actions = [
+      { id: "storylines", label: "Open Storylines", primary: !demand },
+      { id: demand ? "tradehub" : "roster", label: demand ? "Open Trade Hub" : "View Player", primary: Boolean(demand) },
+    ];
   }
 
   return (
@@ -875,12 +879,55 @@ function ShowcasePopupStyles() {
         background: var(--ops-panel, rgba(9, 25, 38, 0.98));
         box-shadow: var(--depth-overlay, 0 24px 70px rgba(0, 0, 0, 0.42));
         overflow: hidden;
-        display: grid;
-        grid-template-rows: auto minmax(0, 1fr) auto;
+        display: flex;
+        flex-direction: column;
       }
+      .showcase-popup__panel > .showcase-popup__body { flex: 1 1 auto; }
       .showcase-popup__panel--media,
       .showcase-popup__panel--trade-wire {
-        width: min(560px, calc(100vw - 24px));
+        width: min(520px, calc(100vw - 24px));
+        max-height: min(78dvh, 720px);
+      }
+      .showcase-popup__panel--media .showcase-popup__body { padding: 12px 14px 10px; }
+      .alert-queue-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 12px;
+        border-bottom: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
+        background: rgba(0, 0, 0, 0.28);
+        font-size: 0.68rem;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--ops-text-secondary, #8096a8);
+      }
+      .alert-queue-bar strong { color: var(--ops-text, #e9f7fb); }
+      .alert-queue-bar__flash { color: var(--ops-cyan, #13d8e7); text-transform: none; letter-spacing: 0.02em; }
+      .alert-queue-bar__spacer { flex: 1; }
+      .alert-queue-bar__btn {
+        border: 1px solid var(--ops-grid-2, rgba(115, 229, 241, 0.25));
+        background: transparent;
+        color: var(--ops-text, #e9f7fb);
+        border-radius: 4px;
+        padding: 3px 8px;
+        font: inherit;
+        cursor: pointer;
+      }
+      .alert-queue-bar__btn:hover { border-color: var(--ops-cyan, #13d8e7); color: var(--ops-cyan, #13d8e7); }
+      .alert-flash {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        z-index: 4000;
+        max-width: 360px;
+        padding: 10px 14px;
+        border-radius: 6px;
+        border-left: 3px solid var(--ops-cyan, #13d8e7);
+        background: var(--ops-panel, rgba(9, 25, 38, 0.98));
+        color: var(--ops-text, #e9f7fb);
+        font-size: 0.82rem;
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
       }
       .showcase-popup__head {
         padding: 10px 14px 8px;
@@ -1280,6 +1327,13 @@ export function ShowcasePopupLayer() {
       ]
     : rawQueue;
   const first = visiblePopups[0];
+  const [flash, setFlash] = useState("");
+
+  useEffect(() => {
+    if (!flash) return undefined;
+    const t = window.setTimeout(() => setFlash(""), 4500);
+    return () => window.clearTimeout(t);
+  }, [flash]);
 
   const dismiss = useCallback(() => {
     if (!first) return;
@@ -1300,9 +1354,21 @@ export function ShowcasePopupLayer() {
     return () => window.removeEventListener("keydown", onKey);
   }, [first, dismiss]);
 
-  if (!first) return null;
+  if (!first) {
+    return flash ? (
+      <>
+        <ShowcasePopupStyles />
+        <div className="alert-flash" role="status">{flash}</div>
+      </>
+    ) : null;
+  }
 
   const kind = first.kind;
+  const dismissAll = () => {
+    const ids = visiblePopups.map((p) => String(p.id || p.popup_id || "").trim()).filter(Boolean);
+    if (ids.length) onDismissShowcasePopups(ids);
+    else dismiss();
+  };
   const theme = resolveAlertTheme(first);
 
   const tradeQueueIds = visiblePopups.filter(isTradePopup).map((p) => p.id).filter(Boolean);
@@ -1312,7 +1378,21 @@ export function ShowcasePopupLayer() {
 
   const handleAction = (act) => {
     dismiss();
-    if (act.id === "storylines") setScreen?.(SCREENS.STORYLINES);
+    if (act.id === "waiver_claim") {
+      const pid = act.player_id || first.player_id;
+      claimWaiverPlayer(pid, true)
+        .then((r) =>
+          setFlash(
+            r?.ok
+              ? `Claim placed on ${first.player_name || "player"} — resolves when the 24h window closes.`
+              : r?.reason || "Claim failed"
+          )
+        )
+        .catch((e) => setFlash(e?.message || "Claim failed"));
+      return;
+    }
+    if (act.id === "waivers") setScreen?.(SCREENS.ROSTER);
+    else if (act.id === "storylines") setScreen?.(SCREENS.STORYLINES);
     else if (act.id === "roster") setScreen?.(SCREENS.ROSTER);
     else if (act.id === "calendar") setScreen?.(SCREENS.CALENDAR);
     else if (act.id === "tradehub") setScreen?.(SCREENS.TRADE);
@@ -1326,6 +1406,7 @@ export function ShowcasePopupLayer() {
     kind === "injury" ||
     kind === "player_meeting" ||
     kind === "breaking_news" ||
+    kind === "waiver" ||
     kind === "fa_decision";
   const isTradeAlert = isMediaAlert && isTradePopup(first);
 
@@ -1350,6 +1431,27 @@ export function ShowcasePopupLayer() {
         aria-labelledby="showcase-popup-title"
         onMouseDown={(event) => event.stopPropagation()}
       >
+        {visiblePopups.length > 1 || flash ? (
+          <div className="alert-queue-bar">
+            {visiblePopups.length > 1 ? (
+              <span className="alert-queue-bar__count">
+                Alert <strong>1</strong> of {visiblePopups.length}
+              </span>
+            ) : null}
+            {flash ? <span className="alert-queue-bar__flash">{flash}</span> : null}
+            <span className="alert-queue-bar__spacer" />
+            {tradeQueueIds.length > 1 ? (
+              <button type="button" className="alert-queue-bar__btn" onClick={dismissAllTrades}>
+                Clear trades ({tradeQueueIds.length})
+              </button>
+            ) : null}
+            {visiblePopups.length > 1 ? (
+              <button type="button" className="alert-queue-bar__btn" onClick={dismissAll}>
+                Dismiss all
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {!isMediaAlert ? (
           <header className="showcase-popup__head">
             <h2 id="showcase-popup-title" className="showcase-popup__title">
@@ -1365,7 +1467,7 @@ export function ShowcasePopupLayer() {
           {kind === "injury" ? (
             <InjuryBody pop={first} onDismiss={dismiss} onAction={handleAction} queueCount={visiblePopups.length} />
           ) : null}
-          {kind === "storyline" || kind === "legal_trouble" || kind === "player_meeting" || kind === "breaking_news" ? (
+          {kind === "storyline" || kind === "legal_trouble" || kind === "player_meeting" || kind === "breaking_news" || kind === "waiver" ? (
             <StorylineBody
               pop={first}
               onDismiss={dismiss}
@@ -1378,7 +1480,7 @@ export function ShowcasePopupLayer() {
           {kind === "fa_decision" ? (
             <FaDecisionBody pop={first} onDismiss={dismiss} onAction={handleAction} queueCount={visiblePopups.length} />
           ) : null}
-          {!["wjc_tournament", "showcase_game", "allstar_game", "injury", "storyline", "legal_trouble", "player_meeting", "breaking_news", "fa_decision"].includes(
+          {!["wjc_tournament", "showcase_game", "allstar_game", "injury", "storyline", "legal_trouble", "player_meeting", "breaking_news", "waiver", "fa_decision"].includes(
             kind
           ) ? (
             <LeagueNoticeBody pop={first} />
@@ -1386,23 +1488,11 @@ export function ShowcasePopupLayer() {
         </div>
         {!isMediaAlert ? (
           <footer className="showcase-popup__foot">
-            {visiblePopups.length > 1 ? (
-              <span className="showcase-popup__queue">+{visiblePopups.length - 1} more after this</span>
-            ) : null}
+            <span />
             <button type="button" className="showcase-popup__btn" onClick={dismiss}>
               Continue
             </button>
           </footer>
-        ) : null}
-        {isMediaAlert && visiblePopups.length > 1 ? (
-          <div className="media-alert__queue">
-            +{visiblePopups.length - 1} more alerts queued
-            {tradeQueueIds.length > 1 ? (
-              <button type="button" className="media-alert__clear-trades" onClick={dismissAllTrades}>
-                Clear all trades
-              </button>
-            ) : null}
-          </div>
         ) : null}
       </div>
     </div>

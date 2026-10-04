@@ -44,8 +44,26 @@ def _merge_simengine_league_news_into_storylines(session: FranchiseSession) -> N
         if not isinstance(raw, dict):
             continue
         _record_storyline(session, raw)
+_POSSESSIVE_S_RE = None
+
+
+def _fix_plural_possessive(text: Any) -> Any:
+    """'Ottawa Senators's' -> 'Ottawa Senators''. Only capitalised words (team names)."""
+    global _POSSESSIVE_S_RE
+    if not isinstance(text, str) or "s's" not in text:
+        return text
+    import re as _re
+
+    if _POSSESSIVE_S_RE is None:
+        _POSSESSIVE_S_RE = _re.compile(r"\b([A-Z][A-Za-z]*s)'s\b")
+    return _POSSESSIVE_S_RE.sub(r"\1'", text)
+
+
 def _record_storyline(session: FranchiseSession, event: Dict[str, Any]) -> None:
     raw = event if isinstance(event, dict) else {}
+    for _k in ("headline", "summary", "short_summary", "title"):
+        if isinstance(raw.get(_k), str):
+            raw[_k] = _fix_plural_possessive(raw[_k])
     ev = _normalize_storyline_payload(raw)
     if not ev.get("headline"):
         return
@@ -81,7 +99,9 @@ def _record_storyline(session: FranchiseSession, event: Dict[str, Any]) -> None:
     try:
         from app.sim_engine.franchise.storyline_engine import _trim_storyline_events  # noqa: WPS433
 
-        session.storyline_events = _trim_storyline_events(list(session.storyline_events), limit=480)
+        session.storyline_events = _trim_storyline_events(
+            list(session.storyline_events), limit=480, protect_team_id=str(getattr(session, "user_team_id", "") or "")
+        )
     except Exception:
         if len(session.storyline_events) > 400:
             session.storyline_events = session.storyline_events[-400:]

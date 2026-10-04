@@ -846,6 +846,22 @@ def infer_role_satisfaction_from_deployment(
     elif deploy.ev_line_rank <= 2 and ovr >= 84 and ratio >= 0.9:
         satisfaction = max(satisfaction, 70.0)
 
+    # Bottom-six forwards live on special teams: a PK or PP2 job is their role, and
+    # being shut out of both is the clearest signal they're replaceable.
+    if not is_defense and deploy.ev_line_rank in (3, 4):
+        st_bonus = 0.0
+        if deploy.pk_unit == 1 or deploy.pk_toi_min_pg >= 1.6:
+            st_bonus += 10.0
+        elif deploy.pk_unit in (2, 3) or deploy.pk_toi_min_pg >= 0.8:
+            st_bonus += 6.0
+        if deploy.pp_unit == 1 or deploy.pp_toi_min_pg >= 2.0:
+            st_bonus += 11.0
+        elif deploy.pp_unit == 2 or deploy.pp_toi_min_pg >= 0.8:
+            st_bonus += 7.0
+        if st_bonus == 0.0 and deploy.gp >= 5:
+            st_bonus = -8.0 if ovr >= 78 else -4.0
+        satisfaction += min(16.0, st_bonus)
+
     if knows_his_place:
         # Spare parts are rarely thrilled, but they don't agitate over depth minutes.
         satisfaction = max(satisfaction, 58.0)

@@ -160,6 +160,45 @@ export async function generateNextSeason() {
   return data;
 }
 
+/** Board of Governors: meeting, rulebook, franchise values, relocation/expansion. */
+export async function getGovernance() {
+  const { data } = await api.get("/api/franchise/governance");
+  return data;
+}
+
+/** @param {{ proposal_id: string, vote: "yes"|"no"|"abstain" }} body */
+export async function voteGovernance(body) {
+  const { data } = await api.post("/api/franchise/governance/vote", body || {});
+  return data;
+}
+
+/** @param {{ proposal_id: string, side: "yes"|"no" }} body */
+export async function lobbyGovernance(body) {
+  const { data } = await api.post("/api/franchise/governance/lobby", body || {});
+  return data;
+}
+
+export async function getProspectRightsDesk() {
+  const { data } = await api.get("/api/franchise/prospect-rights/desk");
+  return data;
+}
+
+export async function getAhlLedger(season) {
+  const { data } = await api.get("/api/franchise/ahl/ledger", { params: season ? { season } : {} });
+  return data;
+}
+
+export async function getAhlLines() {
+  const { data } = await api.get("/api/franchise/ahl/lines");
+  return data;
+}
+
+/** @param {{ lines?: object, auto?: boolean }} body */
+export async function saveAhlLines(body) {
+  const { data } = await api.post("/api/franchise/ahl/lines", body || {});
+  return data;
+}
+
 export async function getLeagueOperations() {
   const { data } = await api.get("/api/franchise/league-operations");
   return data;
@@ -341,6 +380,26 @@ export async function getRosterMoves(playerId) {
 
 export async function moveRosterPlayer(payload) {
   const { data } = await api.post("/api/franchise/roster/move", payload || {});
+  return data;
+}
+
+export async function getNegotiationMeetings(playerId) {
+  const { data } = await api.get(`/api/franchise/negotiation/meetings/${encodeURIComponent(playerId)}`);
+  return data;
+}
+
+export async function runNegotiationMeeting(playerId, kind, option = "") {
+  const { data } = await api.post("/api/franchise/negotiation/meetings", { player_id: playerId, kind, option });
+  return data;
+}
+
+export async function getWaiverWire() {
+  const { data } = await api.get("/api/franchise/waivers");
+  return data;
+}
+
+export async function claimWaiverPlayer(playerId, claim = true) {
+  const { data } = await api.post("/api/franchise/waivers/claim", { player_id: playerId, claim });
   return data;
 }
 
@@ -585,9 +644,9 @@ export async function submitCombineMeeting(body) {
   return data;
 }
 
-export async function getSocialFeed(sessionId) {
+export async function getSocialFeed(sessionId, params = {}) {
   const sid = sessionId || getFranchiseSessionId();
-  const { data } = await api.get(`/api/franchise/${encodeURIComponent(sid)}/social-feed`);
+  const { data } = await api.get(`/api/franchise/${encodeURIComponent(sid)}/social-feed`, { params });
   return data;
 }
 

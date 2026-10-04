@@ -681,6 +681,12 @@ def _simulate_one_game(
         "played_at": _now_iso(),
         "playoff_day": day,
     }
+    try:
+        stars = _accumulate_playoff_player_stats(session, home_id, away_id, int(hs), int(as_), bool(ot), f"{row.get('series_id')}|{game_no}")
+        if stars:
+            entry["stars"] = stars
+    except Exception:
+        pass
     log = list(row.get("game_log") or [])
     log.append(entry)
     row["game_log"] = log
@@ -691,6 +697,113 @@ def _simulate_one_game(
         row["winner_id"] = _winner_id(row)
         row["loser_id"] = _loser_id(row)
     return entry
+
+
+def _accumulate_playoff_player_stats(
+    session: FranchiseSession, home_id: str, away_id: str, hs: int, as_: int, ot: bool, seed: str,
+) -> List[Dict[str, Any]]:
+    """Per-player playoff lines for a score-only playoff game (feeds Conn Smythe, career, feeds).
+
+    Goals/assists go to dressed skaters weighted by role ice time and rating; the
+    starting goalie gets the decision and shots against. Stored on
+    ``session.playoff_player_stats`` with ``stat_scope='playoffs'``."""
+    import random as _random
+    import zlib as _zlib
+
+    from services.lineup_integrity import is_available, player_key, player_name, player_ovr, position_bucket, position_code
+
+    ledger = getattr(session, "playoff_player_stats", None)
+    if not isinstance(ledger, dict) or int(getattr(session, "_playoff_stats_season", 0) or 0) != int(getattr(session, "season_calendar_year", 0) or 0):
+        ledger = {}
+        session._playoff_stats_season = int(getattr(session, "season_calendar_year", 0) or 0)
+    session.playoff_player_stats = ledger
+    rng = _random.Random(_zlib.crc32(f"{getattr(session, 'session_id', '')}|po|{seed}".encode()) & 0xFFFFFFFF)
+    stars: List[Dict[str, Any]] = []
+    for tid, gf, ga in ((home_id, hs, as_), (away_id, as_, hs)):
+        team = (getattr(session, "team_by_id", None) or {}).get(str(tid))
+        if team is None:
+            continue
+        pool = [p for p in (getattr(team, "roster", None) or []) if is_available(p)]
+        fw = sorted([p for p in pool if position_bucket(p) == "F"], key=player_ovr, reverse=True)[:12]
+        dm = sorted([p for p in pool if position_bucket(p) == "D"], key=player_ovr, reverse=True)[:6]
+        gk = sorted([p for p in pool if position_bucket(p) == "G"], key=player_ovr, reverse=True)[:1]
+        toi = {}
+        for i, p in enumerate(fw):
+            toi[player_key(p)] = (19.5, 16.5, 13.5, 10.0)[min(3, i // 3)]
+        for i, p in enumerate(dm):
+            toi[player_key(p)] = (24.5, 20.5, 16.5)[min(2, i // 2)]
+        skaters = fw + dm
+        weights = [(p, toi[player_key(p)] * (player_ovr(p) / 75.0) ** 3 * (1.0 if position_bucket(p) == "F" else 0.45)) for p in skaters]
+
+        def _row(p: Any) -> Dict[str, Any]:
+            pid = player_key(p)
+            r = ledger.get(pid)
+            if r is None:
+                r = {"player_id": pid, "name": player_name(p), "team_id": str(tid), "position": position_code(p), "stat_scope": "playoffs",
+                     "gp": 0, "g": 0, "a": 0, "pts": 0, "sog": 0, "plus_minus": 0, "pim": 0, "toi_sec": 0,
+                     "w": 0, "l": 0, "otl": 0, "ga": 0, "saves": 0, "shots_against": 0, "so": 0}
+                ledger[pid] = r
+            return r
+
+        def _pick(items: List[Any]) -> Any:
+            tot = sum(w for _, w in items)
+            if tot <= 0:
+                return None
+            x = rng.random() * tot
+            for it, w in items:
+                x -= w
+                if x <= 0:
+                    return it
+            return items[-1][0]
+
+        game_pts: Dict[str, int] = {}
+        for p in skaters:
+            r = _row(p)
+            r["gp"] += 1
+            r["toi_sec"] += int(toi[player_key(p)] * 60)
+        shots = max(gf + 14, int(rng.gauss(30, 4)))
+        for _ in range(shots):
+            sh = _pick(weights)
+            if sh is not None:
+                _row(sh)["sog"] += 1
+        for _ in range(gf):
+            sc = _pick(weights)
+            if sc is None:
+                continue
+            _row(sc)["g"] += 1
+            game_pts[player_key(sc)] = game_pts.get(player_key(sc), 0) + 1
+            mates = [(p, w) for p, w in weights if p is not sc]
+            for _a in range(2 if rng.random() < 0.7 else 1):
+                ast = _pick(mates)
+                if ast is None:
+                    break
+                _row(ast)["a"] += 1
+                game_pts[player_key(ast)] = game_pts.get(player_key(ast), 0) + 1
+                mates = [(p, w) for p, w in mates if p is not ast]
+        for p in skaters:
+            r = _row(p)
+            r["pts"] = r["g"] + r["a"]
+        if gk:
+            g = _row(gk[0])
+            opp_shots = max(ga + 14, int(rng.gauss(30, 4)))
+            g["gp"] += 1
+            g["toi_sec"] += 3600 + (600 if ot else 0)
+            g["shots_against"] += opp_shots
+            g["ga"] += ga
+            g["saves"] += max(0, opp_shots - ga)
+            if gf > ga:
+                g["w"] += 1
+                if ga == 0:
+                    g["so"] += 1
+            elif ot:
+                g["otl"] += 1
+            else:
+                g["l"] += 1
+        best = sorted(game_pts.items(), key=lambda kv: -kv[1])[:2]
+        for pid, pts in best:
+            r = ledger.get(pid) or {}
+            stars.append({"player_id": pid, "name": r.get("name"), "team_id": str(tid), "points": pts})
+    return stars
 
 
 def _sort_winners_by_standings(session: FranchiseSession, team_ids: List[str]) -> List[str]:

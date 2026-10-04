@@ -1,0 +1,111 @@
+/* Entry Draft visual language shared by offseason event screens (Combine, Lottery).
+   Same tokens, fonts, panels and buttons as the Entry Draft (.edraft-root). */
+.edraft-skin {
+  --ops-navy: #04101a;
+  --ops-navy-deep: #020a11;
+  --ops-black: #06131f;
+  --ops-panel: rgba(9, 25, 38, 0.94);
+  --ops-panel-2: rgba(12, 35, 52, 0.94);
+  --ops-panel-3: rgba(15, 46, 66, 0.78);
+  --ops-grid: rgba(156, 218, 236, 0.14);
+  --ops-grid-2: rgba(115, 229, 241, 0.25);
+  --ops-grid-strong: rgba(73, 231, 240, 0.5);
+  --ops-text: #e9f7fb;
+  --ops-text-secondary: #8096a8;
+  --ops-text-disabled: #607789;
+  --ops-cyan: #13d8e7;
+  --ops-cyan-soft: rgba(19, 216, 231, 0.13);
+  --ops-gold: #e9a83c;
+  --ops-gold-soft: rgba(233, 168, 60, 0.14);
+  --ops-success: #52df94;
+  --ops-injury: #ff606d;
+  --ed-head: "Barlow Condensed", var(--font-broadcast-display), "Archivo Black", "Rajdhani", "Arial Narrow", sans-serif;
+  background:
+    radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.12), transparent 30%),
+    radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.08), transparent 26%),
+    linear-gradient(180deg, #06131f 0%, #020a11 100%) !important;
+  color: #e9f7fb;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+}
+.edraft-skin h1,
+.edraft-skin h2,
+.edraft-skin h3,
+.edraft-skin h4,
+.edraft-skin .dlot-title,
+.edraft-skin .dlot-eyebrow,
+.edraft-skin .dcb-panel-head {
+  font-family: var(--ed-head);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+/* Combine: no calendar side rail — full-width like the Entry Draft floor. */
+.edraft-skin.nhlcal-root {
+  grid-template-columns: minmax(0, 1fr);
+}
+.edraft-skin .nhlcal-sidebar {
+  display: none;
+}
+.edraft-skin .nhlcal-topbar {
+  border-bottom: 1px solid rgba(156, 218, 236, 0.14);
+  background: linear-gradient(180deg, rgba(9, 25, 38, 0.94), rgba(4, 16, 26, 0.6));
+}
+.edraft-skin .dcb-panel-card,
+.edraft-skin .dlot-panel,
+.edraft-skin .dlot-board-col,
+.edraft-skin .dlot-results {
+  border: 1px solid rgba(156, 218, 236, 0.14);
+  border-radius: 10px;
+  background: rgba(9, 25, 38, 0.94);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.edraft-skin .dcb-tab-bar button,
+.edraft-skin .dlot-chip {
+  font-family: var(--ed-head);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.edraft-skin .dlot-cta-btn,
+.edraft-skin .dlot-secondary-btn,
+.edraft-skin .dlot-skip-btn,
+.edraft-skin .dlot-ghost-btn {
+  font-family: var(--ed-head);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border-radius: 8px;
+}
+.edraft-skin .dlot-cta-btn {
+  background: linear-gradient(180deg, #f3b94f, #e9a83c);
+  color: #1a1206;
+  border: 1px solid #e9a83c;
+  font-weight: 900;
+}
+.edraft-skin .dlot-secondary-btn,
+.edraft-skin .dlot-skip-btn,
+.edraft-skin .dlot-ghost-btn {
+  background: rgba(19, 216, 231, 0.08);
+  color: #13d8e7;
+  border: 1px solid rgba(19, 216, 231, 0.35);
+}
+/* Combine testing table */
+.dcb-testing { overflow: auto; }
+.dcb-test-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.dcb-test-table th {
+  position: sticky; top: 0; z-index: 1;
+  background: #061522; color: #8096a8;
+  font-family: "Barlow Condensed", sans-serif; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 7px 8px; text-align: right; cursor: pointer; white-space: nowrap;
+  border-bottom: 1px solid rgba(156, 218, 236, 0.14);
+}
+.dcb-test-table th:first-child { text-align: left; }
+.dcb-test-table th.is-sorted { color: #13d8e7; }
+.dcb-test-table td {
+  padding: 6px 8px; text-align: right; white-space: nowrap;
+  border-bottom: 1px solid rgba(156, 218, 236, 0.07);
+  font-variant-numeric: tabular-nums;
+}
+.dcb-test-table td span { display: block; font-size: 10px; color: #607789; }
+.dcb-test-table td.who { text-align: left; }
+.dcb-test-table td.who strong { display: block; }
+.dcb-test-table td.hi { color: #52df94; }
+.dcb-test-table td.lo { color: #ff606d; }

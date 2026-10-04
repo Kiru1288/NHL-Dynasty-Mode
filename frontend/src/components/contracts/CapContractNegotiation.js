@@ -18,6 +18,7 @@ import {
   agentDifficultyTone,
   resolveAgentDealDifficulty,
 } from "../../utils/playerAgentDisplay";
+import NegotiationMeetingPanel from "./NegotiationMeetingPanel";
 
 function safeNum(v, fallback = 0) {
   const n = Number(v);
@@ -148,12 +149,18 @@ export default function CapContractNegotiation({
   }, [row?.player_id, row?.id, ask.aav, ask.years]);
 
   const offerAavNum = safeNum(offerAav, ask.aav);
-  const offerYearsNum = Math.max(1, safeNum(offerYears, ask.years));
-  const offerBonusNum = Math.max(0, safeNum(offerBonus, 0));
-  const offerCapHitNum = computeOfferCapHitM(offerAavNum, offerYearsNum, offerBonusNum);
+  const offerYearsNum = Math.min(
+    Math.max(1, Number(signingBonusElig?.max_term_own || 7)),
+    Math.max(1, safeNum(offerYears, ask.years))
+  );
+  const maxTerm = Math.max(1, Number(signingBonusElig?.max_term_own || 7));
+  const termOptions = Array.from({ length: maxTerm }, (_, i) => i + 1);
   const bonusAllowed = Boolean(signingBonusElig?.eligible);
-  const bonusMaxPct = Number(signingBonusElig?.max_bonus_pct || 0);
-  const bonusMaxM = Math.max(0, offerAavNum * offerYearsNum * (bonusMaxPct || 0.08));
+  const bonusMaxPct = bonusAllowed ? Number(signingBonusElig?.max_bonus_pct || 0) : 0;
+  const bonusMaxM = Math.max(0, Math.floor(offerAavNum * Math.min(offerYearsNum, maxTerm) * bonusMaxPct * 40) / 40);
+  // Never send more bonus than the rules allow (the slider clamps, the draft value must too).
+  const offerBonusNum = Math.min(bonusMaxM, Math.max(0, safeNum(offerBonus, 0)));
+  const offerCapHitNum = computeOfferCapHitM(offerAavNum, offerYearsNum, offerBonusNum);
   const clauseAsk =
     response?.evaluation?.preferred_clause ||
     row?.clause_ask ||
@@ -236,7 +243,10 @@ export default function CapContractNegotiation({
         ? `${agentName}: terms changed — Talk to agent or submit again for an updated read.`
         : `${agentName} represents ${safeText(row?.name, "the player")}. Set AAV and years, then submit or talk to agent.`;
 
-  const sliderMax = Math.max(12, ask.aav * 1.45, offerAavNum, safeNum(row?.aav_m, 1) * 1.8);
+  const sliderMax = Math.min(
+    Number(signingBonusElig?.max_salary_m || 99),
+    Math.max(12, ask.aav * 1.45, offerAavNum, safeNum(row?.aav_m, 1) * 1.8)
+  );
   const sliderMin = 0.775;
 
   const buildPayload = useCallback(
@@ -552,6 +562,13 @@ export default function CapContractNegotiation({
         </aside>
 
         <section className="cap-nego-desk__controls">
+          <NegotiationMeetingPanel
+            playerId={row?.player_id || row?.id}
+            compact
+            onChanged={() => {
+              runPreview();
+            }}
+          />
           <div className="cap-nego-meter" aria-label="Deal interest">
             <div className="cap-nego-meter-head">
               <span>Deal interest</span>
@@ -655,12 +672,18 @@ export default function CapContractNegotiation({
                 type="range"
                 className="cap-nego__range"
                 min={0}
-                max={Math.max(0.25, bonusMaxM)}
+                max={bonusMaxM}
                 step="0.025"
-                value={Math.min(bonusMaxM, offerBonusNum)}
+                value={offerBonusNum}
                 disabled={busy}
                 onChange={(e) => setOfferBonus(e.target.value)}
               />
+            ) : null}
+            {bonusAllowed ? (
+              <p className="cap-nego-desk__cap-note">
+                Max {formatMoneyM(bonusMaxM)} ({Math.round(bonusMaxPct * 100)}% of contract value)
+                {signingBonusElig?.cash_note ? ` · ${signingBonusElig.cash_note}` : ""}
+              </p>
             ) : (
               <p className="cap-nego-desk__cap-note">
                 {signingBonusElig?.label ||
@@ -672,7 +695,7 @@ export default function CapContractNegotiation({
           <div className="cap-nego__term">
             <span>Years</span>
             <div className="cap-nego__term-btns">
-              {[1, 2, 3, 4, 5, 6, 7, 8].map((y) => (
+              {termOptions.map((y) => (
                 <button
                   key={y}
                   type="button"

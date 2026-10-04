@@ -12,6 +12,7 @@ const loadOffseason = () => import("./offseasonEventMenus");
 const PlayoffStartEvent = React.lazy(() => import("./playoffs/PlayoffStartEvent"));
 const AwardsNightEvent = React.lazy(() => import("./awardsNight/AwardsNightEvent"));
 const EntryDraftMenu = React.lazy(() => import("./entryDraft/EntryDraftMenu"));
+const BoardOfGovernorsMenu = React.lazy(() => import("./boardOfGovernors/BoardOfGovernorsMenu"));
 const DraftCombineEvent = React.lazy(() => import("./draftCombine/DraftCombine"));
 const OpeningNightMenu = React.lazy(() => import("./openingNight/OpeningNightMenu"));
 const TradeDeadlineMenu = React.lazy(() => import("./tradeDeadline/TradeDeadlineMenu"));
@@ -45,8 +46,15 @@ const EVENT_MAP = {
     key: "retirements",
     title: "Final Skate",
     component: wrapMenu(RetirementsEventMenu),
-    ctaLabel: "Continue to Salary Cap",
+    ctaLabel: "Continue to Board of Governors",
     getEventData: (fs) => ({ retirements: fs?.retirements }),
+  },
+  board_of_governors: {
+    key: "board_of_governors",
+    title: "Board of Governors",
+    component: wrapMenu(BoardOfGovernorsMenu),
+    ctaLabel: "Continue to Salary Cap",
+    getEventData: (fs) => ({ board_of_governors: fs?.board_of_governors }),
   },
   salary_cap: {
     key: "salary_cap",
@@ -205,6 +213,7 @@ export function getFranchisePhaseCta(franchiseState) {
   }
   if (phase === "offseason" && stage) {
     if (stage === "retirements") return "Resume Offseason Timeline";
+    if (stage === "board_of_governors") return "Resume Board of Governors";
     if (stage === "salary_cap") return "Resume Offseason Timeline";
     if (stage === "development_report") return "Resume Offseason Timeline";
     if (stage === "draft_lottery") return "Resume Offseason Timeline";

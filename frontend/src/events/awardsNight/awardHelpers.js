@@ -1,6 +1,10 @@
 import { firstDefined, pickFranchiseData, safeArray } from "../shared/eventHelpers";
 import { resolveFranchiseTeamLogo, toLogoUrl } from "../../utils/teamLogos";
-import { ensurePlayerHeadshotFields, mergePlayerHeadshotIdentity } from "../../utils/playerHeadshots";
+import {
+  ensurePlayerHeadshotFields,
+  mergePlayerHeadshotIdentity,
+  pickHeadshotIdentityFields,
+} from "../../utils/playerHeadshots";
 
 /** Canonical display metadata keyed by normalized award id. */
 export const AWARD_CATALOG = {
@@ -2175,7 +2179,12 @@ export function normalizeAwardsPayload(franchiseState, eventData) {
       const entity =
         meta.kind === "team" || row.recipient_type === "team"
           ? { ...resolveWinnerTeam({ ...base, winner_stats: base.winner_stats || parsedStats }, franchiseState) }
-          : resolveWinnerPlayer(base, franchiseState);
+          : // The award row's winner carries the backend headshot identity (NHL id /
+            // NHL headshot URL / portrait seed); lean roster rows often do not.
+            ensurePlayerHeadshotFields({
+              ...(resolveWinnerPlayer(base, franchiseState) || {}),
+              ...pickHeadshotIdentityFields(primaryWinner || {}),
+            });
 
       const evidence = row.evidence || row.result?.evidence || null;
       const legacyEvidence = Boolean(evidence?.winner?.stat_line?.length);

@@ -8,6 +8,7 @@ and generates NHL-style storylines with evidence and small sim effects.
 from __future__ import annotations
 
 import hashlib
+import math
 import logging
 import os
 import random
@@ -1049,7 +1050,7 @@ def _underperform_actions() -> List[Dict[str, Any]]:
 
 def _rookie_breakout_actions() -> List[Dict[str, Any]]:
     return [
-        {"id": "promote_role", "label": "Promote him", "effects": {"development_confidence": 4, "lineup_pressure": 2}, "effect_summary": "Dev confidence +4"},
+        {"id": "promote_role", "label": "Promote him (promise)", "effects": {"development_confidence": 4, "lineup_pressure": 2}, "effect_summary": "Dev confidence +4 · creates a promise: move him up the lineup within 6 games", "promise": {"type": "role_opportunity", "due_games": 6, "description": "Promotion up the lineup.", "success_readiness": 0.6, "failure_readiness": -2.0}},
         {"id": "steady_plan", "label": "Keep development plan steady", "effects": {"development_confidence": 2, "fan_confidence": -1}, "effect_summary": "Dev confidence +2"},
         {"id": "shelter_minutes", "label": "Shelter minutes", "effects": {"player_confidence": 2, "media_pressure": 1}, "effect_summary": "Stability focus"},
     ]
@@ -1057,9 +1058,9 @@ def _rookie_breakout_actions() -> List[Dict[str, Any]]:
 
 def _goalie_meltdown_actions() -> List[Dict[str, Any]]:
     return [
-        {"id": "start_backup", "label": "Start the backup", "effects": {"goalie_confidence": -2, "fan_confidence": 1}, "effect_summary": "Starter confidence -2 · Fans +1"},
+        {"id": "start_backup", "label": "Start the backup", "effects": {"goalie_confidence": -2, "fan_confidence": 1}, "promise_target": "backup_goalie", "promise": {"type": "goalie_start_opportunity", "due_games": 5, "description": "Give the backup a run of starts.", "success_readiness": 0.4, "failure_readiness": -1.5}, "effect_summary": "Promise: start the backup in 3 of the next 5 games · Starter confidence -2 · Fans +1"},
         {"id": "another_chance", "label": "Give starter another chance", "effects": {"goalie_confidence": 2, "media_pressure": 2}, "effect_summary": "Confidence +2 · Media +2"},
-        {"id": "call_up_ahl", "label": "Call up AHL goalie", "effects": {"depth_pressure": 1, "room_tension": 1}, "effect_summary": "Depth pressure +1"},
+        {"id": "call_up_ahl", "label": "Call up AHL goalie", "effects": {"depth_pressure": 1, "room_tension": 1}, "promise_target": "ahl_goalie", "promise": {"type": "call_up_opportunity", "due_games": 4, "description": "Call up the AHL goalie.", "success_readiness": 0.5, "failure_readiness": -1.0}, "effect_summary": "Promise: call up your best AHL goalie within 4 games · Depth pressure +1"},
     ]
 
 
@@ -1733,6 +1734,23 @@ def _enqueue_decision(session: Any, storyline: Dict[str, Any]) -> None:
     opts = list(storyline.get("action_options") or [])
     if not opts:
         return
+    # One blocking decision per player per ~3 weeks: the same player's hot start used to
+    # re-ask "promote him?" every few days under slightly different headlines.
+    pid_d = str(storyline.get("player_id") or "")
+    day_d = int(_u_current_meta(session)[0])
+    asked = dict(getattr(session, "_decision_player_cooldown", None) or {})
+    if pid_d and day_d - int(asked.get(pid_d, -999)) < 21:
+        return
+    if pid_d and any(
+        str(p.get("player_id") or "") == pid_d and str(p.get("status") or "") == "active"
+        for p in (getattr(session, "universe_promises", None) or [])
+    ):
+        return  # you've already made him a promise — let it play out
+    if pid_d:
+        asked[pid_d] = day_d
+        if len(asked) > 300:
+            asked = dict(sorted(asked.items(), key=lambda kv: kv[1])[-200:])
+        session._decision_player_cooldown = asked
     pending.append(
         {
             "id": f"dec_{sid}",
@@ -2350,7 +2368,7 @@ def _build_trade_rejected_storyline(
             [
                 {"id": "meet_player", "label": "Meet with player privately", "effects": {"player_morale": 4, "gm_trust": 3}},
                 {"id": "open_tradehub", "label": "Revisit trade market", "effects": {"trade_market_heat": 2}},
-                {"id": "restore_role", "label": "Restore prominent role", "effects": {"player_morale": 3, "room_tension": -2}},
+                {"id": "restore_role", "label": "Restore prominent role", "effects": {"player_morale": 3, "room_tension": -2}, "effect_summary": "Promise: give him a bigger role within 6 games", "promise": {"type": "role_opportunity", "due_games": 6, "description": "Restore his role.", "success_readiness": 0.5, "failure_readiness": -2.0}},
             ]
             if attempt_count >= 3
             else []
@@ -2720,7 +2738,7 @@ def _build_lineup_fallout_storyline(
         "requires_action": cause_type in ("PLAYER_SCRATCHED_BY_USER", "PLAYER_DEMOTED") and char < 45,
         "action_options": (
             [
-                {"id": "restore_role", "label": "Restore prior role", "effects": {"player_morale": 4, "room_tension": -2}},
+                {"id": "restore_role", "label": "Restore prior role", "effects": {"player_morale": 4, "room_tension": -2}, "effect_summary": "Promise: give him a bigger role within 6 games", "promise": {"type": "role_opportunity", "due_games": 6, "description": "Restore his role.", "success_readiness": 0.5, "failure_readiness": -2.0}},
                 {"id": "meet_player", "label": "Meet with player privately", "effects": {"player_morale": 3, "gm_trust": 2}},
             ]
             if cause_type in ("PLAYER_SCRATCHED_BY_USER", "PLAYER_DEMOTED")
@@ -2949,7 +2967,7 @@ def _build_locker_room_conflict_storyline(
         "action_options": [
             {"id": "meet_player", "label": "Meet with player privately", "effects": {"player_morale": 3}},
             {"id": "open_tradehub", "label": "Explore trade market", "effects": {"trade_market_heat": 2}},
-            {"id": "restore_role", "label": "Restore prominent role", "effects": {"player_morale": 4, "room_tension": -3}},
+            {"id": "restore_role", "label": "Restore prominent role", "effects": {"player_morale": 4, "room_tension": -3}, "effect_summary": "Promise: give him a bigger role within 6 games", "promise": {"type": "role_opportunity", "due_games": 6, "description": "Restore his role.", "success_readiness": 0.5, "failure_readiness": -2.0}},
         ],
     }
 
@@ -4521,21 +4539,38 @@ def _build_press_questions(sl: Dict[str, Any], session: Any, ctx: Optional[Dict[
             )
         )
 
-    candidates.append(
-        _q(
-            "q_storyline",
-            reporter,
-            f"What's your message to fans concerned about {headline.lower()}?",
-            [
-                ("deflect", "Deflect", "Keep internal matters internal.", "neutral"),
-                ("support_staff", "Back the staff", "Reaffirm confidence in coaching decisions.", "firm"),
-                ("support_player", "Back the player", f"Publicly support {pname}.", "diplomatic"),
-                ("no_comment", "Decline comment", "Silence — media will interpret.", "cold"),
-            ],
-            ["storyline_heat", "player_focus"],
-            70,
+    story_tone = str(sl.get("tone") or "").lower()
+    if story_tone == "positive":
+        candidates.append(
+            _q(
+                "q_story_good",
+                reporter,
+                f"{headline}. What's been the difference for {pname}?" if sl.get("player_id") else f"{headline}. What's driving it?",
+                [
+                    ("praise", f"Praise {pname} publicly" if sl.get("player_id") else "Praise the group", "Give him the credit — confidence and goodwill rise.", "diplomatic"),
+                    ("temper", "Keep expectations in check", "Stay measured — keeps him focused, less hype.", "neutral"),
+                    ("credit_staff", "Credit the coaching staff", "Share the credit with the staff and system.", "firm"),
+                ],
+                ["storyline_heat", "player_focus"],
+                72,
+            )
         )
-    )
+    else:
+        candidates.append(
+            _q(
+                "q_story_concern",
+                reporter,
+                f"{headline}. How concerned are you, and what happens next?",
+                [
+                    ("address", "Address it head-on", "Own the issue publicly and lay out a plan.", "honest"),
+                    ("support_player", f"Back {pname}" if sl.get("player_id") else "Back the group", "Public vote of confidence.", "diplomatic"),
+                    ("internal", "Handle it internally", "Don't air it out — the story lingers a bit.", "neutral"),
+                    ("no_comment", "Decline comment", "Silence — the media fills the gap.", "cold"),
+                ],
+                ["storyline_heat", "player_focus"],
+                70,
+            )
+        )
     candidates.append(
         _q(
             "q_fan_message",
@@ -4554,6 +4589,18 @@ def _build_press_questions(sl: Dict[str, Any], session: Any, ctx: Optional[Dict[
     candidates.sort(key=lambda row: -row[0])
     selected: List[Dict[str, Any]] = []
     seen_ids: set = set()
+    # The story that called the availability always gets asked first — otherwise a
+    # hot-streak presser was three generic questions about the team record.
+    for _prio, question in candidates:
+        if str(question.get("id") or "") in ("q_story_good", "q_story_concern"):
+            question = dict(question)
+            question["context_tags"] = list(question.get("context_tags") or []) or ["storyline_heat"]
+            selected.append(question)
+            seen_ids.add(str(question.get("id")))
+            break
+    # Coach-confidence and losing-record questions say the same thing; ask only one.
+    if any(str(q.get("id")) == "q_record_losing" for _p, q in candidates):
+        seen_ids.add("q_coach")
     for _prio, question in candidates:
         qid = str(question.get("id") or "")
         if not qid or qid in seen_ids:
@@ -4588,6 +4635,25 @@ def _press_answer_headline(question_id: str, response_id: str, entry: Dict[str, 
         ("q_injury", "transparent"): f"GM gives injury update on {pname}",
         ("q_contract", "fair_talks"): f"GM says contract talks ongoing with {pname}",
         ("q_locker_room", "accountability"): "GM calls for locker-room accountability",
+        ("q_rebuild", "compete"): "GM rejects tank talk: 'We are competing'",
+        ("q_rebuild", "deflect_future"): "GM won't put a label on the season",
+        ("q_record_winning", "stay_humble"): "GM keeps winning run in perspective",
+        ("q_playoff", "one_game"): "GM: 'One game at a time'",
+        ("q_playoff", "honest_health"): "GM gives honest health update ahead of stretch run",
+        ("q_injury", "optimistic"): f"GM optimistic on {pname}'s return",
+        ("q_injury", "no_timeline"): f"No timeline yet for {pname}",
+        ("q_contract", "focus_hockey"): f"GM steers questions away from {pname}'s contract",
+        ("q_contract", "no_comment"): f"GM won't discuss {pname}'s contract",
+        ("q_locker_room", "united"): "GM insists the room is united",
+        ("q_locker_room", "internal"): "GM keeps locker-room issues in-house",
+        ("q_fan_message", "compete_daily"): "GM promises a compete level fans can count on",
+        ("q_story_good", "praise"): f"GM heaps praise on {pname}",
+        ("q_story_good", "temper"): f"GM keeps expectations in check for {pname}",
+        ("q_story_good", "credit_staff"): "GM credits coaching staff",
+        ("q_story_concern", "address"): "GM addresses concerns head-on",
+        ("q_story_concern", "support_player"): f"GM publicly backs {pname}",
+        ("q_story_concern", "internal"): "GM keeps it in-house",
+        ("q_story_concern", "no_comment"): "GM declines comment — story gains traction",
     }
     if (qid, rid) in by_pair:
         return by_pair[(qid, rid)]
@@ -4798,6 +4864,53 @@ _PRESS_RESPONSE_SPECS: Dict[str, Dict[str, Any]] = {
         "team": {"accountability": 5, "tension": -2},
         "heat_delta": -3,
     },
+    # Story-specific (good news)
+    "q_story_good:praise": {
+        "storyline_effects": {"media_pressure": -2, "player_confidence": 4, "fan_confidence": 2},
+        "entity": {"state.confidence": 4, "state.morale": 3, "state.gm_trust": 3},
+        "reporter": {"trust": 2},
+        "fan_engagement": 1.2,
+        "heat_delta": -4,
+    },
+    "q_story_good:temper": {
+        "storyline_effects": {"media_pressure": -3},
+        "entity": {"state.focus": 4, "state.media_stress": -2},
+        "heat_delta": -6,
+    },
+    "q_story_good:credit_staff": {
+        "storyline_effects": {"coach_security": 3, "fan_confidence": 1},
+        "entity": {"state.coach_trust": 3, "state.morale": 1},
+        "team": {"unity": 2},
+        "heat_delta": -4,
+    },
+    # Story-specific (concern)
+    "q_story_concern:address": {
+        "storyline_effects": {"media_pressure": -2, "fan_confidence": 2},
+        "entity": {"state.gm_trust": 2, "state.focus": 2, "state.media_stress": 1},
+        "reporter": {"trust": 3, "access": 2},
+        "fan_engagement": 1.0,
+        "heat_delta": -8,
+    },
+    "q_story_concern:support_player": {
+        "storyline_effects": {"media_pressure": -3, "player_confidence": 4, "fan_confidence": 1},
+        "entity": {"state.gm_trust": 6, "state.morale": 4, "state.confidence": 3, "state.media_stress": -3},
+        "reporter": {"trust": 2, "friction": -1},
+        "fan_engagement": 0.8,
+        "heat_delta": -6,
+    },
+    "q_story_concern:internal": {
+        "storyline_effects": {"media_pressure": 1},
+        "entity": {"state.media_stress": 1},
+        "reporter": {"friction": 1},
+        "heat_delta": -1,
+    },
+    "q_story_concern:no_comment": {
+        "storyline_effects": {"media_pressure": 5, "fan_confidence": -3},
+        "entity": {"state.media_stress": 5, "state.gm_trust": -3},
+        "reporter": {"friction": 4, "access": -2},
+        "fan_engagement": -1.2,
+        "heat_delta": 5,
+    },
     # Fan message fallback
     "q_fan_message:trust_process": {
         "storyline_effects": {"media_pressure": 1, "fan_confidence": 1},
@@ -4910,7 +5023,7 @@ def _apply_press_response_effects(
             after = _u_clip(before + float(delta))
             rel[field] = after
             receipts["reporter"].append(
-                {"field": field, "before": before, "after": after, "delta": round(after - before, 2)}
+                {"field": f"Reporter {field}", "before": before, "after": after, "delta": round(after - before, 2)}
             )
         rel["interview_count"] = int(rel.get("interview_count", 0) or 0) + 1
 
@@ -4922,7 +5035,7 @@ def _apply_press_response_effects(
             after = _u_clip(before + float(delta))
             culture[field] = after
             receipts["team"].append(
-                {"field": field, "before": before, "after": after, "delta": round(after - before, 2)}
+                {"field": f"Room {field}", "before": before, "after": after, "delta": round(after - before, 2)}
             )
 
     fan_delta = spec.get("fan_engagement")
@@ -4971,6 +5084,86 @@ def _apply_press_response_effects(
     return receipts
 
 
+PRESS_CONFERENCE_WINDOW_DAYS = 4
+
+_PRESS_SKIP_SPEC: Dict[str, Any] = {
+    "storyline_effects": {"media_pressure": 3, "fan_confidence": -1},
+    "entity": {"state.media_stress": 2},
+    "reporter": {"friction": 2},
+    "fan_engagement": -0.5,
+    "heat_delta": 3,
+}
+
+
+def expire_press_conferences(session: Any) -> int:
+    """Close availabilities you never held. They used to stay 'pending' forever, which
+    froze the press room (max 3 open) with questions about a months-old record."""
+    queue = list(getattr(session, "press_conference_queue", None) or [])
+    if not queue:
+        return 0
+    day = int(_u_current_meta(session)[0])
+    season = int(getattr(session, "season_calendar_year", 0) or 0)
+    expired = 0
+    for entry in queue:
+        if str(entry.get("status") or "") not in ("pending", "in_progress"):
+            continue
+        created = entry.get("created_day")
+        stale_season = entry.get("season") is not None and int(entry.get("season") or 0) != season
+        if created is None:
+            entry["status"] = "expired"  # legacy row with no clock — close quietly
+            expired += 1
+            continue
+        if not stale_season and day <= int(entry.get("expires_day") or int(created) + PRESS_CONFERENCE_WINDOW_DAYS):
+            continue
+        entry["status"] = "expired"
+        expired += 1
+        if stale_season:
+            continue
+        try:
+            q0 = (entry.get("questions") or [{}])[0]
+            receipts = _apply_press_response_effects(session, entry, q0, {"id": "skipped", "tone": "cold"}, _PRESS_SKIP_SPEC)
+            entry["coverage"] = list(entry.get("coverage") or []) + [{
+                "headline": "GM skips media availability",
+                "summary": "Reporters ran the story without your side of it.",
+            }]
+            entry["skip_receipts"] = receipts
+        except Exception:
+            pass
+    if expired:
+        closed = {str(e.get("id") or "") for e in queue if str(e.get("status") or "") == "expired"}
+        for ev in list(getattr(session, "storyline_events", None) or []):
+            if isinstance(ev, dict) and str(ev.get("press_conference_id") or "") in closed:
+                ev["requires_action"] = False
+    session.press_conference_queue = queue[-12:]
+    return expired
+
+
+def reconcile_requires_action(session: Any) -> int:
+    """'On your desk' must mean there is something to do. Clear requires_action on stories
+    with no choices, no pending decision and no open press conference."""
+    pend = set()
+    for d in list(getattr(session, "pending_decisions", None) or []):
+        if isinstance(d, dict):
+            pend.add(str((d.get("meta") or {}).get("storyline_id") or d.get("storyline_id") or ""))
+    open_press = {
+        str(p.get("id") or "")
+        for p in (getattr(session, "press_conference_queue", None) or [])
+        if str(p.get("status") or "") in ("pending", "in_progress")
+    }
+    cleared = 0
+    for ev in list(getattr(session, "storyline_events", None) or []):
+        if not isinstance(ev, dict) or not ev.get("requires_action"):
+            continue
+        sid = str(ev.get("storyline_id") or ev.get("id") or "")
+        if sid in pend or str(ev.get("press_conference_id") or "") in open_press:
+            continue
+        if list(ev.get("action_options") or []) and str(ev.get("status") or "") not in ("resolved", "closed"):
+            continue
+        ev["requires_action"] = False
+        cleared += 1
+    return cleared
+
+
 def _maybe_queue_press_conference(session: Any, sl: Dict[str, Any]) -> None:
     utid = str(getattr(session, "user_team_id") or "")
     if str(sl.get("team_id") or "") != utid:
@@ -4979,6 +5172,10 @@ def _maybe_queue_press_conference(session: Any, sl: Dict[str, Any]) -> None:
     priority = str(sl.get("priority") or "")
     if heat < 52 and priority not in ("CRITICAL", "HIGH"):
         return
+    try:
+        expire_press_conferences(session)
+    except Exception:
+        pass
     queue = list(getattr(session, "press_conference_queue", None) or [])
     sid = str(sl.get("storyline_id") or "")
     if any(str(p.get("storyline_id") or "") == sid for p in queue):
@@ -5004,24 +5201,18 @@ def _maybe_queue_press_conference(session: Any, sl: Dict[str, Any]) -> None:
             "context_triggers": list(press_ctx.get("trigger_labels") or []),
             "questions": questions,
             "requires_action": True,
+            "created_day": int(_u_current_meta(session)[0]),
+            "expires_day": int(_u_current_meta(session)[0]) + PRESS_CONFERENCE_WINDOW_DAYS,
+            "season": int(getattr(session, "season_calendar_year", 0) or 0),
+            "story_tone": str(sl.get("tone") or ""),
+            "coverage": [],
         }
     )
     session.press_conference_queue = queue[-12:]
     sl["press_conference_id"] = press_id
     sl["requires_action"] = True
-    opts: List[Dict[str, Any]] = []
-    for q in queue[-1]["questions"]:
-        for resp in q.get("responses") or []:
-            opts.append(
-                {
-                    "id": f"{q['id']}:{resp['id']}",
-                    "label": f"{q['reporter_name']}: {resp['label']}",
-                    "effect_summary": resp.get("effect_preview") or resp.get("description"),
-                    "effects": dict(resp.get("effects") or {"press_tone": resp.get("tone")}),
-                }
-            )
-    if opts:
-        sl["action_options"] = opts[:6]
+    # Answers live in the Press Room only — the story card links there instead of
+    # duplicating six reporter answers under the headline.
 
 
 def apply_press_conference_response(session: Any, press_id: str, question_id: str, response_id: str) -> Dict[str, Any]:
@@ -5079,6 +5270,13 @@ def apply_press_conference_response(session: Any, press_id: str, question_id: st
         len([q for q in (entry.get("questions") or []) if str(q.get("id") or "") not in answered]),
     )
     effect_summary = summary["effect_summary"]
+    entry["coverage"] = (list(entry.get("coverage") or []) + [{
+        "question_id": qid,
+        "response_label": str(response.get("label") or ""),
+        "headline": headline,
+        "summary": effect_summary,
+    }])[-6:]
+    session.press_conference_queue = queue
     if remaining:
         effect_summary = f"{effect_summary} · {remaining} question{'s' if remaining != 1 else ''} remaining"
     return {
@@ -5276,13 +5474,20 @@ def _is_trade_desk_row(sl: Dict[str, Any]) -> bool:
     return False
 
 
-def _trim_storyline_events(rows: List[Dict[str, Any]], limit: int = 420) -> List[Dict[str, Any]]:
+def _trim_storyline_events(rows: List[Dict[str, Any]], limit: int = 420, protect_team_id: str = "") -> List[Dict[str, Any]]:
     clean = [s for s in rows if isinstance(s, dict)]
     if len(clean) <= limit:
         return clean
     stories = [s for s in clean if not _is_trade_desk_row(s)]
     trades = [s for s in clean if _is_trade_desk_row(s)]
-    keep_s = stories[-300:]
+    if protect_team_id:
+        # League-wide noise must not push the user's own club out of the feed.
+        mine = [s for s in stories if str(s.get("team_id") or "") == str(protect_team_id) or s.get("requires_action")][-160:]
+        mine_ids = {id(s) for s in mine}
+        others = [s for s in stories if id(s) not in mine_ids][-max(60, 300 - len(mine)):]
+        keep_s = [s for s in stories if id(s) in mine_ids or id(s) in {id(o) for o in others}]
+    else:
+        keep_s = stories[-300:]
     keep_t = trades[-120:]
     merged = keep_s + keep_t
     merged.sort(key=lambda s: str(s.get("calendar_iso") or s.get("date") or s.get("calendar_day") or ""))
@@ -5317,17 +5522,32 @@ def _breaking_news_signal(sl: Dict[str, Any], user_team_id: str = "") -> Optiona
         "MAJOR_PUBLIC_ALTERCATION",
         "GAMBLING_VIOLATION",
     )
-    if priority == "CRITICAL" or heat >= 88 or crisis:
+    # "League defining" is for genuine crises (or a critical story about YOUR club). Heat
+    # alone inflated: CPU player-vs-reporter spats were all flagged league-defining.
+    if crisis or (priority == "CRITICAL" and (user_club or heat >= 95)):
         return "league_defining"
-    if cause in ("TRADE_DEMAND", "TEAMMATE_FIGHT", "PLAYER_REPORTER_ALTERCATION") and (user_club or heat >= 78):
+    # Routine beats (form runs, life events, room pulse, contract-year chatter, media
+    # spats) are never "breaking" — that label is for news that changes something.
+    routine = cause in (
+        "ROLLING_HOT", "ROLLING_COLD", "MINOR_LIFE_EVENT", "POSITIVE_LIFE_EVENT", "LOCKER_ROOM_PULSE",
+        "ROOM_BELONGING", "CONTRACT_YEAR_HEAT", "WINNING_CONCERN", "PLAYER_REPORTER_CONFRONTATION",
+        "STORYLINE_FOLLOWUP", "FIRST_GOAL", "COACH_HOT_SEAT", "GM_JOB_SECURITY",
+    )
+    if not user_club:
+        if cause in ("TRADE_DEMAND", "TEAMMATE_FIGHT", "PLAYER_REPORTER_ALTERCATION") and heat >= 85:
+            return "breaking"
+        if priority == "CRITICAL" and not routine:
+            return "breaking"
+        return None
+    if cause in ("TRADE_DEMAND", "TEAMMATE_FIGHT", "PLAYER_REPORTER_ALTERCATION"):
         return "breaking"
-    if sl.get("requires_action") and user_club:
+    if sl.get("requires_action"):
         return "breaking"
-    if heat >= 82 and cause in ("HAT_TRICK", "TRADE_DEMAND", "PLAYER_REPORTER_CONFRONTATION"):
+    if routine:
+        return "developing" if heat >= 70 else None
+    if heat >= 76 and priority in ("HIGH", "CRITICAL"):
         return "breaking"
-    if user_club and heat >= 76 and priority in ("HIGH", "CRITICAL"):
-        return "breaking"
-    if user_club and heat >= 70:
+    if heat >= 70:
         return "developing"
     return None
 
@@ -5336,17 +5556,30 @@ def _collect_breaking_alerts(session: Any) -> List[Dict[str, Any]]:
     utid = str(getattr(session, "user_team_id") or "")
     rows: List[Tuple[int, Dict[str, Any]]] = []
     seen: set = set()
-    for s in list(getattr(session, "storyline_events", None) or [])[-240:]:
+    seen_heads: set = set()
+    today_day = int(_u_current_meta(session)[0])
+    for s in reversed(list(getattr(session, "storyline_events", None) or [])[-240:]):
         if not isinstance(s, dict):
             continue
         headline = str(s.get("headline") or s.get("title") or "").strip()
         if not headline:
             continue
+        # Breaking means now: skip anything older than ~10 days, and repeat headlines.
+        try:
+            sd = s.get("calendar_day")
+            if sd is not None and today_day - int(sd) > 10:
+                continue
+        except (TypeError, ValueError):
+            pass
+        hkey = headline.lower()
+        if hkey in seen_heads:
+            continue
+        seen_heads.add(hkey)
         if _is_routine_wire_trade(s, utid):
             continue
-        level = str(s.get("breaking_level") or "") or (
-            _breaking_news_signal(s, utid) or ""
-        )
+        # Recompute rather than trust the level stamped at record time (older saves were
+        # stamped under the inflated rule).
+        level = _breaking_news_signal(s, utid) or ""
         if level not in ("breaking", "league_defining"):
             continue
         key = str(s.get("storyline_id") or s.get("id") or headline)
@@ -5638,7 +5871,12 @@ def _u_name(player: Any) -> str:
 
 def _u_position(player: Any) -> str:
     ident = getattr(player, "identity", None)
-    return str(getattr(player, "position", "") or _u_get(ident, "position", "") or "F").upper()
+    raw = getattr(player, "position", "") or _u_get(ident, "position", "") or "F"
+    raw = getattr(raw, "value", raw)  # Position.G -> "G" (str(enum) gave "POSITION.G")
+    out = str(raw or "F").upper()
+    if out.startswith("POSITION."):
+        out = out.split(".", 1)[1]
+    return out or "F"
 
 
 def _u_team_players(session: Any, team_id: str) -> List[Any]:
@@ -6436,7 +6674,9 @@ def _u_record_storyline(session: Any, *, event: Dict[str, Any], headline: str, s
         enriched = _UNIVERSE_LEGACY_ENRICH(session, row)
         existing = list(getattr(session, "storyline_events", None) or [])
         existing.append(enriched)
-        session.storyline_events = _trim_storyline_events(existing)
+        session.storyline_events = _trim_storyline_events(
+            existing, protect_team_id=str(getattr(session, "user_team_id", "") or "")
+        )
     return row
 
 
@@ -6787,8 +7027,33 @@ def _u_attach_interaction_trigger(session: Any, interaction: Dict[str, Any], sco
         rel_tension=rel_tension,
     )
     interaction["trigger_context"] = ctx
-    interaction["trigger_reasons"] = list(ctx.get("reason_lines") or [])
-    interaction["trigger_reason"] = str(ctx.get("reason_text") or "")
+    reasons = list(ctx.get("reason_lines") or [])
+    # Ground the complaint in his real numbers so it's never "frustrated" with no why.
+    try:
+        facts = _u_player_fact_bits(session, actor_id) if actor_id else {}
+        st = actor.get("state") or {}
+        hard: List[str] = []
+        if facts.get("line"):
+            hard.append(f"This season: {facts['line']}")
+        if float(st.get("role_satisfaction", 60) or 60) < 50:
+            hard.append(f"Role satisfaction {float(st.get('role_satisfaction')):.0f}/100 — usage below what he thinks he's earned")
+        if float(st.get("morale", 55) or 55) < 45:
+            hard.append(f"Morale {float(st.get('morale')):.0f}/100")
+        if float(st.get("gm_trust", 60) or 60) < 45:
+            hard.append(f"Trust in management {float(st.get('gm_trust')):.0f}/100")
+        promises = [
+            pr for pr in (getattr(session, "universe_promises", None) or [])
+            if str(pr.get("player_id") or "") == actor_id and str(pr.get("status") or "") == "broken"
+        ]
+        if promises:
+            hard.append(f"{len(promises)} broken promise{'s' if len(promises) != 1 else ''} on record")
+        reasons = hard + [r for r in reasons if r not in hard]
+        if hard and interaction.get("summary"):
+            interaction["summary"] = f"{interaction['summary']} ({'; '.join(hard[:2])}.)"
+    except Exception:
+        pass
+    interaction["trigger_reasons"] = reasons
+    interaction["trigger_reason"] = str(ctx.get("reason_text") or "") or (reasons[0] if reasons else "")
     return interaction
 
 
@@ -7110,7 +7375,7 @@ def _u_tick_promises(session: Any) -> Dict[str, int]:
             continue
         if int(promise.get("games_remaining", 1) or 0) > 0:
             continue
-        fulfilled = int(promise.get("progress", 0) or 0) > 0
+        fulfilled = int(promise.get("progress", 0) or 0) >= int(promise.get("required_progress", 1) or 1)
         promise["status"] = "kept" if fulfilled else "broken"
         promise["resolved_day"] = day
         player_id = str(promise.get("player_id") or "")
@@ -7151,6 +7416,24 @@ def _u_expire_interactions(session: Any) -> int:
             _u_apply_outcome(session, interaction, choice)
         else:
             interaction["status"] = "expired"
+        expired += 1
+    # Queue rows can outlive their twin in universe_interactions (that list is trimmed),
+    # so expire overdue queue rows directly — otherwise stale requests sit on the desk forever.
+    live_ids = {str(r.get("id") or "") for r in (getattr(session, "universe_interactions", None) or [])}
+    for row in list(getattr(session, "universe_interaction_queue", None) or []):
+        if str(row.get("status") or "") != "pending" or str(row.get("id") or "") in live_ids:
+            continue
+        if int(row.get("expires_day", day + 1) or day + 1) >= day:
+            continue
+        choices = list(row.get("choices") or [])
+        default_id = str(row.get("default_choice_id") or "")
+        choice = next((c for c in choices if str(c.get("id") or "") == default_id), choices[0] if choices else None)
+        try:
+            if choice:
+                _u_apply_outcome(session, row, choice)
+        except Exception:
+            pass
+        row["status"] = "expired"
         expired += 1
     session.universe_interaction_queue = [row for row in (getattr(session, "universe_interaction_queue", None) or []) if str(row.get("status") or "") == "pending"]
     return expired
@@ -7392,6 +7675,133 @@ def apply_universe_matchup_context(sim_inputs: Dict[str, Any], matchup: Dict[str
     return result
 
 
+def _u_promise_snapshot(session: Any, player_id: str) -> Dict[str, Any]:
+    """Where the player stands right now: lineup slot, special teams, games, roster level."""
+    snap: Dict[str, Any] = {"on_nhl": False, "line_rank": 0, "pp_unit": 0, "scratched": False, "gp": 0}
+    utid = str(getattr(session, "user_team_id", "") or "")
+    team = (getattr(session, "team_by_id", None) or {}).get(utid)
+    player = _player_from_roster(session, str(player_id))
+    if team is None or player is None:
+        return snap
+    snap["on_nhl"] = any(p is player for p in list(getattr(team, "roster", None) or []))
+    st = (getattr(session, "player_season_stats", None) or {}).get(str(player_id)) or {}
+    try:
+        snap["gp"] = int(st.get("gp") or 0)
+    except Exception:
+        snap["gp"] = 0
+    if snap["on_nhl"]:
+        try:
+            from app.sim_engine.franchise.trade_stability_engine import resolve_player_deployment
+
+            d = resolve_player_deployment(session, player, team)
+            snap["line_rank"] = int(getattr(d, "ev_line_rank", 0) or 0)
+            snap["pp_unit"] = int(getattr(d, "pp_unit", 0) or 0)
+            snap["scratched"] = bool(getattr(d, "scratched", False))
+        except Exception:
+            pass
+    snap["roster_ids"] = sorted(str(getattr(p, "id", "") or "") for p in list(getattr(team, "roster", None) or []))
+    return snap
+
+
+def _u_promise_how_to(promise_type: str) -> str:
+    return {
+        "role_opportunity": "Move him up a line (or onto a PP unit) in Edit Lines and keep him dressed.",
+        "power_play_opportunity": "Put him on PP1 or PP2 in Edit Lines.",
+        "goalie_start_opportunity": "Start him in net — each start counts.",
+        "call_up_opportunity": "Call him up to the NHL roster.",
+        "mentor_assignment": "Keep him on the NHL roster.",
+        "winning_commitment": "Add an 80+ OVR player to the NHL roster (trade or signing).",
+    }.get(str(promise_type), "Deliver what you promised before the deadline.")
+
+
+def create_universe_promise(session: Any, promise_spec: Dict[str, Any], default_player_id: str = "", source_id: Any = None) -> Optional[Dict[str, Any]]:
+    """Single place promises are created (meetings, interactions, storyline decisions)."""
+    pid = str(promise_spec.get("player_id") or default_player_id or "")
+    if not pid:
+        return None
+    day = _u_current_meta(session)[0]
+    promises = list(getattr(session, "universe_promises", None) or [])
+    due_games = int(promise_spec.get("due_games") or 5)
+    ptype = str(promise_spec.get("type") or "")
+    promise = {
+        "id": f"promise_{uuid.uuid4().hex[:10]}",
+        "interaction_id": source_id,
+        "type": ptype,
+        "player_id": pid,
+        "player_name": str(((getattr(session, "universe_players", None) or {}).get(pid) or {}).get("player_name") or ""),
+        "description": promise_spec.get("description"),
+        "created_day": day,
+        "games_remaining": due_games,
+        "status": "active",
+        "progress": 0,
+        "success_potential_delta": float(promise_spec.get("success_potential_delta", 0) or 0),
+        "success_readiness": float(promise_spec.get("success_readiness", 0) or 0),
+        "failure_readiness": float(promise_spec.get("failure_readiness", 0) or 0),
+        "success_attribute": promise_spec.get("success_attribute"),
+        "success_attribute_delta": float(promise_spec.get("success_attribute_delta", 0) or 0),
+        "required_progress": _u_promise_required(ptype, due_games),
+        "how_to": _u_promise_how_to(ptype),
+    }
+    try:
+        promise["baseline"] = _u_promise_snapshot(session, pid)
+    except Exception:
+        pass
+    promises.append(promise)
+    session.universe_promises = promises[-80:]
+    return promise
+
+
+def _u_promise_required(promise_type: str, due_games: int) -> int:
+    due = max(1, int(due_games or 1))
+    if promise_type in ("call_up_opportunity", "winning_commitment"):
+        return 1
+    if promise_type == "mentor_assignment":
+        return max(1, int(round(due * 0.6)))
+    return max(1, int(math.ceil(due * 0.5)))
+
+
+def _u_promise_progress_tick(session: Any, promise: Dict[str, Any]) -> None:
+    """Credit a promise for this game when the GM actually delivered on it."""
+    pid = str(promise.get("player_id") or "")
+    base = dict(promise.get("baseline") or {})
+    if not base:
+        promise["baseline"] = _u_promise_snapshot(session, pid)
+        return
+    now = _u_promise_snapshot(session, pid)
+    ptype = str(promise.get("type") or "")
+    delivered = False
+    if ptype == "role_opportunity":
+        b_rank = int(base.get("line_rank") or 0)
+        n_rank = int(now.get("line_rank") or 0)
+        dressed = now.get("on_nhl") and not now.get("scratched")
+        promoted = bool(n_rank) and (not b_rank or n_rank < b_rank)
+        new_pp = int(now.get("pp_unit") or 0) > 0 and not int(base.get("pp_unit") or 0)
+        was_out = bool(base.get("scratched")) or not base.get("on_nhl")
+        top_already = b_rank == 1
+        delivered = bool(dressed and (promoted or new_pp or was_out or top_already))
+    elif ptype == "power_play_opportunity":
+        delivered = bool(now.get("on_nhl") and int(now.get("pp_unit") or 0) > 0)
+    elif ptype == "goalie_start_opportunity":
+        last_gp = int(promise.get("_last_gp", base.get("gp") or 0) or 0)
+        delivered = int(now.get("gp") or 0) > last_gp
+        promise["_last_gp"] = int(now.get("gp") or 0)
+    elif ptype == "call_up_opportunity":
+        delivered = bool(now.get("on_nhl"))
+    elif ptype == "mentor_assignment":
+        delivered = bool(now.get("on_nhl"))
+    elif ptype == "winning_commitment":
+        added = set(now.get("roster_ids") or []) - set(base.get("roster_ids") or [])
+        for aid in added:
+            pl = _player_from_roster(session, aid)
+            if pl is not None and _player_ovr99(pl) >= 80:
+                delivered = True
+                break
+    else:
+        delivered = bool(now.get("on_nhl") and not now.get("scratched"))
+    if delivered:
+        promise["progress"] = int(promise.get("progress", 0) or 0) + 1
+
+
 def _u_advance_game_based_state(session: Any, team_id: str) -> None:
     modifiers = dict(getattr(session, "universe_attribute_modifiers", None) or {})
     for player in _u_team_players(session, team_id):
@@ -7403,6 +7813,11 @@ def _u_advance_game_based_state(session: Any, team_id: str) -> None:
     session.universe_attribute_modifiers = modifiers
     for promise in getattr(session, "universe_promises", None) or []:
         if str(promise.get("status") or "") == "active" and str(((getattr(session, "universe_players", None) or {}).get(str(promise.get("player_id") or "")) or {}).get("team_id") or "") == str(team_id):
+            if str(team_id) == str(getattr(session, "user_team_id", "") or ""):
+                try:
+                    _u_promise_progress_tick(session, promise)
+                except Exception:
+                    pass
             promise["games_remaining"] = max(0, int(promise.get("games_remaining", 0) or 0) - 1)
 
 
@@ -7476,8 +7891,20 @@ def apply_universe_postgame(session: Any, team_id: str, game_result: Dict[str, A
                 confidence_delta -= 0.6
         if pim >= 4:
             state["media_stress"] = _u_clip(float(state.get("media_stress", 25)) + 1.5)
-        state["morale"] = _u_clip(float(state.get("morale", 55)) + morale_delta)
-        state["confidence"] = _u_clip(float(state.get("confidence", 55)) + confidence_delta)
+        # Morale has a resting level set by his situation (role, trust in management,
+        # temperament). Without the pull back toward it every slump ratcheted morale down
+        # for good and the whole roster drifted into "frustrated".
+        baseline = (
+            56.0
+            + (float(state.get("role_satisfaction", 58)) - 55.0) * 0.25
+            + (float(state.get("gm_trust", 60)) - 58.0) * 0.15
+            + (float(personality.get("resilience", 55)) - 55.0) * 0.12
+        )
+        baseline = max(38.0, min(74.0, baseline))
+        cur_m = float(state.get("morale", 55))
+        state["morale"] = _u_clip(cur_m + morale_delta + (baseline - cur_m) * 0.07)
+        cur_c = float(state.get("confidence", 55))
+        state["confidence"] = _u_clip(cur_c + confidence_delta + (55.0 - cur_c) * 0.06)
         entity["state"] = state
         _u_push_morale_to_player(session, player_id, float(state["morale"]))
         low_character_risk = max(0.0, 48 - float(personality.get("character", 55))) * 0.006 + max(0.0, 48 - float(state.get("role_satisfaction", 55))) * 0.004 + max(0.0, float((room.get("culture") or {}).get("tension", 35)) - 55) * 0.002
@@ -8944,7 +9371,9 @@ def _u_record_storyline(session: Any, *, event: Dict[str, Any], headline: str, s
         enriched = _UNIVERSE_LEGACY_ENRICH(session, row)
         existing = list(getattr(session, "storyline_events", None) or [])
         existing.append(enriched)
-        session.storyline_events = _trim_storyline_events(existing)
+        session.storyline_events = _trim_storyline_events(
+            existing, protect_team_id=str(getattr(session, "user_team_id", "") or "")
+        )
     if len(getattr(session, "storyline_events", None) or []) <= before:
         return None
     return row
@@ -8984,15 +9413,16 @@ def _u_generate_minor_life_events(session: Any, rng: random.Random) -> int:
             life = entity.get("life") or {}
             last = int(life.get("last_minor_event_day", -999) or -999)
             vol = float((entity.get("personality") or {}).get("volatility", 50))
-            cooldown = 1 if bulk_burst else (3 if vol >= 62 else 5)
+            # Life beats are seasoning, not the meal: ~1 user-team beat every 2-3 days.
+            cooldown = 4 if bulk_burst else (6 if vol >= 62 else 9)
             if day - last < cooldown:
                 continue
             if bulk_burst and team_id != user_team_id:
                 continue
             if bulk_burst:
-                chance = 0.42
+                chance = 0.22
             else:
-                chance = (0.22 if team_id == user_team_id else 0.05) * (0.75 + vol / 100.0)
+                chance = (0.07 if team_id == user_team_id else 0.03) * (0.75 + vol / 100.0)
             if rng.random() > chance:
                 continue
             positive = rng.random() < 0.52
@@ -9014,7 +9444,8 @@ def _u_generate_minor_life_events(session: Any, rng: random.Random) -> int:
                     reason_public=str(leave_cfg.get("reason_public") or "Unavailable — Personal Leave"),
                     rng=rng,
                 )
-            drama = 2.6
+            # 2.6x made random off-ice beats the biggest morale driver on the roster.
+            drama = 1.6
             for field, delta in (spec.get("profile") or {}).items():
                 _u_apply_profile_delta(entity, str(field), float(delta) * drama)
             char_delta = float(spec.get("character", 0) or 0)
@@ -9277,6 +9708,20 @@ def _u_interaction_candidates(session: Any, team_id: str, rng: random.Random) ->
                 score += 6.0
             candidates.append((score, kind, ids[0], ids[1]))
     candidates.sort(key=lambda row: (-row[0], row[1], row[2]))
+    if is_user_team:
+        # Media friction scores are unbounded and were drowning out every real player
+        # concern (role, contract, development). Keep the two loudest, capped.
+        media_kinds = ("reporter_confrontation", "reporter_altercation")
+        kept_media = 0
+        trimmed: List[Tuple[float, str, str, str]] = []
+        for row in candidates:
+            if row[1] in media_kinds:
+                if kept_media >= 2:
+                    continue
+                kept_media += 1
+                row = (min(float(row[0]), 88.0), row[1], row[2], row[3])
+            trimmed.append(row)
+        candidates = sorted(trimmed, key=lambda row: (-row[0], row[1], row[2]))
     return candidates
 
 
@@ -9404,6 +9849,8 @@ def _u_apply_outcome(session: Any, interaction: Dict[str, Any], choice: Dict[str
             receipt = _u_apply_profile_delta(entity, str(field), float(delta))
             receipt["player_id"] = player_id
             receipts["profiles"].append(receipt)
+            if str(field) == "state.morale":
+                _u_push_morale_to_player(session, player_id, float(receipt.get("after") or 55))
         _u_add_memory(entity, kind=str(interaction.get("kind") or "interaction"), summary=str(interaction.get("summary") or "Team interaction"), day=day, iso=iso, emotional_delta=sum(float(v) for v in (changes or {}).values()), related_ids=[pid for pid in (actor_id, target_id) if pid and pid != player_id], public=bool(outcome.get("public")))
     if actor_id and target_id and outcome.get("relationship"):
         receipts["relationships"] = _u_change_relationship(session, team_id, actor_id, target_id, dict(outcome["relationship"]), str(interaction.get("title") or "Interaction"))
@@ -9443,27 +9890,9 @@ def _u_apply_outcome(session: Any, interaction: Dict[str, Any], choice: Dict[str
         rel["history"] = history[-20:]
     promise_spec = outcome.get("promise")
     if isinstance(promise_spec, dict):
-        promises = list(getattr(session, "universe_promises", None) or [])
-        due_games = int(promise_spec.get("due_games") or 5)
-        promise = {
-            "id": f"promise_{uuid.uuid4().hex[:10]}",
-            "interaction_id": interaction.get("id"),
-            "type": promise_spec.get("type"),
-            "player_id": promise_spec.get("player_id") or actor_id,
-            "description": promise_spec.get("description"),
-            "created_day": day,
-            "games_remaining": due_games,
-            "status": "active",
-            "progress": 0,
-            "success_potential_delta": float(promise_spec.get("success_potential_delta", 0) or 0),
-            "success_readiness": float(promise_spec.get("success_readiness", 0) or 0),
-            "failure_readiness": float(promise_spec.get("failure_readiness", 0) or 0),
-            "success_attribute": promise_spec.get("success_attribute"),
-            "success_attribute_delta": float(promise_spec.get("success_attribute_delta", 0) or 0),
-        }
-        promises.append(promise)
-        session.universe_promises = promises[-80:]
-        receipts["promise_id"] = promise["id"]
+        promise = create_universe_promise(session, promise_spec, actor_id, interaction.get("id"))
+        if promise:
+            receipts["promise_id"] = promise["id"]
     interaction["status"] = "resolved"
     interaction["resolved_day"] = day
     interaction["resolved_iso"] = iso
@@ -9568,16 +9997,27 @@ def _u_generate_daily_interactions(session: Any, rng: random.Random) -> int:
     if user_team_id in team_ids:
         team_ids.remove(user_team_id)
         team_ids.insert(0, user_team_id)
-    pending = len([row for row in (getattr(session, "universe_interaction_queue", None) or []) if str(row.get("status") or "") == "pending"])
+    _today = _u_current_meta(session)[0]
+    pending = len([
+        row for row in (getattr(session, "universe_interaction_queue", None) or [])
+        if str(row.get("status") or "") == "pending"
+        and int(row.get("expires_day", _today + 1) or _today + 1) >= int(_today)
+    ])
     for team_id_raw in team_ids:
         team_id = str(team_id_raw)
         candidates = _u_interaction_candidates(session, team_id, rng)
         if not candidates:
             continue
         is_user = team_id == user_team_id
-        if is_user and pending >= 3:
+        if is_user and pending >= 2:
             continue
-        threshold = 40 if is_user else 61
+        if is_user:
+            day_now, _, _ = _u_current_meta(session)
+            last_req = int(getattr(session, "_last_user_meeting_request_day", -99) or -99)
+            # A room doesn't line up at the GM's door every day — one real request every few days.
+            if 0 <= int(day_now) - last_req < 4:
+                continue
+        threshold = 52 if is_user else 61
         picked = _u_pick_weighted_meeting_candidate(candidates, rng)
         if picked is None:
             continue
@@ -9590,6 +10030,10 @@ def _u_generate_daily_interactions(session: Any, rng: random.Random) -> int:
         created += 1
         if is_user:
             pending += 1
+            try:
+                session._last_user_meeting_request_day = int(_u_current_meta(session)[0])
+            except Exception:
+                pass
             continue
         if created >= 8:
             break
@@ -9604,7 +10048,7 @@ def _u_tick_promises(session: Any) -> Dict[str, int]:
     for promise in promises:
         if str(promise.get("status") or "") != "active" or int(promise.get("games_remaining", 1) or 0) > 0:
             continue
-        fulfilled = int(promise.get("progress", 0) or 0) > 0
+        fulfilled = int(promise.get("progress", 0) or 0) >= int(promise.get("required_progress", 1) or 1)
         promise["status"] = "kept" if fulfilled else "broken"
         promise["resolved_day"] = day
         player_id = str(promise.get("player_id") or "")
@@ -10304,6 +10748,11 @@ def narrative_universe_v2_daily_pass(session: Any, calendar_idx: int, day_meta: 
     minor_life = _u_generate_minor_life_events(session, local_rng)
     followups = _process_storyline_followups(session)
     expired = _u_expire_interactions(session)
+    try:
+        expire_press_conferences(session)
+        reconcile_requires_action(session)
+    except Exception:
+        pass
     interactions = _u_generate_daily_interactions(session, local_rng)
     trade_demands_created = _u_maybe_create_trade_demand_from_state(session, local_rng)
     trade_demand_tick = _u_tick_trade_demands(session, local_rng)
@@ -10567,6 +11016,28 @@ def _gm_entity(session: Any, player_id: str) -> Dict[str, Any]:
 
 
 def _gm_contract_info(player: Any) -> Dict[str, Any]:
+    try:
+        from services.contract_economy import (  # noqa: WPS433
+            _contract_years_remaining,
+            has_nmc,
+            has_ntc,
+            player_cap_hit_millions,
+        )
+
+        yrs = float(_contract_years_remaining(player))
+        nmc = bool(has_nmc(player))
+        ntc = bool(has_ntc(player)) or nmc
+        return {
+            "years_remaining": yrs,
+            "aav_m": float(player_cap_hit_millions(player) or 0),
+            "expiring": yrs <= 1.05,
+            "has_ntc": ntc,
+            "has_nmc": nmc,
+            "has_trade_protection": ntc or nmc,
+            "clause_label": "NMC" if nmc else ("NTC" if ntc else "None"),
+        }
+    except Exception:
+        pass
     c = getattr(player, "contract", None) or {}
     if not isinstance(c, dict):
         c = {}
@@ -10828,8 +11299,27 @@ def _gm_build_context(session: Any, player_id: str) -> Dict[str, Any]:
     contract = _gm_contract_info(player) if player is not None else {}
     ovr_trend = build_ovr_trend_explanation(session, player_id)
     pst = _ensure_player_storyline_state(player) if player is not None else {}
-    pos = str(entity.get("position") or _u_position(player or object())).upper()
+    pos = _u_position(player) if player is not None else str(entity.get("position") or "F").upper()
+    if pos.startswith("POSITION."):
+        pos = pos.split(".", 1)[1]
+    if entity and entity.get("position") != pos:
+        entity["position"] = pos
     is_goalie = pos == "G"
+    bucket = ""
+    for _pid, _pl, _b in _gm_user_org_players(session):
+        if _pid == str(player_id):
+            bucket = _b
+            break
+    on_nhl = bucket in ("roster", "injured_reserve", "scratches")
+    deploy = None
+    if player is not None and on_nhl:
+        try:
+            from app.sim_engine.franchise.trade_stability_engine import resolve_player_deployment
+
+            _team = (getattr(session, "team_by_id", None) or {}).get(str(getattr(session, "user_team_id", "") or ""))
+            deploy = resolve_player_deployment(session, player, _team) if _team is not None else None
+        except Exception:
+            deploy = None
     try:
         from app.sim_engine.franchise.player_agent_engine import ensure_player_agent, agent_public_view
 
@@ -10860,6 +11350,20 @@ def _gm_build_context(session: Any, player_id: str) -> Dict[str, Any]:
         "improving": ovr_trend.get("direction") == "up",
         "injured": bool(getattr(player, "injured", False) or getattr(player, "injury", None)),
         "age": float(entity.get("age") or 26),
+        "roster_bucket": bucket,
+        "on_nhl": on_nhl,
+        "on_ahl": bucket == "ahl_roster",
+        "pp_unit": int(getattr(deploy, "pp_unit", 0) or 0),
+        "pp_toi": float(getattr(deploy, "pp_toi_min_pg", 0.0) or 0.0),
+        "lines_saved": str(getattr(deploy, "line_source", "") or "") not in ("", "roster_projection"),
+        "on_pp": int(getattr(deploy, "pp_unit", 0) or 0) > 0
+        or (
+            str(getattr(deploy, "line_source", "") or "") in ("", "roster_projection")
+            and float(getattr(deploy, "pp_toi_min_pg", 0.0) or 0.0) >= 1.5
+        ),
+        "pk_unit": int(getattr(deploy, "pk_unit", 0) or 0),
+        "scratched": bool(getattr(deploy, "scratched", False)),
+        "line_rank": int(getattr(deploy, "ev_line_rank", 0) or 0),
     }
 
 
@@ -11045,12 +11549,114 @@ def _apply_meeting_harsh_fallout(
         )
 
 
+def _u_player_fact_bits(session: Any, player_id: str) -> Dict[str, Any]:
+    """Real numbers about a player (season line, usage) so meetings and complaints can cite them."""
+    st = dict(((getattr(session, "player_season_stats", None) or {}).get(str(player_id)) or {}))
+    gp = int(st.get("gp") or 0)
+    out: Dict[str, Any] = {"gp": gp}
+    if gp <= 0:
+        return out
+    pos = str(st.get("position") or "").upper()
+    if pos == "G":
+        sa = float(st.get("shots_against") or st.get("goalie_shots_against") or 0)
+        ga = float(st.get("goalie_ga") or st.get("ga") or 0)
+        sv = (sa - ga) / sa if sa > 0 else 0.0
+        out.update({"goalie": True, "sv": sv, "w": int(st.get("w") or 0), "l": int(st.get("l") or 0)})
+        out["line"] = f"{out['w']}-{out['l']} with a {sv:.3f} save percentage in {gp} games"
+        return out
+    toi = float(st.get("toi_sec") or 0) / gp
+    g, a, pts = int(st.get("g") or 0), int(st.get("a") or 0), int(st.get("pts") or 0)
+    pm = int(st.get("plus_minus") or 0)
+    out.update({"toi": toi, "g": g, "a": a, "pts": pts, "pm": pm, "ppg": pts / gp})
+    out["toi_txt"] = f"{int(toi // 60)}:{int(toi % 60):02d}"
+    out["line"] = f"{g}-{a}-{pts} in {gp} games, {out['toi_txt']} a night, {pm:+d}"
+    return out
+
+
+def _u_meeting_fact_sentence(facts: Dict[str, Any], category: str) -> str:
+    if not facts.get("gp"):
+        return ""
+    if facts.get("goalie"):
+        return f"I'm {facts['line']}."
+    if category == "role":
+        return f"I'm playing {facts['toi_txt']} a night with {facts['pts']} points in {facts['gp']} games."
+    if category == "performance":
+        return f"{facts['g']} goals, {facts['pts']} points through {facts['gp']} games and I'm a {facts['pm']:+d}."
+    if category in ("contract", "trade"):
+        return f"I've given you {facts['pts']} points in {facts['gp']} games this year."
+    return ""
+
+
+_MEETING_OPENERS = {
+    "low": ("Honestly, I've been in a bad spot.", "I'll be straight with you — I'm not happy.", "It's been a tough stretch for me."),
+    "mid": ("Thanks for making the time.", "Glad we're doing this.", "Okay, let's talk."),
+    "high": ("Feeling good right now, so happy to talk.", "Things are rolling — what's up?", "Good timing, I'm in a good place."),
+}
+
+
+def _u_dynamic_player_line(ctx: Dict[str, Any], base_line: str, category: str, interaction_type: str) -> str:
+    """Player opening line that reflects his mood, temperament and real numbers."""
+    state = ctx.get("state") or {}
+    p = ctx.get("personality") or {}
+    morale = float(state.get("morale", 55) or 55)
+    mood = "low" if morale < 42 else "high" if morale >= 66 else "mid"
+    rng = random.Random(_u_seed("gm_meet_line", ctx.get("player_id"), interaction_type, ctx.get("day")))
+    opener = rng.choice(_MEETING_OPENERS[mood])
+    if float(p.get("volatility", 50)) >= 70 and mood == "low":
+        opener = rng.choice(("I'm not going to sugarcoat it — this is frustrating.", "I've been biting my tongue for a while."))
+    fact = _u_meeting_fact_sentence(_u_player_fact_bits(ctx.get("session"), str(ctx.get("player_id") or "")), category)
+    return " ".join(x for x in (opener, base_line, fact) if x)
+
+
+def _u_meeting_reaction_line(name: str, net: float, personality: Dict[str, Any], seed: str) -> str:
+    rng = random.Random(seed)
+    volatile = float(personality.get("volatility", 50)) >= 68
+    loyal = float(personality.get("loyalty", 50)) >= 70
+    if net >= 5:
+        pool = ("That means a lot. I won't let you down.", "Appreciate it. I'm all in.", "That's exactly what I needed to hear.")
+    elif net >= 1:
+        pool = ("Fair enough. I can work with that.", "Okay. I hear you.", "Alright — that helps.")
+    elif net > -3:
+        pool = ("I'll take it, I guess.", "Not what I hoped, but I understand.", "Fine. We'll see how it plays out.")
+    else:
+        pool = (
+            ("That's garbage and you know it.", "Then I don't know what we're doing here.", "Unbelievable.")
+            if volatile
+            else ("I'm disappointed, honestly.", "That's hard to hear.", "I expected more than that.")
+        )
+        if loyal:
+            pool = ("That stings. I'll keep working, but it stings.",) + tuple(pool[:2])
+    return f"{name}: \u201c{rng.choice(pool)}\u201d"
+
+
+def _u_trust_scale_outcome(outcome: Dict[str, Any], rel: Dict[str, Any], personality: Dict[str, Any]) -> Dict[str, Any]:
+    """Positive effects land harder when he trusts you, softer when he doesn't."""
+    trust = float((rel or {}).get("trust", 55) or 55)
+    factor = max(0.55, min(1.35, 0.55 + trust / 100.0 * 0.85))
+    out = dict(outcome)
+    pcs: Dict[str, Any] = {}
+    for role, changes in (outcome.get("profile_changes") or {}).items():
+        rc = dict(changes or {})
+        for k, v in list(rc.items()):
+            try:
+                d = float(v)
+            except (TypeError, ValueError):
+                continue
+            if d > 0:
+                rc[k] = round(d * factor, 2)
+        pcs[str(role)] = rc
+    out["profile_changes"] = pcs
+    return out
+
+
 def _gm_apply_meeting_outcome(session: Any, ctx: Dict[str, Any], interaction_type: str, choice: Dict[str, Any]) -> Dict[str, Any]:
     entity = ctx["entity"]
     player_id = ctx["player_id"]
     day, iso = ctx["day"], ctx["iso"]
     personality = dict(ctx.get("personality") or {})
     outcome = _scale_negative_meeting_outcome(dict(choice.get("outcome") or {}), personality)
+    outcome = _u_trust_scale_outcome(outcome, ctx.get("relationship") or {}, personality)
+    morale_before = float((entity.get("state") or {}).get("morale", 55) or 55)
     fake_interaction = {
         "id": f"gm_{uuid.uuid4().hex[:10]}",
         "kind": interaction_type,
@@ -11060,9 +11666,29 @@ def _gm_apply_meeting_outcome(session: Any, ctx: Dict[str, Any], interaction_typ
         "player_name": str(entity.get("player_name") or "Player"),
         "summary": str(choice.get("label") or interaction_type),
     }
-    applied = _u_apply_outcome(session, fake_interaction, choice)
+    applied = _u_apply_outcome(session, fake_interaction, {**choice, "outcome": outcome})
     receipts = dict((applied or {}).get("receipts") or applied or {})
+    # _u_apply_outcome re-syncs universe entities (fresh dict objects). Writing the
+    # ledger / cooldown / morale read to the pre-sync dict silently lost all of it.
+    live = (getattr(session, "universe_players", None) or {}).get(str(player_id))
+    if isinstance(live, dict):
+        entity = live
+        ctx["entity"] = live
     _gm_set_cooldown(entity, interaction_type, day)
+    # Meetings change the actual player: morale feeds the game sim, and a big swing either
+    # way shows up in his readiness for the next stretch of games.
+    morale_after = float((entity.get("state") or {}).get("morale", 55) or 55)
+    _u_push_morale_to_player(session, player_id, morale_after)
+    swing = morale_after - morale_before
+    if abs(swing) >= 3.5:
+        receipts.setdefault("readiness", []).append(
+            _u_apply_readiness_modifier(
+                session, player_id, source_id=str(fake_interaction["id"]),
+                ovr_delta=round(max(-1.2, min(1.0, swing * 0.12)), 2), days=8,
+                reason="Lifted by the meeting" if swing > 0 else "Rattled by the meeting",
+                stat_modifiers={},
+            )
+        )
     rel = entity.setdefault("gm_relationship", {})
     for key, delta in (outcome.get("relationship") or {}).items():
         before = float(rel.get(key, 55))
@@ -11088,6 +11714,12 @@ def _gm_apply_meeting_outcome(session: Any, ctx: Dict[str, Any], interaction_typ
         is_public=bool(outcome.get("public")),
     )
     summary = _summarize_meeting_receipts(receipts, str(choice.get("label") or ""))
+    net_feel = swing + float(sum(float(v) for v in (outcome.get("relationship") or {}).values() if isinstance(v, (int, float))) * 0.4)
+    reaction = _u_meeting_reaction_line(
+        str(entity.get("player_name") or "Player"), net_feel, personality,
+        f"react|{player_id}|{interaction_type}|{choice.get('id')}|{day}",
+    )
+    summary["message"] = f"{reaction} {summary.get('message') or ''}".strip()
     history_row = {
         "id": fake_interaction["id"],
         "player_id": player_id,
@@ -11121,6 +11753,8 @@ def _gm_apply_meeting_outcome(session: Any, ctx: Dict[str, Any], interaction_typ
         "message": summary["message"],
         "effect_summary": summary["effect_summary"],
         "choice_label": choice.get("label"),
+        "player_reaction": reaction,
+        "morale_change": round(swing, 1),
         "impact": build_meeting_impact(
             receipts,
             player_name=str(entity.get("player_name") or "Player"),
@@ -11151,44 +11785,44 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
         _gm_choice("honest", "Give an honest assessment", "Explain deployment honestly.", {"profile_changes": {"actor": {"state.gm_trust": 4, "state.focus": 2}}, "relationship": {"trust": 3}}),
         _gm_choice("promise", "Promise to revisit usage", "Creates a role opportunity promise.", {"profile_changes": {"actor": {"state.morale": 4, "state.gm_trust": 2}}, "promise": {"type": "role_opportunity", "player_id": ctx["player_id"], "due_games": 6, "description": "Meaningful lineup opportunity within six games.", "success_readiness": 0.5, "failure_readiness": -2.0}, "relationship": {"trust": 2}}),
         _gm_choice("firm", "Hold the current structure", "Keep hierarchy intact.", {"profile_changes": {"actor": {"state.gm_trust": -6, "state.morale": -5, "state.focus": 2}}, "relationship": {"trust": -6, "respect": -2}, "readiness_changes": [{"who": "actor", "ovr_delta": -0.9, "days": 10, "reason": "Role frustration after meeting"}]}),
-    ], not ctx["is_goalie"])
+    ], not ctx["is_goalie"] and ctx["on_nhl"])
     _reg("offer_increased_ice_time", "role", "Offer increased ice time", "If you're serious about giving me more, I need to know what that looks like.", [
         _gm_choice("commit", "Commit to increased usage", "Promise meaningful minutes.", {"profile_changes": {"actor": {"state.morale": 5, "state.confidence": 3}}, "promise": {"type": "role_opportunity", "player_id": ctx["player_id"], "due_games": 5, "description": "Increased even-strength usage.", "success_readiness": 0.6, "failure_readiness": -2.5}, "relationship": {"trust": 4}}),
         _gm_choice("conditional", "Make it conditional on performance", "Earn-it message.", {"profile_changes": {"actor": {"state.focus": 3, "state.gm_trust": 1}}, "relationship": {"respect": 2}}),
-    ], float(ctx["state"].get("role_satisfaction") or 55) <= 58)
+    ], ctx["on_nhl"] and not ctx["is_goalie"] and float(ctx["state"].get("role_satisfaction") or 55) <= 58)
     _reg("explain_reduced_ice_time", "role", "Explain reduced ice time", "My minutes dropped. I'd like the truth.", [
         _gm_choice("transparent", "Explain coaching decision", "Transparency builds trust.", {"profile_changes": {"actor": {"state.gm_trust": 3}}, "relationship": {"trust": 3, "honesty": 2}}),
         _gm_choice("performance", "Tie it to recent performance", "Accountability framing.", {"profile_changes": {"actor": {"state.focus": 2, "state.morale": -1}}, "relationship": {"respect": 1}}),
         _gm_choice("deflect", "Defer to coaching staff", "Avoids direct answer.", {"profile_changes": {"actor": {"state.gm_trust": -7, "state.morale": -3}}, "relationship": {"trust": -6, "communication": -3}}),
-    ], float(ctx["state"].get("role_satisfaction") or 55) <= 52)
+    ], ctx["on_nhl"] and float(ctx["state"].get("role_satisfaction") or 55) <= 52)
     _reg("discuss_line_assignment", "role", "Discuss line assignment", "Where do you see me fitting in the lineup?", [
         _gm_choice("top_six", "Discuss top-six path", "Offensive role clarity.", {"profile_changes": {"actor": {"state.confidence": 2, "state.focus": 2}}, "relationship": {"communication": 3}}),
         _gm_choice("depth", "Explain depth role", "Honest depth conversation.", {"profile_changes": {"actor": {"state.morale": -1, "state.gm_trust": 2}}, "relationship": {"honesty": 2}}),
-    ])
+    ], ctx["on_nhl"] and not ctx["is_goalie"])
     _reg("discuss_promotion", "role", "Discuss promotion to higher line", "I think I've outgrown my current line.", [
         _gm_choice("support", "Agree — promotion coming", "Boost confidence.", {"profile_changes": {"actor": {"state.morale": 4, "state.confidence": 3}}, "promise": {"type": "role_opportunity", "player_id": ctx["player_id"], "due_games": 4, "description": "Promotion to a higher line.", "success_readiness": 0.45}, "relationship": {"trust": 3}}),
         _gm_choice("wait", "Not yet — keep proving it", "Patience required.", {"profile_changes": {"actor": {"state.morale": -2 if ambitious else 0}}, "relationship": {"respect": 1 if not ambitious else -2}}),
-    ], ctx["improving"] or ambitious)
+    ], (ctx["improving"] or ambitious) and ctx["on_nhl"] and not ctx["is_goalie"] and ctx["line_rank"] != 1)
     _reg("discuss_demotion", "role", "Discuss demotion", "Moving down a line stings. Talk to me.", [
         _gm_choice("accountability", "Accountability conversation", "Performance-linked.", {"profile_changes": {"actor": {"state.focus": 3, "state.morale": -2}}, "relationship": {"respect": 2}}),
         _gm_choice("support", "Support through adjustment", "Soft landing.", {"profile_changes": {"actor": {"state.gm_trust": 2, "state.belonging": 2}}, "relationship": {"loyalty": 2}}),
-    ], ctx["struggling"] or float(ctx["state"].get("role_satisfaction") or 55) <= 48)
+    ], ctx["on_nhl"] and not ctx["is_goalie"] and (ctx["struggling"] or float(ctx["state"].get("role_satisfaction") or 55) <= 48))
     _reg("offer_pp_opportunity", "role", "Offer power-play opportunity", "Put me on the power play and I'll produce.", [
         _gm_choice("promise_pp", "Promise PP look", "Special teams promise.", {"profile_changes": {"actor": {"state.morale": 4}}, "promise": {"type": "power_play_opportunity", "player_id": ctx["player_id"], "due_games": 8, "description": "Meaningful PP usage.", "success_readiness": 0.5, "failure_readiness": -2.0}, "relationship": {"trust": 3}}),
         _gm_choice("deny", "PP spots are earned", "Hierarchy held.", {"profile_changes": {"actor": {"state.morale": -5, "state.confidence": -2}}, "relationship": {"trust": -4}, "readiness_changes": [{"who": "actor", "ovr_delta": -0.7, "days": 8, "reason": "Special teams frustration"}]}),
-    ], not ctx["is_goalie"])
+    ], not ctx["is_goalie"] and ctx["on_nhl"] and not ctx["on_pp"])
     _reg("explain_pp_removal", "role", "Explain removal from power play", "I lost my PP spot. Why?", [
         _gm_choice("explain", "Explain decision", "Direct answer.", {"profile_changes": {"actor": {"state.gm_trust": 2}}, "relationship": {"honesty": 2}}),
         _gm_choice("challenge", "Challenge him to earn it back", "Competitive framing.", {"profile_changes": {"actor": {"state.focus": 3, "state.confidence": -1}}, "relationship": {"respect": 1}}),
-    ], not ctx["is_goalie"])
+    ], not ctx["is_goalie"] and ctx["on_nhl"] and ctx["lines_saved"] and ctx["pp_unit"] == 0 and ctx["pp_toi"] >= 1.5)
     _reg("offer_pk_opportunity", "role", "Offer penalty-kill opportunity", "I can help on the kill if you trust me.", [
         _gm_choice("yes", "Offer PK reps", "Defensive trust.", {"profile_changes": {"actor": {"state.belonging": 3, "state.confidence": 2}}, "relationship": {"trust": 2}}),
         _gm_choice("no", "Stay at even strength", "Role unchanged.", {"profile_changes": {"actor": {"state.morale": -1}}, "relationship": {}}),
-    ], not ctx["is_goalie"])
+    ], not ctx["is_goalie"] and ctx["on_nhl"] and ctx["pk_unit"] == 0)
     _reg("discuss_healthy_scratch", "role", "Discuss healthy scratch", "Being scratched hurts. What's the message?", [
         _gm_choice("development", "Development / reset", "Temporary bench.", {"profile_changes": {"actor": {"state.focus": 2, "state.morale": -3}}, "relationship": {"communication": 2}}),
         _gm_choice("performance", "Performance decision", "Hard truth.", {"profile_changes": {"actor": {"state.morale": -4, "state.focus": 3}}, "relationship": {"respect": 1}}),
-    ], float(ctx["state"].get("morale") or 55) <= 45)
+    ], ctx["on_nhl"] and ctx["scratched"])
     _reg("discuss_return_lineup", "role", "Discuss returning to lineup", "I'm ready to come back. What's the plan?", [
         _gm_choice("welcome", "Welcome back with defined role", "Clear return path.", {"profile_changes": {"actor": {"state.morale": 4, "state.confidence": 3}}, "relationship": {"trust": 3}}),
         _gm_choice("earn", "Earn the spot back", "Competition message.", {"profile_changes": {"actor": {"state.focus": 3}}, "relationship": {"respect": 2}}),
@@ -11196,7 +11830,7 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
     _reg("discuss_goalie_workload", "role", "Discuss goalie starting workload", "I want clarity on the crease rotation.", [
         _gm_choice("promise_starts", "Promise a run of starts", "Starter opportunity.", {"profile_changes": {"actor": {"state.confidence": 4}}, "promise": {"type": "goalie_start_opportunity", "player_id": ctx["player_id"], "due_games": 6, "description": "Meaningful starting workload.", "success_readiness": 0.4, "failure_readiness": -2.5}, "relationship": {"trust": 3}}),
         _gm_choice("platoon", "Explain platoon plan", "Shared net.", {"profile_changes": {"actor": {"state.gm_trust": 2}}, "relationship": {"communication": 2}}),
-    ], ctx["is_goalie"])
+    ], ctx["is_goalie"] and ctx["on_nhl"])
 
     # Performance (13-20)
     _reg("praise_performance", "performance", "Praise recent performance", "Appreciate you noticing — means something.", [
@@ -11290,9 +11924,9 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
         _gm_choice("open", "Keep options open", "Neutral.", {"profile_changes": {"actor": {"state.gm_trust": -1}}, "relationship": {"negotiation_goodwill": -1}}),
     ], ctx["contract"].get("expiring"))
     _reg("hometown_discount", "contract", "Ask for hometown discount", "I've given a lot to this organization.", [
-        _gm_choice("ask", "Ask for team-friendly term", "Money ask.", {"profile_changes": {"actor": {"state.morale": -2 if not loyal else 1}}, "relationship": {"negotiation_goodwill": 3 if loyal else -4}}),
+        _gm_choice("ask", "Ask him to take less to stay", "Real ask — if he agrees, his next deal with you is below market.", {"profile_changes": {"actor": {"state.morale": 0}}, "relationship": {}, "hometown_discount_request": True}),
         _gm_choice("respect", "Respect his market value", "No discount push.", {"profile_changes": {"actor": {"state.gm_trust": 2}}, "relationship": {"respect": 3}}),
-    ], loyal or float(ctx["life"].get("community_connection") or 0) >= 55)
+    ], bool(ctx["contract"].get("expiring")) and ctx["on_nhl"])
     _reg("contract_expectations", "contract", "Discuss contract expectations", "Let's talk about what fair looks like.", [
         _gm_choice("listen", "Listen to expectations", "Open negotiation tone.", {"profile_changes": {"actor": {"state.gm_trust": 2}}, "relationship": {"negotiation_goodwill": 3, "communication": 3}}),
         _gm_choice("anchor", "Anchor below market", "Hard line.", {"profile_changes": {"actor": {"state.morale": -5, "state.gm_trust": -3}}, "relationship": {"negotiation_goodwill": -6, "grievance": 5}}),
@@ -11315,8 +11949,21 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
         _gm_choice("firm", "Firm reassurance", "Trust rebuild.", {"profile_changes": {"actor": {"state.morale": 3, "state.gm_trust": 4}}, "relationship": {"trust": 5, "loyalty": 3}}),
         _gm_choice("vague", "Vague reassurance", "Weak trust.", {"profile_changes": {"actor": {"state.gm_trust": -2 if rel.get('broken_promises') else 1}}, "relationship": {"trust": -2 if rel.get("broken_promises") else 1}}),
     ], ctx["trade_rumor_heat"] >= 8)
-    _reg("ask_ntc_waiver", "trade", "Ask player to waive NTC/NMC", "That's a big ask. I need a good reason.", [
-        _gm_choice("destination", "Present specific destination", "Targeted waiver ask.", {"profile_changes": {"actor": {"state.media_stress": 2}}, "relationship": {"trust": -2}, "ntc_waiver_request": True}),
+    _waiver_hint = ""
+    if ctx["contract"].get("has_trade_protection") and ctx.get("player") is not None:
+        try:
+            from app.sim_engine.trades.clause_consent import preview_waiver_chance
+
+            _team_w = (getattr(session, "team_by_id", None) or {}).get(str(getattr(session, "user_team_id", "") or ""))
+            _pv = preview_waiver_chance(session, ctx["player"], _team_w)
+            _waiver_hint = f"Odds he agrees: ~{round(float(_pv['chance']) * 100)}%"
+            if _pv.get("notes"):
+                _waiver_hint += " (" + ", ".join(str(n) for n in _pv["notes"][:3]) + ")"
+            _waiver_hint += ". A no locks the ask until the next window."
+        except Exception:
+            _waiver_hint = ""
+    _reg("ask_ntc_waiver", "trade", f"Ask player to waive his {ctx['contract'].get('clause_label') or 'NTC/NMC'}", "That's a big ask. I need a good reason.", [
+        _gm_choice("destination", "Make the case for waiving", _waiver_hint or "Ask him to open up his trade protection.", {"profile_changes": {"actor": {"state.media_stress": 2}}, "relationship": {"trust": -2}, "ntc_waiver_request": True}),
         _gm_choice("withdraw", "Withdraw the request", "Preserve relationship.", {"profile_changes": {"actor": {"state.gm_trust": 2}}, "relationship": {"trust": 2}}),
     ], ctx["contract"].get("has_trade_protection") and not _gm_on_cooldown(entity, "ask_ntc_waiver", ctx["day"]))
     _reg("ask_preferred_destinations", "trade", "Ask for preferred destinations", "If a move happens, here's what I'd consider.", [
@@ -11326,11 +11973,11 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
     _reg("discuss_ahl_assignment", "trade", "Discuss AHL assignment", "Sending me down is a message.", [
         _gm_choice("development", "Frame as development", "Soft landing.", {"profile_changes": {"actor": {"state.focus": 2, "state.morale": -4}}, "relationship": {"communication": 2}}),
         _gm_choice("performance", "Performance-based", "Accountability.", {"profile_changes": {"actor": {"state.morale": -5, "state.focus": 3}}, "relationship": {"respect": 1, "grievance": 3}}),
-    ], ctx["struggling"] and float(ctx["age"]) <= 28)
+    ], ctx["on_nhl"] and ctx["struggling"] and float(ctx["age"]) <= 28)
     _reg("discuss_call_up", "trade", "Discuss call-up opportunity", "I'm ready for the NHL.", [
         _gm_choice("soon", "Call-up is possible soon", "Hope.", {"profile_changes": {"actor": {"state.morale": 4, "state.confidence": 3}}, "promise": {"type": "call_up_opportunity", "player_id": ctx["player_id"], "due_games": 14, "description": "Evaluate for NHL call-up.", "success_readiness": 0.5}, "relationship": {"trust": 3}}),
         _gm_choice("work", "Keep working in AHL", "Patience.", {"profile_changes": {"actor": {"state.focus": 2, "state.morale": -1}}, "relationship": {"respect": 1}}),
-    ], False)  # enabled when player on AHL — checked below
+    ], ctx["on_ahl"])
     _reg("address_trade_rumors", "trade", "Address trade rumors", "The rumors are everywhere. What's true?", [
         _gm_choice("deny", "Deny active talks", "Media calm.", {"profile_changes": {"actor": {"state.media_stress": -2}}, "relationship": {"trust": 2 if ctx["trade_attempts"] == 0 else -4}}),
         _gm_choice("acknowledge", "Acknowledge uncertainty", "Honest.", {"profile_changes": {"actor": {"state.gm_trust": 2, "state.morale": -2}}, "relationship": {"honesty": 3}}),
@@ -11392,7 +12039,7 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
         "status": "pending",
         "dialogue": [
             {"speaker": "GM", "text": tpl["title"] + "."},
-            {"speaker": name, "text": tpl["player_line"]},
+            {"speaker": name, "text": _u_dynamic_player_line(ctx, tpl["player_line"], tpl["category"], interaction_type)},
         ],
         "choices": tpl["choices"],
         "ovr_explanation": ctx["ovr_trend"] if interaction_type in ("explain_ovr_rising", "explain_ovr_falling") else None,
@@ -11408,6 +12055,8 @@ def get_available_gm_interactions(session: Any, player_id: str) -> List[Dict[str
     cache_key = f"{player_id}:{day}"
     if cache_key in cache:
         return list(cache[cache_key])
+    # Only today's entries are ever valid — don't let the cache grow inside the save.
+    cache = {k: v for k, v in cache.items() if str(k).endswith(f":{day}")}
     ctx = _gm_build_context(session, player_id)
     if not ctx.get("entity"):
         return []
@@ -11438,6 +12087,12 @@ def get_available_gm_interactions(session: Any, player_id: str) -> List[Dict[str
     return available
 
 
+def _gm_invalidate_interactions(session: Any, player_id: str) -> None:
+    cache = dict(getattr(session, "_gm_interactions_cache", None) or {})
+    pref = f"{player_id}:"
+    session._gm_interactions_cache = {k: v for k, v in cache.items() if not str(k).startswith(pref)}
+
+
 def start_gm_player_meeting(session: Any, player_id: str, interaction_type: str) -> Dict[str, Any]:
     _ensure_gm_meeting_state(session)
     migrate_session_storyline_state(session)
@@ -11446,6 +12101,8 @@ def start_gm_player_meeting(session: Any, player_id: str, interaction_type: str)
         raise ValueError("Player not found in organization.")
     meeting = _gm_build_interaction(session, ctx, str(interaction_type))
     if meeting is None:
+        # The menu may have been built before this player's situation changed.
+        _gm_invalidate_interactions(session, str(player_id))
         raise ValueError("That conversation is not available for this player right now.")
     active = dict(getattr(session, "gm_active_meetings", None) or {})
     active[str(meeting["id"])] = meeting
@@ -11470,34 +12127,49 @@ def resolve_gm_player_meeting(session: Any, meeting_id: str, choice_id: str) -> 
         utid = str(getattr(session, "user_team_id", "") or "")
         team = (getattr(session, "team_by_id", None) or {}).get(utid)
         try:
-            from app.sim_engine.trades.trade_rules import evaluate_ntc_waiver_request
-            waiver = evaluate_ntc_waiver_request(player, source_team=team, destination_team=team, context={"meeting_request": True})
-            trust = float((ctx["entity"].get("state") or {}).get("gm_trust") or 55)
-            chance = float(waiver.get("accept_chance") or 0.35) + (trust - 55) * 0.004
-            life = ctx.get("life") or {}
-            if float(life.get("community_connection") or 0) >= 60:
-                chance -= 0.08
-            if float(life.get("relocation_strain") or 0) >= 50:
-                chance -= 0.05
-            if _gm_broken_promises(session, str(meeting.get("player_id") or "")):
-                chance -= 0.12
-            chance = max(0.03, min(0.88, chance))
-            accepted = float(waiver.get("roll") or 0.5) < chance
-            result["ntc_waiver"] = {**waiver, "accept_chance": round(chance, 3), "accepted": accepted, "meeting_context": True}
-            entity = ctx["entity"]
-            if accepted:
-                _u_apply_profile_delta(entity, "state.gm_trust", 2)
-                result["message"] = f"{meeting.get('player_name')} agreed to discuss waiving his clause."
+            # One source of truth: consent is recorded (and honored by trade rules),
+            # deterministic per player + window, and a "no" can't be re-asked in that window.
+            from app.sim_engine.trades.clause_consent import request_clause_waiver
+
+            waiver = request_clause_waiver(
+                session, player, source_team=team, destination_team=None, origin="meeting",
+                team_by_id=getattr(session, "team_by_id", None), context={"meeting_request": True},
+            )
+            result["ntc_waiver"] = {**waiver, "meeting_context": True}
+            odds = waiver.get("accept_chance")
+            odds_txt = f" (odds were ~{round(float(odds) * 100)}%)" if odds is not None else ""
+            if waiver.get("accepted"):
+                result["message"] = (
+                    waiver.get("message")
+                    or f"{meeting.get('player_name')} agreed to waive his {waiver.get('clause_label') or 'clause'}{odds_txt}. You can trade him this window."
+                )
+            elif waiver.get("can_request") is False and waiver.get("reason"):
+                result["message"] = str(waiver.get("reason"))
             else:
-                _u_apply_profile_delta(entity, "state.gm_trust", -5)
-                _u_apply_profile_delta(entity, "state.morale", -4)
-                result["message"] = f"{meeting.get('player_name')} declined to waive his no-trade protection."
+                why = str(waiver.get("reason") or "").strip()
+                again = str(waiver.get("reask_after_label") or "").strip()
+                result["message"] = (
+                    f"{meeting.get('player_name')} won't waive his {waiver.get('clause_label') or 'clause'}{odds_txt}"
+                    + (f" — {why}" if why else "")
+                    + (f". You can ask again after {again}." if again else ".")
+                )
         except Exception as exc:
             result["ntc_waiver"] = {"error": str(exc)}
+    if outcome.get("hometown_discount_request"):
+        try:
+            from services.negotiation_meetings import ask_hometown_discount  # noqa: WPS433
+
+            hd = ask_hometown_discount(session, str(meeting.get("player_id") or ""))
+            result["hometown_discount"] = hd
+            if hd.get("message"):
+                result["message"] = str(hd["message"])
+        except Exception as exc:
+            result["hometown_discount"] = {"error": str(exc)}
     meeting["status"] = "resolved"
     active.pop(str(meeting_id), None)
     session.gm_active_meetings = active
     _gm_mark_attention_addressed(session, str(meeting.get("player_id") or ""))
+    _gm_invalidate_interactions(session, str(meeting.get("player_id") or ""))
     return result
 
 
@@ -11507,6 +12179,11 @@ def resolve_player_meeting_interaction(session: Any, interaction_id: str, choice
     migrate_session_storyline_state(session)
     all_rows = list(getattr(session, "universe_interactions", None) or [])
     interaction_pre = next((row for row in all_rows if str(row.get("id") or "") == str(interaction_id)), None)
+    if interaction_pre is None:
+        interaction_pre = next(
+            (row for row in (getattr(session, "universe_interaction_queue", None) or []) if str(row.get("id") or "") == str(interaction_id)),
+            None,
+        )
     player_id = str((interaction_pre or {}).get("player_id") or (interaction_pre or {}).get("actor_id") or "")
     if player_id:
         _gm_entity(session, player_id)
@@ -11565,7 +12242,7 @@ def resolve_player_meeting_interaction(session: Any, interaction_id: str, choice
 
 #: Trade-stability pressure → meetings that address it, best first.
 _MEETING_FIX_BY_PRESSURE: Dict[str, Tuple[str, ...]] = {
-    "role": ("offer_increased_ice_time", "discuss_ice_time", "explain_reduced_ice_time", "discuss_goalie_workload", "discuss_healthy_scratch"),
+    "role": ("offer_increased_ice_time", "discuss_ice_time", "explain_reduced_ice_time", "discuss_goalie_workload", "discuss_healthy_scratch", "discuss_promotion", "discuss_line_assignment", "discuss_call_up"),
     "performance": ("discuss_ice_time", "offer_increased_ice_time", "discuss_promotion"),
     "contract": ("contract_expectations", "ask_extension_interest", "discuss_upcoming_fa"),
     "management": ("repair_relationship", "ask_locker_room_concerns"),
@@ -11713,7 +12390,9 @@ def _gm_player_issues_and_openings(
             head,
             f"Main complaint: {complaint or 'general unhappiness'}"
             + (f" · stability {float(score):.0f}/100" if score is not None else ""),
-            top_fixes + ("repair_relationship",),
+            # Always end with conversations every player can be offered, so a critical
+            # stability issue never shows up with no way to act on it.
+            top_fixes + ("repair_relationship", "ask_locker_room_concerns", "long_term_plans"),
         )
     if broken:
         issue(
@@ -11786,13 +12465,16 @@ def _gm_player_issues_and_openings(
             left_i = int(left) if left is not None else None
         except (TypeError, ValueError):
             left_i = None
-        if left_i is not None and left_i <= 3:
+        need = int(p.get("required_progress", 1) or 1)
+        have = int(p.get("progress", 0) or 0)
+        if left_i is not None and left_i <= 3 and have < need:
             issue(
                 "promise_due",
-                "watch",
+                "warning" if need - have > left_i else "watch",
                 "role",
                 "A promise is coming due",
-                f"{str(p.get('description') or p.get('type') or 'Promise')} — {left_i} game{'s' if left_i != 1 else ''} left to deliver.",
+                f"{str(p.get('description') or p.get('type') or 'Promise')} — delivered {have}/{need} games, "
+                f"{left_i} game{'s' if left_i != 1 else ''} left. {_u_promise_how_to(str(p.get('type') or ''))}",
             )
 
     # --- good news ----------------------------------------------------------
@@ -11858,7 +12540,12 @@ def build_player_meetings_payload(session: Any) -> Dict[str, Any]:
         if real_role >= 60.0:
             r["status"] = "withdrawn"
             r["withdrawn_reason"] = "deployment_matches_role"
-    pending_player = [dict(r) for r in pending_player if str(r.get("status") or "") == "pending" and str(r.get("team_id") or "") == utid]
+    pending_player = [
+        dict(r) for r in pending_player
+        if str(r.get("status") or "") == "pending"
+        and str(r.get("team_id") or "") == utid
+        and int(r.get("expires_day", day + 1) or day + 1) >= int(day)
+    ]
     active_promises = [p for p in (getattr(session, "universe_promises", None) or []) if str(p.get("status") or "") == "active"]
     broken_promises = [p for p in (getattr(session, "universe_promises", None) or []) if str(p.get("status") or "") == "broken"]
     for pid, player, bucket in _gm_user_org_players(session):

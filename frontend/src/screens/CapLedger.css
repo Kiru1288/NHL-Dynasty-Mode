@@ -2884,3 +2884,25 @@
 .cap-office-edraft .cap-board-layout--desk .cap-contract-row__name {
   font-size: 15px;
 }
+/* ---- Readability pass: bigger numbers, tighter column layout ---- */
+@media (min-width: 1100px) {
+  .cap-office-edraft .cap-board-layout:not(.cap-board-layout--desk) .cap-board-head,
+  .cap-office-edraft .cap-board-layout:not(.cap-board-layout--desk) .cap-contract-row {
+    grid-template-columns: minmax(260px, 1.15fr) 72px 96px 150px 104px minmax(220px, 1fr);
+    gap: 18px;
+  }
+}
+.cap-office-edraft .cap-board-head { font-size: 12.5px; padding: 12px 18px; }
+.cap-office-edraft .cap-board-head > span:nth-child(n + 2):nth-child(-n + 5) { text-align: center; }
+.cap-office-edraft .cap-contract-row { min-height: 66px; padding: 9px 18px; }
+.cap-office-edraft .cap-contract-row__cell { display: flex; justify-content: center; }
+.cap-office-edraft .cap-photo-well { width: 52px; height: 52px; }
+.cap-office-edraft .cap-card-headshot,
+.cap-office-edraft .cap-contract-headshot { width: 48px; height: 48px; }
+.cap-office-edraft .cap-contract-row__name { font-size: 18px; }
+.cap-office-edraft .cap-contract-row__sub { font-size: 13.5px; font-style: normal; color: var(--cap-muted); }
+.cap-office-edraft .cap-stat-well { min-width: 64px; min-height: 40px; padding: 5px 12px; }
+.cap-office-edraft .cap-stat-well .cap-num-pop { font-size: 23px; }
+.cap-office-edraft .cap-stat-well__unit { font-size: 12px; }
+.cap-office-edraft .cap-contract-row__pos .cap-icon-well { width: 44px; height: 36px; font-size: 13px; }
+.cap-office-edraft .cap-contract-row__tags { justify-content: flex-start; gap: 8px; font-size: 13px; }

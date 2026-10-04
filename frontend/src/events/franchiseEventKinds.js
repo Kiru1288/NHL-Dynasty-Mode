@@ -5,6 +5,7 @@ export const FRANCHISE_CINEMATIC_POPUP_KINDS = new Set([
   "awards",
   "awards_night",
   "retirements",
+  "board_of_governors",
   "salary_cap",
   "development_report",
   "draft_lottery",

@@ -1,0 +1,102 @@
+.burner-panel {
+  --bp-line: rgba(150, 214, 235, 0.16);
+  --bp-text: #e9f7fb;
+  --bp-muted: rgba(190, 214, 228, 0.7);
+  --bp-gold: #e9a83c;
+  --bp-red: #ff6b6b;
+  --bp-green: #3ddc97;
+  --gold: #e9a83c;
+  --text: #e9f7fb;
+  display: grid;
+  gap: 16px;
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 20px 22px 24px;
+  border: 1px solid var(--bp-line);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(14, 30, 46, 0.92), rgba(6, 15, 26, 0.96));
+  color: var(--bp-text);
+  font-size: 14px;
+}
+.burner-panel__head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.burner-panel__head h3 { margin: 2px 0 0; font-size: 22px; letter-spacing: 0.02em; }
+.burner-panel__head .sl-kicker { margin: 0; font-size: 11px; font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; color: var(--bp-muted); }
+.burner-panel__suspicion {
+  display: flex; flex-direction: column; align-items: center; min-width: 96px; padding: 8px 12px;
+  border: 1px solid rgba(255, 107, 107, 0.35); border-radius: 10px; background: rgba(255, 107, 107, 0.08);
+}
+.burner-panel__suspicion span { font-size: 10px; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; color: var(--bp-muted); }
+.burner-panel__suspicion strong { font-size: 26px; line-height: 1.1; }
+.burner-investigation {
+  display: flex; justify-content: space-between; padding: 10px 12px; border-radius: 10px;
+  border: 1px dashed rgba(255, 107, 107, 0.5); color: #ffb4b4; font-weight: 700;
+}
+.burner-field { display: flex; align-items: center; gap: 12px; }
+.burner-field span { font-size: 11px; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; color: var(--bp-muted); }
+.burner-field select {
+  min-width: 220px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--bp-line);
+  background: rgba(0, 0, 0, 0.35); color: var(--bp-text); font-size: 14px;
+}
+.burner-composer { position: relative; min-height: 120px; }
+.burner-composer__backdrop,
+.burner-composer__input {
+  box-sizing: border-box; width: 100%; min-height: 120px; margin: 0; padding: 12px 14px;
+  font: inherit; font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word;
+  border-radius: 10px;
+}
+.burner-composer__backdrop {
+  position: absolute; inset: 0; overflow: hidden; color: transparent; pointer-events: none;
+  border: 1px solid transparent;
+}
+.burner-composer__input {
+  position: relative; resize: vertical; background: rgba(0, 0, 0, 0.32); color: var(--bp-text);
+  border: 1px solid var(--bp-line); caret-color: var(--bp-gold);
+}
+.burner-composer__input:focus { outline: none; border-color: rgba(233, 168, 60, 0.6); box-shadow: 0 0 0 3px rgba(233, 168, 60, 0.12); }
+.burner-hl { color: transparent; border-radius: 3px; }
+.burner-hl--warn { background: rgba(233, 168, 60, 0.28); }
+.burner-hl--danger { background: rgba(255, 107, 107, 0.32); }
+.burner-risk-row { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px; align-items: stretch; }
+.burner-gauge-wrap {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px;
+  border: 1px solid var(--bp-line); border-radius: 12px; background: rgba(0, 0, 0, 0.2);
+}
+.burner-gauge { width: 180px; height: auto; display: block; }
+.burner-gauge-read { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.burner-gauge-read strong { font-size: 30px; line-height: 1; }
+.burner-gauge-read span { font-size: 10px; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; color: var(--bp-muted); }
+.burner-gauge-read em { margin-top: 6px; font-style: normal; font-size: 12px; color: var(--bp-muted); }
+.burner-gauge-wrap.is-mid .burner-gauge-read strong { color: var(--bp-gold); }
+.burner-gauge-wrap.is-high .burner-gauge-read strong { color: var(--bp-red); }
+.burner-outcomes { display: grid; gap: 10px; align-content: start; }
+.burner-tone {
+  justify-self: start; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 900;
+  letter-spacing: 0.08em; text-transform: uppercase; border: 1px solid var(--bp-line);
+}
+.burner-tone.is-hype { color: var(--bp-green); border-color: rgba(61, 220, 151, 0.45); }
+.burner-tone.is-criticism { color: var(--bp-red); border-color: rgba(255, 107, 107, 0.45); }
+.burner-tone.is-trade_talk { color: var(--bp-gold); border-color: rgba(233, 168, 60, 0.45); }
+.burner-outcome { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--bp-line); background: rgba(0, 0, 0, 0.18); }
+.burner-outcome span { font-size: 10.5px; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; }
+.burner-outcome p { margin: 4px 0 0; font-size: 14px; line-height: 1.45; }
+.burner-outcome--ok { border-left: 3px solid var(--bp-green); }
+.burner-outcome--ok span { color: var(--bp-green); }
+.burner-outcome--bad { border-left: 3px solid var(--bp-red); }
+.burner-outcome--bad span { color: var(--bp-red); }
+.burner-error { margin: 0; color: var(--bp-red); font-weight: 700; }
+.burner-post-btn {
+  justify-self: start; padding: 11px 22px; border-radius: 10px; cursor: pointer;
+  border: 1px solid rgba(233, 168, 60, 0.6); background: linear-gradient(180deg, #f0b44e, #c98a24);
+  color: #1a1206; font-weight: 900; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.burner-post-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.burner-history h4 { margin: 4px 0 8px; font-size: 12px; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; color: var(--bp-muted); }
+.burner-history__row { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--bp-line); margin-bottom: 8px; background: rgba(0, 0, 0, 0.15); }
+.burner-history__row strong { color: var(--bp-green); }
+.burner-history__row--caught strong { color: var(--bp-red); }
+.burner-history__row span { color: var(--bp-muted); font-size: 12.5px; }
+.burner-history__row p { margin: 6px 0 4px; }
+.burner-history__row em { font-style: normal; font-size: 12.5px; color: var(--bp-muted); }
+@media (max-width: 720px) {
+  .burner-risk-row { grid-template-columns: 1fr; }
+}

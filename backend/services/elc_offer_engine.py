@@ -92,15 +92,14 @@ def legal_elc_terms(player: Any, season_year: int) -> Dict[str, Any]:
     """Player-specific legal ELC structure — frontend must not invent terms."""
     age = _age(player)
     path = _path(player)
-    signed = str(getattr(player, "signed_status", "unsigned") or "").lower() == "signed"
-    elc_ok = bool(getattr(player, "entry_level_contract_eligible", True)) and not signed
     try:
-        from services.contract_economy import has_true_elc_contract, has_active_contract
+        # One rule everywhere: the same check the signing path enforces.
+        from services.contract_economy import is_elc_eligible
 
-        if has_true_elc_contract(player) or has_active_contract(player):
-            elc_ok = False
+        elc_ok = bool(is_elc_eligible(player))
     except Exception:
-        pass
+        signed = str(getattr(player, "signed_status", "unsigned") or "").lower() == "signed"
+        elc_ok = bool(getattr(player, "entry_level_contract_eligible", True)) and not signed
 
     # Simplified CBA-style: age 18–21 typically 3 years; older bridge often 1–2.
     if age <= 20:
@@ -699,6 +698,20 @@ def preview_elc_offer(
     }
 
 
+def record_signing_bonus_cash(session: Any, team: Any, amount_m: float, season_year: int, *, label: str = "") -> None:
+    """Signing bonuses are paid in cash up front: log them so club finances (profit) feel it."""
+    if amount_m <= 0 or team is None:
+        return
+    tid = str(getattr(team, "team_id", getattr(team, "id", "")) or "")
+    ledger = getattr(session, "signing_bonus_cash", None)
+    if not isinstance(ledger, dict):
+        ledger = {}
+    row = ledger.setdefault(str(int(season_year)), {}).setdefault(tid, {"total_m": 0.0, "items": []})
+    row["total_m"] = round(float(row["total_m"]) + float(amount_m), 4)
+    row["items"] = (row["items"] + [{"label": label, "amount_m": round(float(amount_m), 4)}])[-40:]
+    session.signing_bonus_cash = ledger
+
+
 def submit_elc_offer(
     session: Any,
     player: Any,
@@ -820,6 +833,10 @@ def submit_elc_offer(
     )
     hist_row["result"] = "accepted"
     hist_row["contract"] = result.get("contract")
+    try:
+        record_signing_bonus_cash(session, team, float(built.get("signing_bonus_total_m") or 0.0) / max(1, int(built.get("term_years") or 3)), season_year, label=f"ELC: {getattr(getattr(player, 'identity', None), 'name', '')}")
+    except Exception:
+        pass
     hist_row["assignment"] = assign_res
     record_negotiation(session, hist_row)
 
@@ -847,7 +864,12 @@ def process_elc_slides(session: Any, season_year: int) -> Dict[str, Any]:
         return {"slid": [], "burned": [], "count": 0}
 
     for team in list(getattr(league, "teams", None) or []):
-        for p in list(getattr(team, "prospect_pool", None) or []) + list(getattr(team, "roster", None) or []):
+        nhl_ids = {id(x) for x in list(getattr(team, "roster", None) or [])}
+        for p in (
+            list(getattr(team, "prospect_pool", None) or [])
+            + list(getattr(team, "roster", None) or [])
+            + list(getattr(team, "ahl_roster", None) or [])
+        ):
             c = getattr(p, "contract", None)
             if not isinstance(c, dict):
                 continue
@@ -859,6 +881,15 @@ def process_elc_slides(session: Any, season_year: int) -> Dict[str, Any]:
             if used >= 1:
                 continue
             gp = int(getattr(p, "nhl_games_played_this_season", 0) or c.get("games_played_this_season") or 0)
+            # The tracked counter is often never written; an NHL-roster player's season
+            # line is the real NHL games count (60 GP must burn the year, not slide).
+            if id(p) in nhl_ids:
+                ss = getattr(p, "season_stats", None)
+                if isinstance(ss, dict):
+                    try:
+                        gp = max(gp, int(ss.get("gp") or ss.get("games_played") or 0))
+                    except (TypeError, ValueError):
+                        pass
             threshold = int(c.get("slide_games_threshold") or ELC_SLIDE_GAMES_THRESHOLD)
             if gp < threshold:
                 # Slide: do not decrement — bump expiry, mark slid

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
-import { getLeagueOperations } from "../services/franchiseService";
+import { getGovernance, getLeagueOperations } from "../services/franchiseService";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 
 const EMPTY_OBJ = Object.freeze({});
@@ -14,11 +14,12 @@ const WORKSPACES = [
   { id: "cba", label: "CBA" },
   { id: "markets", label: "Markets" },
   { id: "risk", label: "Franchise Risk" },
+  { id: "board", label: "Board & Values" },
 ];
 const MARKET_FILTERS = [
   { id: "all", label: "All" },
   { id: "growing", label: "Growing" },
-  { id: "losing", label: "Losing" },
+  { id: "losing", label: "Losing money" },
   { id: "reloc", label: "Relocation Risk" },
 ];
 const CALM_MOODS = new Set(["calm", "quiet", "stable"]);
@@ -1447,7 +1448,214 @@ const LO_STYLES = `
   .lo-chart-wrap .lo-chart { max-height: 140px; }
   .lo-ov { gap: 8px !important; }
 }
+
+/* —— Board & Values —— */
+.lo-board { height: 100%; min-height: 0; overflow: auto; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.75fr); gap: 12px; align-content: start; }
+.lo-board-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.lo-board-panel { border: 1px solid var(--lo-line); border-radius: 8px; background: var(--lo-panel); padding: 12px; }
+.lo-board-panel .lo-table td { cursor: default; }
+.lo-board-kv { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; font-size: 0.78rem; }
+.lo-board-kv span { color: var(--lo-muted); }
+.lo-board-kv strong { text-align: right; }
+.lo-board-kv .up { color: var(--lo-green); }
+.lo-board-kv .down { color: var(--lo-red); }
+.lo-board-effects { color: var(--lo-muted); font-weight: 600; white-space: normal; }
+.lo-board-pass { color: var(--lo-green); font-weight: 900; }
+.lo-board-fail { color: var(--lo-red); font-weight: 900; }
+.lo-board-note { color: var(--lo-muted); font-size: 0.76rem; margin: 0; }
+.lo-board-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 0.78rem; }
+.lo-board-list li { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid rgba(156, 218, 236, 0.06); padding: 4px 0; }
+@media (max-width: 1100px) { .lo-board { grid-template-columns: 1fr; } }
 `;
+
+function BoardWorkspace({ userTeamId }) {
+  const [gov, setGov] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let alive = true;
+    getGovernance()
+      .then((d) => {
+        if (alive) setGov(d?.governance || null);
+      })
+      .catch((e) => {
+        if (alive) setErr(e?.message || "Board data unavailable");
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  if (!gov) {
+    return <div className="lo-empty">{err || "Loading Board of Governors…"}</div>;
+  }
+  const impact = asObject(gov.user_impact);
+  const rules = asArray(gov.rulebook);
+  const hist = asArray(gov.history);
+  const values = asArray(gov.franchise_values);
+  const relocs = asArray(gov.relocations);
+  const exp = asObject(gov.expansion);
+  const pending = asArray(exp.pending);
+  const joined = asArray(exp.joined);
+  const valueChange = Number(impact.value_change_pct || 0);
+  return (
+    <div className="lo-board lo-enter">
+      <div className="lo-board-col">
+        <section className="lo-board-panel">
+          <h3 className="lo-section-title">Rules in force ({rules.length})</h3>
+          {rules.length ? (
+            <div className="lo-table-wrap" style={{ height: "auto", maxHeight: 320 }}>
+              <table className="lo-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: "10%" }}>Year</th>
+                    <th style={{ width: "34%" }}>Rule</th>
+                    <th style={{ width: "18%" }}>Area</th>
+                    <th>Effect</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rules.map((r) => (
+                    <tr key={r.rule_id}>
+                      <td>{r.season}</td>
+                      <td title={r.summary}>{r.title}</td>
+                      <td>{r.category_label}</td>
+                      <td className="lo-board-effects">{asArray(r.effects).map((e) => `${e.label} ${e.text}`).join(" · ")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="lo-board-note">No Board rules yet. The Board meets every offseason, after Retirements.</p>
+          )}
+        </section>
+        <section className="lo-board-panel">
+          <h3 className="lo-section-title">Vote record</h3>
+          {hist.length ? (
+            <div className="lo-table-wrap" style={{ height: "auto", maxHeight: 300 }}>
+              <table className="lo-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: "10%" }}>Year</th>
+                    <th style={{ width: "46%" }}>Proposal</th>
+                    <th style={{ width: "18%" }}>Result</th>
+                    <th>Your vote</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {hist.map((h) => (
+                    <tr key={h.proposal_id}>
+                      <td>{h.season}</td>
+                      <td>{h.title}</td>
+                      <td className={h.status === "passed" ? "lo-board-pass" : "lo-board-fail"}>
+                        {h.status === "passed" ? "Passed" : "Failed"} {h.yes}–{h.no}
+                      </td>
+                      <td>{h.user_vote}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="lo-board-note">No votes yet.</p>
+          )}
+        </section>
+      </div>
+      <div className="lo-board-col">
+        <section className="lo-board-panel">
+          <h3 className="lo-section-title">How revenue reaches your club</h3>
+          <div className="lo-board-kv">
+            <span>Annual revenue</span>
+            <strong>{impact.annual_revenue_m != null ? `$${Number(impact.annual_revenue_m).toFixed(1)}M` : "—"}</strong>
+            <span>Franchise value</span>
+            <strong>{impact.franchise_value_b != null ? `$${Number(impact.franchise_value_b).toFixed(2)}B` : "—"}</strong>
+            <span>Value change (last offseason)</span>
+            <strong className={valueChange > 0 ? "up" : valueChange < 0 ? "down" : ""}>
+              {`${valueChange >= 0 ? "+" : ""}${valueChange.toFixed(1)}%`}
+            </strong>
+            <span>Scouting budget (revenue-funded)</span>
+            <strong>{impact.scouting_budget ? `$${(Number(impact.scouting_budget) / 1e6).toFixed(2)}M` : "—"}</strong>
+            <span>Signing-bonus room</span>
+            <strong className={impact.bonus_eligible ? "up" : "down"}>
+              {impact.bonus_eligible
+                ? `Up to ${Math.round(Number(impact.bonus_max_pct || 0) * 100)}% of a deal`
+                : `Locked: needs $${Number(impact.bonus_floor_m || 155).toFixed(0)}M revenue`}
+            </strong>
+            <span>Star revenue spike next season</span>
+            <strong>{impact.star_spike_next_m ? `+$${Number(impact.star_spike_next_m).toFixed(1)}M` : "—"}</strong>
+          </div>
+          <p className="lo-board-note" style={{ marginTop: 8 }}>
+            Some free agents only sign where they get a signing bonus, so clubs below the revenue floor can't land them.
+          </p>
+        </section>
+        <section className="lo-board-panel">
+          <h3 className="lo-section-title">Franchise values</h3>
+          <div className="lo-table-wrap" style={{ height: "auto", maxHeight: 360 }}>
+            <table className="lo-table">
+              <thead>
+                <tr>
+                  <th style={{ width: "34%" }}>Club</th>
+                  <th style={{ width: "18%" }}>Value</th>
+                  <th style={{ width: "16%" }}>Change</th>
+                  <th>Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                {values.map((v) => (
+                  <tr key={v.team_id} className={String(v.team_id) === String(userTeamId) ? "user" : ""}>
+                    <td>
+                      {v.abbr} · {v.name}
+                    </td>
+                    <td>${Number(v.value_b).toFixed(2)}B</td>
+                    <td className={Number(v.change_pct) >= 0 ? "lo-board-pass" : "lo-board-fail"}>
+                      {`${Number(v.change_pct) >= 0 ? "+" : ""}${Number(v.change_pct || 0).toFixed(1)}%`}
+                    </td>
+                    <td className="lo-board-effects">{asArray(v.drivers).join(", ") || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section className="lo-board-panel">
+          <h3 className="lo-section-title">Relocation &amp; expansion</h3>
+          <ul className="lo-board-list">
+            {relocs.map((r) => (
+              <li key={`${r.season}-${r.team_id}`}>
+                <span>
+                  {r.season}: {r.from_city} → {r.to_city} ({r.to_abbr})
+                </span>
+                <span>
+                  {asArray(r.demands).length} trade request{asArray(r.demands).length === 1 ? "" : "s"}
+                </span>
+              </li>
+            ))}
+            {pending.map((p, i) => (
+              <li key={`pending-${i}`}>
+                <span>Approved: {asArray(p.cities).map((c) => c.city).join(" & ")}</span>
+                <span>
+                  Joins {p.start_season}-{String((Number(p.start_season) + 1) % 100).padStart(2, "0")}
+                </span>
+              </li>
+            ))}
+            {joined.map((j) => (
+              <li key={`joined-${j.team_id}`}>
+                <span>
+                  {j.city} {j.name} ({j.abbr})
+                </span>
+                <span>Joined {j.season}</span>
+              </li>
+            ))}
+            {!relocs.length && !pending.length && !joined.length ? (
+              <li>
+                <span>No moves or new clubs yet.</span>
+              </li>
+            ) : null}
+          </ul>
+        </section>
+      </div>
+    </div>
+  );
+}
 
 function InlineStyles() {
   return <style>{LO_STYLES}</style>;
@@ -2383,6 +2591,7 @@ function CbaWorkspace({ data, selectedIssueId, onSelectIssue }) {
             <span className="lo-cba-pressure">
               Pressure {cba.pressure_level || "—"}
               {cba.years_remaining != null ? ` · ${cba.years_remaining}y left` : ""}
+              {cba.lockout_risk_label ? ` · Lockout risk ${cba.lockout_risk_label}` : ""}
             </span>
           </div>
           <div className="lo-timeline-rail" role="list">
@@ -2457,11 +2666,7 @@ function filterTeams(teams, filterId) {
     });
   }
   if (filterId === "losing") {
-    return list.filter((t) => {
-      const yoy = num(t.revenue_yoy_delta, 0);
-      const dir = t.revenue_yoy_direction || "";
-      return dir === "down" || yoy < 0 || String(t.display_status) === "Loss";
-    });
+    return list.filter((t) => num(t.profit, 0) < 0);
   }
   if (filterId === "reloc") {
     return list.filter((t) => num(t.relocation_risk, 0) >= 0.35 || t.threatened);
@@ -2534,7 +2739,8 @@ function MarketsWorkspace({
               <tr>
                 <th className="lo-col-team">Team</th>
                 <th className="lo-col-rev">{sortLabel("revenue", "Revenue")}</th>
-                <th className="lo-col-trend">{sortLabel("trend", "Change")}</th>
+                <th className="lo-col-trend">{sortLabel("trend", "vs last yr")}</th>
+                <th className="lo-col-profit">{sortLabel("profit", "Profit")}</th>
                 <th className="lo-col-market">{sortLabel("market", "Market")}</th>
                 <th className="lo-col-risk">{sortLabel("risk", "Risk")}</th>
               </tr>
@@ -2579,6 +2785,9 @@ function MarketsWorkspace({
                       </td>
                       <td className="lo-col-rev">{fmtMoneyM(t.revenue)}</td>
                       <td className={`lo-col-trend lo-trend ${trend.dir}`}>{trend.text}</td>
+                      <td className={`lo-col-profit lo-trend ${num(t.profit, 0) < 0 ? "down" : "up"}`}>
+                        {num(t.profit, 0) < 0 ? "-" : "+"}{fmtMoneyM(Math.abs(num(t.profit, 0)))}
+                      </td>
                       <td className="lo-col-market">{t.market_tier || "—"}</td>
                       <td className={`lo-col-risk ${riskClass(t.relocation_risk_label)}`}>
                         {t.relocation_risk_label}
@@ -2588,7 +2797,7 @@ function MarketsWorkspace({
                 })
               ) : (
                 <tr>
-                  <td colSpan={5}>
+                  <td colSpan={6}>
                     <div className="lo-empty">No matching teams</div>
                   </td>
                 </tr>
@@ -2719,6 +2928,9 @@ function sortTeams(teams, sortKey, sortDir) {
   list.sort((a, b) => {
     if (sortKey === "trend") {
       return (num(a.revenue_yoy_delta, 0) - num(b.revenue_yoy_delta, 0)) * dir;
+    }
+    if (sortKey === "profit") {
+      return (num(a.profit, 0) - num(b.profit, 0)) * dir;
     }
     if (sortKey === "market") {
       const order = { Large: 3, Mid: 2, Small: 1 };
@@ -2888,6 +3100,7 @@ export default function LeagueOperations() {
               onSelectTeam={(t) => setSelectedTeamId(t.id)}
             />
           ) : null}
+          {workspace === "board" ? <BoardWorkspace userTeamId={userTeamId} /> : null}
           {workspace === "risk" ? (
             <FranchiseRiskWorkspace
               teams={sortedTeams}

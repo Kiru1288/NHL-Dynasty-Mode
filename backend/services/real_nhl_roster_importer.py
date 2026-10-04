@@ -1021,6 +1021,59 @@ def _attach_career_stats(player: Any, *, landing: Optional[Dict[str, Any]], is_g
     setattr(player, "career_stats", existing)
 
 
+def _ensure_estimated_contract(player: Any, *, season_year: int, rng: Any = None) -> None:
+    """Rostered NHL players with no matched Spotrac deal still have a contract in real life.
+
+    Without one they were dumped into free agency at the first summer. Give them an
+    estimated multi-year deal (market AAV, age-based term) so only genuinely expiring
+    players hit the market.
+    """
+    try:
+        from services.contract_economy import (
+            apply_contract_to_player,
+            compute_market_value,
+            has_active_contract,
+        )
+
+        if has_active_contract(player):
+            return
+        age = int(getattr(player, "age", 0) or getattr(getattr(player, "identity", None), "age", 0) or 27)
+        r = (rng.random() if rng is not None else 0.5)
+        if age <= 21:
+            years, rights = 2 + int(r * 2), "RFA"
+        elif age <= 25:
+            years, rights = 1 + int(r * 3), "RFA"
+        elif age <= 30:
+            years, rights = 2 + int(r * 4), "UFA"
+        elif age <= 34:
+            years, rights = 1 + int(r * 3), "UFA"
+        else:
+            years, rights = 1 + int(r * 2), "UFA"
+        try:
+            aav = float(compute_market_value(player) or 0.0)
+        except Exception:
+            aav = 0.0
+        aav = round(max(0.775, min(13.0, aav or 0.775)), 3)
+        apply_contract_to_player(
+            player,
+            {
+                "aav_m": aav,
+                "cap_hit_m": aav,
+                "years": years,
+                "years_remaining": years,
+                "expiry_year": int(season_year) + years,
+                "contract_type": "STANDARD",
+                "rights_status": rights,
+                "source": "estimated",
+                "is_nhl_spc": True,
+            },
+            int(season_year),
+        )
+        setattr(player, "contract_source", "estimated")
+    except Exception:
+        pass
+
+
 def _apply_real_contract(
     player: Any,
     *,
@@ -1039,6 +1092,12 @@ def _apply_real_contract(
         return
     if not payload.get("expiry_year"):
         payload["expiry_year"] = int(season_year) + yrs
+    ext = payload.get("pending_extension")
+    if isinstance(ext, dict) and float(ext.get("aav_m") or 0) > 0:
+        ext = dict(ext)
+        ext["expiry_year"] = int(payload.get("expiry_year") or (int(season_year) + yrs)) + int(ext.get("years") or 0)
+        ext["rights_status"] = "UFA"
+        payload["pending_extension"] = ext
     payload.setdefault("contract_type", "STANDARD")
     payload.setdefault("rights_status", "UFA")
     payload.setdefault("source", "real_nhl_spotrac")
@@ -1477,6 +1536,8 @@ def _build_player_from_roster_row(
             source="real_nhl_import",
             season_year=int(season_year),
         )
+    _ensure_estimated_contract(player, season_year=int(season_year), rng=rng)
+
     # Prefer stable NHL id when ledger assigned a random one.
     try:
         if nhl_id:
@@ -1616,7 +1677,22 @@ def _fetch_merged_team_roster(abbr: str, roster_season: int, prior_season: int) 
         note = f"merged_current_{len(primary_rows)}_prior_{len(prior_rows)}_out_{len(merged)}"
         return primary_payload or prior_payload, merged, note
     if primary_rows:
-        return primary_payload, primary_rows, note
+        # NHL.com's live roster drops injured (IR/LTIR) players even when they are
+        # under contract (e.g. Artem Zub, OTT 2026-27). Carry prior-season players
+        # forward as candidates; build_real_nhl_league_players keeps one only if
+        # he is not on another club's live roster and still holds a contract with
+        # this club (filters out departed UFAs, retirees, and traded players).
+        primary_ids = {_roster_player_id(r) for r in primary_rows}
+        carry: List[Dict[str, Any]] = []
+        for row in prior_rows:
+            pid = _roster_player_id(row)
+            if pid > 0 and pid not in primary_ids:
+                tagged = dict(row)
+                tagged["_prior_only_candidate"] = True
+                carry.append(tagged)
+        if carry:
+            note = f"{note}_plus_{len(carry)}_prior_candidates"
+        return primary_payload, list(primary_rows) + carry, note
     raise RealNhlImportError(f"{abbr}: no roster for {roster_season} or {prior_season}")
 
 
@@ -1776,6 +1852,222 @@ def _assign_player_to_nhl(player: Any, team: Any) -> None:
             ctx.current_team_id = tid
     except Exception:
         pass
+
+
+def _fetch_org_prospects(abbr: str) -> Dict[str, Any]:
+    """NHL API organization prospects (forwards / defensemen / goalies), incl. AHL kids."""
+    try:
+        data = _http_get_json(f"{WEB_API}/prospects/{str(abbr).upper()}", timeout=12)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _player_is_goalie_obj(p: Any) -> bool:
+    pos = getattr(getattr(p, "identity", None), "position", None)
+    val = str(getattr(pos, "value", pos) or getattr(p, "position", "") or "").upper()
+    return val in ("G", "GOALIE")
+
+
+def import_real_minor_goalies(
+    team: Any,
+    abbr: str,
+    *,
+    league: Any,
+    rng: random.Random,
+    season_year: int,
+    as_of: date,
+    dynasty_registry: Any,
+    align_rounds: int = 40,
+    skip_ledger_finalize: bool = False,
+    use_api: bool = True,
+    min_ahl_goalies: int = 2,
+) -> int:
+    """Stock each AHL affiliate with its real goalies.
+
+    The dynasty ratings file lists every club's AHL (and ECHL) goalies, but nothing ever
+    created them, so affiliates ran on generated netminders — and could end up with none.
+    Real goalies come from the ratings file, enriched with NHL API prospect data
+    (id → headshot, birth date, handedness) when the API answers. Generated AHL goalies
+    make way for them; every affiliate ends with at least ``min_ahl_goalies``.
+    """
+    if not hasattr(team, "ahl_roster") or team.ahl_roster is None:
+        team.ahl_roster = []
+    added = 0
+    entries: List[Any] = []
+    if dynasty_registry is not None:
+        for lvl in ("ahl", "echl"):
+            try:
+                entries.extend(
+                    e for e in dynasty_registry.entries_for_team(abbr, lvl) if getattr(e, "is_goalie", False)
+                )
+            except Exception:
+                continue
+    api_rows: Dict[str, Dict[str, Any]] = {}
+    if use_api:
+        payload = _fetch_org_prospects(abbr)
+        for row in list(payload.get("goalies") or []):
+            nm = f"{_localized_name(row.get('firstName'))} {_localized_name(row.get('lastName'))}".strip()
+            if nm:
+                api_rows[_norm_simple(nm)] = row
+    existing_names = set()
+    for attr in ("roster", "ahl_roster", "echl_roster", "prospect_pool"):
+        for p in list(getattr(team, attr, None) or []):
+            nm = str(getattr(getattr(p, "identity", None), "name", "") or getattr(p, "name", "") or "")
+            if nm:
+                existing_names.add(_norm_simple(nm))
+    real_new: List[Any] = []
+    for e in entries:
+        raw = str(getattr(e, "raw_name", "") or "").strip()
+        if " " not in raw:
+            continue  # last-name-only rows can't build a real person
+        key = _norm_simple(raw)
+        if key in existing_names:
+            continue
+        first, last = raw.split(" ", 1)
+        row = dict(api_rows.get(key) or {})
+        if not row:
+            age_guess = 23 + int(rng.random() * 5)
+            row = {
+                "id": 0,
+                "firstName": {"default": first},
+                "lastName": {"default": last},
+                "positionCode": "G",
+                "birthDate": f"{int(season_year) - age_guess}-0{1 + int(rng.random() * 8)}-15",
+                "shootsCatches": "L",
+                "heightInInches": 74,
+                "weightInPounds": 190,
+            }
+        row["positionCode"] = "G"
+        try:
+            player = _build_player_from_roster_row(
+                row,
+                team=team,
+                league=league,
+                rng=rng,
+                season_year=season_year,
+                as_of=as_of,
+                skater_stats_a={},
+                skater_stats_b={},
+                goalie_stats_a={},
+                goalie_stats_b={},
+                dynasty_registry=dynasty_registry,
+                align_rounds=align_rounds,
+                skip_ledger_finalize=skip_ledger_finalize,
+            )
+        except Exception:
+            continue
+        try:
+            from services.dynasty_ratings_parser import apply_dynasty_entry_to_player
+
+            apply_dynasty_entry_to_player(player, e, seed=int(rng.random() * 1e9), align_rounds=align_rounds)
+        except Exception:
+            pass
+        try:
+            from services.contract_economy import apply_contract_to_player, has_active_contract
+
+            if not has_active_contract(player):
+                yrs = 1 + int(rng.random() * 2)
+                apply_contract_to_player(
+                    player,
+                    {
+                        "aav_m": 0.8,
+                        "cap_hit_m": 0.8,
+                        "years": yrs,
+                        "years_remaining": yrs,
+                        "expiry_year": int(season_year) + yrs,
+                        "contract_type": "STANDARD",
+                        "two_way": True,
+                        "minor_salary_m": 0.1,
+                        "rights_status": "UFA",
+                        "source": "estimated",
+                        "is_nhl_spc": True,
+                    },
+                    int(season_year),
+                )
+        except Exception:
+            pass
+        _assign_player_to_ahl(player, team)
+        setattr(player, "real_minor_import", True)
+        real_new.append(player)
+        existing_names.add(key)
+    # Ratings file thin for this org? Pull pro-age goalies straight from the NHL API.
+    if len(real_new) < min_ahl_goalies and api_rows:
+        for key, row in api_rows.items():
+            if len(real_new) >= min_ahl_goalies or key in existing_names:
+                continue
+            try:
+                by = int(str(row.get("birthDate") or "0")[:4] or 0)
+            except ValueError:
+                by = 0
+            if by and int(season_year) - by < 20:
+                continue  # still a junior/college kid, not an AHL goalie
+            try:
+                player = _build_player_from_roster_row(
+                    dict(row, positionCode="G"),
+                    team=team, league=league, rng=rng, season_year=season_year, as_of=as_of,
+                    skater_stats_a={}, skater_stats_b={}, goalie_stats_a={}, goalie_stats_b={},
+                    dynasty_registry=dynasty_registry, align_rounds=align_rounds,
+                    skip_ledger_finalize=skip_ledger_finalize,
+                )
+            except Exception:
+                continue
+            _ensure_estimated_contract(player, season_year=int(season_year), rng=rng)
+            _assign_player_to_ahl(player, team)
+            setattr(player, "real_minor_import", True)
+            real_new.append(player)
+            existing_names.add(key)
+    if real_new:
+        # Generated AHL goalies give up their crease to the real ones.
+        keep_gen = max(0, min_ahl_goalies - len(real_new))
+        new_ahl: List[Any] = []
+        gen_kept = 0
+        for p in list(team.ahl_roster):
+            if _player_is_goalie_obj(p) and not getattr(p, "real_minor_import", False) and not getattr(p, "real_nhl_contract", False):
+                if gen_kept < keep_gen:
+                    gen_kept += 1
+                    new_ahl.append(p)
+                else:
+                    try:
+                        if p in (getattr(league, "players", None) or []):
+                            league.players.remove(p)
+                    except Exception:
+                        pass
+                continue
+            new_ahl.append(p)
+        # Best three real goalies play in the AHL; any extra go to the ECHL affiliate.
+        real_new.sort(key=lambda q: -_player_sort_ovr(q))
+        for i, p in enumerate(real_new):
+            if i < 3:
+                new_ahl.append(p)
+            else:
+                if not hasattr(team, "echl_roster") or team.echl_roster is None:
+                    team.echl_roster = []
+                try:
+                    p.roster_location = "echl"
+                    from app.sim_engine.league_hierarchy_bootstrap import _set_assignment, _team_label
+
+                    _set_assignment(p, org_nhl_team_id=str(getattr(team, "team_id", "") or ""), level="echl", club=_team_label(team))
+                except Exception:
+                    pass
+                team.echl_roster.append(p)
+            try:
+                if p not in (getattr(league, "players", None) or []):
+                    league.players.append(p)
+            except Exception:
+                pass
+            added += 1
+        team.ahl_roster = new_ahl
+    return added
+
+
+def _norm_simple(name: str) -> str:
+    try:
+        from services.real_nhl_contracts import normalize_player_name
+
+        return normalize_player_name(name)
+    except Exception:
+        return " ".join(str(name or "").lower().split())
 
 
 def trim_team_roster_to_nhl_limit(
@@ -1978,6 +2270,7 @@ def build_real_nhl_league_players(
     r4_overrides = load_r4_overrides()
     dynasty_registry = None
     dynasty_meta: Dict[str, Any] = {}
+    _dynasty_unmatched: List[Any] = []
     fast_import = _real_nhl_fast_import_enabled()
     try:
         from services.dynasty_ratings_parser import load_dynasty_ratings_registry
@@ -2054,6 +2347,15 @@ def build_real_nhl_league_players(
             for row in rows:
                 all_rows.append((abbr, row))
 
+    # Live-roster ids league-wide; a prior-season candidate who now appears on
+    # any club's live roster was moved and must not be duplicated.
+    live_roster_ids: set = set()
+    for _, row in all_rows:
+        if not row.get("_prior_only_candidate"):
+            pid_live = _roster_player_id(row)
+            if pid_live > 0:
+                live_roster_ids.add(pid_live)
+
     nhl_ids = []
     for _, row in all_rows:
         try:
@@ -2091,6 +2393,12 @@ def build_real_nhl_league_players(
     contracts_applied = 0
     drafts_applied = 0
     sent_to_ahl = 0
+    restored_missing: List[str] = []
+
+    try:
+        from services.real_nhl_contracts import normalize_player_name as _norm_name
+    except Exception:  # pragma: no cover
+        _norm_name = lambda s: str(s or "").strip().lower()  # noqa: E731
 
     for team in teams:
         abbr = str(
@@ -2123,6 +2431,21 @@ def build_real_nhl_league_players(
             last = _localized_name(row.get("lastName"))
             full_name = f"{first} {last}".strip()
             pos_code = str(row.get("positionCode") or "").upper()
+            is_restored = bool(row.get("_prior_only_candidate"))
+            if is_restored:
+                if pid and pid in live_roster_ids:
+                    continue  # now on another club's live roster
+                # Exact-name contract with THIS club for this season (no last-name
+                # fallback, to avoid matching a different player with the same surname).
+                if _norm_name(full_name) not in (contracts_by_team.get(abbr) or {}):
+                    continue
+                landing_chk = landings.get(pid) if pid else None
+                if isinstance(landing_chk, dict):
+                    if landing_chk.get("isActive") is False:
+                        continue
+                    cur_abbr = str(landing_chk.get("currentTeamAbbrev") or "").upper()
+                    if cur_abbr and cur_abbr != abbr:
+                        continue
             contract = match_contract_for_player(
                 full_name,
                 abbr,
@@ -2159,12 +2482,16 @@ def build_real_nhl_league_players(
                 dynasty_applied += 1
             elif dynasty_registry is not None:
                 dynasty_missing += 1
+                _dynasty_unmatched.append((player, full_name, getattr(player, "nhl_id", None) or getattr(player, "nhl_player_id", None)))
             if getattr(player, "real_nhl_r4", False):
                 r4_applied += 1
             if getattr(player, "real_nhl_contract", False):
                 contracts_applied += 1
             if getattr(player, "drafted", False) or getattr(player, "undrafted", False):
                 drafts_applied += 1
+            if is_restored:
+                setattr(player, "restored_from_prior_roster", True)
+                restored_missing.append(f"{abbr}:{full_name}")
             team.roster.append(player)
             league.players.append(player)
             count += 1
@@ -2173,6 +2500,21 @@ def build_real_nhl_league_players(
         trim_info = trim_team_roster_to_nhl_limit(team)
         per_team[abbr] = int(trim_info.get("nhl") or len(team.roster))
         sent_to_ahl += int(trim_info.get("sent_to_ahl") or 0)
+        try:
+            import_real_minor_goalies(
+                team,
+                abbr,
+                league=league,
+                rng=rng,
+                season_year=sy,
+                as_of=as_of,
+                dynasty_registry=dynasty_registry,
+                align_rounds=align_rounds,
+                skip_ledger_finalize=skip_ledger_finalize,
+                use_api=not fast_import,
+            )
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"{abbr} AHL goalie import failed: {e}")
 
         # Spotrac dead money (buyouts / retained) — previously never imported, so
         # clubs looked ~$5M too loose vs CapFriendly/Spotrac once AAVs were fixed.
@@ -2207,6 +2549,35 @@ def build_real_nhl_league_players(
             f"Real NHL import incomplete ({imported} players). {detail}",
             code="REAL_NHL_INCOMPLETE_IMPORT",
         )
+
+    # Second pass: players the txt lists under another club (trades / stale headers).
+    if dynasty_registry is not None and _dynasty_unmatched:
+        try:
+            from services.dynasty_ratings_parser import apply_dynasty_entry_to_player, normalize_player_name
+
+            claimed = set()
+            used_keys = {
+                str(getattr(p, "_dynasty_entry_key", "") or "")
+                for t in teams for p in (getattr(t, "roster", None) or [])
+                if getattr(p, "dynasty_ratings_import", False)
+            }
+            for e in dynasty_registry.entries:
+                if f"{e.team_abbr}|{e.level}|{e.raw_name}" in used_keys:
+                    claimed.add(id(e))
+            last_counts: Dict[str, int] = {}
+            for _p, nm, _i in _dynasty_unmatched:
+                lk = normalize_player_name(str(nm).split()[-1] if nm else "")
+                last_counts[lk] = last_counts.get(lk, 0) + 1
+            for p, nm, nid in _dynasty_unmatched:
+                entry = dynasty_registry.match_anywhere(str(nm), claimed=claimed, unmatched_last_counts=last_counts)
+                if entry is None:
+                    continue
+                apply_dynasty_entry_to_player(p, entry, seed=nid, align_rounds=40)
+                claimed.add(id(entry))
+                dynasty_applied += 1
+                dynasty_missing = max(0, dynasty_missing - 1)
+        except Exception as _dyn_err:
+            failures.append(f"dynasty second pass failed: {_dyn_err}")
 
     if not fast_import:
         try:
@@ -2247,6 +2618,7 @@ def build_real_nhl_league_players(
             "moneypuck_players": len(analytics_by_id),
             "moneypuck_goalies": len(goalie_analytics_by_id),
             "sent_to_ahl": sent_to_ahl,
+            "restored_missing_from_live_roster": restored_missing,
             "nhl_roster_max": NHL_OPENING_ROSTER_MAX,
             "brady_tkachuk_chaos": brady_meta,
         })

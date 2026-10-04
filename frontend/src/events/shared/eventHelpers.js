@@ -59,8 +59,11 @@ export function formatMoney(value) {
   if (value == null || value === "") return "—";
   const n = Number(value);
   if (!Number.isFinite(n)) return String(value);
-  if (Math.abs(n) >= 1) return `$${n.toFixed(2)}M`;
-  return `$${(n * 1_000_000).toFixed(0)}`;
+  const sign = n < 0 ? "-" : "";
+  const a = Math.abs(n);
+  if (a >= 1) return `${sign}$${a.toFixed(2)}M`;
+  if (a === 0) return "$0";
+  return `${sign}$${Math.round(a * 1000)}K`;
 }
 
 export function formatPick(pick) {
@@ -1703,7 +1706,7 @@ export function buildCinematicCss(prefix) {
 }
 .${p}-fa-row {
   width: 100%; display: grid;
-  grid-template-columns: auto minmax(0,1fr) auto auto auto;
+  grid-template-columns: auto minmax(0,1fr) auto auto auto auto;
   gap: 0.45rem; align-items: center; text-align: left;
   border: 1px solid transparent; background: transparent; color: inherit;
   border-radius: 9px; padding: 0.4rem 0.45rem; cursor: pointer; font: inherit;
@@ -1721,6 +1724,15 @@ export function buildCinematicCss(prefix) {
 }
 .${p}-fa-row-body em { font-style: normal; font-size: 0.6875rem; color: var(--muted); }
 .${p}-fa-row-meta { font-size: 0.6875rem; color: rgba(233,247,251,0.65); text-transform: capitalize; }
+.${p}-fa-rating { display: inline-flex; gap: 0.35rem; }
+.${p}-fa-rating > span {
+  display: flex; flex-direction: column; align-items: center; min-width: 2.7rem;
+  padding: 0.2rem 0.35rem; border-radius: 7px;
+  border: 1px solid rgba(19,216,231,0.3); background: rgba(19,216,231,0.08);
+}
+.${p}-fa-rating > span.is-pot { border-color: rgba(233,168,60,0.35); background: rgba(233,168,60,0.08); }
+.${p}-fa-rating b { font-size: 1.12rem; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
+.${p}-fa-rating i { font-style: normal; font-size: 0.6rem; font-weight: 900; letter-spacing: 0.08em; color: var(--muted); }
 .${p}-fa-logos { display: inline-flex; gap: 0.15rem; align-items: center; }
 .${p}-fa-logos.is-large { gap: 0.35rem; margin-top: 0.25rem; }
 .${p}-fa-ask { font-size: 0.82rem; font-weight: 900; color: var(--gold); white-space: nowrap; }

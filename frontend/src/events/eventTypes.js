@@ -25,6 +25,7 @@ export const EVENT_TYPES = Object.freeze({
   AWARDS: "awards",
   AWARDS_NIGHT: "awards_night",
   RETIREMENTS: "retirements",
+  BOARD_OF_GOVERNORS: "board_of_governors",
   PROSPECT_DEVELOPMENT: "prospect_development",
   SCOUTING_REPORT: "scouting_report",
   INTERNATIONAL_TOURNAMENT: "international_tournament",

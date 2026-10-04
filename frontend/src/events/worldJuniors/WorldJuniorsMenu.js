@@ -92,6 +92,22 @@ function formatProspectPotential(prospect) {
   return "—";
 }
 
+function isUserOrgProspect(row) {
+  return Boolean(
+    row?.is_user_org ||
+      row?.is_user_prospect ||
+      row?.prospect_classification === "drafted_user"
+  );
+}
+
+export function normWjcName(name) {
+  return String(name || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+}
+
 function buildProspectOwnerMap(tournamentProspects) {
   const map = {};
   asArray(tournamentProspects).forEach((row) => {
@@ -102,10 +118,14 @@ function buildProspectOwnerMap(tournamentProspects) {
       row?.prospect_classification === "drafted_user" ||
       row?.is_user_prospect
     ) {
-      map[pid] = {
+      const entry = {
         abbr: row.owner_team_abbr || "YOU",
-        isUser: Boolean(row.is_user_prospect || row.is_user_org),
+        isUser: Boolean(row.is_user_prospect || row.is_user_org || row.prospect_classification === "drafted_user"),
       };
+      map[pid] = entry;
+      // Box scores can carry a different id for the same kid — match on name too.
+      const nk = normWjcName(row.name);
+      if (nk && !map[`name:${nk}`]) map[`name:${nk}`] = entry;
     }
   });
   return map;
@@ -298,8 +318,10 @@ function formatProspectStatus(prospect) {
   if (prospect?.made_wjc_team === false) return "Cut";
   if (prospect?.injured || prospect?.injury) return "Injured";
   if (prospect?.eliminated) return "Eliminated";
-  const raw = String(prospect?.roster || prospect?.role || prospect?.status || "").trim();
-  if (!raw) return "Active";
+  // `roster` is the org assignment (AHL / Junior / pool) and is shown beside the
+  // owner abbr, so it no longer doubles as the tournament status.
+  const raw = String(prospect?.role || prospect?.status || "").trim();
+  if (!raw) return prospect?.made_wjc_team === true ? "Selected" : "Active";
   const lower = raw.toLowerCase();
   if (lower.includes("cut")) return "Cut";
   if (lower.includes("inj")) return "Injured";
@@ -1130,11 +1152,22 @@ function WjcProspectsSection({
   onOpenDraftBoard,
 }) {
   const sorted = useMemo(() => {
-    const list = [...asArray(prospects)];
+    // Same kid can arrive twice (accented vs plain spelling) — keep one row.
+    const seen = new Set();
+    const list = asArray(prospects).filter((p) => {
+      const key = `${normWjcName(p?.name)}|${p?.owner_team_abbr || ""}|${p?.wjc_country || ""}`;
+      if (!normWjcName(p?.name)) return true;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     list.sort((a, b) => {
       const aCut = a.made_wjc_team === false ? 1 : 0;
       const bCut = b.made_wjc_team === false ? 1 : 0;
       if (aCut !== bCut) return aCut - bCut;
+      const aUser = isUserOrgProspect(a) ? 0 : 1;
+      const bUser = isUserOrgProspect(b) ? 0 : 1;
+      if (aUser !== bUser) return aUser - bUser;
       const aPts = Number(a.pts ?? a.tournament_pts) || 0;
       const bPts = Number(b.pts ?? b.tournament_pts) || 0;
       if (bPts !== aPts) return bPts - aPts;
@@ -1265,7 +1298,9 @@ function WjcProspectsSection({
               <button
                 key={prospect.player_id || prospect.name}
                 type="button"
-                className="wjc-page-prospect-row"
+                className={`wjc-page-prospect-row${
+                  isUserOrgProspect(prospect) ? " is-user-org" : ""
+                }`}
                 onClick={() => onSelectProspect(prospect)}
               >
                 <div className="wjc-page-prospect-row__identity">
@@ -1283,13 +1318,21 @@ function WjcProspectsSection({
                     size={44}
                   />
                   <div>
-                    <strong>{prospect.name || "Unknown Player"}</strong>
-                    <span>
-                      {prospect.owner_team_abbr || "—"}
-                      <span aria-hidden="true"> · </span>
-                      {prospect.position || "—"}
-                      <span aria-hidden="true"> · </span>
-                      Age {prospect.age ?? "—"}
+                    <strong>
+                      {prospect.name || "Unknown Player"}
+                      {isUserOrgProspect(prospect) ? (
+                        <em className="wjc-user-org-tag">Your org</em>
+                      ) : null}
+                    </strong>
+                    <span className="wjc-page-prospect-row__meta">
+                      {[
+                        prospect.owner_team_abbr ? `[${prospect.owner_team_abbr}]` : "",
+                        prospect.roster || "",
+                        prospect.position || "",
+                        prospect.age != null ? `Age ${prospect.age}` : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </span>
                   </div>
                 </div>
@@ -1844,6 +1887,7 @@ export default function WorldJuniorsMenu({
 
       <GameResultModal
         game={selectedGame}
+        ownerByPlayerId={prospectOwnerMap}
         onClose={() => setSelectedGame(null)}
         formatScoreLine={formatScoreLine}
         gameCode={gameCode}

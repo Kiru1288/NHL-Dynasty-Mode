@@ -170,6 +170,10 @@ class FranchiseAdvanceBody(BaseModel):
         default=True,
         description="If true, pending GM prompts pick the first option during bulk sims.",
     )
+    auto_fill_lines: bool = Field(
+        default=False,
+        description="If true, open Edit Lines slots are auto-filled instead of blocking the sim.",
+    )
 
 
 class FranchiseDecisionBody(BaseModel):
@@ -504,6 +508,58 @@ def get_franchise_league_operations(x_franchise_session: Optional[str] = Header(
     return {"league_operations": get_cached_league_operations_payload(s)}
 
 
+@app.get("/api/franchise/governance")
+def get_franchise_governance(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Board of Governors: current meeting, rulebook, franchise values, relocation/expansion."""
+    from services.json_safe import json_safe
+    from services.league_governance import build_governance_payload, ensure_franchise_values, sync_governance_to_league
+
+    s = _session_or_404(x_franchise_session)
+    sync_governance_to_league(s)
+    ensure_franchise_values(s)
+    return json_safe({"governance": build_governance_payload(s)})
+
+
+@app.post("/api/franchise/governance/vote")
+def post_franchise_governance_vote(
+    body: dict[str, Any] = Body(default=None),
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.league_governance import cast_vote
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    try:
+        out = cast_vote(s, str(b.get("proposal_id") or ""), str(b.get("vote") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    try:
+        franchise_sim.invalidate_session_payload_caches(s, "governance_vote")
+    except Exception:
+        pass
+    save_session(s)
+    return json_safe(out)
+
+
+@app.post("/api/franchise/governance/lobby")
+def post_franchise_governance_lobby(
+    body: dict[str, Any] = Body(default=None),
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.league_governance import lobby_proposal
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    try:
+        payload = lobby_proposal(s, str(b.get("proposal_id") or ""), str(b.get("side") or "yes"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    save_session(s)
+    return json_safe({"governance": payload})
+
+
 @app.get("/api/franchise/contract-office")
 def get_franchise_contract_office(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
     from services.contract_economy import get_cached_contract_office
@@ -518,6 +574,23 @@ def get_franchise_free_agent_detail(player_id: str, x_franchise_session: Optiona
 
     s = _session_or_404(x_franchise_session)
     return build_free_agent_detail(s, player_id)
+
+
+def _sync_user_lines_after_roster_change(s: Any, reason: str) -> Optional[dict[str, Any]]:
+    """Departed players leave their Edit Lines slot open (flagged); arrivals drop into open slots."""
+    try:
+        from services.lineup_integrity import reconcile_user_lineup
+
+        report = reconcile_user_lineup(s, auto_fill=False, reason=reason)
+        franchise_sim._log_lineup_integrity(s, report, reason=reason)
+        return report
+    except Exception:
+        log.exception("lineup sync after %s failed", reason)
+        return None
+
+
+# Contract actions that add or remove a player from the NHL roster.
+_ROSTER_CHANGING_CONTRACT_ACTIONS = {"sign-free-agent", "waive", "bury", "buyout"}
 
 
 def _contract_action_route(action: str, body: dict[str, Any], session_header: Optional[str]) -> dict[str, Any]:
@@ -537,6 +610,10 @@ def _contract_action_route(action: str, body: dict[str, Any], session_header: Op
         result["office"] = get_cached_contract_office(s)
         return result
 
+    if action in _ROSTER_CHANGING_CONTRACT_ACTIONS:
+        _sync_user_lines_after_roster_change(s, f"contract_{action}")
+        franchise_sim.invalidate_session_payload_caches(s, reason="roster_move")
+
     save_session(s)
     try:
         from services.franchise_offseason import _prepare_resign_payload
@@ -550,7 +627,9 @@ def _contract_action_route(action: str, body: dict[str, Any], session_header: Op
         try:
             from services.franchise_offseason import _run_prospect_rights_stage
 
-            rights = _run_prospect_rights_stage(s, force=True)
+            # Mid-season signings refresh the desk without running the June deadline / CPU pass.
+            in_window = str(getattr(s, "phase", "") or "") in ("offseason", "post_cup")
+            rights = _run_prospect_rights_stage(s, force=True, light=not in_window)
             result["prospect_rights"] = rights.get("prospect_rights")
             save_session(s)
         except Exception:
@@ -624,6 +703,46 @@ def post_roster_move(body: dict[str, Any] = Body(...), x_franchise_session: Opti
             result["state"] = build_state_payload(s)
         except Exception:
             pass
+    return result
+
+
+@app.get("/api/franchise/negotiation/meetings/{player_id}")
+def get_negotiation_meetings(player_id: str, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.negotiation_meetings import meeting_options
+
+    s = _session_or_404(x_franchise_session)
+    return meeting_options(s, player_id)
+
+
+@app.post("/api/franchise/negotiation/meetings")
+def post_negotiation_meeting(body: dict[str, Any] = Body(...), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.negotiation_meetings import run_meeting
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    result = run_meeting(s, str(b.get("player_id") or ""), str(b.get("kind") or ""), str(b.get("option") or ""))
+    if result.get("ok"):
+        save_session(s)
+    return result
+
+
+@app.get("/api/franchise/waivers")
+def get_waiver_wire(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.waivers import waiver_wire_payload
+
+    s = _session_or_404(x_franchise_session)
+    return waiver_wire_payload(s)
+
+
+@app.post("/api/franchise/waivers/claim")
+def post_waiver_claim(body: dict[str, Any] = Body(...), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.waivers import set_user_claim
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    result = set_user_claim(s, str(b.get("player_id") or b.get("playerId") or ""), bool(b.get("claim", True)))
+    if result.get("ok"):
+        save_session(s)
     return result
 
 
@@ -704,6 +823,63 @@ def post_franchise_lines(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     save_session(s)
+    result["lineup_gaps"] = franchise_sim._even_strength_lineup_gaps(s)
+    return result
+
+
+@app.get("/api/franchise/history/last-season")
+def get_last_season_history(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Previous season's standings, analytics (xG, PDO, luck) and award winners."""
+    from services.season_carryover import last_season_payload
+
+    return last_season_payload(_session_or_404(x_franchise_session))
+
+
+@app.get("/api/franchise/prospect-rights/desk")
+def get_franchise_prospect_rights_desk(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Sign drafted prospects (ELCs) any time of year, not only at the post-draft stage."""
+    from services.franchise_offseason import build_in_season_prospect_rights
+
+    s = _session_or_404(x_franchise_session)
+    return build_in_season_prospect_rights(s)
+
+
+@app.get("/api/franchise/ahl/ledger")
+def get_franchise_ahl_ledger(season: Optional[int] = None, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """AHL standings + skater/goalie stats (game-by-game AHL league sim)."""
+    from services.ahl_league import build_ahl_ledger_payload, sync_ahl_to_date
+
+    s = _session_or_404(x_franchise_session)
+    sync_ahl_to_date(s)
+    return build_ahl_ledger_payload(s, season)
+
+
+@app.get("/api/franchise/ahl/lines")
+def get_franchise_ahl_lines(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.ahl_league import build_ahl_lines_payload
+
+    return build_ahl_lines_payload(_session_or_404(x_franchise_session))
+
+
+@app.post("/api/franchise/ahl/lines")
+def post_franchise_ahl_lines(body: dict[str, Any] = Body(default_factory=dict), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.ahl_league import reset_user_ahl_lines, save_user_ahl_lines
+
+    s = _session_or_404(x_franchise_session)
+    try:
+        out = reset_user_ahl_lines(s) if body.get("auto") else save_user_ahl_lines(s, body.get("lines") or {})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    save_session(s)
+    return out
+
+
+@app.post("/api/franchise/lines/auto-fill")
+def post_franchise_lines_auto_fill(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Fill open even-strength slots with the best healthy extras (Edit Lines / sim gate helper)."""
+    s = _session_or_404(x_franchise_session)
+    result = franchise_sim.auto_fill_user_lines(s)
+    save_session(s)
     return result
 
 
@@ -738,6 +914,13 @@ def post_franchise_advance(
         )
 
     simple_one_day = mode == "day" and int(b.count) == 1
+
+    # A sim the GM starts with holes in his saved lines (send-down, trade, incomplete
+    # save) stops here so the UI can route to Edit Lines — unless he chose auto-fill.
+    lineup_block = franchise_sim.user_lineup_advance_gate(s, auto_fill=bool(b.auto_fill_lines))
+    if lineup_block is not None:
+        save_session(s)
+        return {"step": lineup_block, "state": franchise_sim.build_state_payload_safe(s, include_heavy=False)}
 
     try:
         if mode == "next_game":
@@ -1047,6 +1230,7 @@ def post_franchise_trade(
         result = execute_franchise_trade(s, assets_by_team=dict(body.assets_by_team or {}))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    _sync_user_lines_after_roster_change(s, "trade")
     franchise_sim.invalidate_session_payload_caches(s, reason="trade_exec")
     save_session(s)
     return {"state": franchise_sim.build_state_payload(s, include_heavy=False), "trade_result": result}
@@ -1523,64 +1707,12 @@ class BurnerPreviewBody(BaseModel):
 
 
 @app.get("/api/franchise/{session_id}/social-feed")
-def get_social_feed(session_id: str) -> dict[str, Any]:
+def get_social_feed(session_id: str, tab: str = "all", sub: str = "all", page: int = 0) -> dict[str, Any]:
+    """Puckr / IceHole / burner feed generated from real sim state (services/social_feed_engine.py)."""
     s = _session_or_404(session_id)
-    from datetime import datetime, timedelta
-    from services.franchise_sim import _calendar_iso_for_day  # noqa: WPS433
+    from services.social_feed_engine import build_social_feed_response
 
-    def _parse_iso(raw: str) -> datetime | None:
-        text = str(raw or "")[:10]
-        if not text:
-            return None
-        try:
-            return datetime.strptime(text, "%Y-%m-%d")
-        except ValueError:
-            return None
-
-    def _is_recent(item: dict[str, Any], current_iso: str, max_days: int = 2) -> bool:
-        today = _parse_iso(current_iso)
-        item_day = _parse_iso(str(item.get("calendar_iso") or item.get("created_at") or item.get("date") or ""))
-        if today is None or item_day is None:
-            return True
-        return item_day >= today - timedelta(days=max_days)
-
-    def _is_broken_social_text(text: str) -> bool:
-        raw = str(text or "").strip()
-        if len(raw) < 8:
-            return True
-        lower = raw.lower()
-        if "the player" in lower:
-            return True
-        if "(0 ovr)" in lower:
-            return True
-        if any(token in lower for token in ("0 points in 0 games", "through 0 gp", "0 starts", "0.00 ppg through 0")):
-            return True
-        if "{" in raw and "}" in raw:
-            return True
-        return False
-
-    payload = {
-        "social_posts": list(getattr(s, "social_posts", None) or []),
-        "reddit_threads": list(getattr(s, "reddit_threads", None) or []),
-    }
-    current_iso = _calendar_iso_for_day(s, int(getattr(s, "calendar_idx", 0) or 0))
-    posts = list(
-        payload.get("social_posts")
-        or []
-    )
-    posts = [p for p in posts if _is_recent(p, current_iso) and not _is_broken_social_text(str(p.get("text") or ""))]
-    posts.sort(key=lambda p: str(p.get("calendar_iso") or p.get("created_at") or ""), reverse=True)
-    posts = posts[:60]
-    threads = list(payload.get("reddit_threads") or [])
-    threads = [
-        t for t in threads
-        if _is_recent(t, current_iso)
-        and not _is_broken_social_text(str(t.get("body") or ""))
-        and not _is_broken_social_text(str(t.get("title") or ""))
-    ]
-    threads.sort(key=lambda t: str(t.get("created_at") or t.get("calendar_iso") or ""), reverse=True)
-    threads = threads[:40]
-    return {"puckr": posts, "icehole": threads}
+    return build_social_feed_response(s, tab=tab, sub=sub, page=max(0, int(page)))
 
 
 @app.get("/api/franchise/{session_id}/burner")

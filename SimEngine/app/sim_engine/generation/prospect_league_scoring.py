@@ -1647,6 +1647,11 @@ def advance_prospect_stats_to_date(
         rng = random.Random(int(seed) & 0xFFFFFFFF)
 
     key = normalize_prospect_league_key(league)
+    if key == "AHL" and getattr(prospect, "_ahl_ledger_owned", None) is not None:
+        # The AHL game sim (backend services/ahl_league.py) plays real games for this player and
+        # installs his line via apply_external_season_line — never model it a second time here.
+        cached = getattr(prospect, "_prospect_season_stats", None)
+        return dict(cached) if isinstance(cached, dict) else _empty_actual_stat_line()
     stored_year = getattr(prospect, "_prospect_season_year", None)
     # Reset when the calendar year advances — including the first tick after a
     # rollover where `_prospect_season_year` was never stamped (None). Without
@@ -1842,12 +1847,93 @@ def advance_prospect_stats_to_date(
     return dict(actual)
 
 
+def apply_external_season_line(
+    prospect: Any,
+    league: Any,
+    line: Mapping[str, Any],
+    calendar_iso: Any,
+    *,
+    season_year: Optional[int] = None,
+    recent_points: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    """Install a season line that was played game-by-game elsewhere (the AHL league sim).
+
+    ``line`` holds season totals (gp, goals, assists, points, pim, shots, plus_minus, toi_sec,
+    and for goalies wins/losses/ot_losses/shots_against/goals_against/shutouts). The projection
+    is kept as the expectation baseline; weekly/season stock and production context are
+    recomputed from the real line so boards, popups and ``prospect_performance_evidence`` read
+    exactly what the league ledger shows.
+    """
+    target_iso = str(calendar_iso or "")[:10]
+    projected = getattr(prospect, "_prospect_projected_stats", None)
+    if not isinstance(projected, dict):
+        projected = {}
+    prev = getattr(prospect, "_prospect_season_stats", None)
+    actual = dict(prev) if isinstance(prev, dict) else _empty_actual_stat_line()
+    week_key = _iso_week_key(target_iso) if target_iso else ""
+    if week_key:
+        _sync_prospect_week_baseline(prospect, actual, week_key)
+
+    for k, v in dict(line or {}).items():
+        actual[k] = v
+    gp = max(0, _safe_int(actual.get("gp"), 0))
+    actual["gp"] = gp
+    actual["games_played"] = gp
+    if _is_goalie(prospect):
+        sa = max(0, _safe_int(actual.get("shots_against"), 0))
+        ga = max(0, _safe_int(actual.get("goals_against"), 0))
+        actual["saves"] = max(0, sa - ga)
+        actual["save_pct"] = round(1.0 - ga / float(sa), 3) if sa > 0 else 0.0
+        actual["savePct"] = actual["save_pct"]
+        actual["gaa"] = round(ga / float(max(1, gp)), 2) if gp > 0 else 0.0
+        actual["ppg"] = 0.0
+        actual["points_per_game"] = 0.0
+    else:
+        actual["points"] = max(0, _safe_int(actual.get("goals"), 0)) + max(0, _safe_int(actual.get("assists"), 0))
+        _recalc_skater_line_from_totals(actual)
+    if recent_points is not None:
+        actual["_recent_game_points"] = [int(x) for x in list(recent_points)[-8:]]
+    actual["stat_source"] = "ahl_game_sim"
+
+    try:
+        week_delta = _week_stat_delta(prospect, actual)
+        weekly_stock = _compute_weekly_stock_fields(prospect, week_delta, projected, league, actual=actual)
+        season_stock = _compute_stock_fields(prospect, actual, projected, league)
+        recent = list(actual.get("_recent_game_points") or [])
+        ctx = attach_prospect_production_context(prospect, league, actual)
+        actual.update(ctx)
+        actual.update(season_stock)
+        _apply_stock_to_actual(prospect, actual, weekly_stock)
+        actual["season_stock_delta"] = season_stock.get("stock_delta", 0)
+        actual["recent_form"] = {
+            "last_5_gp": min(5, len(recent)),
+            "last_5_points": sum(recent[-5:]) if recent else 0,
+            "week_gp": weekly_stock.get("week_gp", 0),
+            "week_points": weekly_stock.get("week_points", 0),
+        }
+    except Exception:
+        pass
+
+    try:
+        if season_year is not None:
+            setattr(prospect, "_prospect_season_year", int(season_year))
+        setattr(prospect, "_prospect_season_stats", dict(actual))
+        setattr(prospect, "_prospect_last_stat_update_iso", target_iso)
+        setattr(prospect, "_prospect_games_simulated_to_date", gp)
+        if week_key:
+            setattr(prospect, "_prospect_last_stock_week_key", week_key)
+    except Exception:
+        pass
+    return dict(actual)
+
+
 def _live_minor_levels(league: Any) -> Dict[int, Tuple[Any, str]]:
     """Players currently on an AHL / ECHL roster list, keyed by object id."""
     live: Dict[int, Tuple[Any, str]] = {}
     for tm in getattr(league, "teams", None) or []:
         for p in getattr(tm, "ahl_roster", None) or []:
-            if not getattr(p, "retired", False):
+            # AHL game-sim players (services/ahl_league.py) keep their own stint/line.
+            if not getattr(p, "retired", False) and getattr(p, "_ahl_ledger_owned", None) is None:
                 live[id(p)] = (p, "AHL")
         for p in getattr(tm, "echl_roster", None) or []:
             if not getattr(p, "retired", False):
@@ -1894,7 +1980,9 @@ def advance_all_development_league_stats(
             if getattr(p, "retired", False):
                 continue
             if not _still_at_junior(p):
-                end_prospect_stint(p, reason="left_level")
+                # AHL game-sim players: services/ahl_league.py files and reopens their stints.
+                if getattr(p, "_ahl_ledger_owned", None) is None:
+                    end_prospect_stint(p, reason="left_level")
                 continue
             rows.append((p, code))
     else:
@@ -2471,7 +2559,9 @@ def _defensive_talent_score(prospect: Any) -> float:
     chem = getattr(prospect, "chemistry_profile", None)
     if isinstance(chem, dict):
         buy_in = _safe_float(chem.get("defensive_buy_in"), 0.5)
-        score += buy_in * 0.14
+        if buy_in > 1.5:  # chemistry profiles store 0–100; was saturating every prospect at 0.98
+            buy_in /= 100.0
+        score += _clamp(buy_in, 0.0, 1.0) * 0.14
 
     style = _playstyle_bucket(prospect)
     if style in ("defensive_defenseman", "two_way_defenseman", "two_way", "grinder"):
@@ -2650,24 +2740,52 @@ def derive_prospect_analytics(
         primary_points = None
 
     gp_factor = _clamp(gp / 42.0, 0.0, 1.0) if gp > 0 else 0.0
-    offense_drive = (ppg - 0.42) * 5.2 + off_talent * 4.8 + (shot_rate or 0.0) * 0.55
-    defense_drive = (def_talent - 0.48) * 9.5 + (plus_minus or 0) / max(gp, 1) * 2.8
-    scorer_def_gap = max(0.0, off_talent - def_talent - 0.12)
-    # Per-prospect jitter so similar late picks don't print identical possession cookies.
+    pm_rate = (plus_minus or 0) / float(max(gp, 1))
+    age = _player_age(prospect)
+
+    # Stable per-player variation (seeded by player id — NOT Python hash(), which is
+    # salted per process). Four independent draws in [-1, 1].
     try:
-        pid = str(getattr(getattr(prospect, "identity", None), "name", None) or getattr(prospect, "id", None) or id(prospect))
-        jitter = ((sum(ord(c) for c in pid) % 97) / 97.0 - 0.5) * 8.5
+        pid = str(getattr(prospect, "id", None) or getattr(getattr(prospect, "identity", None), "name", None) or "")
     except Exception:
-        jitter = 0.0
-    poss_base = 50.0 + offense_drive * 0.95 + defense_drive * 0.72 - scorer_def_gap * 7.5 + jitter
-    poss_base += (prod_adj - 0.55) * 2.4
-    if style in ("two_way", "two_way_defenseman", "grinder"):
-        poss_base += 1.6
-    # League context: harder leagues pull possession toward 50 (tougher to dominate).
-    poss_base += (0.55 - league_diff) * 3.5
-    xgf_pct = round(_clamp(poss_base, 38.5, 61.8), 1)
-    cf_pct = round(_clamp(xgf_pct + (def_talent - 0.50) * 3.8 + (off_talent - 0.50) * 1.4 + jitter * 0.35, 37.5, 62.5), 1)
-    ff_pct = round(_clamp((xgf_pct * 0.55 + cf_pct * 0.45) + (off_talent - def_talent) * 1.8, 37.8, 62.0), 1)
+        pid = ""
+    _vr = random.Random(int(hashlib.md5(("prospect-analytics|" + pid).encode("utf-8")).hexdigest()[:12], 16))
+    u_off, u_def, u_xg, u_cf = (_vr.uniform(-1.0, 1.0) for _ in range(4))
+
+    # Production relative to this league's own scoring environment (D score ~62% of F):
+    # 0 = league-average producer, 1 = league-elite producer.
+    pos_scale = 0.62 if is_d else 1.0
+    avg_ppg = sum(profile.get("average_ppg_target") or (0.55, 0.90)) / 2.0 * pos_scale
+    elite_ppg = sum(profile.get("elite_ppg_target") or (1.45, 2.00)) / 2.0 * pos_scale
+    prod_idx = _clamp((ppg - avg_ppg) / max(0.2, elite_ppg - avg_ppg), -1.2, 1.9)
+    goal_share = goals / float(points) if points > 0 else 0.0
+    # Harder leagues (NCAA / Euro pro / SHL) translate better than inflated junior.
+    strength_mult = _clamp(0.80 + (league_diff - 0.58) * 1.0, 0.78, 1.16)
+    # Younger producers are more impressive; 20-year-old overagers less so.
+    age_mult = _clamp(1.0 + (18 - age) * 0.07, 0.86, 1.10)
+
+    # --- Possession (xGF% / CF%) -------------------------------------------------
+    # Soft-limited with tanh into ~40–65 so no prospect pins against a hard clamp.
+    compress = _clamp(1.12 - (league_diff - 0.58) * 0.9, 0.80, 1.12)
+    xg_raw = (
+        prod_idx * (4.6 if is_d else 5.6)
+        + (off_talent - 0.41) * 18.0
+        + (def_talent - (0.61 if is_d else 0.58)) * (16.0 if is_d else 10.0)
+        + pm_rate * 3.5 * gp_factor
+        + ((shot_rate or 0.0) - (2.3 if is_d else 3.0)) * 0.7
+        + (0.6 if style in ("two_way", "two_way_defenseman", "grinder") else 0.0)
+        + u_xg * 3.0
+    ) * compress
+    xgf_pct = round(51.0 + 13.0 * math.tanh(xg_raw / 13.0), 1)
+    cf_raw = (
+        (xgf_pct - 51.0) * 0.72
+        + (def_talent - off_talent) * 5.0
+        + ((shot_rate or 0.0) - (2.3 if is_d else 3.0)) * 0.45
+        + (0.4 if is_d else 0.0)
+        + u_cf * 2.2
+    )
+    cf_pct = round(51.0 + 13.0 * math.tanh(cf_raw / 13.0), 1)
+    ff_pct = round(_clamp(xgf_pct * 0.5 + cf_pct * 0.5 + (off_talent - def_talent) * 1.4, 39.0, 64.0), 1)
 
     defensive_impact = round(
         _clamp(
@@ -2691,41 +2809,38 @@ def derive_prospect_analytics(
     team_env = _clamp(5.2 + scoring_mult * 1.35 - league_diff * 3.2 + off_talent * 1.4, 2.5, 8.8)
     quality_of_teammates = round(team_env, 1)
 
+    # --- WAR (junior scale, roughly 0–4) ----------------------------------------
+    # Offence: league-relative production, scaled by league strength / age, plus
+    # finishing and tools. Forwards carry most WAR on offence; D far less.
+    season_w = max(0.35, gp_factor)
     off_war = (
-        (ppg - 0.40) * 1.45 * gp_factor
-        + ((shot_rate or 0.0) - 2.05) * 0.16 * gp_factor
-        + ((shooting_pct or 9.5) / 100.0 - 0.095) * 2.2 * gp_factor
-        + (off_talent - 0.48) * 1.15
-        + goals / max(gp, 1) * 0.22 * gp_factor
-    )
-    if style in ("grinder", "defensive_defenseman") and ppg < 0.55:
-        off_war *= 0.72
-    # Overproduction vs current tools — late-round gem signal (no true-potential leak).
-    expected_ppg = (0.18 + off_talent * 0.85) if is_d else (0.22 + off_talent * 1.15)
-    surplus = ppg - expected_ppg
-    if surplus > 0:
-        off_war += surplus * 1.85 * max(0.35, gp_factor)
-    off_war = round(_clamp(off_war, -1.2, 1.35), 2)
+        (0.45 + prod_idx * 1.05) * strength_mult * age_mult * season_w
+        + (goal_share - 0.40) * 0.45 * gp_factor
+        + ((shooting_pct or 10.0) - 10.0) * 0.012 * gp_factor
+        + (off_talent - 0.42) * 1.6
+        + u_off * 0.14
+    ) * (0.62 if is_d else 1.0)
+    if style in ("grinder", "defensive_defenseman"):
+        off_war *= 0.85
+    off_war = round(_clamp(off_war, -0.9, 2.9), 2)
 
+    # Defence: tools, on-ice goal/shot share, usage. D get the larger share.
     def_war = (
-        (def_talent - 0.46) * 1.25
-        + defensive_impact * 0.14
-        + (plus_minus or 0) / max(gp, 1) * 0.28 * gp_factor
-        + (cf_pct - 50.0) * 0.018
-        + (0.18 if is_d and style in ("defensive_defenseman", "two_way_defenseman") else 0.0)
-    )
-    if style in ("two_way",) and def_talent >= 0.58:
-        def_war += 0.12
-    def_war = round(_clamp(def_war, -0.8, 0.95), 2)
+        (def_talent - (0.61 if is_d else 0.58)) * (3.4 if is_d else 1.8)
+        + (0.42 if is_d else 0.10)
+        + pm_rate * 0.55 * gp_factor
+        + (cf_pct - 51.0) * (0.045 if is_d else 0.02)
+        + (prod_idx * 0.10 if is_d else 0.0)
+        + (0.10 if style in ("defensive_defenseman", "two_way_defenseman", "two_way", "grinder") else 0.0)
+        + u_def * 0.14
+    ) * (0.85 + 0.15 * season_w) * (0.92 + (strength_mult - 0.80) * 0.5)
+    def_war = round(_clamp(def_war, -0.7, 1.9), 2)
 
-    # Ability-weighted WAR: junior scale — top draft-age producers land ~1.6–2.2,
-    # not NHL starter territory. Diminishing returns keep elites separated.
-    ability_war = ((off_talent + def_talent) / 2.0 - 0.50) * 0.95 * max(0.4, gp_factor)
-    raw_war = off_war + def_war + ability_war
-    # Soft cap with headroom so only a handful of true outliers touch the ceiling.
-    if raw_war > 1.85:
-        raw_war = 1.85 + (raw_war - 1.85) * 0.42
-    war = round(_clamp(raw_war, -1.5, 2.35), 2)
+    raw_war = off_war + def_war
+    # Soft shoulder: only true outliers approach the ~4 ceiling.
+    if raw_war > 2.6:
+        raw_war = 2.6 + (raw_war - 2.6) * 0.5
+    war = round(_clamp(raw_war, -1.0, 4.2), 2)
 
     # Publish earlier so WAR is usable for gem hunting before the 15 GP wall.
     sample_ready = gp >= 5

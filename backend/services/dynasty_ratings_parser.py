@@ -219,6 +219,14 @@ class DynastyRatingsRegistry:
                     )
                     if entry_first == first_key:
                         return entry
+                # Txt rows are often last-name only ("Peterka: 86 ovr"). Those never have a
+                # first name to compare, so accept them when the last name is unique on this team.
+                last_only = [
+                    e for e in pool
+                    if last_key in e.lookup_keys and " " not in normalize_player_name(e.raw_name or "")
+                ]
+                if len(last_only) == 1:
+                    return last_only[0]
             elif not full_key:
                 last_hits = [e for e in pool if last_key in e.lookup_keys]
                 if len(last_hits) == 1:
@@ -236,6 +244,39 @@ class DynastyRatingsRegistry:
                 for entry in alt_pool:
                     if full_key in entry.lookup_keys:
                         return entry
+        return None
+
+    def match_anywhere(
+        self,
+        full_name: str,
+        *,
+        last_name: str = "",
+        claimed: Optional[set] = None,
+        unmatched_last_counts: Optional[Dict[str, int]] = None,
+    ) -> Optional[DynastyRatingEntry]:
+        """League-wide fallback for players the txt lists under another club (trades,
+        stale team headers). Exact full-name matches win; a last-name-only row is used
+        only when that last name is unique among unclaimed txt rows AND among the still
+        unmatched players, so two Hughes can never share one rating."""
+        taken = claimed or set()
+        full_key = normalize_player_name(full_name)
+        last_key = normalize_player_name(last_name or (full_name.split()[-1] if full_name else ""))
+        if full_key and " " in full_key:
+            exact = [
+                e for e in self.by_name.get(full_key, [])
+                if id(e) not in taken and normalize_player_name(e.raw_name or "") == full_key
+            ]
+            if len(exact) == 1:
+                return exact[0]
+        if last_key:
+            rows = [e for e in self.by_name.get(last_key, []) if id(e) not in taken]
+            last_only = [e for e in rows if " " not in normalize_player_name(e.raw_name or "")]
+            if (
+                len(rows) == 1
+                and len(last_only) == 1
+                and int((unmatched_last_counts or {}).get(last_key, 1)) == 1
+            ):
+                return last_only[0]
         return None
 
     def entries_for_team(self, team_abbr: str, level: str) -> List[DynastyRatingEntry]:
@@ -357,6 +398,15 @@ def apply_overall_patches(registry: DynastyRatingsRegistry, patch_text: str) -> 
             last = normalize_player_name(name.split()[-1] if name else "")
             hits = registry.by_name.get(last, [])
         for entry in hits:
+            old = int(entry.chapters.get("overall") or new_ovr)
+            pot = entry.chapters.get("potential")
+            if pot is not None:
+                pot = int(pot)
+                if new_ovr < old:
+                    # A downgrade lowers the ceiling by the same amount (never below the new OVR).
+                    pot = max(int(new_ovr), pot - (old - int(new_ovr)))
+                pot = max(pot, int(new_ovr))
+                entry.chapters["potential"] = pot
             entry.chapters["overall"] = int(new_ovr)
             entry.patched = True
             applied += 1
@@ -383,14 +433,31 @@ def apply_overall_patches(registry: DynastyRatingsRegistry, patch_text: str) -> 
 
 
 _REGISTRY_CACHE: Optional[DynastyRatingsRegistry] = None
+_REGISTRY_CACHE_STAMP: Optional[tuple] = None
+
+
+def _ratings_files_stamp() -> tuple:
+    out = []
+    for p in (DYNASTY_RATINGS_PATH, DYNASTY_PATCHES_PATH):
+        try:
+            out.append(p.stat().st_mtime_ns)
+        except OSError:
+            out.append(0)
+    return tuple(out)
 
 
 def load_dynasty_ratings_registry(
     ratings_path: Optional[Path] = None,
     patches_path: Optional[Path] = None,
 ) -> DynastyRatingsRegistry:
-    global _REGISTRY_CACHE
-    if ratings_path is None and patches_path is None and _REGISTRY_CACHE is not None:
+    global _REGISTRY_CACHE, _REGISTRY_CACHE_STAMP
+    stamp = _ratings_files_stamp() if ratings_path is None and patches_path is None else None
+    if (
+        ratings_path is None
+        and patches_path is None
+        and _REGISTRY_CACHE is not None
+        and stamp == _REGISTRY_CACHE_STAMP
+    ):
         return _REGISTRY_CACHE
     rp = ratings_path or DYNASTY_RATINGS_PATH
     pp = patches_path or DYNASTY_PATCHES_PATH
@@ -402,6 +469,7 @@ def load_dynasty_ratings_registry(
         registry.parse_stats["patches_applied"] = n
     if ratings_path is None and patches_path is None:
         _REGISTRY_CACHE = registry
+        _REGISTRY_CACHE_STAMP = stamp
     return registry
 
 
@@ -518,6 +586,7 @@ def apply_dynasty_entry_to_player(
     except Exception:
         pass
     setattr(player, "dynasty_ratings_import", True)
+    setattr(player, "_dynasty_entry_key", f"{entry.team_abbr}|{entry.level}|{entry.raw_name}")
     setattr(player, "dynasty_rating_source", entry.level)
     setattr(player, "real_nhl_rating_note", "dynasty_txt")
 

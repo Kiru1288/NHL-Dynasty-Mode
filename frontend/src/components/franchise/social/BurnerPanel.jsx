@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getBurnerState, postBurnerMessage, previewBurnerPost } from "../../../services/franchiseService";
+import "./BurnerPanel.css";
 
 const RISKY_MID = new Set([
   "coach", "bench", "deal", "management", "soft", "joke", "gm",
@@ -62,7 +63,6 @@ function RiskGauge({ risk }) {
       <path d="M 18 58 A 42 42 0 0 1 102 58" fill="none" stroke="var(--gold)" strokeWidth="8" strokeDasharray={`${(r / 100) * 132} 132`} />
       <line x1={cx} y1={cy} x2={nx} y2={ny} stroke="var(--text)" strokeWidth="2.5" />
       <circle cx={cx} cy={cy} r="4" fill="var(--text)" />
-      <text x={cx} y={66} textAnchor="middle" className="burner-gauge__label">{r}% risk</text>
     </svg>
   );
 }
@@ -72,6 +72,7 @@ export default function BurnerPanel({ sessionId, marketProfiles, defaultMarketKe
   const [text, setText] = useState("");
   const [marketKey, setMarketKey] = useState(defaultMarketKey || "default");
   const [previewRisk, setPreviewRisk] = useState(0);
+  const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const backdropRef = useRef(null);
@@ -94,16 +95,19 @@ export default function BurnerPanel({ sessionId, marketProfiles, defaultMarketKe
   useEffect(() => {
     if (!text.trim()) {
       setPreviewRisk(0);
+      setPreview(null);
       return undefined;
     }
     const t = setTimeout(async () => {
       try {
         const res = await previewBurnerPost(text, marketKey, sessionId);
         setPreviewRisk(Number(res?.risk) || 0);
+        setPreview(res || null);
       } catch {
         setPreviewRisk(0);
+        setPreview(null);
       }
-    }, 900);
+    }, 450);
     return () => clearTimeout(t);
   }, [text, marketKey, sessionId]);
 
@@ -203,22 +207,35 @@ export default function BurnerPanel({ sessionId, marketProfiles, defaultMarketKe
       </div>
 
       <div className="burner-risk-row">
-        <RiskGauge risk={previewRisk} />
+        <div className={`burner-gauge-wrap is-${band}`}>
+          <RiskGauge risk={previewRisk} />
+          <div className="burner-gauge-read">
+            <strong>{previewRisk}</strong>
+            <span>trace risk</span>
+            {preview?.catch_pct != null ? <em>{preview.catch_pct}% chance you're made on this post</em> : null}
+          </div>
+        </div>
         <div className="burner-outcomes">
+          {preview?.tone ? (
+            <span className={`burner-tone is-${preview.tone}`}>
+              {String(preview.tone).replace(/_/g, " ")}
+              {Array.isArray(preview.targets) && preview.targets.length ? ` · aimed at ${preview.targets.join(", ")}` : ""}
+            </span>
+          ) : null}
           <div className="burner-outcome burner-outcome--ok">
             <span>If it lands</span>
-            <p>{outcomeCopy(band, marketLabel, false)}</p>
+            <p>{preview?.if_lands || outcomeCopy(band, marketLabel, false)}</p>
           </div>
           <div className="burner-outcome burner-outcome--bad">
             <span>If you are made</span>
-            <p>{outcomeCopy(band, marketLabel, true)}</p>
+            <p>{preview?.if_caught || outcomeCopy(band, marketLabel, true)}</p>
           </div>
         </div>
       </div>
 
       {error ? <p className="burner-error">{error}</p> : null}
 
-      <button type="button" className="sl-primary-btn" disabled={busy || state?.exposed} onClick={handlePost}>
+      <button type="button" className="burner-post-btn" disabled={busy || state?.exposed || !text.trim()} onClick={handlePost}>
         {busy ? "Posting…" : "Post from burner"}
       </button>
 
@@ -229,7 +246,7 @@ export default function BurnerPanel({ sessionId, marketProfiles, defaultMarketKe
             <div key={`${row.day}-${idx}`} className={`burner-history__row ${row.caught ? "burner-history__row--caught" : ""}`}>
               <div>
                 <strong>{row.caught ? "Exposed" : "Clean"}</strong>
-                <span> · risk {row.risk}</span>
+                <span> · risk {row.risk}{row.tone ? ` · ${String(row.tone).replace(/_/g, " ")}` : ""}</span>
               </div>
               <p>{row.text}</p>
               {row.outcome ? <em>{row.outcome}</em> : null}

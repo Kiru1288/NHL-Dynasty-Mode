@@ -824,7 +824,33 @@ export function ProspectDetailModal({ prospect, tournamentStats, franchiseState,
   );
 }
 
-export function GameResultModal({ game, onClose, formatScoreLine, gameCode }) {
+function boxOwner(ownerByPlayerId, row) {
+  if (!ownerByPlayerId || !row) return null;
+  const byId = ownerByPlayerId[String(row.player_id || "")];
+  if (byId) return byId;
+  const nk = String(row.name || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+  return nk ? ownerByPlayerId[`name:${nk}`] || null : null;
+}
+
+function BoxName({ row, ownerByPlayerId }) {
+  const owner = boxOwner(ownerByPlayerId, row);
+  return (
+    <>
+      <span className={owner?.isUser ? "wjc-box-name is-user-org" : "wjc-box-name"}>{row.name}</span>
+      {owner?.abbr ? (
+        <span className={`wjc-box-org${owner.isUser ? " is-user-org" : ""}`} title={`NHL rights: ${owner.abbr}`}>
+          [{owner.abbr}]
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+export function GameResultModal({ game, onClose, formatScoreLine, gameCode, ownerByPlayerId = {} }) {
   if (!game) return null;
   const box = game.box_score || {};
   const homeLines = asArray(box.home);
@@ -836,7 +862,7 @@ export function GameResultModal({ game, onClose, formatScoreLine, gameCode }) {
     if (!row || typeof row !== "object") return null;
     return (
       <li key={row.player_id || row.name}>
-        {row.name} — {row.w ?? 0}-{row.l ?? 0}, {row.sv ?? 0}/{row.sa ?? 0} SV (
+        <BoxName row={row} ownerByPlayerId={ownerByPlayerId} /> — {row.w ?? 0}-{row.l ?? 0}, {row.sv ?? 0}/{row.sa ?? 0} SV (
         {((Number(row.sv_pct) || 0) * 100).toFixed(1)}%)
       </li>
     );
@@ -877,7 +903,7 @@ export function GameResultModal({ game, onClose, formatScoreLine, gameCode }) {
               <ul>
                 {homeLines.map((r) => (
                   <li key={r.player_id}>
-                    {r.name} — {r.g}G {r.a}A ({r.pts} PTS)
+                    <BoxName row={r} ownerByPlayerId={ownerByPlayerId} /> — {r.g}G {r.a}A ({r.pts} PTS)
                   </li>
                 ))}
               </ul>
@@ -893,7 +919,7 @@ export function GameResultModal({ game, onClose, formatScoreLine, gameCode }) {
               <ul>
                 {awayLines.map((r) => (
                   <li key={r.player_id}>
-                    {r.name} — {r.g}G {r.a}A ({r.pts} PTS)
+                    <BoxName row={r} ownerByPlayerId={ownerByPlayerId} /> — {r.g}G {r.a}A ({r.pts} PTS)
                   </li>
                 ))}
               </ul>

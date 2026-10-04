@@ -4336,8 +4336,8 @@ function FullReportSheet({ prospect, onClose, onDraft, isUserPick, loading }) {
                 </button>
               </>
             ) : (
-              <button type="button" className={`nhlcal-advance-button`} disabled={loading} onClick={() => setConfirm(true)}>
-                <Icon name="check" size={12} /> Select {getPlayerName(prospect)}
+              <button type="button" className={`nhlcal-advance-button`} disabled={loading} onClick={() => onDraft?.(prospect)}>
+                <Icon name="check" size={12} /> Draft {getPlayerName(prospect)}
               </button>
             )}
           </footer>
@@ -4751,7 +4751,7 @@ function SelectionModal({ open, prospects, compareIds, onCompare, onDraft, onClo
               type="button"
               className={`nhlcal-advance-button`}
               disabled={loading || submitting || !detail}
-              onClick={() => setConfirm(true)}
+              onClick={() => detail && onDraft(detail)}
             >
               <Icon name="check" size={12} /> {detail ? `Draft ${getPlayerName(detail)}` : "Select a prospect"}
             </button>
@@ -5746,13 +5746,27 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
     if (!prospect || draftDone || !isUserPick || simLock.current) return;
     const name = getPlayerName(prospect);
     const pickLabel = formatPick(currentPick?.overall_pick || draft.overall_pick);
+    // One "are you sure", from any entry point (board, dossier, report, pick card).
+    // Every overlay closes first so nothing is left to dismiss after the pick.
+    const restore = { modal: userModalOpen, report: reportOpen, board: boardOpen, selected: selectedAvailable };
+    setUserModalOpen(false);
+    setReportOpen(false);
+    setBoardOpen(false);
+    setSelectedAvailable(null);
     setConfirmDialog({
-      title: "Submit pick",
-      message: `Draft ${name} with ${pickLabel}?`,
+      title: "Are you sure?",
+      message: `Select ${name} with the ${pickLabel} pick? This can't be undone.`,
       confirmLabel: `Draft ${name}`,
       onConfirm: () => {
         setConfirmDialog(null);
         handleUserDraft(prospect);
+      },
+      onCancel: () => {
+        setConfirmDialog(null);
+        setUserModalOpen(restore.modal);
+        setReportOpen(restore.report);
+        setBoardOpen(restore.board);
+        setSelectedAvailable(restore.selected);
       },
     });
   }, [
@@ -5761,6 +5775,10 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
     currentPick?.overall_pick,
     draft.overall_pick,
     handleUserDraft,
+    userModalOpen,
+    reportOpen,
+    boardOpen,
+    selectedAvailable,
   ]);
 
   return (
@@ -5965,7 +5983,7 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
           prospect={selectedAvailable}
           isUserPick={isUserPick}
           loading={loading}
-          onDraft={handleUserDraft}
+          onDraft={promptDraftProspect}
           onClose={() => setReportOpen(false)}
         />
       ) : null}
@@ -6032,7 +6050,7 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
         danger={Boolean(confirmDialog?.danger)}
         loading={loading}
         onConfirm={() => confirmDialog?.onConfirm?.()}
-        onCancel={() => setConfirmDialog(null)}
+        onCancel={() => (confirmDialog?.onCancel ? confirmDialog.onCancel() : setConfirmDialog(null))}
       />
 
       <SelectionModal
@@ -6044,7 +6062,7 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
         loading={loading}
         focusProspect={selectedAvailable}
         onCompare={onCompare}
-        onDraft={handleUserDraft}
+        onDraft={promptDraftProspect}
         onTradeDown={() => setTradePanelOpen(true)}
         onClose={() => {
           const pickKey = Number(currentPick?.overall_pick || draft.overall_pick || 0) || 0;

@@ -769,7 +769,9 @@ def bootstrap_full_league_hierarchy(
         _set_assignment(p, level="ufa", overseas=False)
         league.free_agents.append(p)
 
-    elite_ufa_count = 4 if fast_depth else 12
+    # Generated "stud" free agents used to arrive 12 at a time and dominate the market.
+    # Real FA classes come from real expiring contracts; a manufactured star is rare.
+    elite_ufa_count = 1 if rng.random() < 0.25 else 0
     for _ in range(elite_ufa_count):
         pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.D, Position.G])
         lo, hi = (0.78, 0.88) if pos != Position.G else (0.80, 0.90)
@@ -791,7 +793,8 @@ def bootstrap_full_league_hierarchy(
         _set_assignment(p, level="ufa", overseas=True, overseas_league=rng.choice(["KHL", "SHL", "Liiga", "NL", "DEL", "Czech Extraliga"]))
         league.overseas_free_agents.append(p)
 
-    overseas_elite_count = 2 if fast_depth else 6
+    # A Panarin-style import from Europe happens ~1 summer in 4, not six at once.
+    overseas_elite_count = 1 if rng.random() < 0.25 else 0
     for _ in range(overseas_elite_count):
         pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.G])
         lo, hi = (0.80, 0.90) if pos != Position.G else (0.82, 0.92)
@@ -1588,6 +1591,46 @@ def tick_extra_league_development(sim: Any, rng: random.Random) -> None:
                 elif getattr(p, "pipeline_steal", False):
                     setattr(p, "dev_type", "elite")
                 _tick_ratings(rng, p, overseas=False, junior=True)
+
+
+def maybe_spawn_overseas_star(league: Any, rng: random.Random, season_year: int) -> Optional[Any]:
+    """Once per summer: ~25% chance one established European pro (78-86) wants an NHL deal."""
+    if league is None:
+        return None
+    done = getattr(league, "_overseas_star_rolls", None)
+    if not isinstance(done, dict):
+        done = {}
+    key = str(int(season_year or 0))
+    if key in done:
+        return None
+    done[key] = False
+    try:
+        league._overseas_star_rolls = done
+    except Exception:
+        pass
+    if rng.random() >= 0.25:
+        return None
+    used_names: set = set()
+    for p in list(getattr(league, "players", None) or []) + list(getattr(league, "overseas_free_agents", None) or []):
+        nm = str(getattr(getattr(p, "identity", None), "name", "") or "")
+        if nm:
+            used_names.add(nm)
+    pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D])
+    p = _spawn_player(
+        rng, pos=pos, ovr_lo=0.78, ovr_hi=0.86, age_lo=25, age_hi=30,
+        used_names=used_names, league_players=list(getattr(league, "players", None) or []),
+        pool_context="overseas_elite",
+    )
+    p.context.current_team_id = "OVERSEAS"
+    _set_assignment(
+        p, level="ufa", overseas=True,
+        overseas_league=rng.choice(["KHL", "SHL", "Liiga", "NL", "DEL", "Czech Extraliga"]),
+    )
+    pool = list(getattr(league, "overseas_free_agents", None) or [])
+    pool.append(p)
+    league.overseas_free_agents = pool
+    done[key] = True
+    return p
 
 
 def ensure_overseas_fa_pool(

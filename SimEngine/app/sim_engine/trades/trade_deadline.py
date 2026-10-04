@@ -63,8 +63,14 @@ def is_post_deadline(league: Any, day: int, regular_season_last_index: int) -> b
 
 
 def post_deadline_freeze_active(context: Optional[Dict[str, Any]]) -> bool:
-    """True when a trade package may only contain AHL players."""
-    return bool((context or {}).get("trade_deadline_passed"))
+    """True when a trade package may only contain AHL players.
+
+    The Entry Draft is in the offseason: the freeze never applies to draft-floor deals
+    (a stale in-season phase on the league object used to block every trade-down)."""
+    ctx = context or {}
+    if ctx.get("draft_day_trade") or ctx.get("offseason_trade"):
+        return False
+    return bool(ctx.get("trade_deadline_passed"))
 
 
 def freeze_applies_to_phase(phase: str) -> bool:

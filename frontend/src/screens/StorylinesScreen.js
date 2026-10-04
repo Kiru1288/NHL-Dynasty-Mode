@@ -3,6 +3,7 @@ import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import PlayerHeadshot from "../components/PlayerHeadshot";
+import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { getFranchiseSessionId } from "../services/api";
 import {
   activeBreakingAlerts,
@@ -18,6 +19,7 @@ import {
   getSocialFeed,
 } from "../services/franchiseService";
 import BurnerPanel from "../components/franchise/social/BurnerPanel";
+import { PlayerProfileModal, normalizeRosterBrowserPlayer } from "./RosterScreen";
 import { collectLockerPulse, buildHubStoryTicker, isRoutineLeagueTrade } from "../utils/lockerRoomPulse";
 import { resolveChapterMap, chapterNumericValue } from "../utils/chapterAttributes";
 import "../styles/storylinesTokens.css";
@@ -68,7 +70,7 @@ const FILTERS = [
   { id: "all", label: "All" },
   { id: "breaking", label: "Breaking" },
   { id: "major", label: "Major" },
-  { id: "team", label: "Team" },
+  { id: "team", label: "Your club" },
   { id: "league", label: "League" },
   { id: "player", label: "Player" },
   { id: "life", label: "Off ice" },
@@ -170,9 +172,14 @@ function collectProspectsForOrg(org) {
     player_id: str(p.player_id || p.id),
     name: str(p.name || "Prospect"),
     team_id: tid,
+    team_abbr: str(org.abbr || "").toUpperCase(),
     team_name: name,
     potential: prospectPotentialScore(p),
+    ovr: Number(p.ovr ?? p.overall) || null,
+    position: str(p.position || p.pos || ""),
+    league: str(p.league || p.current_league || p.minor_season?.league || ""),
     age: Number(p.age) || null,
+    raw: p,
   }));
 }
 
@@ -188,9 +195,14 @@ function collectDevelopmentLeagueProspects(developmentLeagues, orgIndex) {
           player_id: str(p.player_id || p.id),
           name: str(p.name || "Prospect"),
           team_id: rights,
+          team_abbr: str(org?.abbr || "").toUpperCase(),
           team_name: str(org?.name || rights),
           potential: prospectPotentialScore(p),
+          ovr: Number(p.ovr ?? p.overall) || null,
+          position: str(p.position || p.pos || ""),
+          league: str(block?.league_name || block?.name || block?.league || tm?.league || ""),
           age: Number(p.age) || null,
+          raw: { ...p, league: p.league || block?.league_name || block?.name || "" },
         });
       }
     }
@@ -251,6 +263,7 @@ function buildProspectPoolRankings(organizations, developmentLeagues) {
       potential: p.potential,
       potentialRank: rankByPlayerId.get(p.player_id) || null,
       age: p.age,
+      raw: p.raw,
     });
   });
 
@@ -947,18 +960,56 @@ function ConsequencesPanel({ narrativeUniverse, stories, onOpenStory }) {
   const availability = asObject(narrativeUniverse?.player_availability);
   const budget = asObject(narrativeUniverse?.major_event_budget);
 
+  const unavailable = Object.entries(availability).filter(
+    ([, row]) => row && row.active !== false && !sanctions.some((s) => str(s.source_event_id) === str(row.source_event_id))
+  );
+  const promiseBook = asObject(narrativeUniverse?.player_meetings?.promises);
+  const broken = asArray(promiseBook.broken).slice(-6).reverse();
+
+  const extras = (
+    <>
+      {unavailable.length ? (
+        <section className="sl-fallout-sec">
+          <h4>Currently unavailable</h4>
+          {unavailable.map(([pid, row]) => (
+            <p key={pid}>
+              <b>{str(row.player_name || pid)}</b> — {str(row.reason_public || row.status || "unavailable")}
+              {Number(row.games_remaining) > 0 ? ` · ${Number(row.games_remaining)} games` : ""}
+              {Number(row.days_remaining) > 0 ? ` · ${Number(row.days_remaining)} days` : ""}
+            </p>
+          ))}
+        </section>
+      ) : null}
+      {broken.length ? (
+        <section className="sl-fallout-sec">
+          <h4>Broken promises</h4>
+          {broken.map((p) => (
+            <p key={str(p.id)}>
+              <b>{str(p.player_name || p.player_id)}</b> — {str(p.description || p.type)}. Trust and morale took the hit;
+              a "repair relationship" meeting can win some of it back.
+            </p>
+          ))}
+        </section>
+      ) : null}
+    </>
+  );
+
   if (!sanctions.length) {
+    if (unavailable.length || broken.length) {
+      return <div className="sl-consequences">{extras}</div>;
+    }
     return (
       <EmptyPanel
-        kicker="League fallout"
-        title="No active sanctions"
-        body="Major conduct incidents and cap violations will appear here with fines, pick forfeitures, and player availability."
+        kicker="Fallout"
+        title="Nothing hanging over the club"
+        body="League sanctions (fines, cap penalties, forfeited picks), players unavailable for off-ice reasons and promises you've broken will show up here."
       />
     );
   }
 
   return (
     <div className="sl-consequences">
+      {extras}
       {budget.target ? (
         <p className="sl-muted">
           Major events this season: {budget.generated || 0} / {budget.target}
@@ -1329,13 +1380,20 @@ function isBrokenSocialPost(text) {
   return false;
 }
 
-function buildSocialPosts(stories, narrativeUniverse, { currentIso = null, maxAgeDays = 2 } = {}) {
+function buildSocialPosts(stories, narrativeUniverse, { currentIso = null, maxAgeDays = 2, limit = 40 } = {}) {
   const backendPosts = sortSocialItemsDesc(
     filterRecentSocialItems(asArray(narrativeUniverse?.social_posts), currentIso, maxAgeDays)
   ).filter((p) => !isBrokenSocialPost(p?.text));
   if (backendPosts.length) {
-    return backendPosts.slice(0, 40).map((p, idx) => ({
+    return backendPosts.slice(0, limit).map((p, idx) => ({
       id: str(p.id || `post-${idx}`),
+      badge: str(p.badge || p.author_type || ""),
+      color: p.author_color || null,
+      time: str(p.time || ""),
+      attach: p.attach || null,
+      playerId: str(p.player_id || ""),
+      playerName: str(p.player_name || ""),
+      views: p.views,
       handle: str(p.handle || `@User${idx}`),
       name: str(p.author_name || p.name || "Hockey Fan"),
       verified: Boolean(p.verified),
@@ -1373,7 +1431,7 @@ function buildSocialPosts(stories, narrativeUniverse, { currentIso = null, maxAg
   });
 }
 
-function buildRedditThreads(threads, subFilter = "all", { currentIso = null, maxAgeDays = 2 } = {}) {
+function buildRedditThreads(threads, subFilter = "all", { currentIso = null, maxAgeDays = 2, limit = 40 } = {}) {
   const rows = sortSocialItemsDesc(
     filterRecentSocialItems(asArray(threads), currentIso, maxAgeDays)
   ).filter((t) => !isBrokenSocialPost(t?.body) && !isBrokenSocialPost(t?.title));
@@ -1381,8 +1439,9 @@ function buildRedditThreads(threads, subFilter = "all", { currentIso = null, max
     subFilter === "all"
       ? rows
       : rows.filter((t) => str(t.subreddit).toLowerCase() === str(subFilter).toLowerCase());
-  return filtered.slice(0, 40).map((t, idx) => ({
+  return filtered.slice(0, limit).map((t, idx) => ({
     id: str(t.thread_id || `thread-${idx}`),
+    attach: t.attach || null,
     subreddit: str(t.subreddit || "r/hockey"),
     title: str(t.title || "Thread"),
     author: str(t.op_author || "u/fan"),
@@ -1403,6 +1462,8 @@ function buildRedditThreads(threads, subFilter = "all", { currentIso = null, max
       text: str(c.text || ""),
       upvotes: Number(c.upvotes) || 0,
       isRival: Boolean(c.is_rival),
+      flair: str(c.flair || ""),
+      replies: asArray(c.replies).map((r, ri) => ({ id: `c-${idx}-${ci}-${ri}`, author: str(r.author || "u/fan"), text: str(r.text || ""), upvotes: Number(r.upvotes) || 0 })),
     })),
     heat: heatLabel(t.heat),
     createdAt: str(t.created_at || "—"),
@@ -1931,7 +1992,9 @@ function ResponseChoiceButton({
           <strong>{str(src.label)}</strong>
           {src.tone ? <em className={`sl-choice__tone sl-choice__tone--${toneClass}`}>{str(src.tone).replace(/_/g, " ")}</em> : null}
           {src.detail || src.description ? <span>{str(src.detail || src.description)}</span> : null}
-          {src.effect_preview ? <span className="sl-choice__effects">{src.effect_preview}</span> : null}
+          {src.effect_preview || src.effect_summary ? (
+            <span className="sl-choice__effects">{src.effect_preview || src.effect_summary}</span>
+          ) : null}
         </>
       )}
       {busy ? <em>Working…</em> : null}
@@ -1967,22 +2030,58 @@ function extractTradeBoard(story) {
   };
 }
 
+function tradeAssetStatLine(stats) {
+  const st = stats && typeof stats === "object" ? stats : null;
+  if (!st || !Number(st.gp)) return "";
+  const label = str(st.label || "");
+  if (st.w != null || st.sv_pct != null) {
+    const sv = Number(st.sv_pct);
+    const svTxt = Number.isFinite(sv) && sv > 0 ? ` · ${(sv > 1 ? sv / 100 : sv).toFixed(3)}` : "";
+    return `${label ? `${label}: ` : ""}${st.gp} GP · ${st.w ?? 0}-${st.l ?? 0}${svTxt}`;
+  }
+  return `${label ? `${label}: ` : ""}${st.gp} GP · ${st.g ?? 0}-${st.a ?? 0}-${st.pts ?? 0}`;
+}
+
 function TradeAssetChip({ asset, compact = false }) {
   const name = str(asset?.display_name || asset?.player_name || asset?.name || "Asset");
   const ovr = asset?.ovr != null ? Math.round(Number(asset.ovr)) : null;
+  const pot = asset?.pot != null ? Math.round(Number(asset.pot)) : null;
   const tv = asset?.trade_value != null ? Number(asset.trade_value) : null;
-  const pos = str(asset?.position || asset?.role_line || "");
+  const pos = str(asset?.position || "");
   const isPick = str(asset?.asset_type).toLowerCase().includes("pick");
+  const statLine = isPick ? "" : tradeAssetStatLine(asset?.season_stats);
   return (
     <div className={`sl-trade-asset${compact ? " is-compact" : ""}${isPick ? " is-pick" : ""}`}>
-      <div className="sl-trade-asset__head">
-        <strong>{name}</strong>
-        {ovr != null && !isPick ? <span className="sl-trade-asset__ovr">{ovr} OVR</span> : null}
-      </div>
-      <div className="sl-trade-asset__meta">
-        {pos ? <em>{pos}</em> : null}
-        {tv != null ? <span className="sl-trade-asset__tv">TV {tv.toFixed(1)}</span> : null}
-        {asset?.cap_hit_m != null ? <span>${Number(asset.cap_hit_m).toFixed(2)}M</span> : null}
+      <div className="sl-trade-asset__row">
+        {!isPick ? (
+          <PlayerHeadshot
+            player={ensurePlayerHeadshotFields({ ...asset, id: asset?.player_id, name, position: pos })}
+            size="sm"
+            className="sl-trade-asset__face"
+            flag={null}
+            number={null}
+          />
+        ) : (
+          <span className="sl-trade-asset__pickmark">PK</span>
+        )}
+        <div className="sl-trade-asset__body">
+          <div className="sl-trade-asset__head">
+            <strong title={name}>{name}</strong>
+          </div>
+          <div className="sl-trade-asset__meta">
+            {pos ? <em>{pos}</em> : null}
+            {asset?.age ? <span>Age {asset.age}</span> : null}
+            {asset?.cap_hit_m != null ? <span>${Number(asset.cap_hit_m).toFixed(2)}M{asset?.years_left ? ` × ${asset.years_left}y` : ""}</span> : null}
+            {tv != null ? <span className="sl-trade-asset__tv">TV {tv.toFixed(1)}</span> : null}
+          </div>
+          {statLine ? <div className="sl-trade-asset__stats">{statLine}</div> : null}
+        </div>
+        {ovr != null && !isPick ? (
+          <div className="sl-trade-asset__ratings">
+            <span><b>{ovr}</b><i>OVR</i></span>
+            {pot != null && pot > ovr ? <span className="is-pot"><b>{pot}</b><i>POT</i></span> : null}
+          </div>
+        ) : null}
       </div>
       {tv != null && !compact ? (
         <div className="sl-trade-asset__bar" aria-hidden>
@@ -2308,9 +2407,12 @@ function PlayerMeetingsPanel({
         setView("meeting");
       } catch (err) {
         setNotice(err?.message || "Could not start meeting.");
+        // His situation changed since the menu loaded — pull a fresh list of talks.
+        detailCacheRef.current.delete(playerId);
+        loadPlayerDetail(playerId, { background: true });
       }
     },
-    [onStartMeeting]
+    [onStartMeeting, loadPlayerDetail]
   );
 
   const handleResolveRequest = useCallback(
@@ -2555,9 +2657,22 @@ function PlayerMeetingsPanel({
             {asArray(playerDetail?.promises || promises.active)
               .filter((p) => str(p.player_id) === str(selected.player_id))
               .map((p) => (
-                <div key={str(p.id || p.type)} className="sl-promise">
+                <div key={str(p.id || p.type)} className={`sl-promise is-${str(p.status || "active")}`}>
                   <strong>{str(p.description || p.type)}</strong>
-                  <span>{p.games_remaining != null ? `${p.games_remaining} games left` : "Active"}</span>
+                  <span>
+                    {str(p.status || "active") === "active"
+                      ? `${p.games_remaining != null ? `${p.games_remaining} games left` : "Active"}${
+                          p.required_progress != null
+                            ? ` · delivered ${Number(p.progress) || 0}/${Number(p.required_progress) || 1}`
+                            : ""
+                        }`
+                      : str(p.status) === "kept"
+                        ? "Kept ✓"
+                        : "Broken ✕"}
+                  </span>
+                  {str(p.status || "active") === "active" && p.how_to ? (
+                    <em className="sl-promise-howto">{str(p.how_to)}</em>
+                  ) : null}
                 </div>
               ))}
             {!asArray(playerDetail?.promises || promises.active).filter(
@@ -3055,6 +3170,8 @@ export default function StorylinesScreen() {
     hydrateFranchiseNarrative?.({ force: true });
   }, [franchiseState?.narrative_revision, franchiseState?.session_id, hydrateFranchiseNarrative]);
 
+  const [dossierProspect, setDossierProspect] = useState(null);
+  const [dossierTab, setDossierTab] = useState("overview");
   const [department, setDepartment] = useState(
     pendingMeetingPlayerId ? "player_meetings" : pendingSocialNav ? "social" : "front_page"
   );
@@ -3062,8 +3179,14 @@ export default function StorylinesScreen() {
   const [redditSubFilter, setRedditSubFilter] = useState(pendingSocialNav?.subreddit || "all");
   const [expandedThreadId, setExpandedThreadId] = useState(null);
   const [liveSocialFeed, setLiveSocialFeed] = useState(null);
+  const [feedTab, setFeedTab] = useState("all");
+  const [feedPage, setFeedPage] = useState(0);
+  useEffect(() => {
+    setFeedPage(0);
+  }, [franchiseState?.calendar_cursor, feedTab]);
   const [meetingBusy, setMeetingBusy] = useState(false);
-  const [filter, setFilter] = useState("all");
+  // Open on your own club — "All" is mostly league-wide wire noise.
+  const [filter, setFilter] = useState("team");
   const [sortId, setSortId] = useState("decisions");
   const [search, setSearch] = useState("");
   const [openCaseId, setOpenCaseId] = useState(null);
@@ -3156,6 +3279,10 @@ export default function StorylinesScreen() {
   const pressQueue = asArray(narrativeUniverse?.press_conference_queue).filter((p) =>
     ["pending", "in_progress"].includes(str(p?.status))
   );
+  const pressRecent = asArray(narrativeUniverse?.press_conference_queue)
+    .filter((p) => ["answered", "expired"].includes(str(p?.status)) && asArray(p?.coverage).length)
+    .slice(-4)
+    .reverse();
   const narrativeEras = asArray(narrativeUniverse?.narrative_eras);
   const narrativeArchive = asArray(narrativeUniverse?.narrative_archive);
   const userMarket = asObject(narrativeUniverse?.user_market_profile);
@@ -3194,8 +3321,18 @@ export default function StorylinesScreen() {
     let cancelled = false;
     (async () => {
       try {
-        const feed = await getSocialFeed(sessionId);
-        if (!cancelled) setLiveSocialFeed(feed);
+        const feed = await getSocialFeed(sessionId, { tab: feedTab, page: feedPage });
+        if (!cancelled) {
+          setLiveSocialFeed((prev) =>
+            feedPage > 0 && prev
+              ? {
+                  ...feed,
+                  puckr: [...asArray(prev.puckr), ...asArray(feed?.puckr)],
+                  icehole: [...asArray(prev.icehole), ...asArray(feed?.icehole)],
+                }
+              : feed
+          );
+        }
       } catch {
         if (!cancelled) setLiveSocialFeed(null);
       }
@@ -3203,19 +3340,19 @@ export default function StorylinesScreen() {
     return () => {
       cancelled = true;
     };
-  }, [department, sessionId, franchiseState?.calendar_idx]);
+  }, [department, sessionId, franchiseState?.calendar_idx, franchiseState?.calendar_cursor, feedTab, feedPage]);
 
   const currentCalendarIso = calendarLabel(franchiseState);
 
   const socialPosts = useMemo(() => {
-    const opts = { currentIso: currentCalendarIso, maxAgeDays: 2 };
+    const opts = { currentIso: currentCalendarIso, maxAgeDays: 60, limit: 2000 };
     const puckr = asArray(liveSocialFeed?.puckr);
     if (puckr.length) return buildSocialPosts(stories, { social_posts: puckr }, opts);
     return buildSocialPosts(stories, narrativeUniverse, opts);
   }, [stories, narrativeUniverse, liveSocialFeed, currentCalendarIso]);
 
   const redditThreads = useMemo(() => {
-    const opts = { currentIso: currentCalendarIso, maxAgeDays: 2 };
+    const opts = { currentIso: currentCalendarIso, maxAgeDays: 60, limit: 2000 };
     const icehole = asArray(liveSocialFeed?.icehole);
     const source = icehole.length ? icehole : asArray(narrativeUniverse?.reddit_threads);
     return buildRedditThreads(source, redditSubFilter, opts);
@@ -3516,6 +3653,22 @@ export default function StorylinesScreen() {
   return (
     <div className="nhlcal-sl-root storylines-skin">
       <style>{`
+                .sl-prospect-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 14px; align-items: center; cursor: pointer; transition: border-color .15s ease, transform .15s ease; }
+        .sl-prospect-row:hover, .sl-prospect-row:focus-visible { border-color: rgba(57, 214, 230, 0.55); transform: translateY(-1px); outline: none; }
+        .sl-prospect-row.is-user { border-color: rgba(57, 214, 230, 0.35); }
+        .sl-prospect-row__logo { width: 64px; height: 64px; display: grid; place-items: center; border-radius: 12px; background: rgba(255,255,255,0.04); }
+        .sl-prospect-row__logo img { width: 56px; height: 56px; object-fit: contain; }
+        .sl-prospect-row__logo span { font-weight: 800; font-size: 15px; letter-spacing: .06em; }
+        .sl-prospect-row__name { font-size: 17px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .sl-prospect-row__name b { color: #39d6e6; margin-right: 6px; }
+        .sl-prospect-row__meta { font-size: 13px; opacity: .72; margin-top: 2px; }
+        .sl-prospect-row__team { font-size: 13px; opacity: .85; margin-top: 4px; }
+        .sl-prospect-row__ratings { display: flex; gap: 8px; }
+        .sl-prospect-row__ratings > span { display: flex; flex-direction: column; align-items: center; min-width: 52px; padding: 6px 8px; border-radius: 10px; font-size: 22px; font-weight: 800; line-height: 1; background: rgba(255,255,255,0.05); }
+        .sl-prospect-row__ratings small { font-size: 10px; letter-spacing: .12em; opacity: .7; margin-top: 4px; }
+        .sl-prospect-row__pot { color: #f5b942; background: rgba(245,185,66,0.10) !important; }
+        .sl-trend--click { cursor: pointer; }
+        .sl-trend--click:hover { background: rgba(57, 214, 230, 0.08); }
         .nhlcal-sl-root {
           --bg-deep: #030b13;
           --panel: rgba(10, 26, 40, 0.82);
@@ -4073,6 +4226,28 @@ export default function StorylinesScreen() {
           display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start;
         }
         @media (max-width: 760px) { .sl-trade-board__teams { grid-template-columns: 1fr; } }
+        .sl-trade-board__teams > * { min-width: 0; }
+        /* Feed cards are narrow: stack the two sides so names and ratings never clip. */
+        .sl-trade-board.is-compact .sl-trade-board__teams { grid-template-columns: 1fr; gap: 8px; }
+        .sl-trade-board.is-compact .sl-trade-board__side {
+          display: grid; grid-template-columns: auto 1fr; grid-template-areas: "logo name" "logo recv" "assets assets";
+          justify-items: start; text-align: left; column-gap: 10px; row-gap: 2px; align-items: center;
+        }
+        .sl-trade-board.is-compact .sl-trade-board__side > :first-child { grid-area: logo; }
+        .sl-trade-board.is-compact .sl-trade-board__side > strong { grid-area: name; font-size: 14px; }
+        .sl-trade-board.is-compact .sl-trade-board__side > span { grid-area: recv; }
+        .sl-trade-board.is-compact .sl-trade-board__assets { grid-area: assets; margin-top: 6px; }
+        .sl-trade-board.is-compact .sl-trade-board__mid {
+          grid-auto-flow: column; padding: 0; justify-content: center; align-items: center; gap: 8px;
+          border-top: 1px dashed rgba(201,146,255,.25); padding-top: 6px;
+        }
+        .sl-trade-board.is-compact .sl-trade-board__mid em { font-size: 16px; }
+        .sl-trade-board.is-compact .sl-trade-asset { padding: 7px 9px; }
+        .sl-trade-board.is-compact .sl-trade-asset__row { grid-template-columns: 34px minmax(0,1fr) auto; gap: 8px; }
+        .sl-trade-board.is-compact .sl-trade-asset__face,
+        .sl-trade-board.is-compact .sl-trade-asset__pickmark { width: 34px !important; height: 34px !important; }
+        .sl-trade-board.is-compact .sl-trade-asset__ratings > span { min-width: 36px; padding: 3px 4px; }
+        .sl-trade-board.is-compact .sl-trade-asset__ratings b { font-size: 15px; }
         .sl-trade-board__side { display: grid; gap: 8px; justify-items: center; text-align: center; }
         .sl-trade-board__side strong { font-size: 13px; }
         .sl-trade-board__side > span { font-size: 9px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
@@ -4086,13 +4261,31 @@ export default function StorylinesScreen() {
           border: 1px solid rgba(150,214,235,.16); background: rgba(255,255,255,.03);
         }
         .sl-trade-asset.is-pick { border-color: rgba(233,168,60,.25); }
+        .sl-trade-asset__row { display: grid; grid-template-columns: 44px minmax(0,1fr) auto; gap: 10px; align-items: center; }
+        .sl-trade-asset__face { width: 44px !important; height: 44px !important; }
+        .sl-trade-asset__pickmark {
+          display: grid; place-items: center; width: 44px; height: 44px; border-radius: 8px;
+          background: rgba(233,168,60,.14); color: var(--gold); font-weight: 900; font-size: 12px;
+        }
+        .sl-trade-asset__body { min-width: 0; }
+        .sl-trade-asset__stats { margin-top: 4px; font-size: 12px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+        .sl-trade-asset__ratings { display: flex; gap: 6px; }
+        .sl-trade-asset__ratings > span {
+          display: flex; flex-direction: column; align-items: center; min-width: 44px; padding: 4px 6px; border-radius: 8px;
+          background: rgba(46,230,240,.1); border: 1px solid rgba(46,230,240,.3);
+        }
+        .sl-trade-asset__ratings > span.is-pot { background: rgba(233,168,60,.1); border-color: rgba(233,168,60,.35); }
+        .sl-trade-asset__ratings b { font-size: 18px; font-weight: 900; line-height: 1; }
+        .sl-trade-asset__ratings i { font-style: normal; font-size: 9px; font-weight: 900; letter-spacing: .08em; color: var(--muted); margin-top: 2px; }
         .sl-trade-asset__head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
-        .sl-trade-asset__head strong { font-size: 12px; line-height: 1.3; }
+        .sl-trade-asset__head { min-width: 0; }
+        .sl-trade-asset__head strong { font-size: 15px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+        .sl-trade-asset__meta { min-width: 0; }
         .sl-trade-asset__ovr {
           flex-shrink: 0; font-size: 10px; font-weight: 900; letter-spacing: .06em;
           color: #041018; background: linear-gradient(180deg, #2ee6f0, #12b9c9); padding: 2px 6px; border-radius: 4px;
         }
-        .sl-trade-asset__meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 10px; font-weight: 800; color: var(--muted); }
+        .sl-trade-asset__meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 11.5px; font-weight: 800; color: var(--muted); }
         .sl-trade-asset__meta em { font-style: normal; text-transform: uppercase; letter-spacing: .06em; }
         .sl-trade-asset__tv { color: var(--gold); }
         .sl-trade-asset__bar { height: 4px; border-radius: 999px; background: rgba(150,214,235,.12); margin-top: 6px; overflow: hidden; }
@@ -4191,6 +4384,16 @@ export default function StorylinesScreen() {
         .sl-post__head em { margin-left: auto; font-style: normal; font-size: 10px; font-weight: 800; color: var(--muted); }
         .sl-post__verified { color: var(--cyan); font-size: 11px; }
         .sl-post p { margin: 0; font-size: 13px; line-height: 1.5; }
+        .sl-post__badge { text-transform: uppercase; font-size: 10px; font-weight: 800; letter-spacing: .08em; padding: 1px 6px; border-radius: 4px; background: rgba(19,216,231,.12); color: #13d8e7; }
+        .sl-attach { margin-top: 8px; padding: 8px 10px; border: 1px solid rgba(156,218,236,.16); border-radius: 8px; background: rgba(4,16,26,.6); display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+        .sl-attach small { color: #8fb3c4; font-size: 11px; }
+        .sl-attach b { font-family: "Barlow Condensed", sans-serif; font-size: 16px; letter-spacing: .04em; }
+        .sl-attach--score > span { font-size: 10px; font-weight: 900; color: #e9a83c; text-transform: uppercase; letter-spacing: .1em; }
+        .sl-attach--score small { flex-basis: 100%; }
+        .sl-attach--player > div { display: flex; flex-direction: column; gap: 2px; }
+        .sl-attach--standings { flex-direction: column; align-items: flex-start; }
+        .sl-attach--standings .is-focus { color: #e9a83c; font-weight: 800; }
+        .sl-comment--reply { margin: 6px 0 0 14px; border-left: 2px solid rgba(156,218,236,.18); padding-left: 8px; }
         .sl-post__meta { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 9px; padding-top: 9px;
           border-top: 1px solid rgba(150,214,235,.08); font-size: 10px; font-weight: 800; color: var(--muted); }
         .sl-post__related { color: var(--gold); letter-spacing: .04em; text-transform: uppercase; }
@@ -4260,6 +4463,40 @@ export default function StorylinesScreen() {
         .sl-press__reporter { display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
           font-size: 10px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; color: var(--cyan); }
         .sl-press__reporter i { font-style: normal; width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); }
+        .sl-pressroom__intro { border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; margin-bottom: 14px;
+          display: grid; gap: 10px; background: rgba(22,220,234,.03); }
+        .sl-pressroom__intro strong { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; }
+        .sl-pressroom__intro p { margin: 4px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--muted-2); }
+        .sl-pressroom__levers { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+        .sl-pressroom__levers li { font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+          padding: 4px 8px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--cyan); }
+        .sl-pressroom__rule { margin: 0 !important; font-size: 11px !important; color: var(--muted) !important; }
+        .sl-press__title { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+        .sl-press__status { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+        .sl-press__progress, .sl-press__deadline { font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase;
+          padding: 4px 8px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--muted); }
+        .sl-press__deadline.is-urgent { color: var(--red); border-color: rgba(255,90,90,.45); }
+        .sl-press__why { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 14px; }
+        .sl-press__why-label { font-size: 9.5px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-right: 4px; }
+        .sl-press__trigger { font-size: 10.5px; font-weight: 800; padding: 3px 8px; border-radius: 999px;
+          background: rgba(255,255,255,.04); border: 1px solid var(--line); color: var(--muted-2); }
+        .sl-press__question { margin: 0 0 10px; font-size: 14px; line-height: 1.45; font-weight: 600; }
+        .sl-press__q--done { opacity: .85; }
+        .sl-press__answer { margin: 0; font-size: 12.5px; color: var(--muted-2); }
+        .sl-press__answer em { font-style: normal; color: var(--cyan); }
+        .sl-pressroom__recent { margin-top: 18px; }
+        .sl-pressroom__recent h4 { margin: 0 0 8px; font-size: 11px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+        .sl-press-recent { display: flex; gap: 12px; padding: 10px 12px; border-left: 3px solid var(--cyan);
+          background: rgba(255,255,255,.02); border-radius: 0 8px 8px 0; margin-bottom: 8px; }
+        .sl-press-recent.is-expired { border-left-color: var(--red); }
+        .sl-press-recent__status { font-size: 9.5px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); min-width: 52px; }
+        .sl-press-recent strong { font-size: 12.5px; }
+        .sl-press-recent p { margin: 3px 0 0; font-size: 12px; color: var(--muted-2); }
+        .sl-fallout-sec { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+        .sl-fallout-sec h4 { margin: 0 0 8px; font-size: 10.5px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+        .sl-fallout-sec p { margin: 4px 0; font-size: 12.5px; color: var(--muted-2); }
+        .sl-press-link { margin: 6px 0 12px; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-weight: 800; font-size: 12px;
+          border: 1px solid rgba(22,220,234,.4); background: rgba(22,220,234,.08); color: var(--cyan); }
 
         /* ------------- archive ------------- */
         .sl-era { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-bottom: 14px;
@@ -4461,6 +4698,10 @@ export default function StorylinesScreen() {
           background: rgba(82,223,148,.04); font-size: 12.5px; }
         .sl-promise strong { font-weight: 700; }
         .sl-promise span { font-size: 10.5px; font-weight: 800; color: var(--muted); white-space: nowrap; }
+        .sl-promise { flex-wrap: wrap; }
+        .sl-promise.is-kept span { color: #3ccf8e; }
+        .sl-promise.is-broken span { color: #ff6b6b; }
+        .sl-promise-howto { flex-basis: 100%; font-size: 11px; font-style: normal; color: var(--muted); opacity: 0.85; }
         .sl-histrow { display: grid; grid-template-columns: 96px 1fr; gap: 12px; padding: 10px 0;
           border-bottom: 1px solid rgba(150,214,235,.08); }
         .sl-histrow time { font-size: 10.5px; font-weight: 800; color: var(--muted); }
@@ -4778,6 +5019,22 @@ export default function StorylinesScreen() {
                 ))}
               </div>
 
+              {socialSubTab !== "burner" ? (
+                <div className="sl-pills">
+                  {[
+                    ["all", "All"],
+                    ["mine", "My team"],
+                    ["games", "Games"],
+                    ["trades", "Trades"],
+                    ["rumors", "Rumors"],
+                  ].map(([id, label]) => (
+                    <button key={id} type="button" className={feedTab === id ? "is-active" : ""} onClick={() => setFeedTab(id)}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
               {socialSubTab === "puckr" ? (
                 <div className="sl-feed">
                   {socialPosts.length ? (
@@ -4801,14 +5058,50 @@ export default function StorylinesScreen() {
                         }}
                       >
                         <div className="sl-post__head">
-                          <span className="sl-post__avatar" aria-hidden>{playerInitials(post.name)}</span>
+                          <span className="sl-post__avatar" aria-hidden style={post.color ? { background: post.color } : undefined}>{playerInitials(post.name)}</span>
                           <strong>{post.name}</strong>
                           {post.verified ? <span className="sl-post__verified">✓</span> : null}
                           <span>{post.handle}</span>
-                          {post.isAgent ? <span>· agent</span> : null}
-                          <em>{post.age}</em>
+                          {post.badge && post.badge !== "fan" ? <span className="sl-post__badge">{post.badge}</span> : null}
+                          <em>{post.age}{post.time ? ` · ${post.time}` : ""}</em>
                         </div>
                         <p>{post.text}</p>
+                        {post.attach?.type === "score" ? (
+                          <div className="sl-attach sl-attach--score">
+                            <span>{post.attach.status}</span>
+                            <b>{post.attach.away?.abbr} {post.attach.away?.score}</b>
+                            <b>{post.attach.home?.abbr} {post.attach.home?.score}</b>
+                            <small>SOG {post.attach.away?.shots ?? "—"}-{post.attach.home?.shots ?? "—"} · xG {Number(post.attach.away?.xg || 0).toFixed(1)}-{Number(post.attach.home?.xg || 0).toFixed(1)}</small>
+                            {asArray(post.attach.stars).length ? (
+                              <small>{asArray(post.attach.stars).map((st, si) => `${si + 1}★ ${st.name} (${st.line})`).join(" · ")}</small>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {post.attach?.type === "statline" || post.attach?.type === "contract" ? (
+                          <div className="sl-attach sl-attach--player">
+                            <PlayerHeadshot player={{ ...post.attach, id: post.attach.player_id, position: post.attach.pos }} size="sm" />
+                            <div>
+                              <b>{post.attach.name}</b>
+                              <small>
+                                {[post.attach.pos, post.attach.abbr, post.attach.age ? `${post.attach.age}y` : ""].filter(Boolean).join(" · ")}
+                              </small>
+                              <small>
+                                {post.attach.type === "contract"
+                                  ? `${post.attach.years}y × $${Number(post.attach.aav || 0).toFixed(2)}M`
+                                  : `${post.attach.label ? `${post.attach.label}: ` : ""}${post.attach.line}`}
+                              </small>
+                            </div>
+                          </div>
+                        ) : null}
+                        {post.attach?.type === "standings" ? (
+                          <div className="sl-attach sl-attach--standings">
+                            {asArray(post.attach.rows).map((r) => (
+                              <small key={r.team_id} className={r.focus ? "is-focus" : ""}>
+                                {r.rank}. {r.abbr} {r.pts} pts ({r.gp} GP) · {Math.round(Number(r.odds || 0) * 100)}%
+                              </small>
+                            ))}
+                          </div>
+                        ) : null}
                         <div className="sl-post__meta">
                           {post.related && post.related !== post.text && !post.text.includes(post.related) ? (
                             <span className="sl-post__related">{post.related}</span>
@@ -4827,10 +5120,15 @@ export default function StorylinesScreen() {
                   ) : (
                     <EmptyPanel
                       kicker="Puckr · quiet"
-                      title="Nothing in the last 48 hours"
-                      body="Only posts from the past two franchise days appear here. Advance the calendar or trigger storylines to refresh the timeline."
+                      title="No posts yet"
+                      body="The timeline fills as days are simulated: games, trades, injuries, signings and rumors."
                     />
                   )}
+                  {liveSocialFeed?.has_more_posts ? (
+                    <button type="button" className="nhlcal-advance-button-secondary" onClick={() => setFeedPage((pg) => pg + 1)}>
+                      Load more
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -4880,6 +5178,12 @@ export default function StorylinesScreen() {
                                     {c.isRival ? " · rival fan" : ""} · {c.upvotes}↑
                                   </em>
                                   {c.text}
+                                  {asArray(c.replies).map((r) => (
+                                    <div key={r.id} className="sl-comment sl-comment--reply">
+                                      <em>{r.author} · {r.upvotes}↑</em>
+                                      {r.text}
+                                    </div>
+                                  ))}
                                 </div>
                               ))}
                             </div>
@@ -5035,7 +5339,13 @@ export default function StorylinesScreen() {
                   <h3>Your pipeline</h3>
                   <div className="sl-effects">
                     {userProspectPoolRow.prospects.slice(0, 8).map((p) => (
-                      <div key={p.player_id || p.name} className="sl-trend">
+                      <div
+                        key={p.player_id || p.name}
+                        className="sl-trend sl-trend--click"
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => p.raw && setDossierProspect(p.raw)}
+                      >
                         <b>{p.potentialRank}</b>
                         <span>{p.name}</span>
                         <em>{p.potential} POT</em>
@@ -5052,38 +5362,54 @@ export default function StorylinesScreen() {
               {leagueProspectLeaderboard.length ? (
                 leagueProspectLeaderboard.map((p, idx) => {
                   const isUser = p.team_id === userTeamId(franchiseState).toUpperCase();
+                  const abbr = p.team_abbr || p.team_id;
                   const logo =
                     resolveFranchiseTeamLogo(
-                      { team_abbrev: p.team_id, abbrev: p.team_id, team_name: p.team_name },
-                      p.team_name || p.team_id
+                      { team_abbrev: abbr, abbrev: abbr, abbreviation: abbr, team_name: p.team_name },
+                      p.team_name || abbr
                     ) || "";
                   return (
                     <article
                       key={p.player_id || `${p.team_id}:${p.name}`}
-                      className="sl-insider"
+                      className={`sl-insider sl-prospect-row${isUser ? " is-user" : ""}`}
                       style={{ animationDelay: `${Math.min(idx, 12) * 20}ms` }}
+                      role="button"
+                      tabIndex={0}
+                      title={`Open ${p.name}'s dossier`}
+                      onClick={() => p.raw && setDossierProspect(p.raw)}
+                      onKeyDown={(e) => {
+                        if ((e.key === "Enter" || e.key === " ") && p.raw) {
+                          e.preventDefault();
+                          setDossierProspect(p.raw);
+                        }
+                      }}
                     >
-                      <div className="sl-insider__head">
-                        <strong>
-                          #{p.leagueRank} · {p.name}
-                          {p.age != null ? ` · ${p.age}` : ""}
-                        </strong>
-                        <em>{p.potential} POT</em>
+                      <div className="sl-prospect-row__logo">
+                        {logo ? <img src={logo} alt={p.team_name || abbr} /> : <span>{abbr}</span>}
                       </div>
-                      <p>
-                        Rights held by <strong>{p.team_name || p.team_id}</strong>
-                        {isUser ? " · Your org" : ""}
-                      </p>
-                      <div className="sl-insider__meta">
-                        {logo ? (
-                          <span>
-                            <img src={logo} alt="" width={16} height={16} style={{ verticalAlign: "middle" }} />{" "}
-                            {p.team_id}
+                      <div className="sl-prospect-row__body">
+                        <div className="sl-prospect-row__name">
+                          <b>#{p.leagueRank}</b> {p.name}
+                        </div>
+                        <div className="sl-prospect-row__meta">
+                          {[p.position, p.age != null ? `Age ${p.age}` : "", p.league].filter(Boolean).join(" · ")}
+                        </div>
+                        <div className="sl-prospect-row__team">
+                          Rights held by <strong>{p.team_name || abbr}</strong>
+                          {isUser ? <em> · Your org</em> : null}
+                        </div>
+                      </div>
+                      <div className="sl-prospect-row__ratings">
+                        {p.ovr ? (
+                          <span className="sl-prospect-row__ovr">
+                            {Math.round(p.ovr)}
+                            <small>OVR</small>
                           </span>
-                        ) : (
-                          <span>{p.team_id}</span>
-                        )}
-                        <span>League-wide potential rank</span>
+                        ) : null}
+                        <span className="sl-prospect-row__pot">
+                          {p.potential}
+                          <small>POT</small>
+                        </span>
                       </div>
                     </article>
                   );
@@ -5111,7 +5437,13 @@ export default function StorylinesScreen() {
                 <div className="sl-effects">
                   {userTeamProspectsOnLeaderboard.length ? (
                     userTeamProspectsOnLeaderboard.slice(0, 12).map((p) => (
-                      <div key={p.player_id || p.name} className="sl-trend">
+                      <div
+                        key={p.player_id || p.name}
+                        className="sl-trend sl-trend--click"
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => p.raw && setDossierProspect(p.raw)}
+                      >
                         <b>{p.leagueRank}</b>
                         <span>{p.name}</span>
                         <em>{p.potential} POT</em>
@@ -5130,7 +5462,13 @@ export default function StorylinesScreen() {
                 <h3>League top 10</h3>
                 <div className="sl-effects">
                   {leagueProspectLeaderboard.slice(0, 10).map((p) => (
-                    <div key={p.player_id || p.name} className="sl-trend">
+                    <div
+                      key={p.player_id || p.name}
+                      className="sl-trend sl-trend--click"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => p.raw && setDossierProspect(p.raw)}
+                    >
                       <b>{p.leagueRank}</b>
                       <span>{p.name}</span>
                       <em>{p.potential}</em>
@@ -5214,7 +5552,26 @@ export default function StorylinesScreen() {
             </aside>
           </div>
         ) : department === "press_room" ? (
-          <div>
+          <div className="sl-pressroom">
+            <div className="sl-pressroom__intro">
+              <div>
+                <strong>Press Room</strong>
+                <p>
+                  When a story about your club heats up, reporters book a media availability. Every answer
+                  you give changes things for real — and you can see each effect before you pick.
+                </p>
+              </div>
+              <ul className="sl-pressroom__levers">
+                <li>Fan confidence</li>
+                <li>Player morale &amp; trust</li>
+                <li>Story heat</li>
+                <li>Trade rumours</li>
+                <li>Reporter relationships</li>
+              </ul>
+              <p className="sl-pressroom__rule">
+                Availabilities close after {4} days. Skipping one is treated like a cold "no comment".
+              </p>
+            </div>
             {pressOutcome ? (
               <MeetingOutcomePanel
                 outcome={pressOutcome}
@@ -5223,84 +5580,126 @@ export default function StorylinesScreen() {
               />
             ) : null}
             {pressQueue.length ? (
-              pressQueue.map((press) => (
-                <article key={str(press.id)} className="sl-press">
-                  <div className="sl-press__head">
-                    <strong>{str(press.headline || "Media availability scheduled")}</strong>
-                    {press.player_name ? <span>{press.player_name}</span> : null}
-                    <span className="sl-press__mics">
-                      {heatLabel(press.heat) || "Room is filling"}
-                    </span>
-                  </div>
-                  <div className="sl-press__body">
-                    {press.summary ? <p className="sl-press__summary">{press.summary}</p> : null}
-                    {press.context?.record ? (
-                      <p className="sl-press__record">
-                        Team record: <strong>{str(press.context.record)}</strong>
-                        {press.context.league_rank ? (
-                          <span> · Rank #{Number(press.context.league_rank)}</span>
+              pressQueue.map((press) => {
+                const today = Number(playerMeetingsPayload?.calendar_day);
+                const daysLeft =
+                  press.expires_day != null && Number.isFinite(today)
+                    ? Math.max(0, Number(press.expires_day) - today)
+                    : null;
+                const qs = asArray(press.questions);
+                const answeredIds = new Set(asArray(press.answered_questions).map((id) => str(id)));
+                const coverageByQ = new Map(asArray(press.coverage).map((c) => [str(c.question_id), c]));
+                return (
+                  <article key={str(press.id)} className="sl-press">
+                    <div className="sl-press__head">
+                      <div className="sl-press__title">
+                        <strong>{str(press.headline || "Media availability scheduled")}</strong>
+                        {press.player_name ? <span>About {press.player_name}</span> : null}
+                      </div>
+                      <div className="sl-press__status">
+                        <span className="sl-press__progress">
+                          {answeredIds.size}/{qs.length} answered
+                        </span>
+                        {daysLeft != null ? (
+                          <span className={`sl-press__deadline${daysLeft <= 1 ? " is-urgent" : ""}`}>
+                            {daysLeft === 0 ? "Closes today" : `Closes in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`}
+                          </span>
                         ) : null}
-                      </p>
-                    ) : null}
-                    {asArray(press.context_triggers).length ? (
-                      <div className="sl-press__context" aria-label="Active story triggers">
+                      </div>
+                    </div>
+                    <div className="sl-press__body">
+                      <div className="sl-press__why">
+                        <span className="sl-press__why-label">Why the media is here</span>
+                        {press.context?.record ? (
+                          <span className="sl-press__trigger">
+                            Record {str(press.context.record)}
+                            {press.context.league_rank ? ` · #${Number(press.context.league_rank)}` : ""}
+                          </span>
+                        ) : null}
                         {asArray(press.context_triggers).map((t) => (
-                          <span key={str(t.code)} className="sl-press__trigger" title={str(t.label)}>
-                            ✓ {str(t.label)}
+                          <span key={str(t.code)} className="sl-press__trigger">
+                            {str(t.label)}
                           </span>
                         ))}
                       </div>
-                    ) : null}
-                    {asArray(press.questions).map((q) => {
-                      const answeredQuestions = new Set(asArray(press.answered_questions).map((id) => str(id)));
-                      const questionAnswered = answeredQuestions.has(str(q.id));
-                      return (
-                      <div key={str(q.id)} className={`sl-press__q${questionAnswered ? " sl-press__q--done" : ""}`}>
-                        <div className="sl-press__reporter">
-                          <i aria-hidden />
-                          {str(q.reporter_name || "Reporter")}
-                          {q.outlet ? ` · ${q.outlet}` : ""}
-                          {questionAnswered ? <em className="sl-press__answered">Answered</em> : null}
-                        </div>
-                        {asArray(q.context_tags).length ? (
-                          <div className="sl-press__q-tags">
-                            {asArray(q.context_tags).map((tag) => (
-                              <span key={str(tag)} className="sl-press__q-tag">
-                                ✓ {str(tag).replace(/_/g, " ")}
-                              </span>
-                            ))}
+                      {qs.map((q, qi) => {
+                        const done = answeredIds.has(str(q.id));
+                        const cov = coverageByQ.get(str(q.id));
+                        if (done) {
+                          return (
+                            <div key={str(q.id)} className="sl-press__q sl-press__q--done">
+                              <div className="sl-press__reporter">
+                                Q{qi + 1} · {str(q.reporter_name || "Reporter")}
+                                {q.outlet ? ` · ${q.outlet}` : ""}
+                              </div>
+                              <p className="sl-press__answer">
+                                You said <b>{str(cov?.response_label || "—")}</b>
+                                {cov?.headline ? <> → <em>“{str(cov.headline)}”</em></> : null}
+                              </p>
+                            </div>
+                          );
+                        }
+                        return (
+                          <div key={str(q.id)} className="sl-press__q">
+                            <div className="sl-press__reporter">
+                              <i aria-hidden />
+                              Q{qi + 1} · {str(q.reporter_name || "Reporter")}
+                              {q.outlet ? ` · ${q.outlet}` : ""}
+                            </div>
+                            <p className="sl-press__question">{str(q.question || "")}</p>
+                            <div className="sl-choices sl-choices--press">
+                              {asArray(q.responses).map((resp) => {
+                                const sid = str(press.storyline_id || press.id);
+                                const choiceId = `${str(q.id)}:${str(resp.id)}`;
+                                const busy = busyChoice === `${sid}:${choiceId}`;
+                                return (
+                                  <ResponseChoiceButton
+                                    key={resp.id}
+                                    response={resp}
+                                    className="sl-choice sl-choice--press"
+                                    disabled={Boolean(busyChoice)}
+                                    busy={busy}
+                                    onClick={() => handlePressResponse(press, str(q.id), str(resp.id))}
+                                  />
+                                );
+                              })}
+                            </div>
                           </div>
-                        ) : null}
-                        <p className="sl-press__question">{str(q.question || "")}</p>
-                        <div className="sl-choices sl-choices--press">
-                          {asArray(q.responses).map((resp) => {
-                            const sid = str(press.storyline_id || press.id);
-                            const choiceId = `${str(q.id)}:${str(resp.id)}`;
-                            const busy = busyChoice === `${sid}:${choiceId}`;
-                            return (
-                              <ResponseChoiceButton
-                                key={resp.id}
-                                response={resp}
-                                className="sl-choice sl-choice--press"
-                                disabled={Boolean(busyChoice) || questionAnswered}
-                                busy={busy}
-                                onClick={() => handlePressResponse(press, str(q.id), str(resp.id))}
-                              />
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );})}
-                  </div>
-                </article>
-              ))
+                        );
+                      })}
+                    </div>
+                  </article>
+                );
+              })
             ) : (
               <EmptyPanel
                 kicker="Press room · clear"
-                title="No scheduled availability"
-                body="When heat builds around your club, reporters will queue questions for your next media session."
+                title="No media availability scheduled"
+                body="Reporters book one when a story about your club gets hot (a skid, a streak, trade rumours, a breakout or a slump). It'll show up here with a 4-day window."
               />
             )}
+            {pressRecent.length ? (
+              <section className="sl-pressroom__recent">
+                <h4>Recent coverage</h4>
+                {pressRecent.map((press) => (
+                  <div key={str(press.id)} className={`sl-press-recent is-${str(press.status)}`}>
+                    <span className="sl-press-recent__status">
+                      {str(press.status) === "expired" ? "Skipped" : "Held"}
+                    </span>
+                    <div>
+                      <strong>{str(press.headline || "Media availability")}</strong>
+                      {asArray(press.coverage).map((c, i) => (
+                        <p key={i}>
+                          {c.response_label ? <b>{str(c.response_label)}</b> : null}
+                          {c.response_label ? " → " : ""}
+                          {str(c.headline || "")}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </section>
+            ) : null}
           </div>
         ) : department === "archive" ? (
           <div>
@@ -5438,6 +5837,19 @@ export default function StorylinesScreen() {
                     ) : null}
                   </div>
                   {openCase.summary ? <p className="sl-case__lede">{openCase.summary}</p> : null}
+                  {openCase.pressConferenceId &&
+                  pressQueue.some((p) => str(p.id) === str(openCase.pressConferenceId)) ? (
+                    <button
+                      type="button"
+                      className="sl-press-link"
+                      onClick={() => {
+                        setOpenCaseId(null);
+                        setDepartment("press_room");
+                      }}
+                    >
+                      Reporters want your answer on this — go to the Press Room →
+                    </button>
+                  ) : null}
                 </div>
               </div>
 
@@ -5795,6 +6207,22 @@ export default function StorylinesScreen() {
           </details>
         ) : null}
       </div>
+      {dossierProspect ? (
+        <PlayerProfileModal
+          player={normalizeRosterBrowserPlayer(dossierProspect, franchiseState, 0)}
+          players={[normalizeRosterBrowserPlayer(dossierProspect, franchiseState, 0)]}
+          playerIndex={0}
+          onSelectPlayer={() => {}}
+          activeTab={dossierTab}
+          setActiveTab={setDossierTab}
+          storylines={[]}
+          franchiseState={franchiseState}
+          onClose={() => {
+            setDossierProspect(null);
+            setDossierTab("overview");
+          }}
+        />
+      ) : null}
     </div>
   );
 }

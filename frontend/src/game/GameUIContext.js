@@ -306,6 +306,7 @@ const LEAN_MERGE_PROGRESS_KEYS = [
   "awards",
   "retirements_payload",
   "retirements",
+  "board_of_governors",
   "salary_cap_payload",
   "salary_cap",
   "development_report_payload",
@@ -521,9 +522,20 @@ export function GameUIProvider({ children }) {
     getFranchiseSessionId() ? SCREENS.HUB : SCREENS.SETUP
   );
   const screenRef = useRef(screen);
+  const navGuardRef = useRef(null);
+  const setNavGuard = useCallback((fn) => {
+    navGuardRef.current = typeof fn === "function" ? fn : null;
+  }, []);
   const setScreen = useCallback((next) => {
     const to = typeof next === "function" ? next(screenRef.current) : next;
     const from = screenRef.current;
+    if (to !== from && navGuardRef.current) {
+      try {
+        if (navGuardRef.current(to, from) === false) return;
+      } catch {
+        /* guard errors never trap the user */
+      }
+    }
     if (to !== from) {
       markNavigation(from, to);
     }
@@ -1483,6 +1495,7 @@ export function GameUIProvider({ children }) {
     () => ({
       screen,
       setScreen,
+      setNavGuard,
       hubMenuIndex,
       setHubMenuIndex,
       rosterRowIndex,
@@ -1559,6 +1572,7 @@ export function GameUIProvider({ children }) {
     }),
     [
       screen,
+      setNavGuard,
       hubMenuIndex,
       rosterRowIndex,
       settingsRowIndex,

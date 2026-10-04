@@ -456,6 +456,34 @@ NAME_POOLS: Dict[str, Dict[str, List[str]]] = {
 }
 
 
+try:
+    from app.sim_engine.generation.name_pools import merge_name_pools as _merge_name_pools
+
+    _merge_name_pools(NAME_POOLS)
+except Exception:  # pragma: no cover - pools are optional
+    pass
+
+# Surname usage this process has handed out — draws prefer the less-used names so a
+# league doesn't fill up with twelve Smiths and nine Ivanovs.
+_LAST_USE: Dict[str, int] = {}
+_FULL_USE: Dict[str, int] = {}
+
+
+def _pick_fresh(rng, items: List[str], use: Dict[str, int], tries: int = 4) -> str:
+    if not items:
+        return "Unknown"
+    best = None
+    best_n = None
+    for _ in range(max(1, tries)):
+        cand = str(rng.choice(items))
+        n = use.get(cand, 0)
+        if best is None or n < best_n:
+            best, best_n = cand, n
+            if n == 0:
+                break
+    return str(best)
+
+
 _NICKNAMES = [
     "Ace","Rocket","Hammer","Ghost","Moose","Doc","Skates","Turbo","Sparks","Tank",
     "Iceman","Razor","Chippy","Chief","Snipe","Wheels","Brick","Buzz","Professor","Flash",
@@ -586,7 +614,15 @@ def generate_human_identity(rng, *, nationality: Optional[str] = None) -> HumanI
         if heritage_pool:
             name_pool = heritage_pool
     first = _safe_choice(rng, name_pool.get("first", []))
-    last = _safe_choice(rng, name_pool.get("last", []))
+    last = _pick_fresh(rng, name_pool.get("last", []), _LAST_USE)
+    # Avoid exact full-name repeats where the pool allows it.
+    for _ in range(3):
+        if _FULL_USE.get(f"{first} {last}", 0) == 0:
+            break
+        first = _safe_choice(rng, name_pool.get("first", []))
+        last = _pick_fresh(rng, name_pool.get("last", []), _LAST_USE)
+    _LAST_USE[last] = _LAST_USE.get(last, 0) + 1
+    _FULL_USE[f"{first} {last}"] = _FULL_USE.get(f"{first} {last}", 0) + 1
     hometown = _safe_choice(rng, pool.get("towns", []))
     full = f"{first} {last}"
 

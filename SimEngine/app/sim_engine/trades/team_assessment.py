@@ -82,6 +82,80 @@ def player_ovr(player: Any) -> float:
     return v * 99.0 if v <= 1.5 else v
 
 
+# ---------------------------------------------------------------------------
+# Form — current-season performance relative to what the league's own data says a
+# player of that OVR produces. GMs used to rank their roster on OVR alone, so the
+# same depth names were "surplus" every day of every save regardless of how anyone
+# was actually playing. Form is fit per pass from the live season ledger
+# (league.player_season_stats), so it adapts to whatever the sim produces.
+# ---------------------------------------------------------------------------
+
+#: pid → form adjustment in OVR points (±FORM_MAX), set by assess_league each pass.
+_FORM: Dict[str, float] = {}
+FORM_MAX = 5.0
+FORM_MIN_GP = 8
+FORM_MIN_SAMPLE = 20
+
+
+def player_rating(player: Any) -> float:
+    """OVR adjusted for current-season form — what the GM actually sees."""
+    return player_ovr(player) + _FORM.get(player_pid(player), 0.0)
+
+
+def player_form(player: Any) -> float:
+    return _FORM.get(player_pid(player), 0.0)
+
+
+def _linfit(xs: List[float], ys: List[float]) -> Tuple[float, float, float]:
+    """(slope, intercept, residual std) of y ~ x."""
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    vx = sum((x - mx) ** 2 for x in xs)
+    slope = (sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / vx) if vx > 1e-9 else 0.0
+    icpt = my - slope * mx
+    res = [y - (slope * x + icpt) for x, y in zip(xs, ys)]
+    sd = (sum(r * r for r in res) / max(1, n - 2)) ** 0.5
+    return slope, icpt, sd
+
+
+def compute_form(league: Any, teams: List[Any]) -> Dict[str, float]:
+    reg = getattr(league, "player_season_stats", None)
+    if not isinstance(reg, dict) or not reg:
+        return {}
+    groups: Dict[str, List[Tuple[str, float, float, int]]] = {"F": [], "D": [], "G": []}
+    for tm in teams:
+        for p in list(getattr(tm, "roster", None) or []):
+            row = reg.get(player_pid(p))
+            if not isinstance(row, dict):
+                continue
+            gp = _safe_int(row.get("gp"), 0)
+            if gp < FORM_MIN_GP:
+                continue
+            g = position_group(p)
+            key = "G" if g == "G" else ("D" if g in ("LD", "RD") else "F")
+            if key == "G":
+                # Lower GAA is better → negate so "higher is better" like points.
+                perf = -(_safe_float(row.get("ga"), 0.0) / gp)
+                sa = _safe_float(row.get("sa") or row.get("shots_against"), 0.0)
+                if sa > 0:
+                    perf = 1.0 - _safe_float(row.get("ga"), 0.0) / sa  # true SV% when tracked
+            else:
+                perf = _safe_float(row.get("pts"), 0.0) / gp
+            groups[key].append((player_pid(p), player_ovr(p), perf, gp))
+    out: Dict[str, float] = {}
+    for key, rows in groups.items():
+        if len(rows) < FORM_MIN_SAMPLE:
+            continue
+        slope, icpt, sd = _linfit([r[1] for r in rows], [r[2] for r in rows])
+        if sd <= 1e-9:
+            continue
+        for pid, ovr, perf, gp in rows:
+            z = (perf - (slope * ovr + icpt)) / sd
+            shrink = gp / (gp + 15.0)  # small samples barely move the needle
+            out[pid] = round(max(-FORM_MAX, min(FORM_MAX, z * 2.0)) * shrink, 2)
+    return out
+
+
 def player_age(player: Any) -> int:
     ident = getattr(player, "identity", None)
     return _safe_int(getattr(ident, "age", getattr(player, "age", 27)), 27)
@@ -135,14 +209,22 @@ def _is_injured(player: Any) -> bool:
         return False
 
 
+def _cfield(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def contract_years_left(player: Any) -> int:
+    # Contracts are dicts; getattr() on them always gave 0, so every player looked like an
+    # expiring rental and "bad contract" (needs 2+ years) could never trigger.
     c = getattr(player, "contract", None)
     years = 0
     for obj in (player, c):
         if obj is None:
             continue
         for key in ("years_remaining", "term_remaining", "remaining_years"):
-            years = max(years, _safe_int(getattr(obj, key, 0), 0))
+            years = max(years, _safe_int(_cfield(obj, key, 0), 0))
     return years
 
 
@@ -152,7 +234,7 @@ def cap_hit_m(player: Any) -> float:
         if obj is None:
             continue
         for key in ("cap_hit_m", "aav_m", "cap_hit"):
-            v = getattr(obj, key, None)
+            v = _cfield(obj, key, None)
             if v is not None:
                 f = _safe_float(v, 0.0)
                 return f / 1_000_000.0 if f > 1000 else f
@@ -240,7 +322,7 @@ def _nhl_lineup_by_group(team: Any) -> Dict[str, List[Any]]:
         out[g].append(p)
         out["F" if g in ("C", "W") else ("D" if g in ("LD", "RD") else "G")].append(p)
     for k in out:
-        out[k].sort(key=player_ovr, reverse=True)
+        out[k].sort(key=player_rating, reverse=True)
     # Thin sides borrow from the other side (a left-shot D can play the right).
     return out
 
@@ -252,7 +334,7 @@ def _slot_value(lineup: Dict[str, List[Any]], slot: str) -> Tuple[float, float]:
     if group in ("LD", "RD") and len(players) < hi:
         other = lineup.get("RD" if group == "LD" else "LD") or []
         players = players + [p for p in other[2:]]  # 3rd+ D from other side cover a hole
-    vals = [player_ovr(p) for p in players[lo - 1 : hi]]
+    vals = [player_rating(p) for p in players[lo - 1 : hi]]
     vals += [55.0] * max(0, (hi - lo + 1) - len(vals))
     return sum(vals) / len(vals), min(vals)
 
@@ -361,7 +443,7 @@ def _find_surplus(
         if loc == "nhl" and not getattr(p, "retired", False):
             nhl_by_key[_group_key(position_group(p))].append(p)
     for k in nhl_by_key:
-        nhl_by_key[k].sort(key=player_ovr, reverse=True)
+        nhl_by_key[k].sort(key=player_rating, reverse=True)
 
     # Players the club will never shop.
     core: set = set()
@@ -409,7 +491,7 @@ def _find_surplus(
             if player_age(p) > 23 or player_pid(p) in core:
                 continue
             key = _group_key(position_group(p))
-            ahead = [q for q in nhl_by_key.get(key, []) if player_age(q) >= 24 and player_ovr(q) > player_ovr(p)]
+            ahead = [q for q in nhl_by_key.get(key, []) if player_age(q) >= 24 and player_rating(q) > player_rating(p)]
             if loc == "ahl" and len(ahead) >= LINEUP_COUNTS[key] - 1 and potential_ovr(p) >= 76:
                 add(p, "blocked_prospect", position_group(p), 0.5)
 
@@ -423,6 +505,45 @@ def _find_surplus(
             vets = sorted((p for p in nhl if player_age(p) >= 29 and player_ovr(p) >= 74), key=player_ovr, reverse=True)
             for p in vets[:3]:
                 add(p, "veteran_selloff", position_group(p), 0.6)
+
+    # Lineup regulars who are underperforming their rating this season — the GM is
+    # open to moving them (a change of scenery), not just its 13th forward.
+    for k, plist in nhl_by_key.items():
+        if k == "G":
+            continue
+        for p in plist[: LINEUP_COUNTS[k]]:
+            if player_pid(p) in core:
+                continue
+            f = player_form(p)
+            if f <= -1.5:
+                add(p, "underperformer", position_group(p), min(0.7, 0.35 + (-f) * 0.06))
+
+    # Sellers listen on any non-core veteran with term, not only expiring rentals.
+    if status in (STATUS_SELLER, STATUS_TANK):
+        vets = [
+            p for p, loc in org
+            if loc == "nhl" and player_pid(p) not in core and player_age(p) >= 27
+            and player_ovr(p) >= 72 and not is_rental(p)
+        ]
+        vets.sort(key=player_rating, reverse=True)
+        for p in vets[:3]:
+            add(p, "seller_vet", position_group(p), 0.45 if status == STATUS_SELLER else 0.55)
+
+    # Lineup churn: the next man up (13th F / 7th D) is outplaying the weakest-rated
+    # regular whose OVR says he belongs ahead of him — that regular becomes movable.
+    # One per position group at most, and only when the data actually says so.
+    for k, plist in nhl_by_key.items():
+        if k == "G" or len(plist) <= LINEUP_COUNTS[k]:
+            continue
+        nxt = plist[LINEUP_COUNTS[k]]
+        if player_form(nxt) < 1.0:
+            continue
+        regs = [q for q in plist[: LINEUP_COUNTS[k]] if player_pid(q) not in core and player_ovr(q) > player_ovr(nxt)]
+        if not regs:
+            continue
+        weakest = min(regs, key=player_rating)
+        if player_rating(nxt) >= player_rating(weakest) - 0.5:
+            add(weakest, "lineup_churn", position_group(weakest), 0.35)
 
     # Contracts the club would rather not carry.
     for p, loc in org:
@@ -451,13 +572,24 @@ def _find_surplus(
 
 
 def _cap_space(team: Any, league: Any) -> float:
+    """Usable cap space from the authoritative cap snapshot (season cap table, LTIR,
+    buried/retained/dead money). The old version used ``league.salary_cap_m or 88``,
+    which lags at $88M on 2025+ franchises and made nearly every club look capped out."""
     try:
-        from app.sim_engine.economy.cap_engine import team_active_roster_cap_hit_millions
+        from app.sim_engine.economy.cap_engine import calculate_team_cap_snapshot
 
-        cap = _safe_float(getattr(league, "salary_cap_m", None), 0.0) or 88.0
-        return cap - float(team_active_roster_cap_hit_millions(team))
+        sy = getattr(league, "season_year", None)
+        label = f"{int(sy)}-{(int(sy) + 1) % 100:02d}" if sy else None
+        snap = calculate_team_cap_snapshot(team, league=league, season_label=label)
+        return float(snap.get("usableCapSpace", 0.0) or 0.0)
     except Exception:
-        return 0.0
+        try:
+            from app.sim_engine.economy.cap_engine import team_active_roster_cap_hit_millions
+
+            cap = _safe_float(getattr(league, "salary_cap_m", None), 0.0) or 88.0
+            return cap - float(team_active_roster_cap_hit_millions(team))
+        except Exception:
+            return 0.0
 
 
 def assess_team(
@@ -560,7 +692,11 @@ def assess_league(
     force: bool = False,
 ) -> Dict[str, TeamAssessment]:
     """Assess every club. Cached weekly; daily inside the last two weeks before the deadline."""
+    global _FORM
     cache = getattr(league, "_cpu_assessments", None)
+    cached_form = getattr(league, "_cpu_form", None)
+    if isinstance(cached_form, dict):
+        _FORM = cached_form
     refresh_every = 1 if 0 <= days_to_deadline <= 14 else 7
     if (
         not force
@@ -571,6 +707,14 @@ def assess_league(
     ):
         return cache["by_team"]
     teams = list(getattr(league, "teams", None) or [])
+    try:
+        _FORM = compute_form(league, teams)
+    except Exception:
+        _FORM = {}
+    try:
+        setattr(league, "_cpu_form", _FORM)
+    except Exception:
+        pass
     medians = _league_slot_medians(teams)
     table = _standings_table(league, teams)
     out = {
@@ -594,7 +738,7 @@ def assess_league(
 def slot_for_player(player: Any, assessment: TeamAssessment) -> Tuple[str, float]:
     """Best slot this player would take on the assessed team, and his OVR gain over its weakest occupant."""
     group = position_group(player)
-    ovr = player_ovr(player)
+    ovr = player_rating(player)
     if group == "G":
         cands = ["G_START"]
     elif group == "C":

@@ -255,15 +255,18 @@ def _ai_interest_for_team(
     val = evaluate_package_value(package, team_id, league, team_by_id, context=context)
     net = float(val.get("net", 0.0))
     window = _team_window(team)
+    # Margins scale with the size of the deal: +5 is a real win on a depth swap but
+    # rounding noise on a superstar trade (v15 values run 3x higher at the top).
+    scale = max(1.0, max(float(val.get("outgoing_total") or 0.0), float(val.get("incoming_total") or 0.0)) / 90.0)
 
     # Base interest from net value received
-    if net >= 12:
+    if net >= 12 * scale:
         interest = 0.85
-    elif net >= 5:
+    elif net >= 5 * scale:
         interest = 0.72
     elif net >= 0:
         interest = 0.55
-    elif net >= -8:
+    elif net >= -8 * scale:
         interest = 0.38
         # Ambient CPU market: near-even hockey swaps should not die on float noise.
         if (context or {}).get("cpu_ambient_trade") and net >= -1.25:
@@ -686,6 +689,16 @@ def _team_needs_impact_for_trade(
     }
 
 
+def package_signature(assets_by_team: Dict[str, List[Dict[str, Any]]]) -> str:
+    """Order-free fingerprint of a package (who sends what to whom)."""
+    rows = []
+    for acq, assets in (assets_by_team or {}).items():
+        for a in assets or []:
+            if isinstance(a, dict):
+                rows.append(f"{acq}<{a.get('team')}:{a.get('id')}")
+    return "|".join(sorted(rows))
+
+
 def evaluate_trade_package(
     assets_by_team: Dict[str, List[Dict[str, Any]]],
     *,
@@ -749,6 +762,9 @@ def evaluate_trade_package(
     if accepted and (ctx or {}).get("user_accepted_draft_floor_offer"):
         accepted = True
     elif accepted and (ctx or {}).get("cap_casualty_trade"):
+        accepted = True
+    elif accepted and package_signature(assets_by_team) in set((ctx or {}).get("desperate_offer_keys") or ()):
+        # The partner made this offer itself (desperation) — rules still applied above.
         accepted = True
     elif accepted:
         for tid in package.participating_team_ids:

@@ -129,6 +129,10 @@ class FranchiseSession:
     # GM scouting assignments, coverage overlays, and budget (see franchise_scouting.py)
     scouting_state: Dict[str, Any] = field(default_factory=dict)
 
+    # Board of Governors: rulebook, meetings, franchise values, relocation/expansion
+    # (see league_governance.py)
+    league_governance: Dict[str, Any] = field(default_factory=dict)
+
     # General Manager's World progression (skill tree, goals, modifiers)
     # Sim output: every league game + running skater/goalie counting numbers (franchise session only)
     game_results: List[Dict[str, Any]] = field(default_factory=list)
@@ -158,6 +162,10 @@ class FranchiseSession:
 
     # Saved lineups (even-strength / PP / PK) keyed by unit type; source of truth for Edit Lines
     lines: Dict[str, Any] = field(default_factory=dict)
+    # AHL lineups keyed by team id (user affiliate); see services/ahl_league.py
+    ahl_lines: Dict[str, Any] = field(default_factory=dict)
+    # AHL season ledger: schedule, team standings, per-player game-sim lines (services/ahl_league.py)
+    ahl_league: Dict[str, Any] = field(default_factory=dict)
 
     # Code fingerprint at session create time — mismatched vs live → session is expired
     code_revision: str = ""

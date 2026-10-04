@@ -290,7 +290,20 @@ def _apply_player_move(
 
     if asset.retained_pct > 0:
         # Cap charge stays with source; SPC / 50-slot follows the player to acquiring.
-        cap_hit = player_cap_hit_millions(player)
+        from app.sim_engine.economy.cap_engine import player_full_cap_hit_millions
+
+        cap_hit = player_full_cap_hit_millions(player)
+        try:
+            # The acquiring club now carries only the un-retained share.
+            prior = float(getattr(player, "retained_share_pct", 0.0) or 0.0)
+            c = getattr(player, "contract", None)
+            expiry = c.get("expiry_year") if isinstance(c, dict) else getattr(c, "expiry_year", None)
+            if getattr(player, "retained_share_expiry", None) not in (None, expiry):
+                prior = 0.0
+            setattr(player, "retained_share_pct", min(75.0, prior + float(asset.retained_pct)))
+            setattr(player, "retained_share_expiry", expiry)
+        except Exception:
+            pass
         retained_m = cap_hit * (asset.retained_pct / 100.0)
         rec = RetainedSalaryRecord(
             player_id=asset.player_id,
@@ -442,11 +455,31 @@ def execute_validated_trade(
         _rollback_all()
         raise ValueError(f"Trade execution failed and was rolled back: {exc}") from exc
 
+    # Corresponding moves: clubs pushed past 23 active send their lowest depth to the AHL.
+    roster_moves: List[Dict[str, Any]] = []
+    try:
+        from app.sim_engine.trades.roster_balance import auto_send_down_overflow
+
+        arrived = {str(m.get("player_id") or m.get("asset_id") or "") for m in moved_players}
+        for tid in package.participating_team_ids:
+            tm = team_by_id.get(str(tid))
+            if tm is not None:
+                roster_moves.extend(auto_send_down_overflow(tm, protect_ids=arrived))
+    except Exception:
+        roster_moves = []
+
+    def _tname(tid: Any) -> str:
+        t = team_by_id.get(str(tid))
+        if t is None:
+            return str(tid)
+        abbr = str(getattr(t, "abbreviation", "") or getattr(t, "abbr", "") or "").upper()
+        return abbr or str(getattr(t, "name", "") or tid)
+
     headline_bits = []
     for m in moved_players[:4]:
-        headline_bits.append(f"{m.get('player_name')}: {m['source_team_id']} -> {m['acquiring_team_id']}")
+        headline_bits.append(f"{m.get('player_name')}: {_tname(m['source_team_id'])} -> {_tname(m['acquiring_team_id'])}")
     for m in moved_picks[:2]:
-        headline_bits.append(f"Pick {m.get('asset_id')}: {m['source_team_id']} -> {m['acquiring_team_id']}")
+        headline_bits.append(f"Pick {m.get('asset_id')}: {_tname(m['source_team_id'])} -> {_tname(m['acquiring_team_id'])}")
     headline = "TRADE EXECUTED: " + ("; ".join(headline_bits) if headline_bits else "Assets moved")
 
     trade_id = f"trade_{uuid.uuid4().hex[:12]}"
@@ -471,6 +504,7 @@ def execute_validated_trade(
             "rejection_reasons": [],
             "headline": headline,
             "user_involved": user_involved,
+            "roster_moves": roster_moves,
         },
     )
 
@@ -485,6 +519,7 @@ def execute_validated_trade(
         "value_breakdown": fresh.get("value_breakdown") or {},
         "fairness_gap": fresh.get("fairness_gap"),
         "headline": headline,
+        "roster_moves": roster_moves,
         "history_record": history_record,
         "evaluation": {k: v for k, v in fresh.items() if not str(k).startswith("_")},
     }

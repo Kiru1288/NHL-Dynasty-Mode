@@ -1881,6 +1881,76 @@ def _apply_public_combine_adjustments(
     return adjusted
 
 
+def _apply_attribute_combine(
+    session: FranchiseSession,
+    entries: List[Dict[str, Any]],
+    invite_ids: List[str],
+    combine_results: Dict[str, Dict[str, Any]],
+) -> None:
+    from services import draft_combine_engine as CE
+
+    draft_year = int(getattr(session, "season_calendar_year", 0) or 0) + 1
+    salt = str(getattr(session, "session_id", "") or "combine")
+    players = CE.build_prospect_player_index(session)
+    invite_set = set(invite_ids)
+    invitees = [e for e in entries if str(e.get("key") or "") in invite_set]
+    tested = CE.run_combine_testing(salt, draft_year, invitees, players)
+    truth = CE.interview_truth(invitees, players)
+    for e in invitees:
+        pid = str(e.get("key") or "")
+        res = tested.get(pid)
+        if not res:
+            continue
+        row = combine_results.setdefault(pid, {"prospect_id": pid})
+        goalie = str(e.get("position") or "").upper().startswith("G")
+        cz = float((truth.get(pid) or {}).get("total_z") or 0.0)
+        boost, reason = CE.public_stock_boost(res, cz, goalie=goalie)
+        med = dict(res.get("medical") or {})
+        row.update({
+            "combine_invited": True,
+            "combine_attended": True,
+            "tested": bool(res.get("tested")),
+            "measurements": res.get("measurements") or {},
+            "tests": res.get("tests") or {},
+            "combine_score": res.get("combine_score") if res.get("combine_score") is not None else row.get("combine_score"),
+            "combine_label": res.get("combine_label"),
+            "athletic_pct": res.get("athletic_pct"),
+            "athletic_rank": res.get("athletic_rank"),
+            "tested_count": res.get("tested_count"),
+            "medical": med,
+            "medical_flag": med.get("level") in ("Moderate", "High"),
+            "medical_risk_level": med.get("level") or "Low",
+            "interview_score": round(_clamp_score(60.0 + 12.0 * cz), 1),
+            "interview_red_flags": list((truth.get(pid) or {}).get("red_flags") or []),
+            "combine_stock_delta": int(round(boost)),
+            "combine_stock_boost": boost,
+            "combine_stock_reason": reason,
+        })
+        # Skating/strength/agility/endurance summaries now come from real tests.
+        tests = res.get("tests") or {}
+
+        def _pct(*ids: str) -> Optional[float]:
+            vals = [float((tests.get(i) or {}).get("pct")) for i in ids if (tests.get(i) or {}).get("pct") is not None]
+            return round(40 + 0.55 * sum(vals) / len(vals), 1) if vals else None
+
+        for field, ids in (("skating_test_score", ("pro_agility", "standing_long_jump")), ("strength_test_score", ("bench_press", "grip_strength", "wingate_peak")),
+                           ("agility_test_score", ("pro_agility", "y_balance")), ("endurance_score", ("vo2_max", "wingate_fatigue"))):
+            v = _pct(*ids)
+            if v is not None:
+                row[field] = v
+        try:
+            p = players.get(pid)
+            if p is not None:
+                setattr(p, "draft_combine", CE.public_block({**res, "draft_year": draft_year}, consensus={"score": row["interview_score"], "label": CE.interview_label(cz), "grade": CE.interview_grade(cz)}, stock={"delta": row["combine_stock_delta"], "reason": reason}))
+        except Exception:
+            pass
+    session.draft_combine_catalog = CE.test_catalog()
+
+
+def _clamp_score(v: float) -> float:
+    return max(30.0, min(95.0, float(v)))
+
+
 def run_franchise_draft_combine(session: FranchiseSession) -> Dict[str, Any]:
     """Run combine once per offseason — invites, testing, CPU impressions, final board prep."""
     if getattr(session, "draft_combine_done", False) and session.draft_combine_payload:
@@ -1900,6 +1970,14 @@ def run_franchise_draft_combine(session: FranchiseSession) -> Dict[str, Any]:
             combine_results[pid] = {"prospect_id": pid, "combine_invited": False, "combine_attended": False}
             continue
         combine_results[pid] = _generate_combine_prospect_results(session, e)
+    # Real testing: measurements + NHL combine tests driven by each prospect's own
+    # attributes (services/draft_combine_engine). Replaces the old noise-on-OVR scores.
+    try:
+        _apply_attribute_combine(session, entries, invite_ids, combine_results)
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("attribute combine failed; legacy scores kept")
 
     team_impressions: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for tid in session.team_ids or []:
@@ -1987,6 +2065,7 @@ def run_franchise_draft_combine(session: FranchiseSession) -> Dict[str, Any]:
         "final_rankings": adjusted_entries[:60],
         "user_team_impressions": team_impressions.get(str(session.user_team_id)) or {},
         "draft_year": int(session.season_calendar_year) + 1,
+        "test_catalog": list(getattr(session, "draft_combine_catalog", None) or []),
     }
     session.draft_combine_payload = payload
     session.draft_combine_done = True

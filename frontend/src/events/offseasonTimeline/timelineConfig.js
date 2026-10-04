@@ -5,6 +5,7 @@
 export const FRANCHISE_LIFECYCLE = [
   { id: "awards", label: "Awards Night", folder: "awardsNight", backendStage: "awards", status: "active" },
   { id: "retirements", label: "Retirements", folder: "retirements", backendStage: "retirements", status: "active" },
+  { id: "board_of_governors", label: "Board of Governors", folder: "boardOfGovernors", backendStage: "board_of_governors", status: "active" },
   { id: "hall_of_fame", label: "Hall of Fame", folder: "hallOfFame", backendStage: null, status: "planned" },
   { id: "salary_cap", label: "Cap Report", folder: "salaryCap", backendStage: "salary_cap", status: "active" },
   { id: "development_report", label: "Development Review", folder: "developmentReport", backendStage: "development_report", status: "active" },

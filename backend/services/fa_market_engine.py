@@ -39,6 +39,59 @@ STATE_HOLDING = "holding_out"
 STATE_LEANING = "leaning_to_sign"
 STATE_SIGNED = "signed"
 
+# Parity: one club can't vacuum up the whole top of the market in one summer.
+STAR_FA_OVR = 85.0
+STAR_FA_CAP_PER_TEAM = 1
+STAR_FA_CAP_RICH = 2  # clubs with a truly huge war chest may land a second
+
+
+def _team_star_fa_count(book: Dict[str, Any], tid: str) -> int:
+    n = 0
+    for e in (book.get("entries") or {}).values():
+        if not isinstance(e, dict) or e.get("state") != STATE_SIGNED:
+            continue
+        if str(e.get("signed_team_id") or "") != str(tid):
+            continue
+        if float(e.get("overall") or 0) >= STAR_FA_OVR:
+            n += 1
+    return n
+
+
+def _team_at_star_cap(book: Dict[str, Any], tid: str, spendable_m: float) -> bool:
+    cap = STAR_FA_CAP_RICH if float(spendable_m or 0) >= 30.0 else STAR_FA_CAP_PER_TEAM
+    return _team_star_fa_count(book, tid) >= cap
+
+
+def _worst_regular_at(team: Any, pos: str) -> Optional[float]:
+    """OVR of the weakest NHL-roster player at this position group (forwards pooled)."""
+    fwd = {"C", "LW", "RW", "F"}
+    group = fwd if pos in fwd else {pos}
+    ovrs = [
+        float(_player_ovr(p))
+        for p in list(_get(team, "roster", None) or [])
+        if _position_bucket(p) in group
+    ]
+    if not ovrs:
+        return None
+    return min(ovrs)
+
+
+def _is_value_buy(team: Any, player: Any, *, days_on_market: int, ask_m: float, fair_m: float) -> bool:
+    """A clearly better player than the club's weakest regular, sitting unsigned and
+    asking below fair value — real GMs scoop these up and send the depth guy down."""
+    if days_on_market < 6:
+        return False
+    pos = _position_bucket(player)
+    ovr = float(_player_ovr(player))
+    if ovr < 76:
+        return False
+    worst = _worst_regular_at(team, pos)
+    # Goalies: only a clear upgrade on the current backup (he'd be swapped, not stacked).
+    margin = 6.0 if pos == "G" else 4.0
+    if worst is None or ovr < worst + margin:
+        return False
+    return float(ask_m or 0) <= float(fair_m or 0) * 1.02 + 0.05
+
 
 def _rng_unit(seed: str) -> float:
     h = hashlib.md5(seed.encode("utf-8")).hexdigest()
@@ -157,6 +210,12 @@ def _ask_for_player(player: Any, league: Any, *, days_on_market: int = 0, offer_
 def _iter_domestic_fa_pool(league: Any) -> List[Any]:
     if league is None:
         return []
+    try:
+        from services.contract_economy import prune_owned_from_fa_pools
+
+        prune_owned_from_fa_pools(league)
+    except Exception:
+        pass
     out: List[Any] = []
     seen: set = set()
     for p in list(_get(league, "free_agents", None) or []):
@@ -337,6 +396,18 @@ def _min_fit_for_ovr(ovr: float) -> float:
     return 0.12
 
 
+def _team_bonus_room(session: Any, team: Any, tid: str, league: Any) -> float:
+    """Max signing-bonus share this club can offer (0 below the revenue floor)."""
+    try:
+        from services.franchise_offseason import signing_bonus_max_pct_for_revenue
+        from services.league_operations import calculate_team_revenue
+
+        rev = float(calculate_team_revenue(session, team, str(tid), annual=True).get("revenue") or 0.0)
+        return float(signing_bonus_max_pct_for_revenue(rev, league))
+    except Exception:
+        return 0.0
+
+
 def _collect_cpu_offers(
     session: Any,
     *,
@@ -389,6 +460,7 @@ def _collect_cpu_offers(
             team_ctx[tid] = {
                 "team": team,
                 "ctx": evaluate_team_position_needs(team, league, sim, season_year=season_year),
+                "bonus_room": _team_bonus_room(session, team, tid, league),
             }
         except Exception:
             continue
@@ -396,6 +468,18 @@ def _collect_cpu_offers(
     new_offers: List[Dict[str, Any]] = []
     team_offer_counts: Dict[str, int] = {}
     team_fringe_counts: Dict[str, int] = {}
+    # Open offers are promises: a club can't have more AAV (or more contracts) out on
+    # the table than it can actually fit if every player says yes.
+    committed_m: Dict[str, float] = {}
+    committed_n: Dict[str, int] = {}
+    for _pid, _e in entries.items():
+        if not isinstance(_e, dict) or _e.get("state") == STATE_SIGNED:
+            continue
+        for _o in _e.get("offers") or []:
+            _t = str(_o.get("team_id") or "")
+            if _t:
+                committed_m[_t] = committed_m.get(_t, 0.0) + float(_o.get("aav_m") or 0.0)
+                committed_n[_t] = committed_n.get(_t, 0) + 1
 
     for player in fa_pool:
         if len(new_offers) >= offer_budget:
@@ -407,6 +491,12 @@ def _collect_cpu_offers(
         ovr = float(_player_ovr(player))
         pos = _position_bucket(player)
         fair_base = compute_fair_aav(player, None, league)
+        try:
+            from services.league_governance import fa_bonus_demand_pct
+
+            bonus_want = float(fa_bonus_demand_pct(player, league) or 0.0)
+        except Exception:
+            bonus_want = 0.0
         existing_offers = list(entry.get("offers") or [])
         # Cap concurrent bidders on replaceable players — bidding wars require
         # genuine multi-team need, which fringe talent almost never creates.
@@ -447,16 +537,31 @@ def _collect_cpu_offers(
 
             team = pack["team"]
             ctx = pack["ctx"]
-            if ctx["slots_remaining"] <= 0:
+            prior_here = next((float(o.get("aav_m") or 0) for o in existing_offers if o.get("team_id") == tid), 0.0)
+            if int(ctx["slots_remaining"]) - committed_n.get(tid, 0) + (1 if prior_here else 0) <= 0:
                 continue
+            if bonus_want > 0 and float(pack.get("bonus_room") or 0.0) + 1e-6 < bonus_want:
+                continue  # can't put the cash up front this player insists on
             spendable = float(ctx.get("spendable_cap_space_m", ctx.get("cap_space_m", 0)) or 0)
+            spendable -= max(0.0, committed_m.get(tid, 0.0) - prior_here)
             if spendable < LEAGUE_MINIMUM_AAV_M * 1.02:
                 continue
 
             need = float(ctx["need_score"].get(pos, 0))
             counts = ctx.get("counts") or {}
+            if ovr >= STAR_FA_OVR and not prior_here and _team_at_star_cap(book, tid, spendable):
+                continue
+            value_buy = _is_value_buy(
+                team,
+                player,
+                days_on_market=int(entry.get("days_on_market") or day),
+                ask_m=float(entry.get("ask_aav_m") or 0) or fair_base,
+                fair_m=fair_base,
+            )
             # Pursuit gate: weak players only when the club has a real hole.
-            if ovr < 70:
+            if value_buy:
+                pass
+            elif ovr < 70:
                 if need < 0.48:
                     continue
             elif ovr < 76:
@@ -487,7 +592,18 @@ def _collect_cpu_offers(
             )
             if offer_aav is None:
                 continue
-            if cpu_signing_blocked(team, player, ctx, offer_aav):
+            if value_buy:
+                # Bargain bin: pay roughly his (already-softened) ask, not a bidding-war price.
+                ask_now = float(entry.get("ask_aav_m") or 0) or float(fair)
+                offer_aav = round(max(LEAGUE_MINIMUM_AAV_M, min(offer_aav, ask_now * 1.02, spendable * 0.95)), 3)
+            blocked = cpu_signing_blocked(team, player, ctx, offer_aav)
+            if blocked and not (
+                value_buy
+                and blocked in (
+                    "position_overload", "depth_no_upgrade", "extension_reserve",
+                    "rebuilder_old_expensive", "goalie_overload",
+                )
+            ):
                 continue
 
             _, years, _ = generate_contract_terms(player, team, league, rng, context="ufa")
@@ -507,6 +623,10 @@ def _collect_cpu_offers(
             min_fit = _min_fit_for_ovr(ovr)
             if ovr >= 86 and day >= 12:
                 min_fit = max(0.08, min_fit - 0.06)
+            if value_buy:
+                years = min(years, 2)
+                # Overload/need penalties assume he'd sit; he'd actually bump a weaker regular.
+                fit += 0.40
             if fit < min_fit:
                 continue
 
@@ -544,6 +664,9 @@ def _collect_cpu_offers(
                 offer_count=int(entry.get("offer_count") or 0),
             )
             new_offers.append({"player_id": pid, **offer})
+            committed_m[tid] = committed_m.get(tid, 0.0) - prior_here + float(offer_aav)
+            if not prior_here:
+                committed_n[tid] = committed_n.get(tid, 0) + 1
             team_offer_counts[tid] = team_offer_counts.get(tid, 0) + 1
             if ovr < 76:
                 team_fringe_counts[tid] = team_fringe_counts.get(tid, 0) + 1
@@ -763,6 +886,8 @@ def _try_sign_leaning_players(
                 spendable = max(spendable, space)
             if spendable < offer_aav * 0.5 and space < offer_aav * 0.5:
                 continue
+            if float(entry.get("overall") or 0) >= STAR_FA_OVR and _team_at_star_cap(book, tid, max(space, spendable)):
+                continue
             years = int(offer.get("years") or 1)
             if entry.get("prefer_short_term"):
                 years = min(years, 2 if float(entry.get("overall") or 0) < 82 else 3)
@@ -785,6 +910,7 @@ def _try_sign_leaning_players(
                 ctx_sign,
                 context="ufa",
                 max_rounds=6 if float(entry.get("overall") or 0) >= 88 else 3,
+                session=session,
             )
             if not agreed:
                 entry["state"] = STATE_EVALUATING
@@ -926,6 +1052,7 @@ def _try_sign_leaning_players(
                     team_name = str(_get(team, "name", "") or _get(team, "team_name", "") or tid)
                     entry["state"] = STATE_SIGNED
                     entry["reason"] = f"Late-market emergency signing with {team_name}"
+                    entry["signed_team_id"] = tid
                     entry["best_offer_m"] = aav
                     signings.append({
                         "team_id": tid,
@@ -988,6 +1115,7 @@ def _try_sign_leaning_players(
                 )
                 entry["state"] = STATE_SIGNED
                 entry["reason"] = f"Late-market signing with {team_name}"
+                entry["signed_team_id"] = tid
                 row = {
                     "team_id": tid,
                     "team_name": team_name,
@@ -1329,11 +1457,24 @@ def annotate_fa_rows_with_decisions(session: Any, rows: List[Dict[str, Any]]) ->
         except Exception:
             user_ctx = None
     out = []
+    pot_by_id: Dict[str, Any] = {}
+    if any(r.get("potential") in (None, "") for r in rows):
+        try:
+            from app.sim_engine.economy.player_value import player_ovr_display, player_potential_display
+
+            _lg = getattr(getattr(session, "sim", None), "league", None)
+            for _p in _iter_fa_market_pool(_lg, session, include_overseas=True):
+                _o = player_ovr_display(_p)
+                pot_by_id[str(getattr(_p, "id", "") or "")] = int(round(max(_o, player_potential_display(_p, ovr_display=_o))))
+        except Exception:
+            pot_by_id = {}
     for row in rows:
         r = dict(row)
         pid = str(r.get("player_id") or r.get("id") or r.get("playerId") or "")
         if pid and not r.get("player_id"):
             r["player_id"] = pid
+        if r.get("potential") in (None, "") and pid in pot_by_id:
+            r["potential"] = pot_by_id[pid]
         e = entries.get(pid)
         if e:
             offers_raw = list(e.get("offers") or [])
@@ -1396,7 +1537,11 @@ def annotate_fa_rows_with_decisions(session: Any, rows: List[Dict[str, Any]]) ->
             ask = float(r.get("ask_aav_m") or r.get("askingAav") or 1)
             ovr = float(r.get("overall") or r.get("ovr") or 70)
             age = int(r.get("age") or 28)
-            user_interest = 42.0 + min(28.0, (ovr - 70) * 1.1)
+            # Depth / fringe players jump at any NHL deal; stars hold the leverage.
+            if ovr < 74:
+                user_interest = 72.0 + min(20.0, (74.0 - ovr) * 1.2)
+            else:
+                user_interest = 58.0 - min(18.0, (ovr - 74.0) * 1.0)
             if age >= 33:
                 user_interest += 8.0
             pref = str(r.get("position") or "").upper()
@@ -1443,5 +1588,32 @@ def annotate_fa_rows_with_decisions(session: Any, rows: List[Dict[str, Any]]) ->
                     r["previous_team_id"] = str(
                         getattr(matched, "team_id", None) or getattr(matched, "id", "") or ""
                     )
+        try:
+            _pl = _fa_player_by_id(session, pid)
+            if _pl is not None:
+                from services.league_governance import fa_bonus_demand_pct
+
+                _want = float(fa_bonus_demand_pct(_pl, getattr(getattr(session, "sim", None), "league", None)) or 0.0)
+                if _want > 0:
+                    r["bonus_demand_pct"] = round(_want, 3)
+                    r["bonus_demand_label"] = f"Wants {_want:.0%} as signing bonus"
+        except Exception:
+            pass
         out.append(r)
     return out
+
+
+def _fa_player_by_id(session: Any, pid: str) -> Any:
+    cache = getattr(session, "_fa_player_lookup_cache", None)
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if not isinstance(cache, dict) or cache.get("_n") != len(_iter_fa_market_pool(league, session) or []):
+        cache = {"_n": 0}
+        pool = list(_iter_fa_market_pool(league, session) or [])
+        for p in pool:
+            cache[str(_player_id(p))] = p
+        cache["_n"] = len(pool)
+        try:
+            session._fa_player_lookup_cache = cache
+        except Exception:
+            pass
+    return cache.get(str(pid))

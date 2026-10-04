@@ -16,6 +16,8 @@ export const SCREENS = {
   SCOUTING: "scouting",
   CHEMISTRY: "chemistry",
   EDIT_LINES: "edit_lines",
+  AHL_CENTER: "ahl_center",
+  PROSPECT_SIGNING: "prospect_signing",
   POWER_PLAY: "power_play",
   PENALTY_KILL: "penalty_kill",
   CAP_LEDGER: "cap_ledger",

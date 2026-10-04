@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
+import hashlib
 import random
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
@@ -138,6 +139,41 @@ def _normalize_contract_type_token(raw: Any) -> str:
 
 
 LEAGUE_MINIMUM_AAV_M = 0.775
+#: Cap the market-value curve is calibrated to (2026-27 upper limit).
+MARKET_VALUE_CAP_ANCHOR_M = 104.0
+MAX_SALARY_SHARE_OF_CAP = 0.20
+
+
+def _governance_mods(league: Any) -> Dict[str, Any]:
+    mods = _get(league, "governance_modifiers", None) if league is not None else None
+    return mods if isinstance(mods, dict) else {}
+
+
+def max_salary_share_of_cap(league: Any = None) -> float:
+    """CBA max salary (20% of the upper limit), moved by Board of Governors rules."""
+    delta = float(_governance_mods(league).get("max_salary_pct", 0.0) or 0.0)
+    return max(0.12, min(0.30, MAX_SALARY_SHARE_OF_CAP + delta))
+
+
+def league_minimum_aav(league: Any = None) -> float:
+    delta = float(_governance_mods(league).get("min_salary_m", 0.0) or 0.0)
+    return max(0.5, LEAGUE_MINIMUM_AAV_M + delta)
+
+
+def cba_max_term(league: Any = None, *, own_team: bool = True) -> int:
+    """Max contract length. 2026-30 CBA: 7 years to re-sign, 6 as a UFA (8/7 before).
+    Board of Governors rules can set new limits."""
+    mods = _governance_mods(league)
+    key = "max_term_own" if own_team else "max_term_ufa"
+    if key in mods:
+        return max(1, min(10, int(round(float(mods[key])))))
+    try:
+        sy = int(_get(league, "season_year", 2026) or 2026) if league is not None else 2026
+    except (TypeError, ValueError):
+        sy = 2026
+    if sy >= 2026:
+        return 7 if own_team else 6
+    return 8 if own_team else 7
 ELC_AAV_M = 0.95
 CONTRACT_SLOTS_LIMIT = 50
 CAP_SAFE_CORE_TOP_N = 6
@@ -261,6 +297,57 @@ def _all_rostered(team: Any) -> List[Any]:
 
 
 ELC_AAV_TOLERANCE = 0.01
+
+
+_ORG_POOL_ATTRS = (
+    "roster", "ahl_roster", "echl_roster", "prospect_pool", "injured_reserve",
+    "long_term_injured_reserve", "scratches", "reserve_list", "unsigned_draft_picks",
+)
+
+
+def owned_player_ids(league: Any) -> set:
+    """Every player id that belongs to an organization (NHL/AHL/ECHL/prospect pool)."""
+    out: set = set()
+    for team in list(_get(league, "teams", None) or []):
+        for attr in _ORG_POOL_ATTRS:
+            for p in list(_get(team, attr, None) or []):
+                pid = _player_id(p)
+                if pid:
+                    out.add(pid)
+    return out
+
+
+def prune_owned_from_fa_pools(league: Any) -> int:
+    """A player under an org's control is never a free agent.
+
+    Stale references (trades, signings, call-ups, rights) used to leave a copy of a
+    signed player in league.free_agents / overseas_free_agents, so he showed on the FA
+    wire while still under contract. Drop them from the pools.
+    """
+    if league is None:
+        return 0
+    owned = owned_player_ids(league)
+    removed = 0
+    for attr in ("free_agents", "overseas_free_agents"):
+        pool = list(_get(league, attr, None) or [])
+        if not pool:
+            continue
+        keep = []
+        seen: set = set()
+        for p in pool:
+            pid = _player_id(p)
+            if pid and (pid in owned or pid in seen):
+                removed += 1
+                continue
+            if pid:
+                seen.add(pid)
+            keep.append(p)
+        if len(keep) != len(pool):
+            try:
+                setattr(league, attr, keep)
+            except Exception:
+                pass
+    return removed
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +503,8 @@ def normalize_contract_dict(raw: Any) -> Dict[str, Any]:
     if src.get("bad_contract_type"):
         out["bad_contract_type"] = str(src["bad_contract_type"])
     _apply_contract_type_truth(out)
+    if isinstance(src.get("pending_extension"), dict) and float(src["pending_extension"].get("aav_m") or 0) > 0:
+        out["pending_extension"] = dict(src["pending_extension"])
     return out
 
 
@@ -1055,7 +1144,14 @@ def compute_market_value(player: Any, league: Any = None) -> float:
     elif ovr < 78:
         base = 1.15 + max(0.0, ovr - 70.0) * 0.18
     else:
-        base = LEAGUE_MINIMUM_AAV_M + max(0.0, ovr - 58.0) * 0.12 + max(0.0, ovr - 82.0) * 0.42
+        # Star premium is convex: an 88 is a first-liner (~$8M), 92+ franchise money
+        # ($13M+), 95+ near the 20% max. The old linear 0.42 slope priced a 90 at ~$8M.
+        base = (
+            LEAGUE_MINIMUM_AAV_M
+            + max(0.0, ovr - 58.0) * 0.12
+            + max(0.0, ovr - 82.0) * 0.62
+            + max(0.0, ovr - 88.0) * 0.45
+        )
     # Production shifts value +/-~15% so results matter without overriding rating.
     base *= 0.85 + 0.30 * _player_production_score(player)
     # Only pay a youth-potential premium when there is some pro proof.
@@ -1074,7 +1170,14 @@ def compute_market_value(player: Any, league: Any = None) -> float:
     # True depth / AHL call-ups accept near-min money (CHEAP board, veterans, etc.).
     if ovr < 75:
         base = min(base, LEAGUE_MINIMUM_AAV_M + 0.85 + max(0.0, ovr - 65.0) * 0.10)
-    return round(max(LEAGUE_MINIMUM_AAV_M, base), 3)
+    # Salaries move with the cap (50/50 revenue split): the curve above is in 2026-27
+    # dollars ($104M cap). Without this, a rising cap made every contract relatively
+    # cheaper each season. Never deflates below today's prices.
+    cap = _league_salary_cap_upper_limit(league) if league is not None else MARKET_VALUE_CAP_ANCHOR_M
+    cap = max(MARKET_VALUE_CAP_ANCHOR_M, float(cap or MARKET_VALUE_CAP_ANCHOR_M))
+    base *= cap / MARKET_VALUE_CAP_ANCHOR_M
+    base = min(base, max_salary_share_of_cap(league) * cap)  # CBA: max salary = 20% of the upper limit
+    return round(max(league_minimum_aav(league), base), 3)
 
 
 def compute_market_value_from_row(row: Any, league: Any = None) -> float:
@@ -1246,6 +1349,8 @@ def generate_contract_terms(
             aav = min(aav, ceiling)
 
     years = _term_for_profile(ovr, age, pot, importance, rng)
+    if context != "bootstrap":
+        years = min(years, cba_max_term(league, own_team=context not in ("ufa", "free_agent", "fa")))
     meta["team_importance_score"] = importance
     meta["peer_gap_score"] = gap
     meta["fair_aav_m"] = fair
@@ -1440,15 +1545,32 @@ def _contract_type(player: Any) -> str:
 
 
 def is_elc_eligible(player: Any) -> bool:
-    if not bool(_get(player, "entry_level_contract_eligible", False)):
-        return False
+    """NHL rule: a player who has never signed an NHL SPC and is 24 or younger signs an ELC.
+
+    Rights-held prospects (draft picks in junior / college / Europe) were created without
+    the ``entry_level_contract_eligible`` flag, so every one of them failed this check and
+    no prospect could be signed ("Player is not ELC eligible"). A missing flag is now
+    derived from the rule instead of read as False.
+    """
     if str(_get(player, "signed_status", "") or "").lower() == "signed":
         return False
     if has_true_elc_contract(player):
         return False
     if has_active_contract(player):
         return False
-    return True
+    flag = _get(player, "entry_level_contract_eligible", None)
+    if flag is True:
+        return True
+    try:
+        age = int(_player_age(player))
+    except Exception:
+        age = 0
+    if flag is None:
+        return 0 < age <= 24
+    # Explicit False: honour it unless the player plainly never held an NHL deal.
+    never_signed = not _get(player, "contract", None) and not _get(player, "had_nhl_spc", False)
+    status = str(_get(player, "signed_status", "") or "").lower()
+    return bool(never_signed and status in ("", "unsigned", "rights", "rights_only", "draft_rights") and 0 < age <= 24)
 
 
 def _count_team_contract_slots(team: Any) -> int:
@@ -3216,7 +3338,7 @@ def compute_player_demand(
     term_rng = random.Random(abs(hash(("term", _player_id(player)))) & 0xFFFFFFFF)
     base_years = _term_for_profile(ovr, age, pot, importance, term_rng)
     yr_shift = int(round(prof["security_pref"] * 1.5 - prof["gamble_pref"] * 1.5))
-    want_years = max(1, min(8, base_years + yr_shift))
+    want_years = max(1, min(cba_max_term(league, own_team=context not in ("ufa", "free_agent", "fa")), base_years + yr_shift))
 
     # Minimum he will actually sign for — loyal / patient players flex lower.
     # Solid NHL depth (not stars) accept more below-market AAV so prove-it /
@@ -3274,6 +3396,17 @@ def compute_player_demand(
         floor_m = max(LEAGUE_MINIMUM_AAV_M, market * (0.65 if ovr < 76 else 0.72))
         want = max(floor_m, round(want * blend, 3))
         min_acceptable = max(floor_m, round(min_acceptable * blend, 3))
+
+    # Meetings: an agreed hometown discount / agent framing reprices the ask for this club.
+    try:
+        from services.negotiation_meetings import demand_multiplier
+
+        _mm = demand_multiplier(player, team, context)
+        if abs(_mm - 1.0) > 1e-6:
+            want = max(LEAGUE_MINIMUM_AAV_M, round(want * _mm, 3))
+            min_acceptable = max(LEAGUE_MINIMUM_AAV_M, round(min_acceptable * _mm, 3))
+    except Exception:
+        pass
 
     return {
         "market_value_m": market,
@@ -3390,6 +3523,25 @@ def evaluate_contract_offer(
                 relationship_component += 4.0
             if float((entity.get("state") or {}).get("gm_trust", 65)) >= 68:
                 relationship_component += 3.0
+            # GM meetings: what you told him ("you're a priority", "anchor below market")
+            # carries into talks with YOUR club. Ledger values sit on a 55 baseline.
+            user_tid = str(getattr(session, "user_team_id", "") or "")
+            own_ctx = str(context or "").lower() not in ("ufa", "free_agent", "fa", "free_agency")
+            if own_ctx and tid and tid == user_tid:
+                gr = entity.get("gm_relationship") or {}
+                goodwill = float(gr.get("negotiation_goodwill", 55) or 55) - 55.0
+                loyal_rel = float(gr.get("loyalty", 55) or 55) - 55.0
+                grievance = max(0.0, float(gr.get("grievance", 55) or 55) - 55.0)
+                trust_rel = float(gr.get("trust", 55) or 55) - 55.0
+                relationship_component += max(
+                    -14.0,
+                    min(14.0, goodwill * 0.55 + loyal_rel * 0.30 + trust_rel * 0.20 - grievance * 0.60),
+                )
+        if session is not None:
+            # Recruiting pitch / agent meeting / agent trust (user club only).
+            from services.negotiation_meetings import interest_adjustment
+
+            relationship_component += interest_adjustment(session, player, team, context)
     except Exception:
         pass
     stay_interest = max(
@@ -3475,6 +3627,13 @@ def evaluate_contract_offer(
     if ovr < 84 and r >= 0.82 and interest >= 50.0:
         near_market = _smoothstep((r - 0.80) / 0.10)
         if not meets_floor and near_market >= 0.35:
+            meets_floor = True
+    # Fringe / depth free agents (AHL-calibre and below) don't play hard to get: any real
+    # NHL contract near their ask is a win for them, and an extra year is a bonus.
+    if ovr < 74 and str(context or "").lower() in ("ufa", "free_agent", "fa", ""):
+        fringe = max(0.0, min(1.0, (74.0 - ovr) / 14.0))
+        if aav_m >= LEAGUE_MINIMUM_AAV_M * 0.999 and r >= 0.85:
+            interest = min(100.0, interest + 16.0 + 22.0 * fringe + (3.0 if term_gap > 0 else 0.0))
             meets_floor = True
     if ovr < 76:
         accept_cut = 52.0
@@ -4057,6 +4216,17 @@ def validate_post_fa_roster_shape(team: Any, league: Any, sim: Any = None) -> Li
 # Contract actions
 # ---------------------------------------------------------------------------
 
+def _validate_sign_cap_ahl(team: Any, cap_hit_m: float, league: Any, season_year: int) -> Dict[str, Any]:
+    """Signing straight to the AHL: no NHL roster spot; only the bury residual hits the cap."""
+    from app.sim_engine.economy.cap_engine import nhl_bury_threshold_millions
+
+    snap = calculate_team_cap_snapshot(team, league=league)
+    needed = max(0.0, float(cap_hit_m) - float(nhl_bury_threshold_millions(int(season_year or 0) or None)))
+    if float(snap.get("usableCapSpace", 0.0) or 0.0) + 1e-6 < needed:
+        return {"ok": False, "reason": "Insufficient cap space even if assigned to the AHL", "snapshot": snap}
+    return {"ok": True, "reason": "ok_ahl", "snapshot": snap, "assign_ahl": True}
+
+
 def _validate_sign_cap(
     team: Any,
     aav_m: float,
@@ -4359,12 +4529,145 @@ def sign_player_to_team(
     aav_m = round(normalize_money_m(offer.get("aav_m") or offer.get("aav") or 0), 3)
     years = max(1, int(offer.get("years") or offer.get("term") or 1))
     bonus_m = round(normalize_money_m(offer.get("signing_bonus_m") or offer.get("signing_bonus") or 0), 3)
-    if bonus_m > 0:
+    _ctx = str(offer.get("context") or "").lower()
+    # Live preview: always return the player's read of the offer (so the interest bar
+    # moves with every tweak), and report any rule the offer breaks alongside it.
+    if offer.get("evaluate_only") and not offer.get("_eval_checked"):
+        shadow = dict(offer)
+        shadow["_eval_checked"] = True
+        checked = sign_player_to_team(player, team, league, season_year, shadow)
+        if isinstance(checked, dict) and checked.get("status") == "evaluated":
+            return checked
+        evaluation = evaluate_contract_offer(player, team, offer, league, context=_ctx or "ufa")
+        reason = str((checked or {}).get("reason") or "")
+        return {
+            "ok": True,
+            "status": "evaluated",
+            "evaluation": evaluation,
+            "offer_invalid": True,
+            "invalid_reason": reason,
+            "player_response": {
+                "status": "evaluated",
+                "interest": evaluation.get("interest"),
+                "accept_cut": evaluation.get("accept_cut"),
+                "want_aav_m": evaluation.get("want_aav_m"),
+                "want_years": evaluation.get("want_years"),
+                "feedback": f"{_offer_feedback_label(evaluation, aav_m, years)} · Can't submit: {reason}" if reason else _offer_feedback_label(evaluation, aav_m, years),
+            },
+        }
+    if _ctx not in ("bootstrap",) and not offer.get("force"):
+        try:
+            _cap_ul = float(_league_salary_cap_upper_limit(league) or MARKET_VALUE_CAP_ANCHOR_M)
+        except Exception:
+            _cap_ul = MARKET_VALUE_CAP_ANCHOR_M
+        _max_sal = round(max_salary_share_of_cap(league) * _cap_ul, 3)
+        _min_sal = league_minimum_aav(league)
+        if aav_m > _max_sal + 1e-6:
+            return {
+                "ok": False,
+                "status": "invalid",
+                "reason": f"CBA limit: max salary is ${_max_sal:.2f}M AAV ({max_salary_share_of_cap(league):.0%} of the cap)",
+                "max_salary_m": _max_sal,
+            }
+        if aav_m + 1e-6 < _min_sal and category not in ("elc", "entry_level"):
+            return {
+                "ok": False,
+                "status": "invalid",
+                "reason": f"CBA limit: league minimum salary is ${_min_sal:.3f}M",
+                "min_salary_m": _min_sal,
+            }
+        _own = _ctx not in ("ufa", "free_agent", "fa")
+        _max_term = cba_max_term(league, own_team=_own)
+        if years > _max_term:
+            return {
+                "ok": False,
+                "status": "invalid",
+                "reason": f"CBA limit: {'re-signing' if _own else 'free-agent'} contracts max out at {_max_term} years",
+                "max_term": _max_term,
+            }
+    if _ctx in ("ufa", "free_agent", "fa") and not offer.get("force"):
+        # Some free agents only sign where they get cash up front (league_governance).
+        try:
+            from services.league_governance import fa_bonus_demand_pct
+
+            want_pct = float(fa_bonus_demand_pct(player, league) or 0.0)
+        except Exception:
+            want_pct = 0.0
+        if want_pct > 0:
+            try:
+                from services.franchise_offseason import team_signing_bonus_eligibility
+
+                _s_cap = offer.get("_session")
+                if _s_cap is not None:
+                    _e_cap = team_signing_bonus_eligibility(
+                        _s_cap, str(_get(team, "team_id", "") or _get(team, "id", ""))
+                    )
+                    # A player can't demand more than the rules let this club pay.
+                    want_pct = min(want_pct, float(_e_cap.get("max_bonus_pct") or 0.0))
+            except Exception:
+                pass
+        if want_pct > 0:
+            # Bonus demand is anchored on his own ask, not on whatever the club offers —
+            # and a clear overpay on salary buys out the cash-up-front demand.
+            try:
+                _ask_aav = float(compute_player_demand(player, team, league, context="ufa").get("want_aav_m") or 0.0)
+            except Exception:
+                _ask_aav = 0.0
+            if _ask_aav > 0 and aav_m >= _ask_aav * 1.2:
+                want_pct = 0.0
+            base_aav = min(aav_m, _ask_aav) if _ask_aav > 0 else aav_m
+            total_val = max(0.001, base_aav * max(1, years))
+            want_m = round(total_val * want_pct, 2)
+            if want_pct > 0 and bonus_m + 1e-6 < want_m:
+                return {
+                    "ok": False,
+                    "status": "rejected",
+                    "reason": (
+                        f"{_player_name(player)} wants a signing bonus of at least "
+                        f"${want_m:.2f}M ({want_pct:.0%} of the deal)"
+                    ),
+                    "bonus_demand_pct": want_pct,
+                    "bonus_demand_m": want_m,
+                }
+    if bonus_m > 0 and not offer.get("force"):
+        _sess_b = offer.get("_session")
+        _elig = None
+        if _sess_b is not None:
+            try:
+                from services.franchise_offseason import team_signing_bonus_eligibility
+
+                _tid_b = str(_get(team, "team_id", "") or _get(team, "id", ""))
+                _elig = team_signing_bonus_eligibility(_sess_b, _tid_b)
+            except Exception:
+                _elig = None
+        if isinstance(_elig, dict) and _elig.get("revenue_m") is not None:
+            # Same rule the contract screens display — no more UI/engine disagreement.
+            if not _elig.get("eligible"):
+                return {
+                    "ok": False,
+                    "status": "invalid",
+                    "reason": str(_elig.get("label") or "Signing bonuses are locked for your club"),
+                }
+            _max_pct_b = float(_elig.get("max_bonus_pct") or 0.0)
+            _total_b = aav_m * years
+            if _total_b <= 0 or bonus_m > _total_b * _max_pct_b + 0.005:
+                return {
+                    "ok": False,
+                    "status": "invalid",
+                    "reason": (
+                        f"Signing bonus ${bonus_m:.2f}M exceeds your limit of "
+                        f"${_total_b * _max_pct_b:.2f}M ({_max_pct_b:.0%} of contract value)"
+                    ),
+                    "max_bonus_pct": _max_pct_b,
+                    "max_bonus_m": round(_total_b * _max_pct_b, 3),
+                }
+    if bonus_m > 0 and offer.get("_session") is None and not offer.get("force"):
         from services.franchise_offseason import (
-            SIGNING_BONUS_REVENUE_FLOOR_M,
             signing_bonus_max_pct_for_revenue,
+            signing_bonus_revenue_floor,
         )
 
+        SIGNING_BONUS_REVENUE_FLOOR_M = signing_bonus_revenue_floor(league)
         revenue_m = None
         try:
             revenue_m = float(getattr(team, "revenue_m", None) or getattr(team, "annual_revenue_m", None) or 0) or None
@@ -4376,7 +4679,7 @@ def sign_player_to_team(
                 session = offer.get("_session")
                 if session is not None:
                     tid = str(_get(team, "team_id", "") or _get(team, "id", ""))
-                    row = calculate_team_revenue(session, team, tid, is_user=False)
+                    row = calculate_team_revenue(session, team, tid, is_user=False, annual=True)
                     revenue_m = float(row.get("revenue") or row.get("revenue_m") or 0) or None
             except Exception:
                 revenue_m = None
@@ -4393,7 +4696,7 @@ def sign_player_to_team(
                 "floor_m": SIGNING_BONUS_REVENUE_FLOOR_M,
             }
         total_value = aav_m * years
-        max_pct = signing_bonus_max_pct_for_revenue(revenue_m)
+        max_pct = signing_bonus_max_pct_for_revenue(revenue_m, league)
         if total_value > 0 and (bonus_m / total_value) > max_pct + 1e-6:
             return {
                 "ok": False,
@@ -4414,20 +4717,35 @@ def sign_player_to_team(
             "reason": slot_check.get("reason"),
             "contract_slots": slot_check,
         }
-    check = _validate_sign_cap(
-        team,
-        compute_prorated_cap_hit_m(aav_m, years, bonus_m),
-        league,
-        player=player,
-        context=str(offer.get("context") or ""),
-    )
-    if not check.get("ok"):
-        return {
-            "ok": False,
-            "status": "invalid",
-            "reason": check.get("reason"),
-            "snapshot": check.get("snapshot"),
-        }
+    _sign_hit = compute_prorated_cap_hit_m(aav_m, years, bonus_m)
+    assign_ahl = bool(offer.get("assign_ahl")) or category in ("two_way", "nhl_two_way", "two-way")
+    if not assign_ahl:
+        check = _validate_sign_cap(
+            team,
+            _sign_hit,
+            league,
+            player=player,
+            context=str(offer.get("context") or ""),
+        )
+        if not check.get("ok") and _ctx in ("ufa", "free_agent", "fa", "") and not offer.get("nhl_only"):
+            # Full roster or tight cap isn't a dead end: sign him and assign him to the AHL,
+            # where only the bury residual counts against the cap.
+            ahl_check = _validate_sign_cap_ahl(team, _sign_hit, league, season_year)
+            if ahl_check.get("ok"):
+                assign_ahl = True
+                check = ahl_check
+        if not check.get("ok"):
+            return {
+                "ok": False,
+                "status": "invalid",
+                "reason": check.get("reason"),
+                "snapshot": check.get("snapshot"),
+            }
+    else:
+        check = _validate_sign_cap_ahl(team, _sign_hit, league, season_year)
+        if not check.get("ok"):
+            return {"ok": False, "status": "invalid", "reason": check.get("reason"), "snapshot": check.get("snapshot")}
+    offer = {**offer, "assign_ahl": assign_ahl}
 
     if offer.get("evaluate_only"):
         evaluation = evaluate_contract_offer(
@@ -4447,7 +4765,9 @@ def sign_player_to_team(
                 "want_years": evaluation.get("want_years"),
                 "preferred_clause": evaluation.get("preferred_clause"),
                 "clause_note": evaluation.get("clause_note"),
-                "feedback": _offer_feedback_label(evaluation, aav_m, years),
+                "feedback": _offer_feedback_label(evaluation, aav_m, years)
+                + (" · Roster/cap full — he'd report to the AHL" if offer.get("assign_ahl") else ""),
+                "assign_ahl": bool(offer.get("assign_ahl")),
                 "agent_mood": evaluation.get("agent_mood"),
                 "counter_cap_hit": (evaluation.get("counter_offer") or {}).get("aav_m"),
                 "counter_term": (evaluation.get("counter_offer") or {}).get("years"),
@@ -4685,6 +5005,40 @@ def sign_player_to_team(
     contract["playoff_eligible"] = playoff_eligible
     if offer.get("signed_day") is not None:
         contract["signed_day"] = int(offer.get("signed_day") or 0)
+    # Extension signed while the current deal still has a season to run: it kicks in
+    # on July 1 after that season (current cap hit stays), like the NHL.
+    cur = _get(player, "contract", None)
+    ctx_ext = str(offer.get("context") or "").lower() in ("extension", "re_sign", "rfa")
+    if (
+        ctx_ext
+        and isinstance(cur, dict)
+        and int(cur.get("years_remaining") or 0) >= 1
+        and not cur.get("pending_july1_expiry")
+        and float(cur.get("aav_m") or cur.get("cap_hit_m") or 0) > 0
+    ):
+        ext = dict(contract)
+        ext["expiry_year"] = int(cur.get("expiry_year") or (int(season_year) + int(cur.get("years_remaining") or 1))) + int(years)
+        cur["pending_extension"] = ext
+        try:
+            player.playoff_eligible = playoff_eligible
+        except Exception:
+            pass
+        _remove_from_unsigned_pools(league, player)
+        return {
+            "ok": True,
+            "status": "accepted",
+            "signed": True,
+            "player_id": _player_id(player),
+            "evaluation": eval_result,
+            "final_term": years,
+            "final_cap_hit": ext.get("cap_hit_m"),
+            "expiry_year": ext.get("expiry_year"),
+            "contract_type": ext.get("contract_type") or ext.get("type"),
+            "pending_extension": True,
+            "contract": dict(cur),
+            "extension": ext,
+            "message": f"Extension signed: {years}y x ${aav_m:.2f}M starts after the current deal (current ${float(cur.get('aav_m') or 0):.2f}M stays this season).",
+        }
     apply_contract_to_player(player, contract, season_year)
     try:
         player.playoff_eligible = playoff_eligible
@@ -4696,22 +5050,40 @@ def sign_player_to_team(
     # stays on the Contract Table with a blank ask / stale QO path.
     clear_rfa_rights_for_player(league, _player_id(player), prefer_team=team)
 
-    roster = list(_get(team, "roster", None) or [])
-    if player not in roster:
-        roster.append(player)
-        team.roster = roster
+    if offer.get("assign_ahl") and not any(p is player for p in list(_get(team, "roster", None) or [])):
+        ahl = list(_get(team, "ahl_roster", None) or [])
+        if not any(p is player for p in ahl):
+            ahl.append(player)
+        team.ahl_roster = ahl
+        try:
+            player.in_minors = True
+            player.is_buried = True
+            player.roster_location = "ahl"
+            player.on_ir = False
+            player.on_ltir = False
+            player.organizational_status = "minors"
+            if isinstance(getattr(player, "contract", None), dict):
+                player.contract["two_way"] = True
+                player.contract["is_two_way"] = True
+        except Exception:
+            pass
+    else:
+        roster = list(_get(team, "roster", None) or [])
+        if player not in roster:
+            roster.append(player)
+            team.roster = roster
 
-    # FA / re-sign desks put players on the active NHL list — clear any leftover
-    # minors/IR flags that would leave Roster Check pretending the club is short.
-    try:
-        player.is_buried = False
-        player.buried = False
-        player.in_minors = False
-        player.on_ir = False
-        player.on_ltir = False
-        player.organizational_status = "signed"
-    except Exception:
-        pass
+        # FA / re-sign desks put players on the active NHL list — clear any leftover
+        # minors/IR flags that would leave Roster Check pretending the club is short.
+        try:
+            player.is_buried = False
+            player.buried = False
+            player.in_minors = False
+            player.on_ir = False
+            player.on_ltir = False
+            player.organizational_status = "signed"
+        except Exception:
+            pass
 
     try:
         player.team_id = str(_get(team, "team_id", "") or _get(team, "id", ""))
@@ -4756,6 +5128,11 @@ def sign_player_to_team(
         "final_cap_hit": contract.get("cap_hit_m"),
         "expiry_year": contract.get("expiry_year"),
         "contract_type": contract.get("contract_type") or contract.get("type"),
+        "assigned_to_ahl": bool(offer.get("assign_ahl")),
+        "message": (
+            f"{_player_name(player)} signed and assigned to the AHL — call him up when you have the room."
+            if offer.get("assign_ahl") else None
+        ),
     }
 
 
@@ -4979,6 +5356,14 @@ def execute_offer_sheet(
 ) -> Dict[str, Any]:
     aav_m = normalize_money_m(offer.get("aav_m") or 0)
     years = max(1, int(offer.get("years") or 1))
+    _sheet_max = cba_max_term(league, own_team=False)
+    if years > _sheet_max:
+        return {
+            "ok": False,
+            "status": "invalid",
+            "reason": f"CBA limit: offer sheets max out at {_sheet_max} years",
+            "max_term": _sheet_max,
+        }
     entry = find_rfa_rights(rights_team, _player_id(player))
     if not entry:
         return {"ok": False, "reason": "RFA rights not found"}
@@ -5126,6 +5511,34 @@ def execute_arbitration_settle(team: Any, player_id: str, league: Any, season_ye
 # Contract expiry / tick
 # ---------------------------------------------------------------------------
 
+def activate_pending_extension(player: Any, season_year: int) -> bool:
+    """Swap in a signed extension when the current contract's final season is done."""
+    c = _get(player, "contract", None)
+    if not isinstance(c, dict) or not isinstance(c.get("pending_extension"), dict):
+        return False
+    ext = dict(c.pop("pending_extension") or {})
+    years = int(ext.get("years") or ext.get("years_remaining") or 0)
+    aav = float(ext.get("aav_m") or ext.get("cap_hit_m") or 0)
+    if years <= 0 or aav <= 0:
+        return False
+    new = dict(c)
+    new.update({k: v for k, v in ext.items() if k not in ("years",)})
+    new["aav_m"] = round(aav, 3)
+    new["cap_hit_m"] = round(float(ext.get("cap_hit_m") or aav), 3)
+    new["years"] = years
+    new["years_remaining"] = years
+    new["expiry_year"] = int(ext.get("expiry_year") or (int(season_year) + 1 + years))
+    new.pop("pending_july1_expiry", None)
+    new["contract_type"] = str(ext.get("contract_type") or "STANDARD")
+    new["rights_status"] = str(ext.get("rights_status") or "UFA")
+    apply_contract_to_player(player, new, int(season_year) + 1)
+    try:
+        setattr(player, "pending_july1_expiry", False)
+    except Exception:
+        pass
+    return True
+
+
 def handle_player_contract_expiry(
     player: Any,
     team: Any,
@@ -5173,6 +5586,11 @@ def handle_player_contract_expiry(
         ctype_peek = str(norm_peek.get("type") or norm_peek.get("contract_type") or "").upper()
         is_rfa = "RFA" in rights_peek or ctype_peek == "RFA_BRIDGE"
 
+        # An already-signed extension takes over when the current deal's last season ends
+        # (July 1 like the NHL): new AAV/term, no trip to the re-sign desk or free agency.
+        if yrs_before == 1 and isinstance(c, dict) and isinstance(c.get("pending_extension"), dict):
+            if activate_pending_extension(player, season_year):
+                return "kept"
         # Keep final-year UFAs signed until July 1 / Free Agency for extensions.
         if defer_july1_ufa and yrs_before == 1 and not is_rfa:
             if isinstance(c, dict):
@@ -5494,11 +5912,18 @@ def _cpu_team_revenue_m(team: Any, session: Any = None) -> float:
             from services.league_operations import calculate_team_revenue
 
             tid = str(_get(team, "team_id", "") or _get(team, "id", ""))
-            row = calculate_team_revenue(session, team, tid, is_user=False)
-            return float(row.get("revenue") or row.get("revenue_m") or 0.0)
+            row = calculate_team_revenue(session, team, tid, is_user=False, annual=True)
+            rev = float(row.get("revenue") or row.get("revenue_m") or 0.0)
+            if rev > 0:
+                return rev
         except Exception:
             pass
-    return 0.0
+    # No session context (league-only callers): a stable mid-market estimate per club.
+    # Returning 0 silently barred every CPU club from paying signing bonuses, so any
+    # bonus-demanding free agent could never sign anywhere but the user's team.
+    tid = str(_get(team, "team_id", "") or _get(team, "id", "") or _get(team, "name", ""))
+    seed = int(hashlib.md5(tid.encode("utf-8")).hexdigest()[:6], 16) / float(0xFFFFFF)
+    return round(165.0 + seed * 60.0, 1)
 
 
 def _cpu_bonus_usage_rate(revenue_m: float) -> float:
@@ -5558,13 +5983,30 @@ def _cpu_negotiate_offer(
         try:
             from services.franchise_offseason import signing_bonus_max_pct_for_revenue
 
-            max_pct = signing_bonus_max_pct_for_revenue(revenue_m)
+            max_pct = signing_bonus_max_pct_for_revenue(revenue_m, league)
             total = max(aav * years, 0.25)
             signing_bonus_m = round(min(total * max_pct * 0.45, total * max_pct), 3)
             if _cap_hit(aav, years, signing_bonus_m) > ceiling + 1e-6:
                 signing_bonus_m = 0.0
         except Exception:
             signing_bonus_m = 0.0
+
+    # Bonus-demanding free agents only sign where the club can pay cash up front.
+    if str(context or "").lower() in ("ufa", "free_agent", "fa"):
+        try:
+            from services.franchise_offseason import signing_bonus_max_pct_for_revenue, signing_bonus_revenue_floor
+            from services.league_governance import fa_bonus_demand_pct
+
+            want_pct = float(fa_bonus_demand_pct(player, league) or 0.0)
+            if want_pct > 0:
+                if revenue_m < signing_bonus_revenue_floor(league):
+                    return False, round(aav, 3), years
+                cap_pct = signing_bonus_max_pct_for_revenue(revenue_m, league)
+                if cap_pct + 1e-6 < want_pct:
+                    return False, round(aav, 3), years
+                signing_bonus_m = max(signing_bonus_m, round(max(aav * years, 0.25) * want_pct, 3))
+        except Exception:
+            pass
 
     rounds = max(1, int(max_rounds))
     if float(_player_ovr(player)) >= 88:
@@ -7651,7 +8093,7 @@ def build_contract_row(player: Any, team: Any, season_year: int, league: Any = N
         value_label = "Bad"
 
     ext_aav = round(fair * 1.02, 3)
-    ext_years = max(3, min(8, 34 - int(age or 27)))
+    ext_years = max(3, min(cba_max_term(league, own_team=True), 34 - int(age or 27)))
 
     pending_july1 = bool(
         c.get("pending_july1_expiry") or getattr(player, "pending_july1_expiry", False)
@@ -8044,7 +8486,7 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
     awaiting_july1 = (
         not fa_open
         and str(getattr(session, "phase", "") or "").lower() == "offseason"
-        and stage in ("re_sign", "salary_cap", "draft", "draft_combine", "awards", "retirements")
+        and stage in ("re_sign", "salary_cap", "draft", "draft_combine", "awards", "retirements", "board_of_governors")
     )
     if user_team is not None and league is not None:
         try:
@@ -8053,6 +8495,10 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
             rng = getattr(sim, "rng", None)
             if rng is not None:
                 ensure_overseas_fa_pool(league, rng, min_count=120, min_goalies=12)
+        except Exception:
+            pass
+        try:
+            prune_owned_from_fa_pools(league)
         except Exception:
             pass
         seen_fa: set = set()

@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 
 # Bump when the talent curve / depth-star spread changes so Trade Hub caches rebuild
 # without requiring a new franchise save.
-TRADE_VALUE_FORMULA_VERSION = 13
+TRADE_VALUE_FORMULA_VERSION = 16  # v15: exponential star curve, age/goalie/position, term surplus, consolidation
 # Soft ceiling used only for UI-relative clamps / legacy helpers — player totals are uncapped.
-TRADE_VALUE_SOFT_CEIL = 220.0
+TRADE_VALUE_SOFT_CEIL = 450.0
 LEAGUE_MINIMUM_AAV_M = 0.775
 # Contract burden: value lost per $1M of overpay per remaining season.
 CONTRACT_BURDEN_PER_M_YEAR = 2.0
@@ -43,6 +43,60 @@ PLAYER_VALUE_FLOOR = -60.0
 TRADE_VALUE_FALLBACK_SCALE = 0.55
 TRADE_VALUE_FALLBACK_FLOOR = 3.0
 TRADE_VALUE_FALLBACK_CEIL = 45.0
+
+# --- v14 rebalance knobs ---------------------------------------------------------
+# Future picks: modest per-year discount, never crushing.
+FUTURE_PICK_DISCOUNT_PER_YEAR = 0.07
+FUTURE_PICK_DISCOUNT_CAP = 0.18
+# Prospect premium (age <= 22, potential >= 80): value floor by ceiling, strongly
+# convex so a 90-potential teenager is a premium asset even at ~70 OVR.
+PROSPECT_PREMIUM_MAX_AGE = 23
+PROSPECT_PREMIUM_MIN_POT = 74.0
+# v16: prospects are the league's scarcest currency — floors roughly 1.5x v15 and
+# extended down to mid-ceiling (74+) kids so a pipeline is never "worthless".
+_PROSPECT_FLOOR_ANCHORS: Tuple[Tuple[float, float], ...] = (
+    (74.0, 8.0),
+    (77.0, 14.0),
+    (80.0, 26.0),
+    (82.0, 38.0),
+    (84.0, 55.0),
+    (86.0, 82.0),
+    (88.0, 118.0),
+    (90.0, 165.0),
+    (92.0, 215.0),
+    (94.0, 265.0),
+    (97.0, 330.0),
+)
+# AHL-only veterans (age 23+, low ceiling): near-zero filler.
+AHL_FILLER_BASE = 1.0
+AHL_FILLER_PER_OVR = 0.6  # per OVR point above 70
+AHL_HIGH_CEILING_MULT = 0.75  # 23+ AHL players who still project (POT >= 80)
+# Depth roles (rank on their own NHL roster): value multipliers + role-fair AAV.
+DEPTH_ROLE_MULT = {
+    "third_line_f": 0.72,
+    "fourth_line_f": 0.50,
+    "third_pair_d": 0.62,
+    "extra_d": 0.45,
+}
+# Role-fair AAV from the real market (v15.1): 3rd-line forwards sign for ~$3-4M,
+# 4th-liners ~$1.5M, third-pair D ~$3M. The old $2.2M / $1.2M bar turned ordinary
+# depth deals into negative-value contracts.
+DEPTH_ROLE_AAV_M = {
+    "third_line_f": 3.4,
+    "fourth_line_f": 1.6,
+    "third_pair_d": 3.0,
+    "extra_d": 1.4,
+}
+DEPTH_ROLE_LABEL = {
+    "third_line_f": "Third-line role",
+    "fourth_line_f": "Fourth-line / extra forward",
+    "third_pair_d": "Third-pair defenceman",
+    "extra_d": "Depth / extra defenceman",
+}
+DEPTH_ROLE_MAX_VAL_OVR = 81.0  # legit top-6 talent buried on a deep club is not "depth"
+ROLE_BURDEN_PER_M_YEAR = 2.0
+ROLE_BURDEN_TOLERANCE_M = 0.25
+ROLE_BURDEN_MAX = 28.0
 
 
 def _clamp(x: float, lo: float = 0.0, hi: float = TRADE_VALUE_SOFT_CEIL) -> float:
@@ -145,12 +199,14 @@ def _pick_projected_range(proj: Dict[str, Any], rnd: int) -> str:
 def slot_curve_value(overall_slot: int) -> float:
     """Value of a known draft slot on the shared uncapped asset scale.
 
-    Exponential decay anchored near a mid-elite 1st overall (~95), falling to
-    ~40 at the end of round one and ~2 in the last round. True franchise
-    players sit well above even top lottery picks.
+    Two-term decay: a steep lottery term plus a long tail so mid-round picks keep
+    some currency. Proven superstars still sit above even the first overall pick.
     """
     slot = max(1, int(overall_slot))
-    return _clamp(2.0 + 93.0 * math.exp(-0.03056 * (slot - 1)), 2.0, 120.0)
+    k = float(slot - 1)
+    # v15: lottery picks are priced like the stars they usually become —
+    # #1 ~160 · #3 ~135 · #5 ~115 · #10 ~79 · #16 ~53 · #24 ~35 · #32 ~26 · #48 ~18 · #80 ~12.
+    return _clamp(2.0 + 132.0 * math.exp(-0.10 * k) + 26.0 * math.exp(-0.012 * k), 2.0, 170.0)
 
 
 def _known_pick_slot(pick_row: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[int]:
@@ -538,45 +594,37 @@ def _trade_valuation_ovr(
     val = min(max(ovr, blended), ovr + max_lift, pot * 0.97)
     if age <= 23 and ovr >= 76 and upside >= 5.0:
         val = max(val, ovr + min(8.0, upside * 0.58))
-    return val
+    # v15: on the exponential curve every projected point is +16% value, so the
+    # projection premium for an established NHL player is capped tighter.
+    hard_lift = 5.0 if age <= 21 else 4.0 if age <= 23 else 2.5
+    return min(val, ovr + hard_lift)
 
 
 def _talent_base(ovr: float) -> float:
     """
-    Aggressive uncapped ability curve — depth stays cheap; stars separate clearly.
+    Exponential ability curve (v15). Real NHL trade markets are winner-take-all: one star
+    is worth far more than several good players, so value roughly multiplies by ~1.16 per
+    OVR point above 80.
 
-    Approx anchors (before contract/need nudges):
-      70 4th-line → ~12 · 75 bottom-6 → ~22 · 80 middle-6 → ~42
-      82 top-6 → ~55 · 85 star → ~78 · 88 elite → ~108
-      90 franchise → ~130 · 93+ generational → ~155–180
+    Anchors (prime age, fair contract, before context):
+      70 4th line ~10 · 75 bottom-6 ~18 · 78 middle-6 ~30 · 80 top-6 ~38
+      83 1st line / top pair ~60 · 86 star ~94 · 88 elite ~126
+      90 superstar ~170 · 92 MVP-level ~230 · 94 generational ~310
     """
     o = float(ovr or 0.0)
     if o <= 0:
         return 3.0
     if o < 70.0:
-        # 62 → ~5 · 68 → ~11
-        anchor = 5.0 + max(0.0, o - 60.0) * 1.0
-    elif o < 76.0:
-        # 70 → ~12 · 75 → ~22
-        anchor = 12.0 + (o - 70.0) * 2.0
-    elif o < 81.0:
-        # 76 → ~26 · 80 → ~42
-        anchor = 22.0 + (o - 75.0) * 4.0
-    elif o < 85.0:
-        # 81 → ~50 · 84 → ~70
-        anchor = 45.0 + (o - 80.0) * 6.25
-    elif o < 88.0:
-        # 85 → ~78 · 87 → ~96
-        anchor = 72.0 + (o - 84.0) * 8.0
-    elif o < 91.0:
-        # 88 → ~108 · 90 → ~128
-        anchor = 100.0 + (o - 87.0) * 10.0
-    elif o < 94.0:
-        # 91 → ~140 · 93 → ~160
-        anchor = 130.0 + (o - 90.0) * 10.0
+        anchor = 4.0 + max(0.0, o - 60.0) * 0.6
+    elif o < 75.0:
+        anchor = 10.0 + (o - 70.0) * 1.6
+    elif o < 80.0:
+        anchor = 18.0 + (o - 75.0) * 4.0
+    elif o < 92.0:
+        anchor = 38.0 * math.exp(0.15 * (o - 80.0))
     else:
-        # 94+ → 165+ uncapped
-        anchor = 160.0 + (o - 93.0) * 12.0
+        # Past MVP level the curve keeps climbing, but more gently.
+        anchor = 38.0 * math.exp(1.8) * math.exp(0.10 * (o - 92.0))
     return max(3.0, float(anchor))
 
 
@@ -596,7 +644,9 @@ def _expected_cap_m(ovr: float) -> float:
         if o < 75.0:
             out = min(out, LEAGUE_MINIMUM_AAV_M + 0.85 + max(0.0, o - 65.0) * 0.10)
     else:
-        out = LEAGUE_MINIMUM_AAV_M + (o - 58.0) * 0.12 + max(0.0, o - 82.0) * 0.42
+        # Real market (v15.1): 80 ~$3.6M · 84 ~$5.6M · 86 ~$7.2M · 88 ~$8.9M · 90 ~$10.5M ·
+        # 93 ~$13M. The lower curve called fairly-paid regulars "overpaid".
+        out = LEAGUE_MINIMUM_AAV_M + (o - 58.0) * 0.13 + max(0.0, o - 82.0) * 0.70
     return _clamp(out, LEAGUE_MINIMUM_AAV_M, 16.0)
 
 
@@ -924,7 +974,44 @@ def _contract_burden(
     return -min(CONTRACT_BURDEN_MAX, burden)
 
 
-def _production_score(player: Any) -> float:
+def _ledger_production(player: Any, league: Any) -> Optional[Tuple[float, int]]:
+    """(production score, gp) from the live season ledger — session.player_season_stats,
+    mirrored onto ``league.player_season_stats``. player.season_stats is year-keyed during
+    a franchise, so the flat read below never saw the current season and trade value was
+    frozen on last year's real-NHL line."""
+    reg = getattr(league, "player_season_stats", None) if league is not None else None
+    if not isinstance(reg, dict):
+        return None
+    row = reg.get(str(getattr(player, "id", "") or ""))
+    if not isinstance(row, dict):
+        return None
+    gp = _safe_int(row.get("gp"), 0)
+    if gp <= 0:
+        return None
+    if _player_pos(player) == "G":
+        ga = _safe_float(row.get("ga"), 0.0)
+        sa = _safe_float(row.get("sa") or row.get("shots_against"), 0.0)
+        if sa > 0:
+            sv = 1.0 - ga / sa
+        else:
+            # Ledger tracks GA but not shots: map GAA onto the SV% scale (~0.011 SV% per goal).
+            sv = 0.903 + (3.0 - ga / gp) * 0.011
+        return _clamp((sv - 0.88) * 120.0, 0.0, 18.0), gp
+    pts = _safe_float(row.get("pts"), _safe_float(row.get("g"), 0) + _safe_float(row.get("a"), 0))
+    return _clamp((pts / gp) * 14.0, 0.0, 16.0), gp
+
+
+def _production_score(player: Any, league: Any = None) -> float:
+    prior = _prior_production_score(player)
+    cur = _ledger_production(player, league)
+    if cur is None:
+        return prior
+    score, gp = cur
+    w = gp / (gp + 20.0)  # ~50/50 at 20 GP, mostly this season by the deadline
+    return score * w + prior * (1.0 - w)
+
+
+def _prior_production_score(player: Any) -> float:
     st = getattr(player, "season_stats", None) or {}
     if isinstance(st, dict) and "gp" not in st and "pts" not in st and "points" not in st:
         # Year-keyed sim sync or empty — do not treat nested seasons as flat gp.
@@ -1015,6 +1102,171 @@ def _ntc_waived_for_player(player: Any, context: Optional[Dict[str, Any]] = None
 
 
 _NEEDS_MODEL = TeamNeeds()
+
+
+def prospect_floor_value(age: int, ovr: float, pot: float, confidence: float = 0.5) -> float:
+    """Minimum trade value of a young high-ceiling player (v14), 0 when not eligible.
+
+    Scales strongly with potential (80 POT ~16 · 86 ~42 · 90 ~78 · 94 ~112), trimmed
+    for age (less runway) and for older players still far from their ceiling.
+    """
+    age_i = int(age or 0)
+    pot_f = float(pot or 0.0)
+    if age_i <= 0 or age_i > PROSPECT_PREMIUM_MAX_AGE or pot_f < PROSPECT_PREMIUM_MIN_POT:
+        return 0.0
+    anchors = _PROSPECT_FLOOR_ANCHORS
+    if pot_f >= anchors[-1][0]:
+        base = anchors[-1][1]
+    else:
+        base = anchors[0][1]
+        for (p0, v0), (p1, v1) in zip(anchors, anchors[1:]):
+            if p0 <= pot_f <= p1:
+                base = v0 + (v1 - v0) * (pot_f - p0) / (p1 - p0)
+                break
+    age_f = 1.0 if age_i <= 19 else 0.96 if age_i == 20 else 0.90 if age_i == 21 else 0.82 if age_i == 22 else 0.72
+    if age_i >= 21 and pot_f - float(ovr or 0.0) > 12.0:
+        age_f *= 0.88
+    conf = max(0.0, min(1.0, float(confidence if confidence is not None else 0.5)))
+    return round(base * age_f * (0.9 + 0.2 * conf), 2)
+
+
+def _org_location(player: Any, source_team: Any) -> str:
+    """'nhl' / 'ahl' / 'echl' / 'prospect' / '' — where the player sits in his org."""
+    pid = str(getattr(player, "id", "") or "")
+    if source_team is not None and pid:
+        for attr, loc in (
+            ("roster", "nhl"),
+            ("injured_reserve", "nhl"),
+            ("scratches", "nhl"),
+            ("ahl_roster", "ahl"),
+            ("echl_roster", "echl"),
+            ("prospect_pool", "prospect"),
+        ):
+            for p in getattr(source_team, attr, None) or []:
+                if p is player or str(getattr(p, "id", "") or "") == pid:
+                    return loc
+    loc = str(getattr(player, "roster_location", "") or getattr(player, "pool_context", "") or "").lower()
+    if loc in ("ahl", "echl", "nhl"):
+        return loc
+    return ""
+
+
+_ROLE_RANK_CACHE: Dict[int, Tuple[Tuple[Any, ...], Dict[str, Tuple[str, int]]]] = {}
+
+
+def _team_depth_ranks(team: Any) -> Dict[str, Tuple[str, int]]:
+    """{player_id: (group 'F'/'D', 1-based OVR rank in group)} for a team's NHL roster."""
+    roster = [p for p in (getattr(team, "roster", None) or []) if not getattr(p, "retired", False)]
+    sig = tuple((str(getattr(p, "id", "") or ""), getattr(p, "_ovr_memo", None)) for p in roster)
+    key = id(team)
+    hit = _ROLE_RANK_CACHE.get(key)
+    if hit is not None and hit[0] == sig:
+        return hit[1]
+    groups: Dict[str, List[Tuple[float, str]]] = {"F": [], "D": []}
+    for p in roster:
+        pos = _player_pos(p)
+        grp = "D" if pos == "D" else ("F" if pos in ("C", "W", "F", "LW", "RW") else "")
+        if not grp:
+            continue
+        try:
+            groups[grp].append((_player_ovr(p), str(getattr(p, "id", "") or "")))
+        except Exception:
+            continue
+    ranks: Dict[str, Tuple[str, int]] = {}
+    for grp, rows in groups.items():
+        rows.sort(key=lambda r: -r[0])
+        for idx, (_, pid) in enumerate(rows, start=1):
+            ranks[pid] = (grp, idx)
+    if len(_ROLE_RANK_CACHE) > 256:
+        _ROLE_RANK_CACHE.clear()
+    _ROLE_RANK_CACHE[key] = (sig, ranks)
+    return ranks
+
+
+def _depth_role(player: Any, source_team: Any, org_loc: str) -> str:
+    """Depth role on his current NHL club ('' when top-6 F / top-4 D / not on NHL roster)."""
+    if org_loc != "nhl" or source_team is None:
+        return ""
+    row = _team_depth_ranks(source_team).get(str(getattr(player, "id", "") or ""))
+    if row is None:
+        return ""
+    grp, rank = row
+    if grp == "F":
+        if rank <= 6:
+            return ""
+        return "third_line_f" if rank <= 9 else "fourth_line_f"
+    if rank <= 4:
+        return ""
+    return "third_pair_d" if rank <= 6 else "extra_d"
+
+
+def _role_contract_burden(cap_hit: float, years: int, role_aav: float) -> float:
+    """Negative value when a depth player's AAV exceeds what his role is worth (<= 0)."""
+    overpay = float(cap_hit) - float(role_aav) - ROLE_BURDEN_TOLERANCE_M
+    if overpay <= 0:
+        return 0.0
+    return -min(ROLE_BURDEN_MAX, overpay * max(1, int(years or 0)) * ROLE_BURDEN_PER_M_YEAR)
+
+
+def _position_value_mult(pos: str, val_ovr: float) -> float:
+    """Scarcity by position: top centres and No.1 defencemen cost the most; goalies are
+    notoriously volatile and the market pays far less for them than for skaters of the
+    same rating (elite starters excepted)."""
+    if pos == "C":
+        return 1.08
+    if pos == "D":
+        return 1.05 if val_ovr >= 82 else 1.0
+    if pos == "G":
+        # Real market: a Vezina-calibre 31-year-old moved for a late 1st plus pieces.
+        return 0.65 if val_ovr >= 92 else 0.55
+    return 1.0
+
+
+def _age_value_mult(age: int, val_ovr: float, pos: str) -> float:
+    """Decline curve. Teams buy the next five years, so a 33-year-old is a short window
+    no matter how good he is today. Goalies age a little more gracefully."""
+    a = int(age or 0)
+    table = {30: 0.93, 31: 0.86, 32: 0.78, 33: 0.70, 34: 0.62, 35: 0.55}
+    if a < 30:
+        return 1.0
+    mult = table.get(a, 0.48)
+    if pos == "G":
+        return min(1.0, mult + 0.06)
+    if val_ovr >= 90:
+        mult = min(1.0, mult + 0.05)
+    return mult
+
+
+def _term_surplus_value(
+    *,
+    val_ovr: float,
+    age: int,
+    cap_hit: float,
+    expected_cap: float,
+    years: int,
+    expiry: str,
+    is_prospect_val: bool,
+) -> float:
+    """Value of cost control: cap savings per season x seasons of control.
+
+    A star on a cheap long deal is the most valuable thing in a capped league; the same
+    player on an expiring deal is a rental. RFA years after the deal ends add a little
+    (the club still controls him). Only good players produce meaningful surplus.
+    """
+    if is_prospect_val and cap_hit <= 0.05:
+        return 0.0
+    surplus_m = expected_cap - cap_hit
+    if surplus_m <= 0.25:
+        return 0.0
+    yrs = max(0, int(years or 0))
+    control = min(yrs, 6)
+    if str(expiry).upper() in ("RFA", "ELC") and age <= 25:
+        control += 1.5  # still controlled after the deal (RFA rights)
+    if control <= 0:
+        return 0.0
+    tier = max(0.12, min(1.35, (float(val_ovr) - 74.0) / 11.0))
+    value = surplus_m * min(control, 7.0) * 1.7 * tier
+    return round(min(45.0, value), 2)
 
 
 def evaluate_player_asset_value(
@@ -1152,7 +1404,7 @@ def _evaluate_player_asset_value_impl(
     else:
         potential_mod = _clamp(residual_upside * 0.06, 0.0, 2.0)
 
-    production_mod = min(_production_score(player), 8.0) * talent_fit
+    production_mod = min(_production_score(player, league), 8.0) * talent_fit
     # Young high-upside assets are priced on projection until production proves otherwise.
     if age <= 23 and upside >= 6.0:
         production_mod *= 0.50
@@ -1170,10 +1422,15 @@ def _evaluate_player_asset_value_impl(
         pos_mod = 1.0
 
     expected_cap = _expected_cap_m(contract_ref)
-    # Surplus plus mild overpay only — overpay beyond the market tolerance is
-    # priced by _contract_burden outside the context clamp.
+    # Mild overpay only — overpay beyond the market tolerance is priced by
+    # _contract_burden outside the context clamp. Positive surplus is priced per
+    # remaining season below (term_surplus), outside the clamp.
     overpay_tolerance = max(0.75, expected_cap * 0.20)
-    contract_mod = _clamp((expected_cap - cap_hit) * 1.4, -overpay_tolerance * 1.4, 6.0)
+    contract_mod = _clamp((expected_cap - cap_hit) * 1.4, -overpay_tolerance * 1.4, 0.0)
+    term_surplus = _term_surplus_value(
+        val_ovr=contract_ref, age=age, cap_hit=cap_hit, expected_cap=expected_cap,
+        years=years, expiry=expiry, is_prospect_val=is_prospect_val,
+    )
     if is_prospect_val and cap_hit <= 0.05:
         contract_mod = min(contract_mod, 1.25)
     # Cheap replacement / depth AAV is not franchise surplus — clamp positive
@@ -1198,8 +1455,6 @@ def _evaluate_player_asset_value_impl(
             contract_mod -= 2.0
         else:
             contract_mod -= 3.0
-    elif years >= 4 and cap_hit < expected_cap and contract_ref >= 78:
-        contract_mod += 2.0
 
     needs = _NEEDS_MODEL.evaluate(acquiring_team, context=ctx)
     # Needs can nudge price but must not flatten OVR gaps (roster-spot dumps vs stars).
@@ -1411,15 +1666,7 @@ def _evaluate_player_asset_value_impl(
     # Extra star premium / depth tax on top of the uncapped talent curve.
     # Pipeline assets skip star-premium — ceiling is already discounted in val_ovr.
     if not is_prospect_val:
-        if val_ovr >= 92.0:
-            total += 8.0 + (val_ovr - 92.0) * 3.0
-        elif val_ovr >= 90.0:
-            total += 6.0 + (val_ovr - 90.0) * 2.0
-        elif val_ovr >= 87.0:
-            total += 4.0 + (val_ovr - 87.0) * 1.5
-        elif val_ovr >= 84.0:
-            total += 2.5
-        elif val_ovr < 73.0:
+        if val_ovr < 73.0:
             total -= (73.0 - val_ovr) * 1.5
         elif val_ovr < 77.0:
             total -= (77.0 - val_ovr) * 0.65
@@ -1429,20 +1676,82 @@ def _evaluate_player_asset_value_impl(
     if is_prospect_val:
         # Elite-ceiling premium: blue-chip prospects are the scarcest currency in the
         # league. Without it a 90+ potential #1 pick priced like a starting goalie.
-        if pot >= 84.0:
-            total += (pot - 84.0) * 5.0 * (0.75 + 0.5 * _scouting_confidence(player))
+        if pot >= 82.0:
+            total += (pot - 82.0) * 7.0 * (0.75 + 0.5 * _scouting_confidence(player))
         signed = str(getattr(player, "signed_status", "") or "").lower()
         unsigned = signed in ("unsigned", "rights", "rights_only", "") and cap_hit <= 0.05
         # Cap was "never above a #1 pick" (~93); a developing elite prospect is worth more
         # than the pick that bought him, so the cap rises with his ceiling.
-        prospect_cap = slot_curve_value(1) + max(0.0, pot - 86.0) * 6.0 - (2.0 if unsigned else 0.0)
+        prospect_cap = slot_curve_value(1) + max(0.0, pot - 84.0) * 10.0 - (2.0 if unsigned else 0.0)
         total = min(total, max(prospect_cap, 55.0))
+
+    # --- v15: position scarcity, age curve, goalie discount, contract term -------
+    pos_mult = _position_value_mult(pos, val_ovr)
+    age_mult = 1.0 if is_prospect_val else _age_value_mult(age, val_ovr, pos)
+    if total > 0:
+        total *= pos_mult * age_mult
+    total += term_surplus * (age_mult if total > 0 else 1.0)
+    components["position_mult"] = round(pos_mult, 3)
+    components["age_mult"] = round(age_mult, 3)
+    components["term_surplus"] = round(term_surplus, 2)
+
+    # --- v14 rebalance: org level, depth role, prospect premium ------------------
+    org_loc = _org_location(player, source_team)
+    total_pre_role = float(total)
+    low_ceiling = pot < PROSPECT_PREMIUM_MIN_POT or pot <= ovr + 3.0
+    depth_role = ""
+    role_mult = 1.0
+    role_burden = 0.0
+    if org_loc in ("ahl", "echl") and age >= 23 and not is_prospect_val:
+        if low_ceiling:
+            # AHL-only veteran: a roster filler, not a trade chip.
+            depth_role = "ahl_filler"
+            filler_cap = AHL_FILLER_BASE + max(0.0, val_ovr - 70.0) * AHL_FILLER_PER_OVR
+            if total > filler_cap:
+                role_mult = filler_cap / total if total > 0 else 1.0
+                total = filler_cap
+        elif total > 0:
+            depth_role = "ahl_projectable"
+            role_mult = AHL_HIGH_CEILING_MULT
+            total *= role_mult
+    else:
+        role = _depth_role(player, source_team, org_loc)
+        if role and val_ovr < DEPTH_ROLE_MAX_VAL_OVR and (low_ceiling or age >= 26):
+            depth_role = role
+            role_mult = DEPTH_ROLE_MULT[role]
+            if total > 0:
+                total *= role_mult
+            role_burden = _role_contract_burden(cap_hit, years, DEPTH_ROLE_AAV_M[role])
+    role_adjust = float(total) - total_pre_role
+    total_pre_floor = float(total)
+    prospect_floor = prospect_floor_value(age, ovr, pot, _scouting_confidence(player))
+    prospect_floor_applied = False
+    if prospect_floor > 0:
+        if window == "rebuild":
+            prospect_floor *= 1.08
+        elif window == "contender":
+            prospect_floor *= 0.94
+        # Real risk (injury, demand crisis, disruptor) still bites the premium.
+        prospect_floor += min(0.0, risk_mod + injury_mod)
+        if prospect_floor > total:
+            total = prospect_floor
+            prospect_floor_applied = True
+    components["org_level"] = org_loc or "nhl"
+    components["depth_role"] = depth_role
+    components["role_mult"] = round(role_mult, 3)
+    components["role_contract"] = round(role_burden, 2)
+    components["prospect_floor"] = round(prospect_floor, 2)
+    # Numeric drivers for the Trade Hub value panel.
+    components["role_adjust"] = round(role_adjust, 2)
+    components["prospect_premium"] = round(float(total) - total_pre_floor, 2) if prospect_floor_applied else 0.0
+
     # Hockey value floor: a near-minimum deal can be waived/buried for almost
     # nothing, so it should never cost a sweetener to move.
     hockey_floor = 0.0 if cap_hit <= LEAGUE_MINIMUM_AAV_M + 0.25 else -15.0
     total = max(hockey_floor, float(total))
     # Contract burden sits outside the context clamp so albatross deals go negative.
-    total = max(PLAYER_VALUE_FLOOR, total + cap_dump_mod)
+    # Depth players are also measured against what their ROLE is worth.
+    total = max(PLAYER_VALUE_FLOOR, total + min(cap_dump_mod, role_burden))
     tier = player_value_tier(total)
 
     explain: List[str] = []
@@ -1454,8 +1763,12 @@ def _evaluate_player_asset_value_impl(
         explain.append("Strong upside relative to current rating")
     if prospect_upside >= 5:
         explain.append("Elite prospect upside")
-    if contract_mod >= 4:
-        explain.append("Favorable contract relative to performance")
+    if term_surplus >= 8:
+        explain.append(f"Cost-controlled contract (+{term_surplus:.0f} surplus over {years} yr)")
+    if age_mult <= 0.8:
+        explain.append(f"Age {age} — decline years discount")
+    if pos == "G":
+        explain.append("Goalie market discount")
     if cap_dump_mod < 0 and total < 0:
         explain.append("Contract cost outweighs on-ice value")
     elif cap_dump_mod <= -3.0 or contract_mod <= -1.5:
@@ -1476,6 +1789,16 @@ def _evaluate_player_asset_value_impl(
         explain.append("Older profile — less valuable to rebuilding team")
     if window == "rebuild" and age <= 23:
         explain.append("Youth valued by rebuilding team")
+    if prospect_floor_applied:
+        explain.insert(0, f"Prospect premium — {int(round(pot))} potential at age {age}")
+    if depth_role == "ahl_filler":
+        explain.insert(0, "AHL depth — filler value only")
+    elif depth_role in DEPTH_ROLE_LABEL:
+        explain.insert(0, f"{DEPTH_ROLE_LABEL[depth_role]} — depth value")
+    if role_burden < 0 and role_burden <= cap_dump_mod:
+        explain.append(f"Cap hit above what a {DEPTH_ROLE_LABEL.get(depth_role, 'depth').lower()} is worth")
+        if "Cap dump / negative-value contract" not in contract_flags:
+            contract_flags.append("Cap hit exceeds role")
     for flag in risk_flags[:2]:
         if flag not in explain:
             explain.append(flag)
@@ -1572,7 +1895,8 @@ def evaluate_pick_asset_value(
             certainty = 0.0
         in_round = mid if rank is None else certainty * float(rank) + (1.0 - certainty) * mid
         expected_slot = (rnd - 1) * n_teams + in_round
-        base = slot_curve_value(int(round(expected_slot))) * (1.0 - min(0.30, 0.10 * years_out))
+        # Modest future discount (v14): 7%/yr, capped at 18% — was 10%/yr to 30%.
+        base = slot_curve_value(int(round(expected_slot))) * (1.0 - min(FUTURE_PICK_DISCOUNT_CAP, FUTURE_PICK_DISCOUNT_PER_YEAR * years_out))
         age_discount = 0.0
 
     window = _team_window(acquiring_team)
@@ -1852,8 +2176,12 @@ def evaluate_package_value(
         if src and acq:
             out_vals.append(evaluate_asset_value(asset, src, acq, league, context=context))
 
-    out_total = sum(v.get("total", 0.0) for v in out_vals)
-    in_total = sum(v.get("total", 0.0) for v in incoming_vals)
+    raw_out = sum(v.get("total", 0.0) for v in out_vals)
+    raw_in = sum(v.get("total", 0.0) for v in incoming_vals)
+    # Quality over quantity: both sides are summed with diminishing weights, so four
+    # middling pieces no longer add up to one star (roster spots and contracts are finite).
+    out_total = effective_package_total([v.get("total", 0.0) for v in out_vals])
+    in_total = effective_package_total([v.get("total", 0.0) for v in incoming_vals])
     net = in_total - out_total
 
     return {
@@ -1861,8 +2189,26 @@ def evaluate_package_value(
         "outgoing": out_vals,
         "incoming_total": round(in_total, 2),
         "outgoing_total": round(out_total, 2),
+        "incoming_raw_total": round(raw_in, 2),
+        "outgoing_raw_total": round(raw_out, 2),
         "net": round(net, 2),
     }
+
+
+CONSOLIDATION_WEIGHTS = (1.0, 0.80, 0.64, 0.52, 0.42)
+CONSOLIDATION_TAIL = 0.35
+
+
+def effective_package_total(values: List[float]) -> float:
+    """Package worth with diminishing returns on extra pieces (best asset counts fully,
+    the 2nd at 80%, 3rd 64%, ...). Negative contracts always count in full."""
+    pos = sorted((float(v) for v in values if float(v) > 0), reverse=True)
+    neg = sum(float(v) for v in values if float(v) < 0)
+    total = 0.0
+    for i, v in enumerate(pos):
+        w = CONSOLIDATION_WEIGHTS[i] if i < len(CONSOLIDATION_WEIGHTS) else CONSOLIDATION_TAIL
+        total += v * w
+    return round(total + neg, 2)
 
 
 def pick_value_hint(row: Dict[str, Any], league: Any, team: Any, context: Optional[Dict[str, Any]] = None) -> float:

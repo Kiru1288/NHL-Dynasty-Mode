@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import PlayerHeadshot from "../../components/PlayerHeadshot";
+import { pickHeadshotIdentityFields } from "../../utils/playerHeadshots";
 import FanReactionFeed from "../../components/franchise/social/FanReactionFeed";
 // Theme + fonts: paste the same style imports EntryDraft.jsx has at its top here
 // (the files that define --ops-*, --font-broadcast-display, --font-ops-ui, --font-mono-data).
@@ -317,12 +318,13 @@ function lookupPlayer(player, index, label) {
 function resolvePlayer(player, index, label) {
   const full = lookupPlayer(player, index, label);
   if (full && player) {
+    // Award rows carry the backend headshot identity (NHL id, NHL headshot URL,
+    // portrait seed). Lean roster rows often lack it, so the award row wins.
     return {
       ...player,
       ...full,
-      nhl_player_id: full.nhl_player_id ?? player.nhl_player_id,
-      nhl_headshot_url: full.nhl_headshot_url ?? player.nhl_headshot_url,
-      headshot_url: full.headshot_url ?? player.headshot_url,
+      ...pickHeadshotIdentityFields(full),
+      ...pickHeadshotIdentityFields(player),
     };
   }
   return full || player || null;
@@ -716,6 +718,52 @@ function RosterBody({ slide, ev, phase }) {
   );
 }
 
+/* ballot breakdown: top-5 vote getters with 1st-place votes + ballot points */
+function VoteTable({ table, format, playerIndex, team }) {
+  const rows = safeArray(table).filter((r) => r && r.name);
+  if (!rows.length) return null;
+  const ballot = rows.some((r) => toNum(r?.points) !== null);
+  const curve = safeArray(format?.points).map((p) => formatPoints(Number(p))).join("-");
+  return (
+    <div className="an-order an-votes">
+      <h4>{ballot ? "Voting results" : "Final order"}</h4>
+      {ballot && format ? (
+        <p className="an-votes__fmt">
+          {[format.voters ? `${format.voters} ballots` : "", format.body || "", curve ? `${curve} points` : ""]
+            .filter(Boolean)
+            .join(" · ")}
+        </p>
+      ) : null}
+      <div className="an-votes__row an-votes__head">
+        <span>#</span>
+        <span>Player</span>
+        <span>{ballot ? "1st" : ""}</span>
+        <span>{ballot ? "Pts" : "Total"}</span>
+      </div>
+      {rows.map((r, i) => {
+        const who = team ? null : resolvePlayer({ ...r, player_id: r.player_id ?? r.entity_id }, playerIndex, r.name);
+        const sub = [r.team_abbr || r.team_name, r.position, r.summary].filter(Boolean).join(" · ");
+        return (
+          <div key={`${r.entity_id || r.name}-${i}`} className={`an-votes__row${r.is_winner ? " is-winner" : ""}`}>
+            <span className="an-num">{toNum(r.rank) ?? i + 1}</span>
+            <span className="an-votes__who">
+              {who ? <PlayerHeadshot player={who} size="xs" mood="neutral" showFlag={false} /> : null}
+              <span className="an-votes__name">
+                <strong>{r.name}</strong>
+                {sub ? <small>{sub}</small> : null}
+              </span>
+            </span>
+            <em className="an-num">{ballot ? toNum(r.first_place_votes) ?? 0 : ""}</em>
+            <em className="an-num">
+              {ballot ? formatPoints(toNum(r.points) ?? 0) : formatStat(r.value) || ""}
+            </em>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function CitationBody({ slide, ev, finalists, playerIndex }) {
   const team = isTeamSlide(slide);
   const winnerCard = finalists.find((card) => isWinnerCard(card, slide)) || null;
@@ -735,7 +783,8 @@ function CitationBody({ slide, ev, finalists, playerIndex }) {
   const order = [...finalists].sort((a, b) => (toNum(a?.rank) ?? 99) - (toNum(b?.rank) ?? 99));
   const hasBallot = Boolean(ballot) && toNum(ballot.first_place_votes) !== null;
   const hasRace = Boolean(race) && toNum(race.leader_value) !== null;
-  const hasResult = hasBallot || hasRace || order.length > 1;
+  const voteTable = safeArray(ev?.voting_table).filter((r) => r && r.name);
+  const hasResult = hasBallot || hasRace || order.length > 1 || voteTable.length > 0;
   const hasCase = why.length || stats.length || components.length;
 
   return (
@@ -758,7 +807,7 @@ function CitationBody({ slide, ev, finalists, playerIndex }) {
           {why.length ? (
             <div className="an-why">
               <h4>Why they won</h4>
-              {why.slice(0, 4).map((line) => (
+              {why.slice(0, 5).map((line) => (
                 <p key={line}>{line}</p>
               ))}
             </div>
@@ -838,7 +887,9 @@ function CitationBody({ slide, ev, finalists, playerIndex }) {
               </>
             ) : null}
 
-            {order.length > 1 ? (
+            {voteTable.length ? (
+              <VoteTable table={voteTable} format={ev?.ballot_format} playerIndex={playerIndex} team={team} />
+            ) : order.length > 1 ? (
               <div className="an-order">
                 <h4>Final order</h4>
                 {order.map((card, i) => {

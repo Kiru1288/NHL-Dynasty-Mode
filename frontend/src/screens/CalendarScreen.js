@@ -1913,7 +1913,7 @@ function CalendarScreen(props = {}) {
 
         if (status === "blocked") {
           const reason = String(lastStep?.reason || step?.reason || "").toLowerCase();
-          if (reason === "incomplete_lines") {
+          if (reason === "incomplete_lines" || reason === "goalie_shortage") {
             setAdvanceBlockedMessage(
               String(lastStep?.message || step?.message || "Fill every even-strength slot before simulating.")
             );
@@ -1926,8 +1926,8 @@ function CalendarScreen(props = {}) {
         const bulkStopped = String(step?.stopped_reason || "").toLowerCase();
 
         if (step?.bulk && bulkCompleted <= 0) {
-          if (bulkStopped === "pending_decisions" || bulkStopped === "incomplete_lines") {
-            if (bulkStopped === "incomplete_lines") {
+          if (bulkStopped === "pending_decisions" || bulkStopped === "incomplete_lines" || bulkStopped === "goalie_shortage") {
+            if (bulkStopped === "incomplete_lines" || bulkStopped === "goalie_shortage") {
               setAdvanceBlockedMessage(
                 String(lastStep?.message || step?.message || "Fill every even-strength slot before simulating.")
               );

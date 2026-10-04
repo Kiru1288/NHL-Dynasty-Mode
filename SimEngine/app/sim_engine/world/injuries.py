@@ -658,6 +658,7 @@ def maybe_injure_roster_subset(
     max_checks: int = 8,
     *,
     low_intensity: bool = False,
+    rate_mult: float = 1.0,
 ) -> List[Tuple[str, str, int, str]]:
     """
     Potentially injure a subset of a team's roster.
@@ -684,7 +685,7 @@ def maybe_injure_roster_subset(
     checks = max(0, min(int(max_checks), len(roster)))
 
     for player in roster[:checks]:
-        p_inj = _injury_probability(player, chaos_index, low_intensity)
+        p_inj = _injury_probability(player, chaos_index, low_intensity) * max(0.0, float(rate_mult or 1.0))
 
         if rng.random() >= p_inj:
             continue

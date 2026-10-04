@@ -131,6 +131,12 @@ def _team_contract_slots_payload(team: Any, league: Any = None) -> Dict[str, Any
 def _trade_context(session: Any) -> Dict[str, Any]:
     sim = session.sim
     league = getattr(sim, "league", None)
+    if league is not None:
+        # Trade value reads current-season production from the live ledger.
+        try:
+            setattr(league, "player_season_stats", getattr(session, "player_season_stats", None))
+        except Exception:
+            pass
     cal = getattr(session, "nhl_calendar", None) or []
     cursor = int(getattr(session, "calendar_cursor", 0) or 0)
     max_d = max(40, int(getattr(session, "nhl_regular_season_last_index", 192) or 192))
@@ -156,6 +162,14 @@ def _trade_context(session: Any) -> Dict[str, Any]:
     draft_day_live = bool(draft_state.get("draft_started")) and not bool(
         draft_state.get("draft_completed") or draft_done
     )
+    # Clause consents (NMC / NTC waivers) are windowed: drop expired ones first.
+    from app.sim_engine.trades.clause_consent import prune_expired_consents, waiver_window
+
+    try:
+        prune_expired_consents(session)
+    except Exception:
+        pass
+    clause_window = waiver_window(session)
     return {
         "sim": sim,
         "league": league,
@@ -179,7 +193,15 @@ def _trade_context(session: Any) -> Dict[str, Any]:
         "transcendent_active": bool(getattr(session, "transcendent_draft_prospect_id", None)),
         "standings": getattr(session, "standings", None),
         "ntc_waivers": dict(getattr(session, "ntc_waivers", None) or {}),
+        "clause_consent_authoritative": True,
+        "clause_window_key": clause_window.get("key"),
         "player_season_stats": getattr(session, "player_season_stats", None),
+        # Rare "offer you can't refuse" packages the Trade Finder surfaced: still legal,
+        # but the desperate club has already agreed to the price.
+        "desperate_offer_keys": {
+            k for k, exp in (getattr(session, "_desperate_offers", None) or {}).items()
+            if int(exp or 0) >= int(cursor or 0)
+        },
     }
 
 
@@ -207,29 +229,12 @@ def request_ntc_waiver(
     if player is None:
         raise ValueError(f"Player {player_id} not found on {source_team_id} NHL roster")
 
-    cache = getattr(session, "ntc_waivers", None)
-    if not isinstance(cache, dict):
-        cache = {}
-        session.ntc_waivers = cache
-    cache_key = f"{player_id}->{destination_team_id}"
-    cached = cache.get(cache_key)
-    if isinstance(cached, dict) and str(cached.get("destination_team_id") or "") == str(destination_team_id):
-        out = dict(cached)
-        out["cached"] = True
-        return out
+    from app.sim_engine.trades.clause_consent import request_clause_waiver
 
-    decision = evaluate_ntc_waiver_request(
-        player,
-        source_team=src,
-        destination_team=dest,
-        context=ctx,
+    decision = request_clause_waiver(
+        session, player, source_team=src, destination_team=dest, origin="trade_hub",
+        team_by_id=team_by_id, context=ctx,
     )
-    decision["cached"] = False
-    if decision.get("can_request") or decision.get("accepted") or decision.get("reason_code") == "no_ntc":
-        cache[cache_key] = dict(decision)
-        if decision.get("accepted"):
-            cache[str(player_id)] = dict(decision)
-        session.ntc_waivers = cache
     return decision
 
 
@@ -435,6 +440,10 @@ def execute_franchise_trade(
                 if str((a or {}).get("type") or "") in ("player", "prospect"):
                     moved.append(str((a or {}).get("id") or ""))
         clear_demands_on_trade(session, moved)
+        if exec_result and (not isinstance(exec_result, dict) or exec_result.get("ok", True)):
+            from app.sim_engine.trades.clause_consent import consume_consents
+
+            consume_consents(session, moved)
     except Exception:
         pass
 
@@ -556,6 +565,9 @@ def build_trade_assets_payload(session: Any) -> Dict[str, Any]:
             value_hint_fn=lambda row, _team=team: pick_value_hint(row, league, _team, context=ctx),
             min_year=int(ctx.get("tradeable_draft_year") or ctx.get("draft_year") or ctx["season_year"]),
         )
+        # NHL rule: only picks in the next three drafts can be traded.
+        _first_draft = int(ctx.get("tradeable_draft_year") or ctx.get("draft_year") or ctx["season_year"])
+        picks = [it for it in picks if int(it.get("year") or 0) <= _first_draft + 2]
         for item in picks:
             orig_tid = str(item.get("original_team_id") or tid)
             orig_team = (ctx["team_by_id"] or {}).get(orig_tid) or team

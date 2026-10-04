@@ -1329,7 +1329,9 @@ def test_low_ovr_youth_cannot_mint_superstar_trade_value():
     v_depth = float(evaluate_player_asset_value(depth, team, team, league)["total"])
     v_star = float(evaluate_player_asset_value(star, team, team, league)["total"])
     assert v_star > v_depth
-    assert v_depth < 55
+    # v14: an 88-POT teenager is worth about a late 1st (~57), never star money.
+    assert v_depth < 65
+    assert v_star > v_depth * 1.5
 
 
 def test_team_needs_uses_01_scale_not_display_ovr():

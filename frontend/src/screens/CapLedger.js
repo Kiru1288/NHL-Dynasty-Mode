@@ -1169,7 +1169,7 @@ function RfaSheetsTab({
               <input
                 type="number"
                 min="1"
-                max="8"
+                max={Math.max(1, Number(data?.signing_bonus?.max_term_ufa || 6))}
                 value={sheetDraft.years}
                 onChange={(e) => setSheetDraft((d) => ({ ...d, years: e.target.value }))}
               />
@@ -1617,7 +1617,14 @@ export default function CapLedger() {
             key={t.id}
             type="button"
             className={`cap-ledger-tab ${tab === t.id ? "cap-ledger-tab-active is-active" : ""}`}
-            onClick={() => selectTab(t.id)}
+            onClick={() => {
+              // Free agency lives on one screen — the wire — so the tab goes straight there.
+              if (t.id === "freeAgents" && typeof setScreen === "function") {
+                setScreen(SCREENS.FREE_AGENCY);
+                return;
+              }
+              selectTab(t.id);
+            }}
           >
             {t.label}
           </button>

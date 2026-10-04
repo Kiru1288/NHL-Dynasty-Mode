@@ -1800,6 +1800,31 @@
   background: rgba(18, 38, 65, 0.98);
 }
 
+/* User's own org prospects stand out in the NHL-prospect tracker. */
+.wjc-page-prospect-row.is-user-org {
+  background: rgba(46, 36, 8, 0.97);
+  box-shadow: inset 3px 0 0 #f2c14e;
+}
+
+.wjc-page-prospect-row.is-user-org:hover {
+  background: rgba(64, 50, 12, 0.98);
+}
+
+.wjc-user-org-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  color: #1a1404;
+  background: #f2c14e;
+}
+
 .wjc-page-prospect-row__identity {
   display: flex;
   align-items: center;
@@ -3332,4 +3357,31 @@ td.wjc-empty-inline {
   .wjc-page-header__flags {
     display: block;
   }
+}
+/* Prospect row meta: one line, not stacked */
+.wjc-page-prospect-row__identity .wjc-page-prospect-row__meta {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Box score: NHL rights holder bracket */
+.wjc-game-modal .wjc-box-org {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(19, 216, 231, 0.12);
+  color: #8fe9f2;
+  font-size: 0.82em;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+.wjc-game-modal .wjc-box-org.is-user-org {
+  background: rgba(242, 193, 78, 0.18);
+  color: #f2c14e;
+}
+.wjc-game-modal .wjc-box-name.is-user-org {
+  color: #f2c14e;
+  font-weight: 700;
 }

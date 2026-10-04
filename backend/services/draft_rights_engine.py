@@ -438,6 +438,39 @@ def _rights_action_tradeoffs(player: Any, action: Dict[str, Any], env: Dict[str,
     }
 
 
+def _rights_profile_extras(player: Any, ovr: float) -> Dict[str, Any]:
+    """Bio, potential, this season's stat line and headshot for the Rights Desk profile."""
+    extra: Dict[str, Any] = {}
+    ident = getattr(player, "identity", None)
+    try:
+        from app.sim_engine.trades.trade_value import _player_potential_ovr
+
+        pot = _player_potential_ovr(player, float(ovr or 0))
+        if pot and pot > 0:
+            extra["potential"] = int(round(pot))
+    except Exception:
+        pass
+    for key, attr in (("height", "height"), ("weight", "weight"), ("shoots", "shoots"), ("nationality", "nationality"), ("birthplace", "birthplace")):
+        v = getattr(ident, attr, None) if ident is not None else None
+        if v is None:
+            v = getattr(player, attr, None)
+        if v not in (None, ""):
+            extra[key] = v if isinstance(v, (int, float, str)) else str(v)
+    stats = getattr(player, "_prospect_season_stats", None)
+    if isinstance(stats, dict) and int(stats.get("gp") or stats.get("games_played") or 0) > 0:
+        keep = ("gp", "goals", "assists", "points", "plus_minus", "pim", "ppg", "wins", "losses", "save_pct", "gaa", "shutouts", "stock_label")
+        line = {k: stats.get(k) for k in keep if stats.get(k) is not None}
+        line["league"] = getattr(player, "current_league_id", None) or getattr(player, "post_draft_league", None)
+        extra["season_stats"] = line
+    try:
+        from app.sim_engine.generation.player_headshots import merge_headshot_into_row
+
+        merge_headshot_into_row(extra, player)
+    except Exception:
+        pass
+    return extra
+
+
 def rights_card_payload(player: Any, *, team: Any = None, season_year: Optional[int] = None) -> Dict[str, Any]:
     expiry = getattr(player, "rights_expiry_year", None)
     path = str(getattr(player, "development_path", "") or getattr(player, "post_draft_league", "") or "")
@@ -513,6 +546,7 @@ def rights_card_payload(player: Any, *, team: Any = None, season_year: Optional[
         "draft_pick_original_team_id": getattr(player, "draft_pick_original_team_id", None),
         "draft_pick_was_traded": bool(getattr(player, "draft_pick_was_traded", False)),
     }
+    out.update(_rights_profile_extras(player, ovr))
     # Structured ELC negotiation payload (authoritative — do not invent in UI)
     if season_year is not None:
         try:

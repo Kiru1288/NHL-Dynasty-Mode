@@ -12,6 +12,8 @@ from app.sim_engine.economy.cap_engine import (
     can_trade_contract_slots_fit,
     player_cap_hit_millions,
     _retained_slots_used,
+    max_retained_slots,
+    max_retention_pct,
 )
 from app.sim_engine.trades.trade_asset import (
     DraftPickTradeAsset,
@@ -44,6 +46,24 @@ _APPROVED_DEST_FIELDS = (
     "approved_destinations",
     "no_trade_list",
 )
+
+
+class _DictView:
+    """Attribute access over a contract dict (missing keys → AttributeError → getattr default)."""
+
+    __slots__ = ("_d",)
+
+    def __init__(self, d: Dict[str, Any]) -> None:
+        self._d = d
+
+    def __getattr__(self, key: str) -> Any:
+        try:
+            return self._d[key]
+        except KeyError:
+            raise AttributeError(key) from None
+
+    def __bool__(self) -> bool:
+        return True
 
 
 def _approved_trade_destinations(player: Any) -> List[str]:
@@ -127,8 +147,21 @@ def _player_returning_to_prior_club(player: Any, acquiring_team_id: str, context
         return True
 
 
+def _dest_retained_on_player(team: Any, player_id: Any) -> bool:
+    pid = str(player_id or "")
+    for rec in list(getattr(team, "retained_salary_records", None) or []) if team is not None else []:
+        rid = rec.get("player_id") if isinstance(rec, dict) else getattr(rec, "player_id", None)
+        if str(rid or "") == pid:
+            return True
+    return False
+
+
 def _clause_summary(player: Any) -> Dict[str, Any]:
     c = getattr(player, "contract", None)
+    if isinstance(c, dict):
+        # Contracts are stored as dicts; getattr() on a dict always returned the default,
+        # so NMC / NTC / M-NTC were invisible to the rules engine.
+        c = _DictView(c)
     clauses = getattr(c, "clauses", None) if c else None
     nmc = bool(
         getattr(clauses, "noMoveClause", False)
@@ -235,24 +268,49 @@ def evaluate_ntc_waiver_request(
     context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Ask a player with a full NTC whether they will waive for a destination.
-    Deterministic per (player, destination, season cursor) so re-asks do not re-roll.
+    Preview whether a protected player (NMC / NTC / M-NTC) would waive for a destination.
+
+    Pure: records nothing. The roll is seeded by player + season + waiver window only
+    (``context["clause_window_key"]``), so the answer never changes by re-asking. Session
+    flows (meetings, Trade Hub) go through ``clause_consent.request_clause_waiver``, which
+    also enforces the no-re-ask rule and stores consent.
     """
     ctx = context or {}
     clause = _clause_summary(player)
     pname = player_display_name(player)
     if clause.get("nmc"):
+        from app.sim_engine.trades.clause_consent import destination_chance
+
+        pid = str(getattr(player, "id", "") or "")
+        season = int(ctx.get("season_year", 2025) or 2025)
+        window_key = str(ctx.get("clause_window_key") or f"{season}-in")
+        chance = destination_chance(
+            player,
+            source_team=source_team,
+            destination_team=destination_team,
+            context=ctx,
+            rel_adj=float(ctx.get("waiver_rel_adj") or 0.0),
+        )
+        roll = _stable_unit_roll(f"clause-waive|{pid}|{season}|{window_key}")
+        accepted = roll < chance
         return {
-            "ok": False,
-            "accepted": False,
-            "can_request": False,
-            "player_id": str(getattr(player, "id", "") or ""),
+            "ok": True,
+            "accepted": bool(accepted),
+            "can_request": True,
+            "player_id": pid,
             "player_name": pname,
             "clause_label": "NMC",
-            "reason": "No-movement clause cannot be waived for a trade.",
-            "reason_code": "nmc_hard_block",
-            "accept_chance": 0.0,
-            "value_penalty_pct": 0.0,
+            "reason": (
+                "Willing to waive his no-movement clause for this move"
+                if accepted
+                else "Not willing to waive his no-movement clause"
+            ),
+            "reason_code": "nmc_waive" if accepted else "nmc_decline",
+            "accept_chance": round(chance, 3),
+            "roll": round(roll, 4),
+            "destination_team_id": str(getattr(destination_team, "team_id", None) or getattr(destination_team, "id", "") or ""),
+            "source_team_id": str(getattr(source_team, "team_id", None) or getattr(source_team, "id", "") or ""),
+            "value_penalty_pct": 0.08 if accepted else 0.0,
         }
     if not clause.get("ntc") and not (clause.get("mntc", 0) > 0 and not clause.get("ntc")):
         # Full NTC only for this flow; M-NTC uses destination list unless destination blocked.
@@ -293,35 +351,22 @@ def evaluate_ntc_waiver_request(
     src_quality = _team_strength_proxy(source_team, ctx)
     dest_window = str(getattr(destination_team, "gm_window", None) or getattr(destination_team, "window", "") or "").lower()
 
-    age = 28
-    try:
-        ident = getattr(player, "identity", None)
-        age = int(getattr(ident, "age", None) or getattr(player, "age", 28) or 28)
-    except Exception:
-        age = 28
+    from app.sim_engine.trades.clause_consent import destination_chance
 
-    chance = 0.38
-    chance += (dest_quality - 0.45) * 0.55
-    if dest_market == "large":
-        chance += 0.10
-    elif dest_market == "small":
-        chance -= 0.14
-    if "contend" in dest_window:
-        chance += 0.12
-    if "rebuild" in dest_window or "tank" in dest_window:
-        chance -= 0.16
-    if dest_quality + 0.08 < src_quality:
-        chance -= 0.10
-    if age >= 33:
-        chance -= 0.08
-    elif age <= 26:
-        chance += 0.04
-    chance = max(0.08, min(0.82, chance))
+    chance = destination_chance(
+        player,
+        source_team=source_team,
+        destination_team=destination_team,
+        context=ctx,
+        rel_adj=float(ctx.get("waiver_rel_adj") or 0.0),
+    )
 
-    cursor = int(ctx.get("calendar_cursor", 0) or 0)
+    # One seeded roll per player + season + waiver window (was per week + destination,
+    # which let a GM re-roll by waiting a week or swapping partners).
     season = int(ctx.get("season_year", 2025) or 2025)
+    window_key = str(ctx.get("clause_window_key") or f"{season}-in")
     pid = str(getattr(player, "id", "") or "")
-    roll = _stable_unit_roll(f"ntc-waive|{season}|{cursor // 7}|{pid}|{dest_id}|{src_id}")
+    roll = _stable_unit_roll(f"clause-waive|{pid}|{season}|{window_key}")
     accepted = roll < chance
 
     decline_reasons = []
@@ -376,22 +421,28 @@ def evaluate_ntc_waiver_request(
 
 
 def _asset_has_ntc_waiver(asset: PlayerTradeAsset, context: Optional[Dict[str, Any]] = None) -> bool:
-    if bool(getattr(asset, "ntc_waived", False)):
-        return True
-    raw = getattr(asset, "raw", None) or {}
-    if bool(raw.get("ntc_waived") or raw.get("ntcWaived") or raw.get("clause_waived")):
-        return True
-    waivers = (context or {}).get("ntc_waivers") or {}
-    if not isinstance(waivers, dict):
-        return False
-    key = str(asset.player_id)
-    entry = waivers.get(key) or waivers.get(f"{key}->{asset.acquiring_team_id}")
-    if isinstance(entry, dict):
-        if not bool(entry.get("accepted")):
-            return False
-        dest = str(entry.get("destination_team_id") or "")
-        return (not dest) or dest == str(asset.acquiring_team_id)
-    return bool(entry)
+    """True when the player has consented to this move (NMC / NTC / M-NTC waiver).
+
+    Franchise trades are authoritative: only the session's consent records count — a
+    client-sent ``ntc_waived`` flag is ignored, consent must match the destination,
+    the current waiver window and the club that holds the player.
+    """
+    from app.sim_engine.trades.clause_consent import consent_allows, lookup_consent
+
+    ctx = context or {}
+    if not ctx.get("clause_consent_authoritative"):
+        if bool(getattr(asset, "ntc_waived", False)):
+            return True
+        raw = getattr(asset, "raw", None) or {}
+        if bool(raw.get("ntc_waived") or raw.get("ntcWaived") or raw.get("clause_waived")):
+            return True
+    entry = lookup_consent(ctx.get("ntc_waivers") or {}, str(asset.player_id), str(asset.acquiring_team_id))
+    return consent_allows(
+        entry,
+        str(asset.acquiring_team_id),
+        window_key=ctx.get("clause_window_key"),
+        source_team_id=str(asset.source_team_id),
+    )
 
 
 def _season_label(context: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -405,6 +456,8 @@ def _season_label(context: Optional[Dict[str, Any]]) -> Optional[str]:
 
 def _contract_years_for_retention(player: Any) -> int:
     c = getattr(player, "contract", None)
+    if isinstance(c, dict):
+        c = _DictView(c)  # was always 0 for dict contracts → retention blocked on every trade
     for obj in (player, c):
         if obj is None:
             continue
@@ -494,9 +547,9 @@ def validate_trade_rules(
                 blocking.append(f"Duplicate player in trade package: {asset.player_id}")
             seen_players.add(asset.player_id)
 
-            if asset.retained_pct < 0 or asset.retained_pct > 50:
+            if asset.retained_pct < 0 or asset.retained_pct > max_retention_pct(league):
                 blocking.append(
-                    f"Retained salary for {asset.player_id} must be between 0% and 50% (got {asset.retained_pct}%)"
+                    f"Retained salary for {asset.player_id} must be between 0% and {max_retention_pct(league):.0f}% (got {asset.retained_pct}%)"
                 )
 
             src = team_by_id.get(asset.source_team_id)
@@ -535,9 +588,23 @@ def validate_trade_rules(
 
             pname = player_display_name(player)
             clause = _clause_summary(player)
+            approved_dests = clause.get("approved_destinations") or []
             if clause["nmc"]:
-                blocking.append(f"{pname} has a no-movement clause (NMC) and cannot be traded")
-                clause_impact.setdefault(asset.source_team_id, []).append(f"{pname}: NMC blocks trade")
+                # An NMC can be waived by the player (meeting or Trade Hub ask).
+                if _asset_has_ntc_waiver(asset, ctx):
+                    warnings.append(
+                        f"{pname} waived his NMC for this move — trade value slightly reduced"
+                    )
+                    clause_impact.setdefault(asset.source_team_id, []).append(
+                        f"{pname}: NMC waived for {asset.acquiring_team_id}"
+                    )
+                else:
+                    blocking.append(
+                        f"{pname} has a no-movement clause (NMC) — ask the player to waive before trading"
+                    )
+                    clause_impact.setdefault(asset.source_team_id, []).append(f"{pname}: NMC blocks trade (waiver required)")
+            elif clause["ntc"] and clause["mntc"] > 0 and str(asset.acquiring_team_id) in approved_dests:
+                pass  # modified NTC: destination already on his approved list
             elif clause["ntc"]:
                 if _asset_has_ntc_waiver(asset, ctx):
                     warnings.append(
@@ -569,20 +636,19 @@ def validate_trade_rules(
                     blocking.append("Modified no-trade clause requires approved destination.")
                     clause_impact.setdefault(asset.source_team_id, []).append(f"{pname}: M-NTC blocks trade")
 
-            if _player_recently_acquired(player, ctx):
-                blocking.append(f"{pname}: Recently acquired players cannot be traded yet.")
-
-            if _player_returning_to_prior_club(player, asset.acquiring_team_id, ctx):
+            # NHL rule: no waiting period after a trade. The only re-acquisition limit is that a
+            # club that retained salary on a player can't get him back within a year.
+            if _dest_retained_on_player(team_by_id.get(str(asset.acquiring_team_id)), asset.player_id):
                 blocking.append(
-                    f"{pname}: Cannot be traded back to {asset.acquiring_team_id} during the same season."
+                    f"{pname}: {asset.acquiring_team_id} retained salary on him — can't reacquire him within a year."
                 )
 
             if asset.retained_pct > 0:
                 retaining = team_by_id.get(asset.source_team_id)
                 slots_used = _retained_slots_used(retaining, season_label) if retaining else 0
-                if slots_used >= 3:
+                if slots_used >= max_retained_slots(league):
                     blocking.append(
-                        f"{asset.source_team_id} already uses the maximum of 3 retained-salary slots"
+                        f"{asset.source_team_id} already uses the maximum of {max_retained_slots(league)} retained-salary slots"
                     )
                 p_years = _contract_years_for_retention(player)
                 # An expiring contract is still running before the deadline — retaining on a
@@ -626,10 +692,11 @@ def validate_trade_rules(
                 continue
             if pick_round < 1 or pick_round > 7:
                 blocking.append(f"Pick round out of range for {pid}: {pick_round}")
-            if pick_year < draft_year or pick_year > draft_year + 7:
+            # NHL: only picks in the next three drafts may be traded.
+            if pick_year < draft_year or pick_year > draft_year + 2:
                 blocking.append(
-                    f"Pick year out of allowed range for {pid}: {pick_year} "
-                    f"(tradeable draft {draft_year}, season {season_year})"
+                    f"Only picks in the next three drafts ({draft_year}–{draft_year + 2}) can be traded — "
+                    f"the {pick_year} pick isn't tradeable yet"
                 )
             if not validate_pick_ownership(league, pid, asset.source_team_id):
                 blocking.append(
@@ -666,6 +733,32 @@ def validate_trade_rules(
             calendar_cursor=int(ctx.get("calendar_cursor", 0) or 0),
             regular_season_last_index=int(ctx.get("regular_season_last_index", 192) or 192),
         )
+        # Only players moving on/off the active NHL roster use a spot; AHL pieces go to the
+        # affiliate. Overflow is handled by same-day send-downs instead of killing the deal.
+        roster_out_n, roster_in_n, arriving_nhl = 0, 0, []
+        try:
+            from app.sim_engine.economy.cap_engine import _is_active_roster_player
+            from app.sim_engine.trades.roster_balance import demotion_capacity
+
+            for a in package.outgoing_by_team.get(tid, []):
+                if isinstance(a, PlayerTradeAsset):
+                    p, loc, _i = find_player_in_organization(team, a.player_id)
+                    if p is not None and loc == "nhl" and _is_active_roster_player(p):
+                        roster_out_n += 1
+            for a in package.incoming_by_team.get(tid, []):
+                if isinstance(a, PlayerTradeAsset):
+                    src = team_by_id.get(a.source_team_id)
+                    p, loc, _i = find_player_in_organization(src, a.player_id) if src is not None else (None, "", -1)
+                    if p is not None and loc == "nhl":
+                        roster_in_n += 1
+                        arriving_nhl.append(p)
+            roster_flex = demotion_capacity(
+                team,
+                leaving_ids=[str(a.player_id) for a in out_assets],
+                arriving=arriving_nhl,
+            )
+        except Exception:
+            roster_out_n, roster_in_n, roster_flex = None, None, 0
         cap_check = can_trade_cap_fit(
             team,
             outgoing,
@@ -677,7 +770,14 @@ def validate_trade_rules(
             regular_season_last_index=int(ctx.get("regular_season_last_index", 192) or 192),
             deadline_phase=float(ctx.get("deadline_phase", 0.0) or 0.0),
             season_label=season_label,
+            roster_out_n=roster_out_n,
+            roster_in_n=roster_in_n,
+            roster_flex=roster_flex,
         )
+        if int(cap_check.get("rosterSendDowns") or 0) > 0:
+            warnings.append(
+                f"{tid}: will assign {int(cap_check['rosterSendDowns'])} player(s) to the AHL to make roster room"
+            )
 
         before_usable = float(snap_before.get("usableCapSpace", 0.0))
         after_usable = float(cap_check.get("projectedCapSpace", before_usable))
@@ -705,10 +805,16 @@ def validate_trade_rules(
             if not partial_relief:
                 blocking.append(f"{tid}: {cap_check.get('reason', 'Cap validation failed')}")
 
-        proj_count = int(cap_check.get("projectedRosterCount", snap_before.get("activeRosterCount", 0)))
+        proj_raw = int(cap_check.get("projectedRosterCount", snap_before.get("activeRosterCount", 0)))
+        send_downs = int(cap_check.get("rosterSendDowns") or 0)
+        # Overflow players are assigned to the AHL as part of the deal, so the NHL roster
+        # after the trade is the post-assignment count (the hard org limit is 50 SPCs).
+        proj_count = proj_raw - send_downs
         roster_impact[tid] = {
             "before": int(snap_before.get("activeRosterCount", 0)),
             "after": proj_count,
+            "after_before_send_downs": proj_raw,
+            "send_downs": send_downs,
             "outgoing_players": len(outgoing),
             "incoming_players": len(incoming),
         }

@@ -21,7 +21,15 @@ function isRealWjcProspect(row) {
   if (!row || typeof row !== "object") return false;
   if (isWjcNpc(row)) return false;
   const cls = String(row.prospect_classification || "");
-  if (cls === "draft_eligible" || cls === "drafted_user") return true;
+  if (
+    cls === "draft_eligible" ||
+    cls === "drafted_user" ||
+    cls === "drafted_nhl" ||
+    cls === "junior_u20"
+  ) {
+    return true;
+  }
+  if (row.owner_team_abbr) return true;
   if (row.is_user_prospect) return true;
   if (row.draft_prospect_id) return true;
   return false;

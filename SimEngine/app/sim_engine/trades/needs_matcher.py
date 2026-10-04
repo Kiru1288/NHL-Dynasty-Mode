@@ -36,6 +36,7 @@ from app.sim_engine.trades.team_assessment import (
     need_fill_score,
     player_age,
     player_ovr,
+    player_rating,
     player_pid,
     position_group,
 )
@@ -77,11 +78,17 @@ def save_entropy_salt(league: Any) -> int:
     return int(salt)
 
 
-def on_the_block(league: Any, team_id: str, player: Any, season: int) -> bool:
-    """Whether club ``team_id`` is shopping ``player`` this season (stable per save + season)."""
+#: The trade block is re-decided every this many calendar days. It used to be fixed for a
+#: whole season, so the same ~half of each club's spares were the only names in play from
+#: October to the deadline.
+ON_THE_BLOCK_PERIOD_DAYS = 21
+
+
+def on_the_block(league: Any, team_id: str, player: Any, season: int, period: int = 0) -> bool:
+    """Whether club ``team_id`` is shopping ``player`` in this block period (stable per save)."""
     import zlib
 
-    key = f"block|{save_entropy_salt(league)}|{season}|{team_id}|{player_pid(player)}".encode("utf-8")
+    key = f"block|{save_entropy_salt(league)}|{season}|{period}|{team_id}|{player_pid(player)}".encode("utf-8")
     return (zlib.crc32(key) & 0xFFFFFFFF) / 0xFFFFFFFF < ON_THE_BLOCK_SHARE
 
 
@@ -230,8 +237,10 @@ def _status_fit(buyer: TeamAssessment, seller: TeamAssessment, item: SurplusItem
         fit += 0.25
     if seller.is_seller:
         fit += 0.4
-    elif item.reason in ("depth", "positional", "goalie", "blocked_prospect", "bad_contract", "locker_room"):
+    elif item.reason in ("depth", "positional", "goalie", "blocked_prospect", "bad_contract", "locker_room", "underperformer"):
         fit += 0.3
+    elif item.reason == "lineup_churn":
+        fit += 0.15
     # Rebuilders don't buy veterans; contenders don't buy blocked kids.
     if buyer.status == STATUS_TANK:
         fit -= 0.6
@@ -360,7 +369,7 @@ def _spare_roster_players(team: Any, a: TeamAssessment) -> List[Tuple[Any, str]]
     for g, plist in by_group.items():
         if g == "G":
             continue
-        plist.sort(key=player_ovr, reverse=True)
+        plist.sort(key=player_rating, reverse=True)
         for p in plist[keep.get(g, 2):]:
             slot, _ = slot_for_player(p, a)
             if a.needs.get(slot, 0.0) >= 0.35:
@@ -598,6 +607,7 @@ def generate_plans(
     # Which spare players each club is actually shopping this season (varies per save).
     # Problem players and cap dumps are always available — those clubs need them gone.
     season = int(ctx.get("season_year") or 0)
+    block_period = int(ctx.get("calendar_cursor", 0) or 0) // ON_THE_BLOCK_PERIOD_DAYS
     held: set = set()
     for tid, tm in team_by_tid.items():
         a = assessments.get(tid)
@@ -606,7 +616,7 @@ def generate_plans(
         pool = [i.player for i in a.surplus if i.reason not in ("locker_room", "bad_contract")]
         pool += [p for p, _ in _spare_roster_players(tm, a)]
         for p in pool:
-            if not on_the_block(league, tid, p, season):
+            if not on_the_block(league, tid, p, season, block_period):
                 held.add(player_pid(p))
     excluded = set(used_players) | held
 

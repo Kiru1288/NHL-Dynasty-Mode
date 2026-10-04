@@ -22,15 +22,38 @@ _MARKET_EXPENSE_RATIO = {
     "small": 0.86,
 }
 
+# NHL/NHLPA CBA extension (ratified July 2025): Sept 16 2026 – Sept 15 2030.
 _CBA_KEY_RULES = [
     "50/50 Revenue",
     "Hard Cap",
     "Escrow",
-    "7-Year UFA",
-    "8-Year Re-Sign",
-    "Entry Deals",
-    "No Tax Equalizer",
+    "7-Year Re-Sign",
+    "6-Year UFA",
+    "84 Games",
+    "Playoff Cap",
+    "20% Max Salary",
 ]
+_CBA_REAL_START = 2026  # season the current extension began (Sept 16 2026)
+_CBA_REAL_END = 2030  # expires Sept 15 2030
+_CBA_FUTURE_TERM_YEARS = 4  # simulated successor agreements
+
+# Franchise valuations (Sportico, Sept 2026, $B). Drives market tier + revenue base for
+# real NHL clubs; the old tiers came from a "very rough" city list that rated Edmonton
+# and Calgary as small markets.
+_TEAM_VALUE_B = {
+    "TOR": 4.8, "NYR": 4.15, "MTL": 3.8, "BOS": 3.31, "LAK": 3.3, "CHI": 3.24, "PHI": 3.15,
+    "EDM": 3.11, "NJD": 2.72, "NYI": 2.7, "WSH": 2.67, "VGK": 2.41, "DET": 2.4, "CGY": 2.24,
+    "CAR": 2.22, "TBL": 2.2, "COL": 2.18, "DAL": 2.17, "FLA": 2.15, "VAN": 2.05, "MIN": 1.97,
+    "ANA": 1.92, "SEA": 1.9, "NSH": 1.85, "SJS": 1.78, "PIT": 1.75, "UTA": 1.71, "STL": 1.7,
+    "OTT": 1.55, "BUF": 1.53, "WPG": 1.52, "CBJ": 1.5,
+}
+_TEAM_VALUE_AVG_B = sum(_TEAM_VALUE_B.values()) / len(_TEAM_VALUE_B)
+#: League-average in-season revenue base at the 2026-27 cap; scales with the cap.
+_REVENUE_BASE_AVG_M = 185.0
+_REVENUE_CAP_ANCHOR_M = 104.0
+#: Non-player operating costs as a share of revenue (arena, travel, staff, debt, ...).
+_OTHER_COST_RATIO = {"large": 0.36, "medium": 0.38, "small": 0.40}
+_FIXED_OPS_M = {"large": 50.0, "medium": 40.0, "small": 34.0}
 
 _RULE_CHANGE_TEMPLATES = [
     ("Cap Smoothing", "owners", 0.58),
@@ -84,15 +107,25 @@ def _revenue_yoy_delta(
     season_year: int,
     revenue: float,
     win_pct: float,
+    *,
+    summer: bool = False,
 ) -> Dict[str, Any]:
-    """Prefer persisted prior-season revenue; seed history when missing."""
-    history = getattr(session, "market_revenue_history", None)
+    """Prefer persisted prior-season revenue; seed history when missing.
+
+    Only full-season figures are stored and compared. The old history mixed summer
+    season-ticket books (~1/3 of a year) into the prior season, so every club showed a
+    huge revenue jump and the whole league read as "growing"."""
+    history = getattr(session, "market_revenue_history_v2", None)
     if not isinstance(history, dict):
         history = {}
         try:
-            session.market_revenue_history = history
+            session.market_revenue_history_v2 = history
         except Exception:
             pass
+    if summer:
+        prior_full = (history.get(str(team_id)) or {}).get(str(int(season_year) - 1))
+        return {"revenue_yoy_delta": 0.0, "revenue_yoy_direction": "flat",
+                "revenue_prior_m": round(float(prior_full), 1) if prior_full is not None else None}
 
     tid = str(team_id)
     team_hist = history.get(tid)
@@ -294,7 +327,88 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return lo if v < lo else hi if v > hi else v
 
 
+def _team_abbr_for_value(team: Any) -> str:
+    try:
+        from services.franchise_sim import _franchise_team_abbrev  # noqa: WPS433
+
+        v = str(_franchise_team_abbrev(team) or "").upper()
+        if v:
+            return v
+    except Exception:
+        pass
+    for key in ("abbreviation", "abbr", "abbrev"):
+        v = str(getattr(team, key, "") or "").upper()
+        if v:
+            return v
+    return ""
+
+
+def _team_value_b(team: Any) -> Optional[float]:
+    return _TEAM_VALUE_B.get(_team_abbr_for_value(team))
+
+
+def _gov(session: FranchiseSession, key: str, default: float = 0.0) -> float:
+    """Board of Governors modifier (league_governance) — 0 when no rule touches it."""
+    try:
+        from services.league_governance import gov_mod  # noqa: WPS433
+
+        return float(gov_mod(session, key, default))
+    except Exception:
+        return float(default)
+
+
+def _governance_value_b(session: FranchiseSession, team_id: str) -> Optional[float]:
+    try:
+        from services.league_governance import team_value_b  # noqa: WPS433
+
+        return team_value_b(session, team_id)
+    except Exception:
+        return None
+
+
+def _value_and_avg(session: FranchiseSession, team: Any, team_id: str) -> Tuple[Optional[float], float]:
+    """Franchise value ($B) and league average. Live values (they move every offseason
+    and with relocation/expansion) win over the Sept 2026 Sportico snapshot."""
+    gv = _governance_value_b(session, team_id)
+    if gv is not None:
+        try:
+            from services.league_governance import league_average_value  # noqa: WPS433
+
+            return gv, float(league_average_value(session))
+        except Exception:
+            return gv, _TEAM_VALUE_AVG_B
+    return _team_value_b(team), _TEAM_VALUE_AVG_B
+
+
+def _team_market_tier_live(session: FranchiseSession, team: Any, team_id: str) -> Tuple[str, str]:
+    val, avg = _value_and_avg(session, team, team_id)
+    if val is None:
+        return _team_market_tier(team)
+    if val >= avg * 1.18:
+        return "large", "Large"
+    if val <= avg * 0.72:
+        return "small", "Small"
+    return "medium", "Mid"
+
+
+def _cap_index(session: FranchiseSession) -> float:
+    """Revenue scales with the cap (the cap is set from revenue under the 50/50 split)."""
+    try:
+        from services.franchise_sim import ensure_session_nhl_salary_cap  # noqa: WPS433
+
+        return max(0.5, float(ensure_session_nhl_salary_cap(session)) / _REVENUE_CAP_ANCHOR_M)
+    except Exception:
+        return 1.0
+
+
 def _team_market_tier(team: Any) -> Tuple[str, str]:
+    val = _team_value_b(team)
+    if val is not None:
+        if val >= 3.0:
+            return "large", "Large"
+        if val <= 1.8:
+            return "small", "Small"
+        return "medium", "Mid"
     market = getattr(team, "market", None)
     raw = str(getattr(market, "market_size", "") or getattr(team, "market_size", "") or "medium").lower()
     if raw in ("large", "big", "major"):
@@ -724,13 +838,22 @@ def calculate_team_revenue(
     team_id: str,
     *,
     is_user: bool = False,
+    annual: bool = False,
 ) -> Dict[str, Any]:
+    """Club revenue/profit row. ``annual=True`` always returns the full-season model
+    (the summer "season tickets only" book is a partial-year number; using it for
+    decisions — bonus eligibility, budgets, votes — made every club look poor)."""
     from services.franchise_sim import _display_team, _franchise_team_abbrev  # noqa: WPS433
 
-    tier_key, tier_label = _team_market_tier(team)
-    base = _MARKET_BASE_REVENUE_M[tier_key]
+    tier_key, tier_label = _team_market_tier_live(session, team, team_id)
+    val_b, val_avg = _value_and_avg(session, team, team_id)
+    if val_b is not None:
+        base = _REVENUE_BASE_AVG_M * (val_b / max(0.1, val_avg)) ** 0.65
+    else:
+        base = _MARKET_BASE_REVENUE_M[tier_key]
+    base *= _cap_index(session)
     win_pct = _team_win_pct(session, team_id)
-    fan_sent = _team_fan_sentiment(session, team_id)
+    fan_sent = _clamp(_team_fan_sentiment(session, team_id) + _gov(session, "fan"), 0.0, 100.0)
     trade_heat = _team_trade_heat(session, team_id)
     stars = _team_star_metrics(team)
     arena = _team_arena_quality(team)
@@ -739,11 +862,18 @@ def calculate_team_revenue(
     global_draw = calculate_global_draw_revenue_boost(team)
     global_draw_m = _safe_float(global_draw.get("global_draw_revenue_boost", 0), 0.0)
 
+    # Board of Governors revenue levers (all 0 until a rule passes).
+    rev_mult = 1.0 + _gov(session, "rev_all") / 100.0
+    if tier_key == "small":
+        rev_mult += _gov(session, "rev_small") / 100.0
+    elif tier_key == "large":
+        rev_mult += _gov(session, "rev_large") / 100.0
+
     # Camp / summer: season-ticket book, not the full in-season gate.
-    if phase in ("preseason", "offseason"):
-        summer = _season_ticket_summer_revenue_m(tier_key)
+    if phase in ("preseason", "offseason") and not annual:
+        summer = _season_ticket_summer_revenue_m(tier_key) * _cap_index(session)
         fan_adj = 0.92 + (fan_sent / 100.0) * 0.14
-        revenue = summer * fan_adj
+        revenue = summer * fan_adj * rev_mult
         revenue += stars.get("star_power", 0) * 1.5
         # International interest still lifts summer merch / deposits.
         revenue += global_draw_m * 0.62
@@ -767,7 +897,7 @@ def calculate_team_revenue(
         relocation_risk = calculate_relocation_risk(team, revenue, profit, fan_sent, win_pct, tier_key)
         revenue_status = _revenue_status_label(profit, revenue, win_pct, relocation_risk)
         sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
-        yoy = _revenue_yoy_delta(session, team_id, sy, revenue, win_pct)
+        yoy = _revenue_yoy_delta(session, team_id, sy, revenue, win_pct, summer=True)
         abbr = _franchise_team_abbrev(team) if team is not None else ""
         name = _display_team(team) if team is not None else team_id
         row = {
@@ -830,11 +960,25 @@ def calculate_team_revenue(
         in_playoffs=in_playoffs,
     )
     superstar_m = _safe_float(star_boost.get("superstar_revenue_boost", 0), 0.0)
+    superstar_m *= max(0.0, 1.0 + _gov(session, "star_rev") / 100.0)
 
-    revenue = base * perf_mult * fan_mult * arena_mult
+    sy_rev = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    spike_m, spike_rows, honey_m, fee_m = 0.0, [], 0.0, 0.0
+    try:
+        from services.league_governance import fee_share_m, honeymoon_m, star_spike_m  # noqa: WPS433
+
+        spike_m, spike_rows = star_spike_m(session, team_id, sy_rev)
+        honey_m = honeymoon_m(session, team_id, sy_rev)
+        fee_m = fee_share_m(session, sy_rev)
+    except Exception:
+        pass
+
+    playoff_m = _playoff_revenue_bonus(session, team_id) * max(0.0, 1.0 + _gov(session, "playoff_rev") / 100.0)
+    revenue = base * perf_mult * fan_mult * arena_mult * rev_mult
     revenue += superstar_m
     revenue += global_draw_m
-    revenue += _playoff_revenue_bonus(session, team_id)
+    revenue += playoff_m
+    revenue += spike_m + honey_m + fee_m
 
     conduct_rev_mult = 1.0
     try:
@@ -852,18 +996,35 @@ def calculate_team_revenue(
     elif is_user and fan_sent < 45:
         revenue *= 0.94
 
-    expense_ratio = _MARKET_EXPENSE_RATIO[tier_key]
-    payroll_m = _safe_float(getattr(team, "payroll_m", 0) or 0)
+    payroll_m = 0.0
+    try:
+        from services.franchise_sim import _team_nhl_payroll_m  # noqa: WPS433
+
+        payroll_m = float(_team_nhl_payroll_m(team))
+    except Exception:
+        payroll_m = _safe_float(getattr(team, "payroll_m", 0) or 0)
     if payroll_m <= 0:
-        try:
-            from services.franchise_sim import _team_nhl_payroll_m  # noqa: WPS433
-
-            payroll_m = _team_nhl_payroll_m(team)
-        except Exception:
-            payroll_m = base * 0.55
-    expense_ratio += _clamp(payroll_m / max(base, 1.0) - 0.65, 0.0, 0.12) * 0.15
-
-    expenses = revenue * expense_ratio + payroll_m * 0.08
+        payroll_m = base * 0.55
+    # Player payroll is the largest cost (~half of revenue league-wide). It used to be
+    # counted at 8%, so spending to the cap barely moved profit and every club made money.
+    # Costs: payroll + fixed operations (arena, travel, staff) + variable costs, with the
+    # league's revenue sharing taking from the richest clubs and topping up the poorest.
+    # A flat 36-40% of revenue on top of payroll meant every club, even a small market
+    # with a cap-level payroll, turned a profit.
+    ci = _cap_index(session)
+    variable_ratio = max(0.14, 0.24 + _gov(session, "opex") / 100.0)
+    fixed_ops = _FIXED_OPS_M[tier_key] * ci
+    share_out = max(0.0, revenue - 220.0 * ci) * 0.18
+    share_in = max(0.0, 170.0 * ci - revenue) * 0.25
+    expenses = payroll_m + fixed_ops + revenue * variable_ratio + share_out - share_in
+    # Signing bonuses are paid in cash on top of cap-hit payroll (ELCs, UFA bonus deals).
+    bonus_cash_m = 0.0
+    try:
+        _sb = (getattr(session, "signing_bonus_cash", None) or {}).get(str(int(getattr(session, "season_calendar_year", 0) or 0))) or {}
+        bonus_cash_m = float((_sb.get(str(team_id)) or {}).get("total_m") or 0.0)
+    except Exception:
+        bonus_cash_m = 0.0
+    expenses += bonus_cash_m
     profit = revenue - expenses
     attendance_rate = _clamp(
         0.55
@@ -877,6 +1038,12 @@ def calculate_team_revenue(
 
     superstar_tags = list(star_boost.get("superstar_tags") or [])
     reason_tags: List[str] = list(global_draw.get("global_draw_tags") or []) + list(superstar_tags)
+    if spike_m > 0:
+        reason_tags.insert(0, "Star Spike")
+    if honey_m > 0:
+        reason_tags.insert(0, "New Market")
+    if fee_m > 0:
+        reason_tags.append("Expansion Fee")
     if tier_key == "large":
         reason_tags.append("Big Market")
     if win_pct >= 0.58:
@@ -905,10 +1072,16 @@ def calculate_team_revenue(
             deduped.append(tag)
     reason_tags = deduped[:2]
 
-    relocation_risk = calculate_relocation_risk(team, revenue, profit, fan_sent, win_pct, tier_key)
+    relocation_risk = _clamp(
+        calculate_relocation_risk(team, revenue, profit, fan_sent, win_pct, tier_key) + _gov(session, "relocation_ease"),
+        0.05,
+        0.95,
+    )
     revenue_status = _revenue_status_label(profit, revenue, win_pct, relocation_risk)
     sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
-    yoy = _revenue_yoy_delta(session, team_id, sy, revenue, win_pct)
+    yoy = _revenue_yoy_delta(session, team_id, sy, revenue, win_pct) if not annual else {
+        "revenue_yoy_delta": 0.0, "revenue_yoy_direction": "flat", "revenue_prior_m": None,
+    }
 
     abbr = _franchise_team_abbrev(team)
     name = _display_team(team)
@@ -927,6 +1100,7 @@ def calculate_team_revenue(
         "revenue": round(revenue, 1),
         "revenue_m": round(revenue, 1),
         "expenses": round(expenses, 1),
+        "signing_bonus_cash_m": round(bonus_cash_m, 2),
         "profit": round(profit, 1),
         "attendance_rate": round(attendance_rate, 3),
         "fan_sentiment": round(fan_sent, 1),
@@ -951,6 +1125,12 @@ def calculate_team_revenue(
         "conduct_revenue_modifier": round(conduct_rev_mult, 3),
         "is_user": bool(is_user),
         "revenue_profile": "in_season",
+        "payroll_m": round(payroll_m, 1),
+        "franchise_value_b": round(val_b, 2) if val_b is not None else None,
+        "star_spike_m": round(spike_m, 1),
+        "star_spike_players": [r.get("player") for r in spike_rows][:3],
+        "relocation_honeymoon_m": round(honey_m, 1),
+        "expansion_fee_m": round(fee_m, 1),
         "win_pct": round(win_pct, 3),
         "arena_quality": round(arena, 3),
     }
@@ -1005,6 +1185,28 @@ def _relocation_label(risk: float) -> str:
     return "Low"
 
 
+def _apply_revenue_sharing(session: FranchiseSession, team_rows: List[Dict[str, Any]]) -> None:
+    """Board-voted revenue sharing: ``revenue_share`` points of large-market revenue
+    move to small markets (negative = the pool shrinks back toward large markets)."""
+    pts = _gov(session, "revenue_share")
+    if abs(pts) < 1e-6:
+        return
+    large = [r for r in team_rows if r.get("market_tier_key") == "large"]
+    small = [r for r in team_rows if r.get("market_tier_key") == "small"]
+    if not large or not small:
+        return
+    pool = sum(_safe_float(r.get("revenue")) for r in large) * pts / 100.0
+    per_large = pool / len(large)
+    per_small = pool / len(small)
+    for r, delta in [(r, -per_large) for r in large] + [(r, per_small) for r in small]:
+        r["revenue"] = round(_safe_float(r.get("revenue")) + delta, 1)
+        r["revenue_m"] = r["revenue"]
+        r["profit"] = round(_safe_float(r.get("profit")) + delta, 1)
+        r["revenue_sharing_m"] = round(delta, 1)
+        if delta > 0 and "Revenue Sharing" not in (r.get("reason_tags") or []):
+            r["reason_tags"] = (["Revenue Sharing"] + list(r.get("reason_tags") or []))[:2]
+
+
 def calculate_league_revenue(teams: List[Dict[str, Any]]) -> float:
     return round(sum(_safe_float(t.get("revenue", 0)) for t in teams), 1)
 
@@ -1039,15 +1241,17 @@ def calculate_escrow_progress(
             }
             ledger[sy] = season_row
         else:
-            # Blend toward current formula so health shifts move the ledger without wiping history.
-            prev = _safe_float(season_row.get("collected_m"), collected_formula)
+            # Deterministic: the old 65/35 blend ran on every payload rebuild, so escrow
+            # depended on how often the screen was opened, and the preseason→regular
+            # revenue jump dragged it to ~72% for two months (a false "Cap Freeze").
             season_row["target_m"] = target
-            season_row["collected_m"] = round(prev * 0.65 + collected_formula * 0.35, 1)
+            season_row["collected_m"] = collected_formula
             entries = season_row.get("entries")
             if not isinstance(entries, list):
                 entries = []
                 season_row["entries"] = entries
-            if len(entries) < 48:
+            day = int(getattr(session, "calendar_cursor", 0) or 0)
+            if len(entries) < 48 and (not entries or int(entries[-1].get("day", -1)) != day):
                 entries.append(
                     {
                         "day": int(getattr(session, "calendar_cursor", 0) or 0),
@@ -1068,82 +1272,127 @@ def calculate_escrow_progress(
     }
 
 
+def _cap_type_for_pct(pct: float) -> str:
+    if pct <= -0.003:
+        return "Rare Drop"
+    if pct < 0.003:
+        return "Cap Freeze"
+    if pct < 0.02:
+        return "Flat Cap"
+    if pct < 0.06:
+        return "Small Rise"
+    return "Big Jump"
+
+
+def _model_cap_growth(league_state: Dict[str, Any]) -> float:
+    """Revenue-model growth for seasons with no announced range (fraction per season)."""
+    escrow = _safe_float(league_state.get("escrow_progress", 1.0), 1.0)
+    losing = _safe_int(league_state.get("losing_teams_count", 0), 0)
+    health = _safe_float(league_state.get("revenue_health", 0.6), 0.6)
+    cba = _safe_float(league_state.get("cba_pressure", 0.3), 0.3)
+    g = 0.04 + (health - 0.65) * 0.10 + _clamp(escrow - 1.0, -0.1, 0.1) * 0.15 - max(0, losing - 10) / 32.0 * 0.05
+    if cba >= 0.72:
+        g *= 0.65
+    # Cap era: largest single-season jump is ~12% (2028-29 est.); declines are rare and small.
+    return _clamp(g, -0.025, 0.08)
+
+
+def _known_cap(session: FranchiseSession, year: int) -> Optional[float]:
+    """Announced range or a cap already set for that season at rollover."""
+    from app.sim_engine.economy.cap_engine import NHL_UPPER_LIMIT_BY_SEASON_START  # noqa: WPS433
+
+    league = getattr(getattr(session, "sim", None), "league", None)
+    sched = getattr(league, "cap_schedule_m", None) if league is not None else None
+    if isinstance(sched, dict):
+        for k, v in sched.items():
+            try:
+                if int(k) == int(year):
+                    return float(v)
+            except (TypeError, ValueError):
+                continue
+    if int(year) in NHL_UPPER_LIMIT_BY_SEASON_START:
+        return float(NHL_UPPER_LIMIT_BY_SEASON_START[int(year)])
+    return None
+
+
 def calculate_salary_cap_projection(
     session: FranchiseSession,
     league_state: Dict[str, Any],
 ) -> Dict[str, Any]:
+    """Next season's cap: the announced range when one exists (2027-28 $113.5M,
+    2028-29 est. $127.5M), otherwise the revenue model. The old version ignored the
+    announced ranges and keyed a "Cap Freeze" off a drifting escrow number."""
     from services.franchise_sim import ensure_session_nhl_salary_cap  # noqa: WPS433
 
     current_cap = float(ensure_session_nhl_salary_cap(session))
+    sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    known = _known_cap(session, sy + 1)
+    growth = _model_cap_growth(league_state) + _gov(session, "cap_growth") / 100.0
+    board_adjust = 0.0
+    try:
+        from services.league_governance import pending_cap_adjust  # noqa: WPS433
 
-    escrow_progress = _safe_float(league_state.get("escrow_progress", 1.0), 1.0)
-    losing_teams = _safe_int(league_state.get("losing_teams_count", 0), 0)
-    small_market_break_even = _safe_float(league_state.get("small_market_break_even", 0.5), 0.5)
-    revenue_health = _safe_float(league_state.get("revenue_health", 0.55), 0.55)
-    cba_pressure = _safe_float(league_state.get("cba_pressure", 0.3), 0.3)
+        board_adjust = float(pending_cap_adjust(session))
+    except Exception:
+        board_adjust = 0.0
+    if known is not None:
+        projected = round(known, 2)
+        from app.sim_engine.economy.cap_engine import NHL_UPPER_LIMIT_BY_SEASON_START  # noqa: WPS433
 
-    if escrow_progress >= 1.05 and small_market_break_even >= 0.75:
-        cap_change_type = "Big Jump"
-        delta_pct = 0.068
-    elif escrow_progress >= 1.0 and losing_teams <= 8:
-        cap_change_type = "Small Rise"
-        delta_pct = 0.032
-    elif losing_teams >= 22 or revenue_health < 0.45:
-        cap_change_type = "Rare Drop"
-        delta_pct = -0.018
-    elif losing_teams >= 15:
-        cap_change_type = "Flat Cap"
-        delta_pct = 0.004
-    elif escrow_progress < 0.92:
-        cap_change_type = "Cap Freeze"
-        delta_pct = 0.0
+        if (sy + 1) in NHL_UPPER_LIMIT_BY_SEASON_START:
+            source = "announced" if (sy + 1) <= 2027 else "league_estimate"
+        else:
+            source = "set"
     else:
-        cap_change_type = "Small Rise"
-        delta_pct = 0.022
-
-    if cba_pressure >= 0.72:
-        delta_pct *= 0.65
-
-    projected = round(current_cap * (1.0 + delta_pct), 2)
+        projected = round(round(current_cap * (1.0 + growth) * 2.0) / 2.0, 2)
+        source = "model"
+    if board_adjust:
+        projected = round(round((projected + board_adjust) * 2.0) / 2.0, 2)
     cap_change = round(projected - current_cap, 2)
+    pct = cap_change / current_cap if current_cap > 0 else 0.0
+    cap_change_type = _cap_type_for_pct(pct)
 
     return {
         "salary_cap": round(current_cap, 2),
         "projected_salary_cap": projected,
         "cap_change": cap_change,
+        "cap_change_pct": round(pct * 100.0, 1),
         "cap_change_type": cap_change_type,
+        "cap_projection_source": source,
+        "board_cap_adjust_m": round(board_adjust, 2),
+        "model_growth_pct": round(growth * 100.0, 1),
         "cap_tags": _CAP_TAGS.get(cap_change_type, ["Flat Risk"]),
         "cap_gauge_position": _CAP_GAUGE_POSITION.get(cap_change_type, 48),
     }
 
 
 def build_cap_forecast_series(session: FranchiseSession, cap: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Authoritative multi-year sketch from current + next scalars (not a full HRR model)."""
-    from app.sim_engine.economy.cap_engine import nhl_upper_limit_millions  # noqa: WPS433
-
+    """Five seasons: announced/set caps where known, then the revenue model compounding
+    from the last known season. (Was a blend with a fixed 8%-per-year table.)"""
     sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
-    current = _safe_float(cap.get("salary_cap"), nhl_upper_limit_millions(sy))
-    projected = _safe_float(cap.get("projected_salary_cap"), current)
-    growth = projected - current
-    if abs(growth) < 0.05:
-        growth = current * 0.025
-    uncertainty = max(0.8, abs(growth) * 0.35 + 1.2)
+    current = _safe_float(cap.get("salary_cap"), 0.0)
+    growth = _safe_float(cap.get("model_growth_pct"), 4.5) / 100.0
     series: List[Dict[str, Any]] = []
+    prev = current
+    est_steps = 0
     for i in range(5):
         year = sy + i
-        if i == 0:
-            value = current
-            source = "current"
-        elif i == 1:
-            value = projected
-            source = "projected_next"
+        known = current if i == 0 else _known_cap(session, year)
+        if i == 1 and known is None:
+            known = _safe_float(cap.get("projected_salary_cap"), 0.0) or None
+            src_next = "projected_next"
         else:
-            # Blend model growth with published NHL table when available.
-            table = nhl_upper_limit_millions(year)
-            extrapolated = current + growth * i * (0.85 + (0.92 ** i) * 0.2)
-            value = round((table * 0.55 + extrapolated * 0.45), 1)
+            src_next = None
+        if known is not None:
+            value = known
+            source = "current" if i == 0 else (src_next or ("announced" if year <= 2027 else "estimate"))
+            band = 0.0 if source in ("current", "announced") else 2.0
+        else:
+            est_steps += 1
+            value = round(prev * (1.0 + growth) * 2.0) / 2.0
             source = "extrapolated"
-        band = uncertainty * (0.7 + i * 0.35)
+            band = 2.5 + est_steps * 2.0
+        prev = value
         series.append(
             {
                 "year": year,
@@ -1169,12 +1418,20 @@ def calculate_cba_pressure(league_state: Dict[str, Any]) -> float:
     return round(_clamp(pressure, 0.1, 0.95), 3)
 
 
+def _cba_term(sy: int) -> Tuple[int, int]:
+    """(start season, expiry year). Real extension 2026-2030, then simulated 4-year deals."""
+    if sy < _CBA_REAL_END:
+        return _CBA_REAL_START if sy >= _CBA_REAL_START else 2020, _CBA_REAL_END if sy >= _CBA_REAL_START else _CBA_REAL_START
+    k = (sy - _CBA_REAL_END) // _CBA_FUTURE_TERM_YEARS
+    start = _CBA_REAL_END + k * _CBA_FUTURE_TERM_YEARS
+    return start, start + _CBA_FUTURE_TERM_YEARS
+
+
 def _build_cba_block(session: FranchiseSession, pressure: float) -> Dict[str, Any]:
     sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
-    start_year = sy - ((sy - 2020) % 8)
-    end_year = start_year + 7
+    start_year, end_year = _cba_term(sy)
     years_remaining = max(0, end_year - sy)
-    bargaining_deadline = f"{end_year - 1}-06-30"
+    bargaining_deadline = f"{end_year}-09-15"
 
     if pressure >= 0.72:
         pressure_level = "High"
@@ -1182,6 +1439,15 @@ def _build_cba_block(session: FranchiseSession, pressure: float) -> Dict[str, An
         pressure_level = "Med"
     else:
         pressure_level = "Low"
+
+    # Lockout risk only exists while the agreement is near expiry; labour peace is
+    # locked in until then. Scaled by owner/player pressure.
+    if years_remaining >= 3:
+        lockout_risk = 0.0
+    else:
+        window = {2: 0.35, 1: 0.7, 0: 1.0}.get(years_remaining, 1.0)
+        lockout_risk = round(_clamp((pressure - 0.30) * 1.6, 0.0, 0.9) * window, 3)
+    lockout_label = "None" if lockout_risk < 0.05 else ("Low" if lockout_risk < 0.25 else ("Med" if lockout_risk < 0.5 else "High"))
 
     return {
         "current_agreement": f"CBA {start_year}-{end_year}",
@@ -1191,13 +1457,15 @@ def _build_cba_block(session: FranchiseSession, pressure: float) -> Dict[str, An
         "years_remaining": years_remaining,
         "pressure_level": pressure_level,
         "pressure": round(pressure, 3),
+        "lockout_risk": lockout_risk,
+        "lockout_risk_label": lockout_label,
         "key_rules": list(_CBA_KEY_RULES),
         "potential_changes": _build_rule_changes(pressure, session),
         "display_only": True,
         "interactive": False,
         "brief": (
-            "Intelligence display only — negotiations are pressure estimates. "
-            "They do not change cap rules, LTIR, lottery, or contract limits in-sim."
+            f"CBA runs through Sept 15 {end_year}. Lockout risk {lockout_label.lower()}. "
+            "Negotiation items are pressure estimates. They do not change cap rules, LTIR, lottery, or contract limits in-sim."
         ),
     }
 
@@ -1213,7 +1481,7 @@ def _build_rule_changes(pressure: float, session: FranchiseSession) -> List[Dict
         owner_support = _clamp(support + (0.08 if "Cap" in name or "Tax" in name else -0.04), 0.1, 0.95)
         player_support = _clamp(1.0 - owner_support + 0.15, 0.1, 0.95)
         fan_reaction = _clamp(0.42 + support * 0.35, 0.2, 0.9)
-        likelihood = support * 0.85 + (0.1 if sy % 3 == 0 else 0.0)
+        likelihood = support * 0.85
         if likelihood >= 0.62:
             status = "Likely"
         elif likelihood >= 0.48:
@@ -1368,6 +1636,7 @@ def _build_league_operations_payload_impl(session: FranchiseSession) -> Dict[str
         row = calculate_team_revenue(session, team, str(tid), is_user=(str(tid) == uid))
         team_rows.append(row)
 
+    _apply_revenue_sharing(session, team_rows)
     team_rows.sort(key=lambda r: -_safe_float(r.get("revenue", 0)))
 
     max_rev = max((_safe_float(t.get("revenue", 0)) for t in team_rows), default=1.0)
@@ -1390,7 +1659,9 @@ def _build_league_operations_payload_impl(session: FranchiseSession) -> Dict[str
     losing_teams = sum(1 for t in team_rows if _safe_float(t.get("profit", 0)) < -2)
     avg_fan = sum(_safe_float(t.get("fan_sentiment", 55)) for t in team_rows) / max(len(team_rows), 1)
     revenue_health = _clamp(
-        0.35 + (league_revenue / max(len(team_rows) * 175.0, 1)) * 0.35 + (avg_fan / 100.0) * 0.2 - (losing_teams / 32.0) * 0.25,
+        # Per-team revenue benchmark scales with the cap so a rising cap (which lifts
+        # revenue) doesn't read as ever-improving "health" and feed back into the cap.
+        0.35 + (league_revenue / max(len(team_rows) * 175.0 * _cap_index(session), 1)) * 0.35 + (avg_fan / 100.0) * 0.2 - (losing_teams / 32.0) * 0.25,
         0.15,
         0.95,
     )

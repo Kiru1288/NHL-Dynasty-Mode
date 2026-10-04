@@ -1019,7 +1019,10 @@ def _safe_attr_float(player: Any, keys: List[str], default: float = 0.0) -> floa
             return float(v)
         except (TypeError, ValueError):
             continue
-    return float(default)
+    # ``None`` is a legitimate "not available" default (callers test for it). float(None)
+    # raised here and the exception was swallowed upstream, so every prospect without a
+    # stamped points surplus silently got zero development.
+    return None if default is None else float(default)
 
 
 def _safe_attr_int(player: Any, keys: List[str], default: int = 0) -> int:
@@ -1794,6 +1797,15 @@ def calculate_season_growth_budget(
     else:
         mod *= 0.34
 
+    # Young NHL players should *explode*: real 19-22 year-olds routinely jump 5-10 OVR
+    # in a season once they're playing NHL minutes.
+    young_boost = 1.0
+    if age <= 23 and gp >= 15:
+        young_boost = 2.0 if age <= 21 else 1.7
+    elif age <= 23:
+        young_boost = 1.35
+    mod *= young_boost
+
     if age <= 20 and gap_exp >= 0.10:
         mod *= 1.16
     elif age <= 23 and gap_exp >= 0.07:
@@ -1860,6 +1872,10 @@ def calculate_season_growth_budget(
         # Allow strong / breakout years to hit design targets (+5–10 display).
         hard_cap = 0.110 if phase == "SPIKE" else 0.085
         gap_cap = max(0.028, gap_exp * 0.78 + 0.022) if gap_exp > 0 else 0.028
+        if age <= 23:
+            # Ceilings rise with growth (lift_potential_with_growth), so let kids run.
+            hard_cap = 0.160 if phase == "SPIKE" else 0.125
+            gap_cap = max(0.045, gap_exp * 1.05 + 0.035)
         if surplus_pts is not None and gp >= 40:
             gp_scale = _clamp(float(gp) / 82.0, 0.45, 1.0)
             threshold = _SEASON_SURPLUS_POINTS_BUFFER * gp_scale
@@ -1883,10 +1899,10 @@ def calculate_season_growth_budget(
         budget = min(budget, hard_cap, gap_cap)
 
         # Elite runway floors — +2 should not be the default for franchise kids.
-        if age <= 20 and gap_exp >= 0.10 and phase in ("NORMAL", "SPIKE"):
-            budget = max(budget, 0.045 if phase == "NORMAL" else 0.065)
-        elif age <= 23 and gap_exp >= 0.07 and phase in ("NORMAL", "SPIKE"):
-            budget = max(budget, 0.036 if phase == "NORMAL" else 0.055)
+        if age <= 20 and gap_exp >= 0.08 and phase in ("NORMAL", "SPIKE"):
+            budget = max(budget, 0.062 if phase == "NORMAL" else 0.090)
+        elif age <= 23 and gap_exp >= 0.05 and phase in ("NORMAL", "SPIKE"):
+            budget = max(budget, 0.048 if phase == "NORMAL" else 0.072)
         elif gap_exp >= 0.04 and phase in ("NORMAL", "SPIKE"):
             budget = max(budget, 0.030 if phase == "NORMAL" else 0.045)
         elif gap_exp >= 0.06 and phase == "STALL":
@@ -1902,7 +1918,7 @@ def calculate_season_growth_budget(
 
 
 # Separate mid-season vs season-end pools (design §11).
-_IN_SEASON_POOL_SHARE = 0.32
+_IN_SEASON_POOL_SHARE = 0.45
 _SEASON_END_POOL_SHARE = 0.58
 
 
@@ -2490,6 +2506,12 @@ def apply_player_development(player: Any, rng: Any) -> None:
         attribute_deltas=applied,
         source_path="apply_player_development",
     )
+    try:
+        from app.sim_engine.progression.potential import lift_potential_with_growth
+
+        lift_potential_with_growth(player, ovr_before, ovr_after)
+    except Exception:
+        pass
 
     net_growth = (ovr_after - ovr_before) * 99.0
     report_type = "growth"
@@ -2633,7 +2655,9 @@ def apply_in_season_development_pulse(
     # Pulses draw only from the in-season share of the annual budget.
     season_pool = abs(float(annual)) * float(_IN_SEASON_POOL_SHARE)
     pulse_budget = season_pool * float(frac) * (1.0 if annual >= 0 else -1.0)
-    if abs(pulse_budget) < 0.0020:
+    if abs(pulse_budget) < 0.0005:
+        # The old 0.002 floor swallowed almost every pulse, so NHL players barely grew
+        # during the season at all.
         if age <= 24 and gap >= 0.05 and phase != "REGRESSION":
             pulse_budget = 0.0035 if phase != "SPIKE" else 0.0055
         else:
@@ -2671,6 +2695,12 @@ def apply_in_season_development_pulse(
     )
     ovr_after_01 = float(persist_recomputed_ovr(player))
     delta_disp = (ovr_after_01 - ovr_before_01) * 99.0
+    try:
+        from app.sim_engine.progression.potential import lift_potential_with_growth
+
+        lift_potential_with_growth(player, ovr_before_01, ovr_after_01)
+    except Exception:
+        pass
     try:
         setattr(player, "_in_season_growth_spent_01", spent + abs(float(pulse_budget)))
         accum = float(getattr(player, "_in_season_ovr_delta_accum", 0.0) or 0.0)
@@ -2798,6 +2828,12 @@ def apply_prospect_in_season_pulse(player: Any, rng: Any, season_id: Any) -> flo
     )
     ovr_after_01 = float(persist_recomputed_ovr(player))
     delta_01 = ovr_after_01 - ovr_before_01
+    try:
+        from app.sim_engine.progression.potential import lift_potential_with_growth
+
+        lift_potential_with_growth(player, ovr_before_01, ovr_after_01)
+    except Exception:
+        pass
     # What the ratings actually did this season (never over-counts past the plan).
     plan["spent"] = ovr_after_01 - float(plan["start_ovr01"])
     try:

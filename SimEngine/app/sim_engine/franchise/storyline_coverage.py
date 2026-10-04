@@ -237,7 +237,7 @@ def emit_concern_threshold_storylines(session: Any, rng: random.Random) -> int:
             ambition_boost = float(personality.get("ambition", 50)) >= 68 and key in ("role", "winning")
             if pressure < (22 if ambition_boost else 28):
                 continue
-            stable = f"concern|{key}|{player_id}|{season}"
+            stable = f"concern|{key}|{player_id}|{season}|{day // 21}"
             ok, _rep = _can_fire(session, stable, day, "minor")
             if not ok:
                 continue
@@ -339,7 +339,7 @@ def ingest_game_box_storylines(session: Any, box: Dict[str, Any]) -> int:
             if _can_fire(session, stable, day, "minor")[0]:
                 _emit_public(
                     session,
-                    headline=f"{name} piles up penalty minutes as tempers go",
+                    headline=f"{name} piles up penalty minutes as tempers flare",
                     summary=f"{name} finished with {pim} PIM. The Department of Player Safety will have the tape.",
                     cause_type="ON_ICE_ALTERCATION",
                     category="league",
@@ -680,12 +680,16 @@ def emit_org_desk_storylines(session: Any, rng: random.Random) -> int:
         gp = _team_games_played(session, tid)
         rank = _league_points_rank(session, tid)
         tname = _team_display(session, tid)
-        coach = str(getattr(tm, "coach_name", None) or getattr(tm, "coach", None) or "")
+        _c = getattr(tm, "coach_name", None) or getattr(tm, "coach", None) or ""
+        # team.coach is a Coach object — str() of it dumped the whole dataclass into the headline.
+        coach = str(getattr(_c, "name", _c) or "") if not isinstance(_c, str) else _c
+        if len(coach) > 40 or "(" in coach:
+            coach = ""
         if tid == user_tid:
             coach = coach or str(getattr(session, "head_coach_name", "") or "Head Coach")
         # AI teams have no coach record: `coach` stays empty and the headline stays generic.
         if gp >= 18 and rank >= 24:
-            stable = f"coachhot|{tid}|{season}"
+            stable = f"coachhot|{tid}|{season}|{day // 21}"
             if _can_fire(session, stable, day, "minor")[0]:
                 _emit_public(
                     session,
@@ -705,7 +709,7 @@ def emit_org_desk_storylines(session: Any, rng: random.Random) -> int:
                 emitted += 1
         if gp >= 22 and rank >= 26:
             gm_name = str(getattr(tm, "gm_name", None) or (getattr(session, "gm_name", None) if tid == user_tid else None) or "the front office")
-            stable = f"gmseat|{tid}|{season}"
+            stable = f"gmseat|{tid}|{season}|{day // 21}"
             if _can_fire(session, stable, day, "minor")[0]:
                 _emit_public(
                     session,

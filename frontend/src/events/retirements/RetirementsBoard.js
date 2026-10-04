@@ -135,7 +135,7 @@ export default function RetirementsBoard({ franchiseState = {}, retirees = [], o
 
       <footer className="retirement-actions">
         <button type="button" className="retirement-continue-btn" onClick={onContinue}>
-          Continue to Salary Cap
+          Continue to Board of Governors
         </button>
       </footer>
     </section>

@@ -358,7 +358,11 @@ _COMMUNITY_HOOKS = (
 
 def community_event_copy(name: str, team: str, player_id: str = "") -> Tuple[str, str]:
     seed = abs(hash(str(player_id or name)))
-    hook = _COMMUNITY_HOOKS[seed % len(_COMMUNITY_HOOKS)].format(team=team or "the club")
+    hook = _COMMUNITY_HOOKS[seed % len(_COMMUNITY_HOOKS)]
+    known = str(team or "").strip()
+    if "{team}" in hook and (not known or known.lower() in ("the club", "club", "the team")):
+        hook = "a children's hospital visit"  # "the the club Foundation" when no team name
+    hook = hook.format(team=known)
     headline = f"{name} spends a day on {hook}"
     summary = f"{name} spent time on {hook}. Teammates say those days still matter in the room."
     return headline, summary

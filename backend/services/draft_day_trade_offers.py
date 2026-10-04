@@ -234,11 +234,101 @@ def _preview_trade_value_meter(
     }
 
 
+def _creative_package(
+    session: Any,
+    league: Any,
+    partner_team: Any,
+    *,
+    ctx: Dict[str, Any],
+    gap: float,
+    exclude: set,
+    draft_year: int,
+    rng: random.Random,
+) -> Optional[Dict[str, Any]]:
+    """Real-looking trade-down packages: this year's later picks, next year's 1st/2nd,
+    or a young roster player / prospect, sized to the slot-value gap (same value scale
+    as trade_value.slot_curve_value). Returns None when the partner can't pay fairly."""
+    if gap <= 3.0:
+        return {"picks": [], "players": [], "style": "straight"}
+    try:
+        from app.sim_engine.trades.trade_pick_registry import get_team_owned_picks
+        from app.sim_engine.trades.trade_value import evaluate_pick_asset_value, evaluate_player_asset_value
+    except Exception:
+        return None
+    tid = str(getattr(partner_team, "team_id", None) or getattr(partner_team, "id", "") or "")
+    picks: List[Tuple[float, Dict[str, Any]]] = []
+    for row in get_team_owned_picks(league, tid) or []:
+        pid = str(row.get("pick_id") or "")
+        if not pid or pid in exclude or bool(row.get("resolved")):
+            continue
+        try:
+            yr = int(row.get("year") or row.get("season") or row.get("draft_year") or draft_year)
+        except (TypeError, ValueError):
+            yr = draft_year
+        if yr > draft_year + 1:
+            continue
+        try:
+            val = float(evaluate_pick_asset_value(row, partner_team, partner_team, league, context=ctx).get("total") or 0.0)
+        except Exception:
+            continue
+        if val > 0.5:
+            picks.append((val, row))
+    players: List[Tuple[float, Any]] = []
+    for attr in ("roster", "ahl_roster", "prospect_pool"):
+        for p in getattr(partner_team, attr, None) or []:
+            try:
+                age = int(getattr(getattr(p, "identity", None), "age", 99) or 99)
+            except (TypeError, ValueError):
+                age = 99
+            if age > 23 or getattr(p, "retired", False):
+                continue
+            try:
+                v = float(evaluate_player_asset_value(p, partner_team, None, league, context=ctx).get("total") or 0.0)
+            except Exception:
+                continue
+            if v > 4.0:
+                players.append((v, p))
+    need_lo, need_hi = gap * 0.95, gap * 1.3 + 4.0
+    options: List[Dict[str, Any]] = []
+    # 1) one asset that covers it (a future 1st, a 2nd, or a prospect)
+    for v, row in picks:
+        if need_lo <= v <= need_hi:
+            options.append({"picks": [row], "players": [], "style": "future_pick" if int(row.get("year") or draft_year) > draft_year else "pick", "paid": v})
+    for v, p in players:
+        if need_lo <= v <= need_hi:
+            options.append({"picks": [], "players": [p], "style": "player", "paid": v})
+    # 2) two picks
+    srt = sorted(picks, key=lambda x: -x[0])
+    for i in range(len(srt)):
+        for j in range(i + 1, len(srt)):
+            tot = srt[i][0] + srt[j][0]
+            if need_lo <= tot <= need_hi:
+                options.append({"picks": [srt[i][1], srt[j][1]], "players": [], "style": "picks", "paid": tot})
+                break
+    # 3) player + small pick
+    for v, p in players:
+        for pv, row in sorted(picks, key=lambda x: x[0]):
+            if need_lo <= v + pv <= need_hi:
+                options.append({"picks": [row], "players": [p], "style": "player_plus_pick", "paid": v + pv})
+                break
+    if not options:
+        return None
+    # Mix it up: players show up regularly, not every time.
+    weights = [3.0 if o["style"] in ("player", "player_plus_pick") else 2.0 if o["style"] == "future_pick" else 1.5 for o in options]
+    tot = sum(weights)
+    r = rng.random() * tot
+    for o, w in zip(options, weights):
+        r -= w
+        if r <= 0:
+            return o
+    return options[-1]
+
+
 def generate_draft_day_trade_offers(
     session: Any,
     state: Optional[Dict[str, Any]] = None,
     *,
-    max_offers: int = 2,
+    max_offers: int = 3,
 ) -> List[Dict[str, Any]]:
     state = state or getattr(session, "draft_state", None) or {}
     if not state.get("draft_started") or state.get("draft_completed"):
@@ -365,7 +455,17 @@ def generate_draft_day_trade_offers(
         partner_pick_id = str(future.get("pick_id") or "")
         exclude = {pid for pid in (on_clock_pick_id, partner_pick_id) if pid}
         sweeteners: List[Dict[str, Any]] = []
-        if league is not None:
+        sweetener_players: List[Any] = []
+        creative = None
+        if league is not None and team_by_id.get(partner) is not None:
+            creative = _creative_package(
+                session, league, team_by_id.get(partner), ctx=ctx, gap=float(gap), exclude=exclude,
+                draft_year=int(state.get("draft_year") or getattr(session, "season_calendar_year", 2026) or 2026), rng=rng,
+            )
+        if creative is not None:
+            sweeteners = list(creative.get("picks") or [])
+            sweetener_players = list(creative.get("players") or [])
+        elif league is not None:
             # Use the real chart gap — never inflate into a free future 2nd.
             sweet = _draft_swap_sweeteners(
                 league,
@@ -389,7 +489,19 @@ def generate_draft_day_trade_offers(
         assets_out = f"#{partner_overall} ({future_round}{_ordinal(future_round)} this year)"
         sweetener_ids = [str(r.get("pick_id") or "") for r in sweeteners if r.get("pick_id")]
         sweetener_labels = [_pick_display(r) for r in sweeteners]
-        incoming = [assets_out, *sweetener_labels]
+        player_ids = [str(getattr(p, "id", "") or "") for p in sweetener_players]
+        player_labels = []
+        for p in sweetener_players:
+            ident = getattr(p, "identity", None)
+            nm = str(getattr(ident, "name", "") or "Prospect")
+            pos = str(getattr(getattr(ident, "position", None), "value", getattr(ident, "position", "")) or "").split(".")[-1]
+            try:
+                from services.lineup_integrity import player_ovr
+
+                player_labels.append(f"{nm} ({pos}, {int(getattr(ident, 'age', 0) or 0)}y, {round(player_ovr(p))} OVR)")
+            except Exception:
+                player_labels.append(nm)
+        incoming = [assets_out, *sweetener_labels, *player_labels]
 
         candidates = _decoy_targets(true_target, available, rng)
         candidate_rows = [
@@ -463,7 +575,9 @@ def generate_draft_day_trade_offers(
                 "incoming_assets": incoming,
                 "outgoing_assets": [ask_label],
                 "sweetener_pick_ids": sweetener_ids,
-                "sweetener_labels": sweetener_labels,
+                "sweetener_labels": sweetener_labels + player_labels,
+                "sweetener_player_ids": player_ids,
+                "package_style": (creative or {}).get("style") or ("picks" if sweeteners else "straight"),
                 "slot_value_gap": round(gap, 2),
                 # Fogged: FE shows candidates only — do not surface the true name.
                 "target_candidates": candidate_rows,

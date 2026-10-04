@@ -151,16 +151,33 @@ def _parse_yearly_team_html(html: str) -> Dict[str, Dict[str, Any]]:
                 year_hits.append(m)
         if not year_hits:
             continue
-        aav_m = round(float(year_hits[0]), 3)
-        season_hits = list(year_hits)
-        if len(season_hits) >= 2 and abs(season_hits[0] - season_hits[1]) < 0.06:
-            season_hits = season_hits[1:]
-        years_remaining = 0
+        # The yearly board's money cells are one per season starting with the current
+        # season (no separate AAV column). The old code dropped the first cell whenever
+        # the first two matched, which removed a real season from every flat contract
+        # (Chabot, Sanderson, Stützle... all expired a year early).
+        season_hits = [float(h or 0) for h in year_hits]
+        seasons: List[float] = []
         for hit in season_hits:
-            if float(hit or 0) <= 0.05:
+            if hit <= 0.05:
                 break
-            years_remaining += 1
-        years_remaining = min(max(years_remaining, 1), 8)
+            seasons.append(hit)
+        if not seasons:
+            continue
+        aav_m = round(seasons[0], 3)
+        # A later run of seasons at a clearly different cap hit is an already-signed
+        # extension (e.g. Batherson: $4.975M in 2026-27, then 8 x $10.75M).
+        cur_len = 1
+        while cur_len < len(seasons) and abs(seasons[cur_len] - seasons[0]) <= 0.25:
+            cur_len += 1
+        pending_ext = None
+        if cur_len < len(seasons):
+            ext = seasons[cur_len:]
+            ext_aav = round(sum(ext) / len(ext), 3)
+            if abs(ext_aav - aav_m) > 0.25:
+                pending_ext = {"aav_m": ext_aav, "cap_hit_m": ext_aav, "years": min(len(ext), 8)}
+            else:
+                cur_len = len(seasons)
+        years_remaining = min(max(cur_len if pending_ext else len(seasons), 1), 8)
         rights = "UFA"
         row_text = re.sub(r"<[^>]+>", " ", row)
         if re.search(r"\bRFA\b", row_text):
@@ -184,6 +201,8 @@ def _parse_yearly_team_html(html: str) -> Dict[str, Dict[str, Any]]:
             "no_trade_clause": ntc,
             "source": "real_nhl_spotrac",
         }
+        if pending_ext:
+            entry["pending_extension"] = pending_ext
         # Same display name can appear twice on one club (e.g. Elias Pettersson C/D).
         existing = out.get(key)
         if existing is None:
@@ -290,6 +309,21 @@ def fetch_team_cap_sheet(abbr: str, season_year: int) -> Dict[str, Any]:
         return empty
 
     active_rows = _parse_cap_table_rows(html, "table_active")
+    # Spotrac lists injured / IR / LTIR (and other non-active) players in their own
+    # tables. Reading only table_active meant every injured player had no contract
+    # and was dropped from the Real NHL import. Pull every player table that is not
+    # dead money; the importer still only keeps players who were on the NHL roster.
+    for row in active_rows:
+        row.setdefault("spotrac_table", "table_active")
+    seen_tables = {"table_active", "table_dead", "table_retained"}
+    for tid in re.findall(r'id="(table_[A-Za-z0-9_\-]+)"', html):
+        low = tid.lower()
+        if tid in seen_tables or any(t in low for t in ("dead", "retain", "buyout", "recapture")):
+            continue
+        seen_tables.add(tid)
+        for row in _parse_cap_table_rows(html, tid):
+            row["spotrac_table"] = tid
+            active_rows.append(row)
     buyout_rows = _parse_cap_table_rows(html, "table_dead")
     retained_rows = _parse_cap_table_rows(html, "table_retained")
     active: Dict[str, Dict[str, Any]] = {}
@@ -306,8 +340,15 @@ def fetch_team_cap_sheet(abbr: str, season_year: int) -> Dict[str, Any]:
             "no_move_clause": False,
             "no_trade_clause": False,
             "source": "real_nhl_spotrac_cap",
+            "spotrac_table": row.get("spotrac_table", "table_active"),
+            "spotrac_injured": any(
+                t in str(row.get("spotrac_table") or "").lower()
+                for t in ("injur", "ltir", "reserve", "ir_", "_ir")
+            ),
         }
         key = row["name_key"]
+        if key in active and row.get("spotrac_table") != "table_active":
+            continue  # active-table row wins over a duplicate in another table
         existing = active.get(key)
         if existing is None:
             active[key] = entry
@@ -368,12 +409,15 @@ def _merge_cap_aav_over_yearly(
             # Yearly boards often lead with an already-signed extension AAV. Only collapse
             # term to the current deal when cap hit disagrees with the yearly grid.
             yearly_yrs = int(merged.get("years_remaining") or merged.get("years") or 0)
+            if merged.get("pending_extension"):
+                return merged
             if old_aav > 0 and abs(old_aav - cap_aav) > 0.25:
                 merged["years_remaining"] = 1
                 merged["years"] = 1
                 merged["extension_aav_m"] = old_aav
                 if yearly_yrs > 1:
                     merged["extension_years_remaining"] = min(yearly_yrs, 8)
+                    merged["pending_extension"] = {"aav_m": old_aav, "cap_hit_m": old_aav, "years": min(yearly_yrs, 8)}
             elif yearly_yrs > 0:
                 merged["years_remaining"] = yearly_yrs
                 merged["years"] = yearly_yrs

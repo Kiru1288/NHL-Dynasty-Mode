@@ -6,7 +6,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { getStatsCentral } from "../services/franchiseService";
+import { getAhlLedger, getStatsCentral } from "../services/franchiseService";
 import { formatFranchiseApiError, isExpiredFranchiseSessionError } from "../services/api";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS, teamNameToNhlAbbr } from "../game/constants";
@@ -2159,6 +2159,21 @@ export function StatsCentralScreen() {
   } = useGameUI();
 
   const [tab, setTab] = useState(normalizeStatsMenu(statsCentralTab));
+  const [league, setLeague] = useState(() => {
+    try {
+      return window.sessionStorage.getItem("statsCentralLeague") === "ahl" ? "ahl" : "nhl";
+    } catch {
+      return "nhl";
+    }
+  });
+  const chooseLeague = (next) => {
+    setLeague(next);
+    try {
+      window.sessionStorage.setItem("statsCentralLeague", next);
+    } catch {
+      /* per-viewer convenience only */
+    }
+  };
   const [scope, setScope] = useState("league");
   const [lazyStatsCentral, setLazyStatsCentral] = useState(null);
   const [statsLoadState, setStatsLoadState] = useState("idle");
@@ -2260,33 +2275,103 @@ export function StatsCentralScreen() {
       <StatsCentralStretchStyles />
 
       <main className="statscentral-shell register-ops">
-        <header className="sc-terminal-header">
-          <button
-            type="button"
-            className="sc-back-link"
-            onClick={handleBack}
-          >
-            Hub
-          </button>
-
-          <div className="sc-terminal-title">
-            <span className="sc-terminal-kicker">NHL League Intelligence</span>
-            <strong>Stats Central</strong>
+        <header className="sc-terminal-header sc-hdr-v2">
+          <style>{`
+            .stats-central-screen .sc-terminal-header.sc-hdr-v2 {
+              display: flex;
+              align-items: center;
+              gap: 14px;
+              min-height: 60px;
+              padding: 10px 16px;
+              flex-wrap: nowrap;
+            }
+            .stats-central-screen .sc-hdr-v2 .sc-hdr-v2__brand {
+              display: flex;
+              align-items: center;
+              gap: 14px;
+              min-width: 0;
+            }
+            .stats-central-screen .sc-hdr-v2 .sc-back-link {
+              height: 36px;
+              width: auto;
+              padding: 0 14px;
+              display: inline-flex;
+              align-items: center;
+              gap: 6px;
+              flex: 0 0 auto;
+            }
+            .stats-central-screen .sc-hdr-v2 .sc-hdr-v2__divider {
+              width: 1px;
+              height: 30px;
+              background: rgba(156, 218, 236, 0.16);
+              flex: 0 0 auto;
+            }
+            .stats-central-screen .sc-hdr-v2 .sc-terminal-title { white-space: nowrap; }
+            .stats-central-screen .sc-hdr-v2 .sc-hdr-v2__controls {
+              margin-left: auto;
+              display: flex;
+              align-items: center;
+              gap: 12px;
+              min-width: 0;
+            }
+            .stats-central-screen .sc-hdr-v2 .sc-mode-rail {
+              flex: 0 0 auto;
+              flex-wrap: nowrap;
+            }
+            .stats-central-screen .sc-hdr-v2 .sc-mode-rail button {
+              flex: 0 0 auto;
+              height: 36px;
+              padding: 0 18px;
+              white-space: nowrap;
+            }
+            .stats-central-screen .sc-hdr-v2 .sc-league-rail button { width: 72px; padding: 0; }
+            .stats-central-screen .sc-hdr-v2 .sc-tabs-rail button { min-width: 132px; }
+            @media (max-width: 1100px) {
+              .stats-central-screen .sc-terminal-header.sc-hdr-v2 { flex-wrap: wrap; }
+              .stats-central-screen .sc-hdr-v2 .sc-hdr-v2__controls { margin-left: 0; width: 100%; }
+              .stats-central-screen .sc-hdr-v2 .sc-tabs-rail { flex: 1 1 auto; }
+              .stats-central-screen .sc-hdr-v2 .sc-tabs-rail button { flex: 1 1 0; min-width: 0; }
+            }
+          `}</style>
+          <div className="sc-hdr-v2__brand">
+            <button
+              type="button"
+              className="sc-back-link"
+              onClick={handleBack}
+              aria-label="Back to Hub"
+            >
+              <span aria-hidden="true">‹</span> Hub
+            </button>
+            <span className="sc-hdr-v2__divider" aria-hidden="true" />
+            <div className="sc-terminal-title">
+              <span className="sc-terminal-kicker">NHL League Intelligence</span>
+              <strong>Stats Central</strong>
+            </div>
           </div>
 
-          <nav className="sc-mode-rail" aria-label="Stats Central modes">
-            {TABS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={tab === item.id ? "is-active" : ""}
-                onClick={() => setTab(item.id)}
-                title={item.label}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
+          <div className="sc-hdr-v2__controls">
+            <nav className="sc-mode-rail sc-league-rail" aria-label="League">
+              {[["nhl", "NHL"], ["ahl", "AHL"]].map(([id, label]) => (
+                <button key={id} type="button" className={league === id ? "is-active" : ""} onClick={() => chooseLeague(id)}>
+                  {label}
+                </button>
+              ))}
+            </nav>
+
+            <nav className="sc-mode-rail sc-tabs-rail" aria-label="Stats Central modes">
+              {TABS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={tab === item.id ? "is-active" : ""}
+                  onClick={() => setTab(item.id)}
+                  title={item.label}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
+          </div>
         </header>
 
         <section
@@ -2299,14 +2384,16 @@ export function StatsCentralScreen() {
             .filter(Boolean)
             .join(" ")}
         >
-          {tab === "team_stats" ? (
+          {league === "ahl" ? <AhlStatsPage tab={tab} franchiseState={franchiseState} /> : null}
+
+          {league === "nhl" && tab === "team_stats" ? (
             <TeamStatsPage
               data={data}
               loadState={statsLoadState}
             />
           ) : null}
 
-          {tab === "player_stats" ? (
+          {league === "nhl" && tab === "player_stats" ? (
             <PlayerStatsPage
               data={data}
               scope={scope}
@@ -2315,7 +2402,7 @@ export function StatsCentralScreen() {
             />
           ) : null}
 
-          {tab === "league_leaders" ? (
+          {league === "nhl" && tab === "league_leaders" ? (
             <LeagueLeadersPage data={data} />
           ) : null}
         </section>
@@ -2324,6 +2411,181 @@ export function StatsCentralScreen() {
   );
 }
 
+
+/* =========================================================
+   AHL — same tables as NHL Stats Central, base stats only
+========================================================= */
+function AhlStatsPage({ tab, franchiseState }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState("");
+  const [scope, setScope] = useState("mine");
+  const [pos, setPos] = useState("all");
+  const [view, setView] = useState("skaters");
+  const [sortKey, setSortKey] = useState("p");
+  const [sortDir, setSortDir] = useState("desc");
+  const [teamSort, setTeamSort] = useState({ key: "pts", dir: "desc" });
+
+  useEffect(() => {
+    let active = true;
+    getAhlLedger()
+      .then((res) => { if (active) setD(res || null); })
+      .catch((e) => { if (active) setErr(e?.message || "AHL stats unavailable"); });
+    return () => { active = false; };
+  }, [franchiseState?.calendar_cursor]);
+
+  if (!d) {
+    return <div className="sc-tab-page"><div className="sc-empty">{err || "Loading AHL stats…"}</div></div>;
+  }
+
+  const sortBy = (rows, key, dir) =>
+    [...rows].sort((a, b) => {
+      const av = a?.[key];
+      const bv = b?.[key];
+      if (typeof av === "string" || typeof bv === "string") {
+        return String(av || "").localeCompare(String(bv || "")) * (dir === "desc" ? -1 : 1);
+      }
+      return ((Number(av) || 0) - (Number(bv) || 0)) * (dir === "desc" ? -1 : 1);
+    });
+  const col = (label, key, opts = {}) => ({
+    label,
+    key,
+    sortKey: key,
+    align: opts.left ? undefined : "right",
+    className: opts.className,
+    render: opts.render || ((row) => (row?.[key] ?? "—")),
+    onClick: () => {
+      if (sortKey === key) setSortDir(sortDir === "desc" ? "asc" : "desc");
+      else { setSortKey(key); setSortDir(opts.left ? "asc" : "desc"); }
+    },
+  });
+  const playerCell = (row) => (
+    <PlayerNameCell player={{ ...row, id: row.player_id, position: row.pos }} teams={[]} franchiseState={franchiseState} />
+  );
+  const scoped = (rows) =>
+    rows
+      .filter((r) => (scope === "mine" ? r.user_org : true))
+      .filter((r) => (pos === "all" ? true : pos === "f" ? r.pos === "F" : r.pos === "D"));
+
+  const skaterCols = [
+    { label: "#", key: "rank", className: "is-rank-col", render: (row) => (scoped(sortBy(d.skaters, sortKey, sortDir)).indexOf(row) + 1) || "—" },
+    col("Player", "name", { left: true, className: "is-player-col", render: playerCell }),
+    col("Team", "team", { left: true }),
+    col("Age", "age"),
+    col("GP", "gp"),
+    col("G", "g"),
+    col("A", "a"),
+    col("P", "p"),
+    col("+/-", "pm"),
+    col("PIM", "pim"),
+    col("SOG", "sog"),
+    col("P/GP", "ppg", { render: (r) => Number(r.ppg || 0).toFixed(2) }),
+    col("TOI", "toi", { render: (r) => Number(r.toi || 0).toFixed(1) }),
+  ];
+  const goalieCols = [
+    col("Goalie", "name", { left: true, className: "is-player-col", render: playerCell }),
+    col("Team", "team", { left: true }),
+    col("Age", "age"),
+    col("GP", "gp"),
+    col("W", "w"),
+    col("L", "l"),
+    col("OTL", "otl"),
+    col("SV%", "sv_pct", { render: (r) => (r.sv_pct != null ? Number(r.sv_pct).toFixed(3) : "—") }),
+    col("GAA", "gaa", { render: (r) => (r.gaa != null ? Number(r.gaa).toFixed(2) : "—") }),
+    col("SO", "so"),
+  ];
+  const tcol = (label, key, opts = {}) => ({
+    label,
+    key,
+    sortKey: key,
+    align: opts.left ? undefined : "right",
+    className: opts.className,
+    render: opts.render || ((row) => (row?.[key] ?? "—")),
+    onClick: () => setTeamSort((cur) => ({ key, dir: cur.key === key && cur.dir === "desc" ? "asc" : "desc" })),
+  });
+  const teamRows = sortBy(d.teams || [], teamSort.key, teamSort.dir);
+  const teamCols = [
+    { label: "#", key: "rank", className: "is-rank-col", render: (row) => (d.teams || []).indexOf(row) + 1 },
+    tcol("Team", "name", { left: true, className: "is-player-col", render: (r) => <strong>{r.name}{r.parent_abbr ? <em style={{ marginLeft: 6, opacity: 0.6, fontStyle: "normal" }}>{r.parent_abbr}</em> : null}</strong> }),
+    tcol("GP", "gp"), tcol("W", "w"), tcol("L", "l"), tcol("OTL", "otl"), tcol("PTS", "pts"),
+    tcol("P%", "pts_pct", { render: (r) => Number(r.pts_pct || 0).toFixed(3) }),
+    tcol("GF", "gf"), tcol("GA", "ga"), tcol("DIFF", "diff", { render: (r) => (r.diff > 0 ? `+${r.diff}` : r.diff) }),
+    tcol("SF", "shots"), tcol("SA", "shots_against"),
+    tcol("SH%", "sh_pct", { render: (r) => Number(r.sh_pct || 0).toFixed(1) }),
+    tcol("SV%", "sv_pct", { render: (r) => Number(r.sv_pct || 0).toFixed(3) }),
+    tcol("L10", "last10", { left: true }), tcol("STRK", "streak", { left: true }),
+  ];
+  const mine = (d.teams || []).find((t) => t.user);
+  const through = d.last_game_date ? `Through ${d.last_game_date}` : "Season starts Oct 10";
+
+  if (tab === "team_stats") {
+    return (
+      <div className="sc-tab-page">
+        <section className="sc-overview-module">
+          <header className="sc-player-table-header">
+            <div>
+              <span>AHL TEAM STATS</span>
+              <strong>{mine ? `${mine.name}: ${mine.w}-${mine.l}-${mine.otl}, ${mine.pts} pts` : "AHL Standings"}</strong>
+              <em>{(d.teams || []).length} clubs · {through}</em>
+            </div>
+          </header>
+          <div className="sc-overview-table-fill">
+            <DataTable
+              columns={teamCols}
+              rows={teamRows}
+              sortKey={teamSort.key}
+              sortDir={teamSort.dir}
+              density="compact"
+              tableClassName="sc-skaters-table-v2 sc-skaters-table-v3"
+              getRowId={(row) => row.team_id}
+              rowClassName={(row) => (row.user ? "is-user-team" : "")}
+              empty="No AHL games played yet."
+            />
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  const skaters = scoped(sortBy(d.skaters || [], sortKey, sortDir));
+  const goalies = scoped(sortBy(d.goalies || [], view === "goalies" ? sortKey : "w", view === "goalies" ? sortDir : "desc"));
+  return (
+    <div className="sc-tab-page">
+      <section className="sc-overview-module sc-overview-scoring-leaders">
+        <header className="sc-player-table-header">
+          <div>
+            <span>AHL PLAYER STATS</span>
+            <strong>{scope === "mine" ? "Our Affiliate" : "All AHL"}</strong>
+            <em>{(view === "skaters" ? skaters : goalies).length} players · {through}</em>
+          </div>
+          <div className="sc-overview-board-controls">
+            <StatsChipGroup label="Scope" value={scope} onChange={setScope} options={[["mine", "Our affiliate"], ["all", "All AHL"]]} />
+            <StatsChipGroup
+              label="Group"
+              value={view}
+              onChange={(v) => { setView(v); setSortKey(v === "goalies" ? "w" : "p"); setSortDir("desc"); }}
+              options={[["skaters", "Skaters"], ["goalies", "Goalies"]]}
+            />
+            {view === "skaters" ? (
+              <StatsChipGroup label="Position" value={pos} onChange={setPos} options={[["all", "All"], ["f", "Forwards"], ["d", "Defence"]]} />
+            ) : null}
+          </div>
+        </header>
+        <div className="sc-overview-table-fill">
+          <DataTable
+            columns={view === "skaters" ? skaterCols : goalieCols}
+            rows={view === "skaters" ? (tab === "league_leaders" ? skaters.slice(0, 25) : skaters) : goalies}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            density="compact"
+            tableClassName="sc-skaters-table-v2 sc-skaters-table-v3 sc-overview-scoring-table"
+            getRowId={(row) => row.player_id}
+            empty="No AHL games played yet."
+          />
+        </div>
+      </section>
+    </div>
+  );
+}
 
 function TeamStatsPage({ data, loadState }) {
   return (

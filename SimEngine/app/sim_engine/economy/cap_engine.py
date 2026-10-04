@@ -2,14 +2,30 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-# 2025–26 NHL CBA payroll range (millions USD).
-# Upper Limit announced at $95.5M; Lower Limit is $16M below Upper Limit.
+# NHL team payroll ranges (millions USD).
+# 2025-26 .. 2027-28: NHL/NHLPA announced ranges (Jan 31 2025, nhl.com).
+# 2028-29: league estimate reported from the Sept 2026 Board of Governors ($127.5M).
+# Beyond the table the cap is NOT a fixed growth curve: the offseason rollover sets
+# each new season from the league revenue model and stores it on the league
+# (league.cap_schedule_m), which every reader below honours.
 NHL_UPPER_LIMIT_BY_SEASON_START: Dict[int, float] = {
     2024: 88.0,
     2025: 95.5,
-    2026: 104.0,  # projected band used by public trackers; overridden if league sets explicit
+    2026: 104.0,
+    2027: 113.5,
+    2028: 127.5,  # league estimate (Sept 2026) — revisable
 }
-NHL_CAP_FLOOR_GAP_M = 16.0
+NHL_LOWER_LIMIT_BY_SEASON_START: Dict[int, float] = {
+    2024: 65.0,
+    2025: 70.6,
+    2026: 76.9,
+    2027: 83.9,
+}
+#: Lower limit / upper limit in the announced ranges (76.9/104, 83.9/113.5).
+NHL_CAP_FLOOR_RATIO = 0.739
+#: Fallback growth for a season nobody has set yet (long-run cap-era average ~4-5%).
+NHL_CAP_DEFAULT_GROWTH = 0.045
+NHL_CAP_FLOOR_GAP_M = 16.0  # legacy constant (no longer used for the floor)
 NHL_MINIMUM_SALARY_BY_SEASON_START: Dict[int, float] = {
     2024: 0.775,
     2025: 0.775,
@@ -18,18 +34,64 @@ NHL_MINIMUM_SALARY_BY_SEASON_START: Dict[int, float] = {
 NHL_BURY_BONUS_M = 0.375  # CBA: min salary + $375k = bury relief ceiling
 
 
-def nhl_upper_limit_millions(season_start_year: Optional[int] = None) -> float:
+def max_retention_pct(league: Any = None) -> float:
+    """CBA max salary retention (50%), shifted by Board of Governors rules."""
+    mods = _get(league, "governance_modifiers", None) if league is not None else None
+    delta = _safe_float((mods or {}).get("retention_max_pct", 0.0), 0.0) if isinstance(mods, dict) else 0.0
+    return max(20.0, min(75.0, 50.0 + delta))
+
+
+def max_retained_slots(league: Any = None) -> int:
+    mods = _get(league, "governance_modifiers", None) if league is not None else None
+    delta = int(round(_safe_float((mods or {}).get("retention_slots", 0.0), 0.0))) if isinstance(mods, dict) else 0
+    return max(1, min(6, 3 + delta))
+
+
+def _league_cap_schedule(league: Any) -> Dict[int, float]:
+    raw = _get(league, "cap_schedule_m", None) if league is not None else None
+    out: Dict[int, float] = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            try:
+                out[int(k)] = float(v)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def nhl_upper_limit_millions(season_start_year: Optional[int] = None, league: Any = None) -> float:
+    """Upper limit for a season: announced table first, then the league's own schedule
+    (set at each rollover from the revenue model), then a modest default growth."""
     y = int(season_start_year) if season_start_year is not None else 2025
+    sched = _league_cap_schedule(league)
+    if y in sched:
+        # Set once at the offseason rollover (announced range ± any Board of
+        # Governors adjustment) — that number is the season's cap from then on.
+        return float(sched[y])
     if y in NHL_UPPER_LIMIT_BY_SEASON_START:
         return float(NHL_UPPER_LIMIT_BY_SEASON_START[y])
-    # Outside table: grow ~8% from 2025 baseline as a soft extrapolation.
-    if y > 2025:
-        return round(95.5 * (1.08 ** (y - 2025)), 1)
+    last_known = max(NHL_UPPER_LIMIT_BY_SEASON_START)
+    if y > last_known:
+        # Grow from the latest season we actually know (scheduled or table).
+        known = {**NHL_UPPER_LIMIT_BY_SEASON_START, **{k: v for k, v in sched.items() if k < y}}
+        base_y = max(k for k in known if k < y)
+        return round(float(known[base_y]) * ((1.0 + NHL_CAP_DEFAULT_GROWTH) ** (y - base_y)) * 2.0) / 2.0
     return 88.0
 
 
-def nhl_lower_limit_millions(season_start_year: Optional[int] = None) -> float:
-    return max(0.0, nhl_upper_limit_millions(season_start_year) - NHL_CAP_FLOOR_GAP_M)
+def nhl_lower_limit_millions(season_start_year: Optional[int] = None, league: Any = None) -> float:
+    y = int(season_start_year) if season_start_year is not None else 2025
+    upper = nhl_upper_limit_millions(y, league)
+    # Board of Governors floor rules shift the floor by a share of the upper limit.
+    delta = _safe_float(_get(league, "governance_floor_delta", 0.0), 0.0) if league is not None else 0.0
+    if y in NHL_LOWER_LIMIT_BY_SEASON_START and not _league_cap_schedule(league).get(y):
+        base = float(NHL_LOWER_LIMIT_BY_SEASON_START[y])
+    elif y in NHL_LOWER_LIMIT_BY_SEASON_START and abs(upper - NHL_UPPER_LIMIT_BY_SEASON_START.get(y, upper)) < 0.01:
+        base = float(NHL_LOWER_LIMIT_BY_SEASON_START[y])
+    else:
+        # Was upper − $16M, which put the 2026-27 floor at $88.0M (real: $76.9M).
+        base = upper * NHL_CAP_FLOOR_RATIO
+    return round(min(upper - 1.0, base + delta * upper), 1)
 
 
 def nhl_minimum_salary_millions(season_start_year: Optional[int] = None) -> float:
@@ -90,7 +152,31 @@ def _is_pending_july1_expiry(player: Any) -> bool:
     return bool(isinstance(c, dict) and c.get("pending_july1_expiry"))
 
 
+def _contract_expiry_key(player: Any) -> Any:
+    c = _get(player, "contract", None)
+    return _get(c, "expiry_year", None) if c is not None else None
+
+
 def player_cap_hit_millions(player: Any) -> float:
+    """Cap hit this club carries for the player — net of salary another club retained.
+
+    Retention used to be charged to the retaining club while the acquiring club still
+    carried the full AAV, so every retained deal double-counted and could push the
+    acquirer over the cap.
+    """
+    full = player_full_cap_hit_millions(player)
+    try:
+        pct = float(_get(player, "retained_share_pct", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        pct = 0.0
+    if pct > 0.0 and full > 0.0:
+        key = _get(player, "retained_share_expiry", None)
+        if key is None or key == _contract_expiry_key(player):
+            return round(full * (1.0 - min(75.0, pct) / 100.0), 4)
+    return full
+
+
+def player_full_cap_hit_millions(player: Any) -> float:
     for key in ("cap_hit_m", "contract_aav_m", "aav_m", "salary_m"):
         v = normalize_money_to_millions(_get(player, key, 0))
         if v > 0:
@@ -233,8 +319,8 @@ def _season_start_year_from_label(season_label: Optional[str], league: Any = Non
 
 def apply_nhl_salary_cap_for_season(league: Any, season_start_year: int) -> Dict[str, float]:
     """Stamp league upper/lower limits to the real NHL payroll range for the season."""
-    upper = nhl_upper_limit_millions(season_start_year)
-    lower = nhl_lower_limit_millions(season_start_year)
+    upper = nhl_upper_limit_millions(season_start_year, league)
+    lower = nhl_lower_limit_millions(season_start_year, league)
     try:
         setattr(league, "salary_cap_m", float(upper))
         setattr(league, "salary_cap", float(upper))
@@ -393,8 +479,8 @@ def _league_cap_bounds_millions(
     if season_y is None:
         season_y = inferred_y
 
-    default_upper = nhl_upper_limit_millions(season_y)
-    default_lower = nhl_lower_limit_millions(season_y)
+    default_upper = nhl_upper_limit_millions(season_y, league)
+    default_lower = nhl_lower_limit_millions(season_y, league)
 
     # Explicit session/label season → table is source of truth (and re-stamp).
     if season_start_year is not None and season_y is not None:
@@ -677,22 +763,72 @@ def _pick_cap_movement(rng: Any) -> tuple:
     return movement_type, delta, label, reason
 
 
-def advance_league_salary_cap(league: Any, rng: Any, season_year: Optional[int] = None) -> Dict[str, Any]:
+def advance_league_salary_cap(
+    league: Any,
+    rng: Any,
+    season_year: Optional[int] = None,
+    *,
+    target_cap_m: Optional[float] = None,
+    target_reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Set next season's cap ONCE and persist it, so every later read agrees.
+
+    Order: announced table → ``target_cap_m`` (backend revenue model) → random movement
+    (legacy). The old version rolled dice here and the table then overwrote the result
+    on the next read, so the offseason report and the live cap disagreed.
+    """
     previous_cap = normalize_money_to_millions(
         _get(league, "salary_cap_m", _get(league, "salary_cap", _get(_get(league, "economics", None), "salary_cap", 92.0)))
     )
     if previous_cap <= 0:
         previous_cap = 92.0
 
-    movement_type, delta_m, movement_label, movement_reason = _pick_cap_movement(rng)
-    if movement_type == "flat_cap":
+    sy_next = int(season_year) if season_year is not None else None
+    fixed_cap: Optional[float] = None
+    if target_cap_m is not None and float(target_cap_m) > 0:
+        # The backend projection already starts from the announced range when one
+        # exists and adds any Board of Governors adjustment.
+        fixed_cap = _round_to_half_million(float(target_cap_m))
+        if sy_next is not None and sy_next in NHL_UPPER_LIMIT_BY_SEASON_START and abs(fixed_cap - NHL_UPPER_LIMIT_BY_SEASON_START[sy_next]) < 0.01:
+            movement_label, movement_reason = "Announced payroll range", "Cap set by the NHL/NHLPA payroll range."
+        else:
+            movement_label = "Revenue-driven cap"
+            movement_reason = target_reason or "Cap follows league hockey-related revenue."
+    elif sy_next is not None and sy_next in NHL_UPPER_LIMIT_BY_SEASON_START:
+        fixed_cap = float(NHL_UPPER_LIMIT_BY_SEASON_START[sy_next])
+        movement_label, movement_reason = "Announced payroll range", "Cap set by the NHL/NHLPA payroll range."
+    if fixed_cap is not None:
+        next_cap = fixed_cap
+        change = round(next_cap - previous_cap, 3)
+        pct = change / previous_cap if previous_cap > 0 else 0.0
+        movement_type = (
+            "decrease" if change < -0.001 else "flat_cap" if abs(change) < 0.001
+            else "dramatic_increase" if pct >= 0.065 else "strong_increase" if pct >= 0.035 else "normal_increase"
+        )
+        delta_m = change
+    else:
+        movement_type, delta_m, movement_label, movement_reason = _pick_cap_movement(rng)
+    if fixed_cap is not None:
+        pass
+    elif movement_type == "flat_cap":
         next_cap = previous_cap
         change = 0.0
     else:
         next_cap = max(30.0, _round_to_half_million(previous_cap + float(delta_m)))
         change = round(next_cap - previous_cap, 3)
 
-    floor = _round_to_half_million(next_cap * 0.74)
+    if sy_next is not None:
+        sched = _get(league, "cap_schedule_m", None)
+        if not isinstance(sched, dict):
+            sched = {}
+        sched[int(sy_next)] = float(next_cap)
+        try:
+            setattr(league, "cap_schedule_m", sched)
+        except Exception:
+            pass
+        floor = nhl_lower_limit_millions(int(sy_next), league)
+    else:
+        floor = round(next_cap * NHL_CAP_FLOOR_RATIO, 1)
     cap_change_percent = round((change / previous_cap) * 100.0, 1) if previous_cap > 0 else 0.0
     direction = "flat" if abs(change) < 1e-6 else ("up" if change > 0 else "down")
 
@@ -950,7 +1086,13 @@ def can_trade_cap_fit(
     regular_season_last_index: int = 192,
     deadline_phase: float = 0.0,
     season_label: Optional[str] = None,
+    roster_out_n: Optional[int] = None,
+    roster_in_n: Optional[int] = None,
+    roster_flex: int = 0,
 ) -> Dict[str, Any]:
+    """``roster_out_n`` / ``roster_in_n`` count only players moving on/off the active NHL
+    roster (AHL pieces don't take a spot); ``roster_flex`` is how many players the club can
+    send to the AHL as corresponding moves."""
     snap = calculate_team_cap_snapshot(
         team,
         league=league,
@@ -971,12 +1113,23 @@ def can_trade_cap_fit(
     if float(deadline_phase or 0.0) > 0.72:
         prorate_factor = min(1.0, prorate_factor + (1.0 - prorate_factor) * 0.65)
 
-    out_full_m = sum(player_cap_hit_millions(p) for p in outgoing)
+    try:
+        _season_y = int(str(season_label or "")[:4]) if season_label else None
+    except ValueError:
+        _season_y = None
+
+    def _trade_hit(p: Any) -> float:
+        # A player assigned to the AHL (and staying there) only carries his bury residual.
+        if _get(p, "in_minors", False) or _get(p, "is_buried", False) or _get(p, "buried", False):
+            return buried_cap_hit_millions(p, season_start_year=_season_y)
+        return player_cap_hit_millions(p)
+
+    out_full_m = sum(_trade_hit(p) for p in outgoing)
     in_full_m = 0.0
     for p in incoming:
         pid = str(_get(p, "id", "") or "")
-        cap_hit = player_cap_hit_millions(p)
-        retained_pct = max(0.0, min(50.0, float(retained_map.get(pid, 0.0))))
+        cap_hit = _trade_hit(p)
+        retained_pct = max(0.0, min(max_retention_pct(league), float(retained_map.get(pid, 0.0))))
         in_full_m += cap_hit * (1.0 - retained_pct / 100.0)
 
     out_m = out_full_m * prorate_factor
@@ -984,7 +1137,11 @@ def can_trade_cap_fit(
     retained_added = max(0.0, float(retained_added_m))
     delta = in_m - out_m + retained_added
     full_delta = in_full_m - out_full_m + retained_added
-    projected_roster_count = snap["activeRosterCount"] - len(outgoing) + len(incoming)
+    projected_roster_count = (
+        snap["activeRosterCount"]
+        - (len(outgoing) if roster_out_n is None else int(roster_out_n))
+        + (len(incoming) if roster_in_n is None else int(roster_in_n))
+    )
 
     upper_limit = float(snap.get("upperLimit", 0.0))
     effective_limit = float(snap.get("effectiveCapLimit", upper_limit))
@@ -992,7 +1149,8 @@ def can_trade_cap_fit(
     projected_cap_space = float(snap["usableCapSpace"]) - delta
     projected_deadline_space = float(snap.get("projectedDeadlineSpace", snap["usableCapSpace"])) - delta
 
-    if projected_roster_count > snap["activeRosterMax"]:
+    roster_send_downs = max(0, projected_roster_count - int(snap["activeRosterMax"]))
+    if roster_send_downs > max(0, int(roster_flex or 0)):
         return {
             "ok": False,
             "reason": "Trade would exceed active roster maximum",
@@ -1007,16 +1165,22 @@ def can_trade_cap_fit(
         }
 
     ok = projected_cap_space >= -0.001
+    # Never let a club finish a trade over the upper limit on full cap hits: in-season
+    # proration made a $9M player "fit" a club with $3M of room. A trade that sheds salary
+    # is always allowed (an over-cap club must be able to get under).
+    if ok and full_delta > 0.001 and projected_total_cap > upper_limit + 0.001:
+        ok = False
     ltir_relief = False
     reason = "ok"
+    if not ok and full_delta <= 0.001 and delta <= 0.001:
+        # Already over the cap: a deal that only sheds salary is how a club gets compliant.
+        ok = True
+        reason = "ok_reduces_cap"
     if not ok:
         if projected_total_cap <= effective_limit + 0.02 and float(snap.get("ltirPool", 0.0)) > 0.001:
             ok = True
             ltir_relief = True
             reason = "ok_with_ltir"
-        elif projected_deadline_space >= -0.001 and day_idx > 0 and float(deadline_phase or 0.0) < 0.72:
-            ok = True
-            reason = "ok_with_accrual"
         else:
             reason = "Trade would exceed usable cap space"
 
@@ -1047,6 +1211,7 @@ def can_trade_cap_fit(
         "prorationFactor": round(prorate_factor, 4),
         "ltirReliefUsed": ltir_relief,
         "projectedTotalCapHit": round(projected_total_cap, 3),
+        "rosterSendDowns": roster_send_downs,
     }
 
 

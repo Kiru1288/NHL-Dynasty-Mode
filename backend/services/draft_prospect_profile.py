@@ -559,7 +559,9 @@ def _evidence_strengths(row: Dict[str, Any]) -> List[Dict[str, Any]]:
         if stock >= 8 and catalyst:
             out.append({
                 "title": "Stock rise",
-                "fact": f"Rose {stock} spots — {catalyst}",
+                "fact": f"Rose {stock} spots" + (
+                    "" if catalyst.lower().startswith(("board jump", "up ")) else f" — {catalyst}"
+                ),
                 "context": "Season events moved public board consensus",
                 "confidence": "Medium",
             })
@@ -703,7 +705,9 @@ def _evidence_weaknesses(row: Dict[str, Any]) -> List[Dict[str, Any]]:
         if stock <= -8 and catalyst:
             out.append({
                 "title": "Stock drop",
-                "fact": f"Fell {abs(stock)} spots — {catalyst}",
+                "fact": f"Fell {abs(stock)} spots" + (
+                    "" if catalyst.lower().startswith(("board drop", "down ")) else f" — {catalyst}"
+                ),
                 "context": "Public board moved against him during the season",
                 "confidence": "Medium",
             })
@@ -2706,7 +2710,11 @@ def build_prospect_profile(
     current_rank = _i(row.get("rank")) or None
     midseason = _i(row.get("midseason_rank")) or None
     rank_movement = None
-    if preseason and current_rank:
+    if row.get("season_rank_movement") is not None:
+        # Like-for-like (only prospects still on the board) — raw preseason - current
+        # inflates by every drafted/removed name above him (e.g. "+274" on draft night).
+        rank_movement = _i(row.get("season_rank_movement"))
+    elif preseason and current_rank:
         rank_movement = preseason - current_rank  # positive = rose
 
     wjc_stats = None
