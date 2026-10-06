@@ -45,6 +45,7 @@ _APPROVED_DEST_FIELDS = (
     "approved_trade_team_ids",
     "approved_destinations",
     "no_trade_list",
+    "ntc_teams",
 )
 
 
@@ -64,6 +65,17 @@ class _DictView:
 
     def __bool__(self) -> bool:
         return True
+
+
+def _dest_on_list(dest: str, approved: List[str]) -> bool:
+    d = str(dest or "").strip()
+    if not d or not approved:
+        return False
+    for item in approved:
+        s = str(item or "").strip()
+        if s and (s == d or s.upper() == d.upper()):
+            return True
+    return False
 
 
 def _approved_trade_destinations(player: Any) -> List[str]:
@@ -174,9 +186,16 @@ def _clause_summary(player: Any) -> Dict[str, Any]:
         else getattr(c, "no_trade_clause", False) if c else getattr(player, "no_trade_clause", False)
     )
     mntc = 0
+    clause_type = ""
+    mode = ""
+    if c is not None:
+        mode = str(getattr(c, "ntc_mode", "") or "").upper()
+        clause_type = str(getattr(c, "clause_type", "") or "").lower()
     if clauses is not None:
         mntc = int(getattr(clauses, "modifiedNoTradeTeams", 0) or 0)
-        clause_type = str(getattr(clauses, "clause_type", "") or "").lower()
+        nested = str(getattr(clauses, "clause_type", "") or "").lower()
+        if nested:
+            clause_type = nested
         if not nmc and clause_type in ("nmc",):
             nmc = True
         if not ntc and clause_type in ("ntc",):
@@ -185,13 +204,23 @@ def _clause_summary(player: Any) -> Dict[str, Any]:
             mntc = max(mntc, int(getattr(clauses, "trade_list_size", 10) or 10))
     elif c is not None:
         mntc = int(getattr(c, "modified_no_trade_teams", 0) or 0)
+    # A modified list stores no_trade_clause=True plus a team count. That is not a full NTC.
+    modified = (
+        mode in ("MODIFIED", "MNTC", "M-NTC")
+        or clause_type in ("m-ntc", "mntc")
+        or mntc > 0
+    )
+    if modified and not nmc:
+        ntc = False
+        if mntc <= 0:
+            mntc = 10
     label = "None"
     if nmc:
         label = "NMC"
+    elif modified:
+        label = "M-NTC"
     elif ntc:
         label = "NTC"
-    elif mntc > 0:
-        label = "M-NTC"
     approved = _approved_trade_destinations(player) if mntc > 0 else []
     return {
         "label": label,
@@ -291,7 +320,8 @@ def evaluate_ntc_waiver_request(
             context=ctx,
             rel_adj=float(ctx.get("waiver_rel_adj") or 0.0),
         )
-        roll = _stable_unit_roll(f"clause-waive|{pid}|{season}|{window_key}")
+        dest_key = str(getattr(destination_team, "team_id", None) or getattr(destination_team, "id", "") or "")
+        roll = _stable_unit_roll(f"clause-waive|{pid}|{season}|{window_key}|{dest_key}")
         accepted = roll < chance
         return {
             "ok": True,
@@ -332,7 +362,7 @@ def evaluate_ntc_waiver_request(
     src_id = str(getattr(source_team, "team_id", None) or getattr(source_team, "id", "") or "")
     if clause.get("mntc", 0) > 0 and not clause.get("ntc"):
         approved = clause.get("approved_destinations") or []
-        if dest_id and dest_id in approved:
+        if dest_id and _dest_on_list(dest_id, approved):
             return {
                 "ok": True,
                 "accepted": True,
@@ -361,12 +391,12 @@ def evaluate_ntc_waiver_request(
         rel_adj=float(ctx.get("waiver_rel_adj") or 0.0),
     )
 
-    # One seeded roll per player + season + waiver window (was per week + destination,
-    # which let a GM re-roll by waiting a week or swapping partners).
+    # Stable per player + season + window + destination. Re-asking the same club
+    # does not re-roll; a different club gets its own roll.
     season = int(ctx.get("season_year", 2025) or 2025)
     window_key = str(ctx.get("clause_window_key") or f"{season}-in")
     pid = str(getattr(player, "id", "") or "")
-    roll = _stable_unit_roll(f"clause-waive|{pid}|{season}|{window_key}")
+    roll = _stable_unit_roll(f"clause-waive|{pid}|{season}|{window_key}|{dest_id}")
     accepted = roll < chance
 
     decline_reasons = []
@@ -430,7 +460,8 @@ def _asset_has_ntc_waiver(asset: PlayerTradeAsset, context: Optional[Dict[str, A
     from app.sim_engine.trades.clause_consent import consent_allows, lookup_consent
 
     ctx = context or {}
-    if not ctx.get("clause_consent_authoritative"):
+    has_book = isinstance(ctx.get("ntc_waivers"), dict)
+    if not ctx.get("clause_consent_authoritative") and not has_book:
         if bool(getattr(asset, "ntc_waived", False)):
             return True
         raw = getattr(asset, "raw", None) or {}
@@ -603,8 +634,8 @@ def validate_trade_rules(
                         f"{pname} has a no-movement clause (NMC) — ask the player to waive before trading"
                     )
                     clause_impact.setdefault(asset.source_team_id, []).append(f"{pname}: NMC blocks trade (waiver required)")
-            elif clause["ntc"] and clause["mntc"] > 0 and str(asset.acquiring_team_id) in approved_dests:
-                pass  # modified NTC: destination already on his approved list
+            elif _dest_on_list(str(asset.acquiring_team_id), approved_dests):
+                pass
             elif clause["ntc"]:
                 if _asset_has_ntc_waiver(asset, ctx):
                     warnings.append(
@@ -623,7 +654,7 @@ def validate_trade_rules(
             elif clause["mntc"] > 0:
                 approved = clause.get("approved_destinations") or _approved_trade_destinations(player)
                 dest = str(asset.acquiring_team_id)
-                if approved and dest in approved:
+                if _dest_on_list(dest, approved):
                     pass
                 elif _asset_has_ntc_waiver(asset, ctx):
                     warnings.append(
@@ -665,8 +696,12 @@ def validate_trade_rules(
                     blocking.append(
                         f"{pname} has no contract years remaining — cannot retain salary on this trade"
                     )
-                elif asset.retained_pct > 0 and p_years < 1:
-                    blocking.append(f"{pname}: retention cannot exceed contract term")
+                elif asset.retained_pct > 0:
+                    prior = float(getattr(player, "retained_share_pct", 0) or 0)
+                    if prior + float(asset.retained_pct) > float(max_retention_pct(league)) + 0.01:
+                        blocking.append(
+                            f"{pname}: retention would stack past the {max_retention_pct(league):.0f}% cap"
+                        )
 
         elif isinstance(asset, DraftPickTradeAsset):
             pid = resolve_pick_id(asset.pick_id, asset.source_team_id)

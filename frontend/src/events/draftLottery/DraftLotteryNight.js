@@ -44,30 +44,38 @@ function PickCard({ pick, active, pending, isUser }) {
         "dlot-card",
         active ? "is-active" : "",
         pending ? "is-pending" : "",
-        isUser ? "is-user" : "",
+        !pending && isUser ? "is-user" : "",
       ]
         .filter(Boolean)
         .join(" ")}
     >
       <div className="dlot-card-rank">#{pick.pick}</div>
       <div className="dlot-card-body">
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <TeamLogo src={pick.logoSrc} label={pick.team_name} size="md" />
-          <div>
-            <strong>{formatPickOwnershipLabel(pick)}</strong>
-            {pick.is_traded && pick.via_abbr ? (
-              <div className="dlot-via">
-                {pick.viaLogoSrc ? <TeamLogo src={pick.viaLogoSrc} label={pick.via_abbr} size="xs" /> : null}
-                <span>via {pick.via_abbr}</span>
+        {pending ? (
+          <div className="dlot-card-sealed" aria-hidden="true">
+            <span className="dlot-logo md dlot-logo-fallback">?</span>
+            <strong>Sealed</strong>
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <TeamLogo src={pick.logoSrc} label={pick.team_name} size="md" />
+            <div>
+              <strong>{formatPickOwnershipLabel(pick)}</strong>
+              {isUser ? <span className="dlot-card-you">Your team</span> : null}
+              {pick.is_traded && pick.via_abbr ? (
+                <div className="dlot-via">
+                  {pick.viaLogoSrc ? <TeamLogo src={pick.viaLogoSrc} label={pick.via_abbr} size="xs" /> : null}
+                  <span>via {pick.via_abbr}</span>
+                </div>
+              ) : null}
+              <div className="dlot-card-details">
+                <span>Was #{pick.original_rank}</span>
+                <span className={`tone-${movement.tone}`}>{movement.label}</span>
+                {pick.odds != null ? <span>{pick.odds}% odds</span> : null}
               </div>
-            ) : null}
-            <div className="dlot-card-details">
-              <span>Was #{pick.original_rank}</span>
-              <span className={`tone-${movement.tone}`}>{movement.label}</span>
-              {pick.odds != null ? <span>{pick.odds}% odds</span> : null}
             </div>
           </div>
-        </div>
+        )}
       </div>
     </article>
   );
@@ -91,6 +99,7 @@ function RevealOverlay({ pick, revealIndex, revealTotal, onSkip, isUser }) {
         </div>
       </div>
       <div className={`dlot-reveal-overlay${isUser ? " is-user-team" : ""}`}>
+      <div className="dlot-reveal-card" key={pick.pick}>
       <p className="dlot-reveal-kicker">
         {isTopPick ? "THE" : "WITH THE"} {pickOrdinal(pick.pick).toUpperCase()} OVERALL PICK
       </p>
@@ -114,6 +123,7 @@ function RevealOverlay({ pick, revealIndex, revealTotal, onSkip, isUser }) {
       <button type="button" className="dlot-skip-btn" onClick={onSkip} style={{ marginTop: 20 }}>
         Skip to All Picks
       </button>
+      </div>
       </div>
     </>
   );

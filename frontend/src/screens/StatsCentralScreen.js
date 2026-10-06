@@ -6,7 +6,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { getAhlLedger, getStatsCentral } from "../services/franchiseService";
+import { getAhlLedger, getStatsCentral, peekStatsCentral } from "../services/franchiseService";
 import { formatFranchiseApiError, isExpiredFranchiseSessionError } from "../services/api";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS, teamNameToNhlAbbr } from "../game/constants";
@@ -380,6 +380,13 @@ function hasRealPct(value) {
 function fmtMaybePct(value, digits = 1) {
   if (!hasRealPct(value)) return "—";
   return fmtPct(value, digits);
+}
+
+function fmtRelPct(value) {
+  if (!hasRealPct(value)) return "—";
+  const n = normalizePct(value, 0) * 100;
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(1)}`;
 }
 
 function fmtMaybeDecimal(value, digits = 3) {
@@ -2175,8 +2182,8 @@ export function StatsCentralScreen() {
     }
   };
   const [scope, setScope] = useState("league");
-  const [lazyStatsCentral, setLazyStatsCentral] = useState(null);
-  const [statsLoadState, setStatsLoadState] = useState("idle");
+  const [lazyStatsCentral, setLazyStatsCentral] = useState(() => peekStatsCentral(null));
+  const [statsLoadState, setStatsLoadState] = useState(() => (peekStatsCentral(null) ? "loaded" : "idle"));
 
   useEffect(() => {
     if (franchiseState?.roster_browser?.organizations?.length) return;
@@ -2193,10 +2200,17 @@ export function StatsCentralScreen() {
 
   useEffect(() => {
     let cancelled = false;
+    const revision = franchiseState?.stats_revision ?? null;
+    const cached = peekStatsCentral(revision);
 
-    setStatsLoadState("loading");
+    if (cached) {
+      setLazyStatsCentral(cached);
+      setStatsLoadState("loaded");
+    } else if (!lazyStatsCentral) {
+      setStatsLoadState("loading");
+    }
 
-    getStatsCentral()
+    getStatsCentral(revision)
       .then((payload) => {
         if (cancelled) return;
         setLazyStatsCentral(payload || {});
@@ -2204,9 +2218,10 @@ export function StatsCentralScreen() {
       })
       .catch((error) => {
         if (cancelled) return;
-
-        setLazyStatsCentral(null);
-        setStatsLoadState("error");
+        if (!lazyStatsCentral && !cached) {
+          setLazyStatsCentral(null);
+          setStatsLoadState("error");
+        }
 
         if (isExpiredFranchiseSessionError(error)) {
           expireFranchiseSession(formatFranchiseApiError(error));
@@ -5290,6 +5305,24 @@ function getColumnFullName(column) {
   );
 }
 
+function columnGroups(columns) {
+  const groups = [];
+  columns.forEach((column, index) => {
+    const name = column?.group || "";
+    const last = groups[groups.length - 1];
+    if (last && last.name === name) {
+      last.span += 1;
+    } else {
+      groups.push({
+        name,
+        span: 1,
+        key: `${name || "col"}-${column?.key || index}`,
+      });
+    }
+  });
+  return groups;
+}
+
 function DataTable({
   columns,
   rows,
@@ -5325,6 +5358,15 @@ function DataTable({
     >
       <table className={`sc-table ${tableClassName}`}>
         <thead>
+          {columns.some((column) => column?.group) ? (
+            <tr className="sc-col-groups">
+              {columnGroups(columns).map((group) => (
+                <th key={group.key} colSpan={group.span} scope="colgroup">
+                  {group.name}
+                </th>
+              ))}
+            </tr>
+          ) : null}
           <tr>
             {columns.map((column) => {
               const isSortable =
@@ -5999,6 +6041,8 @@ function getActiveColumnPresetLabel(view) {
   if (view === "scoring") return "Scoring";
   if (view === "analytics") return "Analytics";
   if (view === "usage") return "Usage";
+  if (view === "relative") return "Vs team";
+  if (view === "model") return "Shot model";
   return "All";
 }
 
@@ -6154,6 +6198,8 @@ function PlayersTab({
     ["scoring", "Scoring"],
     ["analytics", "Analytics"],
     ["usage", "Usage"],
+    ["relative", "Vs team"],
+    ["model", "Shot model"],
     ["contract", "Roster"],
   ];
 
@@ -6531,6 +6577,185 @@ function PlayersTab({
         changeSort("gf_pct"),
     },
 
+    relCf: {
+      label: "Rel CF",
+      sortKey: "rel_cf_pct",
+      align: "right",
+      render: (row) => (
+        <SkaterStatCell
+          value={fmtRelPct(row.rel_cf_pct)}
+          sub={rankSub(row, "rel_cf_pct")}
+        />
+      ),
+      onClick: () => changeSort("rel_cf_pct"),
+    },
+
+    relFf: {
+      label: "Rel FF",
+      sortKey: "rel_ff_pct",
+      align: "right",
+      render: (row) => (
+        <SkaterStatCell
+          value={fmtRelPct(row.rel_ff_pct)}
+          sub={rankSub(row, "rel_ff_pct")}
+        />
+      ),
+      onClick: () => changeSort("rel_ff_pct"),
+    },
+
+    relXgf: {
+      label: "Rel xGF",
+      sortKey: "rel_xgf_pct",
+      align: "right",
+      render: (row) => (
+        <SkaterStatCell
+          value={fmtRelPct(row.rel_xgf_pct)}
+          sub={rankSub(row, "rel_xgf_pct")}
+        />
+      ),
+      onClick: () => changeSort("rel_xgf_pct"),
+    },
+
+    relGf: {
+      label: "Rel GF",
+      sortKey: "rel_gf_pct",
+      align: "right",
+      render: (row) => (
+        <SkaterStatCell
+          value={fmtRelPct(row.rel_gf_pct)}
+          sub={rankSub(row, "rel_gf_pct")}
+        />
+      ),
+      onClick: () => changeSort("rel_gf_pct"),
+    },
+
+    goalShare: {
+      label: "G share",
+      sortKey: "team_goal_share",
+      align: "right",
+      render: (row) => (
+        <SkaterStatCell
+          value={fmtMaybePct(row.team_goal_share)}
+          sub={rankSub(row, "team_goal_share")}
+        />
+      ),
+      onClick: () => changeSort("team_goal_share"),
+    },
+
+    pointShare: {
+      label: "P share",
+      sortKey: "team_point_share",
+      align: "right",
+      render: (row) => (
+        <SkaterStatCell
+          value={fmtMaybePct(row.team_point_share)}
+          sub={rankSub(row, "team_point_share")}
+        />
+      ),
+      onClick: () => changeSort("team_point_share"),
+    },
+
+    primaryA: {
+      label: "A1/60",
+      sortKey: "primary_assists_per_60",
+      align: "right",
+      render: (row) => (
+        <SkaterStatCell
+          value={
+            row.primary_assists_per_60 == null
+              ? "—"
+              : fmtTwo(row.primary_assists_per_60)
+          }
+          sub={
+            row.primary_assists_estimated
+              ? "est"
+              : row.primary_assists == null
+                ? ""
+                : `${fmtZero(row.primary_assists)} A1`
+          }
+        />
+      ),
+      onClick: () => changeSort("primary_assists_per_60"),
+    },
+
+    g60: {
+      label: "G/60",
+      sortKey: "goals_per_60",
+      align: "right",
+      render: (row) => <SkaterStatCell value={fmtTwo(row.goals_per_60)} sub={rankSub(row, "goals_per_60")} />,
+      onClick: () => changeSort("goals_per_60"),
+    },
+    ixg60: {
+      label: "iXG/60",
+      sortKey: "ixg_per_60",
+      align: "right",
+      render: (row) => <SkaterStatCell value={fmtTwo(row.ixg_per_60)} sub={rankSub(row, "ixg_per_60")} />,
+      onClick: () => changeSort("ixg_per_60"),
+    },
+    sog60: {
+      label: "SOG/60",
+      sortKey: "shots_per_60",
+      align: "right",
+      render: (row) => <SkaterStatCell value={fmtTwo(row.shots_per_60)} sub={rankSub(row, "shots_per_60")} />,
+      onClick: () => changeSort("shots_per_60"),
+    },
+    hd60: {
+      label: "HD/60",
+      sortKey: "ind_hd_per_60",
+      align: "right",
+      render: (row) => <SkaterStatCell value={fmtTwo(row.ind_hd_per_60)} />,
+      onClick: () => changeSort("ind_hd_per_60"),
+    },
+    md60: {
+      label: "MD/60",
+      sortKey: "ind_md_per_60",
+      align: "right",
+      render: (row) => <SkaterStatCell value={fmtTwo(row.ind_md_per_60)} />,
+      onClick: () => changeSort("ind_md_per_60"),
+    },
+    ld60: {
+      label: "LD/60",
+      sortKey: "ind_ld_per_60",
+      align: "right",
+      render: (row) => <SkaterStatCell value={fmtTwo(row.ind_ld_per_60)} />,
+      onClick: () => changeSort("ind_ld_per_60"),
+    },
+    shAx: {
+      label: "SH% Ax",
+      sortKey: "sh_above_expected",
+      align: "right",
+      render: (row) => <SkaterStatCell value={fmtRelPct(row.sh_above_expected)} />,
+      onClick: () => changeSort("sh_above_expected"),
+    },
+    flurryX: {
+      label: "Flurry xGF%",
+      sortKey: "oi_flurry_xgf_pct",
+      align: "right",
+      render: (row) => <SkaterStatCell value={fmtMaybePct(row.oi_flurry_xgf_pct)} />,
+      onClick: () => changeSort("oi_flurry_xgf_pct"),
+    },
+    scoreX: {
+      label: "Score xGF%",
+      sortKey: "oi_score_xgf_pct",
+      align: "right",
+      render: (row) => <SkaterStatCell value={fmtMaybePct(row.oi_score_xgf_pct)} />,
+      onClick: () => changeSort("oi_score_xgf_pct"),
+    },
+    reb60: {
+      label: "xReb/60",
+      sortKey: "ind_x_rebounds_per_60",
+      align: "right",
+      render: (row) => <SkaterStatCell value={fmtTwo(row.ind_x_rebounds_per_60)} />,
+      onClick: () => changeSort("ind_x_rebounds_per_60"),
+    },
+    xa60: {
+      label: "xA/60",
+      sortKey: "xa_per_60",
+      align: "right",
+      render: (row) => <SkaterStatCell value={fmtTwo(row.xa_per_60)} />,
+      onClick: () => changeSort("xa_per_60"),
+    },
+
     war: {
       label: "WAR",
       sortKey: "war",
@@ -6797,6 +7022,40 @@ function PlayersTab({
       "hits",
       "blocks",
       "actions",
+    ],
+    relative: [
+      "player",
+      "gp",
+      "relCf",
+      "relFf",
+      "relXgf",
+      "relGf",
+      "goalShare",
+      "pointShare",
+      "cfPct",
+      "xgfPct",
+      "gfPct",
+      "primaryA",
+      "actions",
+    ],
+    model: [
+      "player",
+      "gp",
+      "g60",
+      "ixg60",
+      "sog60",
+      "finish",
+      "shAx",
+      "hd60",
+      "md60",
+      "ld60",
+      "reb60",
+      "primaryA",
+      "xa60",
+      "flurryX",
+      "scoreX",
+      "cfPct",
+      "xgfPct",
     ],
     contract: [
       "player",
@@ -7728,6 +7987,42 @@ const TEAM_STAT_VIEWS = [
     defaultSort: "xgf_pct",
     defaultDir: "desc",
   },
+  {
+    id: "rates",
+    label: "Rates",
+    defaultSort: "xgd",
+    defaultDir: "desc",
+  },
+  {
+    id: "expected",
+    label: "Expected",
+    defaultSort: "flurry_xgf_pct",
+    defaultDir: "desc",
+  },
+  {
+    id: "danger",
+    label: "Danger",
+    defaultSort: "hd_xgf",
+    defaultDir: "desc",
+  },
+  {
+    id: "outcomes",
+    label: "Shot outcomes",
+    defaultSort: "x_rebounds_for",
+    defaultDir: "desc",
+  },
+  {
+    id: "situations",
+    label: "Situations",
+    defaultSort: "comeback_wins",
+    defaultDir: "desc",
+  },
+  {
+    id: "ledger",
+    label: "Full ledger",
+    defaultSort: "points",
+    defaultDir: "desc",
+  },
 ];
 
 const TEAM_COLUMN_PRESETS = {
@@ -7782,10 +8077,216 @@ const TEAM_COLUMN_PRESETS = {
     "cf_pct",
     "ff_pct",
     "xgf_pct",
+    "gf_pct",
+    "xgd",
+    "gf_above_xgf",
+    "ga_above_expected",
     "pdo",
     "goal_diff",
   ],
+  rates: [
+    "rank",
+    "team",
+    "gp",
+    "gf_60",
+    "ga_60",
+    "gd_60",
+    "xgf_60",
+    "xga_60",
+    "xgd_60",
+    "sf_60",
+    "sa_60",
+    "sh_pct",
+    "sv_pct",
+    "sh_pct_unblocked",
+    "shots_blocked",
+  ],
+  expected: [
+    "rank",
+    "team",
+    "gp",
+    "xgf",
+    "xga",
+    "xgf_pct",
+    "flurry_xgf",
+    "flurry_xga",
+    "flurry_xgf_pct",
+    "score_xgf",
+    "score_xga",
+    "score_xgf_pct",
+    "flurry_score_xgf_pct",
+    "score_cf_pct",
+    "gf_above_xgf",
+    "ga_above_expected",
+    "sh_above_expected",
+    "sv_above_expected",
+    "pdo_above_expected",
+  ],
+  danger: [
+    "rank",
+    "team",
+    "gp",
+    "ld_sf",
+    "md_sf",
+    "hd_sf",
+    "ld_sa",
+    "md_sa",
+    "hd_sa",
+    "ld_xgf",
+    "md_xgf",
+    "hd_xgf",
+    "hd_xga",
+    "ld_gf",
+    "md_gf",
+    "hd_gf",
+    "hd_ga",
+  ],
+  outcomes: [
+    "rank",
+    "team",
+    "gp",
+    "sf",
+    "missed_shots",
+    "shots_blocked",
+    "miss_pct",
+    "block_pct",
+    "x_miss",
+    "miss_above_expected",
+    "x_rebounds_for",
+    "rebound_xgf",
+    "rebound_gf",
+    "x_freeze_for",
+    "x_zone_for",
+    "x_clear_for",
+    "sh_pct",
+    "sh_pct_unblocked",
+    "sh_pct_attempts",
+    "pim_60",
+    "hit_60",
+  ],
+  situations: [
+    "rank", "team", "gp",
+    "comeback_wins", "multi_comeback_wins", "comeback_pct",
+    "led_after_2", "wins_led_after_2", "lead_hold_pct",
+    "blown_leads_after_2", "losses_led_after_2", "otl_led_after_2", "blow_lead_pct", "blown_multi_leads",
+    "led_after_1", "tied_after_1", "trailed_after_1",
+    "wins_led_after_1", "wins_tied_after_1", "wins_trailed_after_1",
+    "tied_after_2", "trailed_after_2", "wins_tied_after_2",
+    "regulation_wins", "regulation_losses", "ot_wins", "ot_losses", "ot_games",
+    "one_goal_wins", "one_goal_losses", "one_goal_games",
+    "wins_by_2", "wins_by_3", "losses_by_2", "losses_by_3", "ties",
+    "shutout_wins", "shutout_losses", "blowout_wins", "blowout_losses",
+    "home_wins", "home_losses", "home_otl", "home_points", "home_point_pct",
+    "road_wins", "road_losses", "road_otl", "road_points", "road_point_pct",
+    "wins_outshot", "losses_outshooting", "wins_out_xg", "losses_with_xg_edge",
+    "wins_with_pp_goal", "losses_allowing_pp",
+    "scored_first", "en_goals_for", "en_goals_against",
+    "p1_gf", "p1_ga", "p2_gf", "p2_ga", "p3_gf", "p3_ga", "ot_gf", "ot_ga",
+    "periods_won", "periods_lost", "periods_tied",
+  ],
 };
+
+TEAM_COLUMN_PRESETS.ledger = [...new Set(Object.values(TEAM_COLUMN_PRESETS).flat())];
+
+const TEAM_LEDGER_GROUP_LABELS = {
+  overall: "Record",
+  offense: "Offense",
+  defense: "Defense",
+  special: "Special teams",
+  analytics: "Possession",
+  rates: "Rates",
+  expected: "Expected",
+  danger: "Danger",
+  outcomes: "Shot outcomes",
+  situations: "Situations",
+};
+
+const TEAM_LEDGER_GROUPS = {};
+Object.entries(TEAM_COLUMN_PRESETS).forEach(([preset, keys]) => {
+  if (preset === "ledger") return;
+  const label = TEAM_LEDGER_GROUP_LABELS[preset] || preset;
+  keys.forEach((key) => {
+    if (key === "rank" || key === "team" || key === "gp") return;
+    if (!TEAM_LEDGER_GROUPS[key]) TEAM_LEDGER_GROUPS[key] = label;
+  });
+});
+
+const SITUATION_COLUMN_GROUPS = {
+  comeback_wins: "Comebacks",
+  multi_comeback_wins: "Comebacks",
+  comeback_pct: "Comebacks",
+  led_after_2: "Led after 2",
+  wins_led_after_2: "Led after 2",
+  lead_hold_pct: "Led after 2",
+  blown_leads_after_2: "Led after 2",
+  losses_led_after_2: "Led after 2",
+  otl_led_after_2: "Led after 2",
+  blow_lead_pct: "Led after 2",
+  blown_multi_leads: "Led after 2",
+  led_after_1: "After 1st",
+  tied_after_1: "After 1st",
+  trailed_after_1: "After 1st",
+  wins_led_after_1: "After 1st",
+  wins_tied_after_1: "After 1st",
+  wins_trailed_after_1: "After 1st",
+  tied_after_2: "After 2nd",
+  trailed_after_2: "After 2nd",
+  wins_tied_after_2: "After 2nd",
+  regulation_wins: "Decisions",
+  regulation_losses: "Decisions",
+  ot_wins: "Decisions",
+  ot_losses: "Decisions",
+  ot_games: "Decisions",
+  one_goal_wins: "Margins",
+  one_goal_losses: "Margins",
+  one_goal_games: "Margins",
+  wins_by_2: "Margins",
+  wins_by_3: "Margins",
+  losses_by_2: "Margins",
+  losses_by_3: "Margins",
+  ties: "Margins",
+  shutout_wins: "Margins",
+  shutout_losses: "Margins",
+  blowout_wins: "Margins",
+  blowout_losses: "Margins",
+  home_wins: "Home",
+  home_losses: "Home",
+  home_otl: "Home",
+  home_points: "Home",
+  home_point_pct: "Home",
+  road_wins: "Road",
+  road_losses: "Road",
+  road_otl: "Road",
+  road_points: "Road",
+  road_point_pct: "Road",
+  wins_outshot: "Shots and special teams",
+  losses_outshooting: "Shots and special teams",
+  wins_out_xg: "Shots and special teams",
+  losses_with_xg_edge: "Shots and special teams",
+  wins_with_pp_goal: "Shots and special teams",
+  losses_allowing_pp: "Shots and special teams",
+  scored_first: "Scoring",
+  en_goals_for: "Scoring",
+  en_goals_against: "Scoring",
+  p1_gf: "Periods",
+  p1_ga: "Periods",
+  p2_gf: "Periods",
+  p2_ga: "Periods",
+  p3_gf: "Periods",
+  p3_ga: "Periods",
+  ot_gf: "Periods",
+  ot_ga: "Periods",
+  periods_won: "Periods",
+  periods_lost: "Periods",
+  periods_tied: "Periods",
+};
+
+function teamColumnGroup(view, key) {
+  if (key === "rank" || key === "team" || key === "gp") return "";
+  if (view === "situations") return SITUATION_COLUMN_GROUPS[key] || "Situations";
+  if (view === "ledger") return TEAM_LEDGER_GROUPS[key] || "";
+  return "";
+}
 
 const TEAM_METRIC_DIRECTIONS = {
   gp: "desc",
@@ -7820,8 +8321,126 @@ const TEAM_METRIC_DIRECTIONS = {
   cf_pct: "desc",
   ff_pct: "desc",
   xgf_pct: "desc",
+  gf_pct: "desc",
   pdo: "desc",
   goal_diff: "desc",
+  xgd: "desc",
+  gf_above_xgf: "desc",
+  ga_above_expected: "asc",
+  gf_60: "desc",
+  ga_60: "asc",
+  gd_60: "desc",
+  xgf_60: "desc",
+  xga_60: "asc",
+  xgd_60: "desc",
+  sf_60: "desc",
+  sa_60: "asc",
+  sh_pct_unblocked: "desc",
+  sv_pct_unblocked: "desc",
+  shots_blocked: "desc",
+  missed_shots: "desc",
+  flurry_xgf: "desc",
+  flurry_xga: "asc",
+  flurry_xgf_pct: "desc",
+  score_xgf: "desc",
+  score_xga: "asc",
+  score_xgf_pct: "desc",
+  flurry_score_xgf_pct: "desc",
+  score_cf_pct: "desc",
+  score_ff_pct: "desc",
+  sh_above_expected: "desc",
+  sv_above_expected: "desc",
+  pdo_above_expected: "desc",
+  hd_sf: "desc",
+  md_sf: "desc",
+  ld_sf: "desc",
+  hd_sa: "asc",
+  md_sa: "asc",
+  ld_sa: "asc",
+  hd_xgf: "desc",
+  md_xgf: "desc",
+  ld_xgf: "desc",
+  hd_xga: "asc",
+  hd_gf: "desc",
+  md_gf: "desc",
+  ld_gf: "desc",
+  hd_ga: "asc",
+  x_rebounds_for: "desc",
+  rebound_xgf: "desc",
+  rebound_gf: "desc",
+  x_miss: "desc",
+  miss_above_expected: "desc",
+  miss_pct: "desc",
+  block_pct: "desc",
+  pim_60: "asc",
+  hit_60: "desc",
+  comeback_wins: "desc",
+  multi_comeback_wins: "desc",
+  comeback_pct: "desc",
+  led_after_1: "desc",
+  tied_after_1: "desc",
+  trailed_after_1: "desc",
+  led_after_2: "desc",
+  tied_after_2: "desc",
+  trailed_after_2: "desc",
+  wins_led_after_1: "desc",
+  wins_tied_after_1: "desc",
+  wins_trailed_after_1: "desc",
+  wins_led_after_2: "desc",
+  wins_tied_after_2: "desc",
+  lead_hold_pct: "desc",
+  losses_led_after_2: "asc",
+  otl_led_after_2: "asc",
+  blown_leads_after_2: "asc",
+  blow_lead_pct: "asc",
+  blown_multi_leads: "asc",
+  regulation_wins: "desc",
+  regulation_losses: "asc",
+  ot_wins: "desc",
+  ot_losses: "asc",
+  ot_games: "desc",
+  one_goal_wins: "desc",
+  one_goal_losses: "asc",
+  one_goal_games: "desc",
+  wins_by_2: "desc",
+  wins_by_3: "desc",
+  losses_by_2: "asc",
+  losses_by_3: "asc",
+  ties: "asc",
+  shutout_wins: "desc",
+  shutout_losses: "asc",
+  blowout_wins: "desc",
+  blowout_losses: "asc",
+  home_wins: "desc",
+  home_losses: "asc",
+  home_otl: "asc",
+  home_points: "desc",
+  home_point_pct: "desc",
+  road_wins: "desc",
+  road_losses: "asc",
+  road_otl: "asc",
+  road_points: "desc",
+  road_point_pct: "desc",
+  wins_outshot: "desc",
+  losses_outshooting: "asc",
+  wins_out_xg: "desc",
+  losses_with_xg_edge: "asc",
+  wins_with_pp_goal: "desc",
+  losses_allowing_pp: "asc",
+  scored_first: "desc",
+  en_goals_for: "desc",
+  en_goals_against: "asc",
+  p1_gf: "desc",
+  p1_ga: "asc",
+  p2_gf: "desc",
+  p2_ga: "asc",
+  p3_gf: "desc",
+  p3_ga: "asc",
+  ot_gf: "desc",
+  ot_ga: "asc",
+  periods_won: "desc",
+  periods_lost: "asc",
+  periods_tied: "desc",
 };
 
 function hasTeamNumber(value) {
@@ -7978,6 +8597,9 @@ function formatTeamStatValue(metric, value) {
       "ff_pct",
       "xgf_pct",
       "sh_pct",
+      "sh_pct_unblocked",
+      "sv_pct_unblocked",
+      "gf_pct",
       "points_pct",
       "win_pct",
     ].includes(metric)
@@ -8004,8 +8626,53 @@ function formatTeamStatValue(metric, value) {
     return fmtOne(value);
   }
 
+  if (
+    [
+      "gf_60",
+      "ga_60",
+      "gd_60",
+      "xgf_60",
+      "xga_60",
+      "xgd_60",
+      "sf_60",
+      "sa_60",
+      "gf_above_xgf",
+      "ga_above_expected",
+      "xgd",
+      "shots_blocked",
+      "missed_shots",
+    ].includes(metric)
+  ) {
+    return fmtOne(value);
+  }
+
   if (metric === "goal_diff") {
     return formatSigned(value);
+  }
+
+  if (
+    metric.endsWith("_pct") ||
+    metric === "sh_above_expected" ||
+    metric === "sv_above_expected" ||
+    metric === "miss_pct" ||
+    metric === "block_pct"
+  ) {
+    return fmtPct(value, 1);
+  }
+
+  if (
+    metric.startsWith("flurry_") ||
+    metric.startsWith("score_") ||
+    metric.startsWith("hd_") ||
+    metric.startsWith("md_") ||
+    metric.startsWith("ld_") ||
+    metric.startsWith("x_") ||
+    metric.startsWith("rebound_") ||
+    metric.endsWith("_60") ||
+    metric === "miss_above_expected" ||
+    metric === "pdo_above_expected"
+  ) {
+    return fmtOne(value);
   }
 
   return fmtZero(value);
@@ -8024,7 +8691,10 @@ function TeamMetricValue({
   const tone = hasPlayed ? getTeamRankTone(metric, rank, total) : "";
 
   return (
-    <span className={`sc-team-value ${tone}`}>
+    <span
+      className={`sc-team-value ${tone}`}
+      title={hasPlayed && rank ? `League rank ${rank} of ${total}` : undefined}
+    >
       <strong>{formatted}</strong>
 
       {formatted !== "—" &&
@@ -8296,6 +8966,138 @@ function getTeamColumnDefinitions({
       "pdo",
       "PDO",
       "is-group-start"
+    ),
+
+    gf_pct: metricColumn("gf_pct", "GF%"),
+    xgd: metricColumn("xgd", "xGD"),
+    gf_above_xgf: metricColumn("gf_above_xgf", "GF−xGF"),
+    ga_above_expected: metricColumn("ga_above_expected", "GA−xGA"),
+    gf_60: metricColumn("gf_60", "GF/60"),
+    ga_60: metricColumn("ga_60", "GA/60"),
+    gd_60: metricColumn("gd_60", "GD/60"),
+    xgf_60: metricColumn("xgf_60", "xGF/60"),
+    xga_60: metricColumn("xga_60", "xGA/60"),
+    xgd_60: metricColumn("xgd_60", "xGD/60"),
+    sf_60: metricColumn("sf_60", "SF/60"),
+    sa_60: metricColumn("sa_60", "SA/60"),
+    sh_pct_unblocked: metricColumn("sh_pct_unblocked", "SH% FF"),
+    sv_pct_unblocked: metricColumn("sv_pct_unblocked", "SV% FF"),
+    shots_blocked: metricColumn("shots_blocked", "BLK"),
+    missed_shots: metricColumn("missed_shots", "MISS"),
+    ...Object.fromEntries(
+      [
+        ["flurry_xgf", "Flurry xGF"],
+        ["flurry_xga", "Flurry xGA"],
+        ["flurry_xgf_pct", "Flurry xGF%"],
+        ["score_xgf", "Score xGF"],
+        ["score_xga", "Score xGA"],
+        ["score_xgf_pct", "Score xGF%"],
+        ["flurry_score_xgf_pct", "F+S xGF%"],
+        ["score_cf_pct", "Score CF%"],
+        ["score_ff_pct", "Score FF%"],
+        ["sh_above_expected", "SH% Ax"],
+        ["sv_above_expected", "SV% Ax"],
+        ["pdo_above_expected", "PDO Ax"],
+        ["xsh_pct", "xSH%"],
+        ["xsv_pct", "xSV%"],
+        ["hd_sf", "HD SF"],
+        ["md_sf", "MD SF"],
+        ["ld_sf", "LD SF"],
+        ["hd_sa", "HD SA"],
+        ["md_sa", "MD SA"],
+        ["ld_sa", "LD SA"],
+        ["hd_xgf", "HD xGF"],
+        ["md_xgf", "MD xGF"],
+        ["ld_xgf", "LD xGF"],
+        ["hd_xga", "HD xGA"],
+        ["hd_gf", "HD GF"],
+        ["md_gf", "MD GF"],
+        ["ld_gf", "LD GF"],
+        ["hd_ga", "HD GA"],
+        ["x_rebounds_for", "xReb F"],
+        ["x_rebounds_against", "xReb A"],
+        ["rebound_xgf", "Reb xGF"],
+        ["rebound_gf", "Reb GF"],
+        ["rebound_ga", "Reb GA"],
+        ["x_freeze_for", "xFreeze"],
+        ["x_zone_for", "xIn zone"],
+        ["x_clear_for", "xClear"],
+        ["x_miss", "xMiss"],
+        ["miss_above_expected", "Miss Ax"],
+        ["miss_pct", "Miss%"],
+        ["block_pct", "Blk%"],
+        ["sh_pct_attempts", "SH% CF"],
+        ["pim_60", "PIM/60"],
+        ["hit_60", "Hit/60"],
+        ["ice_seconds", "Ice sec"],
+        ["comeback_wins", "Comeback W"],
+        ["multi_comeback_wins", "Multi CB W"],
+        ["comeback_pct", "CB%"],
+        ["led_after_1", "Led P1"],
+        ["tied_after_1", "Tied P1"],
+        ["trailed_after_1", "Trail P1"],
+        ["led_after_2", "Led P2"],
+        ["tied_after_2", "Tied P2"],
+        ["trailed_after_2", "Trail P2"],
+        ["wins_led_after_1", "W led P1"],
+        ["wins_tied_after_1", "W tied P1"],
+        ["wins_trailed_after_1", "W trail P1"],
+        ["wins_led_after_2", "W led P2"],
+        ["wins_tied_after_2", "W tied P2"],
+        ["lead_hold_pct", "Hold%"],
+        ["losses_led_after_2", "L led P2"],
+        ["otl_led_after_2", "OTL led P2"],
+        ["blown_leads_after_2", "Blown P2"],
+        ["blow_lead_pct", "Blow%"],
+        ["blown_multi_leads", "Blown 2+"],
+        ["regulation_wins", "RW"],
+        ["regulation_losses", "RL"],
+        ["ot_wins", "OTW"],
+        ["ot_losses", "OTL"],
+        ["ot_games", "OT GP"],
+        ["one_goal_wins", "1G W"],
+        ["one_goal_losses", "1G L"],
+        ["one_goal_games", "1G GP"],
+        ["wins_by_2", "W by 2"],
+        ["wins_by_3", "W by 3+"],
+        ["losses_by_2", "L by 2"],
+        ["losses_by_3", "L by 3+"],
+        ["ties", "T"],
+        ["shutout_wins", "SO W"],
+        ["shutout_losses", "SO L"],
+        ["blowout_wins", "Blow W"],
+        ["blowout_losses", "Blow L"],
+        ["home_wins", "H W"],
+        ["home_losses", "H L"],
+        ["home_otl", "H OTL"],
+        ["home_points", "H PTS"],
+        ["home_point_pct", "H PTS%"],
+        ["road_wins", "R W"],
+        ["road_losses", "R L"],
+        ["road_otl", "R OTL"],
+        ["road_points", "R PTS"],
+        ["road_point_pct", "R PTS%"],
+        ["wins_outshot", "W outshot"],
+        ["losses_outshooting", "L outshoot"],
+        ["wins_out_xg", "W low xG"],
+        ["losses_with_xg_edge", "L high xG"],
+        ["wins_with_pp_goal", "W w/ PPG"],
+        ["losses_allowing_pp", "L w/ PPGA"],
+        ["scored_first", "Scored 1st"],
+        ["en_goals_for", "EN GF"],
+        ["en_goals_against", "EN GA"],
+        ["p1_gf", "P1 GF"],
+        ["p1_ga", "P1 GA"],
+        ["p2_gf", "P2 GF"],
+        ["p2_ga", "P2 GA"],
+        ["p3_gf", "P3 GF"],
+        ["p3_ga", "P3 GA"],
+        ["ot_gf", "OT GF"],
+        ["ot_ga", "OT GA"],
+        ["periods_won", "Per W"],
+        ["periods_lost", "Per L"],
+        ["periods_tied", "Per T"],
+      ].map(([key, label]) => [key, metricColumn(key, label)])
     ),
   };
 }
@@ -8786,11 +9588,22 @@ function TeamTab({ data, loadState }) {
     [data, rankMaps, handleSort]
   );
 
-  const columns =
-    TEAM_COLUMN_PRESETS[view].map(
-      (columnKey) =>
-        columnDefinitions[columnKey]
-    );
+  const columns = (TEAM_COLUMN_PRESETS[view] || [])
+    .map((columnKey, index, keys) => {
+      const column = columnDefinitions[columnKey];
+      if (!column) return null;
+      const group = teamColumnGroup(view, columnKey);
+      const previous = index > 0 ? teamColumnGroup(view, keys[index - 1]) : "";
+      return {
+        ...column,
+        group,
+        className: [column.className, group && group !== previous ? "is-group-start" : ""]
+          .filter(Boolean)
+          .join(" "),
+      };
+    })
+    .filter(Boolean);
+  const wideTable = columns.length >= 16;
 
   if (
     loadState === "loading" &&
@@ -8845,12 +9658,17 @@ function TeamTab({ data, loadState }) {
       />
 
       <section className="sc-team-table-panel">
+        {wideTable ? (
+          <div className="sc-team-scroll-hint">
+            Scroll sideways. Rank and team stay pinned.
+          </div>
+        ) : null}
         <DataTable
           columns={columns}
           rows={sortedTeams}
           sortKey={sortKey}
           sortDir={sortDir}
-          tableClassName="sc-team-stats-table"
+          tableClassName={`sc-team-stats-table${wideTable ? " is-wide" : ""}`}
           empty="No teams match the current filters."
           getRowId={(team) =>
             teamRowId(team)
@@ -14078,11 +14896,68 @@ function StatsCentralStretchStyles() {
       }
 
       .sc-table,
-      .sc-overview-scoring-table,
-      .sc-team-stats-table {
+      .sc-overview-scoring-table {
         width: 100% !important;
         min-width: 100% !important;
         table-layout: fixed !important;
+      }
+
+      .sc-team-table-panel .sc-table-wrap {
+        overflow: auto !important;
+      }
+
+      .sc-team-table-panel .sc-team-stats-table {
+        width: max-content !important;
+        min-width: 100% !important;
+        table-layout: auto !important;
+      }
+
+      .sc-team-table-panel .sc-team-stats-table thead th.is-right,
+      .sc-team-table-panel .sc-team-stats-table tbody td.is-right {
+        width: auto !important;
+        min-width: 76px !important;
+        max-width: none !important;
+      }
+
+      .sc-team-table-panel .sc-team-stats-table.is-wide thead th.is-right,
+      .sc-team-table-panel .sc-team-stats-table.is-wide tbody td.is-right {
+        min-width: 104px !important;
+      }
+
+      .sc-team-table-panel .sc-team-stats-table thead th {
+        height: auto !important;
+        min-height: 48px !important;
+        padding: 8px 8px 6px !important;
+        letter-spacing: 0.02em !important;
+        line-height: 1.15 !important;
+        white-space: normal !important;
+        vertical-align: bottom !important;
+      }
+
+      .sc-team-table-panel .sc-team-stats-table thead tr.sc-col-groups th {
+        min-height: 0 !important;
+        height: 24px !important;
+        padding: 4px 8px !important;
+        top: 0 !important;
+        z-index: 11 !important;
+        text-align: center !important;
+        letter-spacing: 0.14em !important;
+        color: #e8a536 !important;
+        background: #041018 !important;
+        white-space: nowrap !important;
+      }
+
+      .sc-team-table-panel .sc-team-stats-table thead tr.sc-col-groups + tr th {
+        top: 24px !important;
+      }
+
+      .sc-team-table-panel .sc-team-stats-table thead tr:not(.sc-col-groups) th:nth-child(1),
+      .sc-team-table-panel .sc-team-stats-table thead tr:not(.sc-col-groups) th:nth-child(2) {
+        z-index: 14 !important;
+      }
+
+      .sc-team-table-panel .sc-team-stats-table.is-wide .sc-team-value em {
+        display: none;
       }
 
       @media (max-width: 1220px) {
@@ -18256,12 +19131,16 @@ function StatsCentralStyles() {
 
       .sc-team-view-tabs {
         display: flex;
+        flex-wrap: nowrap;
         align-items: stretch;
         justify-content: flex-end;
+        overflow-x: auto;
+        scrollbar-width: thin;
       }
 
       .sc-team-view-tabs button {
-        min-width: 112px;
+        flex: 0 0 auto;
+        min-width: 96px;
         padding: 0 16px;
         border: 0;
         border-left: 1px solid rgba(156, 218, 236, 0.12);
@@ -18400,12 +19279,16 @@ function StatsCentralStyles() {
       .sc-team-table-panel {
         min-height: 0;
         overflow: hidden;
+        display: flex;
+        flex-direction: column;
         border: 1px solid rgba(156, 218, 236, 0.14);
         background: rgba(3, 13, 22, 0.82);
       }
 
       .sc-team-table-panel .sc-table-wrap {
-        height: 100%;
+        flex: 1 1 auto;
+        height: auto;
+        min-height: 0;
         border: 0;
         border-radius: 0;
         overflow: auto;
@@ -18510,22 +19393,31 @@ function StatsCentralStyles() {
         border-left: 1px solid rgba(156, 218, 236, 0.14);
       }
 
-      .sc-team-stats-table th:nth-child(1),
+      .sc-team-stats-table thead tr:not(.sc-col-groups) th:nth-child(1),
       .sc-team-stats-table td:nth-child(1) {
         position: sticky;
         left: 0;
       }
 
-      .sc-team-stats-table th:nth-child(2),
+      .sc-team-stats-table thead tr:not(.sc-col-groups) th:nth-child(2),
       .sc-team-stats-table td:nth-child(2) {
         position: sticky;
         left: 58px;
       }
 
-      .sc-team-stats-table th:nth-child(1),
-      .sc-team-stats-table th:nth-child(2) {
+      .sc-team-stats-table thead tr:not(.sc-col-groups) th:nth-child(1),
+      .sc-team-stats-table thead tr:not(.sc-col-groups) th:nth-child(2) {
         z-index: 5;
         background: #061722;
+      }
+
+      .sc-team-scroll-hint {
+        flex: 0 0 auto;
+        padding: 6px 14px;
+        border-bottom: 1px solid rgba(156, 218, 236, 0.12);
+        color: #8facbc;
+        font-size: 0.75rem;
+        letter-spacing: 0.04em;
       }
 
       .sc-team-stats-table td:nth-child(1),

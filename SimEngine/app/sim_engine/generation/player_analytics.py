@@ -150,6 +150,144 @@ def per_60(value: Any, toi_sec: Any, default: float = 0.0) -> float:
     return safe_float(value, 0.0) * 3600.0 / sec
 
 
+# MoneyPuck glossary (moneypuck.com/glossary.htm):
+#   Low danger  = unblocked shot with xG < 0.08  (~75% of shots, ~0.03 xG each)
+#   Medium      = 0.08 <= xG < 0.20             (~20% of shots, ~0.12 xG each)
+#   High        = xG >= 0.20                     (~5% of shots, ~0.23 xG each)
+# Those three rates are the unique 75/20/5 mix that matches the glossary.
+# Flurry xG (moneypuck.com/about.htm):
+#   adjusted = P(not scored yet in the flurry) * raw xG
+#   Season form: rebound xG is ~13% of xG in their published team file, discounted
+#   by the chance the previous shot already scored (the team's own xG per shot).
+# Score adjustment (same glossary: more credit when a club has been protecting leads):
+#   one goal of average margin moves shot rates about 3.5%, the public score-effect range.
+_MP_LD_XG = 0.03
+_MP_MD_XG = 0.12
+_MP_HD_XG = 0.23
+_MP_MD_SHARE = 0.20
+_MP_REBOUND_XG_SHARE = 0.13
+_MP_SCORE_K = 0.035
+# Non-goal unblocked attempts in the published team file split into these outcomes.
+_MP_NON_GOAL = {
+    "x_rebounds": 0.086,
+    "x_freeze": 0.134,
+    "x_stopped": 0.002,
+    "x_zone": 0.375,
+    "x_clear": 0.403,
+}
+# Miss rates by danger. At the 75/20/5 mix they reproduce the ~33% miss rate
+# on unblocked attempts in that same published file.
+_MP_MISS = {"ld": 0.38, "md": 0.22, "hd": 0.12}
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
+def _danger_split(unblocked: float, xg: float) -> Optional[Dict[str, float]]:
+    """Split unblocked attempts into MoneyPuck danger bands so band xG sums to xG."""
+    shots = float(unblocked)
+    if shots <= 0:
+        return None
+    total_xg = _clamp(float(xg), shots * _MP_LD_XG, shots * _MP_HD_XG)
+    medium = _MP_MD_SHARE * shots
+    target = total_xg - (_MP_MD_XG * medium)
+    high = (target - _MP_LD_XG * (1.0 - _MP_MD_SHARE) * shots) / (_MP_HD_XG - _MP_LD_XG)
+    high = _clamp(high, 0.0, (1.0 - _MP_MD_SHARE) * shots)
+    low = (1.0 - _MP_MD_SHARE) * shots - high
+    return {
+        "ld": low,
+        "md": medium,
+        "hd": high,
+        "ld_xg": low * _MP_LD_XG,
+        "md_xg": medium * _MP_MD_XG,
+        "hd_xg": high * _MP_HD_XG,
+    }
+
+
+def _share_goals(goals: float, weights: Dict[str, float]) -> Dict[str, float]:
+    total_w = sum(weights.values())
+    if goals <= 0 or total_w <= 0:
+        return {key: 0.0 for key in weights}
+    return {key: float(goals) * (weight / total_w) for key, weight in weights.items()}
+
+
+def published_moneypuck_side(
+    unblocked: float,
+    shots_on_goal: float,
+    goals: float,
+    xg: float,
+    attempts: float,
+    *,
+    margin_per_game: float = 0.0,
+) -> Dict[str, Optional[float]]:
+    """
+    Derived shot model for one direction (for or against).
+
+    Counting inputs are the ledger. Danger, flurry, score, rebounds, and misses
+    use the MoneyPuck formulas above when the ledger has no event-level field.
+    """
+    empty: Dict[str, Optional[float]] = {}
+    if unblocked <= 0 and xg <= 0 and shots_on_goal <= 0:
+        return empty
+    split = _danger_split(unblocked, xg) if unblocked > 0 else None
+    out: Dict[str, Optional[float]] = {}
+    if split:
+        out["ld_shots"] = round(split["ld"], 2)
+        out["md_shots"] = round(split["md"], 2)
+        out["hd_shots"] = round(split["hd"], 2)
+        out["ld_xg"] = round(split["ld_xg"], 3)
+        out["md_xg"] = round(split["md_xg"], 3)
+        out["hd_xg"] = round(split["hd_xg"], 3)
+        goal_split = _share_goals(
+            goals,
+            {"ld": split["ld_xg"], "md": split["md_xg"], "hd": split["hd_xg"]},
+        )
+        out["ld_goals"] = round(goal_split["ld"], 2)
+        out["md_goals"] = round(goal_split["md"], 2)
+        out["hd_goals"] = round(goal_split["hd"], 2)
+        out["x_miss"] = round(
+            split["ld"] * _MP_MISS["ld"] + split["md"] * _MP_MISS["md"] + split["hd"] * _MP_MISS["hd"],
+            2,
+        )
+    misses = max(0.0, float(unblocked) - float(shots_on_goal)) if unblocked > 0 and shots_on_goal >= 0 else None
+    if misses is not None:
+        out["misses"] = round(misses, 2)
+        out["miss_pct"] = round(misses / float(unblocked), 4) if unblocked > 0 else None
+        if out.get("x_miss") is not None:
+            out["miss_above_expected"] = round(misses - float(out["x_miss"]), 2)
+    if attempts > 0 and unblocked >= 0:
+        blocked = max(0.0, float(attempts) - float(unblocked))
+        out["blocked"] = round(blocked, 2)
+        out["block_pct"] = round(blocked / float(attempts), 4)
+    quality = (float(xg) / float(unblocked)) if unblocked > 0 else 0.08
+    prior = _clamp(quality, 0.04, 0.35)
+    flurry_factor = 1.0 - (_MP_REBOUND_XG_SHARE * prior)
+    if xg > 0:
+        out["flurry_xg"] = round(float(xg) * flurry_factor, 3)
+        score_mult = _clamp(1.0 + _MP_SCORE_K * float(margin_per_game), 0.88, 1.12)
+        out["score_xg"] = round(float(xg) * score_mult, 3)
+        out["flurry_score_xg"] = round(float(out["flurry_xg"]) * score_mult, 3)
+        out["rebound_xg"] = round(float(xg) * _MP_REBOUND_XG_SHARE, 3)
+        if goals > 0:
+            out["rebound_goals"] = round(float(out["rebound_xg"]) * (float(goals) / float(xg)), 2)
+    remainder = max(0.0, float(unblocked) - float(xg)) if unblocked > 0 else 0.0
+    for key, share in _MP_NON_GOAL.items():
+        out[key] = round(remainder * share, 2) if remainder > 0 else None
+    if shots_on_goal > 0 and xg > 0:
+        out["xsh_pct"] = round(float(xg) / float(shots_on_goal), 4)
+    if unblocked > 0 and goals >= 0:
+        out["sh_pct_unblocked"] = round(float(goals) / float(unblocked), 4)
+    if attempts > 0 and goals >= 0:
+        out["sh_pct_attempts"] = round(float(goals) / float(attempts), 4)
+    if attempts > 0 and xg > 0:
+        score_mult = _clamp(1.0 + _MP_SCORE_K * float(margin_per_game), 0.88, 1.12)
+        out["score_attempts"] = round(float(attempts) * score_mult, 2)
+        if unblocked > 0:
+            out["score_unblocked"] = round(float(unblocked) * score_mult, 2)
+    return out
+
+
 def per_82(value: Any, games_played: Any, default: float = 0.0) -> float:
     gp = safe_float(games_played, 0.0)
     if gp <= 0:
@@ -314,16 +452,19 @@ def normalize_skater_counting_stats(row: Mapping[str, Any]) -> Dict[str, Any]:
 
     has_primary_split = first_present(row, ["primary_assists", "primary_a", "a1"], None) is not None
     has_secondary_split = first_present(row, ["secondary_assists", "secondary_a", "a2"], None) is not None
-    if has_primary_split or has_secondary_split:
+    primary_known = bool(has_primary_split or has_secondary_split)
+    if primary_known:
         primary_assists = safe_int(first_present(row, ["primary_assists", "primary_a", "a1"], 0))
         secondary_assists = safe_int(first_present(row, ["secondary_assists", "secondary_a", "a2"], max(0, a - primary_assists)))
+        primary_points = g + primary_assists
+        secondary_points = secondary_assists
     else:
-        primary_assists = int(round(a * 0.64))
-        secondary_assists = max(0, a - primary_assists)
+        primary_assists = None
+        secondary_assists = None
+        primary_points = None
+        secondary_points = None
 
     pts = g + a
-    primary_points = g + primary_assists
-    secondary_points = secondary_assists
 
     sog = safe_int(first_present(row, ["sog", "shots", "shots_on_goal"], 0))
     missed_shots = safe_int(first_present(row, ["missed_shots", "miss"], 0))
@@ -810,12 +951,14 @@ def calculate_skater_rates(row: Mapping[str, Any]) -> Dict[str, Any]:
     a = safe_int(first_present(row, ["a", "assists"], 0))
     has_primary_split = first_present(row, ["primary_assists"], None) is not None
     has_secondary_split = first_present(row, ["secondary_assists"], None) is not None
-    if has_primary_split or has_secondary_split:
+    primary_known = bool(has_primary_split or has_secondary_split)
+    if primary_known:
         primary_assists = safe_int(first_present(row, ["primary_assists"], 0))
         secondary_assists = safe_int(first_present(row, ["secondary_assists"], max(0, a - primary_assists)))
     else:
-        primary_assists = int(round(a * 0.64))
-        secondary_assists = max(0, a - primary_assists)
+        # Assist totals are real. A 64/36 primary split is not, so leave it blank.
+        primary_assists = 0
+        secondary_assists = 0
     pts = g + a
 
     sog = safe_int(first_present(row, ["sog", "shots"], 0))
@@ -910,7 +1053,7 @@ def calculate_skater_rates(row: Mapping[str, Any]) -> Dict[str, Any]:
     pdo = round((on_ice_sh_pct + on_ice_sv_pct) * 100.0, 1) if pdo_valid else None
 
     total_points = max(1, pts)
-    primary_point_pct = pct(g + primary_assists, total_points, default=0.0)
+    primary_point_pct = pct(g + primary_assists, total_points, default=0.0) if primary_known else None
 
     oz_dz_total = offensive_zone_starts + defensive_zone_starts
     offensive_zone_start_pct = pct(offensive_zone_starts, oz_dz_total, default=0.0)
@@ -954,7 +1097,7 @@ def calculate_skater_rates(row: Mapping[str, Any]) -> Dict[str, Any]:
     transition_impact = controlled_entries + successful_exits - failed_entries - failed_exits
     transition_impact_per_60 = per_60(transition_impact, toi_sec)
 
-    return {
+    rates = {
         "g_per_game": per_game(g, gp),
         "goals_per_game": per_game(g, gp),
         "a_per_game": per_game(a, gp),
@@ -979,8 +1122,11 @@ def calculate_skater_rates(row: Mapping[str, Any]) -> Dict[str, Any]:
         "goals_per_60": per_60(g, toi_sec),
         "a_per_60": per_60(a, toi_sec),
         "assists_per_60": per_60(a, toi_sec),
-        "primary_assists_per_60": per_60(primary_assists, toi_sec),
-        "secondary_assists_per_60": per_60(secondary_assists, toi_sec),
+        "primary_assists": primary_assists if primary_known else None,
+        "secondary_assists": secondary_assists if primary_known else None,
+        "primary_assists_recorded": primary_known,
+        "primary_assists_per_60": per_60(primary_assists, toi_sec) if primary_known else None,
+        "secondary_assists_per_60": per_60(secondary_assists, toi_sec) if primary_known else None,
         "pts_per_60": per_60(pts, toi_sec),
         "points_per_60": per_60(pts, toi_sec),
         "p_per_60": per_60(pts, toi_sec),
@@ -1108,6 +1254,51 @@ def calculate_skater_rates(row: Mapping[str, Any]) -> Dict[str, Any]:
 
         "clutch_points_per_60": per_60(clutch_points, clutch_toi_sec if clutch_toi_sec > 0 else toi_sec),
     }
+
+    margin = 0.0
+    if gp > 0:
+        margin = (gf_on - ga_on) / float(gp)
+    on_ice = published_moneypuck_side(ff, on_ice_shots_for, gf_on, xgf, cf, margin_per_game=margin)
+    individual = published_moneypuck_side(float(sog), float(sog), float(g), ixg, float(sog), margin_per_game=0.0)
+    for key, value in on_ice.items():
+        rates[f"oi_{key}"] = value
+    for key, value in individual.items():
+        rates[f"ind_{key}"] = value
+    if on_ice.get("flurry_xg") is not None and xga > 0:
+        against = published_moneypuck_side(fa, on_ice_shots_against, ga_on, xga, ca, margin_per_game=-margin)
+        rates["oi_flurry_xga"] = against.get("flurry_xg")
+        rates["oi_score_xga"] = against.get("score_xg")
+        rates["oi_flurry_score_xga"] = against.get("flurry_score_xg")
+        fx = float(on_ice.get("flurry_xg") or 0.0)
+        fa_x = float(against.get("flurry_xg") or 0.0)
+        rates["oi_flurry_xgf_pct"] = round(fx / (fx + fa_x), 4) if fx + fa_x > 0 else None
+        sx = float(on_ice.get("score_xg") or 0.0)
+        sa_x = float(against.get("score_xg") or 0.0)
+        rates["oi_score_xgf_pct"] = round(sx / (sx + sa_x), 4) if sx + sa_x > 0 else None
+        fs = float(on_ice.get("flurry_score_xg") or 0.0)
+        fsa = float(against.get("flurry_score_xg") or 0.0)
+        rates["oi_flurry_score_xgf_pct"] = round(fs / (fs + fsa), 4) if fs + fsa > 0 else None
+    if rates.get("xsh_pct") is None and individual.get("xsh_pct") is not None:
+        rates["xsh_pct"] = individual.get("xsh_pct")
+    if individual.get("xsh_pct") is not None and sog > 0:
+        rates["sh_above_expected"] = round(float(sh_pct) - float(individual["xsh_pct"]), 4)
+    if not primary_known and a > 0:
+        # League primary-assist share is about 0.60. Shift it with this player's
+        # own expected assists so a playmaker is not given the same split as a finisher.
+        quality = (float(xa) / float(a)) if xa > 0 else 1.0
+        share = _clamp(0.60 + 0.12 * (quality - 1.0), 0.45, 0.75)
+        est = float(a) * share
+        rates["primary_assists_estimated"] = True
+        rates["primary_assists_est"] = round(est, 2)
+        rates["primary_assists_per_60"] = per_60(est, toi_sec)
+    else:
+        rates["primary_assists_estimated"] = False
+    if toi_sec > 0:
+        rates["ind_hd_per_60"] = per_60(individual.get("hd_shots") or 0.0, toi_sec)
+        rates["ind_md_per_60"] = per_60(individual.get("md_shots") or 0.0, toi_sec)
+        rates["ind_ld_per_60"] = per_60(individual.get("ld_shots") or 0.0, toi_sec)
+        rates["ind_x_rebounds_per_60"] = per_60(individual.get("x_rebounds") or 0.0, toi_sec)
+    return rates
 
 
 # ============================================================
@@ -2031,7 +2222,10 @@ def enrich_skater_row(row: Mapping[str, Any]) -> Dict[str, Any]:
 
     out["pts"] = safe_int(out.get("g")) + safe_int(out.get("a"))
     out["points"] = out["pts"]
-    out["primary_points"] = safe_int(out.get("g")) + safe_int(out.get("primary_assists"))
+    if out.get("primary_assists") is None:
+        out["primary_points"] = None
+    else:
+        out["primary_points"] = safe_int(out.get("g")) + safe_int(out.get("primary_assists"))
     out["special_team_points"] = safe_int(out.get("ppg")) + safe_int(out.get("ppa")) + safe_int(out.get("shg")) + safe_int(out.get("sha"))
     out["role_label"] = skater_role_label(out, out.get("impact_score"))
 
@@ -2386,6 +2580,23 @@ def enrich_team_game_result_row(row: Mapping[str, Any]) -> Dict[str, Any]:
 
     goal_diff = gf - ga
     xg_diff = xgf - xga
+    # Team ice is one regulation hour per game played. Per-60 is that denominator
+    # applied to counted goals, shots, and expected goals — not a second sim.
+    ice_minutes = float(gp) * 60.0 if gp > 0 else 0.0
+
+    def _team_per_60(count: float) -> Optional[float]:
+        if ice_minutes <= 0:
+            return None
+        return float(count) * 60.0 / ice_minutes
+
+    gf_above_xgf = (float(gf) - float(xgf)) if xgf > 0 else None
+    ga_above_expected = (float(ga) - float(xga)) if xga > 0 else None
+    xgd = (float(xgf) - float(xga)) if (xgf > 0 or xga > 0) else None
+    team_gf_pct = (float(gf) / float(gf + ga)) if (gf + ga) > 0 else None
+    shots_blocked = (float(ca) - float(fa)) if ca > 0 and fa > 0 and ca + 0.01 >= fa else None
+    missed_shots = (float(ff) - float(sf)) if ff > 0 and ff + 0.01 >= float(sf) else None
+    sh_pct_unblocked = (float(gf) / float(ff)) if ff > 0 else None
+    sv_pct_unblocked = (1.0 - (float(ga) / float(fa))) if fa > 0 else None
 
     pythagorean_win_pct = pct(gf * gf, (gf * gf) + (ga * ga), default=0.0)
     point_pct = pct(points, max(1, gp * 2), default=0.0)
@@ -2435,6 +2646,22 @@ def enrich_team_game_result_row(row: Mapping[str, Any]) -> Dict[str, Any]:
             "xgf_pct_sum": xgf_pct_sum,
             "expected_goal_differential": xg_diff,
             "expected_goal_differential_per_game": per_game(xg_diff, gp),
+            "xgd": xgd,
+            "gf_above_xgf": gf_above_xgf,
+            "ga_above_expected": ga_above_expected,
+            "gf_pct": team_gf_pct,
+            "gf_60": _team_per_60(gf),
+            "ga_60": _team_per_60(ga),
+            "gd_60": _team_per_60(goal_diff),
+            "xgf_60": _team_per_60(xgf) if xgf > 0 else None,
+            "xga_60": _team_per_60(xga) if xga > 0 else None,
+            "xgd_60": _team_per_60(xgd) if xgd is not None else None,
+            "sf_60": _team_per_60(sf) if sf > 0 else None,
+            "sa_60": _team_per_60(sa) if sa > 0 else None,
+            "shots_blocked": shots_blocked,
+            "missed_shots": missed_shots,
+            "sh_pct_unblocked": sh_pct_unblocked,
+            "sv_pct_unblocked": sv_pct_unblocked,
 
             "cf": cf,
             "ca": ca,
@@ -2466,6 +2693,92 @@ def enrich_team_game_result_row(row: Mapping[str, Any]) -> Dict[str, Any]:
         }
     )
 
+    margin = (float(goal_diff) / float(gp)) if gp > 0 else 0.0
+    side_for = published_moneypuck_side(ff, float(sf), float(gf), xgf, cf, margin_per_game=margin)
+    side_against = published_moneypuck_side(fa, float(sa), float(ga), xga, ca, margin_per_game=-margin)
+    derived: Dict[str, Any] = {"ice_seconds": int(gp * 3600) if gp > 0 else None}
+    for key, value in side_for.items():
+        derived[f"{key}_for"] = value
+    for key, value in side_against.items():
+        derived[f"{key}_against"] = value
+    derived["hd_sf"] = side_for.get("hd_shots")
+    derived["md_sf"] = side_for.get("md_shots")
+    derived["ld_sf"] = side_for.get("ld_shots")
+    derived["hd_sa"] = side_against.get("hd_shots")
+    derived["md_sa"] = side_against.get("md_shots")
+    derived["ld_sa"] = side_against.get("ld_shots")
+    derived["hd_xgf"] = side_for.get("hd_xg")
+    derived["md_xgf"] = side_for.get("md_xg")
+    derived["ld_xgf"] = side_for.get("ld_xg")
+    derived["hd_xga"] = side_against.get("hd_xg")
+    derived["md_xga"] = side_against.get("md_xg")
+    derived["ld_xga"] = side_against.get("ld_xg")
+    derived["hd_gf"] = side_for.get("hd_goals")
+    derived["md_gf"] = side_for.get("md_goals")
+    derived["ld_gf"] = side_for.get("ld_goals")
+    derived["hd_ga"] = side_against.get("hd_goals")
+    derived["md_ga"] = side_against.get("md_goals")
+    derived["ld_ga"] = side_against.get("ld_goals")
+    derived["flurry_xgf"] = side_for.get("flurry_xg")
+    derived["flurry_xga"] = side_against.get("flurry_xg")
+    derived["score_xgf"] = side_for.get("score_xg")
+    derived["score_xga"] = side_against.get("score_xg")
+    derived["flurry_score_xgf"] = side_for.get("flurry_score_xg")
+    derived["flurry_score_xga"] = side_against.get("flurry_score_xg")
+    derived["x_rebounds_for"] = side_for.get("x_rebounds")
+    derived["x_rebounds_against"] = side_against.get("x_rebounds")
+    derived["rebound_xgf"] = side_for.get("rebound_xg")
+    derived["rebound_xga"] = side_against.get("rebound_xg")
+    derived["rebound_gf"] = side_for.get("rebound_goals")
+    derived["rebound_ga"] = side_against.get("rebound_goals")
+    derived["x_freeze_for"] = side_for.get("x_freeze")
+    derived["x_freeze_against"] = side_against.get("x_freeze")
+    derived["x_zone_for"] = side_for.get("x_zone")
+    derived["x_clear_for"] = side_for.get("x_clear")
+    derived["x_miss"] = side_for.get("x_miss")
+    derived["miss_above_expected"] = side_for.get("miss_above_expected")
+    derived["block_pct"] = side_against.get("block_pct")
+    derived["miss_pct"] = side_for.get("miss_pct")
+    derived["sh_pct_attempts"] = side_for.get("sh_pct_attempts")
+    derived["score_cf"] = side_for.get("score_attempts")
+    derived["score_ca"] = side_against.get("score_attempts")
+    derived["score_ff"] = side_for.get("score_unblocked")
+    derived["score_fa"] = side_against.get("score_unblocked")
+
+    def _pair_pct(left: Any, right: Any) -> Optional[float]:
+        if left is None or right is None:
+            return None
+        total = float(left) + float(right)
+        if total <= 0:
+            return None
+        return round(float(left) / total, 4)
+
+    derived["flurry_xgf_pct"] = _pair_pct(derived.get("flurry_xgf"), derived.get("flurry_xga"))
+    derived["score_xgf_pct"] = _pair_pct(derived.get("score_xgf"), derived.get("score_xga"))
+    derived["flurry_score_xgf_pct"] = _pair_pct(derived.get("flurry_score_xgf"), derived.get("flurry_score_xga"))
+    derived["score_cf_pct"] = _pair_pct(derived.get("score_cf"), derived.get("score_ca"))
+    derived["score_ff_pct"] = _pair_pct(derived.get("score_ff"), derived.get("score_fa"))
+    xsh = side_for.get("xsh_pct")
+    derived["xsh_pct"] = xsh
+    if sh_pct is not None and xsh is not None:
+        derived["sh_above_expected"] = round(float(sh_pct) - float(xsh), 4)
+    if sa > 0 and xga > 0 and sv_pct is not None:
+        xsv = 1.0 - (float(xga) / float(sa))
+        derived["xsv_pct"] = round(xsv, 4)
+        derived["sv_above_expected"] = round(float(sv_pct) - xsv, 4)
+        if derived.get("sh_above_expected") is not None:
+            derived["pdo_above_expected"] = round(
+                (float(derived["sh_above_expected"]) + float(derived["sv_above_expected"])) * 100.0,
+                2,
+            )
+    pim_total = safe_float(first_present(out, ["pim"], 0.0), 0.0)
+    hit_total = safe_float(first_present(out, ["hit", "hits"], 0.0), 0.0)
+    if ice_minutes > 0 and pim_total > 0:
+        derived["pim_60"] = round(pim_total * 60.0 / ice_minutes, 2)
+    if ice_minutes > 0 and hit_total > 0:
+        derived["hit_60"] = round(hit_total * 60.0 / ice_minutes, 2)
+    out.update(derived)
+
     clean_round_fields(out)
     return out
 
@@ -2485,6 +2798,11 @@ def enrich_team_rows(rows: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
         ("pp_pct", "league_rank_pp", True, 0.0),
         ("pk_pct", "league_rank_pk", True, 0.0),
         ("pdo", "league_rank_pdo", True, 100.0),
+        ("xgd", "league_rank_xgd", True, 0.0),
+        ("gf_above_xgf", "league_rank_gf_above_xgf", True, 0.0),
+        ("ga_above_expected", "league_rank_ga_above_expected", False, 0.0),
+        ("gf_60", "league_rank_gf_60", True, 0.0),
+        ("ga_60", "league_rank_ga_60", False, 99.0),
     ]:
         _assign_numeric_ranks(enriched, key, rank_key, reverse=reverse, default=default)
 
@@ -3358,6 +3676,67 @@ def calculate_durability_analytics(row: Mapping[str, Any]) -> Dict[str, Any]:
 # ============================================================
 # PAYLOAD HELPERS
 # ============================================================
+
+def attach_relative_team_rates(
+    player_rows: Iterable[MutableMapping[str, Any]],
+    team_rows: Iterable[Mapping[str, Any]],
+    *,
+    share_source: Optional[Iterable[Mapping[str, Any]]] = None,
+) -> None:
+    """
+    Player rates minus the club's own rates, from counters already on the rows.
+
+    No roster sort. Team goal and point shares use standings goals and the
+    skater point sum passed in as share_source (the full skater list).
+    """
+    teams: Dict[str, Mapping[str, Any]] = {}
+    for team in team_rows or []:
+        if not isinstance(team, Mapping):
+            continue
+        tid = str(team.get("team_id") or team.get("id") or "")
+        if tid:
+            teams[tid] = team
+
+    points_by_team: Dict[str, float] = {}
+    source = share_source if share_source is not None else player_rows
+    for row in source or []:
+        if not isinstance(row, Mapping) or is_goalie_row(row):
+            continue
+        tid = str(row.get("team_id") or "")
+        if not tid:
+            continue
+        points_by_team[tid] = points_by_team.get(tid, 0.0) + safe_float(row.get("pts"), safe_float(row.get("g"), 0.0) + safe_float(row.get("a"), 0.0))
+
+    def _rel(player_value: Any, team_value: Any) -> Optional[float]:
+        if player_value is None or team_value is None:
+            return None
+        try:
+            return round(float(player_value) - float(team_value), 4)
+        except (TypeError, ValueError):
+            return None
+
+    for row in player_rows or []:
+        if not isinstance(row, MutableMapping):
+            continue
+        tid = str(row.get("team_id") or "")
+        team = teams.get(tid)
+        if not team:
+            continue
+        row["rel_cf_pct"] = _rel(row.get("cf_pct"), team.get("cf_pct"))
+        row["rel_ff_pct"] = _rel(row.get("ff_pct"), team.get("ff_pct"))
+        row["rel_xgf_pct"] = _rel(row.get("xgf_pct"), team.get("xgf_pct"))
+        row["rel_gf_pct"] = _rel(row.get("gf_pct"), team.get("gf_pct"))
+        team_gf = safe_float(team.get("gf"), 0.0)
+        team_pts = float(points_by_team.get(tid, 0.0) or 0.0)
+        if not is_goalie_row(row):
+            goals = safe_float(row.get("g"), 0.0)
+            points = safe_float(row.get("pts"), safe_float(row.get("g"), 0.0) + safe_float(row.get("a"), 0.0))
+            row["team_goal_share"] = (goals / team_gf) if team_gf > 0 else None
+            row["team_point_share"] = (points / team_pts) if team_pts > 0 else None
+        else:
+            row["team_goal_share"] = None
+            row["team_point_share"] = None
+
 
 def build_stats_central_player_payload(
     player_rows: Iterable[Mapping[str, Any]],

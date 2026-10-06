@@ -1670,12 +1670,21 @@ def _fetch_merged_team_roster(abbr: str, roster_season: int, prior_season: int) 
     except Exception:
         prior_rows = []
 
+    prior_ids = {_roster_player_id(row) for row in prior_rows if _roster_player_id(row) > 0}
+
+    def _mark_prior(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Anyone who dressed on last year's NHL roster is not a Calder rookie."""
+        for row in rows:
+            if _roster_player_id(row) in prior_ids or row.get("_prior_only_candidate"):
+                row["_on_prior_season_roster"] = True
+        return rows
+
     if not primary_rows and prior_rows:
-        return prior_payload or primary_payload, prior_rows, "prior_only"
+        return prior_payload or primary_payload, _mark_prior(prior_rows), "prior_only"
     if len(primary_rows) < 22 and prior_rows:
         merged = _merge_roster_rows(primary_rows, prior_rows)
         note = f"merged_current_{len(primary_rows)}_prior_{len(prior_rows)}_out_{len(merged)}"
-        return primary_payload or prior_payload, merged, note
+        return primary_payload or prior_payload, _mark_prior(merged), note
     if primary_rows:
         # NHL.com's live roster drops injured (IR/LTIR) players even when they are
         # under contract (e.g. Artem Zub, OTT 2026-27). Carry prior-season players
@@ -1692,7 +1701,7 @@ def _fetch_merged_team_roster(abbr: str, roster_season: int, prior_season: int) 
                 carry.append(tagged)
         if carry:
             note = f"{note}_plus_{len(carry)}_prior_candidates"
-        return primary_payload, list(primary_rows) + carry, note
+        return primary_payload, _mark_prior(list(primary_rows) + carry), note
     raise RealNhlImportError(f"{abbr}: no roster for {roster_season} or {prior_season}")
 
 
@@ -1922,7 +1931,7 @@ def import_real_minor_goalies(
         if " " not in raw:
             continue  # last-name-only rows can't build a real person
         key = _norm_simple(raw)
-        if key in existing_names:
+        if key in existing_names or any(_same_person_name(raw, existing) for existing in existing_names):
             continue
         first, last = raw.split(" ", 1)
         row = dict(api_rows.get(key) or {})
@@ -1994,7 +2003,9 @@ def import_real_minor_goalies(
     # Ratings file thin for this org? Pull pro-age goalies straight from the NHL API.
     if len(real_new) < min_ahl_goalies and api_rows:
         for key, row in api_rows.items():
-            if len(real_new) >= min_ahl_goalies or key in existing_names:
+            if len(real_new) >= min_ahl_goalies or key in existing_names or any(
+                _same_person_name(key, existing) for existing in existing_names
+            ):
                 continue
             try:
                 by = int(str(row.get("birthDate") or "0")[:4] or 0)
@@ -2059,6 +2070,47 @@ def import_real_minor_goalies(
             added += 1
         team.ahl_roster = new_ahl
     return added
+
+
+def _same_person_name(a: str, b: str) -> bool:
+    """True when two labels are the same player (accents, 'Last, First', or 'L. Last')."""
+    na = _norm_simple(a).split()
+    nb = _norm_simple(b).split()
+    if not na or not nb:
+        return False
+    if na == nb or sorted(na) == sorted(nb):
+        return True
+    if na[-1] == nb[-1] and na[0][:1] == nb[0][:1]:
+        if na[0].startswith(nb[0]) or nb[0].startswith(na[0]) or min(len(na[0]), len(nb[0])) <= 2:
+            return True
+    return False
+
+
+def _drop_org_name_duplicates(team: Any) -> int:
+    """Drop a minors copy when the same person is already on the NHL roster."""
+    nhl_names = []
+    for p in list(getattr(team, "roster", None) or []):
+        ident = getattr(p, "identity", None)
+        nm = str(getattr(ident, "name", "") or getattr(p, "name", "") or "")
+        if nm:
+            nhl_names.append(nm)
+    if not nhl_names:
+        return 0
+    removed = 0
+    for attr in ("ahl_roster", "echl_roster", "prospect_pool"):
+        kept = []
+        for p in list(getattr(team, attr, None) or []):
+            ident = getattr(p, "identity", None)
+            nm = str(getattr(ident, "name", "") or getattr(p, "name", "") or "")
+            if nm and any(_same_person_name(nm, n) for n in nhl_names):
+                removed += 1
+                continue
+            kept.append(p)
+        try:
+            setattr(team, attr, kept)
+        except Exception:
+            pass
+    return removed
 
 
 def _norm_simple(name: str) -> str:
@@ -2492,6 +2544,8 @@ def build_real_nhl_league_players(
             if is_restored:
                 setattr(player, "restored_from_prior_roster", True)
                 restored_missing.append(f"{abbr}:{full_name}")
+            if row.get("_on_prior_season_roster") or is_restored:
+                setattr(player, "prior_nhl_roster", True)
             team.roster.append(player)
             league.players.append(player)
             count += 1
@@ -2515,6 +2569,10 @@ def build_real_nhl_league_players(
             )
         except Exception as e:  # noqa: BLE001
             failures.append(f"{abbr} AHL goalie import failed: {e}")
+        try:
+            _drop_org_name_duplicates(team)
+        except Exception:
+            pass
 
         # Spotrac dead money (buyouts / retained) — previously never imported, so
         # clubs looked ~$5M too loose vs CapFriendly/Spotrac once AAVs were fixed.

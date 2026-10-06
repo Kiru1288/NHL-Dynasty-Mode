@@ -17,6 +17,7 @@ import {
   advancePlayerMeeting,
   getPlayerMeetingDetail,
   getSocialFeed,
+  getStatsCentral,
 } from "../services/franchiseService";
 import BurnerPanel from "../components/franchise/social/BurnerPanel";
 import { PlayerProfileModal, normalizeRosterBrowserPlayer } from "./RosterScreen";
@@ -107,6 +108,7 @@ const DEPARTMENTS = [
   { id: "prospect_pools", label: "Prospect Pools", glyph: "▲" },
   { id: "prospect_leaderboard", label: "Top Prospects", glyph: "★" },
   { id: "insiders", label: "Insiders", glyph: "◇" },
+  { id: "awards_race", label: "Awards", glyph: "★" },
   { id: "press_room", label: "Press Room", glyph: "▤" },
   { id: "archive", label: "Archive", glyph: "▥" },
 ];
@@ -136,6 +138,21 @@ function str(v, fallback = "") {
 }
 function userTeamId(state) {
   return str(state?.user_team_id || state?.userTeamId || state?.team_id || "");
+}
+
+function storyBelongsToUser(state, teamId, raw) {
+  const uid = userTeamId(state).toUpperCase();
+  const uabbr = str(state?.user_team_abbr || state?.team_abbr || state?.team?.abbr || "").toUpperCase();
+  const uname = str(
+    state?.user_team_name || state?.team_name || state?.franchise_team_name || state?.team?.name || ""
+  ).toUpperCase();
+  const tid = str(teamId).toUpperCase();
+  const tabbr = str(raw?.team_abbrev || raw?.team_abbr || "").toUpperCase();
+  const tname = str(raw?.team_name || "").toUpperCase();
+  if (uid && (tid === uid || tabbr === uid || tname === uid)) return true;
+  if (uabbr && (tid === uabbr || tabbr === uabbr)) return true;
+  if (uname && tname && tname === uname) return true;
+  return false;
 }
 
 const PROSPECT_POOL_TOP_N = 5;
@@ -249,19 +266,22 @@ function buildProspectPoolRankings(organizations, developmentLeagues) {
   const orgs = asArray(organizations);
   const deduped = collectLeagueProspectsDeduped(organizations, developmentLeagues);
 
-  const rankByPlayerId = new Map();
+  const rankByKey = new Map();
   deduped.forEach((p, idx) => {
-    if (p.player_id) rankByPlayerId.set(p.player_id, idx + 1);
+    const key = p.player_id || `${p.team_id}:${p.name}`;
+    if (key) rankByKey.set(key, idx + 1);
   });
+  const boardSize = Math.max(deduped.length, 1);
 
   const byTeam = new Map();
   deduped.forEach((p) => {
     if (!byTeam.has(p.team_id)) byTeam.set(p.team_id, []);
+    const key = p.player_id || `${p.team_id}:${p.name}`;
     byTeam.get(p.team_id).push({
-      player_id: p.player_id,
+      player_id: p.player_id || key,
       name: p.name,
       potential: p.potential,
-      potentialRank: rankByPlayerId.get(p.player_id) || null,
+      potentialRank: rankByKey.get(key) || null,
       age: p.age,
       raw: p.raw,
     });
@@ -276,6 +296,7 @@ function buildProspectPoolRankings(organizations, developmentLeagues) {
 
     const count = prospects.length;
     const topSlice = prospects.slice(0, PROSPECT_POOL_TOP_N);
+    const depthScore = topSlice.reduce((sum, p) => sum + (boardSize + 1 - p.potentialRank), 0);
     const avgRank = topSlice.length
       ? topSlice.reduce((sum, p) => sum + p.potentialRank, 0) / topSlice.length
       : null;
@@ -288,6 +309,7 @@ function buildProspectPoolRankings(organizations, developmentLeagues) {
       name,
       count,
       avgRank,
+      depthScore,
       avgPotential,
       topProspect: prospects[0] || null,
       prospects,
@@ -295,10 +317,10 @@ function buildProspectPoolRankings(organizations, developmentLeagues) {
   });
 
   rows.sort((a, b) => {
-    if (a.avgRank == null && b.avgRank == null) return str(a.name).localeCompare(str(b.name));
-    if (a.avgRank == null) return 1;
-    if (b.avgRank == null) return -1;
-    if (a.avgRank !== b.avgRank) return a.avgRank - b.avgRank;
+    if (!a.depthScore && !b.depthScore) return str(a.name).localeCompare(str(b.name));
+    if (!a.depthScore) return 1;
+    if (!b.depthScore) return -1;
+    if (a.depthScore !== b.depthScore) return b.depthScore - a.depthScore;
     return str(a.name).localeCompare(str(b.name));
   });
 
@@ -334,23 +356,42 @@ function prettyDate(iso) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+function categoryTokens(value) {
+  return str(value)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function hasCategoryToken(cat, words) {
+  const tokens = categoryTokens(cat);
+  return words.some((word) => tokens.includes(word));
+}
+
 function resolveCategoryKey(story) {
   const cat = str(story?.category || story?.type || "").toLowerCase();
-  if (story?.requiresAction) return "decision";
-  if (cat.includes("legal") || cat === "legal_trouble") return "legal_trouble";
-  if (cat === "injury" || /injur/i.test(cat)) return "injury";
-  if (/draft|prospect/.test(cat)) return "draft";
-  if (/goalie|goaltender/.test(cat)) return "goalie";
-  if (/trade|rumor|contract/.test(cat)) return /contract/.test(cat) ? "contract" : "trade";
-  if (/locker|belong|role/.test(cat)) return "locker_room";
-  if (cat === "personal_life" || /life/.test(cat) || String(story?.causeType || story?.raw?.cause_type || "").toUpperCase().includes("LIFE")) {
+  const cause = String(story?.causeType || story?.raw?.cause_type || "").toUpperCase();
+  const causeTokens = categoryTokens(cause);
+  if (hasCategoryToken(cat, ["legal", "conduct"]) || cat === "legal_trouble") return "legal_trouble";
+  if (hasCategoryToken(cat, ["injury", "injured"]) || categoryTokens(cat).some((t) => t.startsWith("injur"))) return "injury";
+  if (hasCategoryToken(cat, ["draft", "prospect"])) return "draft";
+  if (hasCategoryToken(cat, ["goalie", "goaltender"])) return "goalie";
+  if (hasCategoryToken(cat, ["contract"])) return "contract";
+  if (hasCategoryToken(cat, ["trade", "rumor", "rumour"])) return "trade";
+  if (hasCategoryToken(cat, ["locker", "belonging", "role"])) return "locker_room";
+  if (
+    cat === "personal_life" ||
+    hasCategoryToken(cat, ["life", "personal"]) ||
+    causeTokens.includes("life")
+  ) {
     return "personal_life";
   }
-  if (/business|agent/.test(cat)) return "business";
-  if (/coach|gm|captain|ahl/.test(cat)) return "league";
-  if (/crisis|collapse|skid/.test(cat)) return "team_crisis";
-  if (/rival/.test(cat)) return "rivalry";
-  if (/performance|underperform|breakout|streak|star|rookie/.test(cat)) return "performance";
+  if (hasCategoryToken(cat, ["business", "agent"])) return "business";
+  if (hasCategoryToken(cat, ["coach", "gm", "captain", "ahl"])) return "league";
+  if (hasCategoryToken(cat, ["crisis", "collapse", "skid"])) return "team_crisis";
+  if (hasCategoryToken(cat, ["rival", "rivalry"])) return "rivalry";
+  if (hasCategoryToken(cat, ["performance", "underperform", "breakout", "streak", "rookie"])) return "performance";
+  if (hasCategoryToken(cat, ["star"]) || categoryTokens(cat).some((t) => t.startsWith("underperform"))) return "performance";
   return cat || "storyline";
 }
 function categoryMeta(story) {
@@ -378,7 +419,7 @@ function parseStoryDate(raw) {
 
 function storyAgeLabel(story, todayIso) {
   const sd = parseStoryDate(story?.raw || story);
-  const td = todayIso ? new Date(String(todayIso).slice(0, 10)) : null;
+  const td = todayIso ? localDateFromIso(String(todayIso).slice(0, 10)) : null;
   if (!sd || !td || Number.isNaN(td.getTime())) return story.date || "—";
   const days = Math.floor((td - sd) / 86400000);
   if (days <= 0) return "Today";
@@ -390,7 +431,7 @@ function storyAgeLabel(story, todayIso) {
 
 function storyFreshnessClass(story, todayIso) {
   const sd = parseStoryDate(story?.raw || story);
-  const td = todayIso ? new Date(String(todayIso).slice(0, 10)) : null;
+  const td = todayIso ? localDateFromIso(String(todayIso).slice(0, 10)) : null;
   if (!sd || !td) return "";
   const days = Math.floor((td - sd) / 86400000);
   if (days <= 0) return "is-fresh";
@@ -649,11 +690,20 @@ function MeetingEffectCards({ receipts }) {
   );
 }
 
+function openPromiseDestination(nav, setScreen, setPendingPromiseNav) {
+  if (!nav || !nav.screen) return;
+  const key = String(nav.screen || "").toUpperCase();
+  setPendingPromiseNav?.(nav);
+  setScreen?.(SCREENS[key] || nav.screen);
+}
+
 function MeetingResultOverlay({ outcome, onDismiss }) {
+  const { setScreen, setPendingPromiseNav } = useGameUI();
   const impact = asObject(outcome?.impact);
   const tone = str(impact.tone) || "mixed";
   const pid = str(outcome?.player_id || "");
   const name = str(impact.player_name || outcome?.player_name || "Player");
+  const nav = outcome?.navigate || impact.navigate;
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape" || e.key === "Enter") onDismiss?.();
@@ -700,6 +750,18 @@ function MeetingResultOverlay({ outcome, onDismiss }) {
         {asArray(impact.notes).map((n, i) => (
           <p key={i} className="md-result__note">{str(n)}</p>
         ))}
+        {nav?.screen ? (
+          <button
+            type="button"
+            className="md-result__close"
+            onClick={() => {
+              openPromiseDestination(nav, setScreen, setPendingPromiseNav);
+              onDismiss?.();
+            }}
+          >
+            {str(nav.label || "Open the sheet")}
+          </button>
+        ) : null}
         <button type="button" className="md-result__close" onClick={onDismiss}>
           Back to the desk
         </button>
@@ -803,12 +865,12 @@ function LockerRoomDashboard({ narrativeUniverse, franchiseState, stories = [] }
   const leaders = asArray(hallmark.unheralded_leaders);
   const pulse = collectLockerPulse(franchiseState, { limit: 12 });
   const uid = str(franchiseState?.user_team_id);
-  const roomWire = stories.filter(
-    (s) =>
-      s.categoryKey === "personal_life" ||
-      s.categoryKey === "locker_room" ||
-      /locker|life|room/i.test(str(s.category))
-  );
+  const roomWire = stories.filter((s) => {
+    if (s.categoryKey === "personal_life" || s.categoryKey === "locker_room") return true;
+    const tokens = categoryTokens(s.category || s.type);
+    if (tokens.includes("press")) return false;
+    return tokens.includes("locker") || tokens.includes("personal") || tokens.includes("life");
+  });
   const lifeStories = pulse.lifeStories.length
     ? pulse.lifeStories
     : roomWire.filter((s) => s.categoryKey === "personal_life").slice(0, 10);
@@ -994,9 +1056,33 @@ function ConsequencesPanel({ narrativeUniverse, stories, onOpenStory }) {
     </>
   );
 
+  const hasCap = Object.values(capPenalties).some((v) => Number(v) > 0 || (v && typeof v === "object"));
+  const hasPicks = forfeited.length > 0;
   if (!sanctions.length) {
-    if (unavailable.length || broken.length) {
-      return <div className="sl-consequences">{extras}</div>;
+    if (unavailable.length || broken.length || hasCap || hasPicks) {
+      return (
+        <div className="sl-consequences">
+          {extras}
+          {hasCap ? (
+            <section className="sl-fallout-sec">
+              <h4>Cap penalties</h4>
+              {Object.entries(capPenalties).map(([tid, hit]) => (
+                <p key={tid}>
+                  {tid}: {typeof hit === "object" ? str(hit.cap_penalty_m || hit.amount || "") : `$${Number(hit).toFixed(2)}M`}
+                </p>
+              ))}
+            </section>
+          ) : null}
+          {hasPicks ? (
+            <section className="sl-fallout-sec">
+              <h4>Forfeited picks</h4>
+              {forfeited.map((p, i) => (
+                <p key={str(p.pick_id || i)}>{str(p.draft_year)} R{str(p.round)}</p>
+              ))}
+            </section>
+          ) : null}
+        </div>
+      );
     }
     return (
       <EmptyPanel
@@ -1094,7 +1180,6 @@ function matchesSearch(story, q) {
 }
 
 function normalizeStory(raw, idx, state) {
-  const uid = userTeamId(state);
   const tid = str(raw?.team_id || raw?.team || "");
   const headline = str(raw?.headline || raw?.title || "").trim();
   const type = str(raw?.type || raw?.category || "storyline").toLowerCase();
@@ -1138,10 +1223,12 @@ function normalizeStory(raw, idx, state) {
     date: str(raw?.calendar_iso || raw?.date || ""),
     teamId: tid,
     teamName: str(raw?.team_name || raw?.team_abbrev || tid),
+    teamAbbrev: str(raw?.team_abbrev || raw?.team_abbr || ""),
     playerId: str(raw?.player_id || ""),
     playerName: str(raw?.player_name || asArray(raw?.players)[0] || ""),
     playerOverall: raw?.player_overall,
-    isUserTeam: Boolean(tid && uid && tid === uid),
+    playerPotential: raw?.player_potential ?? raw?.potential,
+    isUserTeam: storyBelongsToUser(state, tid, raw),
     requiresAction: Boolean(raw?.requires_action),
     actionOptions: asArray(raw?.action_options),
     escalatedFrom: str(raw?.escalated_from || ""),
@@ -1246,13 +1333,13 @@ function buildChoicesMap(state) {
 
 function matchesFilter(story, filter) {
   if (filter === "all") return true;
-  if (filter === "major") return story.priorityRank >= 3 || story.requiresAction || isBreakingStory(story);
+  if (filter === "major") return story.priorityRank >= 3;
   if (filter === "breaking") return isBreakingStory(story);
   if (filter === "rumors") return isRumourStory(story);
   if (filter === "team") return story.isUserTeam;
-  if (filter === "league") return !story.isUserTeam;
+  if (filter === "league") return story.categoryKey === "league" || hasCategoryToken(story.category || story.type, ["league"]);
   if (filter === "player") return Boolean(story.playerName);
-  if (filter === "life") return story.categoryKey === "personal_life" || /life/i.test(str(story.category));
+  if (filter === "life") return story.categoryKey === "personal_life" || hasCategoryToken(story.category, ["life", "personal"]);
   if (filter === "media_buzz") return Number(story.heat) >= 40;
   return true;
 }
@@ -1327,19 +1414,24 @@ function scoreTone(score) {
 }
 
 function isRumourStory(story) {
-  return isTradeDeskStory(story);
+  if (!story) return false;
+  const tokens = categoryTokens(`${story.categoryKey || ""} ${story.category || ""} ${story.type || ""}`);
+  if (tokens.includes("rumor") || tokens.includes("rumour")) return true;
+  const cause = str(story.causeType || story.raw?.cause_type).toUpperCase();
+  return cause.includes("RUMOR") || cause.includes("RUMOUR");
 }
 
 function isTradeDeskStory(story) {
   if (!story) return false;
   const key = str(story.categoryKey || story.category || story.type).toLowerCase();
-  if (["personal_life", "locker_room", "injury", "performance"].includes(key)) return false;
+  if (["personal_life", "locker_room", "injury", "performance", "contract"].includes(key)) return false;
   const cause = str(story.causeType || story.raw?.cause_type).toUpperCase();
   if (/TRADE_DEMAND|TRADE_REJECTED|TRADE_PROPOSAL|CULPRIT_TRADED|TRADE_ATTEMPTED/.test(cause)) return true;
-  if (key === "trade" || key === "rumor") return true;
-  const hay = `${story.category || ""} ${story.type || ""} ${story.headline || ""}`.toLowerCase();
-  if (/\bacquires\b|\btraded to\b|trade rumour|trade rumor|trade wire/.test(hay)) return true;
-  return /\btrade\b/.test(hay);
+  if (key === "trade" || key === "rumor" || key === "rumour") return true;
+  const filed = `${story.category || ""} ${story.type || ""}`.toLowerCase();
+  if (hasCategoryToken(filed, ["trade", "rumor", "rumour"])) return true;
+  const headline = str(story.headline).toLowerCase();
+  return /\bacquires\b|\btraded to\b|trade rumour|trade rumor|trade wire|\btrade demand\b/.test(headline);
 }
 
 function parseIsoDate(iso) {
@@ -1358,9 +1450,9 @@ function filterRecentSocialItems(items, currentIso, maxAgeDays = 2) {
   const today = parseIsoDate(currentIso);
   if (!today) return items;
   const cutoff = today.getTime() - maxAgeDays * 86400000;
-  return items.filter((item) => {
+    return items.filter((item) => {
     const ts = socialPostTimestamp(item);
-    if (!ts) return true;
+    if (!ts) return false;
     return ts >= cutoff;
   });
 }
@@ -1373,7 +1465,10 @@ function isBrokenSocialPost(text) {
   const raw = str(text);
   if (!raw || raw.length < 8) return true;
   const lower = raw.toLowerCase();
-  if (lower.includes("the player")) return true;
+  const looksUnfilled =
+    /^the player[.!?]?$/i.test(raw.trim()) ||
+    (lower.includes("the player") && raw.length < 48 && !/[A-Z][a-z]+ [A-Z][a-z]+/.test(raw));
+  if (looksUnfilled) return true;
   if (/\(\s*0\s*ovr\s*\)/i.test(raw)) return true;
   if (/0 points in 0 games|through 0 gp|0 starts|0\.00 ppg through 0/i.test(lower)) return true;
   if (/\{[a-z_]+\}/.test(raw)) return true;
@@ -1653,30 +1748,48 @@ function CategoryTag({ story, size = "sm" }) {
 
 function StoryFace({ story, size = 48 }) {
   const abbr = str(story?.teamName || "TEAM").slice(0, 4).toUpperCase();
+  const raw = asObject(story?.raw) || {};
   const logo =
     resolveFranchiseTeamLogo(
-      { team_id: story?.teamId, team_name: story?.teamName, team_abbrev: abbr, abbrev: abbr },
+      { team_id: story?.teamId, team_name: story?.teamName, team_abbrev: raw.team_abbrev || abbr, abbrev: raw.team_abbrev || abbr },
       story?.teamName
     ) || "";
+  const ovr = Number(story?.playerOverall || raw.player_overall || 0);
+  const pot = Number(story?.playerPotential || raw.player_potential || raw.potential || 0);
   return (
-    <div className="sl-face" style={{ width: size, height: size }}>
-      {story?.playerName ? (
-        <PlayerHeadshot
-          player={{
-            name: story.playerName,
-            position: story.playerPosition,
-            overall: story.playerOverall,
-            team_abbrev: abbr,
-            team_name: story.teamName,
-            ...(asObject(story.raw) || {}),
-          }}
-          size={size}
-        />
-      ) : logo ? (
-        <img src={logo} alt="" />
-      ) : (
-        <span>{playerInitials(story?.playerName || abbr)}</span>
-      )}
+    <div className="sl-face-wrap">
+      <div className="sl-face" style={{ width: size, height: size }}>
+        {story?.playerName ? (
+          <PlayerHeadshot
+            player={{
+              ...raw,
+              name: story.playerName,
+              id: story.playerId || raw.player_id,
+              position: story.playerPosition,
+              overall: ovr || undefined,
+              potential: pot || undefined,
+              team_abbrev: raw.team_abbrev || abbr,
+              team_name: story.teamName,
+            }}
+            size="lg"
+            preferPhoto
+            showFlag={false}
+          />
+        ) : logo ? (
+          <img src={logo} alt="" />
+        ) : (
+          <span>{playerInitials(story?.playerName || abbr)}</span>
+        )}
+      </div>
+      {story?.playerName && logo ? (
+        <img className="sl-face-logo" src={logo} alt="" />
+      ) : null}
+      {ovr > 0 || pot > 0 ? (
+        <div className="sl-face-ratings">
+          {ovr > 0 ? <em>OVR {Math.round(ovr)}</em> : null}
+          {pot > 0 ? <em>POT {Math.round(pot)}</em> : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1928,16 +2041,17 @@ function inferChoiceTone(choice = {}) {
   if (explicit && explicit !== "neutral") return explicit;
   const id = str(choice.id || "").toLowerCase();
   const label = str(choice.label || "").toLowerCase();
-  const hay = `${id} ${label}`;
-  if (/no_comment|deny|firm|hold|cold|challenge|accountability|platoon|deflect|defer|wait|neither/.test(hay)) {
+  const tokens = categoryTokens(`${id} ${label}`);
+  const has = (word) => tokens.includes(word);
+  if (has("disagree") || has("deny") || has("deflect") || has("no_comment")) return "firm";
+  if (has("firm") || has("hold") || has("cold") || has("challenge") || has("accountability") || has("platoon") || has("defer") || has("wait")) {
     return "firm";
   }
-  if (/support|promise|commit|honest|transparent|welcome|praise|listen|acknowledge|diplomatic|agree/.test(hay)) {
+  if (has("support") || has("promise") || has("commit") || has("honest") || has("transparent") || has("welcome") || has("praise") || has("listen") || has("acknowledge") || has("diplomatic") || has("agree")) {
     return "supportive";
   }
-  if (/trade|rumor|volatile|changes|overhaul/.test(hay)) return "volatile";
-  if (/conditional|cautious|performance|earn/.test(hay)) return "cautious";
-  if (/deflect|neither_confirm/.test(hay)) return "deflect";
+  if (has("trade") || has("rumor") || has("rumour") || has("volatile") || has("overhaul")) return "volatile";
+  if (has("conditional") || has("cautious") || has("performance") || has("earn")) return "cautious";
   return "neutral";
 }
 
@@ -2198,6 +2312,7 @@ function StoryCard({ story, socialCount, onOpen, index }) {
         <span className="sl-card__age">{story.ageLabel || "—"}</span>
       </div>
       <div className="sl-card__body">
+        <TeamMark abbrev={story.teamName} name={story.teamName} size={28} />
         <StoryFace story={story} size={46} />
         <div className="sl-card__text">
           <h3>{story.headline}</h3>
@@ -2310,6 +2425,7 @@ function PlayerMeetingsPanel({
   const [lastOutcome, setLastOutcome] = useState(null);
   const [addressedPlayerIds, setAddressedPlayerIds] = useState(() => new Set());
   const [rosterQuery, setRosterQuery] = useState("");
+  const { setScreen, setPendingPromiseNav } = useGameUI();
 
   const markPlayerAddressed = useCallback((playerId) => {
     const pid = str(playerId);
@@ -2421,6 +2537,11 @@ function PlayerMeetingsPanel({
       setLastOutcome(null);
       try {
         const res = await onResolvePlayerRequest(interactionId, choiceId);
+        if (res?.continued && (res?.meeting || res?.interaction)) {
+          setActiveMeeting(res.meeting || res.interaction);
+          setView("meeting");
+          return;
+        }
         const gm = res?.state?.last_gm_result || res?.last_gm_result || {};
         setLastOutcome({
           message: res?.message || gm.headline || "Meeting resolved.",
@@ -2432,6 +2553,7 @@ function PlayerMeetingsPanel({
           player_id: res?.player_id || res?.interaction?.player_id || res?.interaction?.actor_id,
           player_name: res?.player_name,
           portrait: portraitOf(res?.player_id || res?.interaction?.player_id || res?.interaction?.actor_id),
+          navigate: res?.navigate,
         });
         markPlayerAddressed(res?.interaction?.player_id || res?.interaction?.actor_id);
         setActiveMeeting(null);
@@ -2450,6 +2572,10 @@ function PlayerMeetingsPanel({
       setLastOutcome(null);
       try {
         const res = await onAdvanceMeeting(meetingId, choiceId);
+        if (res?.continued && res?.meeting) {
+          setActiveMeeting(res.meeting);
+          return;
+        }
         const gm = res?.state?.last_gm_result || res?.last_gm_result || {};
         setLastOutcome({
           message: res?.message || gm.headline || res?.history?.choice_label || "Conversation recorded.",
@@ -2462,6 +2588,7 @@ function PlayerMeetingsPanel({
           player_id: res?.player_id || activeMeeting?.player_id,
           player_name: res?.player_name || activeMeeting?.player_name,
           portrait: portraitOf(res?.player_id || activeMeeting?.player_id),
+          navigate: res?.navigate,
         });
         markPlayerAddressed(activeMeeting?.player_id);
         setActiveMeeting(null);
@@ -2670,8 +2797,18 @@ function PlayerMeetingsPanel({
                         ? "Kept ✓"
                         : "Broken ✕"}
                   </span>
-                  {str(p.status || "active") === "active" && p.how_to ? (
-                    <em className="sl-promise-howto">{str(p.how_to)}</em>
+                  {str(p.status || "active") === "active" && (p.navigate || p.how_to) ? (
+                    <button
+                      type="button"
+                      className="md-result__close"
+                      onClick={() => openPromiseDestination(
+                        p.navigate || { screen: "edit_lines", player_id: p.player_id, label: p.how_to },
+                        setScreen,
+                        setPendingPromiseNav
+                      )}
+                    >
+                      {str(p.navigate?.label || p.how_to)}
+                    </button>
                   ) : null}
                 </div>
               ))}
@@ -3152,6 +3289,134 @@ function StoryImpactReport({ report }) {
 /* main screen                                                         */
 /* ------------------------------------------------------------------ */
 
+function formatRaceMetric(metric) {
+  if (!metric || metric.value == null || metric.value === "") return "—";
+  const n = Number(metric.value);
+  if (!Number.isFinite(n)) return "—";
+  if (metric.kind === "pct") {
+    const scaled = Math.abs(n) > 1.5 ? n : n * 100;
+    return `${scaled.toFixed(1)}%`;
+  }
+  if (metric.kind === "signed") {
+    const sign = n > 0 ? "+" : "";
+    return `${sign}${n.toFixed(1)}`;
+  }
+  return String(Math.round(n));
+}
+
+function AwardsRacePanel({ boards, status, sealed, sealedMessage }) {
+  const list = asArray(boards);
+  if (sealed) {
+    return (
+      <section className="sl-awards">
+        <header className="sl-awards__head">
+          <p>League desk</p>
+          <h2>Awards race</h2>
+          <span>Sealed for the final 15 days.</span>
+        </header>
+        <p className="sl-awards__sealed">
+          {sealedMessage || "The race is dark. Whoever is leading when the season ends keeps the trophy."}
+        </p>
+        <style>{`
+          .sl-awards { display: flex; flex-direction: column; gap: 16px; padding: 8px 4px 28px; }
+          .sl-awards__head p { margin: 0; letter-spacing: 0.16em; text-transform: uppercase; font-size: 11px; color: #8ab4ff; }
+          .sl-awards__head h2 { margin: 4px 0 6px; font-size: 28px; }
+          .sl-awards__head span { color: #9aa8b5; font-size: 13px; }
+          .sl-awards__sealed { margin: 12px 0 0; max-width: 42rem; font-size: 18px; line-height: 1.45; color: #d5e2ee; }
+        `}</style>
+      </section>
+    );
+  }
+  return (
+    <section className="sl-awards">
+      <header className="sl-awards__head">
+        <p>League desk</p>
+        <h2>Awards race</h2>
+        <span>The leader when the season ends keeps the trophy. This board goes dark for the last 15 days.</span>
+      </header>
+      {status === "loading" && !list.length ? (
+        <p className="sl-awards__status">Pulling the race from the awards ledger…</p>
+      ) : null}
+      {status === "error" ? (
+        <p className="sl-awards__status">The awards ledger did not load. Advance a day and open this desk again.</p>
+      ) : null}
+      {status !== "loading" && status !== "error" && !list.length ? (
+        <p className="sl-awards__status">No qualified players yet. The race fills in as games hit the ledger.</p>
+      ) : null}
+      <div className="sl-awards__grid">
+        {list.map((board) => (
+          <article key={board.id || board.name} className="sl-awards__card">
+            <header>
+              <strong>{str(board.name)}</strong>
+              <em>{str(board.blurb)}</em>
+            </header>
+            <ol>
+              {asArray(board.leaders).length ? (
+                asArray(board.leaders).map((leader, index) => {
+                  const portrait = ensurePlayerHeadshotFields({
+                    ...leader,
+                    id: leader.player_id,
+                    player_id: leader.player_id,
+                  });
+                  return (
+                    <li key={`${board.id}-${leader.player_id || leader.name}-${index}`}>
+                      <span className="sl-awards__rank">{index + 1}</span>
+                      {leader.position === "HC" ? (
+                        <span className="sl-awards__coach" aria-hidden>HC</span>
+                      ) : (
+                        <PlayerHeadshot player={portrait} size="xs" showFlag={false} />
+                      )}
+                      <span className="sl-awards__who">
+                        <b>{str(leader.name, "Player")}</b>
+                        <i>
+                          {str(leader.team_abbr)}
+                          {leader.position && leader.position !== "HC" ? ` · ${leader.position}` : ""}
+                        </i>
+                      </span>
+                      <span className="sl-awards__nums">
+                        {asArray(leader.metrics).map((metric) => (
+                          <span key={metric.label}>
+                            <small>{metric.label}</small>
+                            {formatRaceMetric(metric)}
+                          </span>
+                        ))}
+                      </span>
+                    </li>
+                  );
+                })
+              ) : (
+                <li className="sl-awards__empty">No qualified names on this ballot yet.</li>
+              )}
+            </ol>
+          </article>
+        ))}
+      </div>
+      <style>{`
+        .sl-awards { display: flex; flex-direction: column; gap: 16px; padding: 8px 4px 28px; }
+        .sl-awards__head p { margin: 0; letter-spacing: 0.16em; text-transform: uppercase; font-size: 11px; color: #8ab4ff; }
+        .sl-awards__head h2 { margin: 4px 0 6px; font-size: 28px; }
+        .sl-awards__head span, .sl-awards__status { color: #9aa8b5; font-size: 13px; }
+        .sl-awards__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+        .sl-awards__card { background: #12181f; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 12px 12px 6px; }
+        .sl-awards__card header { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+        .sl-awards__card header strong { font-size: 18px; }
+        .sl-awards__card header em { font-style: normal; color: #8ea0b0; font-size: 12px; }
+        .sl-awards__card ol { list-style: none; margin: 0; padding: 0; }
+        .sl-awards__card li { display: grid; grid-template-columns: 18px 36px minmax(0, 1fr); gap: 8px; align-items: center; padding: 7px 0; border-top: 1px solid rgba(255,255,255,0.06); }
+        .sl-awards__rank { color: #8ea0b0; font-variant-numeric: tabular-nums; }
+        .sl-awards__coach { width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; background: #1c2733; color: #d5e2ee; font-size: 11px; }
+        .sl-awards__who { min-width: 0; display: flex; flex-direction: column; }
+        .sl-awards__who b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .sl-awards__who i { font-style: normal; color: #8ea0b0; font-size: 11px; }
+        .sl-awards__nums { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 12px; font-variant-numeric: tabular-nums; }
+        .sl-awards__nums span { display: flex; flex-direction: column; align-items: flex-end; min-width: 36px; }
+        .sl-awards__nums small { color: #8ea0b0; font-size: 10px; letter-spacing: 0.04em; }
+        .sl-awards__empty { display: block !important; color: #8ea0b0; }
+      `}</style>
+    </section>
+  );
+}
+
 export default function StorylinesScreen() {
   const {
     franchiseState,
@@ -3175,6 +3440,25 @@ export default function StorylinesScreen() {
   const [department, setDepartment] = useState(
     pendingMeetingPlayerId ? "player_meetings" : pendingSocialNav ? "social" : "front_page"
   );
+  const [awardsRace, setAwardsRace] = useState(null);
+  const [awardsStatus, setAwardsStatus] = useState("idle");
+  useEffect(() => {
+    if (department !== "awards_race") return undefined;
+    let cancelled = false;
+    setAwardsStatus("loading");
+    getStatsCentral()
+      .then((payload) => {
+        if (cancelled) return;
+        setAwardsRace(payload?.awards_race || { boards: [] });
+        setAwardsStatus("loaded");
+      })
+      .catch(() => {
+        if (!cancelled) setAwardsStatus("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [department, franchiseState?.stats_revision]);
   const [socialSubTab, setSocialSubTab] = useState(pendingSocialNav?.subTab || "puckr");
   const [redditSubFilter, setRedditSubFilter] = useState(pendingSocialNav?.subreddit || "all");
   const [expandedThreadId, setExpandedThreadId] = useState(null);
@@ -3190,6 +3474,7 @@ export default function StorylinesScreen() {
   const [sortId, setSortId] = useState("decisions");
   const [search, setSearch] = useState("");
   const [openCaseId, setOpenCaseId] = useState(null);
+  const [pinnedCase, setPinnedCase] = useState(null);
   const [activeTab, setActiveTab] = useState("details");
   const [busyChoice, setBusyChoice] = useState("");
   const [actionNotice, setActionNotice] = useState("");
@@ -3237,8 +3522,49 @@ export default function StorylinesScreen() {
     [franchiseState?.narrative_summary?.story_impact_report, franchiseState?.narrative_revision]
   );
 
+  const openFiledBeat = useCallback((row) => {
+    if (!row) return;
+    const sid = str(row.storyline_id || row.storylineId || row.id || row.world_event_id);
+    const match = stories.find(
+      (s) => (sid && (str(s.storylineId) === sid || str(s.id) === sid)) || (row.headline && s.headline === row.headline)
+    );
+    if (match) {
+      setPinnedCase(null);
+      setDepartment(isTradeDeskStory(match) ? "trade_desk" : "front_page");
+      setFilter("all");
+      setOpenCaseId(match.id);
+      setActiveTab("details");
+      return;
+    }
+    const synthetic = finalizeStory(
+      normalizeStory(
+        {
+          ...row,
+          id: sid || `filed-${str(row.headline).slice(0, 24)}`,
+          storyline_id: sid,
+          headline: row.headline,
+          summary: row.summary,
+          category: row.category || "storyline",
+          calendar_iso: row.calendar_iso,
+          heat: row.heat,
+          player_name: row.player_name,
+          team_id: row.team_id,
+          status: "archived",
+        },
+        0,
+        franchiseState
+      ),
+      franchiseState
+    );
+    setPinnedCase(synthetic);
+    setDepartment("front_page");
+    setOpenCaseId(synthetic.id);
+    setActiveTab("details");
+  }, [stories, franchiseState]);
+
   const openStory = useCallback((id) => {
     if (!id) return;
+    setPinnedCase(null);
     setOpenCaseId(id);
     setActiveTab("details");
     if (typeof window !== "undefined") {
@@ -3425,10 +3751,10 @@ export default function StorylinesScreen() {
     [socialCountByStory]
   );
 
-  const openCase = useMemo(
-    () => (openCaseId ? stories.find((s) => s.id === openCaseId) || null : null),
-    [openCaseId, stories]
-  );
+  const openCase = useMemo(() => {
+    if (!openCaseId) return null;
+    return stories.find((s) => s.id === openCaseId) || (pinnedCase && pinnedCase.id === openCaseId ? pinnedCase : null);
+  }, [openCaseId, stories, pinnedCase]);
 
   const leadStory = useMemo(() => {
     if (!filtered.length) return null;
@@ -3913,6 +4239,12 @@ export default function StorylinesScreen() {
           display: grid; place-items: center; }
         .sl-face img { width: 100%; height: 100%; object-fit: cover; }
         .sl-face > span { font-size: 15px; font-weight: 900; color: var(--cyan); letter-spacing: .04em; }
+        .sl-face-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; flex-shrink: 0; }
+        .sl-face-logo { width: 22px; height: 22px; object-fit: contain; }
+        .sl-face-ratings { display: flex; gap: 4px; }
+        .sl-face-ratings em { font-style: normal; font-size: 9px; font-weight: 900; letter-spacing: .04em;
+          color: #d7f6ff; background: rgba(8, 28, 42, .9); border: 1px solid rgba(120, 210, 230, .35);
+          border-radius: 4px; padding: 1px 4px; }
         .sl-teammark { display: grid; place-items: center; border-radius: 8px; border: 1px solid var(--line-2);
           background: rgba(255,255,255,.03); overflow: hidden; flex-shrink: 0; }
         .sl-teammark img { width: 100%; height: 100%; object-fit: contain; padding: 3px; }
@@ -5494,13 +5826,7 @@ export default function StorylinesScreen() {
                         key={sid}
                         type="button"
                         className="sl-insider"
-                        onClick={() => {
-                          if (match) {
-                            setDepartment(isTradeDeskStory(match) ? "trade_desk" : "front_page");
-                            setFilter("all");
-                            openStory(match.id);
-                          }
-                        }}
+                        onClick={() => openFiledBeat(item)}
                       >
                         <div className="sl-insider__head">
                           <strong>{str(item.headline || match?.headline || "Desk note")}</strong>
@@ -5551,6 +5877,13 @@ export default function StorylinesScreen() {
               </div>
             </aside>
           </div>
+        ) : department === "awards_race" ? (
+          <AwardsRacePanel
+            boards={awardsRace?.boards}
+            status={awardsStatus}
+            sealed={Boolean(awardsRace?.sealed)}
+            sealedMessage={awardsRace?.sealed_message}
+          />
         ) : department === "press_room" ? (
           <div className="sl-pressroom">
             <div className="sl-pressroom__intro">
@@ -5725,16 +6058,7 @@ export default function StorylinesScreen() {
                         <button
                           key={str(story.storyline_id || story.headline || idx)}
                           type="button"
-                          onClick={() => {
-                            const match = stories.find(
-                              (s) => str(s.storylineId) === str(story.storyline_id) || s.headline === story.headline
-                            );
-                            if (match) {
-                              setDepartment(isTradeDeskStory(match) ? "trade_desk" : "front_page");
-                              setFilter("all");
-                              openStory(match.id);
-                            }
-                          }}
+                          onClick={() => openFiledBeat(story)}
                         >
                           <strong>{str(story.headline || "Archived beat")}</strong>
                           <em>
@@ -5762,14 +6086,7 @@ export default function StorylinesScreen() {
                       <button
                         key={str(story.storyline_id || story.headline || idx)}
                         type="button"
-                        onClick={() => {
-                          const match = stories.find((s) => str(s.storylineId) === str(story.storyline_id));
-                          if (match) {
-                            setDepartment(isTradeDeskStory(match) ? "trade_desk" : "front_page");
-                            setFilter("all");
-                            openStory(match.id);
-                          }
-                        }}
+                        onClick={() => openFiledBeat(story)}
                       >
                         <strong>{str(story.headline || "Archived beat")}</strong>
                         <em>{prettyDate(story.calendar_iso) || str(story.season || "—")}</em>

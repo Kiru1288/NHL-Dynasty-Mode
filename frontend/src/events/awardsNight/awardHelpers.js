@@ -264,11 +264,11 @@ const AWARD_ALIASES = [
   ["art_ross", ["art ross", "art ross trophy"]],
   ["rocket", ["rocket", "rocket richard", "maurice richard", "richard trophy"]],
   ["norris", ["norris", "norris trophy", "james norris"]],
+  ["conn_smythe", ["conn smythe", "smythe", "playoff mvp"]],
   ["hart", ["hart", "hart memorial", "mvp"]],
   ["selke", ["selke", "frank j selke"]],
   ["calder", ["calder", "calder memorial", "rookie of the year"]],
   ["vezina", ["vezina", "vezina trophy"]],
-  ["conn_smythe", ["conn smythe", "smythe", "playoff mvp"]],
   ["jennings", ["jennings", "william jennings", "william m. jennings"]],
   ["lady_byng", ["lady byng", "byng"]],
   ["ted_lindsay", ["ted lindsay", "lindsay"]],
@@ -2087,7 +2087,7 @@ export function normalizeAwardsPayload(franchiseState, eventData) {
         String(row.award_id || "").trim();
       const catalogFromBackend = backendCatalog?.[awardKey] || null;
       const meta = {
-        ...getAwardCatalogEntry(row.name || row.award_id || awardKey),
+        ...getAwardCatalogEntry(awardKey || row.award_id || row.name),
         ...(catalogFromBackend
           ? {
               label: catalogFromBackend.name || undefined,

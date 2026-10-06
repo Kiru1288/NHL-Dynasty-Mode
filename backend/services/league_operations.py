@@ -563,6 +563,25 @@ def calculate_global_draw_revenue_boost(team: Any) -> Dict[str, Any]:
             raw *= 1.28
         elif ovr >= 76:
             raw *= 1.12
+        # A regular from a huge non-hockey country pulls a national audience
+        # (China, India, the Philippines, Mexico, Brazil, Nigeria).
+        nation = str(country or "").strip().lower()
+        pop = 1.0
+        for token, mult in (
+            ("china", 1.55),
+            ("india", 1.50),
+            ("philipp", 1.42),
+            ("filipino", 1.42),
+            ("mexico", 1.38),
+            ("brazil", 1.32),
+            ("nigeria", 1.35),
+            ("indonesia", 1.28),
+            ("pakistan", 1.24),
+        ):
+            if token in nation:
+                pop = mult
+                break
+        raw *= pop
         draws.append(
             {
                 "name": _player_display_name(p),
@@ -1633,7 +1652,8 @@ def _build_league_operations_payload_impl(session: FranchiseSession) -> Dict[str
     for tid, team in (session.team_by_id or {}).items():
         if team is None:
             continue
-        row = calculate_team_revenue(session, team, str(tid), is_user=(str(tid) == uid))
+        # Full-season book + revenue sharing — same profit sign the Board uses for votes.
+        row = calculate_team_revenue(session, team, str(tid), is_user=(str(tid) == uid), annual=True)
         team_rows.append(row)
 
     _apply_revenue_sharing(session, team_rows)

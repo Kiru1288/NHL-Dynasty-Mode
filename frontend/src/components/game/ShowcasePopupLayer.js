@@ -2,11 +2,13 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useGameUI } from "../../game/GameUIContext";
 import { SCREENS } from "../../game/constants";
 import { isFranchiseCinematicPopup } from "../../events/franchiseEventKinds";
-import { getTeamLogoSrc, toLogoUrl } from "../../utils/teamLogos";
+import { getTeamLogoSrc, resolveFranchiseTeamLogo, toLogoUrl } from "../../utils/teamLogos";
 import { claimWaiverPlayer } from "../../services/franchiseService";
+import PlayerHeadshot from "../PlayerHeadshot";
 
 function resolveAlertTheme(pop) {
   const theme = pop.theme || pop.presentation_type || "";
+  if (theme === "obituary" || pop.kind === "player_death") return "obituary";
   if (theme === "danger" || pop.legal_severity === "major" || pop.kind === "legal_trouble") {
     return "danger";
   }
@@ -378,6 +380,52 @@ function TradeWireBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
   );
 }
 
+function AlertIdentity({ pop }) {
+  const ovr = Number(pop.player_overall || pop.overall || 0);
+  const pot = Number(pop.player_potential || pop.potential || 0);
+  const name = pop.player_name;
+  const teamName = pop.team_name || pop.team_abbrev || pop.team_abbr || "";
+  if (!name && !teamName) return null;
+  const logo =
+    resolveFranchiseTeamLogo(
+      {
+        team_id: pop.team_id,
+        team_name: pop.team_name,
+        team_abbrev: pop.team_abbrev || pop.team_abbr,
+        abbrev: pop.team_abbrev || pop.team_abbr,
+      },
+      pop.team_name || teamName
+    ) || "";
+  return (
+    <div className="media-alert__identity">
+      {name ? (
+        <PlayerHeadshot
+          player={{
+            ...pop,
+            name,
+            id: pop.player_id,
+            position: pop.player_position || pop.position,
+            overall: ovr || undefined,
+            potential: pot || undefined,
+          }}
+          size="lg"
+          preferPhoto
+          showFlag={false}
+        />
+      ) : null}
+      {logo ? (
+        <img className="media-alert__team-logo" src={logo} alt="" />
+      ) : teamName ? (
+        <span className="media-alert__team-fallback">{String(teamName).slice(0, 3).toUpperCase()}</span>
+      ) : null}
+      <div className="media-alert__ratings">
+        {ovr > 0 ? <span className="media-alert__ovr">OVR {Math.round(ovr)}</span> : null}
+        {pot > 0 ? <span className="media-alert__pot">POT {Math.round(pot)}</span> : null}
+      </div>
+    </div>
+  );
+}
+
 function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [], queueCount = 0 }) {
   const theme = resolveAlertTheme(pop);
   const source = pop.source_label || pop.title || "League Update";
@@ -397,6 +445,8 @@ function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [], que
           ×
         </button>
       </div>
+
+      <AlertIdentity pop={pop} />
 
       <div className="media-alert__hero-text">
         <h3 className="media-alert__headline" id="showcase-popup-title">
@@ -437,6 +487,30 @@ function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [], que
   );
 }
 
+function ObituaryBody({ pop, onDismiss }) {
+  const age = pop.player_age != null && pop.player_age !== "" ? `age ${pop.player_age}` : "";
+  const meta = [pop.player_position, age, pop.player_country, pop.team_name].filter(Boolean);
+  return (
+    <div className="obituary">
+      <p className="obituary__kicker">League announcement</p>
+      <h3 className="obituary__name" id="showcase-popup-title">
+        {pop.player_name || "A player"}
+      </h3>
+      {meta.length ? <p className="obituary__meta">{meta.join("   ·   ")}</p> : null}
+      <div className="obituary__rule" aria-hidden />
+      <p className="obituary__lead">{pop.headline || "Has died"}</p>
+      {pop.summary ? <p className="obituary__body">{pop.summary}</p> : null}
+      {pop.cause ? <p className="obituary__cause">{pop.cause}</p> : null}
+      <p className="obituary__note">
+        He is permanently removed from competition. His contract comes off the books and the roster spot is open.
+      </p>
+      <button type="button" className="obituary__ack" onClick={onDismiss}>
+        Acknowledge
+      </button>
+    </div>
+  );
+}
+
 function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTradeCount = 0, queueCount = 0 }) {
   if (isTradePopup(pop) && !pop.trade_demand) {
     return (
@@ -471,6 +545,7 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
     { label: "Player", value: pop.player_name ? null : pop.culprit_player_name || null },
     { label: "Position", value: pop.player_position || null },
     { label: "OVR", value: Number(pop.player_overall) > 0 ? Math.round(Number(pop.player_overall)) : null },
+    { label: "POT", value: Number(pop.player_potential || pop.potential) > 0 ? Math.round(Number(pop.player_potential || pop.potential)) : null },
     {
       label: "Status",
       value: demand
@@ -1400,7 +1475,9 @@ export function ShowcasePopupLayer() {
     else if (act.id === "freeagency") setScreen?.(SCREENS.FREE_AGENCY);
   };
 
+  const isObituary = kind === "player_death";
   const isMediaAlert =
+    isObituary ||
     kind === "storyline" ||
     kind === "legal_trouble" ||
     kind === "injury" ||
@@ -1413,11 +1490,11 @@ export function ShowcasePopupLayer() {
   return (
     <>
       <ShowcasePopupStyles />
-      <div className="showcase-popup showcase-popup--v2">
+      <div className={`showcase-popup showcase-popup--v2 ${isObituary ? "showcase-popup--obituary" : ""}`}>
       <div
         className="showcase-popup__backdrop showcase-popup__backdrop--v2"
         aria-hidden
-        onClick={dismiss}
+        onClick={isObituary ? undefined : dismiss}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") dismiss();
         }}
@@ -1425,7 +1502,7 @@ export function ShowcasePopupLayer() {
         tabIndex={-1}
       />
       <div
-        className={`showcase-popup__panel showcase-popup__panel--v2 ${isMediaAlert ? "showcase-popup__panel--media" : ""} ${isTradeAlert ? "showcase-popup__panel--trade-wire" : ""} showcase-popup__panel--${theme}`}
+        className={`showcase-popup__panel showcase-popup__panel--v2 ${isMediaAlert ? "showcase-popup__panel--media" : ""} ${isTradeAlert ? "showcase-popup__panel--trade-wire" : ""} ${isObituary ? "showcase-popup__panel--obituary" : ""} showcase-popup__panel--${theme}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="showcase-popup-title"
@@ -1464,6 +1541,7 @@ export function ShowcasePopupLayer() {
           {kind === "wjc_tournament" ? <WjcBody pop={first} /> : null}
           {kind === "showcase_game" ? <ShowcaseGameBody pop={first} /> : null}
           {kind === "allstar_game" ? <AllStarBody pop={first} /> : null}
+          {kind === "player_death" ? <ObituaryBody pop={first} onDismiss={dismiss} /> : null}
           {kind === "injury" ? (
             <InjuryBody pop={first} onDismiss={dismiss} onAction={handleAction} queueCount={visiblePopups.length} />
           ) : null}
@@ -1480,7 +1558,7 @@ export function ShowcasePopupLayer() {
           {kind === "fa_decision" ? (
             <FaDecisionBody pop={first} onDismiss={dismiss} onAction={handleAction} queueCount={visiblePopups.length} />
           ) : null}
-          {!["wjc_tournament", "showcase_game", "allstar_game", "injury", "storyline", "legal_trouble", "player_meeting", "breaking_news", "waiver", "fa_decision"].includes(
+          {!["wjc_tournament", "showcase_game", "allstar_game", "injury", "storyline", "legal_trouble", "player_meeting", "breaking_news", "waiver", "fa_decision", "player_death"].includes(
             kind
           ) ? (
             <LeagueNoticeBody pop={first} />

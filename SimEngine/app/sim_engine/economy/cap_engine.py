@@ -275,14 +275,15 @@ def _is_active_roster_player(player: Any) -> bool:
         )
 
 
-def team_active_roster_cap_hit_millions(team: Any) -> float:
+def team_active_roster_cap_hit_millions(team: Any, *, include_expiring: bool = False) -> float:
     total = 0.0
     for p in _iter_team_roster(team):
         if not _is_active_roster_player(p):
             continue
         # Deferred July-1 UFAs stay on the roster for extension talks, but their
         # AAV must not squat usable opening-day space (re-sign / FA desk).
-        if _is_pending_july1_expiry(p):
+        # During the season those deals are still on this year's books.
+        if (not include_expiring) and _is_pending_july1_expiry(p):
             continue
         total += player_cap_hit_millions(p)
     return max(0.0, total)
@@ -624,6 +625,7 @@ def calculate_team_cap_snapshot(
     season_label: Optional[str] = None,
     calendar_cursor: int = 0,
     regular_season_last_index: int = 192,
+    include_expiring: bool = False,
 ) -> Dict[str, Any]:
     season_y = _season_start_year_from_label(season_label, league)
     # Pass the resolved season so a stale league.salary_cap_m=$88 (or a lagging
@@ -632,7 +634,7 @@ def calculate_team_cap_snapshot(
     upper_limit_m = max(0.0, bounds["upper"])
     lower_limit_m = max(0.0, bounds["lower"])
 
-    active_m = team_active_roster_cap_hit_millions(team)
+    active_m = team_active_roster_cap_hit_millions(team, include_expiring=bool(include_expiring))
     # Do NOT fall back to team.total_cap_hit when active is 0 — that mirror is the
     # FULL snapshot total and reinstates pending July-1 UFAs (and double-counts
     # buried/bonus), leaving every club at ~$0 usable space for FA.
@@ -890,8 +892,9 @@ def can_sign_player(
     league: Any = None,
     *,
     player: Any = None,
+    include_expiring: bool = False,
 ) -> Dict[str, Any]:
-    snap = calculate_team_cap_snapshot(team, league=league)
+    snap = calculate_team_cap_snapshot(team, league=league, include_expiring=bool(include_expiring))
     needed = max(0.0, float(contract_aav_m))
     roster_add = 0 if _player_on_active_roster(team, player) else 1
     projected_roster_count = snap["activeRosterCount"] + roster_add

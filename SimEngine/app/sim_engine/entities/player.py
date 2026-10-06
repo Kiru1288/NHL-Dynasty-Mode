@@ -222,6 +222,12 @@ def persist_recomputed_ovr(player: Any) -> float:
             inval()
     except Exception:
         pass
+    try:
+        from app.sim_engine.entities.chapter_attributes import sync_chapters_to_overall
+
+        sync_chapters_to_overall(player)
+    except Exception:
+        pass
     return ovr01
 
 

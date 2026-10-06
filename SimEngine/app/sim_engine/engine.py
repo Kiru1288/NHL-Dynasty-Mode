@@ -86,9 +86,9 @@ _SKATER_LEDGER_ANALYTICS_KEYS = (
 )
 
 # League-wide goals/points lift (game scores + finish rate). Does not touch TOI allocation.
-_GM_LEAGUE_SCORING_PACE_MULT = 1.22
+_GM_LEAGUE_SCORING_PACE_MULT = 1.36
 # Bulk/light game scores: talent gap should move standings, not single-game dice.
-_GM_STRENGTH_MATCHUP_GOAL_K = 1.38
+_GM_STRENGTH_MATCHUP_GOAL_K = 1.85
 _GM_STRENGTH_GAME_GOAL_SIGMA = 1.26
 _GM_STRENGTH_MATCHUP_SIGMA_DAMP = 0.52
 _GM_STRENGTH_TIEBREAK_SKILL_K = 0.48
@@ -10600,6 +10600,15 @@ class SimEngine:
             if tid is None:
                 tid = f"T{idx:02d}"
             m[str(tid)] = self._team_strength(t)
+        # Roster averages sit in a narrow band, so raw strength made every club
+        # a coin flip. Stretch the league from the worst team to the best.
+        if len(m) >= 8:
+            vals = list(m.values())
+            lo, hi = min(vals), max(vals)
+            span = max(0.025, hi - lo)
+            for tid, v in list(m.items()):
+                t = (float(v) - lo) / span
+                m[tid] = 0.30 + t * 0.52
         return m
 
     def _narrative_team_goal_sigma_multiplier(self, team: Any) -> float:
@@ -10750,7 +10759,13 @@ class SimEngine:
             tier_mult = 1.0 + (tier_mult - 1.0) * 0.42
         elif usage < 1.45:
             tier_mult = 1.0 + (tier_mult - 1.0) * 0.72
-        return float(max(0.85, min(1.78, tier_mult * self._gm_franchise_alloc_mult(
+        if ovr99 >= 93 and pos != "D":
+            tier_mult = max(tier_mult, 2.35)
+        elif ovr99 >= 90 and pos != "D":
+            tier_mult = max(tier_mult, 1.95)
+        # 90+ forwards have to be otherworldly, not just another first-liner.
+        cap = 3.05 if ovr99 >= 93 else (2.45 if ovr99 >= 90 else 1.78)
+        return float(max(0.85, min(cap, tier_mult * self._gm_franchise_alloc_mult(
             p, "overall_equivalent", "effort", "shot_involvement", "assist_involvement"
         ))))
 
@@ -13017,11 +13032,11 @@ class SimEngine:
         home_share += rng.uniform(-0.045, 0.045)
         # NHL team CF% over a 15-game sample almost never lives at 30/70.
         # Keep talent edge, but don't invent historically impossible shares.
-        home_share = max(0.40, min(0.60, home_share))
+        home_share = max(0.34, min(0.66, home_share))
 
-        pace = 102.0 + 16.0 * ((home_off + away_off) * 0.5 - 0.5)
-        pace += rng.uniform(-9.0, 9.0)
-        total_attempts = int(round(max(90.0, min(128.0, pace))))
+        pace = 132.0 + 18.0 * ((home_off + away_off) * 0.5 - 0.5)
+        pace += rng.uniform(-8.0, 8.0)
+        total_attempts = int(round(max(112.0, min(168.0, pace))))
 
         h_attempts = max(26, int(round(total_attempts * home_share)))
         a_attempts = max(26, total_attempts - h_attempts)
@@ -14535,7 +14550,7 @@ class SimEngine:
             away_cf_n -= nudge
         total_cf = max(1, int(home_cf_n) + int(away_cf_n))
         home_share_n = float(home_cf_n) / float(total_cf)
-        home_share_n = max(0.40, min(0.60, home_share_n))
+        home_share_n = max(0.34, min(0.66, home_share_n))
         home_cf_n = max(36, int(round(total_cf * home_share_n)))
         away_cf_n = max(36, total_cf - home_cf_n)
 
@@ -14649,12 +14664,19 @@ class SimEngine:
                 if goal_first:
                     w_g *= 1.08
                 elif playmaker or assist_lean:
-                    w_g *= 0.64
+                    w_g *= 0.92 if ovr_n >= 0.95 else 0.64
                 else:
                     w_g *= 0.74
                 star_mult = self._gm_scoring_involvement_mult(p)
                 star_adj = 1.0 + (float(star_mult) - 1.0) * float(depth_damp) * 0.55
-                w_g *= star_adj ** 0.50
+                if ovr_n >= 0.95 and pos != "D":
+                    w_g *= (star_adj ** 1.15) * 1.45
+                elif ovr_n >= 0.92 and pos != "D":
+                    w_g *= (star_adj ** 1.05) * 1.25
+                elif ovr_n >= 0.90:
+                    w_g *= star_adj ** 0.95
+                else:
+                    w_g *= star_adj ** 0.50
                 off_w[pid] = max(0.05, w_g)
 
                 prim = self._gm_primary_assist_weight(p, "EV")
@@ -14668,6 +14690,9 @@ class SimEngine:
                 else:
                     prim *= 1.26
                     sec *= 1.18
+                if ovr_n >= 0.95 and pos != "D":
+                    prim *= 1.45
+                    sec *= 1.25
                 ast_prim_w[pid] = max(
                     0.05,
                     prim * (star_adj ** 0.70) * (usage_scale ** 0.20) * (toi_f ** 0.70),
@@ -14709,7 +14734,18 @@ class SimEngine:
             pair_share = (0.46, 0.34, 0.20)
 
             def _pick_scorer() -> Any:
-                use_d = bool(d_pool) and rng.random() < 0.14
+                # 98-overall forwards are a different tier from a 96 winger.
+                # McDavid and Draisaitl take a real slice of the goals instead of
+                # splitting a normal top line with everyone else.
+                titans = [p for p in fw_pool if self._gm_ovr_norm(p) >= 0.982]
+                use_d = bool(d_pool) and rng.random() < 0.17
+                if titans and not use_d and rng.random() < (0.20 if len(titans) == 1 else 0.42):
+                    # Two franchise forwards share this. Full shot-weight was
+                    # giving it all to one of them; a coin flip left the other behind.
+                    ordered = sorted(titans, key=self._gm_ovr_norm, reverse=True)
+                    if len(ordered) == 1 or rng.random() < 0.55:
+                        return ordered[0]
+                    return rng.choice(ordered[1:])
                 pool = d_pool if use_d else (fw_pool or skaters)
                 if not pool:
                     pool = skaters
@@ -14745,12 +14781,33 @@ class SimEngine:
                 remaining = linemates + [p for p in skaters if p is not scorer and p not in linemates]
                 n_ast = 2 if rng.random() < 0.91 else 1
                 n_ast = min(n_ast, len(remaining))
+                # Forward goals were keeping both assists on the forward unit, so
+                # defensemen never reached a real point total. About half of those
+                # goals now include a defenseman assist, weighted to the offensive D.
+                d_assist_slot = None
+                if (not self._gm_is_defense(scorer)) and d_pool and rng.random() < 0.36:
+                    # Secondary assist. The primary stays with the forward who made the play.
+                    d_assist_slot = min(1, n_ast - 1)
                 for i_a in range(n_ast):
                     if not remaining:
                         break
                     bucket = ast_prim_w if i_a == 0 else ast_sec_w
-                    # Primary assist usually same unit; ~20% off-unit playmaking.
-                    if i_a == 0 and linemates and rng.random() < _GM_SCORING_LINE_UNIT_BLEND:
+                    d_choices = [p for p in remaining if self._gm_is_defense(p)]
+                    scorer_is_titan = (
+                        not self._gm_is_defense(scorer) and self._gm_ovr_norm(scorer) >= 0.982
+                    )
+                    partner = [
+                        p for p in remaining
+                        if not self._gm_is_defense(p) and self._gm_ovr_norm(p) >= 0.982
+                    ]
+                    # When one of McDavid or Draisaitl scores, the other gets the
+                    # primary assist. They do not take the primary on everyone else's goals.
+                    if i_a == 0 and scorer_is_titan and partner:
+                        best = max(partner, key=self._gm_ovr_norm)
+                        assister = best
+                    elif i_a == d_assist_slot and d_choices:
+                        assister = _pick_weighted_live(d_choices, bucket, 1.05, balance_role="assist")
+                    elif i_a == 0 and linemates and rng.random() < _GM_SCORING_LINE_UNIT_BLEND:
                         assister = _pick_weighted_live(linemates, bucket, 1.05, balance_role="assist")
                     else:
                         assister = _pick_weighted_live(remaining, bucket, 1.08 if i_a == 0 else 1.02, balance_role="assist")
@@ -14874,10 +14931,11 @@ class SimEngine:
         _credit_ev_plus_minus(away_sk, away_toi, aid, ag, hg, away_ppg, home_ppg)
 
         def _team_sog_target(goals: int, team_cf: int) -> int:
-            # SOG tracks talent-driven attempts (~52% of CF on net) with mild goal tether.
-            base = float(team_cf) * 0.52 + (float(goals) - 3.05) * 0.90
-            n = int(round(rng.gauss(base, 2.4)))
-            return max(int(goals) + 14, min(42, n))
+            # SOG tracks talent-driven attempts. A higher on-net share lifts team
+            # and player shot totals without turning every shot into a goal.
+            base = float(team_cf) * 0.66 + (float(goals) - 3.05) * 0.70
+            n = int(round(rng.gauss(base, 2.6)))
+            return max(int(goals) + 16, min(52, n))
 
         def _allocate_team_sog(
             skaters: List[Any],
@@ -14904,6 +14962,21 @@ class SimEngine:
                 else:
                     # Extra shot volume for finishers / wings.
                     base_w *= 1.15 if pos in ("LW", "RW", "C", "F") else 0.85
+                # Stars get a real shot share. 95+ forwards should look otherworldly.
+                if pos == "D":
+                    if ovr_n >= 0.90:
+                        base_w *= 1.35
+                    elif ovr_n >= 0.86:
+                        base_w *= 1.15
+                elif ovr_n >= 0.95:
+                    # Floor so a second superstar on the same line is not squeezed to ordinary shots.
+                    base_w = max(base_w, 0.48) * 1.85
+                elif ovr_n >= 0.92:
+                    base_w = max(base_w, 0.36) * 1.5
+                elif ovr_n >= 0.88:
+                    base_w *= 1.55
+                elif ovr_n >= 0.84:
+                    base_w *= 1.22
                 sog_w.append(max(0.06, base_w))
             shares = self._gm_distribute_integer_shares(rng, sog_w, sog_n)
             for p, n in zip(skaters, shares):

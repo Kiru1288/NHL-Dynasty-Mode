@@ -580,9 +580,9 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
                 elif cid == "loan_partial":
                     mode = "partial"
                 else:
-                    mode = False
+                    mode = "none"
                 session.wjc_nhl_u20_loan[pid] = mode
-                effects["wjc_loan"] = 1 if mode else 0
+                effects["wjc_loan"] = 1 if mode in ("full", "partial") else 0
                 effects["wjc_loan_mode"] = mode or "none"
 
                 player = None
@@ -609,7 +609,7 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
 
                     inj_roll = session.sim.rng.random()
                     inj_threshold = 0.07 if mode == "full" else (0.03 if mode == "partial" else 0.0)
-                    if mode and inj_roll < inj_threshold:
+                    if mode in ("full", "partial") and inj_roll < inj_threshold:
                         ident = getattr(player, "identity", None)
                         pname = str(getattr(ident, "name", None) or meta.get("player_name") or "Player")
                         abbr = _franchise_team_abbrev(ut) if ut else "?"

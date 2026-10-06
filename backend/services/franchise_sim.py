@@ -30,6 +30,8 @@ _TEAM_SUMMARY_CACHE: Optional[List[Dict[str, str]]] = None
 # Per-session locks kept off FranchiseSession so pickle/save clones stay valid.
 _DRAFT_RANKINGS_LOCKS: Dict[str, threading.Lock] = {}
 _DRAFT_RANKINGS_LOCKS_GUARD = threading.Lock()
+_ROSTER_BROWSER_LOCKS: Dict[str, threading.Lock] = {}
+_ROSTER_BROWSER_LOCKS_GUARD = threading.Lock()
 
 
 def _franchise_startup_stage(msg: str) -> None:
@@ -2161,6 +2163,12 @@ def start_franchise(
 
     sim._preseason_line_synergy_refresh(teams, sim.rng)
     strength_map = sim._build_strength_map(teams)
+    try:
+        from app.sim_engine.league.awards import assign_team_season_expectations
+
+        assign_team_season_expectations(teams, strength_map, games=int(gp or 82))
+    except Exception:
+        logging.getLogger(__name__).exception("Opening-night win expectations failed")
     use_world = _use_world_modules()
     play_days: Dict[str, Any] = {}
     if use_world and world_calendar is not None:
@@ -2356,6 +2364,14 @@ def _schedule_draft_class_cache_warm(session: FranchiseSession) -> None:
             if sim is None:
                 return
             board = get_cached_draft_class_rankings(session, sim)
+            try:
+                get_cached_roster_browser(
+                    session,
+                    sim,
+                    str(getattr(session, "user_team_id", "") or ""),
+                )
+            except Exception:
+                pass
             user_team = None
             try:
                 user_team = (getattr(session, "team_by_id", None) or {}).get(
@@ -3968,6 +3984,10 @@ def _accumulate_franchise_game_stats(
             "simmed": True,
         }
     )
+    try:
+        stamp_game_period_lines(box, rng)
+    except Exception:
+        pass
     if not light_stats:
         for row in list((getattr(session, "player_season_stats", None) or {}).values()):
             if isinstance(row, dict):
@@ -4886,6 +4906,393 @@ def _repair_on_ice_share_to_team_box(session: FranchiseSession) -> bool:
     return False
 
 
+def _stable_game_seed(text: str) -> int:
+    n = 2166136261
+    for ch in str(text):
+        n ^= ord(ch)
+        n = (n * 16777619) & 0xFFFFFFFF
+    return int(n)
+
+
+def _final_score(game: Dict[str, Any]) -> Tuple[int, int]:
+    hg = int(game.get("home_goals", game.get("home_score", 0)) or 0)
+    ag = int(game.get("away_goals", game.get("away_score", 0)) or 0)
+    return hg, ag
+
+
+def _game_went_ot(game: Dict[str, Any]) -> bool:
+    return bool(game.get("overtime") or game.get("ot") or game.get("went_ot"))
+
+
+def _period_goal_sum(game: Dict[str, Any], side: str) -> int:
+    return (
+        int(game.get(f"{side}_p1") or 0)
+        + int(game.get(f"{side}_p2") or 0)
+        + int(game.get(f"{side}_p3") or 0)
+        + int(game.get(f"{side}_ot_goals") or 0)
+    )
+
+
+def _split_score_into_periods(
+    rng: random.Random,
+    hg: int,
+    ag: int,
+    ot: bool,
+    hid: str,
+    aid: str,
+) -> Tuple[List[int], List[int], int, int, str]:
+    """
+    One goal sequence for both teams.
+
+    Period totals, the overtime goal, and the first scorer all come from that
+    sequence. Overtime is a one-goal game: regulation is tied, and the winner's
+    extra goal is not placed in a period.
+    """
+    decisive_ot = bool(ot) and abs(int(hg) - int(ag)) == 1
+    if decisive_ot:
+        reg = min(int(hg), int(ag))
+        hot = 1 if hg > ag else 0
+        aot = 1 if ag > hg else 0
+        h_reg = a_reg = reg
+    else:
+        hot = aot = 0
+        h_reg, a_reg = int(hg), int(ag)
+    seq = (["H"] * h_reg) + (["A"] * a_reg)
+    rng.shuffle(seq)
+    hp = [0, 0, 0]
+    ap = [0, 0, 0]
+    placed: List[Tuple[int, int, str]] = []
+    weights = (0.31, 0.33, 0.36)
+    for index, side in enumerate(seq):
+        period = rng.choices((0, 1, 2), weights=weights, k=1)[0]
+        if side == "H":
+            hp[period] += 1
+        else:
+            ap[period] += 1
+        placed.append((period, index, side))
+    first = ""
+    if placed:
+        _period, _index, side = min(placed)
+        first = hid if side == "H" else aid
+    elif hot:
+        first = hid
+    elif aot:
+        first = aid
+    return hp, ap, hot, aot, first
+
+
+def _periods_from_scoring_events(game: Dict[str, Any]) -> Optional[Dict[str, int]]:
+    events = game.get("scoring_events") or []
+    if not events:
+        return None
+    hid = str(game.get("home_id") or game.get("home_team_id") or "")
+    aid = str(game.get("away_id") or game.get("away_team_id") or "")
+    hp = [0, 0, 0]
+    ap = [0, 0, 0]
+    hot = aot = 0
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        try:
+            per = int(ev.get("period") or 0)
+        except (TypeError, ValueError):
+            continue
+        tid = str(ev.get("for_team_id") or "")
+        if per >= 4:
+            if tid == hid:
+                hot += 1
+            elif tid == aid:
+                aot += 1
+        elif 1 <= per <= 3:
+            if tid == hid:
+                hp[per - 1] += 1
+            elif tid == aid:
+                ap[per - 1] += 1
+    final_h = int(game.get("home_goals", game.get("home_score", 0)) or 0)
+    final_a = int(game.get("away_goals", game.get("away_score", 0)) or 0)
+    if sum(hp) + hot != final_h or sum(ap) + aot != final_a:
+        return None
+    return {
+        "home_p1": hp[0], "home_p2": hp[1], "home_p3": hp[2],
+        "away_p1": ap[0], "away_p2": ap[1], "away_p3": ap[2],
+        "home_ot_goals": hot, "away_ot_goals": aot,
+    }
+
+
+def _first_goal_team_from_events(game: Dict[str, Any]) -> str:
+    best: Optional[Tuple[Tuple[int, int], str]] = None
+    for index, ev in enumerate(game.get("scoring_events") or []):
+        if not isinstance(ev, dict):
+            continue
+        tid = str(ev.get("for_team_id") or "")
+        if not tid:
+            continue
+        try:
+            period = int(ev.get("period") or 0)
+        except (TypeError, ValueError):
+            period = 0
+        key = (period if period > 0 else 99, index)
+        if best is None or key < best[0]:
+            best = (key, tid)
+    return best[1] if best else ""
+
+
+def _infer_first_goal_team(game: Dict[str, Any]) -> str:
+    """First scorer implied by the period line already stored on the game."""
+    hid = str(game.get("home_id") or game.get("home_team_id") or "")
+    aid = str(game.get("away_id") or game.get("away_team_id") or "")
+    for period in (1, 2, 3):
+        home_goals = int(game.get(f"home_p{period}") or 0)
+        away_goals = int(game.get(f"away_p{period}") or 0)
+        if home_goals and not away_goals:
+            return hid
+        if away_goals and not home_goals:
+            return aid
+        if home_goals and away_goals:
+            hg, ag = _final_score(game)
+            rng = random.Random(_stable_game_seed(f"{game.get('game_id') or game.get('id')}|{hg}|{ag}|p{period}"))
+            return hid if rng.random() < (home_goals / float(home_goals + away_goals)) else aid
+    if int(game.get("home_ot_goals") or 0):
+        return hid
+    if int(game.get("away_ot_goals") or 0):
+        return aid
+    return ""
+
+
+def _pull_ot_goal_out_of_regulation(game: Dict[str, Any]) -> None:
+    """A one-goal overtime final keeps that goal out of the three periods."""
+    hg, ag = _final_score(game)
+    if not _game_went_ot(game) or abs(hg - ag) != 1:
+        return
+    if int(game.get("home_ot_goals") or 0) + int(game.get("away_ot_goals") or 0) > 0:
+        return
+    home_won = hg > ag
+    keys = ("home_p3", "home_p2", "home_p1") if home_won else ("away_p3", "away_p2", "away_p1")
+    for key in keys:
+        if int(game.get(key) or 0) > 0:
+            game[key] = int(game.get(key) or 0) - 1
+            game["home_ot_goals"] = 1 if home_won else 0
+            game["away_ot_goals"] = 0 if home_won else 1
+            return
+
+
+def _remember_first_goal(game: Dict[str, Any]) -> None:
+    if game.get("first_goal_team_id"):
+        return
+    first = _first_goal_team_from_events(game) or _infer_first_goal_team(game)
+    if first:
+        game["first_goal_team_id"] = first
+
+
+def stamp_game_period_lines(game: Dict[str, Any], rng: Optional[random.Random] = None) -> None:
+    """
+    Period lines, the overtime goal, and the first scorer for one game.
+
+    Event boxes use the recorded scoring events. Light boxes use one shared
+    sequence of the recorded final, so both clubs' period totals and the
+    first goal are the same fact.
+    """
+    if not isinstance(game, dict):
+        return
+    if game.get("home_p1") is not None and game.get("away_p3") is not None:
+        _pull_ot_goal_out_of_regulation(game)
+        if _period_goal_sum(game, "home") == _final_score(game)[0] and _period_goal_sum(game, "away") == _final_score(game)[1]:
+            _remember_first_goal(game)
+            return
+    from_events = _periods_from_scoring_events(game)
+    if from_events:
+        game.update(from_events)
+        game["period_source"] = "scoring_events"
+        _remember_first_goal(game)
+        return
+    hg, ag = _final_score(game)
+    ot = _game_went_ot(game)
+    hid = str(game.get("home_id") or game.get("home_team_id") or "H")
+    aid = str(game.get("away_id") or game.get("away_team_id") or "A")
+    if rng is None:
+        gid = str(game.get("game_id") or game.get("id") or "")
+        rng = random.Random(_stable_game_seed(f"{gid}|{hg}|{ag}|{int(ot)}"))
+    home_reg, away_reg, hot, aot, first = _split_score_into_periods(rng, hg, ag, ot, hid, aid)
+    game.update(
+        {
+            "home_p1": home_reg[0], "home_p2": home_reg[1], "home_p3": home_reg[2],
+            "away_p1": away_reg[0], "away_p2": away_reg[1], "away_p3": away_reg[2],
+            "home_ot_goals": hot, "away_ot_goals": aot,
+            "first_goal_team_id": first,
+            "period_source": "final_split",
+        }
+    )
+
+
+_SITUATION_KEYS = (
+    "led_after_1", "tied_after_1", "trailed_after_1",
+    "led_after_2", "tied_after_2", "trailed_after_2",
+    "wins_led_after_1", "wins_tied_after_1", "wins_trailed_after_1",
+    "wins_led_after_2", "wins_tied_after_2", "comeback_wins",
+    "losses_led_after_2", "otl_led_after_2", "blown_leads_after_2",
+    "multi_comeback_wins", "blown_multi_leads",
+    "p1_gf", "p1_ga", "p2_gf", "p2_ga", "p3_gf", "p3_ga", "ot_gf", "ot_ga",
+    "periods_won", "periods_lost", "periods_tied",
+    "regulation_wins", "regulation_losses", "ot_wins", "ot_losses", "ot_games",
+    "one_goal_wins", "one_goal_losses", "one_goal_games",
+    "wins_by_2", "wins_by_3", "losses_by_2", "losses_by_3",
+    "ties",
+    "shutout_wins", "shutout_losses", "blowout_wins", "blowout_losses",
+    "home_wins", "home_losses", "home_otl", "home_points",
+    "road_wins", "road_losses", "road_otl", "road_points",
+    "wins_outshot", "losses_outshooting",
+    "wins_out_xg", "losses_with_xg_edge",
+    "wins_with_pp_goal", "losses_allowing_pp",
+    "scored_first", "en_goals_for", "en_goals_against",
+)
+
+
+def _bump_team_situation(
+    bucket: Dict[str, int],
+    *,
+    gf_p: List[int],
+    ga_p: List[int],
+    gf: int,
+    ga: int,
+    ot: bool,
+    sf: float,
+    sa: float,
+    xgf: float,
+    xga: float,
+    ppg: float,
+    ppga: float,
+    is_home: bool,
+    scored_first: bool,
+    en_for: int,
+    en_against: int,
+    ot_for: int = 0,
+    ot_against: int = 0,
+) -> None:
+    a1, a2 = int(gf_p[0]), int(gf_p[0]) + int(gf_p[1])
+    b1, b2 = int(ga_p[0]), int(ga_p[0]) + int(ga_p[1])
+    won = gf > ga
+    otl = gf < ga and ot
+    lost = gf < ga and not ot
+    no_win = lost or otl
+    if a1 > b1:
+        bucket["led_after_1"] += 1
+        if won:
+            bucket["wins_led_after_1"] += 1
+    elif a1 == b1:
+        bucket["tied_after_1"] += 1
+        if won:
+            bucket["wins_tied_after_1"] += 1
+    else:
+        bucket["trailed_after_1"] += 1
+        if won:
+            bucket["wins_trailed_after_1"] += 1
+    if a2 > b2:
+        bucket["led_after_2"] += 1
+        if won:
+            bucket["wins_led_after_2"] += 1
+        if lost:
+            bucket["losses_led_after_2"] += 1
+        if otl:
+            bucket["otl_led_after_2"] += 1
+        if no_win:
+            bucket["blown_leads_after_2"] += 1
+        if no_win and (a2 - b2) >= 2:
+            bucket["blown_multi_leads"] += 1
+    elif a2 == b2:
+        bucket["tied_after_2"] += 1
+        if won:
+            bucket["wins_tied_after_2"] += 1
+    else:
+        bucket["trailed_after_2"] += 1
+        if won:
+            bucket["comeback_wins"] += 1
+            if (b2 - a2) >= 2:
+                bucket["multi_comeback_wins"] += 1
+    for idx, key_f, key_a in ((0, "p1_gf", "p1_ga"), (1, "p2_gf", "p2_ga"), (2, "p3_gf", "p3_ga")):
+        bucket[key_f] += int(gf_p[idx])
+        bucket[key_a] += int(ga_p[idx])
+        if gf_p[idx] > ga_p[idx]:
+            bucket["periods_won"] += 1
+        elif gf_p[idx] < ga_p[idx]:
+            bucket["periods_lost"] += 1
+        else:
+            bucket["periods_tied"] += 1
+    bucket["ot_gf"] += int(ot_for)
+    bucket["ot_ga"] += int(ot_against)
+    margin = int(gf) - int(ga)
+    if ot:
+        bucket["ot_games"] += 1
+    if won and not ot:
+        bucket["regulation_wins"] += 1
+    if lost:
+        bucket["regulation_losses"] += 1
+    if won and ot:
+        bucket["ot_wins"] += 1
+    if otl:
+        bucket["ot_losses"] += 1
+    if abs(margin) == 1:
+        bucket["one_goal_games"] += 1
+    if won and margin == 1:
+        bucket["one_goal_wins"] += 1
+    if no_win and margin == -1:
+        bucket["one_goal_losses"] += 1
+    if won and margin == 2:
+        bucket["wins_by_2"] += 1
+    if won and margin >= 3:
+        bucket["wins_by_3"] += 1
+    if no_win and margin == -2:
+        bucket["losses_by_2"] += 1
+    if no_win and margin <= -3:
+        bucket["losses_by_3"] += 1
+    if won and ga == 0:
+        bucket["shutout_wins"] += 1
+    if no_win and gf == 0:
+        bucket["shutout_losses"] += 1
+    if won and margin >= 4:
+        bucket["blowout_wins"] += 1
+    if no_win and margin <= -4:
+        bucket["blowout_losses"] += 1
+    points = 2 if won else (1 if otl else 0)
+    if is_home:
+        bucket["home_points"] += points
+        if won:
+            bucket["home_wins"] += 1
+        elif otl:
+            bucket["home_otl"] += 1
+        elif lost:
+            bucket["home_losses"] += 1
+        else:
+            bucket["ties"] += 1
+    else:
+        bucket["road_points"] += points
+        if won:
+            bucket["road_wins"] += 1
+        elif otl:
+            bucket["road_otl"] += 1
+        elif lost:
+            bucket["road_losses"] += 1
+        else:
+            bucket["ties"] += 1
+    if (sf > 0 or sa > 0) and sf != sa:
+        if won and sf < sa:
+            bucket["wins_outshot"] += 1
+        if no_win and sf > sa:
+            bucket["losses_outshooting"] += 1
+    if (xgf > 0 or xga > 0) and xgf != xga:
+        if won and xgf < xga:
+            bucket["wins_out_xg"] += 1
+        if no_win and xgf > xga:
+            bucket["losses_with_xg_edge"] += 1
+    if won and gf > 0 and 0 < ppg <= gf:
+        bucket["wins_with_pp_goal"] += 1
+    if no_win and ga > 0 and 0 < ppga <= ga:
+        bucket["losses_allowing_pp"] += 1
+    if scored_first and gf > 0:
+        bucket["scored_first"] += 1
+    bucket["en_goals_for"] += min(int(en_for), int(gf))
+    bucket["en_goals_against"] += min(int(en_against), int(ga))
+
+
 def _build_team_analytics_rows(session: FranchiseSession) -> List[Dict[str, Any]]:
     from app.sim_engine.generation.player_analytics import aggregate_team_from_player_rows, enrich_team_game_result_row
 
@@ -4919,6 +5326,7 @@ def _build_team_analytics_rows(session: FranchiseSession) -> List[Dict[str, Any]
             "full_event_games": 0.0,
         }
     )
+    team_situations: Dict[str, Dict[str, int]] = defaultdict(lambda: {key: 0 for key in _SITUATION_KEYS})
     for game in list(getattr(session, "game_results", None) or []):
         if not isinstance(game, dict):
             continue
@@ -4995,6 +5403,43 @@ def _build_team_analytics_rows(session: FranchiseSession) -> List[Dict[str, Any]
             at["xgf"] += a_xgf
             at["xga"] += h_xgf
             at["event_games"] += 1.0
+
+        stamp_game_period_lines(game)
+        h_periods = [int(game.get("home_p1") or 0), int(game.get("home_p2") or 0), int(game.get("home_p3") or 0)]
+        a_periods = [int(game.get("away_p1") or 0), int(game.get("away_p2") or 0), int(game.get("away_p3") or 0)]
+        hot = int(game.get("home_ot_goals") or 0)
+        aot = int(game.get("away_ot_goals") or 0)
+        hg = sum(h_periods) + hot
+        ag = sum(a_periods) + aot
+        ot_flag = (hot + aot) > 0
+        first_id = str(game.get("first_goal_team_id") or "")
+        h_en = a_en = 0
+        for ev in game.get("scoring_events") or []:
+            if not isinstance(ev, dict) or not ev.get("empty_net"):
+                continue
+            scorer_team = str(ev.get("for_team_id") or "")
+            if scorer_team == hid:
+                h_en += 1
+            elif scorer_team == aid:
+                a_en += 1
+        _bump_team_situation(
+            team_situations[hid],
+            gf_p=h_periods, ga_p=a_periods,
+            gf=hg, ga=ag,
+            ot=ot_flag, sf=h_sf, sa=a_sf, xgf=h_xgf, xga=a_xgf,
+            ppg=h_ppg, ppga=a_ppg,
+            is_home=True, scored_first=first_id == hid, en_for=h_en, en_against=a_en,
+            ot_for=hot, ot_against=aot,
+        )
+        _bump_team_situation(
+            team_situations[aid],
+            gf_p=a_periods, ga_p=h_periods,
+            gf=ag, ga=hg,
+            ot=ot_flag, sf=a_sf, sa=h_sf, xgf=a_xgf, xga=h_xgf,
+            ppg=a_ppg, ppga=h_ppg,
+            is_home=False, scored_first=first_id == aid, en_for=a_en, en_against=h_en,
+            ot_for=aot, ot_against=hot,
+        )
 
     rows_by_team: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for row in list((getattr(session, "player_season_stats", None) or {}).values()):
@@ -5184,6 +5629,22 @@ def _build_team_analytics_rows(session: FranchiseSession) -> List[Dict[str, Any]
         gp_play = max((int(p.get("gp", 0) or 0) for p in players if str(p.get("position", "")).upper() != "G"), default=0)
         merged["analytics_gp"] = gp_analytics
         merged["analytics_coverage_pct"] = round(gp_analytics / float(max(1, gp_play)), 4) if gp_play > 0 else 0.0
+        situation = dict(team_situations.get(tid_s) or {key: 0 for key in _SITUATION_KEYS})
+        merged.update(situation)
+
+        def _sit_rate(num_key: str, den_key: str) -> Optional[float]:
+            den = int(situation.get(den_key, 0) or 0)
+            if den <= 0:
+                return None
+            return round(int(situation.get(num_key, 0) or 0) / float(den), 4)
+
+        merged["comeback_pct"] = _sit_rate("comeback_wins", "trailed_after_2")
+        merged["lead_hold_pct"] = _sit_rate("wins_led_after_2", "led_after_2")
+        merged["blow_lead_pct"] = _sit_rate("blown_leads_after_2", "led_after_2")
+        home_gp = int(situation.get("home_wins", 0) or 0) + int(situation.get("home_losses", 0) or 0) + int(situation.get("home_otl", 0) or 0)
+        road_gp = int(situation.get("road_wins", 0) or 0) + int(situation.get("road_losses", 0) or 0) + int(situation.get("road_otl", 0) or 0)
+        merged["home_point_pct"] = round(int(situation.get("home_points", 0) or 0) / float(home_gp * 2), 4) if home_gp else None
+        merged["road_point_pct"] = round(int(situation.get("road_points", 0) or 0) / float(road_gp * 2), 4) if road_gp else None
         out.append(enrich_team_game_result_row(merged))
     return out
 
@@ -5240,6 +5701,97 @@ def _league_weighted_shooting_metrics(session: FranchiseSession) -> Dict[str, An
     }
 
 
+_SCOREBOARD_GAME_KEYS = (
+    "game_id",
+    "id",
+    "day",
+    "calendar_day",
+    "calendar_iso",
+    "iso",
+    "date_iso",
+    "home_id",
+    "home_team_id",
+    "away_id",
+    "away_team_id",
+    "home_name",
+    "home_team_name",
+    "away_name",
+    "away_team_name",
+    "home_goals",
+    "away_goals",
+    "home_score",
+    "away_score",
+    "home_shots",
+    "away_shots",
+    "home_xg",
+    "away_xg",
+    "overtime",
+    "ot",
+    "shootout",
+    "went_ot",
+)
+
+
+def _scoreboard_game(game: Dict[str, Any]) -> Dict[str, Any]:
+    """Recent-games row for Stats Central. Full boxes stay on the session."""
+    return {key: game.get(key) for key in _SCOREBOARD_GAME_KEYS if key in game}
+
+
+def _stamp_calder_facts(row: Dict[str, Any], player: Any, season_year: int) -> None:
+    """Rookies are the current draft class, or players with no prior NHL season rows."""
+    if player is None:
+        row["prior_nhl_seasons"] = int(row.get("prior_nhl_seasons") or 0)
+        row["rookie_class_year"] = int(season_year)
+        return
+    ident = getattr(player, "identity", None)
+    draft_year = getattr(player, "draft_year", None)
+    if draft_year is None and ident is not None:
+        draft_year = getattr(ident, "draft_year", None)
+    try:
+        draft_year_i = int(draft_year or 0)
+    except (TypeError, ValueError):
+        draft_year_i = 0
+    career = getattr(player, "career_stats", None)
+    seasons = []
+    if isinstance(career, dict):
+        raw = career.get("seasons") or career.get("by_season") or career.get("history") or []
+        if isinstance(raw, list):
+            seasons = [s for s in raw if isinstance(s, dict)]
+    prior = 0
+    for season in seasons:
+        year_raw = season.get("season") or season.get("year") or season.get("season_year") or season.get("season_id")
+        try:
+            year_i = int(str(year_raw)[:4])
+        except (TypeError, ValueError):
+            year_i = 0
+        try:
+            gp_i = int(season.get("gp") or season.get("games") or season.get("games_played") or 0)
+        except (TypeError, ValueError):
+            gp_i = 0
+        if gp_i <= 0:
+            continue
+        if year_i and year_i >= int(season_year):
+            continue
+        prior += 1
+    age_i = _player_age_int(player)
+    # Last year's NHL roster, an earlier draft year, or stored season rows all mean
+    # he has already played. Bedard, Faber, and LaCombe fail this. A 2026 draftee
+    # (McKenna, Stenberg) or a teenager who was not on an NHL roster last year passes.
+    on_prior_roster = bool(
+        getattr(player, "prior_nhl_roster", False)
+        or getattr(player, "restored_from_prior_roster", False)
+    )
+    if on_prior_roster or (1990 < draft_year_i < int(season_year)):
+        prior = max(prior, 1)
+    drafted_this_year = draft_year_i == int(season_year)
+    is_rookie = drafted_this_year or (prior <= 0 and 0 < age_i <= 20)
+    row["draft_year"] = draft_year_i or None
+    row["prior_nhl_seasons"] = int(prior)
+    row["rookie_class_year"] = int(season_year)
+    row["is_rookie"] = bool(is_rookie)
+    row["rookie"] = bool(is_rookie)
+
+
 def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
     """
     StatsCentral payload via canonical player_analytics enrichment.
@@ -5265,7 +5817,9 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
             _backfill_player_analytics_from_game_boxes(session)
         except Exception:
             logging.getLogger(__name__).exception("Player analytics backfill failed")
-        session._stats_backfill_revision = stats_rev
+        # Backfill can bump the revision. Remember the revision after that bump,
+        # or the next open treats the ledger as dirty and rebuilds it again.
+        session._stats_backfill_revision = int(getattr(session, "_stats_revision", 0) or 0)
 
     try:
         from app.sim_engine.gameplay.game_analytics_ledger import league_assist_health_metrics
@@ -5397,6 +5951,44 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
             logging.getLogger(__name__).exception("Stats Central headshot reattach failed")
 
         team_rows = enrich_team_rows(_build_team_analytics_rows(session))
+        try:
+            from app.sim_engine.generation.player_analytics import attach_relative_team_rates
+            from app.sim_engine.league.awards import build_live_awards_race
+
+            skater_rows = list(enriched.get("skaters") or [])
+            goalie_rows = list(enriched.get("goalies") or [])
+            for list_key in (
+                "skaters",
+                "goalies",
+                "league_leaders",
+                "league_analytics_leaders",
+                "league_goalies",
+                "user_team_skaters",
+                "user_team_goalies",
+                "players",
+            ):
+                bucket = enriched.get(list_key)
+                if isinstance(bucket, list) and bucket:
+                    attach_relative_team_rates(bucket, team_rows, share_source=skater_rows)
+            season_len = int(getattr(session, "season_length", None) or getattr(session, "games_per_team", None) or 82)
+            league = getattr(getattr(session, "sim", None), "league", None)
+            league_teams = list(getattr(league, "teams", None) or [])
+            season_year = int(getattr(session, "season_calendar_year", 2026) or 2026)
+            for race_row in skater_rows + goalie_rows:
+                if isinstance(race_row, dict):
+                    _stamp_calder_facts(race_row, player_by_id.get(str(race_row.get("player_id") or race_row.get("id") or "")), season_year)
+            cursor = int(getattr(session, "calendar_cursor", 0) or 0)
+            last_reg = int(getattr(session, "nhl_regular_season_last_index", 0) or 0)
+            race_sealed = last_reg > 0 and cursor >= (last_reg - 15)
+            enriched["awards_race"] = build_live_awards_race(
+                skater_rows + goalie_rows,
+                teams=league_teams,
+                standings=getattr(session, "standings", None),
+                season_length=season_len,
+                sealed=race_sealed,
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Relative stats / awards race attach failed")
         all_results = [g for g in list(getattr(session, "game_results", None) or []) if isinstance(g, dict)]
         integrity = _stats_integrity_payload(rows, all_results)
         goal_events: List[Dict[str, Any]] = []
@@ -5423,7 +6015,7 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
         enriched["team_analytics"] = team_rows
         enriched["league_team_stats"] = team_rows
         enriched["teams"] = team_rows
-        enriched["games"] = list(reversed(all_results[-100:]))
+        enriched["games"] = [_scoreboard_game(g) for g in reversed(all_results[-40:])]
         enriched["calendar"] = enriched.get("calendar") or []
         enriched["leader_limit"] = 100
         enriched["players"] = enriched.get("skaters", [])
@@ -6679,9 +7271,13 @@ def _serialize_player_row(
     session: Optional[FranchiseSession] = None,
     _team: Optional[Any] = None,
     roster_kind: str = "",
+    light: bool = False,
 ) -> Dict[str, Any]:
     ident = getattr(p, "identity", None)
-    if session is not None:
+    # Development-league dumps cover every junior in the world. Aging, chemistry,
+    # chapter profiles, and generated headshots on that pass were the multi-second
+    # roster-browser build. NHL/AHL/prospect rows still take the full path.
+    if session is not None and not light:
         try:
             sync_player_age_to_session(p, session)
         except Exception:
@@ -6747,74 +7343,77 @@ def _serialize_player_row(
             "cap_hit": cap_hit_m,
         },
     }
-    try:
-        from app.sim_engine.generation.player_headshots import merge_headshot_into_row
+    if not light:
+        try:
+            from app.sim_engine.generation.player_headshots import merge_headshot_into_row
 
-        # One serialization seam for NHL photography and deterministic fallback
-        # metadata. Optional fields keep older saves and API consumers valid.
-        row = merge_headshot_into_row(row, p)
-    except Exception:
-        pass
+            # One serialization seam for NHL photography and deterministic fallback
+            # metadata. Optional fields keep older saves and API consumers valid.
+            row = merge_headshot_into_row(row, p)
+        except Exception:
+            pass
     if name_tags:
         row["name_tags"] = list(name_tags)
         row["locker_room_cancer"] = True
         row["brady_tkachuk_chaos"] = True
         row["display_name_tag"] = "CANCER"
     # Normalized 0–100 psych + chemistry profile for UI contracts.
-    try:
-        from app.sim_engine.systems.chemistry import (  # noqa: WPS433
-            ensure_player_chemistry_profile,
-            safe_get_psych,
-            coach_system_fit_score,
-            usage_satisfaction_score,
-        )
+    # Skipped on the development-league dump; those screens read name, rights, and OVR.
+    if not light:
+        try:
+            from app.sim_engine.systems.chemistry import (  # noqa: WPS433
+                ensure_player_chemistry_profile,
+                safe_get_psych,
+                coach_system_fit_score,
+                usage_satisfaction_score,
+            )
 
-        psych01 = safe_get_psych(p)
-        morale100 = int(round(float(psych01.get("morale", 0.5)) * 100.0))
-        conf100 = int(round(float(psych01.get("confidence", 0.5)) * 100.0))
-        role100 = int(round(float(psych01.get("role_satisfaction", 0.5)) * 100.0))
-        coach_trust_raw = getattr(getattr(p, "psych", None), "coach_trust", None)
-        if coach_trust_raw is None:
-            coach100 = int(round((conf100 + role100) / 2.0))
-        else:
-            ct = float(coach_trust_raw or 0.5)
-            coach100 = int(round(ct * 100.0 if ct <= 1.5 else ct))
-        prof = dict(ensure_player_chemistry_profile(p) or {})
-        prof["morale"] = morale100
-        prof["confidence"] = conf100
-        prof["role_satisfaction"] = role100
-        prof["coach_trust"] = coach100
-        prof["compete"] = int(prof.get("competitiveness", prof.get("compete", 50)) or 50)
-        prof["adaptability"] = int(prof.get("adaptability", 50) or 50)
-        prof["leadership"] = int(prof.get("leadership", 50) or 50)
-        prof["coach_system_fit"] = int(round(coach_system_fit_score(p, _team)))
-        prof["usage_satisfaction"] = int(round(usage_satisfaction_score(p)))
-        prof["personality"] = prof.get("personality") or getattr(p, "personality", None)
-        prof["playstyle"] = prof.get("playstyle") or getattr(p, "playstyle", None)
-        rels = dict(getattr(p, "chemistry_relationships", None) or {})
-        canon_rels: Dict[str, float] = {}
-        for k, v in rels.items():
-            if k is None:
-                continue
-            ck = str(k)
-            if ck.isdigit():
-                ck = f"NHL_{ck}"
-            canon_rels[ck] = float(v)
-        row["chemistry_relationships"] = canon_rels
-        row["morale"] = morale100
-        row["confidence"] = conf100
-        row["role_satisfaction"] = role100
-        row["coach_trust"] = coach100
-        row["personality"] = prof.get("personality")
-        row["playstyle"] = prof.get("playstyle")
-        row["chemistry_profile"] = prof
-    except Exception:
-        m_raw = float(getattr(getattr(p, "psych", None), "morale", 0.5) or 0.5)
-        row["morale"] = int(round(m_raw * 100.0 if m_raw <= 1.5 else m_raw))
-        row["confidence"] = 50
-        row["role_satisfaction"] = 50
-        row["coach_trust"] = 50
-        row["chemistry_profile"] = None
+            psych01 = safe_get_psych(p)
+            morale100 = int(round(float(psych01.get("morale", 0.5)) * 100.0))
+            conf100 = int(round(float(psych01.get("confidence", 0.5)) * 100.0))
+            role100 = int(round(float(psych01.get("role_satisfaction", 0.5)) * 100.0))
+            coach_trust_raw = getattr(getattr(p, "psych", None), "coach_trust", None)
+            if coach_trust_raw is None:
+                coach100 = int(round((conf100 + role100) / 2.0))
+            else:
+                ct = float(coach_trust_raw or 0.5)
+                coach100 = int(round(ct * 100.0 if ct <= 1.5 else ct))
+            prof = dict(ensure_player_chemistry_profile(p) or {})
+            prof["morale"] = morale100
+            prof["confidence"] = conf100
+            prof["role_satisfaction"] = role100
+            prof["coach_trust"] = coach100
+            prof["compete"] = int(prof.get("competitiveness", prof.get("compete", 50)) or 50)
+            prof["adaptability"] = int(prof.get("adaptability", 50) or 50)
+            prof["leadership"] = int(prof.get("leadership", 50) or 50)
+            prof["coach_system_fit"] = int(round(coach_system_fit_score(p, _team)))
+            prof["usage_satisfaction"] = int(round(usage_satisfaction_score(p)))
+            prof["personality"] = prof.get("personality") or getattr(p, "personality", None)
+            prof["playstyle"] = prof.get("playstyle") or getattr(p, "playstyle", None)
+            rels = dict(getattr(p, "chemistry_relationships", None) or {})
+            canon_rels: Dict[str, float] = {}
+            for k, v in rels.items():
+                if k is None:
+                    continue
+                ck = str(k)
+                if ck.isdigit():
+                    ck = f"NHL_{ck}"
+                canon_rels[ck] = float(v)
+            row["chemistry_relationships"] = canon_rels
+            row["morale"] = morale100
+            row["confidence"] = conf100
+            row["role_satisfaction"] = role100
+            row["coach_trust"] = coach100
+            row["personality"] = prof.get("personality")
+            row["playstyle"] = prof.get("playstyle")
+            row["chemistry_profile"] = prof
+        except Exception:
+            m_raw = float(getattr(getattr(p, "psych", None), "morale", 0.5) or 0.5)
+            row["morale"] = int(round(m_raw * 100.0 if m_raw <= 1.5 else m_raw))
+            row["confidence"] = 50
+            row["role_satisfaction"] = 50
+            row["coach_trust"] = 50
+            row["chemistry_profile"] = None
     gr = _get_live_injury_games_remaining(p)
     hstat = _get_player_health_status(p)
     if gr > 0 and hstat == "HEALTHY":
@@ -6854,80 +7453,81 @@ def _serialize_player_row(
             "return_date": ret_iso,
         }
     )
-    try:
-        from app.sim_engine.franchise.conduct_incidents import (  # noqa: WPS433
-            get_active_incident_for_player,
-            player_eligible_to_dress,
-            serialize_incident_for_ui,
-        )
-
-        eligible = bool(player_eligible_to_dress(p, session))
-        row["conduct_eligible_to_play"] = eligible
-        row["conduct_incident_id"] = str(getattr(p, "_conduct_incident_id", "") or "")
-        row["conduct_dress_backlash_risk"] = float(getattr(p, "_conduct_dress_backlash_risk", 0) or 0)
-        cgr = int(getattr(p, "_world_conduct_games_remaining", 0) or 0)
-        row["conduct_games_remaining"] = cgr
-        row["conduct_trade_restricted"] = bool(getattr(p, "_conduct_trade_restricted", False))
-        if not eligible:
-            row["availability_status"] = "Suspended" if str(getattr(p, "_world_conduct_status", "") or "") == "league_suspended" else "Leave"
-            if cgr > 0 and session is not None:
-                cret, ciso = _estimate_return_from_games_remaining(session, cgr)
-                row["return_estimate"] = cret or row.get("return_estimate") or ""
-                row["return_date"] = ciso or row.get("return_date") or ""
-            elif cgr > 0:
-                row["return_estimate"] = f"In {cgr} games"
-        if session is not None and row.get("conduct_incident_id"):
-            inc = get_active_incident_for_player(session, str(getattr(p, "id", "") or getattr(p, "player_id", "") or ""))
-            if isinstance(inc, dict):
-                row["conduct_incident"] = serialize_incident_for_ui(inc)
-    except Exception:
-        pass
-    dynasty_tagged = bool(
-        getattr(p, "dynasty_ratings_import", False)
-        or str(getattr(p, "real_nhl_rating_note", "") or "") == "dynasty_txt"
-    )
-    if include_ratings or dynasty_tagged:
+    if not light:
         try:
-            from services.dynasty_ratings_parser import ensure_dynasty_chapter_profile_on_player  # noqa: WPS433
-
-            ensure_dynasty_chapter_profile_on_player(
-                p,
-                team=_team,
-                roster_kind=roster_kind,
+            from app.sim_engine.franchise.conduct_incidents import (  # noqa: WPS433
+                get_active_incident_for_player,
+                player_eligible_to_dress,
+                serialize_incident_for_ui,
             )
+
+            eligible = bool(player_eligible_to_dress(p, session))
+            row["conduct_eligible_to_play"] = eligible
+            row["conduct_incident_id"] = str(getattr(p, "_conduct_incident_id", "") or "")
+            row["conduct_dress_backlash_risk"] = float(getattr(p, "_conduct_dress_backlash_risk", 0) or 0)
+            cgr = int(getattr(p, "_world_conduct_games_remaining", 0) or 0)
+            row["conduct_games_remaining"] = cgr
+            row["conduct_trade_restricted"] = bool(getattr(p, "_conduct_trade_restricted", False))
+            if not eligible:
+                row["availability_status"] = "Suspended" if str(getattr(p, "_world_conduct_status", "") or "") == "league_suspended" else "Leave"
+                if cgr > 0 and session is not None:
+                    cret, ciso = _estimate_return_from_games_remaining(session, cgr)
+                    row["return_estimate"] = cret or row.get("return_estimate") or ""
+                    row["return_date"] = ciso or row.get("return_date") or ""
+                elif cgr > 0:
+                    row["return_estimate"] = f"In {cgr} games"
+            if session is not None and row.get("conduct_incident_id"):
+                inc = get_active_incident_for_player(session, str(getattr(p, "id", "") or getattr(p, "player_id", "") or ""))
+                if isinstance(inc, dict):
+                    row["conduct_incident"] = serialize_incident_for_ui(inc)
         except Exception:
             pass
-    try:
-        from app.sim_engine.entities.chapter_attributes import serialize_chapter_profile_for_api  # noqa: WPS433
-
-        chapter_payload = serialize_chapter_profile_for_api(p)
-        if chapter_payload:
-            row["chapter_profile"] = chapter_payload
-    except Exception:
-        pass
-    if include_ratings:
-        row["rating_groups"] = _rating_groups_for_player(p)
-    try:
-        from app.sim_engine.franchise.storyline_conduct import (  # noqa: WPS433
-            get_base_ovr_display,
-            get_effective_ovr_display,
-            serialize_ovr_modifiers_for_ui,
+        dynasty_tagged = bool(
+            getattr(p, "dynasty_ratings_import", False)
+            or str(getattr(p, "real_nhl_rating_note", "") or "") == "dynasty_txt"
         )
+        if include_ratings or dynasty_tagged:
+            try:
+                from services.dynasty_ratings_parser import ensure_dynasty_chapter_profile_on_player  # noqa: WPS433
 
-        # Universal display OVR for every team (user + CPU): effective ratings blend.
-        # Keep sim_ovr separately so callers can still see raw engine ovr().
-        base_ovr = int(get_base_ovr_display(p))
-        eff_ovr = int(get_effective_ovr_display(p))
-        mods = serialize_ovr_modifiers_for_ui(p)
-        row["sim_ovr"] = row.get("ovr")
-        row["base_ovr"] = base_ovr
-        row["effective_ovr"] = eff_ovr
-        row["ovr"] = eff_ovr
-        row["overall"] = eff_ovr
-        row["ovr_modifiers"] = mods
-        row["overall_drop"] = max(0, base_ovr - eff_ovr)
-    except Exception:
-        pass
+                ensure_dynasty_chapter_profile_on_player(
+                    p,
+                    team=_team,
+                    roster_kind=roster_kind,
+                )
+            except Exception:
+                pass
+        try:
+            from app.sim_engine.entities.chapter_attributes import serialize_chapter_profile_for_api  # noqa: WPS433
+
+            chapter_payload = serialize_chapter_profile_for_api(p)
+            if chapter_payload:
+                row["chapter_profile"] = chapter_payload
+        except Exception:
+            pass
+        if include_ratings:
+            row["rating_groups"] = _rating_groups_for_player(p)
+        try:
+            from app.sim_engine.franchise.storyline_conduct import (  # noqa: WPS433
+                get_base_ovr_display,
+                get_effective_ovr_display,
+                serialize_ovr_modifiers_for_ui,
+            )
+
+            # Universal display OVR for every team (user + CPU): effective ratings blend.
+            # Keep sim_ovr separately so callers can still see raw engine ovr().
+            base_ovr = int(get_base_ovr_display(p))
+            eff_ovr = int(get_effective_ovr_display(p))
+            mods = serialize_ovr_modifiers_for_ui(p)
+            row["sim_ovr"] = row.get("ovr")
+            row["base_ovr"] = base_ovr
+            row["effective_ovr"] = eff_ovr
+            row["ovr"] = eff_ovr
+            row["overall"] = eff_ovr
+            row["ovr_modifiers"] = mods
+            row["overall_drop"] = max(0, base_ovr - eff_ovr)
+        except Exception:
+            pass
     def _plain_draft(v: Any) -> Any:
         if v is None or isinstance(v, (bool, int, float, str)):
             return v
@@ -6970,13 +7570,14 @@ def _serialize_player_row(
         row["drafted"] = False
         row["undrafted"] = True
     # Season-long growth for prospects: OVR and potential move independently.
-    try:
-        from services.prospect_in_season_growth import is_growth_prospect, prospect_growth_fields
+    if not light:
+        try:
+            from services.prospect_in_season_growth import is_growth_prospect, prospect_growth_fields
 
-        if is_growth_prospect(p):
-            row.update(prospect_growth_fields(p))
-    except Exception:
-        pass
+            if is_growth_prospect(p):
+                row.update(prospect_growth_fields(p))
+        except Exception:
+            pass
     # Rights / org status always (prospects + veterans).
     try:
         row["rights_type"] = str(getattr(p, "rights_type", "") or "") or None
@@ -6997,17 +7598,20 @@ def _serialize_player_row(
     except Exception:
         pass
     # Potential (0–100 display) from chapter profile / engine fields — never invent.
+    # Light rows use the stored potential only. Opening chapters for every junior
+    # was part of the roster-browser stall.
     try:
         pot99 = None
-        try:
-            from app.sim_engine.entities.chapter_attributes import get_player_chapters  # noqa: WPS433
+        if not light:
+            try:
+                from app.sim_engine.entities.chapter_attributes import get_player_chapters  # noqa: WPS433
 
-            chapters = get_player_chapters(p)
-            pot_ch = chapters.get("potential")
-            if pot_ch is not None:
-                pot99 = int(round(float(pot_ch)))
-        except Exception:
-            pot99 = None
+                chapters = get_player_chapters(p)
+                pot_ch = chapters.get("potential")
+                if pot_ch is not None:
+                    pot99 = int(round(float(pot_ch)))
+            except Exception:
+                pot99 = None
         if pot99 is None:
             ratings = getattr(p, "ratings", None) or {}
             pot_raw = None
@@ -7602,13 +8206,19 @@ def _rows_from_players_list(
     session: Optional[FranchiseSession] = None,
     team: Optional[Any] = None,
     roster_kind: str = "",
+    light: bool = False,
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for p in players or []:
         if getattr(p, "retired", False):
             continue
         row = _serialize_player_row(
-            p, include_ratings=include_ratings, session=session, _team=team, roster_kind=roster_kind
+            p,
+            include_ratings=include_ratings,
+            session=session,
+            _team=team,
+            roster_kind=roster_kind,
+            light=light,
         )
         minor = _minor_season_line(p)
         if minor:
@@ -7665,7 +8275,7 @@ def _serialize_development_leagues(blocks: Any) -> List[Dict[str, Any]]:
                 {
                     "team_id": tm.get("team_id"),
                     "name": tm.get("name"),
-                    "players": _rows_from_players_list(tm.get("players")),
+                    "players": _rows_from_players_list(tm.get("players"), light=True),
                 }
             )
         out.append(
@@ -11312,11 +11922,13 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
             from services.transcendent_tank_behavior import apply_tank_daily_behavior
 
             apply_tank_daily_behavior(session, sim, teams, rng, news_tmp, ctr)
+        # Trade volume from governance already flows through league modifiers / CPU proposer.
+        # Don't multiply bulk_comp here — it squares trade work and slows week/month sims.
         try:
             setattr(
                 league,
                 "_franchise_bulk_trade_day_multiplier",
-                int(socio_gap) if bulk else 1,
+                max(1, int(socio_gap) if bulk else 1),
             )
         except Exception:
             pass
@@ -12979,6 +13591,237 @@ def _resolve_in_season_fa_offers(session: FranchiseSession, iso: str) -> None:
         session.timeline.append(f"FA: {name} {'signed elsewhere' if signed_elsewhere else 'declined your offer'}.")
 
 
+_DEATH_CAUSES = (
+    "a car accident",
+    "a sudden cardiac event",
+    "a boating accident",
+    "a private plane crash",
+    "an off-ice training accident",
+    "an undiagnosed medical condition",
+    "a house fire",
+    "a skiing accident",
+    "a motorcycle accident",
+    "a drowning accident",
+    "a sudden illness",
+    "a hiking accident",
+    "carbon monoxide exposure",
+    "a lightning strike",
+    "complications after a routine medical procedure",
+)
+
+
+def _death_notice_player(player: Any) -> Optional[Dict[str, Any]]:
+    """Only a real person with a name and a bio can be the subject of a death notice."""
+    ident = getattr(player, "identity", None)
+    name = str(
+        getattr(ident, "name", None) or getattr(player, "name", None) or getattr(player, "full_name", None) or ""
+    ).strip()
+    parts = [p for p in name.replace(".", " ").split() if len(p) > 1]
+    if len(parts) < 2 or len(name) < 6:
+        return None
+    low = name.lower()
+    if low in ("a player", "unknown player") or "prospect" == low or "generated" in low:
+        return None
+    try:
+        age = int(getattr(ident, "age", None) or getattr(player, "age", None) or 0)
+    except (TypeError, ValueError):
+        age = 0
+    if age < 18 or age > 48:
+        return None
+    country = str(
+        getattr(ident, "birth_country", None)
+        or getattr(ident, "nationality", None)
+        or getattr(player, "nationality", None)
+        or ""
+    ).strip()
+    birth_year = getattr(ident, "birth_year", None) if ident is not None else None
+    if not country and not birth_year:
+        return None
+    pos = getattr(ident, "position", None) if ident is not None else None
+    pos_s = str(getattr(pos, "value", pos) or getattr(player, "position", "") or "").split(".")[-1].upper()
+    if pos_s not in ("C", "LW", "RW", "D", "G", "L", "R", "W"):
+        return None
+    try:
+        ovr = int(round(_player_ovr99(player)))
+    except Exception:
+        ovr = 0
+    if ovr < 50:
+        return None
+    return {
+        "name": name,
+        "age": age,
+        "position": {"L": "LW", "R": "RW", "W": "F"}.get(pos_s, pos_s),
+        "country": country,
+        "ovr": ovr,
+    }
+
+
+def _maybe_player_death(session: FranchiseSession) -> None:
+    """Rare league-wide death. One roll per day, and at most one death in a season.
+
+    Only NHL players with a real name and bio are eligible. The contract comes off
+    the books and the roster spot opens.
+    """
+    phase = str(getattr(session, "phase", "") or "").lower()
+    if phase not in ("regular", "preseason", "playoffs"):
+        return
+    year = int(getattr(session, "season_calendar_year", 0) or 0)
+    if int(getattr(session, "_death_season_year", -1) or -1) != year:
+        try:
+            session._death_season_year = year
+            session._deaths_this_season = 0
+        except Exception:
+            pass
+    if int(getattr(session, "_deaths_this_season", 0) or 0) >= 1:
+        return
+    cursor = int(getattr(session, "calendar_cursor", 0) or 0)
+    rng = random.Random(f"death|{getattr(session, 'session_id', '')}|{cursor}")
+    # About one death every six to eight seasons. Not a per-player roll.
+    if rng.random() > 0.0004:
+        return
+    league = getattr(getattr(session, "sim", None), "league", None)
+    teams = list(getattr(league, "teams", None) or [])
+    pool = []
+    for team in teams:
+        for p in list(getattr(team, "roster", None) or []):
+            if getattr(p, "retired", False) or getattr(p, "deceased", False):
+                continue
+            if _death_notice_player(p) is None:
+                continue
+            pool.append((team, p))
+    if not pool:
+        return
+    team, player = pool[rng.randrange(len(pool))]
+    bio = _death_notice_player(player)
+    if bio is None:
+        return
+    cause = _DEATH_CAUSES[rng.randrange(len(_DEATH_CAUSES))]
+    pid = str(getattr(player, "id", "") or "")
+    name = str(getattr(player, "name", None) or getattr(getattr(player, "identity", None), "name", None) or "A player")
+    try:
+        from app.sim_engine.trades.trade_executor import _purge_player_id_from_team_lists
+
+        if pid:
+            _purge_player_id_from_team_lists(team, pid)
+    except Exception:
+        for attr in ("roster", "ahl_roster", "echl_roster"):
+            setattr(team, attr, [p for p in list(getattr(team, attr, None) or []) if p is not player])
+    try:
+        player.retired = True
+        player.deceased = True
+        player.death_cause = cause
+        player.active_roster = False
+        player.contract = {
+            "years_remaining": 0,
+            "aav_m": 0.0,
+            "cap_hit_m": 0.0,
+            "terminated": "deceased",
+        }
+    except Exception:
+        pass
+    try:
+        from services.contract_economy import sync_team_cap_fields
+
+        sync_team_cap_fields(team, league)
+    except Exception:
+        pass
+    team_name = str(getattr(team, "name", None) or getattr(team, "abbreviation", None) or "A club")
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    team_tid = str(getattr(team, "team_id", None) or getattr(team, "id", "") or "")
+    try:
+        session._deaths_this_season = int(getattr(session, "_deaths_this_season", 0) or 0) + 1
+    except Exception:
+        pass
+    who = f"{bio['name']}, {bio['age']}, {bio['position']}"
+    if bio.get("country"):
+        who += f", {bio['country']}"
+    _append_showcase_popup(
+        session,
+        f"player_death:{pid}:{cursor}",
+        {
+            "kind": "player_death",
+            "source_label": "League announcement",
+            "theme": "obituary",
+            "headline": f"{bio['name']} has died",
+            "summary": (
+                f"The {team_name} and the league have confirmed that {who}, has died in {cause}. "
+                "He is permanently removed from competition. "
+                "His contract comes off the books and the roster spot is open."
+            ),
+            "player_name": bio["name"],
+            "player_id": pid,
+            "player_position": bio["position"],
+            "player_age": bio["age"],
+            "player_overall": bio["ovr"],
+            "player_country": bio.get("country") or "",
+            "cause": cause,
+            "team_name": team_name,
+            "is_user_team": team_tid == user_tid,
+        },
+    )
+    try:
+        session.timeline.append(f"{name} ({team_name}) has died — {cause}. Cap hit and roster spot removed.")
+    except Exception:
+        pass
+
+
+def _actionable_interrupt_ids(session: FranchiseSession):
+    """Waiver claims, player meetings, and press availabilities the user still has to answer."""
+    utid = str(getattr(session, "user_team_id", "") or "")
+    pops = []
+    for p in list(getattr(session, "pending_ui_popups", None) or []):
+        if not isinstance(p, dict):
+            continue
+        actions = p.get("actions") or []
+        claim = any(isinstance(a, dict) and str(a.get("id") or "") == "waiver_claim" for a in actions)
+        if claim:
+            pops.append("w:" + str(p.get("player_id") or p.get("id") or ""))
+    meetings = []
+    day = int(getattr(session, "calendar_cursor", 0) or 0)
+    for r in list(getattr(session, "universe_interaction_queue", None) or []):
+        if not isinstance(r, dict) or str(r.get("status") or "pending") != "pending":
+            continue
+        if utid and str(r.get("team_id") or "") != utid:
+            continue
+        if int(r.get("expires_day", day + 1) or day + 1) < day:
+            continue
+        meetings.append(str(r.get("id") or ""))
+    for mid in (getattr(session, "gm_active_meetings", None) or {}):
+        meetings.append("gm:" + str(mid))
+    press = []
+    for r in list(getattr(session, "press_conference_queue", None) or []):
+        if isinstance(r, dict) and str(r.get("status") or "") in ("pending", "in_progress"):
+            press.append(str(r.get("id") or ""))
+    return (tuple(sorted(pops)), tuple(sorted(meetings)), tuple(sorted(press)))
+
+
+def _drop_resolved_waiver_popups(session: FranchiseSession) -> None:
+    """Rest-of-season sim closes the 24-hour window. Don't dump notices for players who already cleared."""
+    try:
+        from services.contract_economy import _ensure_waiver_wire
+
+        league = getattr(getattr(session, "sim", None), "league", None)
+        open_ids = set()
+        if league is not None:
+            for e in _ensure_waiver_wire(league):
+                if not e.get("cleared") and not e.get("claimed_by"):
+                    open_ids.add(str(e.get("player_id") or ""))
+    except Exception:
+        open_ids = set()
+
+    def _keep(p: Any) -> bool:
+        if not isinstance(p, dict):
+            return True
+        kind = str(p.get("kind") or "")
+        actions = p.get("actions") or []
+        claim = any(isinstance(a, dict) and str(a.get("id") or "") == "waiver_claim" for a in actions)
+        if kind != "waiver" and not claim and "waiver" not in str(p.get("headline") or "").lower():
+            return True
+        return str(p.get("player_id") or "") in open_ids
+
+    session.pending_ui_popups = [p for p in list(getattr(session, "pending_ui_popups", None) or []) if _keep(p)]
+
+
 def _finalize_regular_calendar_day(
     session: FranchiseSession,
     day_meta: Dict[str, Any],
@@ -13035,6 +13878,10 @@ def _finalize_regular_calendar_day(
         from services.waivers import process_waiver_wire
 
         process_waiver_wire(session)
+    except Exception:
+        pass
+    try:
+        _maybe_player_death(session)
     except Exception:
         pass
     if _franchise_narrative_should_run(session, just_idx=just_idx, light_bulk=light_bulk, bulk=bulk):
@@ -16429,7 +17276,15 @@ def _auto_resolve_pending_decisions(session: FranchiseSession) -> None:
             f"{did} -> {choice_id}"
         )
 
-        apply_decision(session, did, choice_id)
+        try:
+            apply_decision(session, did, choice_id)
+        except Exception as exc:
+            session.timeline.append(f"AUTO-RESOLVE failed ({did}): {exc}")
+            session.pending_decisions = [
+                item
+                for item in list(getattr(session, "pending_decisions", None) or [])
+                if not isinstance(item, dict) or str(item.get("id") or "") != did
+            ]
 def _apply_injury_decision_effect(
     session: FranchiseSession,
     decision: Dict[str, Any],
@@ -16500,8 +17355,9 @@ def _apply_injury_decision_effect(
 
     elif choice_id == "shuffle_lines":
         setattr(user_team, "_lines_shuffled", True)
+        _shuffle_saved_lines(session)
         changed = _nudge_team_room(user_team, morale=0.002, confidence=0.006, role_satisfaction=0.006)
-        effects.update({"line_chemistry_volatility": 1, "players_affected": changed})
+        effects.update({"line_chemistry_volatility": 1, "players_affected": changed, "lines_shuffled": 1})
 
     elif choice_id == "play_short_roster":
         setattr(user_team, "_depth_pressure", float(getattr(user_team, "_depth_pressure", 0.0) or 0.0) + 0.10)
@@ -16511,14 +17367,21 @@ def _apply_injury_decision_effect(
     elif choice_id == "place_on_ir":
         setattr(user_team, "_ir_management_used", int(getattr(user_team, "_ir_management_used", 0) or 0) + 1)
         setattr(user_team, "_needs_callup", True)
+        if target is not None:
+            setattr(target, "on_ir", True)
+            ir_list = list(getattr(user_team, "injured_reserve", None) or [])
+            tid = str(getattr(target, "id", "") or "")
+            if tid and all(str(getattr(p, "id", "") or "") != tid for p in ir_list):
+                ir_list.append(target)
+            setattr(user_team, "injured_reserve", ir_list)
         effects.update({"ir_used": 1, "callup_flag": 1, "cap_flexibility_delta": 1})
 
     return effects
 
 
-def _call_up_best_ahl_spc(team: Any) -> Dict[str, Any]:
+def _call_up_best_ahl_spc(team: Any, prefer_pos: Optional[str] = None) -> Dict[str, Any]:
     """Validate-then-commit AHL→NHL call-up (23-man aware). Rolls back on failure."""
-    from services.contract_economy import uses_nhl_contract_slot
+    from services.contract_economy import has_ntc, uses_nhl_contract_slot, _position_bucket
 
     if team is None:
         return {"ok": False, "reason": "no_team"}
@@ -16528,6 +17391,7 @@ def _call_up_best_ahl_spc(team: Any) -> Dict[str, Any]:
     nhl = list(nhl_snap)
     ahl = list(ahl_snap)
     demoted = None
+    want = str(prefer_pos or "").upper()
 
     if len(nhl) >= 23:
         demote_idx = None
@@ -16535,6 +17399,10 @@ def _call_up_best_ahl_spc(team: Any) -> Dict[str, Any]:
         for i, p in enumerate(nhl):
             c = getattr(p, "contract", None)
             if bool(getattr(c, "nmc", False) or getattr(c, "no_move_clause", False)):
+                continue
+            if has_ntc(p):
+                continue
+            if want and _position_bucket(p) != want:
                 continue
             score = float(_player_ovr99(p))
             if score < demote_score:
@@ -16546,6 +17414,10 @@ def _call_up_best_ahl_spc(team: Any) -> Dict[str, Any]:
         ahl.append(demoted)
 
     eligible = [p for p in ahl if uses_nhl_contract_slot(p)]
+    if want:
+        preferred = [p for p in eligible if _position_bucket(p) == want]
+        if preferred:
+            eligible = preferred
     if demoted is not None:
         # Demoted player is temporarily on AHL list; do not call them back up.
         eligible = [
@@ -16617,9 +17489,10 @@ def _apply_ice_time_decision_effect(
         setattr(target, "_accountability_pressure_games", 4)
         effects.update({"role_satisfaction_delta": -3, "accountability_pressure_games": 4})
 
-    else:
-        _nudge_player_psych(target, morale=0.006, confidence=0.006, role_satisfaction=0.02)
-        effects.update({"role_satisfaction_delta": 1})
+    elif choice_id in ("reduce", "reduce_toi", "scratch", "cut", "demote"):
+        _nudge_player_psych(target, morale=-0.02, confidence=-0.015, role_satisfaction=-0.08)
+        _drop_player_one_line(session, str(getattr(target, "id", "") or player_id))
+        effects.update({"role_satisfaction_delta": -2, "ice_time_delta": -1})
 
     return effects
 
@@ -16691,6 +17564,113 @@ def _apply_legal_conduct_decision_effect(
     return out
 
 
+def _saved_line_sheet(session: FranchiseSession) -> Optional[Dict[str, Any]]:
+    root = getattr(session, "lines", None)
+    if not isinstance(root, dict):
+        return None
+    block = root.get("even_strength")
+    if not isinstance(block, dict):
+        return None
+    inner = block.get("lines") if isinstance(block.get("lines"), dict) else block
+    return inner if isinstance(inner, dict) else None
+
+
+def _shuffle_saved_lines(session: FranchiseSession) -> bool:
+    sheet = _saved_line_sheet(session)
+    if not sheet:
+        return False
+    moved = False
+    if isinstance(sheet.get("forwards"), list) and len(sheet["forwards"]) >= 2:
+        sheet["forwards"][0], sheet["forwards"][1] = sheet["forwards"][1], sheet["forwards"][0]
+        moved = True
+    if isinstance(sheet.get("defense"), list) and len(sheet["defense"]) >= 2:
+        sheet["defense"][0], sheet["defense"][1] = sheet["defense"][1], sheet["defense"][0]
+        moved = True
+    return moved
+
+
+def _drop_player_one_line(session: FranchiseSession, player_id: str) -> bool:
+    pid = str(player_id or "")
+    sheet = _saved_line_sheet(session)
+    if not pid or not sheet:
+        return False
+    for group in ("forwards", "defense"):
+        units = [u for u in (sheet.get(group) or []) if isinstance(u, dict)]
+        for idx, unit in enumerate(units[:-1]):
+            slots = dict(unit.get("slots") or {})
+            hit = next((slot for slot, val in slots.items() if str(val or "") == pid), "")
+            if not hit:
+                continue
+            below = dict(units[idx + 1].get("slots") or {})
+            if hit not in below:
+                continue
+            slots[hit], below[hit] = below[hit], slots[hit]
+            unit["slots"] = slots
+            units[idx + 1]["slots"] = below
+            return True
+    return False
+
+
+def _swap_goalie_slots(session: FranchiseSession) -> bool:
+    sheet = _saved_line_sheet(session)
+    units = [u for u in ((sheet or {}).get("goalies") or []) if isinstance(u, dict)]
+    if not units:
+        return False
+    slots = dict(units[0].get("slots") or {})
+    if "Starter" not in slots or "Backup" not in slots:
+        return False
+    slots["Starter"], slots["Backup"] = slots["Backup"], slots["Starter"]
+    units[0]["slots"] = slots
+    return True
+
+
+def _raise_trade_rumor(player: Any, amount: int = 12) -> None:
+    if player is None:
+        return
+    st = getattr(player, "_franchise_storyline_state", None)
+    if not isinstance(st, dict):
+        st = {}
+        setattr(player, "_franchise_storyline_state", st)
+    st["trade_rumor_heat"] = int(st.get("trade_rumor_heat") or 0) + int(amount)
+    st["was_recently_shopped"] = True
+    st["trade_attempt_count"] = int(st.get("trade_attempt_count") or 0) + 1
+
+
+def _apply_storyline_choice_action(
+    session: FranchiseSession,
+    decision: Dict[str, Any],
+    choice: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Lineup and market moves a story card describes but a morale nudge cannot do."""
+    cid = str(choice.get("id") or choice.get("choice_id") or "")
+    user_team = session.team_by_id.get(str(session.user_team_id))
+    meta = dict(decision.get("meta") or {})
+    out: Dict[str, Any] = {}
+    if user_team is None:
+        return out
+    target = _find_player_on_team_by_id_or_name(
+        user_team,
+        player_id=str(meta.get("player_id") or ""),
+        player_name=str(meta.get("player_name") or ""),
+    )
+    if cid in ("reduce_toi", "reduce"):
+        if _drop_player_one_line(session, str(getattr(target, "id", "") or meta.get("player_id") or "")):
+            out["ice_time_moved"] = 1
+        if target is not None:
+            rank = int(getattr(target, "_deployed_line_rank", 1) or 1)
+            setattr(target, "_deployed_line_rank", min(4, rank + 1))
+    elif cid == "explore_trade":
+        _raise_trade_rumor(target, 12)
+        out["trade_rumor_heat"] = 12
+    elif cid == "start_backup":
+        if _swap_goalie_slots(session):
+            out["goalies_swapped"] = 1
+    elif cid == "call_up_ahl":
+        called = _call_up_best_ahl_spc(user_team, prefer_pos="G")
+        out["callup"] = called
+    return out
+
+
 def _apply_generic_storyline_choice_effect(
     session: FranchiseSession,
     decision: Dict[str, Any],
@@ -16713,11 +17693,34 @@ def _apply_generic_storyline_choice_effect(
 
     target = _find_player_on_team_by_id_or_name(user_team, player_id=player_id, player_name=player_name)
 
-    morale = float(raw_effects.get("morale_delta", raw_effects.get("morale", 0)) or 0) / 100.0
-    confidence = float(raw_effects.get("confidence_delta", raw_effects.get("confidence", 0)) or 0) / 100.0
+    story_keys = (
+        "player_morale",
+        "player_confidence",
+        "goalie_confidence",
+        "development_confidence",
+        "media_pressure",
+        "team_morale",
+        "fan_confidence",
+    )
+    routed = any(k in raw_effects for k in story_keys)
+    if routed:
+        try:
+            from app.sim_engine.franchise.storyline_engine import _apply_storyline_effects  # noqa: WPS433
+
+            _apply_storyline_effects(
+                session,
+                str(session.user_team_id or ""),
+                str(getattr(target, "id", "") or player_id),
+                raw_effects,
+            )
+            applied["storyline_effects"] = 1
+        except Exception:
+            routed = False
+    morale = 0.0 if routed else float(raw_effects.get("morale_delta", raw_effects.get("morale", 0)) or 0) / 100.0
+    confidence = 0.0 if routed else float(raw_effects.get("confidence_delta", raw_effects.get("confidence", 0)) or 0) / 100.0
     role = float(raw_effects.get("role_satisfaction_delta", raw_effects.get("role", 0)) or 0) / 100.0
 
-    if target is not None:
+    if target is not None and any((morale, confidence, role)):
         _nudge_player_psych(target, morale=morale, confidence=confidence, role_satisfaction=role)
         applied["target_player_affected"] = 1
     elif any([morale, confidence, role]):
@@ -16740,6 +17743,7 @@ def _apply_generic_storyline_choice_effect(
 
     for k, v in raw_effects.items():
         applied[k] = v
+    applied.update(_apply_storyline_choice_action(session, decision, choice))
 
     return applied
 def _pending_decision_snapshot(session: FranchiseSession) -> List[Dict[str, Any]]:
@@ -17192,6 +18196,8 @@ def advance_franchise_bulk(
                 stopped = "pending_decisions"
                 break
 
+            interrupt_before = _actionable_interrupt_ids(session) if eff_mode != "season" else None
+
             if eff_mode == "days":
                 step = advance_franchise_day(session)
             elif eff_mode == "games":
@@ -17224,6 +18230,13 @@ def advance_franchise_bulk(
 
             if st != "ok":
                 stopped = st
+                break
+
+            # Week / month sims stop so a waiver claim, meeting, or press availability
+            # is still inside its window. Rest-of-season keeps going; those windows close
+            # on their own and the stale notices are dropped at the end.
+            if interrupt_before is not None and _actionable_interrupt_ids(session) != interrupt_before:
+                stopped = "user_action"
                 break
 
             if use_light_bulk and st == "ok":
@@ -17262,6 +18275,11 @@ def advance_franchise_bulk(
 
         if guard >= max_iter:
             stopped = "guard_limit"
+        if eff_mode == "season":
+            try:
+                _drop_resolved_waiver_popups(session)
+            except Exception:
+                pass
     finally:
         steps_n = int(len(steps))
         full_finalize = False
@@ -17288,6 +18306,11 @@ def advance_franchise_bulk(
     last = steps[-1] if steps else {
         "status": "blocked" if getattr(session, "pending_decisions", None) else "noop",
         "reason": "pending_decisions" if getattr(session, "pending_decisions", None) else "noop",
+        "message": (
+            "A decision is still open on the desk. Resolve it, then sim again."
+            if getattr(session, "pending_decisions", None)
+            else "Nothing advanced."
+        ),
         "pending_decisions": _pending_decision_snapshot(session),
     }
 
@@ -17607,6 +18630,7 @@ def _apply_storyline_event_choice(
             dict(chosen.get("effects") or {}),
         )
         effects.update(dict(chosen.get("effects") or {}))
+        effects.update(_apply_storyline_choice_action(session, decision, chosen))
     except Exception:
         effects.update(_apply_generic_storyline_choice_effect(session, decision, chosen))
 
@@ -17795,9 +18819,9 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
                 elif cid == "loan_partial":
                     mode = "partial"
                 else:
-                    mode = False
+                    mode = "none"
                 session.wjc_nhl_u20_loan[pid] = mode
-                effects["wjc_loan"] = 1 if mode else 0
+                effects["wjc_loan"] = 1 if mode in ("full", "partial") else 0
                 effects["wjc_loan_mode"] = mode or "none"
 
                 player = _wjc_find_roster_player(session, pid)
@@ -17822,7 +18846,7 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
 
                     inj_roll = session.sim.rng.random()
                     inj_threshold = 0.07 if mode == "full" else (0.03 if mode == "partial" else 0.0)
-                    if mode and inj_roll < inj_threshold:
+                    if mode in ("full", "partial") and inj_roll < inj_threshold:
                         ident = getattr(player, "identity", None)
                         pname = str(getattr(ident, "name", None) or meta.get("player_name") or "Player")
                         ut = session.team_by_id.get(str(session.user_team_id))
@@ -17846,6 +18870,11 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
 
         elif kind == "legal_storyline_decision":
             effects.update(_apply_legal_conduct_decision_effect(session, d, chosen))
+
+        elif kind == "retirement_decision":
+            from app.sim_engine.franchise.retirement import apply_retirement_decision  # noqa: WPS433
+
+            effects.update(apply_retirement_decision(session, d, cid) or {})
 
         else:
             effects.update(_apply_generic_storyline_choice_effect(session, d, chosen))
@@ -17965,7 +18994,10 @@ def _nudge_player_psych(
 
         try:
             cur = float(getattr(psych, attr, 0.5) or 0.5)
-            setattr(psych, attr, _clamp(cur + float(delta)))
+            nxt = _clamp(cur + float(delta))
+            setattr(psych, attr, nxt)
+            if attr == "confidence" and hasattr(psych, "confidence_level"):
+                psych.confidence_level = nxt
         except Exception:
             pass
 
@@ -22453,6 +23485,12 @@ def save_franchise_lines(session: FranchiseSession, payload: Dict[str, Any]) -> 
         for s in lineup_storylines
         if isinstance(s, dict)
     ]
+    try:
+        from app.sim_engine.franchise.storyline_engine import credit_line_promises
+
+        credit_line_promises(session)
+    except Exception:
+        pass
     return {
         "ok": True,
         "unit_type": unit_type,
@@ -22881,9 +23919,21 @@ def get_cached_roster_browser(session: FranchiseSession, sim: Any, user_team_id:
     cached = getattr(session, "_cached_roster_browser_payload", None)
     if isinstance(cached, dict) and cached:
         return cached
-    payload = _build_roster_browser(sim, user_team_id, franchise_session=session)
-    session._cached_roster_browser_payload = payload
-    return payload
+    # Hub and roster screens both request this on open. Without a lock they each
+    # serialize every club at once and the page waits on both builds.
+    sid = str(getattr(session, "session_id", "") or id(session))
+    with _ROSTER_BROWSER_LOCKS_GUARD:
+        lock = _ROSTER_BROWSER_LOCKS.get(sid)
+        if lock is None:
+            lock = threading.Lock()
+            _ROSTER_BROWSER_LOCKS[sid] = lock
+    with lock:
+        cached = getattr(session, "_cached_roster_browser_payload", None)
+        if isinstance(cached, dict) and cached:
+            return cached
+        payload = _build_roster_browser(sim, user_team_id, franchise_session=session)
+        session._cached_roster_browser_payload = payload
+        return payload
 
 
 def player_cap_hit_millions(player: Any) -> float:
@@ -23050,6 +24100,13 @@ def _serialize_player_trade_block(
         clause = _clause_summary(player)
         clause_label = str(clause.get("label") or "None")
         approved = list(clause.get("approved_destinations") or [])
+        if clause_label == "M-NTC" and not approved and league is not None:
+            try:
+                from services.trade_demand_engine import seed_mntc_destinations
+
+                approved = list(seed_mntc_destinations(player, league, list_size=int(clause.get("mntc") or 10)) or [])
+            except Exception:
+                approved = []
         acq_id = str(
             getattr(acquiring_team, "team_id", None)
             or getattr(acquiring_team, "id", "")
@@ -23099,10 +24156,48 @@ def _serialize_player_trade_block(
         waivers = dict(getattr(session, "ntc_waivers", None) or {})
         w = waivers.get(pid) or waivers.get(f"{pid}->{acq_id}")
         if isinstance(w, dict) and bool(w.get("accepted")):
-            if not w.get("destination_team_id") or str(w.get("destination_team_id")) == str(acq_id):
+            try:
+                from app.sim_engine.trades.clause_consent import waiver_window
+
+                live_key = str(waiver_window(session).get("key") or "")
+            except Exception:
+                live_key = ""
+            stored_key = str(w.get("window_key") or "")
+            if stored_key and live_key and stored_key != live_key:
+                w = None
+        if isinstance(w, dict) and bool(w.get("accepted")):
+            dest_w = str(w.get("destination_team_id") or "")
+            allowed = [str(x) for x in (w.get("allowed_team_ids") or [])]
+            if dest_w and dest_w == str(acq_id):
                 ntc_waived = True
+            elif acq_id and str(acq_id) in allowed:
+                ntc_waived = True
+            if ntc_waived:
                 ntc_waiver_reason = str(w.get("reason") or "")
                 requires_ntc_waive = False
+
+    id_list = list(approved)
+    shown = []
+    lookup = {}
+    for tm in list(getattr(league, "teams", None) or []):
+        tid = str(getattr(tm, "team_id", None) or getattr(tm, "id", "") or "")
+        ab = ""
+        for attr in ("abbreviation", "abbr", "code"):
+            raw = getattr(tm, attr, None)
+            if raw:
+                ab = str(raw).upper()
+                break
+        if tid and ab:
+            lookup[tid] = ab
+            lookup[tid.upper()] = ab
+        if ab:
+            lookup[ab] = ab
+    for token in approved:
+        lab = lookup.get(str(token), lookup.get(str(token).upper(), str(token)))
+        if lab and lab not in shown:
+            shown.append(lab)
+    if shown:
+        approved = shown
 
     row = {
         "player_id": pid,
@@ -23118,8 +24213,8 @@ def _serialize_player_trade_block(
         "requires_ntc_waive": requires_ntc_waive or (clause_label in ("NTC", "NMC") and not ntc_waived and not tradeable),
         "ntc_waived": ntc_waived,
         "ntc_waiver_reason": ntc_waiver_reason,
-        "approved_trade_teams": approved,
-        "approved_trade_team_ids": approved,
+        "approved_trade_teams": shown or id_list,
+        "approved_trade_team_ids": id_list,
         "can_trade_to_partner": tradeable if acq_id else None,
         "assignment_level": loc or "nhl",
         "org_level": loc or "nhl",
@@ -23454,12 +24549,14 @@ def get_cached_trade_assets_payload(session: FranchiseSession, *, force: bool = 
 def _contract_clause_label(c: Any) -> str:
     if c is None:
         return "None"
-    if getattr(c, "no_move_clause", False):
+    if getattr(c, "no_move_clause", False) or getattr(c, "nmc", False):
         return "NMC"
-    if getattr(c, "no_trade_clause", False):
-        return "NTC"
-    if int(getattr(c, "modified_no_trade_teams", 0) or 0) > 0:
+    mode = str(getattr(c, "ntc_mode", "") or "").upper()
+    kind = str(getattr(c, "clause_type", "") or "").upper()
+    if mode in ("MODIFIED", "MNTC", "M-NTC") or kind in ("M-NTC", "MNTC") or int(getattr(c, "modified_no_trade_teams", 0) or 0) > 0:
         return "M-NTC"
+    if getattr(c, "no_trade_clause", False) or getattr(c, "ntc", False) or mode == "FULL":
+        return "NTC"
     return "None"
 
 
@@ -23526,8 +24623,8 @@ def _build_contract_ledger_row(p: Any, session: FranchiseSession, season_year: i
             "aav": round(aav, 3),
             "years_remaining": yrs,
             "expiry_year": expiry_year,
-            "ntc": bool(getattr(c, "no_trade_clause", False)),
-            "nmc": bool(getattr(c, "no_move_clause", False)),
+            "ntc": _contract_clause_label(c) == "NTC",
+            "nmc": _contract_clause_label(c) == "NMC",
             "two_way": bool(getattr(c, "two_way", False)),
         },
     }

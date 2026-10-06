@@ -2240,7 +2240,7 @@ def get_entry_draft_payload(
     offers = generate_draft_day_trade_offers(
         session,
         state,
-        max_offers=5 if current_team == user_id else 3,
+        max_offers=6 if current_team == user_id else 3,
     )
 
     # Team board only needs a window of the public board — not every remaining name.

@@ -7,6 +7,7 @@ and generates NHL-style storylines with evidence and small sim effects.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import math
 import logging
@@ -278,7 +279,8 @@ def build_meeting_impact(
     }[tone]
     notes: List[str] = []
     if promise_made or raw.get("promise_id"):
-        notes.append("You made a promise — deliver it in the lineup or it turns into a broken promise.")
+        notes.append("He will hold you to the lineup. Role satisfaction stays put until his minutes actually change.")
+        quote = "I'll hold you to the lineup. Talk is cheap until the sheet changes."
     return {
         "tone": tone,
         "verdict": verdict,
@@ -580,7 +582,8 @@ def _u_enqueue_story_impact_popup(
         "player_id": str(storyline.get("player_id") or ""),
         "player_name": str(storyline.get("player_name") or ""),
         "player_position": storyline.get("player_position"),
-        "player_overall": storyline.get("player_overall"),
+        "player_overall": storyline.get("player_overall") or storyline.get("effective_overall"),
+        "player_potential": storyline.get("player_potential") or storyline.get("potential"),
         "team_name": storyline.get("team_name"),
         # The numbers behind the story (previously dropped, so a slump popup could not show them).
         "evidence": dict(storyline.get("evidence") or {}),
@@ -771,7 +774,10 @@ def _apply_storyline_effects(session: Any, team_id: str, player_id: str, effects
                     try:
                         dv = float(effects[key]) * scale * mult
                         cur = float(getattr(psych, attr, 0.5))
-                        setattr(psych, attr, _clamp(cur + dv))
+                        nxt = _clamp(cur + dv)
+                        setattr(psych, attr, nxt)
+                        if attr == "confidence_level" and hasattr(psych, "confidence"):
+                            psych.confidence = nxt
                     except (TypeError, ValueError):
                         pass
             if hasattr(psych, "clamp_all"):
@@ -802,6 +808,24 @@ def _apply_storyline_effects(session: Any, team_id: str, player_id: str, effects
                     pass
             if hasattr(st, "clamp"):
                 st.clamp()
+        if "fan_confidence" in effects:
+            try:
+                apply_fan_engagement_delta(
+                    session,
+                    str(team_id),
+                    float(effects.get("fan_confidence") or 0) / 8.0,
+                    source="storyline",
+                )
+            except (TypeError, ValueError):
+                pass
+    if player_id and "gm_trust" in effects:
+        entity = (getattr(session, "universe_players", None) or {}).get(str(player_id)) or {}
+        if entity:
+            try:
+                _u_apply_profile_delta(entity, "state.gm_trust", float(effects.get("gm_trust") or 0))
+                _sync_gm_trust_scales(session, str(player_id))
+            except (TypeError, ValueError):
+                pass
 
 
 REDDIT_ENGAGEMENT_WEIGHT = 2.5
@@ -2693,11 +2717,28 @@ def _build_lineup_fallout_storyline(
         headline = f"{player_name} earns bigger role in lineup"
         body = f"{player_name} promoted from line {prev_rank} to line {new_rank} — confidence building."
         effects = {"player_morale": 4, "player_confidence": 3, "development_confidence": 2}
-        ovr_mod = 0
+        try:
+            jump = max(1, int(prev_rank or 1) - int(new_rank or 1))
+        except (TypeError, ValueError):
+            jump = 1
+        # Stored below as a positive modifier. A trimmed role already applies a negative one.
+        ovr_mod = -min(2, jump)
         severity = "minor"
     else:
         return None
 
+    try:
+        from app.sim_engine.franchise.storyline_conduct import get_effective_ovr_display
+
+        shown_ovr = int(get_effective_ovr_display(player))
+    except Exception:
+        shown_ovr = None
+    try:
+        from app.sim_engine.progression.potential import read_player_potential99
+
+        shown_pot = int(round(float(read_player_potential99(player) or 0))) or None
+    except Exception:
+        shown_pot = None
     tone = "positive" if cause_type == "PLAYER_PROMOTED" else "negative"
     return {
         "id": _storyline_id(stable_key),
@@ -2729,6 +2770,8 @@ def _build_lineup_fallout_storyline(
         "source": _SOURCE_LABEL_BY_CAUSE.get(cause_type, "Team Report"),
         "source_label": _SOURCE_LABEL_BY_CAUSE.get(cause_type, "Team Report"),
         "effects": effects,
+        "player_overall": shown_ovr,
+        "player_potential": shown_pot,
         "ovr_modifier": -int(ovr_mod) if ovr_mod else 0,
         "ovr_modifier_games": 6 if ovr_mod else 0,
         "recovery_conditions": ["Restore prior role", "Win games together", "Meet with player privately"],
@@ -3239,6 +3282,30 @@ def _decay_trade_rumor_state(session: Any, calendar_idx: int) -> None:
             pst["last_trade_rumor_season"] = season
 
 
+def _expire_gm_meetings(session: Any) -> int:
+    """Drop GM meetings whose window closed before anyone answered."""
+    day, _, _ = _u_current_meta(session)
+    active = dict(getattr(session, "gm_active_meetings", None) or {})
+    kept: Dict[str, Any] = {}
+    dropped = 0
+    for mid, meeting in active.items():
+        if not isinstance(meeting, dict):
+            dropped += 1
+            continue
+        if str(meeting.get("status") or "") == "resolved":
+            continue
+        try:
+            expires = int(meeting.get("expires_day"))
+        except (TypeError, ValueError):
+            expires = None
+        if expires is not None and expires < int(day):
+            dropped += 1
+            continue
+        kept[str(mid)] = meeting
+    session.gm_active_meetings = kept
+    return dropped
+
+
 def franchise_cause_storyline_daily_pass(
     session: Any,
     calendar_idx: int,
@@ -3249,6 +3316,7 @@ def franchise_cause_storyline_daily_pass(
     migrate_session_storyline_state(session)
     tick_franchise_storyline_modifiers(session)
     _decay_trade_rumor_state(session, int(calendar_idx))
+    _expire_gm_meetings(session)
     r = rng or random.Random()
     utid = str(getattr(session, "user_team_id", "") or "")
     iso = str(day_meta.get("iso") or "")
@@ -4942,7 +5010,24 @@ def _press_response_spec(question_id: str, response_id: str) -> Dict[str, Any]:
         alias_key = f"{alias}:{rid}"
         if alias_key in _PRESS_RESPONSE_SPECS:
             return dict(_PRESS_RESPONSE_SPECS[alias_key])
-    return {}
+    rid_l = rid.lower()
+    if any(token in rid_l for token in ("no_comment", "cold", "silence", "decline")):
+        return {
+            "storyline_effects": {"media_pressure": 2, "fan_confidence": -2},
+            "heat_delta": 4,
+            "entity": {"state.media_stress": 2},
+        }
+    if any(token in rid_l for token in ("firm", "honest", "diplomatic", "support")):
+        return {
+            "storyline_effects": {"fan_confidence": 1, "player_morale": 1},
+            "heat_delta": -4,
+            "entity": {"state.gm_trust": 1, "state.morale": 1},
+        }
+    return {
+        "storyline_effects": {"media_pressure": 1},
+        "heat_delta": -1,
+        "entity": {"state.media_stress": 1},
+    }
 
 
 def _build_press_effect_preview(spec: Dict[str, Any]) -> str:
@@ -5329,14 +5414,30 @@ def build_narrative_eras(session: Any) -> List[Dict[str, Any]]:
         items = by_season[season]
         top = sorted(items, key=lambda x: int(x.get("heat") or 0), reverse=True)[:8]
         themes: List[str] = []
-        cats = [str(x.get("category") or "") for x in items]
-        if any("trade" in c for c in cats):
-            themes.append("Trade deadline chaos")
-        if any("injury" in c for c in cats):
+        trade_hit = False
+        deadline_hit = False
+        injury_hit = False
+        draft_hit = False
+        legal_hit = False
+        for item in items:
+            tokens = {
+                tok
+                for field in (item.get("category"), item.get("headline"))
+                for tok in re.split(r"[^a-z0-9]+", str(field or "").lower())
+                if tok
+            }
+            trade_hit = trade_hit or "trade" in tokens
+            deadline_hit = deadline_hit or "deadline" in tokens
+            injury_hit = injury_hit or "injury" in tokens
+            draft_hit = draft_hit or "draft" in tokens
+            legal_hit = legal_hit or "legal" in tokens or "conduct" in tokens
+        if trade_hit:
+            themes.append("Trade deadline chaos" if deadline_hit else "Trade wire")
+        if injury_hit:
             themes.append("Injury cloud")
-        if any("draft" in c for c in cats):
+        if draft_hit:
             themes.append("Draft obsession")
-        if any("legal" in c or "conduct" in c for c in cats):
+        if legal_hit:
             themes.append("Off-ice storm")
         eras.append(
             {
@@ -5846,6 +5947,85 @@ def _u_push_morale_to_player(session: Any, player_id: str, morale_100: float) ->
             psych.morale = max(0.0, min(1.0, value / 100.0))
         except Exception:
             return
+
+
+def _u_push_confidence_to_player(session: Any, player_id: str, confidence_100: float) -> None:
+    """Meeting confidence is 0–100. The skater the sim uses stores 0–1."""
+    player = _player_from_roster(session, str(player_id))
+    if player is None:
+        return
+    value = max(0.0, min(1.0, _u_clip(confidence_100) / 100.0))
+    psych = getattr(player, "psych", None)
+    if psych is None:
+        return
+    for attr in ("confidence", "confidence_level"):
+        if hasattr(psych, attr):
+            try:
+                setattr(psych, attr, value)
+            except Exception:
+                pass
+
+
+def _sync_gm_trust_scales(session: Any, player_id: str) -> None:
+    """One trust number: the 0–100 meeting score, the relationship ledger, and trade demand's 0–1 copy."""
+    entity = (getattr(session, "universe_players", None) or {}).get(str(player_id)) or {}
+    state = entity.get("state") or {}
+    try:
+        value = _u_clip(float(state.get("gm_trust", 55) or 55))
+    except (TypeError, ValueError):
+        return
+    if isinstance(state, dict):
+        state["gm_trust"] = value
+    rel = entity.setdefault("gm_relationship", {})
+    if isinstance(rel, dict):
+        rel["trust"] = value
+    player = _player_from_roster(session, str(player_id))
+    if player is None:
+        return
+    pst = _ensure_player_storyline_state(player)
+    pst["gm_trust"] = max(0.05, min(0.99, value / 100.0))
+
+
+def _meeting_hold_active(entity: Dict[str, Any], day: int) -> bool:
+    hold = entity.get("meeting_hold") if isinstance(entity, dict) else None
+    if not isinstance(hold, dict):
+        return False
+    try:
+        return int(hold.get("until_day") or 0) >= int(day)
+    except (TypeError, ValueError):
+        return False
+
+
+def _hold_meeting_mood(entity: Dict[str, Any], day: int, days: int = 8) -> None:
+    """Keep the mood from this meeting until the promise window ends."""
+    if not isinstance(entity, dict):
+        return
+    state = entity.get("state") or {}
+    entity["meeting_hold"] = {
+        "until_day": int(day) + max(4, int(days)),
+        "morale": float(state.get("morale", 55) or 55),
+        "confidence": float(state.get("confidence", 55) or 55),
+        "focus": float(state.get("focus", 60) or 60),
+        "energy": float(state.get("energy", 70) or 70),
+    }
+
+
+def _refresh_open_promise_types(session: Any) -> None:
+    by_player: Dict[str, List[str]] = {}
+    for promise in getattr(session, "universe_promises", None) or []:
+        if str(promise.get("status") or "") != "active":
+            continue
+        pid = str(promise.get("player_id") or "")
+        if not pid:
+            continue
+        by_player.setdefault(pid, [])
+        ptype = str(promise.get("type") or "")
+        if ptype and ptype not in by_player[pid]:
+            by_player[pid].append(ptype)
+    entities = getattr(session, "universe_players", None) or {}
+    for pid, entity in entities.items():
+        if isinstance(entity, dict):
+            entity["open_promise_types"] = list(by_player.get(str(pid)) or [])
 
 
 def _u_clip(value: Any, lo: float = 0.0, hi: float = 100.0) -> float:
@@ -7314,9 +7494,21 @@ def _u_tick_player_life(session: Any, team_id: str, entity: Dict[str, Any], rng:
     relocation = float(life.get("relocation_strain", 15))
     sleep = float(life.get("sleep_quality", 68))
     personal_target = _u_clip(30 + relocation * 0.30 + max(0, 60 - home_stability) * 0.36 + max(0, 62 - sleep) * 0.28)
-    state["personal_stress"] = _u_clip(float(state.get("personal_stress", 30)) * 0.86 + personal_target * 0.14 + rng.uniform(-1.8, 1.8))
-    state["energy"] = _u_clip(float(state.get("energy", 70)) + (sleep - 65) * 0.035 - float(state.get("personal_stress", 30)) * 0.012 + rng.uniform(-1.2, 1.2))
-    state["focus"] = _u_clip(48 + float(state.get("confidence", 55)) * 0.24 + float(state.get("energy", 70)) * 0.20 - float(state.get("personal_stress", 30)) * 0.14)
+    held = _meeting_hold_active(entity, _u_current_meta(session)[0])
+    stress_keep = 0.94 if held else 0.86
+    stress_pull = 0.06 if held else 0.14
+    jitter = rng.uniform(-0.4, 0.4) if held else rng.uniform(-1.8, 1.8)
+    state["personal_stress"] = _u_clip(float(state.get("personal_stress", 30)) * stress_keep + personal_target * stress_pull + jitter)
+    if held:
+        anchor_energy = float((entity.get("meeting_hold") or {}).get("energy") or state.get("energy", 70))
+        state["energy"] = _u_clip(float(state.get("energy", 70)) * 0.92 + anchor_energy * 0.08)
+    else:
+        state["energy"] = _u_clip(float(state.get("energy", 70)) + (sleep - 65) * 0.035 - float(state.get("personal_stress", 30)) * 0.012 + rng.uniform(-1.2, 1.2))
+    focus_formula = 48 + float(state.get("confidence", 55)) * 0.24 + float(state.get("energy", 70)) * 0.20 - float(state.get("personal_stress", 30)) * 0.14
+    if held:
+        state["focus"] = _u_clip(float(state.get("focus", 60)) * 0.82 + focus_formula * 0.18)
+    else:
+        state["focus"] = _u_clip(focus_formula)
     life["relocation_strain"] = _u_clip(relocation - 0.18)
     life["community_connection"] = _u_clip(float(life.get("community_connection", 35)) + rng.uniform(0, 0.25))
     if rng.random() < 0.012 and float(life.get("community_connection", 0)) >= 58:
@@ -7403,11 +7595,41 @@ def record_universe_promise_progress(session: Any, player_id: str, promise_type:
     return changed
 
 
+def _u_notice_ignored_meeting(session: Any, interaction: Dict[str, Any], day: int) -> None:
+    """Silence is an answer. Do not invent the reply he never heard."""
+    interaction["status"] = "expired"
+    pid = str(interaction.get("actor_id") or interaction.get("player_id") or "")
+    entity = (getattr(session, "universe_players", None) or {}).get(pid) or {}
+    name = str(interaction.get("player_name") or entity.get("player_name") or "A player")
+    if entity:
+        _u_apply_profile_delta(entity, "state.gm_trust", -3)
+        _u_apply_profile_delta(entity, "state.morale", -2)
+        _u_push_morale_to_player(session, pid, float((entity.get("state") or {}).get("morale") or 55))
+        _sync_gm_trust_scales(session, pid)
+    _u_notify_user_event(
+        session,
+        {
+            "id": f"ignored_{interaction.get('id')}",
+            "kind": "meeting_ignored",
+            "player_id": pid,
+            "player_name": name,
+            "headline": f"{name} noticed you never answered",
+            "summary": "The meeting expired. Trust slipped because the silence was the reply.",
+            "calendar_day": day,
+        },
+        presentation_level=2,
+    )
+
+
 def _u_expire_interactions(session: Any) -> int:
     day = _u_current_meta(session)[0]
     expired = 0
     for interaction in list(getattr(session, "universe_interactions", None) or []):
         if str(interaction.get("status") or "") != "pending" or int(interaction.get("expires_day", day + 1) or day + 1) >= day:
+            continue
+        if interaction.get("requires_action"):
+            _u_notice_ignored_meeting(session, interaction, day)
+            expired += 1
             continue
         choices = list(interaction.get("choices") or [])
         default_id = str(interaction.get("default_choice_id") or "")
@@ -7424,6 +7646,10 @@ def _u_expire_interactions(session: Any) -> int:
         if str(row.get("status") or "") != "pending" or str(row.get("id") or "") in live_ids:
             continue
         if int(row.get("expires_day", day + 1) or day + 1) >= day:
+            continue
+        if row.get("requires_action"):
+            _u_notice_ignored_meeting(session, row, day)
+            expired += 1
             continue
         choices = list(row.get("choices") or [])
         default_id = str(row.get("default_choice_id") or "")
@@ -7675,42 +7901,109 @@ def apply_universe_matchup_context(sim_inputs: Dict[str, Any], matchup: Dict[str
     return result
 
 
+def _promise_navigate(promise_type: str, player_id: str) -> Dict[str, Any]:
+    """Where the GM has to go to keep this promise."""
+    pid = str(player_id or "")
+    table = {
+        "role_opportunity": ("edit_lines", "even_strength", "Open Edit Lines and move him up"),
+        "power_play_opportunity": ("power_play", "power_play", "Open the power play and put him on a unit"),
+        "penalty_kill_opportunity": ("penalty_kill", "penalty_kill", "Open the penalty kill and give him reps"),
+        "goalie_start_opportunity": ("edit_lines", "goalies", "Open Edit Lines and make him the starter"),
+        "call_up_opportunity": ("ahl_center", "call_up", "Open the AHL list and call him up"),
+        "mentor_assignment": ("edit_lines", "even_strength", "Open Edit Lines and put a younger teammate on his line"),
+        "winning_commitment": ("trade", "trade", "Open the trade floor and add a real difference-maker"),
+    }
+    screen, unit, label = table.get(
+        str(promise_type),
+        ("cap_ledger", "contract", "Open the cap desk"),
+    )
+    return {"screen": screen, "unit": unit, "player_id": pid, "label": label}
+
+
 def _u_promise_snapshot(session: Any, player_id: str) -> Dict[str, Any]:
     """Where the player stands right now: lineup slot, special teams, games, roster level."""
-    snap: Dict[str, Any] = {"on_nhl": False, "line_rank": 0, "pp_unit": 0, "scratched": False, "gp": 0}
+    snap: Dict[str, Any] = {
+        "on_nhl": False,
+        "line_rank": None,
+        "pp_unit": 0,
+        "pk_unit": 0,
+        "scratched": False,
+        "injured": False,
+        "gp": 0,
+        "starts": None,
+        "toi_min": None,
+        "is_starter_slot": False,
+    }
     utid = str(getattr(session, "user_team_id", "") or "")
     team = (getattr(session, "team_by_id", None) or {}).get(utid)
     player = _player_from_roster(session, str(player_id))
     if team is None or player is None:
         return snap
     snap["on_nhl"] = any(p is player for p in list(getattr(team, "roster", None) or []))
+    snap["injured"] = bool(getattr(player, "injured", False) or getattr(player, "injury", None) or int(getattr(player, "_world_injury_games_remaining", 0) or 0) > 0)
     st = (getattr(session, "player_season_stats", None) or {}).get(str(player_id)) or {}
     try:
         snap["gp"] = int(st.get("gp") or 0)
     except Exception:
         snap["gp"] = 0
+    for key in ("starts", "gs", "goalie_starts"):
+        if st.get(key) not in (None, ""):
+            try:
+                snap["starts"] = int(st.get(key) or 0)
+            except (TypeError, ValueError):
+                pass
+            break
+    try:
+        toi_sec = float(st.get("toi_sec") or 0)
+        gp = int(snap["gp"] or 0)
+        if gp > 0 and toi_sec > 0:
+            snap["toi_min"] = round(toi_sec / gp / 60.0, 2)
+    except (TypeError, ValueError):
+        pass
     if snap["on_nhl"]:
         try:
             from app.sim_engine.franchise.trade_stability_engine import resolve_player_deployment
 
             d = resolve_player_deployment(session, player, team)
-            snap["line_rank"] = int(getattr(d, "ev_line_rank", 0) or 0)
+            rank = int(getattr(d, "ev_line_rank", 0) or 0)
+            snap["line_rank"] = rank if rank > 0 else None
             snap["pp_unit"] = int(getattr(d, "pp_unit", 0) or 0)
+            snap["pk_unit"] = int(getattr(d, "pk_unit", 0) or 0)
             snap["scratched"] = bool(getattr(d, "scratched", False))
+            if getattr(d, "avg_toi_min", None) not in (None, 0):
+                snap["toi_min"] = round(float(d.avg_toi_min), 2)
         except Exception:
             pass
+    org_ids = []
+    for bucket in ("roster", "ahl_roster", "prospect_pool", "echl_roster"):
+        for p in list(getattr(team, bucket, None) or []):
+            oid = str(getattr(p, "id", "") or "")
+            if oid:
+                org_ids.append(oid)
+    snap["org_ids"] = sorted(set(org_ids))
     snap["roster_ids"] = sorted(str(getattr(p, "id", "") or "") for p in list(getattr(team, "roster", None) or []))
+    lines = getattr(session, "lines", None)
+    if isinstance(lines, dict):
+        block = lines.get("even_strength") if isinstance(lines.get("even_strength"), dict) else lines
+        inner = block.get("lines") if isinstance(block, dict) and isinstance(block.get("lines"), dict) else block
+        if isinstance(inner, dict):
+            for unit in inner.get("goalies") or []:
+                if isinstance(unit, dict):
+                    slots = unit.get("slots") or {}
+                    if str(slots.get("Starter") or "") == str(player_id):
+                        snap["is_starter_slot"] = True
     return snap
 
 
 def _u_promise_how_to(promise_type: str) -> str:
     return {
-        "role_opportunity": "Move him up a line (or onto a PP unit) in Edit Lines and keep him dressed.",
-        "power_play_opportunity": "Put him on PP1 or PP2 in Edit Lines.",
-        "goalie_start_opportunity": "Start him in net — each start counts.",
+        "role_opportunity": "Move him up a line in Edit Lines and keep him there.",
+        "power_play_opportunity": "Put him on a power-play unit he was not already on.",
+        "penalty_kill_opportunity": "Put him on a penalty-kill unit he was not already on.",
+        "goalie_start_opportunity": "Make him the starter. Relief appearances do not count.",
         "call_up_opportunity": "Call him up to the NHL roster.",
-        "mentor_assignment": "Keep him on the NHL roster.",
-        "winning_commitment": "Add an 80+ OVR player to the NHL roster (trade or signing).",
+        "mentor_assignment": "Dress him with the younger teammate assigned to his line.",
+        "winning_commitment": "Add an 80+ player who was not already in the organization.",
     }.get(str(promise_type), "Deliver what you promised before the deadline.")
 
 
@@ -7723,6 +8016,15 @@ def create_universe_promise(session: Any, promise_spec: Dict[str, Any], default_
     promises = list(getattr(session, "universe_promises", None) or [])
     due_games = int(promise_spec.get("due_games") or 5)
     ptype = str(promise_spec.get("type") or "")
+    for existing in promises:
+        if str(existing.get("status") or "") == "active" and str(existing.get("player_id") or "") == pid and str(existing.get("type") or "") == ptype:
+            existing["games_remaining"] = max(int(existing.get("games_remaining") or 0), due_games)
+            existing["description"] = promise_spec.get("description") or existing.get("description")
+            existing["how_to"] = _u_promise_how_to(ptype)
+            existing["navigate"] = _promise_navigate(ptype, pid)
+            existing["required_progress"] = max(int(existing.get("required_progress") or 1), due_games)
+            _refresh_open_promise_types(session)
+            return existing
     promise = {
         "id": f"promise_{uuid.uuid4().hex[:10]}",
         "interaction_id": source_id,
@@ -7739,67 +8041,184 @@ def create_universe_promise(session: Any, promise_spec: Dict[str, Any], default_
         "failure_readiness": float(promise_spec.get("failure_readiness", 0) or 0),
         "success_attribute": promise_spec.get("success_attribute"),
         "success_attribute_delta": float(promise_spec.get("success_attribute_delta", 0) or 0),
-        "required_progress": _u_promise_required(ptype, due_games),
+        "required_progress": max(1, due_games),
         "how_to": _u_promise_how_to(ptype),
+        "navigate": _promise_navigate(ptype, pid),
+        "games_paused": 0,
     }
+    if ptype == "mentor_assignment":
+        mentee = _pick_mentee_id(session, pid)
+        if mentee:
+            promise["mentee_id"] = mentee
     try:
         promise["baseline"] = _u_promise_snapshot(session, pid)
     except Exception:
         pass
     promises.append(promise)
-    session.universe_promises = promises[-80:]
+    active = [row for row in promises if str(row.get("status") or "") == "active"]
+    done = [row for row in promises if str(row.get("status") or "") != "active"]
+    session.universe_promises = active + done[-max(0, 80 - len(active)):]
+    _refresh_open_promise_types(session)
     return promise
+
+
+def _pick_mentee_id(session: Any, mentor_id: str) -> str:
+    utid = str(getattr(session, "user_team_id", "") or "")
+    team = (getattr(session, "team_by_id", None) or {}).get(utid)
+    best_id = ""
+    best_age = 99
+    for player in list(getattr(team, "roster", None) or []):
+        pid = str(getattr(player, "id", "") or "")
+        if not pid or pid == str(mentor_id):
+            continue
+        if str(_u_position(player)).upper() == "G":
+            continue
+        age = _player_age(player)
+        if age < best_age:
+            best_age = age
+            best_id = pid
+    return best_id if best_age <= 24 else ""
 
 
 def _u_promise_required(promise_type: str, due_games: int) -> int:
     due = max(1, int(due_games or 1))
     if promise_type in ("call_up_opportunity", "winning_commitment"):
         return 1
-    if promise_type == "mentor_assignment":
-        return max(1, int(round(due * 0.6)))
-    return max(1, int(math.ceil(due * 0.5)))
+    return due
 
 
-def _u_promise_progress_tick(session: Any, promise: Dict[str, Any]) -> None:
-    """Credit a promise for this game when the GM actually delivered on it."""
+def _unit_improved(now_unit: Any, base_unit: Any) -> bool:
+    """Special-teams ranks use 1 as the top unit. 0 means he is not on a unit."""
+    try:
+        now_u = int(now_unit or 0)
+        base_u = int(base_unit or 0)
+    except (TypeError, ValueError):
+        return False
+    if now_u <= 0:
+        return False
+    if base_u <= 0:
+        return True
+    return now_u < base_u
+
+
+def _rank_better(now_rank: Any, base_rank: Any) -> bool:
+    try:
+        n = int(now_rank)
+        b = int(base_rank)
+    except (TypeError, ValueError):
+        return False
+    return n > 0 and b > 0 and n < b
+
+
+def _shares_line(session: Any, a_id: str, b_id: str) -> bool:
+    lines = getattr(session, "lines", None)
+    if not isinstance(lines, dict):
+        return False
+    block = lines.get("even_strength") if isinstance(lines.get("even_strength"), dict) else lines
+    inner = block.get("lines") if isinstance(block, dict) and isinstance(block.get("lines"), dict) else block
+    if not isinstance(inner, dict):
+        return False
+    for group in ("forwards", "defense"):
+        for unit in inner.get(group) or []:
+            if not isinstance(unit, dict):
+                continue
+            slots = [str(v) for v in (unit.get("slots") or {}).values() if v]
+            if str(a_id) in slots and str(b_id) in slots:
+                return True
+    return False
+
+
+def _u_promise_progress_tick(session: Any, promise: Dict[str, Any]) -> bool:
+    """Credit a promise when the lineup actually changed. Returns True when this tick only stored a baseline."""
     pid = str(promise.get("player_id") or "")
     base = dict(promise.get("baseline") or {})
     if not base:
         promise["baseline"] = _u_promise_snapshot(session, pid)
-        return
+        promise["_baseline_only"] = True
+        return True
     now = _u_promise_snapshot(session, pid)
+    promise["_could_not_play"] = bool(now.get("scratched") or now.get("injured"))
     ptype = str(promise.get("type") or "")
     delivered = False
     if ptype == "role_opportunity":
-        b_rank = int(base.get("line_rank") or 0)
-        n_rank = int(now.get("line_rank") or 0)
-        dressed = now.get("on_nhl") and not now.get("scratched")
-        promoted = bool(n_rank) and (not b_rank or n_rank < b_rank)
-        new_pp = int(now.get("pp_unit") or 0) > 0 and not int(base.get("pp_unit") or 0)
-        was_out = bool(base.get("scratched")) or not base.get("on_nhl")
-        top_already = b_rank == 1
-        delivered = bool(dressed and (promoted or new_pp or was_out or top_already))
+        dressed = now.get("on_nhl") and not now.get("scratched") and not now.get("injured")
+        promoted = _rank_better(now.get("line_rank"), base.get("line_rank"))
+        try:
+            toi_up = (
+                now.get("toi_min") is not None
+                and base.get("toi_min") is not None
+                and float(now["toi_min"]) >= float(base["toi_min"]) + 1.5
+            )
+        except (TypeError, ValueError):
+            toi_up = False
+        pp_up = _unit_improved(now.get("pp_unit"), base.get("pp_unit"))
+        delivered = bool(dressed and (promoted or toi_up or pp_up))
     elif ptype == "power_play_opportunity":
-        delivered = bool(now.get("on_nhl") and int(now.get("pp_unit") or 0) > 0)
+        delivered = _unit_improved(now.get("pp_unit"), base.get("pp_unit"))
+    elif ptype == "penalty_kill_opportunity":
+        delivered = _unit_improved(now.get("pk_unit"), base.get("pk_unit"))
     elif ptype == "goalie_start_opportunity":
-        last_gp = int(promise.get("_last_gp", base.get("gp") or 0) or 0)
-        delivered = int(now.get("gp") or 0) > last_gp
-        promise["_last_gp"] = int(now.get("gp") or 0)
+        if now.get("starts") is not None:
+            last = promise.get("_last_starts", base.get("starts"))
+            try:
+                delivered = int(now.get("starts") or 0) > int(last if last is not None else -1)
+            except (TypeError, ValueError):
+                delivered = False
+            promise["_last_starts"] = int(now.get("starts") or 0)
+        else:
+            delivered = bool(now.get("is_starter_slot") and now.get("on_nhl") and not now.get("scratched") and not now.get("injured"))
     elif ptype == "call_up_opportunity":
         delivered = bool(now.get("on_nhl"))
     elif ptype == "mentor_assignment":
-        delivered = bool(now.get("on_nhl"))
+        mentee = str(promise.get("mentee_id") or "")
+        dressed = now.get("on_nhl") and not now.get("scratched")
+        delivered = bool(dressed and mentee and _shares_line(session, pid, mentee))
     elif ptype == "winning_commitment":
-        added = set(now.get("roster_ids") or []) - set(base.get("roster_ids") or [])
+        added = set(now.get("roster_ids") or []) - set(base.get("org_ids") or base.get("roster_ids") or [])
         for aid in added:
             pl = _player_from_roster(session, aid)
             if pl is not None and _player_ovr99(pl) >= 80:
                 delivered = True
                 break
     else:
-        delivered = bool(now.get("on_nhl") and not now.get("scratched"))
+        delivered = False
     if delivered:
         promise["progress"] = int(promise.get("progress", 0) or 0) + 1
+    return False
+
+
+def credit_line_promises(session: Any) -> None:
+    """Saving the sheet can keep a promise before the next game, and the desk's role number updates now."""
+    team_id = str(getattr(session, "user_team_id", "") or "")
+    team = (getattr(session, "team_by_id", None) or {}).get(team_id)
+    for promise in list(getattr(session, "universe_promises", None) or []):
+        if str(promise.get("status") or "") != "active":
+            continue
+        try:
+            _u_promise_progress_tick(session, promise)
+        except Exception:
+            continue
+    for player in list(getattr(team, "roster", None) or []):
+        pid = str(getattr(player, "id", "") or "")
+        entity = (getattr(session, "universe_players", None) or {}).get(pid)
+        if not isinstance(entity, dict):
+            continue
+        try:
+            _u_sync_role_from_deployment(session, pid, team_id, entity)
+        except Exception:
+            continue
+
+
+def _latest_promise_nav(session: Any, player_id: str) -> Optional[Dict[str, Any]]:
+    for promise in reversed(list(getattr(session, "universe_promises", None) or [])):
+        if str(promise.get("player_id") or "") != str(player_id):
+            continue
+        if str(promise.get("status") or "") != "active":
+            continue
+        nav = promise.get("navigate")
+        if isinstance(nav, dict) and nav.get("screen"):
+            return dict(nav)
+    return None
 
 
 def _u_advance_game_based_state(session: Any, team_id: str) -> None:
@@ -7811,14 +8230,34 @@ def _u_advance_game_based_state(session: Any, team_id: str) -> None:
             row["games_remaining"] = max(0, int(row.get("games_remaining", 0) or 0) - 1)
         modifiers[player_id] = [row for row in rows if int(row.get("games_remaining", 0) or 0) > 0]
     session.universe_attribute_modifiers = modifiers
+    if str(team_id) != str(getattr(session, "user_team_id", "") or ""):
+        return
+    team = (getattr(session, "team_by_id", None) or {}).get(str(team_id))
+    roster_ids = {str(getattr(p, "id", "") or "") for p in list(getattr(team, "roster", None) or [])}
+    roster_ids |= {str(getattr(p, "id", "") or "") for p in list(getattr(team, "ahl_roster", None) or [])}
     for promise in getattr(session, "universe_promises", None) or []:
-        if str(promise.get("status") or "") == "active" and str(((getattr(session, "universe_players", None) or {}).get(str(promise.get("player_id") or "")) or {}).get("team_id") or "") == str(team_id):
-            if str(team_id) == str(getattr(session, "user_team_id", "") or ""):
-                try:
-                    _u_promise_progress_tick(session, promise)
-                except Exception:
-                    pass
-            promise["games_remaining"] = max(0, int(promise.get("games_remaining", 0) or 0) - 1)
+        if str(promise.get("status") or "") != "active":
+            continue
+        pid = str(promise.get("player_id") or "")
+        entity = (getattr(session, "universe_players", None) or {}).get(pid) or {}
+        on_club = pid in roster_ids or str(entity.get("team_id") or "") == str(team_id)
+        if not on_club:
+            continue
+        baseline_only = False
+        try:
+            baseline_only = bool(_u_promise_progress_tick(session, promise))
+        except Exception:
+            baseline_only = False
+        ptype = str(promise.get("type") or "")
+        pause = ptype in ("role_opportunity", "power_play_opportunity", "penalty_kill_opportunity", "goalie_start_opportunity", "mentor_assignment")
+        if baseline_only or (pause and promise.get("_could_not_play")):
+            promise["games_paused"] = int(promise.get("games_paused") or 0) + 1
+            due = max(1, int(promise.get("due_games") or promise.get("games_remaining") or 1))
+            if int(promise.get("games_paused") or 0) >= due and int(promise.get("progress") or 0) <= 0:
+                promise["status"] = "waived"
+                promise["games_remaining"] = 0
+            continue
+        promise["games_remaining"] = max(0, int(promise.get("games_remaining", 0) or 0) - 1)
 
 
 def apply_universe_postgame(session: Any, team_id: str, game_result: Dict[str, Any], rng: Optional[random.Random] = None) -> Dict[str, Any]:
@@ -7894,19 +8333,29 @@ def apply_universe_postgame(session: Any, team_id: str, game_result: Dict[str, A
         # Morale has a resting level set by his situation (role, trust in management,
         # temperament). Without the pull back toward it every slump ratcheted morale down
         # for good and the whole roster drifted into "frustrated".
-        baseline = (
-            56.0
-            + (float(state.get("role_satisfaction", 58)) - 55.0) * 0.25
-            + (float(state.get("gm_trust", 60)) - 58.0) * 0.15
-            + (float(personality.get("resilience", 55)) - 55.0) * 0.12
-        )
-        baseline = max(38.0, min(74.0, baseline))
-        cur_m = float(state.get("morale", 55))
-        state["morale"] = _u_clip(cur_m + morale_delta + (baseline - cur_m) * 0.07)
-        cur_c = float(state.get("confidence", 55))
-        state["confidence"] = _u_clip(cur_c + confidence_delta + (55.0 - cur_c) * 0.06)
+        hold = entity.get("meeting_hold") if _meeting_hold_active(entity, day) else None
+        if isinstance(hold, dict):
+            cur_m = float(state.get("morale", 55))
+            anchor_m = float(hold.get("morale") or cur_m)
+            state["morale"] = _u_clip(cur_m + morale_delta * 0.35 + (anchor_m - cur_m) * 0.04)
+            cur_c = float(state.get("confidence", 55))
+            anchor_c = float(hold.get("confidence") or cur_c)
+            state["confidence"] = _u_clip(cur_c + confidence_delta * 0.35 + (anchor_c - cur_c) * 0.04)
+        else:
+            baseline = (
+                56.0
+                + (float(state.get("role_satisfaction", 58)) - 55.0) * 0.25
+                + (float(state.get("gm_trust", 60)) - 58.0) * 0.15
+                + (float(personality.get("resilience", 55)) - 55.0) * 0.12
+            )
+            baseline = max(38.0, min(74.0, baseline))
+            cur_m = float(state.get("morale", 55))
+            state["morale"] = _u_clip(cur_m + morale_delta + (baseline - cur_m) * 0.07)
+            cur_c = float(state.get("confidence", 55))
+            state["confidence"] = _u_clip(cur_c + confidence_delta + (55.0 - cur_c) * 0.06)
         entity["state"] = state
         _u_push_morale_to_player(session, player_id, float(state["morale"]))
+        _u_push_confidence_to_player(session, player_id, float(state["confidence"]))
         low_character_risk = max(0.0, 48 - float(personality.get("character", 55))) * 0.006 + max(0.0, 48 - float(state.get("role_satisfaction", 55))) * 0.004 + max(0.0, float((room.get("culture") or {}).get("tension", 35)) - 55) * 0.002
         if not won and local_rng.random() < min(0.28, low_character_risk):
             state["coach_trust"] = _u_clip(float(state.get("coach_trust", 55)) - 4)
@@ -9762,7 +10211,7 @@ def _u_make_extended_interaction(session: Any, team_id: str, kind: str, actor_id
             "dialogue": [{"speaker": name, "text": "I want more responsibility. If you think I haven't earned it, tell me exactly what I need to do."}],
             "choices": [
                 _u_choice("honest", "Give an honest assessment", "Explain the current role and what must improve.", {"profile_changes": {"actor": {"state.gm_trust": 4, "state.focus": 2}}, "readiness_changes": [{"who": "actor", "ovr_delta": 0.25, "days": 5, "reason": "Clear role expectations", "stats": {"toi_readiness": 0.02}}], "public": False}),
-                _u_choice("promise", "Promise a bigger opportunity", "Morale jumps now, but the promise must be delivered.", {"profile_changes": {"actor": {"state.morale": 5, "state.gm_trust": 3}}, "promise": {"type": "role_opportunity", "player_id": actor_id, "due_games": 6, "description": "Give the player a meaningful lineup opportunity within six games.", "success_potential_delta": 0.35, "success_readiness": 0.5, "failure_readiness": -2.0}, "public": False}),
+                _u_choice("promise", "Promise a bigger opportunity", "Morale jumps now, but the promise must be delivered.", {"profile_changes": {"actor": {"state.morale": 5, "state.confidence": 3, "state.gm_trust": 4}}, "promise": {"type": "role_opportunity", "player_id": actor_id, "due_games": 5, "description": "Increased even-strength usage.", "success_readiness": 0.6, "failure_readiness": -2.5}, "relationship": {"trust": 4}, "public": False}),
                 _u_choice("decline", "Tell him the role is earned", "Push back without offering a timetable.", {"profile_changes": {"actor": {"state.gm_trust": -6, "state.morale": -5, "state.focus": 2}}, "readiness_changes": [{"who": "actor", "ovr_delta": -1.0, "days": 10, "reason": "Frustration after role meeting", "stats": {"offensive_awareness": -0.35}}], "public": False}),
             ],
         })
@@ -9836,7 +10285,15 @@ def _u_apply_outcome(session: Any, interaction: Dict[str, Any], choice: Dict[str
     if is_player_meeting and actor_id:
         meeting_entity = entities.get(actor_id) or {}
         if meeting_entity:
-            outcome = _scale_negative_meeting_outcome(outcome, dict(meeting_entity.get("personality") or {}))
+            personality = dict(meeting_entity.get("personality") or {})
+            outcome = _scale_negative_meeting_outcome(outcome, personality)
+            state = meeting_entity.get("state") or {}
+            rel = meeting_entity.get("gm_relationship") or {}
+            outcome = _u_trust_scale_outcome(
+                outcome,
+                {"gm_trust": state.get("gm_trust", rel.get("trust", 55)), "trust": rel.get("trust", state.get("gm_trust", 55))},
+                personality,
+            )
     day, iso, _ = _u_current_meta(session)
     receipts: Dict[str, Any] = {"profiles": [], "relationships": [], "attributes": [], "potential": [], "readiness": [], "reporter": [], "team": []}
     role_ids = {"actor": actor_id, "target": target_id}
@@ -9926,6 +10383,12 @@ def _u_apply_outcome(session: Any, interaction: Dict[str, Any], choice: Dict[str
     if is_player_meeting and actor_id:
         meeting_entity = entities.get(actor_id) or {}
         if meeting_entity:
+            hold_days = 8
+            if isinstance(outcome.get("promise"), dict):
+                hold_days = max(8, int((outcome.get("promise") or {}).get("due_games") or 8))
+            _hold_meeting_mood(meeting_entity, day, hold_days)
+            _u_push_confidence_to_player(session, actor_id, float((meeting_entity.get("state") or {}).get("confidence") or 55))
+            _sync_gm_trust_scales(session, actor_id)
             _apply_meeting_harsh_fallout(
                 session,
                 meeting_entity,
@@ -10043,19 +10506,31 @@ def _u_generate_daily_interactions(session: Any, rng: random.Random) -> int:
 def _u_tick_promises(session: Any) -> Dict[str, int]:
     """Resolve promises with long-term potential rewards and readiness fallout."""
     promises = list(getattr(session, "universe_promises", None) or [])
-    counts = {"kept": 0, "broken": 0}
+    counts = {"kept": 0, "broken": 0, "waived": 0}
     day, iso, _ = _u_current_meta(session)
     for promise in promises:
-        if str(promise.get("status") or "") != "active" or int(promise.get("games_remaining", 1) or 0) > 0:
+        status = str(promise.get("status") or "")
+        player_id = str(promise.get("player_id") or "")
+        entity = (getattr(session, "universe_players", None) or {}).get(player_id) or {}
+        if status == "waived" and not promise.get("_waived_applied"):
+            if entity:
+                _u_apply_profile_delta(entity, "state.gm_trust", -1)
+                _sync_gm_trust_scales(session, player_id)
+            promise["_waived_applied"] = True
+            counts["waived"] += 1
+            continue
+        if status != "active" or int(promise.get("games_remaining", 1) or 0) > 0:
             continue
         fulfilled = int(promise.get("progress", 0) or 0) >= int(promise.get("required_progress", 1) or 1)
         promise["status"] = "kept" if fulfilled else "broken"
         promise["resolved_day"] = day
-        player_id = str(promise.get("player_id") or "")
-        entity = (getattr(session, "universe_players", None) or {}).get(player_id) or {}
-        delta = 6 if fulfilled else -12
+        delta = 8 if fulfilled else -6
         _u_apply_profile_delta(entity, "state.gm_trust", delta)
-        _u_apply_profile_delta(entity, "state.morale", 3 if fulfilled else -6)
+        _u_apply_profile_delta(entity, "state.morale", 6 if fulfilled else -4)
+        if entity:
+            _hold_meeting_mood(entity, day, 8)
+            _u_push_morale_to_player(session, player_id, float((entity.get("state") or {}).get("morale") or 55))
+            _sync_gm_trust_scales(session, player_id)
         if fulfilled and float(promise.get("success_potential_delta", 0) or 0):
             _u_apply_potential_change(session, player_id, float(promise.get("success_potential_delta") or 0), str(promise.get("id")), "Management delivered a development/role promise")
         readiness_delta = float(promise.get("success_readiness", 0) if fulfilled else promise.get("failure_readiness", 0) or 0)
@@ -10073,6 +10548,7 @@ def _u_tick_promises(session: Any) -> Dict[str, int]:
             _u_notify_user_event(session, {**event, "headline": f"Promise {promise['status']}: {entity.get('player_name') or 'player'}", "summary": str(promise.get("description") or "")}, presentation_level=1 if fulfilled else 2)
         counts[promise["status"]] += 1
     session.universe_promises = promises
+    _refresh_open_promise_types(session)
     return counts
 
 
@@ -10100,7 +10576,11 @@ def _trade_fallout_magnitude(session: Any, player: Any, attempt_count: int) -> T
     duration_days = int(round(7 + attempt_count * 7 + fragility * 52 + max(0, 50 - char) * 0.35))
     duration_days = max(7, min(120, duration_days))
     severity = "minor" if ovr_mod <= 2 else "mid" if ovr_mod <= 6 else "major"
-    pst["gm_trust"] = _clamp(float(pst.get("gm_trust", 0.72)) - gm_trust_drop * 0.01)
+    if entity:
+        _u_apply_profile_delta(entity, "state.gm_trust", -float(gm_trust_drop))
+        _sync_gm_trust_scales(session, player_id)
+    else:
+        pst["gm_trust"] = _clamp(float(pst.get("gm_trust", 0.72)) - gm_trust_drop * 0.01)
     pst["last_trade_mental_ovr"] = round(mental, 1)
     pst["last_trade_readiness_penalty"] = -ovr_mod
     pst["last_trade_recovery_days"] = duration_days
@@ -10673,9 +11153,21 @@ def _u_tick_player_life(session: Any, team_id: str, entity: Dict[str, Any], rng:
     relocation = float(life.get("relocation_strain", 15))
     sleep = float(life.get("sleep_quality", 68))
     personal_target = _u_clip(30 + relocation * 0.30 + max(0, 60 - home_stability) * 0.36 + max(0, 62 - sleep) * 0.28)
-    state["personal_stress"] = _u_clip(float(state.get("personal_stress", 30)) * 0.86 + personal_target * 0.14 + rng.uniform(-1.8, 1.8))
-    state["energy"] = _u_clip(float(state.get("energy", 70)) + (sleep - 65) * 0.035 - float(state.get("personal_stress", 30)) * 0.012 + rng.uniform(-1.2, 1.2))
-    state["focus"] = _u_clip(48 + float(state.get("confidence", 55)) * 0.24 + float(state.get("energy", 70)) * 0.20 - float(state.get("personal_stress", 30)) * 0.14)
+    held = _meeting_hold_active(entity, _u_current_meta(session)[0])
+    stress_keep = 0.94 if held else 0.86
+    stress_pull = 0.06 if held else 0.14
+    jitter = rng.uniform(-0.4, 0.4) if held else rng.uniform(-1.8, 1.8)
+    state["personal_stress"] = _u_clip(float(state.get("personal_stress", 30)) * stress_keep + personal_target * stress_pull + jitter)
+    if held:
+        anchor_energy = float((entity.get("meeting_hold") or {}).get("energy") or state.get("energy", 70))
+        state["energy"] = _u_clip(float(state.get("energy", 70)) * 0.92 + anchor_energy * 0.08)
+    else:
+        state["energy"] = _u_clip(float(state.get("energy", 70)) + (sleep - 65) * 0.035 - float(state.get("personal_stress", 30)) * 0.012 + rng.uniform(-1.2, 1.2))
+    focus_formula = 48 + float(state.get("confidence", 55)) * 0.24 + float(state.get("energy", 70)) * 0.20 - float(state.get("personal_stress", 30)) * 0.14
+    if held:
+        state["focus"] = _u_clip(float(state.get("focus", 60)) * 0.82 + focus_formula * 0.18)
+    else:
+        state["focus"] = _u_clip(focus_formula)
     life["relocation_strain"] = _u_clip(relocation - 0.18)
     life["community_connection"] = _u_clip(float(life.get("community_connection", 35)) + rng.uniform(0, 0.25))
     life["current_note"] = "Travel and home responsibilities are competing with hockey focus." if float(state.get("personal_stress", 0)) >= 68 else "Home life is stable."
@@ -10748,6 +11240,7 @@ def narrative_universe_v2_daily_pass(session: Any, calendar_idx: int, day_meta: 
     minor_life = _u_generate_minor_life_events(session, local_rng)
     followups = _process_storyline_followups(session)
     expired = _u_expire_interactions(session)
+    _expire_gm_meetings(session)
     try:
         expire_press_conferences(session)
         reconcile_requires_action(session)
@@ -11026,24 +11519,43 @@ def _gm_contract_info(player: Any) -> Dict[str, Any]:
 
         yrs = float(_contract_years_remaining(player))
         nmc = bool(has_nmc(player))
-        ntc = bool(has_ntc(player)) or nmc
+        full_ntc = bool(has_ntc(player))
+        try:
+            from services.contract_economy import _modified_ntc_team_count
+
+            modified = _modified_ntc_team_count(player) > 0
+        except Exception:
+            modified = False
+        if nmc:
+            label = "NMC"
+        elif modified:
+            label = "M-NTC"
+        elif full_ntc:
+            label = "NTC"
+        else:
+            label = "None"
         return {
             "years_remaining": yrs,
             "aav_m": float(player_cap_hit_millions(player) or 0),
             "expiring": yrs <= 1.05,
-            "has_ntc": ntc,
+            "has_ntc": full_ntc,
             "has_nmc": nmc,
-            "has_trade_protection": ntc or nmc,
-            "clause_label": "NMC" if nmc else ("NTC" if ntc else "None"),
+            "has_trade_protection": full_ntc or nmc or modified,
+            "clause_label": label,
         }
     except Exception:
         pass
     c = getattr(player, "contract", None) or {}
     if not isinstance(c, dict):
         c = {}
-    clause = str(c.get("clause") or c.get("clause_type") or "").upper()
-    has_ntc = bool(c.get("no_trade_clause") or c.get("ntc") or "NTC" in clause or "NMC" in clause or "NO TRADE" in clause or "NO MOVE" in clause)
-    has_nmc = bool(c.get("no_move_clause") or c.get("nmc") or "NMC" in clause or "NO MOVE" in clause)
+    clause = str(c.get("clause") or c.get("clause_type") or c.get("ntc_mode") or "").upper()
+    modified = "M-NTC" in clause or "MNTC" in clause or "MODIFIED" in clause or int(c.get("modified_no_trade_teams") or 0) > 0
+    has_nmc = bool(c.get("no_move_clause") or c.get("nmc") or (not modified and ("NMC" in clause or "NO MOVE" in clause)))
+    has_ntc = bool(
+        not has_nmc and not modified and (
+            c.get("no_trade_clause") or c.get("ntc") or "NO TRADE" in clause or (clause == "NTC" or clause.endswith(" NTC"))
+        )
+    )
     years_left = float(c.get("years_remaining") or c.get("term_years_remaining") or 0)
     expiring = years_left <= 1.05
     return {
@@ -11053,11 +11565,28 @@ def _gm_contract_info(player: Any) -> Dict[str, Any]:
         "has_ntc": has_ntc,
         "has_nmc": has_nmc,
         "has_trade_protection": has_ntc or has_nmc,
-        "clause_label": "NMC" if has_nmc else ("NTC" if has_ntc else "None"),
+        "clause_label": "NMC" if has_nmc else ("M-NTC" if modified else ("NTC" if has_ntc else "None")),
     }
 
 
+_ICE_PROMISE_BY_TOPIC = {
+    "discuss_ice_time": "role_opportunity",
+    "offer_increased_ice_time": "role_opportunity",
+    "explain_reduced_ice_time": "role_opportunity",
+    "discuss_line_assignment": "role_opportunity",
+    "discuss_promotion": "role_opportunity",
+    "offer_pp_opportunity": "power_play_opportunity",
+    "explain_pp_removal": "power_play_opportunity",
+    "offer_pk_opportunity": "penalty_kill_opportunity",
+    "discuss_goalie_workload": "goalie_start_opportunity",
+}
+
+
 def _gm_on_cooldown(entity: Dict[str, Any], interaction_type: str, day: int) -> bool:
+    open_types = list(entity.get("open_promise_types") or [])
+    promised = _ICE_PROMISE_BY_TOPIC.get(str(interaction_type))
+    if promised and promised in open_types:
+        return False
     cooldowns = dict(entity.get("meeting_cooldowns") or {})
     last = int(cooldowns.get(interaction_type) or -999)
     extra = GM_MEETING_PRAISE_COOLDOWN_DAYS if interaction_type == "praise_performance" else GM_MEETING_NTC_COOLDOWN_DAYS if interaction_type == "ask_ntc_waiver" else GM_MEETING_DEFAULT_COOLDOWN_DAYS
@@ -11082,15 +11611,17 @@ def _gm_attention_cleared(entity: Dict[str, Any], day: int) -> bool:
     return int(entity.get("meeting_attention_cleared_until_day") or 0) > int(day)
 
 
-def _gm_mark_attention_addressed(session: Any, player_id: str, *, days: int = 21) -> None:
+def _gm_mark_attention_addressed(session: Any, player_id: str, *, days: int = 21, swing: float = 0.0) -> None:
     if not player_id:
         return
     entity = _gm_entity(session, player_id)
     if not entity:
         return
     day = _u_current_meta(session)[0]
-    entity["meeting_attention_cleared_until_day"] = int(day) + int(days)
     entity["last_gm_meeting_resolved_day"] = int(day)
+    if float(swing) < -1.0:
+        return
+    entity["meeting_attention_cleared_until_day"] = int(day) + int(days)
 
 
 def _gm_should_flag_attention(
@@ -11196,14 +11727,14 @@ def _gm_relationship_summary(entity: Dict[str, Any], session: Any, player_id: st
         p for p in (getattr(session, "universe_promises", None) or [])
         if str(p.get("player_id") or "") == str(player_id) and str(p.get("status") or "") == "active"
     ]
-    score = gm_trust * 0.45 + morale * 0.20 + role_sat * 0.20 + max(0, 100 - broken * 14) * 0.15
-    if score >= 78:
+    score = gm_trust * 0.62 + morale * 0.18 + role_sat * 0.08 + max(0, 100 - broken * 14) * 0.12
+    if score >= 84:
         label, tone = "Strong", "positive"
-    elif score >= 64:
-        label, tone = "Good", "neutral"
-    elif score >= 48:
+    elif score >= 76:
+        label, tone = "Good", "positive"
+    elif score >= 68:
         label, tone = "Neutral", "neutral"
-    elif score >= 32:
+    elif score >= 52:
         label, tone = "Strained", "negative"
     else:
         label, tone = "Broken", "negative"
@@ -11287,6 +11818,24 @@ def build_ovr_trend_explanation(session: Any, player_id: str) -> Dict[str, Any]:
     }
 
 
+def _gm_scoring_drought(player: Any, pos: str, is_goalie: bool) -> bool:
+    """A drought is a long stretch without points, not a confidence dip."""
+    if is_goalie or player is None:
+        return False
+    stats = getattr(player, "season_stats", None) or getattr(player, "stats", None) or {}
+    if not isinstance(stats, dict):
+        return False
+    try:
+        gp = int(stats.get("gp") or stats.get("games") or stats.get("games_played") or 0)
+        pts = int(stats.get("points") or (int(stats.get("goals") or 0) + int(stats.get("assists") or 0)))
+    except (TypeError, ValueError):
+        return False
+    if gp < 8:
+        return False
+    floor = 0.12 if str(pos or "").upper().startswith("D") else 0.28
+    return (pts / gp) < floor
+
+
 def _gm_build_context(session: Any, player_id: str) -> Dict[str, Any]:
     entity = _gm_entity(session, player_id)
     player = _player_from_roster(session, player_id)
@@ -11345,7 +11894,7 @@ def _gm_build_context(session: Any, player_id: str) -> Dict[str, Any]:
         "relationship": _gm_relationship_summary(entity, session, player_id),
         "trade_rumor_heat": int(pst.get("trade_rumor_heat") or 0),
         "trade_attempts": int(pst.get("trade_attempt_count") or 0),
-        "scoring_drought": float(state.get("confidence", 55)) <= 44 and not is_goalie,
+        "scoring_drought": _gm_scoring_drought(player, pos, is_goalie),
         "struggling": ovr_trend.get("direction") == "down" or float(state.get("morale", 55)) <= 42,
         "improving": ovr_trend.get("direction") == "up",
         "injured": bool(getattr(player, "injured", False) or getattr(player, "injury", None)),
@@ -11356,11 +11905,7 @@ def _gm_build_context(session: Any, player_id: str) -> Dict[str, Any]:
         "pp_unit": int(getattr(deploy, "pp_unit", 0) or 0),
         "pp_toi": float(getattr(deploy, "pp_toi_min_pg", 0.0) or 0.0),
         "lines_saved": str(getattr(deploy, "line_source", "") or "") not in ("", "roster_projection"),
-        "on_pp": int(getattr(deploy, "pp_unit", 0) or 0) > 0
-        or (
-            str(getattr(deploy, "line_source", "") or "") in ("", "roster_projection")
-            and float(getattr(deploy, "pp_toi_min_pg", 0.0) or 0.0) >= 1.5
-        ),
+        "on_pp": int(getattr(deploy, "pp_unit", 0) or 0) > 0,
         "pk_unit": int(getattr(deploy, "pk_unit", 0) or 0),
         "scratched": bool(getattr(deploy, "scratched", False)),
         "line_rank": int(getattr(deploy, "ev_line_rank", 0) or 0),
@@ -11384,11 +11929,10 @@ def _gm_choice(cid: str, label: str, detail: str, outcome: Dict[str, Any]) -> Di
 
 _MEETING_RELATIONSHIP_STATE_MAP = {
     "trust": ("state.gm_trust", 1.0),
-    "respect": ("state.morale", 0.5),
+    "respect": ("state.morale", 1.0),
     "loyalty": ("state.belonging", 0.55),
-    "honesty": ("state.gm_trust", 0.6),
-    "communication": ("state.gm_trust", 0.45),
-    "negotiation_goodwill": ("state.morale", 0.35),
+    "honesty": ("state.gm_trust", 1.0),
+    "communication": ("state.gm_trust", 1.0),
 }
 
 _PLAYER_MEETING_KINDS = frozenset({
@@ -11430,10 +11974,17 @@ def _meeting_personality_neg_mult(personality: Dict[str, Any]) -> float:
     return round(1.3 + max(0.0, vol - 58) * 0.02 + max(0.0, amb - 68) * 0.012, 3)
 
 
+def _meeting_personality_pos_mult(personality: Dict[str, Any]) -> float:
+    loyalty = float((personality or {}).get("loyalty", 50))
+    vol = float((personality or {}).get("volatility", 50))
+    return round(max(0.75, min(1.45, 0.85 + (loyalty - 50) * 0.008 - (vol - 50) * 0.006)), 3)
+
+
 def _scale_negative_meeting_outcome(outcome: Dict[str, Any], personality: Dict[str, Any]) -> Dict[str, Any]:
-    """Amplify negative meeting deltas so harsh answers actually move the needle."""
+    """Personality changes how hard a meeting lands, in both directions."""
     scaled = dict(outcome)
     neg_mult = _meeting_personality_neg_mult(personality)
+    pos_mult = _meeting_personality_pos_mult(personality)
     profile_changes: Dict[str, Any] = {}
     for role, changes in (outcome.get("profile_changes") or {}).items():
         role_changes = dict(changes or {})
@@ -11444,6 +11995,8 @@ def _scale_negative_meeting_outcome(outcome: Dict[str, Any], personality: Dict[s
                 continue
             if d < 0:
                 role_changes[field] = round(d * neg_mult, 2)
+            elif d > 0:
+                role_changes[field] = round(d * pos_mult, 2)
         profile_changes[str(role)] = role_changes
     scaled["profile_changes"] = profile_changes
     relationship: Dict[str, Any] = {}
@@ -11458,6 +12011,8 @@ def _scale_negative_meeting_outcome(outcome: Dict[str, Any], personality: Dict[s
             relationship[k] = round(d * neg_mult, 2)
         elif d < 0:
             relationship[k] = round(d * neg_mult, 2)
+        elif d > 0:
+            relationship[k] = round(d * pos_mult, 2)
         else:
             relationship[k] = d
     scaled["relationship"] = relationship
@@ -11631,7 +12186,7 @@ def _u_meeting_reaction_line(name: str, net: float, personality: Dict[str, Any],
 
 def _u_trust_scale_outcome(outcome: Dict[str, Any], rel: Dict[str, Any], personality: Dict[str, Any]) -> Dict[str, Any]:
     """Positive effects land harder when he trusts you, softer when he doesn't."""
-    trust = float((rel or {}).get("trust", 55) or 55)
+    trust = float((rel or {}).get("gm_trust", (rel or {}).get("trust", 55)) or 55)
     factor = max(0.55, min(1.35, 0.55 + trust / 100.0 * 0.85))
     out = dict(outcome)
     pcs: Dict[str, Any] = {}
@@ -11694,14 +12249,69 @@ def _gm_apply_meeting_outcome(session: Any, ctx: Dict[str, Any], interaction_typ
         before = float(rel.get(key, 55))
         after = _u_clip(before + float(delta))
         rel[key] = after
-        receipts.setdefault("profiles", []).append({
-            "field": str(key).replace("_", " ").title(),
-            "before": round(before, 1),
-            "after": round(after, 1),
-            "delta": round(after - before, 1),
-            "player_id": player_id,
-        })
-        _mirror_meeting_relationship_to_state(entity, player_id, str(key), float(delta), receipts)
+        mapped = _MEETING_RELATIONSHIP_STATE_MAP.get(str(key))
+        already = False
+        if mapped:
+            state_key = str(mapped[0])
+            for bucket in (outcome.get("profile_changes") or {}).values():
+                if isinstance(bucket, dict) and state_key in bucket:
+                    already = True
+                    break
+        if mapped and not already:
+            _mirror_meeting_relationship_to_state(entity, player_id, str(key), float(delta), receipts)
+        elif str(key) == "grievance":
+            receipts.setdefault("profiles", []).append({
+                "field": "grievance",
+                "before": round(before, 1),
+                "after": round(after, 1),
+                "delta": round(after - before, 1),
+                "player_id": player_id,
+            })
+            _mirror_meeting_relationship_to_state(entity, player_id, str(key), float(delta), receipts)
+        elif not mapped:
+            receipts.setdefault("profiles", []).append({
+                "field": str(key),
+                "before": round(before, 1),
+                "after": round(after, 1),
+                "delta": round(after - before, 1),
+                "player_id": player_id,
+            })
+    state_now = entity.setdefault("state", {})
+    if state_now.get("gm_trust") is not None:
+        rel["trust"] = float(state_now.get("gm_trust") or 55)
+    _sync_gm_trust_scales(session, player_id)
+    if outcome.get("clear_broken_promises"):
+        for row in getattr(session, "universe_promises", None) or []:
+            if str(row.get("player_id") or "") == str(player_id) and str(row.get("status") or "") == "broken":
+                row["status"] = "forgiven"
+    if outcome.get("clear_short_injury"):
+        player = ctx.get("player")
+        remaining = 99
+        if player is not None:
+            try:
+                remaining = int(getattr(player, "_world_injury_games_remaining", 0) or 0)
+            except (TypeError, ValueError):
+                remaining = 99
+            if remaining <= 3:
+                setattr(player, "_world_injury_games_remaining", 0)
+                for flag in ("injured", "on_ir", "is_ir"):
+                    if hasattr(player, flag):
+                        setattr(player, flag, False)
+                if hasattr(player, "injury"):
+                    setattr(player, "injury", None)
+            else:
+                create_universe_promise(
+                    session,
+                    {
+                        "type": "role_opportunity",
+                        "player_id": player_id,
+                        "due_games": max(4, remaining),
+                        "description": "Return to the lineup when the injury clears.",
+                        "success_readiness": 0.35,
+                    },
+                    player_id,
+                    str(fake_interaction.get("id") or "gm_meeting"),
+                )
     _apply_meeting_harsh_fallout(
         session,
         entity,
@@ -11745,6 +12355,20 @@ def _gm_apply_meeting_outcome(session: Any, ctx: Dict[str, Any], interaction_typ
         emotional_delta=float(sum((outcome.get("relationship") or {}).values()) or 0),
         public=bool(outcome.get("public")),
     )
+    hold_days = 8
+    if isinstance(outcome.get("promise"), dict):
+        hold_days = max(8, int((outcome.get("promise") or {}).get("due_games") or 8))
+    _hold_meeting_mood(entity, day, hold_days)
+    _u_push_confidence_to_player(session, player_id, float((entity.get("state") or {}).get("confidence") or 55))
+    nav = _latest_promise_nav(session, player_id)
+    impact = build_meeting_impact(
+        receipts,
+        player_name=str(entity.get("player_name") or "Player"),
+        choice_label=str(choice.get("label") or ""),
+        promise_made=bool(outcome.get("promise")),
+    )
+    if outcome.get("promise_softened"):
+        impact.setdefault("notes", []).append("The promise still stands. He heard you pull it back, so the ask is shorter.")
     return {
         "ok": True,
         "history": history_row,
@@ -11755,12 +12379,8 @@ def _gm_apply_meeting_outcome(session: Any, ctx: Dict[str, Any], interaction_typ
         "choice_label": choice.get("label"),
         "player_reaction": reaction,
         "morale_change": round(swing, 1),
-        "impact": build_meeting_impact(
-            receipts,
-            player_name=str(entity.get("player_name") or "Player"),
-            choice_label=str(choice.get("label") or ""),
-            promise_made=bool(outcome.get("promise")),
-        ),
+        "impact": impact,
+        "navigate": nav,
         "player_id": player_id,
         "player_name": entity.get("player_name"),
     }
@@ -11814,9 +12434,9 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
     _reg("explain_pp_removal", "role", "Explain removal from power play", "I lost my PP spot. Why?", [
         _gm_choice("explain", "Explain decision", "Direct answer.", {"profile_changes": {"actor": {"state.gm_trust": 2}}, "relationship": {"honesty": 2}}),
         _gm_choice("challenge", "Challenge him to earn it back", "Competitive framing.", {"profile_changes": {"actor": {"state.focus": 3, "state.confidence": -1}}, "relationship": {"respect": 1}}),
-    ], not ctx["is_goalie"] and ctx["on_nhl"] and ctx["lines_saved"] and ctx["pp_unit"] == 0 and ctx["pp_toi"] >= 1.5)
+    ], not ctx["is_goalie"] and ctx["on_nhl"] and ctx["pp_unit"] == 0 and ctx["pp_toi"] >= 1.5)
     _reg("offer_pk_opportunity", "role", "Offer penalty-kill opportunity", "I can help on the kill if you trust me.", [
-        _gm_choice("yes", "Offer PK reps", "Defensive trust.", {"profile_changes": {"actor": {"state.belonging": 3, "state.confidence": 2}}, "relationship": {"trust": 2}}),
+        _gm_choice("yes", "Offer PK reps", "Defensive trust.", {"profile_changes": {"actor": {"state.belonging": 3, "state.confidence": 2}}, "promise": {"type": "penalty_kill_opportunity", "player_id": ctx["player_id"], "due_games": 8, "description": "Meaningful penalty-kill usage.", "success_readiness": 0.4, "failure_readiness": -1.5}, "relationship": {"trust": 2}}),
         _gm_choice("no", "Stay at even strength", "Role unchanged.", {"profile_changes": {"actor": {"state.morale": -1}}, "relationship": {}}),
     ], not ctx["is_goalie"] and ctx["on_nhl"] and ctx["pk_unit"] == 0)
     _reg("discuss_healthy_scratch", "role", "Discuss healthy scratch", "Being scratched hurts. What's the message?", [
@@ -11824,7 +12444,7 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
         _gm_choice("performance", "Performance decision", "Hard truth.", {"profile_changes": {"actor": {"state.morale": -4, "state.focus": 3}}, "relationship": {"respect": 1}}),
     ], ctx["on_nhl"] and ctx["scratched"])
     _reg("discuss_return_lineup", "role", "Discuss returning to lineup", "I'm ready to come back. What's the plan?", [
-        _gm_choice("welcome", "Welcome back with defined role", "Clear return path.", {"profile_changes": {"actor": {"state.morale": 4, "state.confidence": 3}}, "relationship": {"trust": 3}}),
+        _gm_choice("welcome", "Welcome back with defined role", "Clear return path.", {"profile_changes": {"actor": {"state.morale": 4, "state.confidence": 3}}, "clear_short_injury": True, "relationship": {"trust": 3}}),
         _gm_choice("earn", "Earn the spot back", "Competition message.", {"profile_changes": {"actor": {"state.focus": 3}}, "relationship": {"respect": 2}}),
     ], ctx["injured"])
     _reg("discuss_goalie_workload", "role", "Discuss goalie starting workload", "I want clarity on the crease rotation.", [
@@ -11860,7 +12480,7 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
     _reg("discuss_consistency", "performance", "Discuss consistency", "I know I need to be more consistent.", [
         _gm_choice("routine", "Discuss routine / habits", "Process focus.", {"profile_changes": {"actor": {"state.focus": 3}}, "relationship": {"communication": 2}}),
         _gm_choice("pressure", "Acknowledge pressure", "Empathy.", {"profile_changes": {"actor": {"state.personal_stress": -2, "state.gm_trust": 2}}, "relationship": {"trust": 2}}),
-    ])
+    ], ctx["struggling"] or float(ctx["state"].get("confidence") or 70) < 62)
     _reg("discuss_playoff_performance", "performance", "Discuss playoff performance", "Playoffs are a different animal.", [
         _gm_choice("belief", "Express belief in playoff game", "Big moment trust.", {"profile_changes": {"actor": {"state.confidence": 4, "state.morale": 2}}, "relationship": {"trust": 3}}),
         _gm_choice("prep", "Discuss playoff prep plan", "Preparation focus.", {"profile_changes": {"actor": {"state.focus": 3}}, "relationship": {"respect": 2}}),
@@ -11882,8 +12502,8 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
         _gm_choice("skills", "Assign focused skills work", "Targeted growth.", {"profile_changes": {"actor": {"state.confidence": 2}}, "relationship": {"respect": 2}}),
     ], float(ctx["age"]) <= 27)
     _reg("set_development_priority", "development", "Set development priority", "Which part of my game should I prioritize?", [
-        _gm_choice("skating", "Prioritize skating", "Skating focus.", {"profile_changes": {"actor": {"state.focus": 3}}, "relationship": {"communication": 2}}),
-        _gm_choice("hockey_sense", "Prioritize hockey sense", "IQ focus.", {"profile_changes": {"actor": {"state.focus": 3}}, "relationship": {"communication": 2}}),
+        _gm_choice("skating", "Prioritize skating", "Skating focus.", {"profile_changes": {"actor": {"state.energy": 2, "state.focus": 2}}, "attributes": [{"who": "actor", "attribute": "skating", "delta": 0.6, "permanent": True, "reason": "Skating priority"}], "relationship": {"communication": 2}}),
+        _gm_choice("hockey_sense", "Prioritize hockey sense", "IQ focus.", {"profile_changes": {"actor": {"state.focus": 3}}, "attributes": [{"who": "actor", "attribute": "hockey_sense", "delta": 0.6, "permanent": True, "reason": "Hockey sense priority"}], "relationship": {"communication": 2}}),
     ], float(ctx["age"]) <= 26)
     _reg("discuss_stalled_development", "development", "Discuss stalled development", "I feel like I've plateaued.", [
         _gm_choice("patience", "Explain patience", "Timeline.", {"profile_changes": {"actor": {"state.gm_trust": 1}}, "relationship": {"honesty": 2}}),
@@ -11896,7 +12516,7 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
     _reg("discuss_conditioning", "development", "Discuss conditioning / readiness", "I'll do whatever it takes to be ready.", [
         _gm_choice("staff", "Connect with training staff", "Support.", {"profile_changes": {"actor": {"state.energy": 4, "state.focus": 2}}, "relationship": {"trust": 2}}),
         _gm_choice("expect", "Set clear expectations", "Standards.", {"profile_changes": {"actor": {"state.focus": 3}}, "relationship": {"respect": 2}}),
-    ])
+    ], float(ctx["state"].get("energy") or 70) <= 62 or float(ctx["state"].get("personal_stress") or 0) >= 40)
     _reg("discuss_injury_recovery", "development", "Discuss recovery after injury", "I'm doing everything to get back right.", [
         _gm_choice("no_rush", "No rush — health first", "Trust.", {"profile_changes": {"actor": {"state.gm_trust": 4, "state.personal_stress": -3}}, "relationship": {"loyalty": 3}}),
         _gm_choice("timeline", "Discuss return timeline", "Planning.", {"profile_changes": {"actor": {"state.focus": 2}}, "relationship": {"communication": 2}}),
@@ -11910,7 +12530,7 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
     _reg("long_term_plans", "contract", "Tell player they are part of long-term plans", "That's what I needed to hear.", [
         _gm_choice("commit", "Commit to long-term vision", "Security.", {"profile_changes": {"actor": {"state.morale": 4, "state.belonging": 3}}, "relationship": {"loyalty": 4, "negotiation_goodwill": 4}}),
         _gm_choice("cautious", "Cautious optimism", "Measured.", {"profile_changes": {"actor": {"state.gm_trust": 1}}, "relationship": {"honesty": 1}}),
-    ])
+    ], not ctx["contract"].get("expiring"))
     _reg("future_uncertain", "contract", "Tell player future is uncertain", "That's hard to hear.", [
         _gm_choice("honest", "Be direct about cap/depth chart", "Transparency.", {"profile_changes": {"actor": {"state.gm_trust": 2, "state.morale": -3}}, "relationship": {"honesty": 3, "negotiation_goodwill": -2}}),
         _gm_choice("soften", "Soften with respect", "Dignity.", {"profile_changes": {"actor": {"state.morale": -1}}, "relationship": {"respect": 2}}),
@@ -11918,7 +12538,7 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
     _reg("discuss_role_next_season", "contract", "Discuss expected role next season", "What role do you see for me next year?", [
         _gm_choice("top_role", "Top-six / top-pair role", "Ambitious plan.", {"profile_changes": {"actor": {"state.confidence": 3, "state.morale": 2}}, "relationship": {"communication": 3}}),
         _gm_choice("depth", "Depth / specialist role", "Honest depth.", {"profile_changes": {"actor": {"state.morale": -2 if ambitious else 1}}, "relationship": {"honesty": 2}}),
-    ])
+    ], ctx["contract"].get("expiring") or int(ctx["contract"].get("years_remaining") or 9) <= 2)
     _reg("discuss_upcoming_fa", "contract", "Discuss upcoming free agency", "Free agency is on my mind.", [
         _gm_choice("priority", "Say he's a priority to re-sign", "Retention signal.", {"profile_changes": {"actor": {"state.morale": 3}}, "relationship": {"negotiation_goodwill": 5, "loyalty": 3}}),
         _gm_choice("open", "Keep options open", "Neutral.", {"profile_changes": {"actor": {"state.gm_trust": -1}}, "relationship": {"negotiation_goodwill": -1}}),
@@ -11991,7 +12611,7 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
     _reg("ask_locker_room_concerns", "team", "Ask about locker-room concerns", "There are some things in the room worth discussing.", [
         _gm_choice("listen", "Listen confidentially", "Safe space.", {"profile_changes": {"actor": {"state.gm_trust": 4, "state.belonging": 2}}, "relationship": {"trust": 4}}),
         _gm_choice("address", "Promise to address with leadership", "Action.", {"profile_changes": {"actor": {"state.morale": 2}}, "relationship": {"trust": 3}}),
-    ])
+    ], float(ctx["state"].get("belonging") or 70) <= 58 or float(ctx["state"].get("morale") or 70) <= 52)
     _reg("discuss_leadership", "team", "Discuss leadership / captaincy", "Leadership matters to this team.", [
         _gm_choice("praise_leader", "Praise leadership impact", "Recognition.", {"profile_changes": {"actor": {"state.confidence": 3, "state.morale": 2}}, "relationship": {"respect": 3}}),
         _gm_choice("expect_more", "Expect more vocal leadership", "Challenge.", {"profile_changes": {"actor": {"state.focus": 3}}, "relationship": {"respect": 2}}),
@@ -12007,7 +12627,7 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
         _gm_choice("boundaries", "Respect privacy", "Space.", {"profile_changes": {"actor": {"state.gm_trust": 2}}, "relationship": {"respect": 2}}),
     ], float(ctx["state"].get("personal_stress") or 30) >= 45 or float(ctx["life"].get("relocation_strain") or 0) >= 40)
     _reg("repair_relationship", "personal", "Repair relationship / clear the air", "We should talk about where things stand between us.", [
-        _gm_choice("apologize", "Apologize for past friction", "Accountability.", {"profile_changes": {"actor": {"state.gm_trust": 6, "state.morale": 3}}, "relationship": {"trust": 6, "grievance": -8}}),
+        _gm_choice("apologize", "Apologize for past friction", "Accountability.", {"profile_changes": {"actor": {"state.gm_trust": 6, "state.morale": 3}}, "relationship": {"trust": 6, "grievance": -8}, "clear_broken_promises": True}),
         _gm_choice("reset", "Reset expectations together", "Fresh start.", {"profile_changes": {"actor": {"state.gm_trust": 4, "state.focus": 2}}, "relationship": {"communication": 4}}),
         _gm_choice("deflect", "Minimize past issues", "Avoidance.", {"profile_changes": {"actor": {"state.gm_trust": -6, "state.morale": -3}}, "relationship": {"trust": -7, "grievance": 4}}),
     ], rel.get("label") in ("Strained", "Broken") or rel.get("broken_promises", 0) > 0)
@@ -12110,6 +12730,161 @@ def start_gm_player_meeting(session: Any, player_id: str, interaction_type: str)
     return {"ok": True, "meeting": meeting}
 
 
+def _soften_meeting_outcome(node: Any) -> None:
+    if isinstance(node, dict):
+        node.pop("readiness_changes", None)
+        promise = node.get("promise")
+        if isinstance(promise, dict):
+            promise["due_games"] = max(2, int(promise.get("due_games") or 5) - 2)
+            if promise.get("failure_readiness") not in (None, ""):
+                promise["failure_readiness"] = round(float(promise.get("failure_readiness") or 0) * 0.5, 2)
+            node["promise_softened"] = True
+        for key, value in list(node.items()):
+            if key == "promise":
+                continue
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and float(value) < 0:
+                node[key] = round(float(value) * 0.4, 2)
+            else:
+                _soften_meeting_outcome(value)
+    elif isinstance(node, list):
+        for item in node:
+            _soften_meeting_outcome(item)
+
+
+def _gm_meeting_topic(interaction_type: str, category: str) -> str:
+    iid = str(interaction_type or "")
+    cat = str(category or "")
+    if cat == "role" or any(bit in iid for bit in ("ice", "line", "promotion", "demotion", "pp_", "pk_", "scratch", "workload", "call_up", "ahl")):
+        return "role"
+    if cat == "performance" or any(bit in iid for bit in ("praise", "challenge", "struggle", "scoring", "defensive", "consistency", "ovr", "conditioning", "injury")):
+        return "performance"
+    if cat == "contract" or any(bit in iid for bit in ("extension", "contract", "fa", "discount", "retirement", "long_term")):
+        return "contract"
+    if cat == "trade" or any(bit in iid for bit in ("trade", "shopped", "ntc", "destination", "rumor")):
+        return "trade"
+    return "room"
+
+
+def _gm_player_pushback(choice: Dict[str, Any], facts: Dict[str, Any], topic: str) -> str:
+    """Second player line answers the choice the GM just made, using his real numbers."""
+    label = str(choice.get("label") or "that").rstrip(".")
+    if facts.get("goalie") and facts.get("line"):
+        cited = f"I'm {facts['line']}."
+    elif facts.get("gp"):
+        cited = f"I'm at {facts.get('line')}."
+    else:
+        cited = ""
+    if topic == "role":
+        ask = "So is that the ice and the line I should expect this week, or are you moving me?"
+    elif topic == "performance":
+        ask = "What do you want different from me in the next game?"
+    elif topic == "contract":
+        ask = "Where does that leave the deal — term, money, or both?"
+    elif topic == "trade":
+        ask = "Am I in your plans here, or should I be ready to go?"
+    else:
+        ask = "What do you need from me in the room before the next game?"
+    return " ".join(bit for bit in (f"Alright. {label}.", cited, ask) if bit)
+
+
+def _gm_followup_choices(choice: Dict[str, Any], *, topic: str = "room") -> List[Dict[str, Any]]:
+    """Second beat answers the question he just asked. Confirm keeps the answer; soften eases it; press makes him answer back."""
+    base = copy.deepcopy(choice.get("outcome") or {})
+    soft = copy.deepcopy(base)
+    _soften_meeting_outcome(soft)
+    soft_rel = dict(soft.get("relationship") or {})
+    soft_rel["trust"] = int(soft_rel.get("trust") or 0) + 2
+    soft["relationship"] = soft_rel
+    hard = copy.deepcopy(base)
+    hard_rel = dict(hard.get("relationship") or {})
+    hard_rel["respect"] = int(hard_rel.get("respect") or 0) + 1
+    hard["relationship"] = hard_rel
+    cid = str(choice.get("id") or "choice")
+    label = str(choice.get("label") or "what I just said")
+    by_topic = {
+        "role": (
+            ("That's your ice this week", "The minutes and the line I just laid out are the sheet."),
+            ("I'll find you another shift", "Play the next one the right way and the ice goes up. I'm not writing it in pen."),
+            ("Tell me the job you heard", "Say the role back so we don't leave with two different sheets."),
+        ),
+        "performance": (
+            ("That's the standard", f"{label}. That's what I want in the next game."),
+            ("One stretch doesn't bury you", "I'm not nailing you to this run. Show me the next game."),
+            ("Walk me through the chances", "Tell me which ones you think you left out there."),
+        ),
+        "contract": (
+            ("That's where the deal stands", f"{label}. That's the number and the term on the table."),
+            ("I'll look at the number again", "I'll take another pass at the structure before this goes to your agent."),
+            ("Tell me the term you want", "Say the years and the role you're actually asking for."),
+        ),
+        "trade": (
+            ("That's the situation", f"{label}. That's where this stands."),
+            ("You're not on the block tonight", "I'm not making a call on you before the next game."),
+            ("Name the places you'd accept", "If it comes to that, tell me where you'd go."),
+        ),
+        "room": (
+            ("That's what I need from you", f"{label}. That's the ask."),
+            ("We'll pick this up after the game", "I'm not dragging this out. Play, then we talk again."),
+            ("Say it back to me", "Repeat what you heard so the room gets one version."),
+        ),
+    }
+    lines = by_topic.get(topic) or by_topic["room"]
+    outcomes = (base, soft, hard)
+    suffixes = ("confirm", "soften", "press")
+    return [
+        _gm_choice(f"{cid}__{suffix}", text, detail, outcome)
+        for (text, detail), outcome, suffix in zip(lines, outcomes, suffixes)
+    ]
+
+
+def _rewrite_canned_meeting_beats(session: Any) -> None:
+    """Meetings already on the second beat were saved with the old three buttons. Rewrite those in place."""
+    active = getattr(session, "gm_active_meetings", None) or {}
+    if not isinstance(active, dict):
+        return
+    for meeting in active.values():
+        if not isinstance(meeting, dict) or int(meeting.get("beat") or 0) < 1:
+            continue
+        choices = list(meeting.get("choices") or [])
+        if not any(str(c.get("label") or "") == "That's the call" for c in choices):
+            continue
+        confirm = next((c for c in choices if str(c.get("id") or "").endswith("__confirm")), None)
+        if not isinstance(confirm, dict):
+            continue
+        cid = str(confirm.get("id") or "")
+        base_id = cid[: -len("__confirm")] if cid.endswith("__confirm") else cid
+        dialogue = list(meeting.get("dialogue") or [])
+        gm_text = ""
+        for line in reversed(dialogue):
+            if isinstance(line, dict) and str(line.get("speaker") or "") == "GM":
+                gm_text = str(line.get("text") or "")
+                break
+        topic = _gm_meeting_topic(
+            str(meeting.get("interaction_type") or ""),
+            str(meeting.get("category") or ""),
+        )
+        synthetic = {
+            "id": base_id or "choice",
+            "label": gm_text or "what I just said",
+            "outcome": dict(confirm.get("outcome") or {}),
+        }
+        reply = _gm_player_pushback(
+            synthetic,
+            _u_player_fact_bits(session, str(meeting.get("player_id") or "")),
+            topic,
+        )
+        name = str(meeting.get("player_name") or "Player")
+        for line in reversed(dialogue):
+            if not isinstance(line, dict):
+                continue
+            text = str(line.get("text") or "")
+            if str(line.get("speaker") or "") == name or text.endswith("this week."):
+                line["text"] = reply
+                break
+        meeting["dialogue"] = dialogue
+        meeting["choices"] = _gm_followup_choices(synthetic, topic=topic)
+
+
 def resolve_gm_player_meeting(session: Any, meeting_id: str, choice_id: str) -> Dict[str, Any]:
     _ensure_gm_meeting_state(session)
     active = dict(getattr(session, "gm_active_meetings", None) or {})
@@ -12119,6 +12894,32 @@ def resolve_gm_player_meeting(session: Any, meeting_id: str, choice_id: str) -> 
     choice = next((c for c in (meeting.get("choices") or []) if str(c.get("id")) == str(choice_id)), None)
     if choice is None:
         raise ValueError(f"Choice not found: {choice_id}")
+    if int(meeting.get("beat") or 0) < 1:
+        name = str(meeting.get("player_name") or "Player")
+        label = str(choice.get("label") or "that")
+        facts = _u_player_fact_bits(session, str(meeting.get("player_id") or ""))
+        topic = _gm_meeting_topic(
+            str(meeting.get("interaction_type") or ""),
+            str(meeting.get("category") or ""),
+        )
+        reply = _gm_player_pushback(choice, facts, topic)
+        dialogue = list(meeting.get("dialogue") or [])
+        dialogue.append({"speaker": "GM", "text": label})
+        dialogue.append({"speaker": name, "text": reply})
+        meeting["dialogue"] = dialogue
+        meeting["choices"] = _gm_followup_choices(choice, topic=topic)
+        meeting["beat"] = 1
+        meeting["status"] = "pending"
+        active[str(meeting_id)] = meeting
+        session.gm_active_meetings = active
+        return {
+            "ok": True,
+            "continued": True,
+            "meeting": meeting,
+            "message": reply,
+            "player_name": name,
+            "player_id": meeting.get("player_id"),
+        }
     ctx = _gm_build_context(session, str(meeting.get("player_id") or ""))
     outcome = dict(choice.get("outcome") or {})
     result = _gm_apply_meeting_outcome(session, ctx, str(meeting.get("interaction_type") or ""), choice)
@@ -12168,7 +12969,11 @@ def resolve_gm_player_meeting(session: Any, meeting_id: str, choice_id: str) -> 
     meeting["status"] = "resolved"
     active.pop(str(meeting_id), None)
     session.gm_active_meetings = active
-    _gm_mark_attention_addressed(session, str(meeting.get("player_id") or ""))
+    _gm_mark_attention_addressed(
+        session,
+        str(meeting.get("player_id") or ""),
+        swing=float(result.get("morale_change") or 0),
+    )
     _gm_invalidate_interactions(session, str(meeting.get("player_id") or ""))
     return result
 
@@ -12192,6 +12997,34 @@ def resolve_player_meeting_interaction(session: Any, interaction_id: str, choice
         None,
     )
     choice_label = str((choice_pre or {}).get("label") or choice_id)
+    if interaction_pre is not None and int(interaction_pre.get("beat") or 0) < 1 and choice_pre is not None:
+        name = str(interaction_pre.get("player_name") or "Player")
+        dialogue = list(interaction_pre.get("dialogue") or [])
+        dialogue.append({"speaker": "GM", "text": choice_label})
+        dialogue.append({
+            "speaker": name,
+            "text": (
+                f"Alright. {choice_label}. "
+                + (
+                    f"I'm at {_u_player_fact_bits(session, player_id).get('line')}. "
+                    if _u_player_fact_bits(session, player_id).get("line")
+                    else ""
+                )
+                + "Say that again so I know where we stand."
+            ),
+        })
+        interaction_pre["dialogue"] = dialogue
+        interaction_pre["beat"] = 1
+        interaction_pre["choices"] = _gm_followup_choices(choice_pre)
+        return {
+            "ok": True,
+            "continued": True,
+            "meeting": interaction_pre,
+            "interaction": interaction_pre,
+            "message": dialogue[-1]["text"],
+            "player_name": name,
+            "player_id": str(interaction_pre.get("player_id") or interaction_pre.get("actor_id") or ""),
+        }
     result = resolve_universe_interaction(session, interaction_id, choice_id)
     interaction = dict(result.get("interaction") or {})
     player_id = str(interaction.get("player_id") or interaction.get("actor_id") or player_id)
@@ -12214,9 +13047,17 @@ def resolve_player_meeting_interaction(session: Any, interaction_id: str, choice
         "receipts": receipts,
     })
     session.gm_meeting_history = hist[-GM_MEETING_HISTORY_MAX:]
+    swing = 0.0
+    for row in receipts.get("profiles") or []:
+        if str(row.get("field") or "") in ("state.morale", "Morale"):
+            try:
+                swing += float(row.get("delta") or 0)
+            except (TypeError, ValueError):
+                pass
     if player_id:
-        _gm_mark_attention_addressed(session, player_id)
+        _gm_mark_attention_addressed(session, player_id, swing=swing)
     pname = str(interaction.get("player_name") or entity.get("player_name") or "Player")
+    nav = _latest_promise_nav(session, player_id) if player_id else None
     return {
         "ok": True,
         **result,
@@ -12230,6 +13071,7 @@ def resolve_player_meeting_interaction(session: Any, interaction_id: str, choice
             choice_label=choice_label,
             promise_made=bool(((choice_pre or {}).get("outcome") or {}).get("promise")),
         ),
+        "navigate": nav,
         "player_id": player_id,
         "player_name": pname,
     }
@@ -12629,6 +13471,7 @@ def build_player_meetings_payload(session: Any) -> Dict[str, Any]:
         if rpid:
             req["portrait_row"] = _gm_portrait_row(_player_from_roster(session, rpid), rpid, req["player_name"])
     hist = list(getattr(session, "gm_meeting_history", None) or [])[-40:]
+    _rewrite_canned_meeting_beats(session)
     active_gm = list((getattr(session, "gm_active_meetings", None) or {}).values())
     return {
         "calendar_day": day,

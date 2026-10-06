@@ -769,6 +769,68 @@ def get_player_chapters(player: Any) -> Dict[str, int]:
     return {}
 
 
+def sync_chapters_to_overall(player: Any) -> None:
+    """Move the visible chapter ratings with overall.
+
+    Development was updating the overall number while the chapter attributes
+    the player card shows stayed at the import values.
+    """
+    profile = getattr(player, "attribute_profile", None)
+    if not isinstance(profile, dict):
+        return
+    chapters = profile.get("chapters")
+    if not isinstance(chapters, dict) or not chapters:
+        return
+    try:
+        current = int(round(float(getattr(player, "overall", 0) or 0)))
+    except (TypeError, ValueError):
+        return
+    if current <= 0:
+        return
+    anchor = profile.get("_chapter_ovr_anchor")
+    if anchor is None:
+        try:
+            shown = int(chapters.get("overall") or current)
+        except (TypeError, ValueError):
+            shown = current
+        delta = current - shown
+    else:
+        try:
+            delta = current - int(anchor)
+        except (TypeError, ValueError):
+            delta = 0
+    profile["_chapter_ovr_anchor"] = current
+    chapters["overall"] = current
+    if delta == 0:
+        return
+    weights = {
+        "offence": 1.0,
+        "defence": 0.85,
+        "transition": 0.90,
+        "mental": 0.70,
+        "physical": 0.75,
+        "character": 0.30,
+        "potential": 0.20,
+        "glove": 1.0,
+        "blocker": 1.0,
+        "stick": 1.0,
+    }
+    for key, weight in weights.items():
+        if key not in chapters:
+            continue
+        try:
+            chapters[key] = int(max(RATING_MIN, min(RATING_MAX, round(float(chapters[key]) + delta * weight))))
+        except (TypeError, ValueError):
+            continue
+    hidden = profile.get("hidden")
+    if isinstance(hidden, dict):
+        for key, val in list(hidden.items()):
+            try:
+                hidden[key] = int(max(RATING_MIN, min(RATING_MAX, round(float(val) + delta * 0.85))))
+            except (TypeError, ValueError):
+                continue
+
+
 def serialize_chapter_profile_for_api(player: Any) -> Optional[Dict[str, Any]]:
     """Compact chapter payload for API rows — None when profile absent."""
     profile = getattr(player, "attribute_profile", None)

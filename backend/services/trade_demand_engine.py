@@ -26,6 +26,7 @@ from app.sim_engine.franchise.trade_stability_engine import (
     ensure_player_storyline_state,
     ensure_trade_stability_state,
     formal_demand_eligible,
+    _player_character_0_100,
     gather_player_concerns,
     primary_complaint_from_pressures,
     stability_to_escalation_level,
@@ -47,7 +48,7 @@ MAX_OPEN_DEMANDS_PER_TEAM = 1
 MAX_DEMANDS_PER_TEAM_WINDOW = 2
 DEMAND_TEAM_WINDOW_DAYS = 200
 
-CANADA_ABBRS = frozenset({"TOR", "MTL", "OTT", "VAN", "CGY", "EDM", "WPG", "SEA"})
+CANADA_ABBRS = frozenset({"TOR", "MTL", "OTT", "VAN", "CGY", "EDM", "WPG"})
 SMALL_MARKET_ABBRS = frozenset(
     {"BUF", "OTT", "CBJ", "CGY", "WPG", "ARI", "UTA", "SEA", "NSH", "MIN", "CAR", "FLA"}
 )
@@ -190,6 +191,34 @@ REASON_COPY = {
         "headline": "{name} has formally requested a trade",
         "body": "{name} has delivered a trade request through his agent. The relationship is at a breaking point.",
     },
+    "contract": {
+        "headline": "{name} demands a trade over his contract",
+        "body": "{name} is unhappy with his deal and has asked his agent to find a trade.",
+    },
+    "development": {
+        "headline": "{name} wants out over his development",
+        "body": "{name} does not see a path here and has formally requested a trade.",
+    },
+    "belonging": {
+        "headline": "{name} wants out — he does not feel he belongs",
+        "body": "{name} has asked for a trade. He no longer feels like part of the room.",
+    },
+    "personal": {
+        "headline": "{name} has asked for a trade for personal reasons",
+        "body": "{name} wants a change of scenery for his family and has requested a trade through his agent.",
+    },
+    "organizational": {
+        "headline": "{name} wants out over the direction of the club",
+        "body": "{name} does not believe in where the organization is headed and has requested a trade.",
+    },
+    "canada": {
+        "headline": "{name} wants a trade back to Canada",
+        "body": "{name} has asked his agent to find a deal that brings him home.",
+    },
+    "small_market": {
+        "headline": "{name} wants out of the spotlight",
+        "body": "{name} has asked for a trade to a quieter market.",
+    },
 }
 
 
@@ -263,36 +292,84 @@ def seed_mntc_destinations(player: Any, league: Any, *, list_size: int = 8, rng:
         or _get(contract, "trade_clause", "")
         or ""
     ).upper()
-    if "MNTC" not in clause and "M-NTC" not in clause and "MODIFIED" not in clause:
+    mode = str(_get(contract, "ntc_mode", "") or "").upper()
+    listed = int(_get(contract, "modified_no_trade_teams", 0) or 0)
+    is_modified = (
+        "MNTC" in clause
+        or "M-NTC" in clause
+        or "MODIFIED" in clause
+        or mode in ("MODIFIED", "MNTC", "M-NTC")
+        or listed > 0
+    )
+    if not is_modified:
         size = int(_get(contract, "trade_list_size", 0) or 0)
         if size <= 0:
             return []
     else:
-        size = int(_get(contract, "trade_list_size", 0) or list_size or 8)
+        size = listed or int(_get(contract, "trade_list_size", 0) or 0) or list_size or 10
     size = max(1, min(32, size or list_size))
     teams = list(_get(league, "teams", None) or [])
-    abbrs = []
+    clubs = []
     for t in teams:
+        tid = str(_get(t, "team_id", "") or _get(t, "id", "") or "")
         ab = _team_abbr(t)
-        if ab:
-            abbrs.append(ab)
-    abbrs = sorted(set(abbrs))
-    if not abbrs:
+        if tid or ab:
+            clubs.append((tid, ab))
+    if not clubs:
         return []
     if rng is not None and hasattr(rng, "sample"):
-        chosen = list(rng.sample(abbrs, min(size, len(abbrs))))
+        picked = list(rng.sample(clubs, min(size, len(clubs))))
     else:
-        chosen = abbrs[:size]
+        import random
+
+        stable = random.Random(abs(hash(("mntc", str(_get(player, "id", ""))))) & 0xFFFFFFFF)
+        picked = list(stable.sample(clubs, min(size, len(clubs))))
+    chosen = []
+    for tid, ab in picked:
+        for key in (tid, ab):
+            if key and key not in chosen:
+                chosen.append(key)
     try:
         if isinstance(contract, dict):
             contract["approved_trade_teams"] = chosen
             contract["approved_destinations"] = chosen
+            contract["ntc_teams"] = chosen
         else:
             setattr(contract, "approved_trade_teams", chosen)
             setattr(contract, "approved_destinations", chosen)
+            setattr(contract, "ntc_teams", chosen)
     except Exception:
         pass
     return chosen
+
+
+def _birth_country(player: Any) -> str:
+    ident = _get(player, "identity", None)
+    raw = (
+        _get(ident, "birth_country", "")
+        or _get(player, "nationality", "")
+        or _get(player, "birth_country", "")
+        or ""
+    )
+    return str(raw).strip().lower()
+
+
+def _team_market_size(team: Any) -> str:
+    market = _get(team, "market", None)
+    return str(_get(market, "market_size", "") or _get(team, "market_size", "") or "").strip().lower()
+
+
+def _destination_lean(player: Any, team: Any, top: str) -> str:
+    """Belonging or family grievances can point the wish list at a real market."""
+    if player is None or team is None:
+        return ""
+    home = _team_abbr(team)
+    bc = _birth_country(player)
+    if bc in ("canada", "can", "ca") and home not in CANADA_ABBRS:
+        return "canada"
+    if top in ("personal", "broken_promise") and _team_market_size(team) == "large":
+        return "small_market"
+    return ""
 
 
 def _preferred_destinations(
@@ -304,19 +381,21 @@ def _preferred_destinations(
     rng: Any,
     list_size: int = 12,
 ) -> List[str]:
-    seeded = seed_mntc_destinations(player, league, list_size=list_size, rng=rng)
-    if seeded:
-        return seeded[:32]
+    # The modified no-trade list is where his contract allows a deal. Keep it
+    # on the contract, but do not use it as the list of clubs he wants.
+    seed_mntc_destinations(player, league, list_size=list_size, rng=rng)
     teams = list(_get(league, "teams", None) or [])
     home = _team_abbr(team)
+    want_canada = reason == "canada"
+    want_small = reason == "small_market"
     candidates: List[str] = []
     for t in teams:
         ab = _team_abbr(t)
         if not ab or ab == home:
             continue
-        if reason == "canada" and ab in CANADA_ABBRS:
+        if want_canada and ab not in CANADA_ABBRS:
             continue
-        if reason == "small_market" and ab in SMALL_MARKET_ABBRS:
+        if want_small and ab not in SMALL_MARKET_ABBRS:
             continue
         candidates.append(ab)
     if not candidates:
@@ -328,14 +407,20 @@ def _preferred_destinations(
 
 
 def _snapshot_value(player: Any, team: Any, league: Any, *, crisis_stage: int = 1) -> float:
+    """Trade value before the crisis discount.
+
+    The stage multiplier is applied by ``_apply_crisis_value_state``. Distressed
+    pricing is keyword-only and only runs when the crisis timer expires.
+    """
+    del crisis_stage
     try:
         from app.sim_engine.trades.trade_value import evaluate_player_asset_value
 
-        row = evaluate_player_asset_value(player, team, team, league, context={})
-        base = float(row.get("trade_value") or 0.0)
-        mult = crisis_trade_value_multiplier(crisis_stage)
-        distressed = crisis_distressed_asset_cost(base, crisis_stage)
-        return max(-20.0, base * mult - distressed)
+        row = evaluate_player_asset_value(player, team, team, league, context={}) or {}
+        raw = row.get("trade_value")
+        if raw is None:
+            raw = row.get("total") or 0.0
+        return max(-20.0, float(raw))
     except Exception:
         return max(5.0, _player_ovr(player) * 0.7)
 
@@ -360,7 +445,9 @@ def _apply_crisis_value_state(
         setattr(player, "_systemic_trade_value_mult", mult)
         if crisis_stage >= 3 and timer_expired:
             pst = ensure_player_storyline_state(player)
-            if int(pst.get("character") or 80) < 65:
+            char = int(_player_character_0_100(player))
+            pst["character"] = char
+            if char < 65:
                 setattr(player, "locker_room_disruptor", True)
     except Exception:
         pass
@@ -368,7 +455,13 @@ def _apply_crisis_value_state(
     return mult, after
 
 
-def _reason_from_pressures(pressures: Dict[str, float], *, character: int) -> str:
+def _reason_from_pressures(
+    pressures: Dict[str, float],
+    *,
+    character: int,
+    player: Any = None,
+    team: Any = None,
+) -> str:
     if not pressures:
         return "general"
     top = max(pressures.items(), key=lambda kv: kv[1])[0]
@@ -380,10 +473,19 @@ def _reason_from_pressures(pressures: Dict[str, float], *, character: int) -> st
         return "management"
     if top == "winning":
         return "losing"
+    if top == "contract":
+        return "contract"
+    if top == "development":
+        return "development"
+    if top == "organizational":
+        return "organizational"
+    if top in ("belonging", "personal", "broken_promise"):
+        lean = _destination_lean(player, team, top)
+        if lean:
+            return lean
+        return "belonging" if top == "belonging" else "personal"
     if top == "temperament":
         return "locker_room_disruptor" if character < 62 else "general"
-    if character < 62 and pressures.get("role", 0) + pressures.get("management", 0) < 8:
-        return "locker_room_disruptor"
     return "general"
 
 
@@ -534,22 +636,25 @@ def evaluate_trade_demand_ntc_waiver(
     # Wants out — more willing to waive for a fresh start
     if row.get("status") == "open" or row.get("formal"):
         chance += 0.10 + crisis_stage * 0.04
-    if character >= 85:
-        chance += 0.12
-    elif character >= 77:
-        chance += 0.06
+    # A low-character player who has already demanded out will waive to leave.
+    # A high-character player protects the clause. The old ladder did the opposite,
+    # and the steepest low-character step never ran because `< 65` matched first.
+    if character < 58:
+        chance += 0.22
     elif character < 65:
-        chance -= 0.14
-    elif character < 58:
-        chance -= 0.22
+        chance += 0.14
+    elif character >= 85:
+        chance -= 0.12
+    elif character >= 77:
+        chance -= 0.06
     if mental >= 88:
         chance += 0.04
     elif mental < 62:
         chance -= 0.06
     if str(agent.get("style") or "") == "disruptor" and crisis_stage >= 2 and character < 70:
-        chance -= 0.18
+        chance += 0.18
     if str(agent.get("style") or "") == "discreet" and character >= 80:
-        chance += 0.08
+        chance -= 0.08
 
     chance = max(0.04, min(0.92, chance))
     roll = float(base.get("roll") or 0.5)
@@ -613,7 +718,7 @@ def _build_ntc_waiver_snapshot(
             )
     return {
         "clause": clause,
-        "waivers_required": clause in ("NTC", "M-NTC"),
+        "waivers_required": clause in ("NTC", "M-NTC", "NMC"),
         "crisis_stage": int(demand_row.get("crisis_stage") or 1),
         "samples": samples,
     }
@@ -702,7 +807,7 @@ def open_trade_demand(
     pressures = dict(stability_row.get("pressures") or {})
     character = int(stability_row.get("character") or pst.get("character") or 74)
     if not reason or reason == "auto":
-        reason = _reason_from_pressures(pressures, character=character)
+        reason = _reason_from_pressures(pressures, character=character, player=player, team=team)
 
     disruptor = reason == "locker_room_disruptor" or int(stability_row.get("escalation_level") or 0) >= 4
     escalation = int(stability_row.get("escalation_level") or 3)
@@ -991,6 +1096,8 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
                     reason = _reason_from_pressures(
                         dict(stability_row.get("pressures") or {}),
                         character=int(stability_row.get("character") or 74),
+                        player=player,
+                        team=team,
                     )
                     tid = str(_get(team, "team_id", "") or _get(team, "id", "") or "")
                     user_tid = str(getattr(session, "user_team_id", "") or "")

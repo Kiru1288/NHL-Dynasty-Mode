@@ -1213,7 +1213,7 @@ def apply_storyline_chemistry_effect(session: Any, decision: Dict[str, Any], cho
     out: Dict[str, Any] = {"chemistry_applied": False}
 
     room_delta = _to_num(effects.get("room_delta", effects.get("chemistry_delta", effects.get("chemistry", 0))), 0.0) / 100.0
-    tension_delta = _to_num(effects.get("room_tension_delta", 0), 0.0) / 100.0
+    tension_delta = _to_num(effects.get("room_tension_delta", effects.get("room_tension", 0)), 0.0) / 100.0
     trust_delta = _to_num(effects.get("trust_delta", effects.get("respect_delta", 0)), 0.0) / 100.0
     familiarity_delta = _to_num(effects.get("familiarity_delta", effects.get("line_chemistry_delta", 0)), 0.0)
     coach_trust_delta = _to_num(effects.get("coach_trust_delta", 0), 0.0) / 100.0

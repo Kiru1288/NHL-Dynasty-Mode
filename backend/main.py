@@ -917,7 +917,12 @@ def post_franchise_advance(
 
     # A sim the GM starts with holes in his saved lines (send-down, trade, incomplete
     # save) stops here so the UI can route to Edit Lines — unless he chose auto-fill.
-    lineup_block = franchise_sim.user_lineup_advance_gate(s, auto_fill=bool(b.auto_fill_lines))
+    # A sim the GM started himself (auto-resolve) fills open slots instead of
+    # bouncing off the lineup gate and closing the overlay with no explanation.
+    lineup_block = franchise_sim.user_lineup_advance_gate(
+        s,
+        auto_fill=bool(b.auto_fill_lines) or bool(b.auto_resolve),
+    )
     if lineup_block is not None:
         save_session(s)
         return {"step": lineup_block, "state": franchise_sim.build_state_payload_safe(s, include_heavy=False)}

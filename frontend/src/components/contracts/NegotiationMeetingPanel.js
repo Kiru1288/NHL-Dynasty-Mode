@@ -10,7 +10,7 @@ export default function NegotiationMeetingPanel({ playerId, onChanged, compact =
   const [data, setData] = React.useState(null);
   const [busy, setBusy] = React.useState("");
   const [flash, setFlash] = React.useState(null);
-  const [open, setOpen] = React.useState(!compact);
+  const [open, setOpen] = React.useState(true);
 
   const load = React.useCallback(async () => {
     if (!playerId) return;

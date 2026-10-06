@@ -253,14 +253,17 @@ def calder_history(session: Any, season_year: int, base: Optional[Dict[str, Any]
             if not pre_known and not in_prospect_pool:
                 ident = getattr(p, "identity", None)
                 dy = _i(getattr(ident, "draft_year", 0))
-                if dy > 0:
+                a0 = _age_on_sept15(p, first)
+                # Age 23 and under with no recorded NHL seasons are still rookies.
+                # Inventing a full 82-game career emptied the Calder ballot.
+                if a0 is not None and a0 <= 23:
+                    estimated = 0
+                elif dy > 0:
                     estimated = max(0, first - dy - 3)
                 else:
-                    a0 = _age_on_sept15(p, first)
-                    estimated = max(0, (a0 or 0) - 21)
-                for i in range(estimated):
-                    by_season[f"pre-franchise-{i}"] = 82
-                if estimated:
+                    estimated = max(0, (a0 or 0) - 23)
+                if estimated > 0:
+                    by_season["pre-franchise-0"] = 30
                     basis = f"estimated {estimated} NHL season(s) before the save began"
         max_gp = max(by_season.values(), default=0)
         six_plus = sum(1 for v in by_season.values() if v >= 6)

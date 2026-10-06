@@ -3,6 +3,7 @@ import {
   advanceContractNegotiationDay,
   evaluateContractOffer,
   reSignContract,
+  runNegotiationMeeting,
 } from "../../services/franchiseService";
 import PlayerHeadshot from "../PlayerHeadshot";
 import { ensurePlayerHeadshotFields } from "../../utils/playerHeadshots";
@@ -134,6 +135,8 @@ export default function CapContractNegotiation({
   const [previewPending, setPreviewPending] = useState(false);
   const [previewOfferKey, setPreviewOfferKey] = useState("");
   const [responseSource, setResponseSource] = useState(null);
+  const [dialogue, setDialogue] = useState([]);
+  const [hometownBusy, setHometownBusy] = useState(false);
   const previewSeqRef = useRef(0);
 
   useEffect(() => {
@@ -225,6 +228,7 @@ export default function CapContractNegotiation({
 
   const projectedAfter = capProj.projectedAfterM;
   const projectedNext = capProj.projectedNextSeasonM;
+  const inSeasonCap = Boolean(capProj.inSeasonCap || capSnapshot?.in_season_cap);
 
   const agent = row?.agent || row?.contract?.agent || {};
   const agentName = agent.name || "Player agent";
@@ -243,9 +247,13 @@ export default function CapContractNegotiation({
         ? `${agentName}: terms changed — Talk to agent or submit again for an updated read.`
         : `${agentName} represents ${safeText(row?.name, "the player")}. Set AAV and years, then submit or talk to agent.`;
 
+  const seasonRoom = inSeasonCap
+    ? safeNum(capSnapshot?.usable_cap_space_m, NaN) + Math.max(0, safeNum(row?.aav_m ?? row?.cap_hit_m, 0))
+    : NaN;
   const sliderMax = Math.min(
     Number(signingBonusElig?.max_salary_m || 99),
-    Math.max(12, ask.aav * 1.45, offerAavNum, safeNum(row?.aav_m, 1) * 1.8)
+    Math.max(12, ask.aav * 1.45, offerAavNum, safeNum(row?.aav_m, 1) * 1.8),
+    Number.isFinite(seasonRoom) && seasonRoom > 0.8 ? seasonRoom : 99,
   );
   const sliderMin = 0.775;
 
@@ -277,6 +285,14 @@ export default function CapContractNegotiation({
       setResponse(result);
       setResponseSource("preview");
       setPreviewOfferKey(offerKey);
+      const spoken =
+        result?.evaluation?.agent_dialogue ||
+        result?.player_response?.agent_dialogue ||
+        result?.player_response?.feedback ||
+        "";
+      if (spoken) {
+        setDialogue((prev) => [...prev, String(spoken)].slice(-8));
+      }
       if (!result?.ok && result?.reason) setLocalError(result.reason);
     } catch (e) {
       if (previewSeqRef.current === seq) {
@@ -288,6 +304,29 @@ export default function CapContractNegotiation({
       }
     }
   }, [row, buildPayload, previewPending, offerKey]);
+
+  const askHometownDiscount = useCallback(async () => {
+    const playerId = row?.player_id || row?.id;
+    if (!playerId || hometownBusy) return;
+    setHometownBusy(true);
+    setLocalError("");
+    try {
+      const res = await runNegotiationMeeting(playerId, "hometown", "");
+      const line = res?.message || res?.reason || "He didn't answer.";
+      setDialogue((prev) => [...prev, String(line)].slice(-8));
+      if (!res?.ok && res?.reason) setLocalError(res.reason);
+      if (res?.ok) {
+        const preview = await evaluateContractOffer(buildPayload());
+        setResponse(preview);
+        setResponseSource("preview");
+        setPreviewOfferKey(offerKey);
+      }
+    } catch (e) {
+      setLocalError(String(e?.message || "Could not ask for a hometown discount"));
+    } finally {
+      setHometownBusy(false);
+    }
+  }, [row, hometownBusy, buildPayload, offerKey]);
 
   useEffect(() => {
     if (!row?.player_id && !row?.id) return undefined;
@@ -453,7 +492,7 @@ export default function CapContractNegotiation({
         </div>
         <div className="cap-nego-desk__wells">
           <div className="cap-dossier-tile">
-            <span className="cap-dossier-tile__label">Cap now</span>
+            <span className="cap-dossier-tile__label">{inSeasonCap ? "This season" : "Cap now"}</span>
             <strong className="cap-num-pop tone-green">
               {formatMoneyM(capSnapshot.usable_cap_space_m)}
             </strong>
@@ -467,9 +506,9 @@ export default function CapContractNegotiation({
             </strong>
           </div>
           <div className="cap-dossier-tile">
-            <span className="cap-dossier-tile__label">Next season</span>
+            <span className="cap-dossier-tile__label">{inSeasonCap ? "Next year (info)" : "Next season"}</span>
             <strong
-              className={`cap-num-pop ${projectedNext != null && projectedNext < 0 ? "tone-danger" : "tone-gold"}`}
+              className={`cap-num-pop ${!inSeasonCap && projectedNext != null && projectedNext < 0 ? "tone-danger" : "tone-gold"}`}
             >
               {projectedNext != null ? formatMoneyM(projectedNext) : "—"}
             </strong>
@@ -511,6 +550,13 @@ export default function CapContractNegotiation({
               </div>
             </div>
             <p className="cap-nego__agent-line">{agentLine}</p>
+            {dialogue.length ? (
+              <div className="cap-nego__agent-line" style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                {dialogue.map((line, i) => (
+                  <p key={`${i}-${line.slice(0, 24)}`} style={{ margin: 0 }}>{line}</p>
+                ))}
+              </div>
+            ) : null}
             {evalSnap.agentMood && evalSnap.agentMood !== agentLine ? (
               <p className="cap-nego__agent-mood">{evalSnap.agentMood}</p>
             ) : null}
@@ -687,7 +733,7 @@ export default function CapContractNegotiation({
             ) : (
               <p className="cap-nego-desk__cap-note">
                 {signingBonusElig?.label ||
-                  "Signing bonuses require NHL revenue ≥ $130M for your club."}
+                  "Signing bonuses require NHL revenue ≥ $155M for your club."}
               </p>
             )}
           </div>
@@ -725,6 +771,14 @@ export default function CapContractNegotiation({
               onClick={runPreview}
             >
               {previewPending ? "Agent…" : "Talk to agent"}
+            </button>
+            <button
+              type="button"
+              className="cap-action-btn cap-edraft-action-btn"
+              disabled={busy || previewPending || hometownBusy}
+              onClick={askHometownDiscount}
+            >
+              {hometownBusy ? "Asking…" : "Ask for a hometown discount"}
             </button>
             <button
               type="button"

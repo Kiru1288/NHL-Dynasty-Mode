@@ -673,13 +673,21 @@ function activeTradeRumorModifier(player) {
   return null;
 }
 
+function clauseProtectionKind(raw) {
+  const clause = String(raw || "").toUpperCase();
+  if (clause.includes("NMC")) return "NMC";
+  if (clause.includes("M-NTC") || clause.includes("MODIFIED")) return "M-NTC";
+  if (clause.includes("NTC")) return "NTC";
+  return "NONE";
+}
+
 function clauseFromRow(row, contract) {
   const clause = String(
     row?.clause_label || row?.protection || contract?.clause_label || contract?.clause || "",
   ).toUpperCase();
   if (clause.includes("NMC")) return "NMC";
-  if (clause.includes("NTC")) return "NTC";
   if (clause.includes("M-NTC") || clause.includes("MODIFIED")) return "M-NTC";
+  if (clause.includes("NTC")) return "NTC";
   return "None";
 }
 
@@ -2503,16 +2511,16 @@ function partnerProtectionLists(meta, partnerTeamId) {
     const ovr = Number(p.ovr) || 0;
     const tier = String(assetValueLabel(p) || "").toUpperCase();
     const clause = String(p.protection || p.clauseLabel || "").toUpperCase();
-    const isNmc = clause.includes("NMC");
-    const needsNtcWaive =
-      !p.ntcWaived &&
-      (Boolean(p.requiresNtcWaive) || (clause.includes("NTC") && !clause.includes("M-NTC")) || clause.includes("M-NTC"));
+    const kind = clauseProtectionKind(clause);
+    const isNmc = kind === "NMC";
+    const needsNtcWaive = !p.ntcWaived && kind === "NTC";
+    const mntcHard = !p.ntcWaived && kind === "M-NTC" && p.canTradeToPartner === false;
     const unavailable =
       p.tradeable === false &&
       !needsNtcWaive && // waived path flips tradeable later; NTC without waive is hard via needsNtcWaive
       Boolean(p.tradeBlockReason || isNmc);
 
-    const hardHit = (isNmc && !p.ntcWaived) || needsNtcWaive || unavailable;
+    const hardHit = (isNmc && !p.ntcWaived) || needsNtcWaive || mntcHard || unavailable;
     const softHit =
       !hardHit &&
       (ovr >= 88 ||
@@ -4455,10 +4463,10 @@ function resolveMainProblem({
   const incoming = safeArray(partnerOutgoing).filter((a) => a?.type === "player");
   const targetName = incoming[0]?.name ? playerLastName(incoming[0].name) : null;
 
-  if (blob.includes("clause") || blob.includes("ntc") || blob.includes("nmc")) {
+  if ((blob.includes("clause") || blob.includes("nmc") || blob.includes("ntc")) && !blob.includes("m-ntc")) {
     const blocked = incoming.find((a) => {
-      const c = String(a.protection || a.clauseLabel || "").toUpperCase();
-      return c.includes("NMC") || c.includes("NTC");
+      const kind = clauseProtectionKind(a.protection || a.clauseLabel);
+      return kind === "NMC" || kind === "NTC";
     });
     const who = blocked?.name ? playerLastName(blocked.name) : targetName;
     return {
@@ -4569,7 +4577,7 @@ function resolveReviewBlockers(evaluation, why, fanHeat = 0, noTouchConflict = [
   const primaryCode = String(why?.primary_code || "").toUpperCase();
   const heat = Number(fanHeat) || 0;
   const hardCap = blob.includes("cap") || blob.includes("salary") || primaryCode === "CAP";
-  const hardClause = blob.includes("clause") || blob.includes("ntc") || blob.includes("nmc") || primaryCode === "CLAUSE";
+  const hardClause = blob.includes("clause") || blob.includes("nmc") || (blob.includes("ntc") && !blob.includes("m-ntc")) || blob.includes("m-ntc") || primaryCode === "CLAUSE";
 
   const hierarchy = [
     { key: "CAP", label: "Cap", hit: hardCap },
@@ -4603,6 +4611,7 @@ function untouchableReasonForPlayer(player) {
   if (player.tradeable === false) return String(player.tradeBlockReason || "Unavailable.");
   const clause = String(player.protection || player.clauseLabel || "").toUpperCase();
   if (clause.includes("NMC")) return "No-movement clause.";
+  if (clause.includes("M-NTC") || clause.includes("MODIFIED")) return "Modified no-trade — only listed teams.";
   if (clause.includes("NTC")) return "No-trade clause.";
   const ovr = Number(player.ovr) || 0;
   if (ovr >= 88) return "Franchise cornerstone.";
@@ -4895,20 +4904,21 @@ function buildFixActions(evaluation, rd, noTouchConflict, partnerOutgoing, userO
 
   if (mainKey === "CLAUSE") {
     const blocked = safeArray(partnerOutgoing).find((a) => {
-      const c = String(a?.protection || a?.clauseLabel || "").toUpperCase();
-      return a?.type === "player" && (c.includes("NMC") || c.includes("NTC"));
+      const kind = clauseProtectionKind(a?.protection || a?.clauseLabel);
+      return a?.type === "player" && (kind === "NMC" || kind === "NTC" || kind === "M-NTC");
     }) || safeArray(userOutgoing).find((a) => {
-      const c = String(a?.protection || a?.clauseLabel || "").toUpperCase();
-      return a?.type === "player" && (c.includes("NMC") || c.includes("NTC"));
+      const kind = clauseProtectionKind(a?.protection || a?.clauseLabel);
+      return a?.type === "player" && (kind === "NMC" || kind === "NTC" || kind === "M-NTC");
     });
     if (blocked?.name) {
-      const isNtc = String(blocked.protection || blocked.clauseLabel || "").toUpperCase().includes("NTC")
-        && !String(blocked.protection || blocked.clauseLabel || "").toUpperCase().includes("NMC");
-      if (isNtc && !blocked.ntcWaived) {
+      const kind = clauseProtectionKind(blocked.protection || blocked.clauseLabel);
+      const isNtc = kind === "NTC";
+      const isMntc = kind === "M-NTC";
+      if ((isNtc || isMntc) && !blocked.ntcWaived && (isNtc || blocked.canTradeToPartner === false)) {
         actions.push({
           action: "waive",
           label: `Ask ${playerLastName(blocked.name)} to Waive`,
-          hint: "NTC can be waived",
+          hint: isMntc ? "Destination is off his modified list" : "NTC can be waived",
           playerName: blocked.name,
           side: safeArray(partnerOutgoing).some((a) => a?.name === blocked.name) ? "incoming" : "outgoing",
           rank: 1,
@@ -4957,14 +4967,11 @@ function buildFixSuggestions(evaluation, rd) {
 
 function isHardProtectedTradeAsset(player) {
   if (!player || player.type === "pick") return false;
-  const clause = String(player.protection || player.clauseLabel || "").toUpperCase();
-  const isNmc = clause.includes("NMC");
-  const needsNtcWaive =
-    !player.ntcWaived &&
-    (Boolean(player.requiresNtcWaive) ||
-      (clause.includes("NTC") && !clause.includes("M-NTC")) ||
-      clause.includes("M-NTC"));
-  if (isNmc || needsNtcWaive) return true;
+  const kind = clauseProtectionKind(player.protection || player.clauseLabel);
+  const isNmc = kind === "NMC";
+  const needsNtcWaive = !player.ntcWaived && kind === "NTC";
+  const mntcHard = !player.ntcWaived && kind === "M-NTC" && player.canTradeToPartner === false;
+  if (isNmc || needsNtcWaive || mntcHard) return true;
   if (player.tradeable === false && (player.tradeBlockReason || isNmc)) return true;
   return false;
 }
@@ -7630,7 +7637,7 @@ function buildTradeDecisionToast({
 }
 
 export default function TradeHub() {
-  const { setScreen, franchiseState, setFranchiseState, setPendingSocialNav, hydrateFranchiseNarrative } = useGameUI();
+  const { setScreen, franchiseState, setFranchiseState, setPendingSocialNav, hydrateFranchiseNarrative, pendingPromiseNav, setPendingPromiseNav } = useGameUI();
 
   useEffect(() => {
     hydrateFranchiseNarrative?.();
@@ -7884,12 +7891,12 @@ export default function TradeHub() {
     if (item.type === "pick") {
       return { ...item, type: "pick", teamId };
     }
-    const clause = String(item.protection || item.clauseLabel || "").toUpperCase();
-    const isNmc = clause.includes("NMC");
-    const needsWaive =
-      (item.requiresNtcWaive || clause.includes("NTC")) && !item.ntcWaived && !isNmc;
-    if (isNmc) return null;
-    if (needsWaive || item.tradeable === false) return null;
+    const kind = clauseProtectionKind(item.protection || item.clauseLabel);
+    const isNmc = kind === "NMC" && !item.ntcWaived;
+    const needsFullWaive = kind === "NTC" && !item.ntcWaived;
+    const mntcBlocked = kind === "M-NTC" && !item.ntcWaived && item.canTradeToPartner === false;
+    if (isNmc || needsFullWaive || mntcBlocked) return null;
+    if (item.tradeable === false && !(kind === "M-NTC" && item.canTradeToPartner === true)) return null;
     return {
       ...item,
       type: "player",
@@ -8031,13 +8038,15 @@ export default function TradeHub() {
       const { item, source, side: fromSide, slotIndex: fromSlot } = payload;
       const prepared = prepareAssetForSide(item, side, teamId);
       if (!prepared) {
-        const clause = String(item.protection || item.clauseLabel || "").toUpperCase();
-        const needsWaive =
-          (item.requiresNtcWaive || clause.includes("NTC")) && !item.ntcWaived && !clause.includes("NMC");
+        const kind = clauseProtectionKind(item.protection || item.clauseLabel);
+        const needsWaive = kind === "NTC" && !item.ntcWaived;
+        const mntcBlocked = kind === "M-NTC" && item.canTradeToPartner === false;
         setToast(
           needsWaive
             ? "Ask the player to waive their NTC first"
-            : item.tradeBlockReason || "Asset is not tradeable",
+            : mntcBlocked
+              ? "That club is not on his modified no-trade list"
+              : item.tradeBlockReason || "Asset is not tradeable",
         );
         setTimeout(() => setToast(""), 2000);
         return;
@@ -8554,6 +8563,12 @@ export default function TradeHub() {
   return (
     <div className="nhlcal-root trade-hub-root">
       <div className="trade-hub-shell">
+      {pendingPromiseNav?.screen === "trade" ? (
+        <p className="trade-hub-explanation">
+          {pendingPromiseNav.label || "Add an 80+ player who is not already in the organization."}
+          <button type="button" className="trade-hub-back-btn" onClick={() => setPendingPromiseNav?.(null)}>Dismiss</button>
+        </p>
+      ) : null}
       <header className="trade-hub-topbar th-topbar">
         <button type="button" className="trade-hub-back-btn" onClick={() => setScreen(SCREENS.HUB)}>
           ← Hub

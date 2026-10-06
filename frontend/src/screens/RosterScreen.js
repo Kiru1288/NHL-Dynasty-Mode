@@ -546,6 +546,7 @@ function normalizePosition(position) {
   if (raw.includes("CENTER") || raw === "CENTRE") return "C";
   if (raw.includes("LEFT") && raw.includes("WING")) return "LW";
   if (raw.includes("RIGHT") && raw.includes("WING")) return "RW";
+  if (raw === "WING" || raw === "WINGER" || raw === "FORWARD") return "F";
   if (raw.includes("LW")) return "LW";
   if (raw.includes("RW")) return "RW";
   if (raw.includes("LD")) return "LD";

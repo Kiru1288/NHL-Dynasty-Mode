@@ -17,7 +17,9 @@ from typing import Any, Dict, List, Optional
 
 WAIVER_WINDOW_DAYS = 1
 POPUP_MIN_OVR = 73  # league-wide waiver notices for players worth a look
-CPU_WAIVE_DAILY_CHANCE = 0.015
+# ~0.13 placement attempts per day league-wide before the roster-gap filters.
+# Real NHL wires are a handful of names a week, not a daily dump.
+CPU_WAIVE_DAILY_CHANCE = 0.004
 
 
 def _tid(team: Any) -> str:
@@ -51,16 +53,68 @@ def _popup(session: Any, key: str, payload: Dict[str, Any]) -> None:
 
 
 def _standings_points(session: Any, team: Any) -> float:
+    """Points percentage. Lower is worse, and worse clubs claim first."""
+    key = _waiver_priority_key(session, team)
+    return float(key[0])
+
+
+def _waiver_priority_key(session: Any, team: Any):
+    """NHL waiver order: worst points percentage, then fewer points, then fewer wins.
+
+    A team that has not played sorts with the other winless clubs. Team id breaks
+    the remaining ties so the order does not depend on dict iteration.
+    """
+    points = wins = gp = 0
     st = getattr(session, "standings", None)
     recs = getattr(st, "records", None) or {}
     rec = recs.get(_tid(team)) if isinstance(recs, dict) else None
     if rec is not None:
         try:
-            gp = max(1, int(getattr(rec, "wins", 0) + getattr(rec, "losses", 0) + getattr(rec, "otl", 0)))
-            return float(getattr(rec, "points", 0) or 0) / gp
+            wins = int(getattr(rec, "wins", 0) or 0)
+            losses = int(getattr(rec, "losses", 0) or 0)
+            otl = int(getattr(rec, "otl", 0) or 0)
+            gp = wins + losses + otl
+            points = int(getattr(rec, "points", 0) or 0)
+        except Exception:
+            points = wins = gp = 0
+    pct = (float(points) / float(gp)) if gp > 0 else 0.0
+    return (pct, points, wins, _tid(team))
+
+
+def _portrait_fields(player: Any, entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Headshot, overall, and potential for waiver alerts and the story wire."""
+    overall = entry.get("overall")
+    fields: Dict[str, Any] = {
+        "player_name": entry.get("name"),
+        "player_id": entry.get("player_id"),
+        "player_position": entry.get("position"),
+        "position": entry.get("position"),
+        "player_overall": overall,
+        "overall": overall,
+        "team_name": entry.get("original_team_name"),
+        "team_id": entry.get("original_team_id"),
+    }
+    pot = entry.get("potential")
+    if player is not None:
+        try:
+            from app.sim_engine.progression.potential import read_player_potential99
+
+            pot = int(round(float(read_player_potential99(player) or 0)))
+        except Exception:
+            pot = pot or 0
+        try:
+            from app.sim_engine.generation.player_headshots import merge_headshot_into_row
+
+            fields = merge_headshot_into_row(fields, player)
         except Exception:
             pass
-    return 0.0
+        abbr = str(getattr(player, "team_abbrev", None) or getattr(player, "team_abbreviation", None) or "")
+        if abbr:
+            fields["team_abbrev"] = abbr
+    if pot:
+        fields["player_potential"] = int(pot)
+        fields["potential"] = int(pot)
+    return fields
 
 
 def place_on_waivers(session: Any, team: Any, player: Any, *, reason: str = "manual", manual: bool = True) -> Dict[str, Any]:
@@ -107,6 +161,15 @@ def place_on_waivers(session: Any, team: Any, player: Any, *, reason: str = "man
         "user_claim": False,
         "player_ref": player,
     }
+    try:
+        from app.sim_engine.progression.potential import read_player_potential99
+
+        entry["potential"] = int(round(float(read_player_potential99(player) or 0)))
+    except Exception:
+        entry["potential"] = int(entry["overall"] or 0)
+    abbr = str(getattr(team, "abbreviation", None) or getattr(team, "abbr", None) or "")
+    if abbr:
+        entry["team_abbrev"] = abbr
     wire.append(entry)
     _append_waiver_history(league, {k: v for k, v in entry.items() if k != "player_ref"})
     team.roster = [p for p in list(getattr(team, "roster", None) or []) if p is not player]
@@ -120,29 +183,25 @@ def place_on_waivers(session: Any, team: Any, player: Any, *, reason: str = "man
     sync_team_cap_fields(team, league)
 
     user_tid = str(getattr(session, "user_team_id", "") or "")
-    if _tid(team) == user_tid:
-        _popup(session, f"waiver_placed:{pid}:{now}", {
-            "kind": "breaking_news",
-            "source_label": "Waiver Wire",
-            "headline": f"{entry['name']} placed on waivers",
-            "summary": "Any club can claim him in the next 24 hours. If he clears, he reports to your AHL affiliate.",
-            "player_name": entry["name"],
-            "theme": "info",
-        })
-    elif entry["overall"] >= POPUP_MIN_OVR:
+    portrait = _portrait_fields(player, entry)
+    # A user send-down resolves on the spot: claimed or cleared. CPU placements
+    # stay on the 24-hour wire so the user can still put in a claim.
+    if _tid(team) == user_tid and manual:
+        _resolve_entry(session, entry)
+    elif entry["overall"] >= POPUP_MIN_OVR and _tid(team) != user_tid:
         _popup(session, f"waiver_avail:{pid}:{now}", {
             "kind": "waiver",
             "source_label": "Waiver Wire",
             "headline": f"{_team_name(team)} placed {entry['name']} on waivers",
             "summary": (
-                f"{entry['position']} · {entry['overall']} OVR · ${entry['cap_hit_m']:.2f}M × "
-                f"{entry['years_remaining']} yr. Claims close in 24 hours — priority goes to the "
-                "team lowest in the standings."
+                f"{entry['position']} · {entry['overall']} OVR"
+                + (f" · {entry['potential']} POT" if entry.get("potential") else "")
+                + f" · ${entry['cap_hit_m']:.2f}M × {entry['years_remaining']} yr. "
+                "Claims close in 24 hours — the club lowest in the standings has first dibs."
             ),
-            "player_name": entry["name"],
-            "player_id": pid,
             "theme": "info",
             "actions": [{"id": "waiver_claim", "label": "Put in a claim", "primary": True, "player_id": pid}],
+            **portrait,
         })
     return {"ok": True, "waiver_entry": {k: v for k, v in entry.items() if k != "player_ref"}}
 
@@ -215,7 +274,7 @@ def _resolve_entry(session: Any, entry: Dict[str, Any]) -> None:
 
     order = sorted(
         [t for tid, t in teams.items() if tid != str(entry.get("original_team_id"))],
-        key=lambda t: _standings_points(session, t),
+        key=lambda t: _waiver_priority_key(session, t),
     )
     winner = None
     for team in order:
@@ -236,6 +295,7 @@ def _resolve_entry(session: Any, entry: Dict[str, Any]) -> None:
             continue
 
     name = entry.get("name") or "Player"
+    portrait = _portrait_fields(player, entry)
     if winner is not None:
         _transfer_waiver_player(player, None, winner, league)
         entry["claimed_by"] = _tid(winner)
@@ -252,22 +312,22 @@ def _resolve_entry(session: Any, entry: Dict[str, Any]) -> None:
                 "kind": "breaking_news", "source_label": "Waiver Wire", "theme": "positive",
                 "headline": f"Claim awarded: {name} joins your club",
                 "summary": f"You won the waiver claim on {name} from {entry.get('original_team_name')}. He's on your NHL roster.",
-                "player_name": name,
                 "actions": [{"id": "roster", "label": "Open roster", "primary": True}],
+                **portrait,
             })
         elif str(entry.get("original_team_id")) == user_tid:
             _popup(session, f"waiver_lost:{entry['player_id']}", {
                 "kind": "breaking_news", "source_label": "Waiver Wire", "theme": "warning",
                 "headline": f"{_team_name(winner)} claimed {name}",
                 "summary": f"{name} was claimed off waivers by {_team_name(winner)}. His contract leaves your books.",
-                "player_name": name,
+                **portrait,
             })
         elif entry.get("user_claim"):
             _popup(session, f"waiver_beat:{entry['player_id']}", {
                 "kind": "breaking_news", "source_label": "Waiver Wire", "theme": "info",
                 "headline": f"{_team_name(winner)} had priority on {name}",
-                "summary": "Another club ahead of you in waiver priority (lower in the standings) put in a claim.",
-                "player_name": name,
+                "summary": "A club lower in the standings put in a claim and had first dibs.",
+                **portrait,
             })
         return
 
@@ -296,14 +356,14 @@ def _resolve_entry(session: Any, entry: Dict[str, Any]) -> None:
             "kind": "breaking_news", "source_label": "Waiver Wire", "theme": "info",
             "headline": f"{name} cleared waivers",
             "summary": f"No club claimed {name}. He has reported to your AHL affiliate.",
-            "player_name": name,
+            **portrait,
         })
     elif entry.get("user_claim"):
         _popup(session, f"waiver_noroom:{entry['player_id']}", {
             "kind": "breaking_news", "source_label": "Waiver Wire", "theme": "warning",
             "headline": f"Your claim on {name} didn't go through",
             "summary": "You need cap space and an open contract slot when the window closes.",
-            "player_name": name,
+            **portrait,
         })
 
 

@@ -58,10 +58,18 @@ def _chemistry_profile_for_prospect(*, position: str, age: int, talent_tier: str
         profile["pressure_response"] = int(48 + rng.randint(0, 32))
         profile["temperament"] = int(46 + rng.randint(0, 30))
     elif pos == "D":
-        profile["playstyle"] = rng.choice(["shutdown", "puck_mover", "defensive_defenseman", "offensive_defenseman", "two_way"])
+        profile["playstyle"] = rng.choices(
+            ["offensive_defenseman", "puck_mover", "shutdown", "defensive_defenseman", "two_way"],
+            weights=[0.28, 0.28, 0.18, 0.12, 0.14],
+            k=1,
+        )[0]
         profile["defensive_buy_in"] = int(50 + rng.randint(0, 34))
     else:
-        profile["playstyle"] = rng.choice(["sniper", "playmaker", "power_forward", "two_way", "grinder", "balanced"])
+        profile["playstyle"] = rng.choices(
+            ["sniper", "playmaker", "power_forward", "enforcer", "grinder", "two_way", "balanced"],
+            weights=[0.22, 0.22, 0.14, 0.12, 0.10, 0.10, 0.10],
+            k=1,
+        )[0]
         profile["defensive_buy_in"] = int(42 + rng.randint(0, 30))
 
     if tier in ("franchise", "elite"):
@@ -101,13 +109,13 @@ def _choose_archetype(rng, position: str) -> Archetype:
     if position == "D":
         return rng.choices(
             [Archetype.OFFENSIVE_DEFENSEMAN, Archetype.DEFENSIVE_DEFENSEMAN, Archetype.SHUTDOWN_DEFENSEMAN, Archetype.PUCK_MOVING_DEFENSEMAN],
-            weights=[0.22, 0.34, 0.22, 0.22],
+            weights=[0.30, 0.18, 0.22, 0.30],
             k=1,
         )[0]
     # forward
     return rng.choices(
-        [Archetype.SNIPER, Archetype.PLAYMAKER, Archetype.POWER_FORWARD, Archetype.TWO_WAY_FORWARD, Archetype.GRINDER, Archetype.HYBRID_FORWARD],
-        weights=[0.18, 0.18, 0.14, 0.24, 0.12, 0.14],
+        [Archetype.SNIPER, Archetype.PLAYMAKER, Archetype.POWER_FORWARD, Archetype.TWO_WAY_FORWARD, Archetype.GRINDER, Archetype.ENFORCER, Archetype.HYBRID_FORWARD],
+        weights=[0.22, 0.22, 0.14, 0.12, 0.10, 0.10, 0.10],
         k=1,
     )[0]
 

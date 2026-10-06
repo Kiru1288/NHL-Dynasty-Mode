@@ -4863,6 +4863,100 @@ button.ui-interactive:disabled {
   padding: 18px 20px 12px;
 }
 
+.showcase-popup--obituary .showcase-popup__backdrop--v2 {
+  background: rgba(0, 0, 0, 0.9);
+}
+
+.showcase-popup__panel--obituary {
+  background: #090909;
+  color: #efe8dc;
+  border: 1px solid rgba(214, 198, 168, 0.38);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.78);
+  max-width: 560px;
+}
+
+.obituary {
+  padding: 42px 44px 32px;
+  text-align: center;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.obituary__kicker {
+  margin: 0 0 22px;
+  font-size: 11px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: #b5a48c;
+}
+
+.obituary__name {
+  margin: 0;
+  font-size: 36px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1.15;
+  color: #f7f1e7;
+}
+
+.obituary__meta {
+  margin: 14px 0 0;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  color: #cbbfaa;
+}
+
+.obituary__rule {
+  width: 72px;
+  height: 1px;
+  margin: 22px auto;
+  background: rgba(214, 198, 168, 0.55);
+}
+
+.obituary__lead {
+  margin: 0;
+  font-size: 18px;
+  font-style: italic;
+  color: #f3ebe0;
+}
+
+.obituary__body,
+.obituary__cause,
+.obituary__note {
+  margin: 14px auto 0;
+  max-width: 42ch;
+  font-size: 15px;
+  line-height: 1.55;
+  color: #ddd2c2;
+}
+
+.obituary__cause {
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+}
+
+.obituary__note {
+  margin-top: 18px;
+  font-size: 13px;
+  color: #a89880;
+}
+
+.obituary__ack {
+  margin-top: 28px;
+  padding: 11px 26px;
+  background: transparent;
+  border: 1px solid rgba(214, 198, 168, 0.6);
+  color: #f7f1e7;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.obituary__ack:hover {
+  background: rgba(214, 198, 168, 0.1);
+}
+
 .media-alert__source-row {
   display: flex;
   align-items: center;
@@ -5840,6 +5934,55 @@ button.ui-interactive:disabled {
 .media-alert--v2 .media-alert__hero {
   margin: 0 18px 12px;
   padding-bottom: 12px;
+}
+
+.media-alert__identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 18px 12px;
+}
+
+.media-alert__identity .player-headshot {
+  width: 72px;
+  height: 84px;
+  flex-shrink: 0;
+}
+
+.media-alert__team-logo {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+}
+
+.media-alert__team-fallback {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 900;
+  color: #9ad8ea;
+  border: 1px solid rgba(154, 216, 234, 0.3);
+  border-radius: 8px;
+}
+
+.media-alert__ratings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.media-alert__ovr,
+.media-alert__pot {
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  color: #e8fbff;
+  background: rgba(8, 28, 42, 0.85);
+  border: 1px solid rgba(120, 210, 230, 0.35);
+  border-radius: 6px;
+  padding: 3px 8px;
 }
 
 .media-alert__body-scroll {

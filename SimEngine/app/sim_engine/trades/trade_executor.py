@@ -294,13 +294,18 @@ def _apply_player_move(
 
         cap_hit = player_full_cap_hit_millions(player)
         try:
-            # The acquiring club now carries only the un-retained share.
             prior = float(getattr(player, "retained_share_pct", 0.0) or 0.0)
             c = getattr(player, "contract", None)
             expiry = c.get("expiry_year") if isinstance(c, dict) else getattr(c, "expiry_year", None)
             if getattr(player, "retained_share_expiry", None) not in (None, expiry):
                 prior = 0.0
-            setattr(player, "retained_share_pct", min(75.0, prior + float(asset.retained_pct)))
+            try:
+                from app.sim_engine.economy.cap_engine import max_retention_pct
+
+                cap_pct = float(max_retention_pct((context or {}).get("league")))
+            except Exception:
+                cap_pct = 50.0
+            setattr(player, "retained_share_pct", min(cap_pct, prior + float(asset.retained_pct)))
             setattr(player, "retained_share_expiry", expiry)
         except Exception:
             pass

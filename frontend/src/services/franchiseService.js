@@ -57,9 +57,9 @@ export async function startFranchise(payload) {
   }
 }
 
-/** @param {{ mode?: string, count?: number, auto_resolve?: boolean }} [opts] */
+/** @param {{ mode?: string, count?: number, auto_resolve?: boolean, auto_fill_lines?: boolean }} [opts] */
 export async function advanceFranchise(opts = {}) {
-  const { mode = "day", count = 1, auto_resolve = true } = opts;
+  const { mode = "day", count = 1, auto_resolve = true, auto_fill_lines = false } = opts;
   const m = String(mode || "day").toLowerCase();
   const heavy =
     m === "season" ||
@@ -75,6 +75,7 @@ export async function advanceFranchise(opts = {}) {
         mode,
         count,
         auto_resolve,
+        auto_fill_lines,
       },
       { timeout: heavy ? 600000 : 180000 }
     );
@@ -250,9 +251,44 @@ export async function getFranchiseNarrative() {
   return inflightFranchiseNarrativePromise;
 }
 
-export async function getStatsCentral() {
-  const { data } = await api.get("/api/franchise/stats-central");
-  return data;
+let statsCentralCache = null;
+let statsCentralInflight = null;
+let statsCentralInflightRev = null;
+
+export function peekStatsCentral(revision) {
+  if (!statsCentralCache?.payload) return null;
+  if (revision == null) return statsCentralCache.payload;
+  if (statsCentralCache.revision == null || statsCentralCache.revision === revision) {
+    return statsCentralCache.payload;
+  }
+  return null;
+}
+
+export function prefetchStatsCentral(revision) {
+  const rev = revision ?? null;
+  const cached = peekStatsCentral(rev);
+  if (cached) return Promise.resolve(cached);
+  if (statsCentralInflight && statsCentralInflightRev === rev) return statsCentralInflight;
+  statsCentralInflightRev = rev;
+  statsCentralInflight = api
+    .get("/api/franchise/stats-central")
+    .then((res) => {
+      const payload = res.data;
+      const storedRev = payload?.stats_revision == null ? rev : payload.stats_revision;
+      statsCentralCache = { revision: storedRev, payload };
+      return payload;
+    })
+    .finally(() => {
+      if (statsCentralInflightRev === rev) {
+        statsCentralInflight = null;
+        statsCentralInflightRev = null;
+      }
+    });
+  return statsCentralInflight;
+}
+
+export async function getStatsCentral(revision) {
+  return prefetchStatsCentral(revision ?? null);
 }
 
 export async function getDraftClassDetail() {

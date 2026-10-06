@@ -384,6 +384,10 @@ function SidePanel({ gov }) {
         <h3>Your club</h3>
       </div>
       <div className={`${PREFIX}-kv`}>
+        <span>Annual profit</span>
+        <strong className={Number(impact.annual_profit_m) >= 0 ? "up" : "down"}>
+          {impact.annual_profit_m != null ? money(impact.annual_profit_m) : "—"}
+        </strong>
         <span>Annual revenue</span>
         <strong>{impact.annual_revenue_m != null ? money(impact.annual_revenue_m) : "—"}</strong>
         <span>Franchise value</span>

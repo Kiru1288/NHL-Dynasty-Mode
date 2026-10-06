@@ -578,7 +578,7 @@ export function HubScreen() {
 
   const handleNavigate = useCallback(
     (target) => {
-      if (simActions[target] && !advancing && canAdvance) {
+      if (simActions[target] && !advancing && !blockBulkSim) {
         simActions[target]();
         return;
       }
@@ -595,6 +595,7 @@ export function HubScreen() {
     },
     [
       advancing,
+      blockBulkSim,
       canAdvance,
       openCommandPlaceholder,
       openFranchiseEvent,
@@ -691,7 +692,7 @@ export function HubScreen() {
         onOpenPanel={handleOpenPanel}
         onNavigate={handleNavigate}
         onSimNextGame={() => handleNavigate("sim-next-game")}
-        simDisabled={!canAdvance || advancing}
+        simDisabled={blockBulkSim || advancing}
       />
 
       {error ? (

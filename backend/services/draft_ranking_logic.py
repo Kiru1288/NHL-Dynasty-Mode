@@ -1014,16 +1014,22 @@ def infer_prospect_role(row: Mapping[str, Any]) -> str:
         for k in ("playstyle", "archetype", "player_type", "dossier_archetype", "dossier_play_style")
     ).lower().replace("_", " ")
     if pos in ("D", "LD", "RD", "LHD", "RHD"):
-        if "offensive" in blob or "puck mover" in blob or "quarterback" in blob:
+        if "offensive" in blob or "puck mover" in blob or "puck-moving" in blob or "quarterback" in blob:
             return "offensive_defenseman"
-        if "shutdown" in blob or "defensive" in blob or "stay at home" in blob:
+        if "shutdown" in blob or "stay at home" in blob:
             return "defensive_defenseman"
-        return "two_way_defenseman"
+        if "defensive" in blob and "offensive" not in blob:
+            return "defensive_defenseman"
+        if "two" in blob:
+            return "two_way_defenseman"
+        return "offensive_defenseman"
     if pos == "C":
         if "shutdown" in blob:
             return "shutdown_center"
         if "two" in blob or "200" in blob:
             return "two_way_center"
+    if "enforcer" in blob or "tough" in blob or "fighter" in blob:
+        return "enforcer"
     if "sniper" in blob or "shooter" in blob:
         return "sniper"
     if "playmaker" in blob or "passer" in blob:

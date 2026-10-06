@@ -223,8 +223,13 @@
   justify-content: center;
   padding: 2rem;
   text-align: center;
-  background: rgba(2, 6, 23, 0.9);
-  backdrop-filter: blur(14px);
+  background: #020617;
+}
+
+.dlot-reveal-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   animation: dlotRevealIn 0.4s ease;
 }
 
@@ -317,7 +322,7 @@
 }
 
 .dlot-reveal-overlay.is-user-team {
-  background: rgba(2, 6, 23, 0.94);
+  background: #020617;
 }
 
 .dlot-reveal-overlay.is-user-team .dlot-reveal-team {
@@ -504,7 +509,31 @@
 }
 
 .dlot-card.is-pending {
-  opacity: 0.45;
+  opacity: 1;
+}
+
+.dlot-card-sealed {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+}
+
+.dlot-card-sealed strong {
+  margin: 0;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.85);
+}
+
+.dlot-card-you {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gold);
 }
 
 .dlot-card.is-user {
@@ -697,7 +726,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dlot-reveal-overlay,
+  .dlot-reveal-card,
   .dlot-lower-third__panel {
     animation: none;
   }

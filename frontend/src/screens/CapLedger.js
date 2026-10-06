@@ -1332,6 +1332,8 @@ export default function CapLedger() {
     refreshFranchise,
     openFranchiseEvent,
     onReopenOffseasonStage,
+    pendingPromiseNav,
+    setPendingPromiseNav,
   } = useGameUI();
 
   const [data, setData] = useState(null);
@@ -1339,6 +1341,7 @@ export default function CapLedger() {
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [note, setNote] = useState("");
   const [faDetail, setFaDetail] = useState(null);
   const [faDetailLoading, setFaDetailLoading] = useState(false);
   const [sheetDraft, setSheetDraft] = useState({ aav_m: "2.000", years: "4" });
@@ -1605,6 +1608,19 @@ export default function CapLedger() {
         onBack={handleBack}
       />
 
+      {pendingPromiseNav?.screen === "cap_ledger" ? (
+        <p className="cap-ledger-attention cap-warning-strip">
+          {pendingPromiseNav.label || "The contract talk is waiting on this desk."}
+          <button type="button" onClick={() => setPendingPromiseNav?.(null)}>Dismiss</button>
+        </p>
+      ) : null}
+
+      {note ? (
+        <div className="cap-empty-state" role="status">
+          {note}
+        </div>
+      ) : null}
+
       {error ? (
         <div className="cap-empty-state cap-error">
           {error}
@@ -1680,15 +1696,37 @@ export default function CapLedger() {
                       } else if (result?.ok) {
                         loadData({ silent: true });
                       }
+                      const spoken =
+                        result?.player_response?.feedback ||
+                        result?.evaluation?.agent_dialogue ||
+                        result?.message ||
+                        result?.reason ||
+                        "";
                       if (st === "countered" || st === "rejected" || st === "pending") {
                         setError("");
+                        setNote(
+                          spoken ||
+                            (st === "pending"
+                              ? "Offer is on the table. Sim a day to hear back."
+                              : st === "countered"
+                                ? "He countered. The new number is on the desk."
+                                : "He turned the offer down."),
+                        );
+                        if (typeof refreshFranchise === "function") refreshFranchise();
                         return;
                       }
                       if (!result?.ok && result?.reason) setError(result.reason);
                       else if (result?.ok && (meta?.signed || st === "accepted")) {
+                        const who = negotiateRow?.name || "Player";
+                        const hit = result?.final_cap_hit ?? result?.evaluation?.aav_m;
                         setError("");
+                        setNote(
+                          result?.message ||
+                            `${who} signed${hit != null ? ` at $${Number(hit).toFixed(2)}M` : ""}.`,
+                        );
                         setNegotiateRow(null);
                         setSelected(null);
+                        if (typeof refreshFranchise === "function") refreshFranchise();
                       }
                     }}
                   />

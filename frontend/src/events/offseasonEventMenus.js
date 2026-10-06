@@ -31,6 +31,7 @@ import {
   getFreeAgentDetail,
   getFreeAgencyDesk,
 } from "../services/franchiseService";
+import { estimateOfferInterestM } from "../utils/contractNegotiation";
 import {
   firstDefined,
   formatMoney,
@@ -384,7 +385,14 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
           contract_category: offerContractType || "nhl_one_way",
           context: "re_sign",
         });
-        if (!cancelled && result?.evaluation) setResponse(result);
+        if (!cancelled && result?.evaluation) {
+          const yearsSent = Math.max(1, parseInt(offerYears, 10) || 1);
+          const bonusSent = Number(offerBonus) || 0;
+          setResponse({
+            ...result,
+            _offerStamp: `${computeOfferCapHitM(Number(offerAav) || 0, yearsSent, bonusSent)}|${yearsSent}|${offerNtcMode}|${offerNmc}|${bonusSent}`,
+          });
+        }
       } catch {
         /* preview is best-effort */
       }
@@ -470,17 +478,21 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
     const isPhaseAccepted = (r) => phaseStatus(r) === "accepted";
     const isPhaseReleased = (r) => phaseStatus(r) === "released" || phaseStatus(r) === "lapsed";
     const isPhaseRejected = (r) => phaseStatus(r) === "rejected";
-    const wasExpiring = (r) =>
-      intOr(r.years_remaining, 99) <= 1 ||
-      r.own_ufa === true ||
-      r.contract_status === "own_ufa" ||
-      r.contract_status === "expiring" ||
-      r.contract_status === "rfa_rights" ||
-      r.contract_status === "released" ||
-      isPhaseAccepted(r) ||
-      isPhaseReleased(r) ||
-      isPhaseRejected(r) ||
-      ["pending", "countered", "open"].includes(phaseStatus(r));
+    const wasExpiring = (r) => {
+      if (isPhaseAccepted(r) || r.pending_extension || r.extension_signed) return false;
+      if (intOr(r.years_remaining, 0) > 1 && !r.own_ufa && r.contract_status !== "expiring") return false;
+      return (
+        intOr(r.years_remaining, 99) <= 1 ||
+        r.own_ufa === true ||
+        r.contract_status === "own_ufa" ||
+        r.contract_status === "expiring" ||
+        r.contract_status === "rfa_rights" ||
+        r.contract_status === "released" ||
+        isPhaseReleased(r) ||
+        isPhaseRejected(r) ||
+        ["pending", "countered", "open"].includes(phaseStatus(r))
+      );
+    };
 
     if (filter === "expiring") {
       rows = rows.filter((r) => wasExpiring(r));
@@ -496,9 +508,8 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
         (r) =>
           String(r.expiry_status || r.expiry_type || "").toUpperCase() === "RFA" ||
           r.contract_status === "rfa_rights" ||
-          r.contract_status === "released" ||
           (isPhaseAccepted(r) && String(r.expiry_status || "").toUpperCase() === "RFA") ||
-          isPhaseReleased(r)
+          (isPhaseReleased(r) && String(r.expiry_status || r.expiry_type || "").toUpperCase() === "RFA")
       );
     } else if (filter === "signed") {
       rows = rows.filter(
@@ -770,13 +781,24 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
   const ownWindow = payload?.own_fa_window || {};
   const bonusElig = payload?.signing_bonus || {};
   const bonusAllowed = Boolean(bonusElig.eligible);
+  const liveInterest = estimateOfferInterestM({
+    offerAavM: offerAavNum,
+    offerCapHitM: offerCapHitNum,
+    wantAavM: askAav || offerAavNum || 1,
+    offerYears: offerYearsNum,
+    wantYears: askYears || offerYearsNum,
+    stayInterest: Number(selected?.stay_interest),
+    signingBonusM: offerBonusNum,
+    preferredClause: selected?.clause_ask,
+    ntcMode: offerNtcMode,
+    nmc: offerNmc,
+  });
+  const serverInterest = Number(response?.evaluation?.interest ?? response?.player_response?.interest);
+  const offerStamp = `${offerCapHitNum}|${offerYearsNum}|${offerNtcMode}|${offerNmc}|${offerBonusNum}`;
   const negoInterest =
-    Number(
-      response?.evaluation?.interest ??
-        response?.player_response?.interest ??
-        selected?.pending_offer?.interest ??
-        0
-    ) || 0;
+    response?.evaluation && response._offerStamp === offerStamp && Number.isFinite(serverInterest)
+      ? serverInterest
+      : liveInterest;
   const negoFeedback =
     response?.player_response?.feedback ||
     response?.evaluation?.reason ||
@@ -1495,7 +1517,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                             ) : (
                               <p className={`${prefix}-context`}>
                                 {bonusElig.label ||
-                                  "Signing bonuses require NHL revenue ≥ $130M"}
+                                  "Signing bonuses require NHL revenue ≥ $155M"}
                               </p>
                             )}
                           </div>

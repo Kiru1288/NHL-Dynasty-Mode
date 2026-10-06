@@ -184,8 +184,9 @@ def _parse_yearly_team_html(html: str) -> Dict[str, Dict[str, Any]]:
             rights = "RFA"
         elif re.search(r"\bUFA\b", row_text):
             rights = "UFA"
-        nmc = bool(re.search(r"\bNMC\b", row_text))
-        ntc = bool(re.search(r"\bNTC\b", row_text)) and not nmc
+        nmc = bool(re.search(r"\bNMC\b|no[-\s]?move", row_text, re.I))
+        mntc = bool(re.search(r"\bM-NTC\b|\bMNTC\b|modified\s+no[-\s]?trade", row_text, re.I))
+        ntc = bool(re.search(r"\bNTC\b|no[-\s]?trade", row_text, re.I)) and not nmc and not mntc
         # ELC heuristic: low AAV + short remaining term on young deals.
         ctype = "ELC" if aav_m <= 1.0 and years_remaining <= 3 else "STANDARD"
         entry = {
@@ -199,6 +200,10 @@ def _parse_yearly_team_html(html: str) -> Dict[str, Dict[str, Any]]:
             "contract_type": ctype,
             "no_move_clause": nmc,
             "no_trade_clause": ntc,
+            "ntc_mode": "MODIFIED" if mntc and not nmc else ("FULL" if ntc else "NONE"),
+            "modified_no_trade_teams": 10 if mntc and not nmc else 0,
+            "clause_type": "NMC" if nmc else ("M-NTC" if mntc else "NTC" if ntc else "None"),
+            "season_cap_hits": [round(h, 3) for h in seasons],
             "source": "real_nhl_spotrac",
         }
         if pending_ext:
@@ -402,22 +407,45 @@ def _merge_cap_aav_over_yearly(
         def _overlay(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
             merged = dict(dst)
             cap_aav = float(src.get("aav_m") or src.get("cap_hit_m") or 0)
-            old_aav = float(merged.get("aav_m") or merged.get("cap_hit_m") or 0)
             merged["aav_m"] = cap_aav
             merged["cap_hit_m"] = cap_aav
             merged["source"] = "real_nhl_spotrac"
-            # Yearly boards often lead with an already-signed extension AAV. Only collapse
-            # term to the current deal when cap hit disagrees with the yearly grid.
+            # The cap sheet is the hit being paid THIS season. Count the run of yearly
+            # cells that match it — that is the term still left (Greig through 2030,
+            # Jarvis through the end of the extension). A later run at a different
+            # hit is a future extension. Never collapse a multi-year deal to 1 year
+            # just because the first grid cell disagrees with the cap sheet.
+            hits = [float(h or 0) for h in (merged.get("season_cap_hits") or []) if float(h or 0) > 0.05]
             yearly_yrs = int(merged.get("years_remaining") or merged.get("years") or 0)
-            if merged.get("pending_extension"):
-                return merged
-            if old_aav > 0 and abs(old_aav - cap_aav) > 0.25:
-                merged["years_remaining"] = 1
-                merged["years"] = 1
-                merged["extension_aav_m"] = old_aav
-                if yearly_yrs > 1:
-                    merged["extension_years_remaining"] = min(yearly_yrs, 8)
-                    merged["pending_extension"] = {"aav_m": old_aav, "cap_hit_m": old_aav, "years": min(yearly_yrs, 8)}
+
+            def _stamp_run(start: int, end: int) -> None:
+                years = min(max(end - start, 1), 8)
+                merged["years_remaining"] = years
+                merged["years"] = years
+                merged.pop("pending_extension", None)
+                merged.pop("extension_years_remaining", None)
+                if end < len(hits):
+                    ext = hits[end:]
+                    ext_aav = round(sum(ext) / len(ext), 3)
+                    if abs(ext_aav - cap_aav) > 0.35:
+                        merged["pending_extension"] = {
+                            "aav_m": ext_aav,
+                            "cap_hit_m": ext_aav,
+                            "years": min(len(ext), 8),
+                        }
+                        merged["extension_aav_m"] = ext_aav
+                        merged["extension_years_remaining"] = min(len(ext), 8)
+
+            matched = None
+            for i, hit in enumerate(hits):
+                if abs(hit - cap_aav) <= 0.35:
+                    matched = i
+                    break
+            if matched is not None:
+                end = matched + 1
+                while end < len(hits) and abs(hits[end] - cap_aav) <= 0.35:
+                    end += 1
+                _stamp_run(matched, end)
             elif yearly_yrs > 0:
                 merged["years_remaining"] = yearly_yrs
                 merged["years"] = yearly_yrs

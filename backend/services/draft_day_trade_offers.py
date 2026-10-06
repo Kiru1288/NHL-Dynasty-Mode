@@ -324,6 +324,45 @@ def _creative_package(
     return options[-1]
 
 
+# User on the clock can slide back well past the next few teams. CPU climbs stay short.
+_USER_TRADE_DOWN_SPAN = 56
+_CPU_TRADE_DOWN_SPAN = 14
+_USER_BAND_CAPS = {"close": 2, "lower": 2, "deep": 2}
+_USER_BAND_ATTEMPTS = {"close": 8, "lower": 10, "deep": 8}
+
+
+def _trade_down_band(slots_moved: int) -> str:
+    """close = next handful of slots; lower = later this round; deep = next round-ish."""
+    if slots_moved <= 6:
+        return "close"
+    if slots_moved <= 22:
+        return "lower"
+    return "deep"
+
+
+def _mix_trade_down_bands(
+    staged: Dict[str, List[Dict[str, Any]]],
+    max_offers: int,
+) -> List[Dict[str, Any]]:
+    """Interleave nearby climbers with clubs holding later picks."""
+    mixed: List[Dict[str, Any]] = []
+    cursors = {"close": 0, "lower": 0, "deep": 0}
+    while len(mixed) < max_offers:
+        added = False
+        for band in ("close", "lower", "deep"):
+            i = cursors[band]
+            bucket = staged.get(band) or []
+            if i < len(bucket):
+                mixed.append(bucket[i])
+                cursors[band] = i + 1
+                added = True
+                if len(mixed) >= max_offers:
+                    break
+        if not added:
+            break
+    return mixed
+
+
 def generate_draft_day_trade_offers(
     session: Any,
     state: Optional[Dict[str, Any]] = None,
@@ -393,13 +432,15 @@ def generate_draft_day_trade_offers(
 
     offers: List[Dict[str, Any]] = []
     seen_partners: set = set()
+    staged: Dict[str, List[Dict[str, Any]]] = {"close": [], "lower": [], "deep": []}
+    band_attempts = {"close": 0, "lower": 0, "deep": 0}
     on_clock_value = float(slot_curve_value(overall))
     on_clock_pick_id = str(slot.get("pick_id") or "")
 
     # Later slots that might pay to climb — never invent interest without a target.
-    # Keep the look-ahead modest so only nearby climbers show up.
-    lookahead = order[overall : min(len(order), overall + 14)]
-    forced_one = False
+    # The user desk reaches clubs holding lower picks; CPU swaps stay nearby.
+    span = _USER_TRADE_DOWN_SPAN if user_on_clock else _CPU_TRADE_DOWN_SPAN
+    lookahead = order[overall : min(len(order), overall + span)]
     for future in lookahead:
         partner = str(future.get("team_id") or "")
         if not partner or partner == on_clock or partner in seen_partners:
@@ -415,6 +456,12 @@ def generate_draft_day_trade_offers(
             continue
         if gap < 3.5 and slots_moved < 4:
             continue
+
+        if user_on_clock:
+            band = _trade_down_band(slots_moved)
+            if len(staged[band]) >= _USER_BAND_CAPS[band] or band_attempts[band] >= _USER_BAND_ATTEMPTS[band]:
+                continue
+            band_attempts[band] += 1
 
         partner_board = build_team_draft_board(session, partner, available[:40], cache=cache)
         true_target = _partner_true_target(
@@ -444,12 +491,11 @@ def generate_draft_day_trade_offers(
             true_target=true_target,
             rng=rng,
         )
-        if user_on_clock and offers and not willing and not forced_one:
-            forced_one = True
+        # Each distance gets one bidder with a real target, so a club holding a
+        # later pick still appears after the teams sitting directly below you.
+        if user_on_clock and not willing and not staged[_trade_down_band(slots_moved)]:
             willing = True
-        elif not user_on_clock and not willing:
-            continue
-        elif user_on_clock and offers and not willing:
+        elif not willing:
             continue
 
         partner_pick_id = str(future.get("pick_id") or "")
@@ -606,8 +652,15 @@ def generate_draft_day_trade_offers(
             }
         )
         seen_partners.add(partner)
-        if len(offers) >= max_offers:
+        if user_on_clock:
+            staged[_trade_down_band(slots_moved)].append(offers.pop())
+            if all(len(staged[b]) >= _USER_BAND_CAPS[b] for b in _USER_BAND_CAPS):
+                break
+        elif len(offers) >= max_offers:
             break
+
+    if user_on_clock:
+        offers = _mix_trade_down_bands(staged, max_offers)
 
     state["trade_offers"] = offers
     state["draft_day_trade_offers"] = offers

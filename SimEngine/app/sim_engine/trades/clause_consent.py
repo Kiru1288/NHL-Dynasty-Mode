@@ -33,6 +33,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from app.sim_engine.trades.trade_asset import player_display_name
 from app.sim_engine.trades.trade_rules import (
     _clause_summary,
+    _dest_on_list,
     _market_size,
     _stable_unit_roll,
     _team_strength_proxy,
@@ -124,10 +125,23 @@ def waiver_window(session: Any) -> Dict[str, Any]:
     today = current_sim_iso(session)
     d_idx = _deadline_index(cal) if cal else None
     deadline_iso = str((cal[d_idx] or {}).get("iso") or "") if d_idx is not None else f"{season + 1}-03-10"
-    if d_idx is not None:
+    offseason_now = phase in _OFF_PHASES or phase in {
+        "offseason",
+        "draft",
+        "entry_draft",
+        "free_agency",
+        "freeagency",
+        "resign",
+        "re_sign",
+    } or bool(getattr(session, "free_agency_open", False))
+    # Summer is its own waiver window. A "yes" from before the deadline does not
+    # carry into July, including for deals signed before this offseason.
+    if offseason_now:
+        in_season = False
+    elif d_idx is not None:
         in_season = cursor <= d_idx and phase not in _OFF_PHASES
     else:
-        in_season = phase not in _OFF_PHASES and phase != "offseason"
+        in_season = phase not in _OFF_PHASES
     next_camp_iso = f"{season + 1}-09-15"
     if in_season:
         ends_iso = deadline_iso
@@ -390,7 +404,7 @@ def clause_trade_permission(
     if label == "None":
         return out
     # Modified NTC: approved destinations need no waiver.
-    if not clause.get("nmc") and int(clause.get("mntc") or 0) > 0 and dest and dest in approved:
+    if not clause.get("nmc") and int(clause.get("mntc") or 0) > 0 and _dest_on_list(dest, approved):
         return out
     entry = lookup_consent(waivers, pid, dest)
     if consent_allows(entry, dest, window_key=window_key, source_team_id=source_team_id):
@@ -698,7 +712,7 @@ def request_clause_waiver(
     if label == "None":
         return {**base, "ok": True, "accepted": True, "can_request": False, "reason": "No trade protection — no waiver required.", "reason_code": "no_ntc", "accept_chance": 1.0, "value_penalty_pct": 0.0}
     approved = [str(t) for t in (clause.get("approved_destinations") or [])]
-    if dest_id and not clause.get("nmc") and int(clause.get("mntc") or 0) > 0 and dest_id in approved:
+    if dest_id and not clause.get("nmc") and int(clause.get("mntc") or 0) > 0 and _dest_on_list(dest_id, approved):
         return {**base, "ok": True, "accepted": True, "can_request": False, "reason": "Destination is already on his approved list.", "reason_code": "mntc_approved", "accept_chance": 1.0, "value_penalty_pct": 0.0}
 
     status = ask_status(session, pid, dest_id, source_team_id=src_id)
@@ -721,7 +735,8 @@ def request_clause_waiver(
 
     ctx = dict(context or {})
     snap = _window_snapshot(session, player, source_team, win)
-    roll = float(snap["roll"])
+    dest_id = _team_id(destination_team)
+    roll = round(_stable_unit_roll(f"clause-waive|{pid}|{win['season_year']}|{win['key']}|{dest_id}"), 6)
     rel_adj = float(snap.get("rel_adj") or 0.0)
     chance = destination_chance(player, source_team=source_team, destination_team=destination_team, context=ctx, rel_adj=rel_adj)
     accepted = roll < chance
@@ -834,9 +849,14 @@ def _acceptable_teams(
             continue
         scored.append((destination_chance(player, source_team=source_team, destination_team=team, context=ctx, rel_adj=rel_adj), str(tid)))
     scored.sort(reverse=True)
-    ok = [tid for ch, tid in scored if roll < ch]
-    if len(ok) < 3:
-        ok = [tid for _, tid in scored[:3]]
+    pid = str(getattr(player, "id", "") or "")
+    season = int(ctx.get("season_year", 2025) or 2025)
+    window_key = str(ctx.get("clause_window_key") or f"{season}-in")
+    ok = []
+    for ch, tid in scored:
+        team_roll = _stable_unit_roll(f"clause-waive|{pid}|{season}|{window_key}|{tid}")
+        if team_roll < ch:
+            ok.append(tid)
     out = list(approved)
     for tid in ok:
         if tid not in out:

@@ -84,17 +84,23 @@ def send_down_candidates(
     *,
     leaving_ids: Iterable[str] = (),
     arriving: Iterable[Any] = (),
+    protect_ids: Iterable[str] = (),
     count: int = MAX_AUTO_SEND_DOWNS,
 ) -> List[Any]:
     """Who the club would assign to the AHL, keeping 12F / 6D / 2G dressed."""
     leaving = {str(x) for x in leaving_ids}
     active = [p for p in list(getattr(team, "roster", None) or []) if _is_active(p) and _pid(p) not in leaving]
-    pool = active + [p for p in arriving if p is not None]
+    arriving_ids = {_pid(p) for p in arriving if p is not None}
+    protect = {str(x) for x in protect_ids}
+    already = {_pid(p) for p in active}
+    pool = active + [p for p in arriving if p is not None and _pid(p) not in already]
     by_pos: Dict[str, int] = {"F": 0, "D": 0, "G": 0}
     for p in pool:
         by_pos[_pos_bucket(p)] += 1
-    arriving_ids = {_pid(p) for p in arriving if p is not None}
-    movable = [p for p in active if _pid(p) not in arriving_ids and not _has_nmc(p)]
+    movable = [
+        p for p in active
+        if _pid(p) not in arriving_ids and _pid(p) not in protect and not _has_nmc(p)
+    ]
     out: List[Any] = []
     for p in _send_down_order(movable):
         if len(out) >= count:
@@ -138,8 +144,8 @@ def auto_send_down_overflow(team: Any, *, protect_ids: Iterable[str] = (), activ
     over = len(active) - int(active_max)
     if over <= 0:
         return []
-    arriving = [p for p in active if _pid(p) in protect]
-    cands = send_down_candidates(team, arriving=arriving, count=over)
+    arriving = []
+    cands = send_down_candidates(team, arriving=arriving, protect_ids=protect, count=over)
     moves: List[Dict[str, Any]] = []
     for p in cands:
         _assign_ahl(team, p)

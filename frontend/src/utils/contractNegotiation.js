@@ -23,16 +23,20 @@ export function projectNegotiationCap({
   const currentHit = Number(playerRow.aav_m ?? playerRow.cap_hit_m ?? 0);
   const yrsLeft = Math.max(0, Number(playerRow.years_remaining ?? playerRow.yearsRemaining ?? 0));
   const offerHit = Number(offerCapHitM) || 0;
+  const inSeason = Boolean(capSnapshot.in_season_cap);
 
   if (!Number.isFinite(usable)) {
     return {
       capDeltaNowM: null,
       projectedAfterM: null,
       projectedNextSeasonM: null,
+      inSeasonCap: inSeason,
     };
   }
 
-  const capDeltaNow = yrsLeft > 1 ? 0 : Math.max(0, offerHit - currentHit);
+  // In season the raise has to fit in this year's usable space, even on a deal
+  // that still has term left. Next year's number is not the ceiling.
+  const capDeltaNow = inSeason || yrsLeft <= 1 ? Math.max(0, offerHit - currentHit) : 0;
   const projectedAfter = usable - capDeltaNow;
 
   let projectedNextSeason = null;
@@ -48,6 +52,7 @@ export function projectNegotiationCap({
     capDeltaNowM: capDeltaNow,
     projectedAfterM: projectedAfter,
     projectedNextSeasonM: projectedNextSeason,
+    inSeasonCap: inSeason,
   };
 }
 
@@ -93,6 +98,7 @@ function clauseInterestEstimate(preferredClause, ntcMode, nmc, security = 0.55) 
 
 export function estimateOfferInterestM({
   offerAavM,
+  offerCapHitM,
   wantAavM,
   offerYears = 3,
   wantYears = 3,
@@ -106,16 +112,21 @@ export function estimateOfferInterestM({
 }) {
   const want = Math.max(0.5, Number(wantAavM) || 3);
   const aav = Number(offerAavM) || 0;
-  const pct = (aav - want) / want;
-  const salary = 36 * Math.tanh(pct / 0.07);
+  const gapM = aav - want;
+  const scale = Math.max(2.5, want * 0.35);
+  const salary = 46 * Math.tanh(gapM / scale);
   const termGap = Math.max(1, Number(offerYears) || 1) - Math.max(1, Number(wantYears) || 3);
-  const term = 10 * Math.tanh(termGap * 0.55);
-  const stay = Number.isFinite(Number(stayInterest)) ? (Number(stayInterest) - 50) * 0.22 : 0;
+  const term = 7 * Math.tanh(termGap * 0.45) * 0.65;
+  const stayN = Number.isFinite(Number(stayInterest)) ? Number(stayInterest) : 50;
+  let askAnchor = 56;
+  if (stayN >= 70) askAnchor = 74;
+  else if (stayN < 45) askAnchor = 50;
   const total = Number(totalValueM) || aav * Math.max(1, Number(offerYears) || 1);
   const bonusShare = total > 0 ? Math.max(0, Number(signingBonusM) || 0) / total : 0;
-  const bonus = bonusShare > 0 ? Math.min(18, 52 * bonusShare) : 0;
-  const clause = clauseInterestEstimate(preferredClause, ntcMode, nmc, securityPref);
-  return Math.max(0, Math.min(100, 48 + salary + term + stay + bonus + clause));
+  const bonus = Math.min(4, 8 * bonusShare);
+  const clause = clauseInterestEstimate(preferredClause, ntcMode, nmc, securityPref) * 0.3;
+  const other = Math.max(-6, Math.min(6, term * 0.35 + bonus + clause));
+  return Math.max(0, Math.min(100, askAnchor + salary + other));
 }
 
 export function resignInterestLabel(row) {

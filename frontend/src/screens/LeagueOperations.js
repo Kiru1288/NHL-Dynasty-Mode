@@ -8,7 +8,7 @@ const EMPTY_OBJ = Object.freeze({});
 const EMPTY_ARR = Object.freeze([]);
 
 const ACTION_STATES = ["Stable", "Monitoring", "Negotiating", "Vote Required"];
-const SORT_KEYS = ["revenue", "trend", "market", "risk"];
+const SORT_KEYS = ["revenue", "trend", "market", "risk", "profit"];
 const WORKSPACES = [
   { id: "overview", label: "Overview" },
   { id: "cba", label: "CBA" },
@@ -1701,7 +1701,7 @@ function deriveDisplayStatus(team) {
   if (profit >= 18) return "Surge";
   if (profit >= 8) return "Profit";
   if (profit >= 2) return "Thin";
-  if (profit >= -2) return "Even";
+  if (profit >= -2) return "Flat";
   if (risk >= 0.55 || profit < -10) return "Risk";
   if (profit < -2) return "Loss";
   return "Flat";
@@ -2666,7 +2666,7 @@ function filterTeams(teams, filterId) {
     });
   }
   if (filterId === "losing") {
-    return list.filter((t) => num(t.profit, 0) < 0);
+    return list.filter((t) => num(t.profit, 0) < -2);
   }
   if (filterId === "reloc") {
     return list.filter((t) => num(t.relocation_risk, 0) >= 0.35 || t.threatened);

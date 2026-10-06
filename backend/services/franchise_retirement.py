@@ -369,12 +369,12 @@ def _classify_retirement_type(
     yrs = _contract_years_remaining(player)
     pr = str(primary_reason or "").lower()
 
-    if _is_goalie(player) and age >= 37 and ovr >= 0.72:
-        return "goalie_longevity_retirement"
+    if wear >= 0.75 or "injur" in pr or ctx.get("career_ending_injury"):
+        return "injury_retirement"
     if ctx.get("won_cup_this_year") and age >= 34:
         return "cup_win_walkaway"
-    if wear >= 0.75 or "injur" in pr:
-        return "injury_retirement"
+    if _is_goalie(player) and age >= 37 and ovr >= 0.72:
+        return "goalie_longevity_retirement"
     if yrs <= 0 and age >= 33:
         return "no_contract_retirement"
     if morale < 0.38 or "burnout" in pr or "morale" in pr:
@@ -644,6 +644,97 @@ def _apply_team_retirement_effects(session: FranchiseSession, team: Any, player:
             pass
 
 
+def _sweater_number(player: Any) -> Any:
+    ident = getattr(player, "identity", None)
+    for src in (player, ident):
+        if src is None:
+            continue
+        for key in ("sweater_number", "jersey_number", "sweater", "jersey", "number"):
+            val = getattr(src, key, None)
+            if val not in (None, "", 0):
+                return val
+    return None
+
+
+def _apply_retirement_cap_charge(session: FranchiseSession, team: Any, player: Any, row: Dict[str, Any]) -> None:
+    """Years still on the deal stay on the cap as a buyout. Retirement does not erase the contract."""
+    if team is None:
+        return
+    try:
+        from services.contract_economy import estimate_buyout
+        from services.franchise_sim import _contract_years_remaining, player_cap_hit_millions
+    except Exception:
+        return
+    years = _contract_years_remaining(player)
+    hit = float(player_cap_hit_millions(player) or 0)
+    if years <= 0 or hit <= 0:
+        row["cap_hit_removed"] = hit
+        return
+    est = estimate_buyout(player)
+    buyouts = list(getattr(team, "buyout_cap_hits", None) or [])
+    season_year = int(getattr(session, "season_calendar_year", 0) or 0)
+    for i in range(int(est.get("years") or 0)):
+        yr = season_year + i
+        buyouts.append({
+            "season": f"{yr}-{(yr + 1) % 100:02d}",
+            "amount_m": est.get("annual_penalty_m"),
+            "player_id": _player_id(player),
+            "player_name": _player_name(player),
+            "source": "retirement",
+        })
+    try:
+        team.buyout_cap_hits = buyouts
+    except Exception:
+        pass
+    row["cap_hit_removed"] = float(est.get("cap_savings_m") or 0)
+    row["buyout_annual_m"] = est.get("annual_penalty_m")
+    row["buyout_years"] = est.get("years")
+    contract = getattr(player, "contract", None)
+    if contract is not None:
+        for attr in ("years_remaining", "term_remaining", "remaining_years"):
+            if hasattr(contract, attr):
+                try:
+                    setattr(contract, attr, 0)
+                except Exception:
+                    pass
+        for attr in ("aav_m", "cap_hit_m", "aav"):
+            if hasattr(contract, attr):
+                try:
+                    setattr(contract, attr, 0)
+                except Exception:
+                    pass
+
+
+def _record_retirement_honors(session: FranchiseSession, team: Any, player: Any, row: Dict[str, Any]) -> None:
+    hof = int(row.get("hall_of_fame_score") or 0)
+    jersey = int(row.get("jersey_retirement_score") or 0)
+    year = int(getattr(session, "season_calendar_year", 0) or 0)
+    pid = str(row.get("player_id") or "")
+    if hof >= 78:
+        row["hall_of_fame_candidate"] = True
+        watch = list(getattr(session, "hall_of_fame_watch", None) or [])
+        if not any(isinstance(item, dict) and str(item.get("player_id") or "") == pid for item in watch):
+            watch.append({"player_id": pid, "name": row.get("name"), "score": hof, "year": year})
+        try:
+            session.hall_of_fame_watch = watch
+        except Exception:
+            pass
+    if jersey < 72 or team is None:
+        return
+    number = _sweater_number(player)
+    if number in (None, ""):
+        return
+    book = list(getattr(team, "retired_numbers", None) or [])
+    if not any(isinstance(item, dict) and str(item.get("player_id") or "") == pid for item in book):
+        book.append({"number": number, "player_id": pid, "name": row.get("name"), "year": year})
+    try:
+        team.retired_numbers = book
+    except Exception:
+        pass
+    row["jersey_retired"] = True
+    row["retired_number"] = number
+
+
 def _confirm_retirement(
     session: FranchiseSession,
     player: Any,
@@ -652,6 +743,8 @@ def _confirm_retirement(
 ) -> None:
     from services.franchise_sim import _strip_retired_from_nhl_rosters
 
+    _apply_retirement_cap_charge(session, team, player, row)
+    _record_retirement_honors(session, team, player, row)
     player.retired = True
     try:
         player.retirement_reason = row.get("retirement_reason")
@@ -712,18 +805,132 @@ def _enqueue_borderline_decision(session: FranchiseSession, row: Dict[str, Any])
     )
 
 
+def _find_player_in_org(team: Any, player_id: str) -> Any:
+    if team is None:
+        return None
+    for bucket in ("roster", "ahl_roster", "echl_roster", "prospect_pool"):
+        for player in list(getattr(team, bucket, None) or []):
+            if _player_id(player) == str(player_id):
+                return player
+    return None
+
+
+def _extend_contract_one_year(player: Any) -> int:
+    contract = getattr(player, "contract", None)
+    if contract is None:
+        contract = SimpleNamespace(years_remaining=0, aav_m=0.775, cap_hit_m=0.775)
+        try:
+            player.contract = contract
+        except Exception:
+            return 0
+    years = 0
+    for attr in ("years_remaining", "term_remaining", "remaining_years"):
+        if hasattr(contract, attr):
+            try:
+                years = max(years, int(getattr(contract, attr) or 0))
+            except (TypeError, ValueError):
+                years = 0
+            break
+    years += 1
+    for attr in ("years_remaining", "term_remaining", "remaining_years"):
+        if hasattr(contract, attr):
+            try:
+                setattr(contract, attr, years)
+            except Exception:
+                pass
+    hit = 0.0
+    for attr in ("aav_m", "cap_hit_m", "aav"):
+        if hasattr(contract, attr):
+            try:
+                hit = float(getattr(contract, attr) or 0)
+            except (TypeError, ValueError):
+                hit = 0.0
+            if hit > 0:
+                break
+    if hit <= 0:
+        for attr in ("aav_m", "cap_hit_m"):
+            try:
+                setattr(contract, attr, 0.775)
+            except Exception:
+                pass
+    return years
+
+
+def _demote_saved_line(session: FranchiseSession, player_id: str) -> bool:
+    lines = getattr(session, "lines", None)
+    if not isinstance(lines, dict):
+        return False
+    block = lines.get("even_strength") if isinstance(lines.get("even_strength"), dict) else lines
+    inner = block.get("lines") if isinstance(block, dict) and isinstance(block.get("lines"), dict) else block
+    if not isinstance(inner, dict):
+        return False
+    moved = False
+    for group in ("forwards", "defense", "goalies"):
+        units = list(inner.get(group) or [])
+        for index, unit in enumerate(units):
+            if not isinstance(unit, dict):
+                continue
+            slots = dict(unit.get("slots") or {})
+            slot_name = next((key for key, val in slots.items() if str(val) == str(player_id)), None)
+            if not slot_name:
+                continue
+            if index + 1 < len(units) and isinstance(units[index + 1], dict):
+                below = units[index + 1]
+                below_slots = dict(below.get("slots") or {})
+                slots[slot_name] = below_slots.get(slot_name) or ""
+                below_slots[slot_name] = str(player_id)
+                unit["slots"] = slots
+                below["slots"] = below_slots
+            moved = True
+            break
+        if moved:
+            break
+    for special in ("power_play", "penalty_kill"):
+        units = lines.get(special)
+        if isinstance(units, dict):
+            units = units.get("lines")
+        if not isinstance(units, list):
+            continue
+        for unit in units:
+            if not isinstance(unit, dict):
+                continue
+            slots = dict(unit.get("slots") or {})
+            for key, val in list(slots.items()):
+                if str(val) == str(player_id):
+                    slots[key] = ""
+                    moved = True
+            unit["slots"] = slots
+    return moved
+
+
+def _grant_leadership(team: Any, player: Any) -> str:
+    pid = _player_id(player)
+    captain = str(getattr(team, "captain_id", "") or getattr(team, "captain", "") or "")
+    alternates = [str(item) for item in (getattr(team, "alternate_captains", None) or [])]
+    if not captain:
+        try:
+            team.captain_id = pid
+            team.captain = pid
+        except Exception:
+            pass
+        return "captain"
+    if pid not in alternates and len(alternates) < 2:
+        alternates.append(pid)
+        try:
+            team.alternate_captains = alternates
+        except Exception:
+            pass
+        return "alternate"
+    return "named"
+
+
 def apply_retirement_decision(session: FranchiseSession, decision: Dict[str, Any], choice_id: str) -> Dict[str, Any]:
     """Resolve a user retirement_decision from apply_decision."""
     meta = dict(decision.get("meta") or {})
     pid = str(meta.get("player_id") or decision.get("player_id") or "")
     cid = str(choice_id or "")
     user_team = session.team_by_id.get(str(session.user_team_id))
-    player = None
-    if user_team is not None:
-        for p in getattr(user_team, "roster", None) or []:
-            if _player_id(p) == pid:
-                player = p
-                break
+    player = _find_player_in_org(user_team, pid)
 
     effects: Dict[str, Any] = {"choice": cid}
     if player is None:
@@ -745,10 +952,27 @@ def apply_retirement_decision(session: FranchiseSession, decision: Dict[str, Any
         )
         _confirm_retirement(session, player, user_team, row)
         _merge_into_retirements_payload(session, row, section="team")
+        from services.franchise_sim import _strip_retired_from_nhl_rosters
+
+        league = getattr(session.sim, "league", None)
+        _strip_retired_from_nhl_rosters(list(getattr(league, "teams", None) or []))
+        if user_team is not None:
+            for bucket in ("ahl_roster", "echl_roster", "prospect_pool"):
+                rows = list(getattr(user_team, bucket, None) or [])
+                kept = [person for person in rows if person is not player and _player_id(person) != pid]
+                if len(kept) != len(rows):
+                    try:
+                        setattr(user_team, bucket, kept)
+                    except Exception:
+                        pass
         effects["retired"] = True
+        effects["buyout_annual_m"] = row.get("buyout_annual_m")
+        effects["cap_hit_removed"] = row.get("cap_hit_removed")
     else:
+        year = int(getattr(session, "season_calendar_year", 0) or 0)
         try:
             player.retirement_status = "returning_for_one_more_year"
+            player._retirement_return_season = year
         except Exception:
             pass
         psych = getattr(player, "psych", None)
@@ -758,18 +982,45 @@ def apply_retirement_decision(session: FranchiseSession, decision: Dict[str, Any
             except Exception:
                 pass
         if cid == "one_year_deal":
-            effects["contract_expectation"] = "one_year_extension"
+            effects["contract_years"] = _extend_contract_one_year(player)
         elif cid == "reduced_role":
-            effects["role_expectation"] = "reduced_minutes"
+            health = getattr(player, "health", None)
+            if health is not None and hasattr(health, "wear_and_tear"):
+                try:
+                    health.wear_and_tear = max(0.0, float(health.wear_and_tear or 0) - 0.08)
+                except Exception:
+                    pass
+            effects["line_demoted"] = _demote_saved_line(session, pid)
+            try:
+                player._retirement_role = "reduced_minutes"
+            except Exception:
+                pass
         elif cid == "leadership_role":
-            effects["role_expectation"] = "leadership"
+            effects["leadership"] = _grant_leadership(user_team, player)
         elif cid == "contender_push":
-            effects["promise"] = "contender_push"
+            try:
+                from app.sim_engine.franchise.storyline_engine import create_universe_promise
+
+                promise = create_universe_promise(
+                    session,
+                    {
+                        "type": "winning_commitment",
+                        "player_id": pid,
+                        "due_games": 20,
+                        "description": "Show him the club is still trying to win.",
+                    },
+                    pid,
+                    f"retire_{pid}",
+                )
+                effects["promise_id"] = (promise or {}).get("id")
+            except Exception:
+                pass
             try:
                 player._retirement_promise = "contender_push"
             except Exception:
                 pass
         effects["retired"] = False
+        effects["returns_through_season"] = year
 
     return effects
 
@@ -810,23 +1061,23 @@ def _run_depth_retirement_pass(session: FranchiseSession, rng: Any) -> List[Dict
     if league is None:
         return []
 
-    pool: List[Tuple[Any, str]] = []
+    pool: List[Tuple[Any, Any, str]] = []
     for p in getattr(league, "free_agents", None) or []:
         if not getattr(p, "retired", False):
-            pool.append((p, "UFA"))
+            pool.append((p, None, "UFA"))
     for p in getattr(league, "overseas_free_agents", None) or []:
         if not getattr(p, "retired", False):
-            pool.append((p, "Overseas"))
+            pool.append((p, None, "Overseas"))
     for tm in getattr(league, "teams", None) or []:
         for p in getattr(tm, "ahl_roster", None) or []:
             if not getattr(p, "retired", False):
-                pool.append((p, "AHL"))
+                pool.append((p, tm, "AHL"))
         for p in getattr(tm, "echl_roster", None) or []:
             if not getattr(p, "retired", False):
-                pool.append((p, "ECHL"))
+                pool.append((p, tm, "ECHL"))
 
-    candidates: List[Tuple[float, Any, str]] = []
-    for p, label in pool:
+    candidates: List[Tuple[float, Any, Any, str]] = []
+    for p, team, label in pool:
         age = _player_age(p)
         if age < 30:
             continue
@@ -843,25 +1094,35 @@ def _run_depth_retirement_pass(session: FranchiseSession, rng: Any) -> List[Dict
         elif ovr < 0.62:
             prob += 0.06
         prob = _clamp(prob, 0.0, 0.55)
-        candidates.append((prob, p, label))
+        candidates.append((prob, p, team, label))
 
     projected = sum(c[0] for c in candidates)
     if projected > DEPTH_RETIREMENT_SOFT_CAP:
         factor = DEPTH_RETIREMENT_SOFT_CAP / max(projected, 1.0)
-        candidates = [(c[0] * factor, c[1], c[2]) for c in candidates]
+        candidates = [(c[0] * factor, c[1], c[2], c[3]) for c in candidates]
 
     retired_rows: List[Dict[str, Any]] = []
-    for prob, p, label in candidates:
+    for prob, p, team, label in candidates:
         if prob <= 0:
             continue
         if rng.random() >= prob:
             continue
         p.retired = True
+        if team is not None:
+            team_id = str(getattr(team, "team_id", getattr(team, "id", "")) or "")
+            team_name = str(getattr(team, "name", "") or team_id)
+            if label in ("AHL", "ECHL"):
+                team_name = f"{team_name} ({label})"
+        else:
+            team_id = str(getattr(p, "last_team_id", "") or getattr(p, "former_team_id", "") or "")
+            team_name = "Free agent" if label == "UFA" else "Overseas" if label == "Overseas" else label
+            if not team_id:
+                team_id = "FA" if label == "UFA" else "OV"
         row = {
             "player_id": _player_id(p),
             "name": _player_name(p),
-            "team_id": label,
-            "team_name": label,
+            "team_id": team_id,
+            "team_name": team_name,
             "age": _player_age(p),
             "position": _player_position(p),
             "overall": _player_ovr_display(p),
@@ -870,7 +1131,7 @@ def _run_depth_retirement_pass(session: FranchiseSession, rng: Any) -> List[Dict
             "retirement_status": "confirmed",
             "retirement_risk": int(prob * 100),
             "confirmed": True,
-            "news_headline": f"{_player_name(p)} retires from {label}",
+            "news_headline": f"{_player_name(p)} retires from {team_name}",
         }
         retired_rows.append(row)
         _purge_retired_from_extra_pools(session, p)
@@ -921,7 +1182,18 @@ def run_franchise_retirement_pass(session: FranchiseSession) -> Dict[str, Any]:
             if getattr(player, "retired", False):
                 continue
             if str(getattr(player, "retirement_status", "") or "") == "returning_for_one_more_year":
-                continue
+                granted = getattr(player, "_retirement_return_season", None)
+                year = int(getattr(session, "season_calendar_year", 0) or 0)
+                try:
+                    granted_year = int(granted) if granted is not None else None
+                except (TypeError, ValueError):
+                    granted_year = None
+                if granted_year is not None and granted_year >= year:
+                    continue
+                try:
+                    player.retirement_status = ""
+                except Exception:
+                    pass
 
             age = _player_age(player)
             ovr = _player_ovr_norm(player)
@@ -932,32 +1204,23 @@ def run_franchise_retirement_pass(session: FranchiseSession) -> Dict[str, Any]:
             factors = getattr(decision, "factors", None) if decision is not None else None
             risk = _compute_retirement_risk(player, team, session, engine_chance, factors)
 
-            retire_chance = engine_chance
+            retire_chance = max(float(engine_chance), float(risk) / 100.0)
             if _is_goalie(player):
                 retire_chance *= 0.72
             if age >= 41 and ovr < 0.90:
                 retire_chance = max(retire_chance, 0.82)
             elif age >= 41:
                 retire_chance = max(retire_chance, 0.55)
+            risk = int(round(_clamp(retire_chance, 0.0, 1.0) * 100))
 
-            if ovr >= elite_cut and age < 35 and wear < 0.85:
+            healthy_star = ovr >= elite_cut and age < 35 and wear < 0.85 and not ctx.get("career_ending_injury")
+            if healthy_star:
                 retire_chance = 0.0
                 risk = min(risk, 24)
 
             primary = str(getattr(decision, "primary_reason", "age") if decision else "age")
             locked = _is_locked_retirement(risk, age, ovr, wear)
             borderline = _is_user_borderline(session, tid, risk, age, locked)
-
-            engine_retired = bool(getattr(decision, "retired", False)) if decision is not None else False
-            if decision is None:
-                engine_retired = _fallback_retire_chance(player, rng)
-
-            if retire_chance > 0 and not engine_retired and decision is not None:
-                engine_retired = rng.random() < retire_chance
-            elif decision is None and not engine_retired:
-                pass
-            elif not engine_retired and retire_chance > 0:
-                engine_retired = rng.random() < retire_chance
 
             candidates.append(
                 {
@@ -968,7 +1231,7 @@ def run_franchise_retirement_pass(session: FranchiseSession) -> Dict[str, Any]:
                     "ovr": ovr,
                     "risk": risk,
                     "chance": retire_chance,
-                    "retire": engine_retired and not borderline,
+                    "retire": False,
                     "locked": locked,
                     "borderline": borderline,
                     "primary": primary,
@@ -983,25 +1246,31 @@ def run_franchise_retirement_pass(session: FranchiseSession) -> Dict[str, Any]:
         factor = NHL_RETIREMENT_SOFT_CAP / projected
         for c in active:
             c["chance"] *= factor
+            c["risk"] = int(round(float(c["chance"]) * 100))
     elif projected < NHL_RETIREMENT_FLOOR and active:
         low = sorted(active, key=lambda x: (-x["age"], x["ovr"]))[: max(1, NHL_RETIREMENT_FLOOR - int(projected))]
         for c in low:
             c["chance"] = min(0.65, float(c["chance"]) + 0.04)
+            c["risk"] = int(round(float(c["chance"]) * 100))
 
-    # Re-roll with scaled chances for non-borderline
+    # One roll, using the same chance the card will show.
     for c in active:
-        if c["borderline"]:
-            continue
         if c["locked"]:
             c["retire"] = True
-        elif float(c["chance"]) > 0:
+            continue
+        if float(c["chance"]) > 0:
             c["retire"] = rng.random() < float(c["chance"])
 
-    # Trim if hard cap exceeded
+    # Locked retirements stay. The cap only drops voluntary ones.
     winners = [c for c in candidates if c["retire"]]
     if len(winners) > NHL_RETIREMENT_HARD_CAP:
-        winners.sort(key=lambda x: (-x["age"], x["ovr"]))
-        keep = set(id(c["player"]) for c in winners[:NHL_RETIREMENT_HARD_CAP])
+        locked_winners = [c for c in winners if c["locked"]]
+        voluntary = [c for c in winners if not c["locked"]]
+        voluntary.sort(key=lambda x: (-x["age"], x["ovr"]))
+        room = NHL_RETIREMENT_HARD_CAP - len(locked_winners)
+        keep = {id(c["player"]) for c in locked_winners}
+        if room > 0:
+            keep.update(id(c["player"]) for c in voluntary[:room])
         for c in candidates:
             if c["retire"] and id(c["player"]) not in keep:
                 c["retire"] = False

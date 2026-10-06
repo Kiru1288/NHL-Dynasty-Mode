@@ -572,17 +572,17 @@ def choose_nationality(rng, *, market_bias: Optional[Dict[str, float]] = None) -
         "Kazakhstan": 0.005,
         "Japan": 0.003,
         "South Korea": 0.003,
-        "China": 0.003,
+        "China": 0.006,
         "Australia": 0.003,
         "New Zealand": 0.001,
         "Brazil": 0.002,
         "Argentina": 0.002,
-        "Mexico": 0.002,
-        "Nigeria": 0.002,
+        "Mexico": 0.005,
+        "Nigeria": 0.004,
         "Kenya": 0.001,
         "South Africa": 0.002,
-        "India": 0.002,
-        "Philippines": 0.002,
+        "India": 0.005,
+        "Philippines": 0.005,
     }
     if market_bias:
         for k, v in market_bias.items():

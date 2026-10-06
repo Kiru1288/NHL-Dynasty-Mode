@@ -499,6 +499,21 @@ NATIONALITY_LEAGUE_WEIGHTS: Dict[str, List[Tuple[str, float]]] = {
     "India": [
         ("NCAA", 0.50), ("USHL", 0.40), ("CHL_OHL", 0.06), ("CHL_WHL", 0.04),
     ],
+    "Mexico": [
+        ("NCAA", 0.46), ("USHL", 0.36), ("CHL_WHL", 0.10), ("CHL_OHL", 0.08),
+    ],
+    "Philippines": [
+        ("NCAA", 0.48), ("USHL", 0.36), ("CHL_WHL", 0.09), ("CHL_OHL", 0.07),
+    ],
+    "Brazil": [
+        ("NCAA", 0.46), ("USHL", 0.38), ("CHL_OHL", 0.09), ("CHL_WHL", 0.07),
+    ],
+    "Kenya": [
+        ("NCAA", 0.52), ("USHL", 0.40), ("CHL_OHL", 0.05), ("CHL_WHL", 0.03),
+    ],
+    "Argentina": [
+        ("NCAA", 0.46), ("USHL", 0.38), ("CHL_OHL", 0.09), ("CHL_WHL", 0.07),
+    ],
     "Belarus": [
         ("EU_J_KHL_JR", 0.68), ("EU_J_CZ", 0.08), ("EU_J_DEL", 0.06), ("EU_J_LIIGA", 0.05),
         ("CHL_WHL", 0.04), ("USHL", 0.035), ("NCAA", 0.025),

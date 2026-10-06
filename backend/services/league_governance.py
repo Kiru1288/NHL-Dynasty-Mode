@@ -303,7 +303,7 @@ def trade_demand_multiplier(holder: Any) -> float:
 
 def _team_rows(session: Any) -> Dict[str, Dict[str, Any]]:
     """Annualised revenue / profit rows for every club (phase-independent)."""
-    from services.league_operations import calculate_team_revenue
+    from services.league_operations import _apply_revenue_sharing, calculate_team_revenue
 
     out: Dict[str, Dict[str, Any]] = {}
     uid = str(getattr(session, "user_team_id", "") or "")
@@ -314,6 +314,8 @@ def _team_rows(session: Any) -> Dict[str, Dict[str, Any]]:
             out[str(tid)] = calculate_team_revenue(session, team, str(tid), is_user=str(tid) == uid, annual=True)
         except Exception:
             out[str(tid)] = {"market_tier_key": "medium", "profit": 0.0, "revenue": 180.0}
+    if out:
+        _apply_revenue_sharing(session, list(out.values()))
     return out
 
 
@@ -1580,13 +1582,18 @@ def _user_impact(session: Any) -> Dict[str, Any]:
     uid = str(getattr(session, "user_team_id", "") or "")
     out: Dict[str, Any] = {}
     try:
+        fin = _team_rows(session).get(uid) or {}
+        out["annual_revenue_m"] = fin.get("revenue")
+        out["annual_profit_m"] = fin.get("profit")
+    except Exception:
+        pass
+    try:
         from services.franchise_offseason import team_signing_bonus_eligibility
 
         elig = team_signing_bonus_eligibility(session, uid)
         out["bonus_eligible"] = bool(elig.get("eligible"))
         out["bonus_max_pct"] = elig.get("max_bonus_pct")
         out["bonus_floor_m"] = elig.get("floor_m")
-        out["annual_revenue_m"] = elig.get("revenue_m")
     except Exception:
         pass
     try:

@@ -6176,6 +6176,10 @@ def advance_contract_negotiation_day(session: FranchiseSession, *, days: int = 1
                 "years": pending.get("years"),
                 "ntc": pending.get("ntc"),
                 "nmc": pending.get("nmc"),
+                "ntc_mode": pending.get("ntc_mode") or "",
+                "m_ntc": bool(pending.get("m_ntc")),
+                "modified_no_trade_teams": pending.get("modified_no_trade_teams") or 0,
+                "ntc_teams": list(pending.get("ntc_teams") or []),
                 "signing_bonus_m": pending.get("signing_bonus_m") or 0,
                 "two_way": pending.get("two_way"),
                 "contract_category": pending.get("contract_category") or "nhl_one_way",
@@ -6272,9 +6276,12 @@ def resolve_user_fa_pending_offers(session: FranchiseSession, *, days: int = 1) 
             if not isinstance(pending, dict):
                 continue
             ctx = str(pending.get("context") or "").lower()
+            phase_now = str(getattr(session, "phase", "") or "").lower()
+            in_season = phase_now in ("regular", "preseason", "playoffs", "playoff_ready")
             if ctx and ctx not in ("ufa", "free_agency", "fa", ""):
-                # Exclusive re-sign pending offers use advance_contract_negotiation_day.
-                if ctx in ("re_sign", "resign", "extension"):
+                # Offseason re-sign offers use the exclusive-window Sim Day clock.
+                # In-season offers have to age on the regular calendar or nothing happens.
+                if ctx in ("re_sign", "resign", "extension") and not in_season:
                     continue
             pending["days_held"] = int(pending.get("days_held") or 0) + 1
             need = max(1, int(pending.get("resolve_days") or 2))
@@ -6311,10 +6318,14 @@ def resolve_user_fa_pending_offers(session: FranchiseSession, *, days: int = 1) 
                 "years": pending.get("years"),
                 "ntc": pending.get("ntc"),
                 "nmc": pending.get("nmc"),
+                "ntc_mode": pending.get("ntc_mode") or "",
+                "m_ntc": bool(pending.get("m_ntc")),
+                "modified_no_trade_teams": pending.get("modified_no_trade_teams") or 0,
+                "ntc_teams": list(pending.get("ntc_teams") or []),
                 "signing_bonus_m": pending.get("signing_bonus_m") or 0,
                 "two_way": pending.get("two_way"),
                 "contract_category": pending.get("contract_category") or "nhl_one_way",
-                "context": "ufa",
+                "context": "extension" if ctx in ("re_sign", "resign", "extension") else "ufa",
                 "force": True,
                 "resolve_pending": True,
                 "_session": session,
@@ -7080,6 +7091,30 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
         _joined = run_pending_expansion(session, int(session.season_calendar_year) + 1)
         if _joined:
             session.expansion_joined_payload = _joined
+            try:
+                from services.franchise_sim import _append_showcase_popup
+
+                names = ", ".join(
+                    f"{row.get('city') or ''} {row.get('name') or ''}".strip() or str(row.get("abbr") or "Expansion club")
+                    for row in _joined
+                    if isinstance(row, dict)
+                ) or "New clubs"
+                taken = sum(int(row.get("players") or 0) for row in _joined if isinstance(row, dict))
+                _append_showcase_popup(session, f"expansion:{int(session.season_calendar_year) + 1}", {
+                    "kind": "breaking_news",
+                    "source_label": "Board of Governors",
+                    "theme": "info",
+                    "headline": "Expansion draft is complete",
+                    "summary": (
+                        f"{names} join the league. Existing clubs protected their cores and "
+                        f"{taken or 'several'} players changed teams in the expansion draft. "
+                        "The new clubs are on next year's schedule and in the standings. "
+                        "Passed board rules (cap, injury rate, trade volume) stay in force."
+                    ),
+                })
+                session.timeline.append(f"Expansion: {names} joined the league.")
+            except Exception:
+                pass
     except Exception as _exp_err:  # expansion must never block the season
         import logging
 
@@ -7140,6 +7175,21 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     session.calendar_cursor = 0
     session.nhl_regular_season_last_index = last_reg_idx
     session.standings = StandingsTable(teams)
+    try:
+        from services.franchise_sim import _franchise_refresh_strength_map
+        from app.sim_engine.league.awards import assign_team_season_expectations
+
+        _franchise_refresh_strength_map(session)
+        for club in teams:
+            club.expected_wins = None
+            club.expected_points = None
+        assign_team_season_expectations(
+            teams,
+            getattr(session, "strength_map", None) or {},
+            games=int(getattr(session, "games_per_team_schedule", 82) or 82),
+        )
+    except Exception:
+        pass
     session.player_season_stats = {}
     session.game_results = []
     session.processed_game_ids = set()
@@ -7550,7 +7600,9 @@ def slim_awards_payload_for_client(payload: Optional[Dict[str, Any]]) -> Dict[st
             out["finalists"] = list(full[:3])
         winners = list(out.get("winners") or [])
         if winners and isinstance(winners[0], dict):
-            out["winners"] = [_slim_entity(x) for x in winners[:3]]
+            award_key = str(out.get("award_id") or out.get("name") or "").lower().replace("-", "_").replace(" ", "_")
+            winner_cap = 6 if "all_star" in award_key else 3
+            out["winners"] = [_slim_entity(x) for x in winners[:winner_cap]]
         for rk in ("public_rationale", "rationale"):
             if rk in out and isinstance(out[rk], str) and len(out[rk]) > 320:
                 out[rk] = out[rk][:317] + "..."

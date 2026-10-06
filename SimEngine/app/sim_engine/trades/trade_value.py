@@ -206,7 +206,8 @@ def slot_curve_value(overall_slot: int) -> float:
     k = float(slot - 1)
     # v15: lottery picks are priced like the stars they usually become —
     # #1 ~160 · #3 ~135 · #5 ~115 · #10 ~79 · #16 ~53 · #24 ~35 · #32 ~26 · #48 ~18 · #80 ~12.
-    return _clamp(2.0 + 132.0 * math.exp(-0.10 * k) + 26.0 * math.exp(-0.012 * k), 2.0, 170.0)
+    # Lottery and late firsts carry more weight than a replaceable everyday NHLer.
+    return _clamp(3.0 + 168.0 * math.exp(-0.088 * k) + 42.0 * math.exp(-0.010 * k), 3.0, 220.0)
 
 
 def _known_pick_slot(pick_row: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[int]:
@@ -237,7 +238,8 @@ def _known_pick_slot(pick_row: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[
 def _pick_projected_slot(proj: Dict[str, Any], rnd: int) -> Optional[int]:
     league_rank = proj.get("league_rank")
     if league_rank is not None and rnd == 1:
-        return int(league_rank)
+        # Rank 1 is the best club, so their first-round pick sits at the back of the round.
+        return max(1, min(32, 33 - int(league_rank)))
     points_pct = proj.get("points_pct")
     if points_pct is not None and rnd == 1:
         return int(_clamp(32 - (points_pct - 0.35) * 48.0, 1, 32))
@@ -437,7 +439,7 @@ def _team_league_rank(team: Any, team_by_id: Optional[Dict[str, Any]] = None) ->
         ranked.append((pct, str(tid)))
     if not ranked:
         return None
-    ranked.sort(key=lambda x: x[0])
+    ranked.sort(key=lambda x: -x[0])
     my_id = str(getattr(team, "team_id", getattr(team, "id", "")) or "")
     for idx, (_, tid) in enumerate(ranked, start=1):
         if tid == my_id:
@@ -615,16 +617,15 @@ def _talent_base(ovr: float) -> float:
     if o <= 0:
         return 3.0
     if o < 70.0:
-        anchor = 4.0 + max(0.0, o - 60.0) * 0.6
-    elif o < 75.0:
-        anchor = 10.0 + (o - 70.0) * 1.6
+        anchor = 3.0 + max(0.0, o - 60.0) * 0.45
     elif o < 80.0:
-        anchor = 18.0 + (o - 75.0) * 4.0
+        # Everyday NHLers (fourth line through middle six) sit under a late first.
+        anchor = 6.0 + (o - 70.0) * 1.7
     elif o < 92.0:
-        anchor = 38.0 * math.exp(0.15 * (o - 80.0))
+        anchor = 32.0 * math.exp(0.155 * (o - 80.0))
     else:
         # Past MVP level the curve keeps climbing, but more gently.
-        anchor = 38.0 * math.exp(1.8) * math.exp(0.10 * (o - 92.0))
+        anchor = 32.0 * math.exp(0.155 * 12.0) * math.exp(0.10 * (o - 92.0))
     return max(3.0, float(anchor))
 
 
@@ -1078,10 +1079,11 @@ def _clause_penalty(player: Any) -> float:
         )
     if nmc:
         return 6.0
-    if ntc:
-        return 4.0
+    # Modified lists also set the no-trade flag. Price the list, not a full NTC.
     if mntc > 0:
         return 2.5
+    if ntc:
+        return 4.0
     return 0.0
 
 
@@ -1916,10 +1918,7 @@ def evaluate_pick_asset_value(
     points_pct = proj.get("points_pct")
     lottery_mod = 0.0
     league_rank = proj.get("league_rank")
-    if True:
-        # Slot-curve base already carries lottery upside / finish risk.
-        pass
-    elif rnd == 1:
+    if rnd == 1:
         if league_rank is not None:
             n_teams = len(team_by_id) if isinstance(team_by_id, dict) and team_by_id else 32
             if league_rank >= max(1, n_teams - 4):
@@ -1941,7 +1940,7 @@ def evaluate_pick_asset_value(
                 lottery_mod -= 3.0
 
     future_mod = 0.0
-    if False and years_out >= 1:  # future discount now lives in the slot-curve base
+    if years_out >= 1:
         future_mod -= min(5.0, years_out * 2.2)
         orig_window = str(proj.get("window") or "")
         if orig_window in ("rebuild", "declining"):

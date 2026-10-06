@@ -10,6 +10,7 @@ import {
   getFranchiseNarrative,
   getFranchiseState,
   getFranchiseStateHeavy,
+  prefetchStatsCentral,
   listTeams,
   reopenOffseasonStage,
   resetFranchiseStateCache,
@@ -651,6 +652,7 @@ export function GameUIProvider({ children }) {
   const [pendingDraftProspectId, setPendingDraftProspectId] = useState(null);
   const [pendingMeetingPlayerId, setPendingMeetingPlayerId] = useState(null);
   const [pendingSocialNav, setPendingSocialNav] = useState(null);
+  const [pendingPromiseNav, setPendingPromiseNav] = useState(null);
   const [hubWarmup, setHubWarmup] = useState(() => ({
     [HUB_WARMUP_STAGES.ENVIRONMENT]: "waiting",
     [HUB_WARMUP_STAGES.CRESTS]: "waiting",
@@ -743,6 +745,14 @@ export function GameUIProvider({ children }) {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [franchiseState?.trade_demand_crisis?.demand_id]);
+
+  useEffect(() => {
+    if (!franchiseState?.team && franchiseState?.stats_revision == null) return undefined;
+    const timer = window.setTimeout(() => {
+      prefetchStatsCentral(franchiseState?.stats_revision ?? null).catch(() => {});
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [franchiseState?.stats_revision, franchiseState?.session_id]);
 
   const mergeFranchiseState = useCallback((nextState) => {
     if (!nextState || typeof nextState !== "object") return;
@@ -1171,11 +1181,39 @@ export function GameUIProvider({ children }) {
             mode: targetMode,
             count: targetCount,
             auto_resolve: effectiveAuto,
+            auto_fill_lines: effectiveAuto,
           });
           mergeFranchiseState(res?.state);
         } else {
-          res = await advanceFranchise({ mode: "day", count: 1, auto_resolve: effectiveAuto });
+          res = await advanceFranchise({
+            mode: "day",
+            count: 1,
+            auto_resolve: effectiveAuto,
+            auto_fill_lines: effectiveAuto,
+          });
           mergeFranchiseState(res?.state);
+        }
+        const step = res?.step || {};
+        const lastStep = step?.bulk ? step.last_step || step : step;
+        const status = String(lastStep?.status || step?.status || "").toLowerCase();
+        const stopped = String(step?.stopped_reason || lastStep?.reason || "").toLowerCase();
+        const completed = step?.bulk ? Number(step?.steps_completed || 0) : status === "ok" ? 1 : 0;
+        const pending = (step?.pending_decisions || lastStep?.pending_decisions || [])[0];
+        const pausedForDesk = step?.bulk && stopped === "user_action";
+        const stalled =
+          status === "blocked"
+          || (step?.bulk && completed <= 0 && Boolean(stopped) && stopped !== "count");
+        if (stalled || pausedForDesk) {
+          setError(
+            String(
+              lastStep?.message
+              || step?.message
+              || pending?.title
+              || (pausedForDesk
+                ? "Sim paused. A player meeting, waiver, or press availability is waiting on the desk."
+                : "Sim stopped. Resolve the alert on the desk, then try again.")
+            )
+          );
         }
       } catch (e) {
         // Never rethrow — Axios Network Error must not open the React crash overlay.
@@ -1553,6 +1591,8 @@ export function GameUIProvider({ children }) {
       setPendingMeetingPlayerId,
       pendingSocialNav,
       setPendingSocialNav,
+      pendingPromiseNav,
+      setPendingPromiseNav,
       openDraftClassFromWjc,
       onResolveDecision,
       onResolveStorylineChoice,
@@ -1621,6 +1661,8 @@ export function GameUIProvider({ children }) {
       setPendingMeetingPlayerId,
       pendingSocialNav,
       setPendingSocialNav,
+      pendingPromiseNav,
+      setPendingPromiseNav,
       openDraftClassFromWjc,
       onResolveDecision,
       onResolveStorylineChoice,

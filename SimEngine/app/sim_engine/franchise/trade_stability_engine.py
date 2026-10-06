@@ -141,7 +141,9 @@ def _player_character_0_100(player: Any) -> int:
         + 0.14 * float(getattr(tr, "competitiveness", 0.5))
         + 0.10 * (1.0 - float(getattr(tr, "volatility", 0.5)))
     )
-    return int(round(_clamp(blend, 0.55, 0.95) * 100.0))
+    # Same 40–99 window as a chapter Character rating. The old 55–95 clamp
+    # kept a trait-only player from ever reaching the short crisis clock.
+    return int(round(_clamp(blend, 0.40, 0.99) * 100.0))
 
 
 def _player_mental_0_100(player: Any) -> int:
@@ -1077,7 +1079,13 @@ def gather_player_concerns(session: Any, player: Any, team: Any) -> PlayerConcer
             or _get(contract, "trade_clause", "")
             or ""
         ).upper()
-        has_ntc = "NTC" in clause or "NMC" in clause or "NO MOVE" in clause or "NO TRADE" in clause
+        mode = str(_get(contract, "ntc_mode", "") or "").upper()
+        listed = int(_get(contract, "modified_no_trade_teams", 0) or 0)
+        modified = "M-NTC" in clause or "MNTC" in clause or "MODIFIED" in clause or mode == "MODIFIED" or listed > 0
+        has_nmc = "NMC" in clause or "NO MOVE" in clause or bool(_get(contract, "nmc", False) or _get(contract, "no_move_clause", False))
+        has_ntc = (not modified and not has_nmc) and (
+            "NO TRADE" in clause or "NTC" in clause or bool(_get(contract, "no_trade_clause", False))
+        )
         yrs = int(_get(contract, "years_remaining", 0) or _get(contract, "term", 0) or 0)
         contract_sec = _clamp(40.0 + yrs * 8.0, 0.0, 100.0)
 
@@ -1505,9 +1513,12 @@ def readiness_penalties(stability: float, character: float, mental: float, escal
     stress_base = max(0.0, (55.0 - float(stability)) * 0.06)
     mental_stress = stress_base * _clamp(1.35 - float(mental) / 100.0, 0.15, 1.25)
 
-    disengage_base = max(0.0, (50.0 - float(character)) * 0.05) * (escalation - 1) * 0.35
+    # Distance below a solid character. (50 - character) was about zero for
+    # almost everyone, so the on-ice penalty did not depend on character.
+    gap = max(0.0, 74.0 - float(character))
+    disengage_base = gap * 0.035 * max(1, int(escalation) - 1)
     if escalation >= 4:
-        disengage_base += 2.5
+        disengage_base += 1.0 + gap * 0.03
     character_disengagement = disengage_base * _clamp(1.2 - float(mental) / 120.0, 0.2, 1.0)
 
     ovr = -min(6.0, mental_stress + character_disengagement)
@@ -1587,6 +1598,7 @@ def apply_daily_stability_update(session: Any, player: Any, team: Any, calendar_
     mental = float(instant["mental"])
     drift_mult = character_daily_drift_multiplier(character)
     pst = ensure_player_storyline_state(player)
+    pst["character"] = int(round(character))
 
     pid = _player_id(player)
     book = ensure_trade_stability_state(session)
@@ -1612,6 +1624,7 @@ def apply_daily_stability_update(session: Any, player: Any, team: Any, calendar_
     max_rise = 1.35 if count_personal_significant_pressures(instant["pressures"]) else RECOVERY_RISE_NO_GRIEVANCE
     score = prev_score
     level = prev_level
+    accrued_concern = 0
     for day in range(first_day, int(calendar_idx) + 1):
         delta = (target_score - score) * 0.18
         if target_score < score:
@@ -1635,10 +1648,16 @@ def apply_daily_stability_update(session: Any, player: Any, team: Any, calendar_
             level = target_level
 
         if score < 70.0 or concerned:
-            concern_days += 1
-        else:
-            concern_days = max(0, concern_days - 1)
+            accrued_concern += 1
+
     score = round(score, 2)
+    # Accrue the skipped days only while he is still concerned, so a weekly
+    # check keeps pace with daily checks. A calm reading removes one day.
+    # It does not erase the streak for every day the sim skipped.
+    if score < 70.0 or concerned:
+        concern_days += accrued_concern
+    else:
+        concern_days = max(0, concern_days - 1)
     pst["stability_concern_days"] = concern_days
 
     penalties = readiness_penalties(score, character, mental, level)

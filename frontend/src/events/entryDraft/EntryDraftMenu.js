@@ -4914,7 +4914,7 @@ function TradePanel({ draft, onClose, onAccept, accepting }) {
         <header className={`${PREFIX}-sheet-head`}>
           <div>
             <h3>Trade down</h3>
-            <p>Clubs bidding to climb into your slot</p>
+            <p>Clubs bidding to climb, including teams holding later picks</p>
           </div>
           <button type="button" className="nhlcal-quick-link" onClick={onClose}>
             <Icon name="close" size={12} /> Close

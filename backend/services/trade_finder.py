@@ -195,7 +195,9 @@ def _plan_cap(
         return None
     need = partner_net - partner_budget
     if need <= 0:
-        return None  # partner is fine; it's the user side that can't fit
+        # Partner fits. If the buyer does not, retention has to sit on a player
+        # the buyer is acquiring — this helper only prices the seller's outgoing piece.
+        return None
     cap_pct = MAX_RETAIN_PCT
     try:
         from app.sim_engine.economy.cap_engine import max_retention_pct
@@ -211,16 +213,92 @@ def _plan_cap(
     return pct
 
 
+def _buyer_retention_pct(
+    user_budget: float,
+    partner_budget: float,
+    user_gives: List[Dict[str, Any]],
+    partner_gives: List[Dict[str, Any]],
+) -> Optional[Tuple[str, int]]:
+    """Retention the selling club keeps on one outgoing player so the buyer fits."""
+    user_net = _cap_m(partner_gives) - _cap_m(user_gives)
+    if user_net <= user_budget + 0.005:
+        return None
+    players = [a for a in partner_gives if a.get("type") == "player" and float(a.get("cap_m") or 0) > 0]
+    if not players:
+        return None
+    target = max(players, key=lambda a: float(a.get("cap_m") or 0))
+    hit = float(target.get("cap_m") or 0)
+    need_cut = user_net - user_budget
+    if need_cut <= 0 or hit <= 0:
+        return None
+    cap_pct = MAX_RETAIN_PCT
+    try:
+        from app.sim_engine.economy.cap_engine import max_retention_pct
+
+        cap_pct = int(max_retention_pct(_RETENTION_LEAGUE.get("league")))
+    except Exception:
+        pass
+    pct = int(min(cap_pct, ((need_cut / hit) * 100.0 // 5 + 1) * 5))
+    if hit * pct / 100.0 + 0.005 < need_cut:
+        return None
+    partner_net = _cap_m(user_gives) - _cap_m(partner_gives) + hit * pct / 100.0
+    if partner_net > partner_budget + 0.005:
+        return None
+    return str(target.get("id") or ""), pct
+
+
 def _clause_blocked(player: Any) -> bool:
+    """Full NMC/NTC only. A modified list can still move to the teams on it."""
     c = getattr(player, "contract", None)
     if isinstance(c, dict):
+        mode = str(c.get("ntc_mode") or "").upper()
+        kind = str(c.get("clause_type") or "").upper()
+        if mode in ("MODIFIED", "MNTC", "M-NTC") or kind in ("M-NTC", "MNTC") or int(c.get("modified_no_trade_teams") or 0) > 0:
+            return bool(c.get("no_move_clause") or c.get("nmc"))
         return bool(c.get("no_move_clause") or c.get("nmc") or c.get("no_trade_clause") or c.get("ntc"))
     if c is None:
         return False
     clauses = getattr(c, "clauses", None)
     if clauses is not None:
+        mntc_n = int(getattr(clauses, "modifiedNoTradeTeams", 0) or 0)
+        nested = str(getattr(clauses, "clause_type", "") or "").upper()
+        mode = str(getattr(c, "ntc_mode", "") or "").upper()
+        if mntc_n > 0 or nested in ("M-NTC", "MNTC") or mode in ("MODIFIED", "MNTC", "M-NTC"):
+            return bool(getattr(clauses, "noMoveClause", False))
         return bool(getattr(clauses, "noMoveClause", False) or getattr(clauses, "noTradeClause", False))
+    mntc_n = int(getattr(c, "modified_no_trade_teams", 0) or 0)
+    if mntc_n > 0 or str(getattr(c, "ntc_mode", "") or "").upper() in ("MODIFIED", "MNTC", "M-NTC"):
+        return bool(getattr(c, "no_move_clause", False) or getattr(c, "nmc", False))
     return bool(getattr(c, "no_move_clause", False) or getattr(c, "no_trade_clause", False))
+
+
+def _mntc_blocks_destination(player: Any, acquiring: Any) -> bool:
+    """True when a modified list does not include the club that would receive him."""
+    c = getattr(player, "contract", None)
+    if c is None:
+        return False
+    if isinstance(c, dict):
+        mode = str(c.get("ntc_mode") or "").upper()
+        kind = str(c.get("clause_type") or "").upper()
+        modified = mode in ("MODIFIED", "MNTC", "M-NTC") or kind in ("M-NTC", "MNTC") or int(c.get("modified_no_trade_teams") or 0) > 0
+        if c.get("nmc") or c.get("no_move_clause"):
+            return False
+        approved = list(c.get("approved_trade_teams") or c.get("ntc_teams") or c.get("approved_trade_team_ids") or [])
+    else:
+        mode = str(getattr(c, "ntc_mode", "") or "").upper()
+        modified = mode in ("MODIFIED", "MNTC", "M-NTC") or int(getattr(c, "modified_no_trade_teams", 0) or 0) > 0
+        approved = list(getattr(c, "approved_trade_teams", None) or getattr(c, "ntc_teams", None) or [])
+    if not modified:
+        return False
+    if not approved:
+        return True
+    keys = {str(a).upper() for a in approved if a}
+    dests = []
+    for attr in ("team_id", "id", "abbreviation", "abbr", "code"):
+        raw = getattr(acquiring, attr, None)
+        if raw:
+            dests.append(str(raw).upper())
+    return not any(d in keys for d in dests)
 
 
 def _player_label(p: Any) -> Dict[str, Any]:
@@ -310,7 +388,7 @@ def _pool(
     items: List[Dict[str, Any]] = []
     for p, level in _org_players(team):
         pid = str(getattr(p, "id", "") or "")
-        if not pid or pid in exclude or _clause_blocked(p):
+        if not pid or pid in exclude or _clause_blocked(p) or _mntc_blocks_destination(p, acquiring):
             continue
         if level == "AHL" and not include_ahl:
             continue
@@ -848,6 +926,32 @@ def find_trade_offers(
         for tid, partner in partners:
             tid = str(tid)
             offered = anchor_value(partner)
+            if offered <= 0 and anchor_player is not None:
+                # Dumping a negative asset: the club that takes him also receives a sweetener.
+                sweet = max(6.0, abs(offered))
+                user_pool = _pool(user_team, user_tid, partner, league, ctx, exclude=exclude, max_value=sweet * SELL_MARGIN)
+                partner_room = _nhl_room(partner, league)
+                user_flex_now = _flex(user_team)
+                partner_flex = _flex(partner)
+
+                def dump_fits(combo, pr=partner_room, pf=partner_flex, uf=user_flex_now):
+                    give = [anchor_base] + list(combo)
+                    return _roster_fits(user_room, pr, give, [], uf, pf)
+
+                cands = _sell_candidates(sweet, user_pool, dump_fits, anchor_type="player", rng=rng)
+                for cand in cands[:2]:
+                    if evals >= MAX_EVALS or len(offers) >= limit:
+                        break
+                    give = [{**anchor_base, "value": round(offered, 2)}] + list(cand)
+                    evals += 1
+                    result = _evaluate(user_tid, tid, give, [], ctx)
+                    row = _offer_row(partner, tid, give, [], result)
+                    row["archetype"] = "Cap dump"
+                    if result.get("accepted"):
+                        offers.append(row)
+                    else:
+                        near.append({**row, "reasons": _clean_reasons(result, team_by_id)})
+                continue
             if offered <= 2.0:
                 continue
             partner_budget = _cap_budget(partner, ctx)
@@ -858,8 +962,10 @@ def find_trade_offers(
             def fits(combo, ur=user_room, pr=partner_room, ub=user_budget, pb=partner_budget, pf=partner_flex):
                 if not _roster_fits(ur, pr, [anchor_base], combo, user_flex, pf):
                     return False
-                return _plan_cap(ub, pb, [anchor_base], list(combo),
-                                 retain_on=anchor_base, retain_allowed=can_retain) is not None
+                if _plan_cap(ub, pb, [anchor_base], list(combo),
+                             retain_on=anchor_base, retain_allowed=can_retain) is not None:
+                    return True
+                return _buyer_retention_pct(ub, pb, [anchor_base], list(combo)) is not None
 
             # Rotate which archetype each club leads with so the board isn't one template.
             rot = p_index % len(base_order)
@@ -885,7 +991,11 @@ def find_trade_offers(
                     break
                 pct = _plan_cap(user_budget, partner_budget, [anchor_base], cand,
                                 retain_on=anchor_base, retain_allowed=can_retain) or 0
+                buyer_ret = None if pct else _buyer_retention_pct(user_budget, partner_budget, [anchor_base], cand)
                 give = [{**anchor_base, "value": round(offered, 2), "retained": pct}]
+                if buyer_ret:
+                    bid, bpct = buyer_ret
+                    cand = [{**a, "retained": bpct} if str(a.get("id")) == bid else a for a in cand]
                 evals += 1
                 tries += 1
                 result = _evaluate(user_tid, tid, give, cand, ctx)
@@ -946,12 +1056,35 @@ def find_trade_offers(
                 return False
             return buy_retention(combo) is not None
 
+        if price <= 0 and anchor_player is not None:
+            # Buying a negative contract: the seller pays you to take him.
+            sweet = max(6.0, abs(price))
+            seller_pool = _pool(partner, partner_tid, user_team, league, ctx, exclude=exclude, max_value=sweet * 1.2)
+
+            def seller_fits(combo):
+                get = [anchor_base] + list(combo)
+                return _roster_fits(user_room, partner_room, [], get, user_flex, partner_flex)
+
+            for cand in _sell_candidates(sweet, seller_pool, seller_fits, anchor_type="player", rng=rng)[:4]:
+                if evals >= MAX_EVALS or len(offers) >= 4:
+                    break
+                get = [{**anchor_base, "value": round(price, 2)}] + list(cand)
+                evals += 1
+                result = _evaluate(user_tid, partner_tid, [], get, ctx)
+                row = _offer_row(partner, partner_tid, [], get, result)
+                row["send_downs"] = _send_down_names(user_team, user_room, [], get)
+                row["archetype"] = "Takes the contract"
+                if result.get("accepted"):
+                    offers.append(row)
+                else:
+                    near.append({**row, "reasons": _clean_reasons(result, team_by_id)})
+
         full_pool = _pool(user_team, user_tid, partner, league, ctx, exclude=exclude)
-        pool = _pool(user_team, user_tid, partner, league, ctx, exclude=exclude, max_value=price * 1.6)
+        pool = _pool(user_team, user_tid, partner, league, ctx, exclude=exclude, max_value=max(price, 0.0) * 1.6)
         tried: set = set()
         # Escalate the offer until the GM bites: fair price first, then real overpays.
         for premium in (BUY_PREMIUM, 1.16, 1.32):
-            if len(offers) >= 3 or evals >= MAX_EVALS:
+            if price <= 0 or len(offers) >= 3 or evals >= MAX_EVALS:
                 break
             cands = _buy_candidates(price, pool, fits, rng=rng, premium=premium)
             if not cands:

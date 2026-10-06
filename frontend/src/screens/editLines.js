@@ -1556,7 +1556,7 @@ function LineBuilderToast({ toast, onDismiss, onDetails }) {
 }
 
 export function EvenStrengthLines(props) {
-  const { franchiseState, setScreen, setFranchiseState, setNavGuard } = useGameUI();
+  const { franchiseState, setScreen, setFranchiseState, setNavGuard, pendingPromiseNav, setPendingPromiseNav } = useGameUI();
   // AHL mode: same Edit Lines screen for the affiliate (no chemistry layer).
   const ahl = Boolean(props.ahl);
   const [ahlData, setAhlData] = useState(null);
@@ -1650,6 +1650,35 @@ export function EvenStrengthLines(props) {
       setToast({ type: "warning", message: `${chosen.removed} stale assignments removed.` });
     }
   }, [players, franchiseState?.lines, sessionId, showThird, ahl, ahlData]);
+  useEffect(() => {
+    const nav = pendingPromiseNav;
+    if (!nav?.player_id) return;
+    if (!players.length || hydratedSession.current !== sessionId) return;
+    const screen = String(nav.screen || "");
+    const wantsAhl = screen === "ahl_center";
+    const wantsLines = screen === "edit_lines" || screen === "";
+    if (ahl && !wantsAhl) return;
+    if (!ahl && !wantsLines) return;
+    if (!lineState?.forwards) return;
+    const pid = String(nav.player_id);
+    const row = findAssignment(lineState, pid);
+    if (String(nav.unit || "") === "goalies") setMode(LINEUP_MODES.GOALIES);
+    else if (row?.group === "defense") setMode(LINEUP_MODES.DEFENSE);
+    else if (row?.group === "goalies") setMode(LINEUP_MODES.GOALIES);
+    if (row) {
+      setSelectedUnit({ group: row.group, lineId: row.lineId });
+      setSelectedSlotKey(row.key);
+    }
+    setSelectedPlayerId(pid);
+    setPoolOpen(true);
+    const message = wantsAhl
+      ? "Call him up and dress him to keep the promise."
+      : String(nav.unit || "") === "goalies"
+        ? "Make him the starter to keep the promise."
+        : "Move him up a line to keep the promise.";
+    setToast({ type: "warning", message: nav.label || message });
+    setPendingPromiseNav?.(null);
+  }, [pendingPromiseNav, lineState, ahl, setPendingPromiseNav, players.length, sessionId]);
   useEffect(() => { if (!ahl && hydratedSession.current && players.length) writeSessionLineupCache(LINEUP_KIND, lineState, sessionId); }, [lineState, players.length, sessionId, ahl]);
   useEffect(() => { if (toast?.type !== "success") return undefined; const timer = window.setTimeout(() => setToast(null), 2600); return () => window.clearTimeout(timer); }, [toast]);
 
@@ -2376,7 +2405,7 @@ function SpecialTeamsUnit({ kind, line, index, playerMap, chemReport, chemistry,
 
 function SpecialTeamsLines({ kind, ...props }) {
   const isPP = kind === "power_play";
-  const { franchiseState, setScreen, setFranchiseState } = useGameUI();
+  const { franchiseState, setScreen, setFranchiseState, pendingPromiseNav, setPendingPromiseNav } = useGameUI();
   const sessionId = getFranchiseSessionId();
   const team = useMemo(() => teamIdentity(franchiseState, props), [franchiseState, props]);
   const activeScreen = isPP ? SCREENS.POWER_PLAY : SCREENS.PENALTY_KILL;
@@ -2477,6 +2506,31 @@ function SpecialTeamsLines({ kind, ...props }) {
     setUnsaved(true);
     hydratedSession.current = key;
   }, [players, kind, sessionId, franchiseState?.lines, makeInitial]);
+  useEffect(() => {
+    const nav = pendingPromiseNav;
+    if (!nav?.player_id) return;
+    if (hydratedSession.current !== `${sessionId}:${kind}`) return;
+    const want = isPP ? "power_play" : "penalty_kill";
+    if (nav.screen !== want && nav.unit !== want) return;
+    const pid = String(nav.player_id);
+    setSelectedPlayerId(pid);
+    setPoolOpen(true);
+    for (const line of lines || []) {
+      const slots = line?.slots || {};
+      const slot = Object.keys(slots).find((key) => String(slots[key] || "") === pid);
+      if (slot) {
+        setSelectedLineId(line.id);
+        setSelectedSlot(slot);
+        setSelectedSlotKey(`${line.id}:${slot}`);
+        break;
+      }
+    }
+    setToast({
+      type: "warning",
+      message: nav.label || (isPP ? "Put him on a unit he was not already on." : "Give him penalty-kill reps to keep the promise."),
+    });
+    setPendingPromiseNav?.(null);
+  }, [pendingPromiseNav, lines, isPP, setPendingPromiseNav, sessionId, kind]);
 
   useEffect(() => { if (toast?.type !== "success") return undefined; const timer = window.setTimeout(() => setToast(null), 2600); return () => window.clearTimeout(timer); }, [toast]);
 
